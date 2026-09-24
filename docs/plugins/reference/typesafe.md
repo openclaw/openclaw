@@ -1,5 +1,5 @@
 ---
-summary: "Optional typed evaluations, not a conversational model provider."
+summary: "Typed decision provider for hosted Jev and local System One models."
 read_when:
   - You are installing, configuring, or auditing the typesafe plugin
 title: "Typesafe plugin reference"
@@ -10,7 +10,7 @@ Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
 between the openclaw-plugin-reference:manual-start and
 openclaw-plugin-reference:manual-end comment markers. -->
 
-Optional typed evaluations, not a conversational model provider.
+Typed decision provider for hosted Jev and local System One models.
 
 ## Distribution
 
@@ -19,8 +19,7 @@ Optional typed evaluations, not a conversational model provider.
 
 ## Surface
 
-- Contracts: `decisionProviders`, `tools`
-- Skills
+- Contracts: `decisionProviders`
 
 ## Related docs
 

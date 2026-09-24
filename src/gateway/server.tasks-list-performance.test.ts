@@ -3,6 +3,9 @@ import {
   TASKS_LIST_CURSOR_MAX_LENGTH,
   type TasksListResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import * as inboundDispatch from "../auto-reply/dispatch.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import * as taskRegistryRead from "../tasks/task-registry-read.js";
 import {
   createTaskRecord,
@@ -16,7 +19,7 @@ import {
 } from "../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
-import { installGatewayTestHooks } from "./server.auth.test-helpers.js";
+import { installGatewayTestHooks, onceMessage } from "./server.auth.test-helpers.js";
 import {
   createTaskSnapshot,
   expectedTaskIds,
@@ -37,6 +40,141 @@ afterAll(() => {
 });
 
 describe("tasks.list Gateway performance", () => {
+  test("preserves task cursors across chat liveness while rejecting changed sharing", async () => {
+    const tasks = new Map([...createTaskSnapshot()].slice(0, 3));
+    await withAuthenticatedTaskGateway(
+      () => {
+        resetTaskRegistryForTests({ persist: false });
+        configureTaskRegistryRuntime({
+          store: createInMemoryTaskRegistryStore({ tasks, deliveryStates: new Map() }),
+        });
+      },
+      async ({ admin, viewer }) => {
+        const sessionKey = "agent:main:task-cursor-liveness";
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: "task-cursor-liveness",
+            lifecycleRevision: "task-cursor-liveness-generation",
+            updatedAt: 1,
+            displayName: "Synthetic task cursor conversation",
+            visibility: "shared",
+          },
+        );
+        const start = createDeferred<() => void>();
+        const release = createDeferred();
+        const dispatch = vi
+          .spyOn(inboundDispatch, "dispatchInboundMessageWithProjectedDispatcher")
+          .mockImplementationOnce(async ({ replyOptions }) => {
+            const runId = replyOptions?.runId;
+            const onAgentRunStart = replyOptions?.onAgentRunStart;
+            if (!runId || !onAgentRunStart) {
+              throw new Error("Expected the admitted chat run's startup callback");
+            }
+            start.resolve(() => {
+              onAgentRunStart(runId);
+            });
+            await release.promise;
+            return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+          });
+        const pending: Promise<unknown>[] = [];
+        try {
+          const subscribed = await sendRpc(
+            admin,
+            "task-liveness-subscribe",
+            "sessions.subscribe",
+            {},
+          );
+          expect(subscribed.ok, JSON.stringify(subscribed.error)).toBe(true);
+          const settled = onceMessage<{
+            event?: string;
+            payload?: { sessionKey?: string; reason?: string };
+          }>(
+            admin,
+            (frame) =>
+              frame.event === "sessions.changed" &&
+              frame.payload?.sessionKey === sessionKey &&
+              frame.payload.reason === "agent.input.settled",
+          );
+          pending.push(Promise.allSettled([settled]));
+          const sent = await sendRpc(admin, "task-liveness-send", "chat.send", {
+            sessionKey,
+            message: "Exercise task cursor liveness",
+            idempotencyKey: "task-cursor-liveness-run",
+          });
+          expect(sent.ok, JSON.stringify(sent.error)).toBe(true);
+          const startRun = await withTestTimeout(
+            start.promise,
+            5_000,
+            "Chat dispatch did not start",
+          );
+          const first = await sendRpc<TasksListResult>(viewer, "tasks-before-run", "tasks.list", {
+            limit: 1,
+          });
+          expect(first.ok, JSON.stringify(first.error)).toBe(true);
+          const firstCursor = first.payload?.nextCursor;
+          if (!firstCursor) {
+            throw new Error("Expected a task cursor before the run starts");
+          }
+
+          startRun();
+          const second = await sendRpc<TasksListResult>(viewer, "tasks-running", "tasks.list", {
+            limit: 1,
+            cursor: firstCursor,
+          });
+          expect(second.ok, JSON.stringify(second.error)).toBe(true);
+          const secondCursor = second.payload?.nextCursor;
+          if (!secondCursor) {
+            throw new Error("Expected a task cursor while the run is active");
+          }
+
+          release.resolve();
+          await settled;
+          const third = await sendRpc<TasksListResult>(viewer, "tasks-settled", "tasks.list", {
+            limit: 1,
+            cursor: secondCursor,
+          });
+          expect(third.ok, JSON.stringify(third.error)).toBe(true);
+          expect(
+            [first, second, third].flatMap(
+              (page) => page.payload?.tasks.map((task) => task.id) ?? [],
+            ),
+          ).toEqual(expectedTaskIds(tasks.values(), 0, 3));
+          expect(third.payload?.nextCursor).toBeUndefined();
+
+          const sharing = await sendRpc(admin, "task-liveness-sharing", "session.visibility.set", {
+            sessionKey: FOREIGN_SESSION_KEY,
+            agentId: "main",
+            visibility: "draft",
+          });
+          expect(sharing.ok, JSON.stringify(sharing.error)).toBe(true);
+          await expectCursorRejected(viewer, "tasks-after-sharing", {
+            cursor: firstCursor,
+            limit: 1,
+          });
+          const current = await sendRpc<TasksListResult>(
+            viewer,
+            "tasks-current-sharing",
+            "tasks.list",
+            {},
+          );
+          expect(current.ok, JSON.stringify(current.error)).toBe(true);
+          expect(current.payload?.tasks.map((task) => task.id)).toEqual(
+            expectedTaskIds(
+              [...tasks.values()].filter((task) => task.requesterSessionKey === OWNED_SESSION_KEY),
+              0,
+              3,
+            ),
+          );
+        } finally {
+          release.resolve();
+          await Promise.all(pending);
+          dispatch.mockRestore();
+        }
+      },
+    );
+  });
+
   test("keeps authenticated task pages bounded without blocking other RPCs", async () => {
     const tasks = createTaskSnapshot();
     const ownedTasks = [...tasks.values()].filter(
@@ -49,17 +187,10 @@ describe("tasks.list Gateway performance", () => {
       throw new Error("expected selected and unselected owned task fixtures");
     }
 
-    let onSnapshotLoad: (() => void) | undefined;
     const initializeTasks = () => {
       resetTaskRegistryForTests({ persist: false });
       configureTaskRegistryRuntime({
-        store: {
-          ...createInMemoryTaskRegistryStore(),
-          loadSnapshot: () => {
-            onSnapshotLoad?.();
-            return { tasks, deliveryStates: new Map() };
-          },
-        },
+        store: createInMemoryTaskRegistryStore({ tasks, deliveryStates: new Map() }),
       });
     };
     await withAuthenticatedTaskGateway(initializeTasks, async ({ admin, viewer }) => {
@@ -90,10 +221,13 @@ describe("tasks.list Gateway performance", () => {
         }
         return Reflect.apply(originalToSorted, this, [compareFn]) as T[];
       });
+      let pendingMutation: ReturnType<typeof setImmediate> | undefined;
       try {
         let mutationsApplied = false;
-        onSnapshotLoad = () => {
-          setImmediate(() => {
+        // Mutate once at the scan's first yield, not on every persistence read.
+        onAccessSlice = () => {
+          onAccessSlice = undefined;
+          pendingMutation = setImmediate(() => {
             const updated = markTaskTerminalById({
               taskId: updatedTask.taskId,
               status: "succeeded",
@@ -123,6 +257,7 @@ describe("tasks.list Gateway performance", () => {
 
         const listMaxSortedInput = Math.max(0, ...sortedInputLengths);
         const currentTasks = listTaskRecords();
+        expect(currentTasks).toHaveLength(TASK_COUNT);
         const adminExpected = expectedTaskIds(currentTasks, 0, 7);
         expect(mutationsApplied).toBe(true);
         expect(list.ok, JSON.stringify(list.error)).toBe(true);
@@ -165,11 +300,20 @@ describe("tasks.list Gateway performance", () => {
           cursor: "x".repeat(TASKS_LIST_CURSOR_MAX_LENGTH + 1),
           limit: 7,
         });
+        const viewerExpected = expectedTaskIds(
+          listTaskRecords().filter((task) => task.requesterSessionKey === OWNED_SESSION_KEY),
+          0,
+          25,
+        );
         const sessionPage = await sendRpc<TasksListResult>(
           admin,
           "tasks-session-page",
           "tasks.list",
           { limit: 1, sessionKey: OWNED_SESSION_KEY },
+        );
+        expect(sessionPage.ok, JSON.stringify(sessionPage.error)).toBe(true);
+        expect(sessionPage.payload?.tasks.map((task) => task.id)).toEqual(
+          viewerExpected.slice(0, 1),
         );
         const sessionCursor = sessionPage.payload?.nextCursor;
         if (!sessionCursor) {
@@ -181,11 +325,6 @@ describe("tasks.list Gateway performance", () => {
           sessionKey: FOREIGN_SESSION_KEY,
         });
 
-        const viewerExpected = expectedTaskIds(
-          listTaskRecords().filter((task) => task.requesterSessionKey === OWNED_SESSION_KEY),
-          0,
-          25,
-        );
         sortedInputLengths.length = 0;
         const accessOrder: string[] = [];
         const taskRuntime = await import("../tasks/runtime-internal.js");
@@ -245,33 +384,25 @@ describe("tasks.list Gateway performance", () => {
           throw new Error("expected a converging task fixture");
         }
         resetTaskRegistryForTests({ persist: false });
-        let convergingChurnStarted = false;
         let convergingRevision = 0;
         const convergingRevisionTarget = 1;
-        const convergeTaskRegistry = () => {
-          if (convergingRevision >= convergingRevisionTarget) {
-            return;
-          }
-          convergingRevision += 1;
-          markTaskTerminalById({
-            taskId: convergingTaskId,
-            status: "succeeded",
-            endedAt: TASK_COUNT + convergingRevision,
-          });
-          setImmediate(convergeTaskRegistry);
-        };
         configureTaskRegistryRuntime({
-          store: {
-            ...createInMemoryTaskRegistryStore(),
-            loadSnapshot: () => {
-              if (!convergingChurnStarted) {
-                convergingChurnStarted = true;
-                setImmediate(convergeTaskRegistry);
-              }
-              return { tasks: convergingTasks, deliveryStates: new Map() };
-            },
-          },
+          store: createInMemoryTaskRegistryStore({
+            tasks: convergingTasks,
+            deliveryStates: new Map(),
+          }),
         });
+        onAccessSlice = () => {
+          onAccessSlice = undefined;
+          pendingMutation = setImmediate(() => {
+            convergingRevision += 1;
+            markTaskTerminalById({
+              taskId: convergingTaskId,
+              status: "succeeded",
+              endedAt: TASK_COUNT + convergingRevision,
+            });
+          });
+        };
         const convergedRegistry = await sendRpc<TasksListResult>(
           admin,
           "tasks-converged-registry",
@@ -445,12 +576,16 @@ describe("tasks.list Gateway performance", () => {
           }
         };
         resetTaskRegistryForTests({ persist: false });
+        const scopedStore = createInMemoryTaskRegistryStore({
+          tasks: scopedTasks,
+          deliveryStates: new Map(),
+        });
         configureTaskRegistryRuntime({
           store: {
-            ...createInMemoryTaskRegistryStore(),
+            ...scopedStore,
             loadSnapshot: () => {
               scopedChurn ??= mutateUnrelatedTask();
-              return { tasks: scopedTasks, deliveryStates: new Map() };
+              return scopedStore.loadSnapshot();
             },
           },
         });
@@ -474,10 +609,7 @@ describe("tasks.list Gateway performance", () => {
         const accessTasks = new Map([...createTaskSnapshot()].slice(0, 1_000));
         resetTaskRegistryForTests({ persist: false });
         configureTaskRegistryRuntime({
-          store: {
-            ...createInMemoryTaskRegistryStore(),
-            loadSnapshot: () => ({ tasks: accessTasks, deliveryStates: new Map() }),
-          },
+          store: createInMemoryTaskRegistryStore({ tasks: accessTasks, deliveryStates: new Map() }),
         });
         let accessMutationCount = 0;
         // Invalidate every completed page before the handler checks access again.
@@ -524,6 +656,7 @@ describe("tasks.list Gateway performance", () => {
           scopedRevisionAtStop,
         );
       } finally {
+        clearImmediate(pendingMutation);
         sortSpy.mockRestore();
         accessWork.mockRestore();
         workClock.mockRestore();

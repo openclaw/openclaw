@@ -1,20 +1,24 @@
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { nonEmptyString } from "./crabbox-worker-profile.js";
 
 type CrabboxInspect = {
+  failureError?: unknown;
   id?: unknown;
   providerMetadata?: unknown;
   ready?: unknown;
-  state?: unknown;
   sshUser?: unknown;
+  state?: unknown;
   tailscale?: unknown;
 };
 
 export type ParsedInspect = {
   awsInstanceProfileAttached?: boolean;
+  failureError?: string;
   id: string;
   ready?: boolean;
-  state: string;
   sshUser?: string;
+  state: string;
   tailscaleEnabled: boolean;
 };
 
@@ -32,13 +36,16 @@ export function parseInspectJson(stdout: string): ParsedInspect {
 
   const id = nonEmptyString(value.id);
   const state = nonEmptyString(value.state)?.toLowerCase();
-  const sshUser = nonEmptyString(value.sshUser);
   if (!id || !/^\S{1,128}$/u.test(id) || !state) {
     throw new Error("Crabbox inspect returned an invalid lease identity or state");
   }
   if (value.ready !== undefined && typeof value.ready !== "boolean") {
     throw new Error("Crabbox inspect returned an invalid ready state");
   }
+  if (value.sshUser !== undefined && typeof value.sshUser !== "string") {
+    throw new Error("Crabbox inspect returned an invalid SSH user");
+  }
+  const sshUser = nonEmptyString(value.sshUser);
   if (
     value.tailscale !== undefined &&
     (value.tailscale === null ||
@@ -64,12 +71,21 @@ export function parseInspectJson(stdout: string): ParsedInspect {
     awsInstanceProfileAttached = attached as boolean | undefined;
   }
 
+  const failureError = nonEmptyString(value.failureError);
   return {
     id,
     state,
-    ...(sshUser ? { sshUser } : {}),
     tailscaleEnabled,
+    ...(failureError
+      ? {
+          failureError: truncateUtf16Safe(
+            redactSensitiveText(failureError).replace(/\s+/gu, " "),
+            512,
+          ),
+        }
+      : {}),
     ...(awsInstanceProfileAttached !== undefined ? { awsInstanceProfileAttached } : {}),
     ...(typeof value.ready === "boolean" ? { ready: value.ready } : {}),
+    ...(sshUser && sshUser !== "<token>" ? { sshUser } : {}),
   };
 }

@@ -118,7 +118,14 @@ export type SessionRowObservation = {
 
 export type SessionRowEventListener = (
   event: GatewayEventFrame,
-  result: SessionChangedRowResult,
+  /** Rejected generations can wake recovery but cannot mutate transcript or lifecycle state. */
+  result: SessionChangedRowResult & { generationRejected?: true },
+) => void;
+
+export type SessionRowListener = (
+  row: GatewaySessionRow | null,
+  /** This retiring registration still owns delivery of the captured frame. */
+  notification?: { eventPending: true },
 ) => void;
 
 export type SessionDeleteOptions = {
@@ -233,7 +240,7 @@ export type SessionCapability = {
   /** Owns a routed descriptor through reads and events until its consumer retires. */
   observeRow: (
     target: SessionRowTarget,
-    listener: (row: GatewaySessionRow | null) => void,
+    listener: SessionRowListener,
     /** Matching events can omit descriptor-only fields; re-read those without watching roster revisions. */
     options?: {
       onInvalidate?: (reason?: string) => void;

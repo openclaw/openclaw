@@ -27,6 +27,7 @@ function outputCard(overrides: Partial<ToolCard> = {}): ToolCard {
     callId: "b",
     resultMessageId: "result-b",
     name: "exec",
+    args: { input: "text(await tools.exec_command({cmd: 'check-service'}));" },
     outputText: "preview",
     toolOutput: { source: "provider-response", modelInput: "unverified" },
     completed: true,
@@ -77,8 +78,129 @@ afterEach(() => {
 });
 
 describe("tool output inspection", () => {
-  it("opens long output as an inspectable result, not a Markdown preview", () => {
-    const output = "  " + "x".repeat(150_000) + "\r\nTAIL";
+  it.each([
+    { name: "lookup", args: { query: "input_text" } },
+    { name: "exec", args: { command: "print-result" } },
+    { name: "exec", args: { code: "return result" } },
+    { name: "exec", args: undefined },
+  ])(
+    "keeps content-shaped data literal without native Code Mode input: %o",
+    async ({ name, args }) => {
+      const text = '[{"type":"input_text","text":"literal value"}]';
+      const panel = document.createElement("openclaw-chat-tool-output") as Panel;
+      panel.content = { kind: "tool-output", card: outputCard({ name, args, outputText: text }) };
+      document.body.append(panel);
+      await panel.updateComplete;
+      expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe(text);
+    },
+  );
+
+  it.each([
+    {
+      name: "JSON lexemes",
+      output: '{"id":9007199254740993,"overflow":1e400,"zero":-0,"state":"before","state":"after"}',
+      exitCode: 0,
+    },
+    { name: "failed command without a chunk ID", output: "service unavailable\n", exitCode: 1 },
+    { name: "literal markup", output: "<script>danger()</script>\n**literal**", exitCode: 0 },
+  ])(
+    "unwraps $name while retaining the original response for inspection and copy",
+    async ({ output, exitCode }) => {
+      const raw = JSON.stringify(
+        [
+          { type: "input_text", text: "Script completed\nWall time 0.8 seconds\nOutput:\n" },
+          {
+            type: "input_text",
+            text: JSON.stringify({
+              ...(exitCode === 0 ? { chunk_id: "chunk" } : {}),
+              wall_time_seconds: 0.7,
+              exit_code: exitCode,
+              output,
+            }),
+          },
+        ],
+        null,
+        2,
+      );
+      const panel = mount(
+        outputCard({ outputText: raw }),
+        vi.fn<SidebarFullMessageLoader>().mockResolvedValue(result(raw)),
+      );
+      await vi.waitFor(() =>
+        expect(panel.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("false"),
+      );
+      const shown = panel.querySelector(".chat-tool-output__text")?.textContent ?? "";
+      expect(shown).not.toContain("chunk_id");
+      expect(shown).not.toContain("input_text");
+      expect(panel.querySelector("script, strong")).toBeNull();
+      if (output.startsWith("{")) {
+        expect(shown).toContain('"id": 9007199254740993');
+        expect(shown).toContain('"overflow": 1e400');
+        expect(shown).toContain('"zero": -0');
+        expect(shown).toContain('"state": "before",');
+        expect(shown).toContain('"state": "after"');
+      } else {
+        expect(shown).toContain(output);
+      }
+      if (exitCode !== 0) {
+        expect(shown).toContain("Exit code 1");
+      }
+      const rawBody = panel.querySelector<HTMLElement>(".chat-tool-card__raw-body")!;
+      expect(rawBody.hidden).toBe(true);
+      button(panel, t("chat.toolCards.rawDetails")).click();
+      expect(rawBody.hidden).toBe(false);
+      expect(rawBody.querySelector("code")?.textContent).toBe(raw);
+      const copy = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
+      button(panel, t("chat.toolCards.copyOutput")).click();
+      expect(copy).toHaveBeenCalledWith(raw);
+    },
+  );
+
+  it.each([
+    { name: "incomplete response", text: '[{"type":"input_text","text":"partial' },
+    {
+      name: "mixed media",
+      text: '[{"type":"input_text","text":"caption"},{"type":"input_image","omitted":true}]',
+    },
+    { name: "ordinary JSON", text: '{"output":"data","state":"before","state":"after"}' },
+  ])("keeps $name intact", async ({ text }) => {
+    const panel = mount(
+      outputCard({ outputText: text }),
+      vi.fn<SidebarFullMessageLoader>().mockResolvedValue(result(text)),
+    );
+    await vi.waitFor(() =>
+      expect(panel.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("false"),
+    );
+    expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe(text);
+  });
+
+  it.each([
+    { session_id: 321, output: "still running", chunk_id: "chunk", wall_time_seconds: 0.7 },
+    {
+      exit_code: 0,
+      extra: "keep this field",
+      output: "done",
+      chunk_id: "chunk",
+      wall_time_seconds: 0.7,
+    },
+  ])("keeps process handles and additional response fields visible", async (execution) => {
+    const text = JSON.stringify([{ type: "input_text", text: JSON.stringify(execution) }]);
+    const panel = mount(
+      outputCard({ outputText: text }),
+      vi.fn<SidebarFullMessageLoader>().mockResolvedValue(result(text)),
+    );
+    await vi.waitFor(() =>
+      expect(panel.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("false"),
+    );
+    expect(JSON.parse(panel.querySelector(".chat-tool-output__text")?.textContent ?? "")).toEqual(
+      execution,
+    );
+  });
+
+  it.each(["plain", "native"])("opens long %s output as an inspectable result", (shape) => {
+    const text = "  " + "x".repeat(150_000) + "\r\nTAIL";
+    const output = shape === "native" ? JSON.stringify([{ type: "input_text", text }]) : text;
     const card = outputCard({ outputText: output });
     const open = vi.fn<(content: SidebarContent) => void>();
     const root = document.createElement("div");
@@ -94,6 +216,7 @@ describe("tool output inspection", () => {
       root,
     );
     expect(root.textContent).not.toContain("TAIL");
+    expect(root.querySelector(".chat-tool-card__raw-body")).toBeNull();
     button(root, t("chat.toolCards.showFullOutput")).click();
     expect(open).toHaveBeenCalledWith({
       kind: "tool-output",
@@ -177,7 +300,7 @@ describe("tool output inspection", () => {
     });
     expect(panel.textContent).not.toContain("wrong sibling");
     expect(panel.querySelector("strong")).toBeNull();
-    expect(panel.textContent).toContain(t("chat.toolCards.providerResponseNote"));
+    expect(panel.textContent).not.toContain("Captured before context processing");
 
     const copy = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText: copy } });

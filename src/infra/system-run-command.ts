@@ -167,7 +167,6 @@ function normalizeRawCommandText(rawCommand?: unknown): string | null {
 function validateSystemRunCommandConsistency(params: {
   argv: string[];
   rawCommand?: string | null;
-  allowLegacyShellText?: boolean;
 }): SystemRunCommandValidation {
   const raw = normalizeRawCommandText(params.rawCommand);
   const display = buildSystemRunCommandDisplay(params.argv, raw);
@@ -176,10 +175,7 @@ function validateSystemRunCommandConsistency(params: {
     // rawCommand is display-only metadata. Reject mismatches so approvals cannot
     // show one command while executing a different argv.
     const matchesCanonicalArgv = raw === display.commandText;
-    const matchesLegacyShellText =
-      params.allowLegacyShellText === true &&
-      display.previewText !== null &&
-      raw === display.previewText;
+    const matchesLegacyShellText = display.previewText !== null && raw === display.previewText;
     if (!matchesCanonicalArgv && !matchesLegacyShellText) {
       return {
         ok: false,
@@ -207,16 +203,6 @@ export function resolveSystemRunCommandRequest(params: {
   command?: unknown;
   rawCommand?: unknown;
 }): ResolvedSystemRunCommand {
-  return resolveSystemRunCommandWithMode(params, true);
-}
-
-function resolveSystemRunCommandWithMode(
-  params: {
-    command?: unknown;
-    rawCommand?: unknown;
-  },
-  allowLegacyShellText: boolean,
-): ResolvedSystemRunCommand {
   const raw = normalizeRawCommandText(params.rawCommand);
   const command = Array.isArray(params.command) ? params.command : [];
   if (command.length === 0) {
@@ -240,7 +226,6 @@ function resolveSystemRunCommandWithMode(
   const validation = validateSystemRunCommandConsistency({
     argv,
     rawCommand: raw,
-    allowLegacyShellText,
   });
   if (!validation.ok) {
     return {

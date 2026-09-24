@@ -23,7 +23,7 @@ working.
 - `plugins.entries.codex.enabled` is `true`.
 - `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
 - Codex app-server reports `0.149.0` or newer. The official plugin ships
-  `@openai/codex` `0.154.0`; newer custom, remote, and macOS desktop-owned
+  `@openai/codex` `0.155.1`; newer custom, remote, and macOS desktop-owned
   binaries continue with a compatibility warning and normal runtime validation.
 - The target Codex app-server can see the expected marketplace, plugin, and
   app inventory.
@@ -539,9 +539,14 @@ get `open_world_enabled: true`. OpenClaw does not expose a separate
 plugin-level open-world policy knob and does not maintain per-plugin
 destructive tool-name deny lists.
 
-Tool approval mode defaults to automatic for admitted apps, so non-destructive
-read tools run without a same-thread approval prompt. Destructive tools stay
-controlled by each app's `destructive_enabled` policy.
+Admitted apps retain their native Codex approval mode and reviewer, including
+app defaults and saved link or tool overrides. With no native approval setting,
+Codex uses its `auto` approval mode, and read-only tools usually run without a prompt.
+Use `allow_destructive_actions: "auto"` to route native human approval requests
+through OpenClaw; native `prompt` with the `auto_review` reviewer stays within
+Codex's automatic review flow. These settings also apply when resuming a thread
+or asking a `/btw` side question. Explicit OpenClaw `"ask"` policy overrides saved
+native approvals as described below; `false` still disables destructive tools.
 
 ## Destructive action policy
 
@@ -551,7 +556,10 @@ plugins, while unsafe schemas and ambiguous ownership fail closed:
 - Global `allow_destructive_actions` defaults to `true`.
 - Per-plugin `allow_destructive_actions` overrides the global policy for
   that plugin.
-- `false`: OpenClaw returns a deterministic decline.
+- `false`: OpenClaw excludes destructive hosted app tools before execution.
+  Native approval requests for permitted tools still go through OpenClaw consent,
+  including during a `/btw` side question. Plugin-provided MCP server approval
+  requests receive a deterministic decline.
 - `true`: OpenClaw auto-accepts only safe schemas it can map to an approval
   response, such as a boolean approve field.
 - `"auto"`: OpenClaw exposes destructive plugin actions to Codex, then

@@ -163,7 +163,6 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
         modelCatalog: catalog,
         runtimeModels: new Map(),
         providerExpiries: new Map(),
-        configuredProviderModelIds: new Map(),
         configuredRuntimeModels: agentFacts.configuredRuntimeModels,
       };
     },
@@ -309,7 +308,10 @@ describe("prepared model runtime Gateway catalog mode", () => {
         levels: [{ id: "off" }, { id: "low", label: "on" }],
         defaultLevel: "low",
       },
-      expectedLevels: [{ id: "low", label: "on" }],
+      expectedLevels: [
+        { id: "low", label: "on" },
+        { id: "ultra", label: "ultra" },
+      ],
     },
   ] as const)(
     "publishes $name policy with model caps for lightweight configured and full catalog reads",

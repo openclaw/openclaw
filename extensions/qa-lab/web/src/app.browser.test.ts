@@ -46,12 +46,31 @@ const scenarios: Bootstrap["scenarios"] = [
   },
 ];
 
-function createBootstrap(selection: RunnerSelection): Bootstrap {
+function createRunnerSelection(): RunnerSelection {
+  return {
+    alternateModel: "mock-openai/gpt-5.6-luna-alt",
+    channel: null,
+    channelDriver: "qa-channel",
+    evidenceMode: "full",
+    fastMode: false,
+    primaryModel: "mock-openai/gpt-5.6-luna",
+    profile: "all",
+    providerMode: "mock-openai",
+    runtimePair: null,
+    runtimePairLane: null,
+    scenarioIds: ["dm-chat-baseline"],
+  };
+}
+
+function createBootstrap(
+  selection: RunnerSelection,
+  controlUiUrl: string | null = null,
+): Bootstrap {
   const selectedScenarioIds = selection.scenarioIds ?? scenarios.map((scenario) => scenario.id);
   return {
     baseUrl: "http://127.0.0.1:43124",
     controlUiEmbeddedUrl: null,
-    controlUiUrl: null,
+    controlUiUrl,
     defaults: {
       conversationId: "qa-operator",
       conversationKind: "direct",
@@ -114,8 +133,9 @@ async function mountRunner(
     threads: [],
   },
   evidence: EvidenceEnvelope["evidence"] = null,
+  controlUiUrl: string | null = null,
 ) {
-  let bootstrap = createBootstrap(selection);
+  let bootstrap = createBootstrap(selection, controlUiUrl);
   httpMock.getJson.mockImplementation(async (url: string) => {
     if (url.startsWith("/api/evidence?")) {
       return { evidence };
@@ -152,7 +172,7 @@ async function mountRunner(
       throw new Error(`unexpected POST ${url}`);
     }
     const nextSelection = body as RunnerSelection;
-    bootstrap = createBootstrap(nextSelection);
+    bootstrap = createBootstrap(nextSelection, controlUiUrl);
     return { runner: { selection: nextSelection } };
   });
   const root = document.createElement("div");
@@ -162,19 +182,7 @@ async function mountRunner(
 }
 
 async function mountRunningControlUi(controlUiUrl: string | null) {
-  const selection: RunnerSelection = {
-    alternateModel: "mock-openai/gpt-5.6-luna-alt",
-    channel: null,
-    channelDriver: "qa-channel",
-    evidenceMode: "full",
-    fastMode: false,
-    primaryModel: "mock-openai/gpt-5.6-luna",
-    profile: "all",
-    providerMode: "mock-openai",
-    runtimePair: null,
-    runtimePairLane: null,
-    scenarioIds: ["dm-chat-baseline"],
-  };
+  const selection: RunnerSelection = createRunnerSelection();
   const root = await mountRunner(selection);
   const getJson = httpMock.getJson.getMockImplementation()!;
   const bootstrap = createBootstrap(selection);
@@ -257,6 +265,180 @@ afterEach(() => {
 });
 
 describe("QA Lab runner browser interactions", () => {
+  it.each([
+    {
+      name: "fractional right clipping",
+      navLeft: 0,
+      clientLeft: 0,
+      clientWidth: 320,
+      scrollLeft: 0,
+      tabLeft: 286.5625,
+      expected: 35.59375,
+    },
+    {
+      name: "left clipping",
+      navLeft: 0,
+      clientLeft: 0,
+      clientWidth: 320,
+      scrollLeft: 90,
+      tabLeft: -20.5,
+      expected: 69.5,
+    },
+    {
+      name: "fully outside right",
+      navLeft: 0,
+      clientLeft: 0,
+      clientWidth: 320,
+      scrollLeft: 0,
+      tabLeft: 500,
+      expected: 249.03125,
+    },
+    {
+      name: "fully outside left",
+      navLeft: 0,
+      clientLeft: 0,
+      clientWidth: 320,
+      scrollLeft: 400,
+      tabLeft: -100,
+      expected: 300,
+    },
+    {
+      name: "offset bordered scrollport",
+      navLeft: 200.25,
+      clientLeft: 2,
+      clientWidth: 320,
+      scrollLeft: 50,
+      tabLeft: 500.75,
+      expected: 97.53125,
+    },
+    {
+      name: "already visible after scrolling",
+      navLeft: 0,
+      clientLeft: 0,
+      clientWidth: 320,
+      scrollLeft: 50,
+      tabLeft: 100,
+      expected: 50,
+    },
+    {
+      name: "desktop without overflow",
+      navLeft: 360,
+      clientLeft: 0,
+      clientWidth: 1080,
+      scrollLeft: 0,
+      tabLeft: 686.5625,
+      expected: 0,
+    },
+  ])("reveals the focused tab within its own scrollport: $name", async (geometry) => {
+    const root = await mountRunner(createRunnerSelection());
+    const tab = root.querySelector<HTMLButtonElement>('[data-tab="report"]')!;
+    const nav = tab.parentElement!;
+    const main = nav.parentElement!;
+    vi.spyOn(nav, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(geometry.navLeft, 81.5, geometry.clientWidth + 2 * geometry.clientLeft, 50.5),
+    );
+    vi.spyOn(tab, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(geometry.tabLeft, 89.5, 69.03125, 33.5),
+    );
+    let scrollLeft = geometry.scrollLeft;
+    const setScrollLeft = vi.fn((value: number) => {
+      scrollLeft = value;
+    });
+    Object.defineProperties(nav, {
+      clientLeft: { configurable: true, value: geometry.clientLeft },
+      clientWidth: { configurable: true, value: geometry.clientWidth },
+      scrollLeft: { configurable: true, get: () => scrollLeft, set: setScrollLeft },
+    });
+    nav.scrollTop = 17;
+    main.scrollLeft = 11;
+    main.scrollTop = 23;
+    root.scrollLeft = 7;
+    root.scrollTop = 13;
+
+    tab.focus();
+
+    expect(document.activeElement).toBe(tab);
+    expect(nav.scrollLeft).toBe(geometry.expected);
+    if (geometry.expected === geometry.scrollLeft) {
+      expect(setScrollLeft).not.toHaveBeenCalled();
+    } else {
+      expect(setScrollLeft).toHaveBeenCalledExactlyOnceWith(geometry.expected);
+    }
+    expect(nav.scrollTop).toBe(17);
+    expect([main.scrollLeft, main.scrollTop, root.scrollLeft, root.scrollTop]).toEqual([
+      11, 23, 7, 13,
+    ]);
+    expect(root.querySelector<HTMLElement>(".tab-btn.active")?.dataset.tab).toBe("chat");
+    expect(root.querySelector('[data-tab="report"]')).toBe(tab);
+  });
+
+  it("binds tab focus reveal again after navigation replaces the tab bar", async () => {
+    const root = await mountRunner(createRunnerSelection());
+    const oldNav = root.querySelector(".tab-bar");
+    root.querySelector<HTMLButtonElement>('[data-tab="report"]')!.click();
+    const tab = root.querySelector<HTMLButtonElement>('[data-tab="capture"]')!;
+    const nav = tab.parentElement!;
+    expect(nav).not.toBe(oldNav);
+    vi.spyOn(nav, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 320, 50));
+    vi.spyOn(tab, "getBoundingClientRect").mockReturnValue(new DOMRect(480, 0, 88, 32));
+    Object.defineProperty(nav, "clientWidth", { configurable: true, value: 320 });
+
+    tab.focus();
+
+    expect(document.activeElement).toBe(tab);
+    expect(nav.scrollLeft).toBe(248);
+    expect(root.querySelector<HTMLElement>(".tab-btn.active")?.dataset.tab).toBe("report");
+    tab.click();
+    expect(root.querySelector<HTMLElement>(".tab-btn.active")?.dataset.tab).toBe("capture");
+  });
+
+  it.each([false, true])(
+    "preserves the manual sidebar preference across Evidence navigation (collapsed=%s)",
+    async (collapsed) => {
+      localStorage.setItem("qa-lab-sidebar-collapsed", collapsed ? "1" : "0");
+      const root = await mountRunner(createRunnerSelection());
+      expect(
+        [...root.querySelectorAll<HTMLElement>("[data-tab]")].map((node) => node.dataset.tab),
+      ).toEqual(["chat", "results", "evidence", "report", "events", "capture"]);
+
+      root.querySelector<HTMLButtonElement>('[data-tab="evidence"]')!.click();
+      expect(root.querySelector(".app-shell--evidence-focus")).not.toBeNull();
+      expect(Boolean(root.querySelector(".app-shell--sidebar-collapsed"))).toBe(collapsed);
+      expect(localStorage.getItem("qa-lab-sidebar-collapsed")).toBe(collapsed ? "1" : "0");
+
+      root.querySelector<HTMLButtonElement>('[data-tab="capture"]')!.click();
+      expect(root.querySelector(".app-shell--evidence-focus")).toBeNull();
+      expect(Boolean(root.querySelector(".app-shell--sidebar-collapsed"))).toBe(collapsed);
+
+      root.querySelector<HTMLButtonElement>('[data-action="toggle-sidebar"]')!.click();
+      expect(localStorage.getItem("qa-lab-sidebar-collapsed")).toBe(collapsed ? "0" : "1");
+      root.querySelector<HTMLButtonElement>('[data-tab="evidence"]')!.click();
+      root.querySelector<HTMLButtonElement>('[data-tab="chat"]')!.click();
+      expect(Boolean(root.querySelector(".app-shell--sidebar-collapsed"))).toBe(!collapsed);
+    },
+  );
+
+  it("keeps header actions and the Control UI link alongside long errors", async () => {
+    const selection: RunnerSelection = createRunnerSelection();
+    const controlUiUrl = "https://control.example.test/";
+    const root = await mountRunner(selection, undefined, null, controlUiUrl);
+    expect(root.querySelector<HTMLAnchorElement>(".header-link")?.href).toBe(controlUiUrl);
+
+    const message = `Request failed: <missing> ${"error-context".repeat(16)}`;
+    httpMock.getJson.mockRejectedValueOnce(new Error(message));
+    root.querySelector<HTMLButtonElement>('[data-action="refresh"]')!.click();
+    await vi.waitFor(() =>
+      expect(root.querySelector(".header-status .badge-fail")?.textContent).toContain(message),
+    );
+    expect(root.querySelector(".header-title")?.textContent).toBe("QA Lab");
+    expect(root.querySelector<HTMLAnchorElement>(".header-link")?.href).toBe(controlUiUrl);
+    expect(
+      [...root.querySelectorAll<HTMLElement>(".header-right [data-action]")].map(
+        (node) => node.dataset.action,
+      ),
+    ).toEqual(["toggle-sidebar", "refresh", "reset", "toggle-theme"]);
+  });
+
   it.each([
     { action: "attaches", before: null, after: "http://127.0.0.1:43124/control-ui/" },
     {
@@ -359,23 +541,7 @@ describe("QA Lab runner browser interactions", () => {
         profile: null,
         schemaVersion: 3,
       };
-      const root = await mountRunner(
-        {
-          alternateModel: "mock-openai/gpt-5.6-luna-alt",
-          channel: null,
-          channelDriver: "qa-channel",
-          evidenceMode: "full",
-          fastMode: false,
-          primaryModel: "mock-openai/gpt-5.6-luna",
-          profile: "all",
-          providerMode: "mock-openai",
-          runtimePair: null,
-          runtimePairLane: null,
-          scenarioIds: ["dm-chat-baseline"],
-        },
-        undefined,
-        evidence,
-      );
+      const root = await mountRunner(createRunnerSelection(), undefined, evidence);
       expect(root.querySelector(".evidence-inspector")?.textContent).toContain(
         "observed attempt 0",
       );
@@ -404,19 +570,7 @@ describe("QA Lab runner browser interactions", () => {
   });
 
   it("labels every execution configuration select", async () => {
-    const root = await mountRunner({
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      channel: null,
-      channelDriver: "qa-channel",
-      evidenceMode: "full",
-      fastMode: false,
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      profile: "all",
-      providerMode: "mock-openai",
-      runtimePair: null,
-      runtimePairLane: null,
-      scenarioIds: ["dm-chat-baseline"],
-    });
+    const root = await mountRunner(createRunnerSelection());
 
     root.querySelector<HTMLButtonElement>("[data-sidebar-panel='config']")?.click();
     const selects = [...root.querySelectorAll<HTMLSelectElement>(".config-field select")];
@@ -436,37 +590,22 @@ describe("QA Lab runner browser interactions", () => {
   });
 
   it("sends group conversation messages from the interactive chat composer", async () => {
-    const root = await mountRunner(
-      {
-        alternateModel: "mock-openai/gpt-5.6-luna-alt",
-        channel: null,
-        channelDriver: "qa-channel",
-        evidenceMode: "full",
-        fastMode: false,
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        profile: "all",
-        providerMode: "mock-openai",
-        runtimePair: null,
-        runtimePairLane: null,
-        scenarioIds: ["dm-chat-baseline"],
-      },
-      {
-        conversations: [{ accountId: "default", id: "qa-room", kind: "channel" }],
-        cursor: 0,
-        events: [],
-        messages: [],
-        threads: [
-          {
-            accountId: "default",
-            conversationId: "qa-room",
-            createdAt: 0,
-            createdBy: "qa-operator",
-            id: "owned-thread",
-            title: "Owned thread",
-          },
-        ],
-      },
-    );
+    const root = await mountRunner(createRunnerSelection(), {
+      conversations: [{ accountId: "default", id: "qa-room", kind: "channel" }],
+      cursor: 0,
+      events: [],
+      messages: [],
+      threads: [
+        {
+          accountId: "default",
+          conversationId: "qa-room",
+          createdAt: 0,
+          createdBy: "qa-operator",
+          id: "owned-thread",
+          title: "Owned thread",
+        },
+      ],
+    });
     httpMock.postJson.mockResolvedValue({ message: { id: "group-message" } });
 
     root.querySelector<HTMLButtonElement>("[data-thread-select='owned-thread']")?.click();
@@ -499,19 +638,7 @@ describe("QA Lab runner browser interactions", () => {
   });
 
   it("keeps scenario rows from collapsing inside the scrolling list", async () => {
-    const root = await mountRunner({
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      channel: null,
-      channelDriver: "qa-channel",
-      evidenceMode: "full",
-      fastMode: false,
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      profile: "all",
-      providerMode: "mock-openai",
-      runtimePair: null,
-      runtimePairLane: null,
-      scenarioIds: ["dm-chat-baseline"],
-    });
+    const root = await mountRunner(createRunnerSelection());
 
     const scroll = root.querySelector<HTMLElement>(".scenario-scroll");
     const row = root.querySelector<HTMLElement>(".scenario-item");
@@ -551,19 +678,7 @@ describe("QA Lab runner browser interactions", () => {
   });
 
   it("changes to real channels without changing the mock provider lane", async () => {
-    const root = await mountRunner({
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      channel: null,
-      channelDriver: "qa-channel",
-      evidenceMode: "full",
-      fastMode: false,
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      profile: "all",
-      providerMode: "mock-openai",
-      runtimePair: null,
-      runtimePairLane: null,
-      scenarioIds: ["dm-chat-baseline"],
-    });
+    const root = await mountRunner(createRunnerSelection());
 
     root.querySelector<HTMLButtonElement>("[data-sidebar-panel='config']")?.click();
     expect(
@@ -626,19 +741,7 @@ describe("QA Lab runner browser interactions", () => {
   });
 
   it("renders server-resolved exclusions and errors from a rejected launch", async () => {
-    const root = await mountRunner({
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      channel: null,
-      channelDriver: "qa-channel",
-      evidenceMode: "full",
-      fastMode: false,
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      profile: "all",
-      providerMode: "mock-openai",
-      runtimePair: null,
-      runtimePairLane: null,
-      scenarioIds: ["dm-chat-baseline"],
-    });
+    const root = await mountRunner(createRunnerSelection());
     httpMock.postJson.mockRejectedValueOnce(
       new httpMock.QaLabHttpError("selection rejected", 400, {
         plan: {
@@ -676,19 +779,7 @@ describe("QA Lab runner browser interactions", () => {
   });
 
   it("starts a dirty profile override without reusing the previous resolved plan", async () => {
-    const root = await mountRunner({
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      channel: null,
-      channelDriver: "qa-channel",
-      evidenceMode: "full",
-      fastMode: false,
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      profile: "all",
-      providerMode: "mock-openai",
-      runtimePair: null,
-      runtimePairLane: null,
-      scenarioIds: ["dm-chat-baseline"],
-    });
+    const root = await mountRunner(createRunnerSelection());
 
     root.querySelector<HTMLButtonElement>("[data-sidebar-panel='config']")?.click();
     selectValue(root, "#run-profile", "smoke-ci");
@@ -709,19 +800,7 @@ describe("QA Lab runner browser interactions", () => {
   });
 
   it("disables launch when an explicit override becomes empty", async () => {
-    const root = await mountRunner({
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      channel: null,
-      channelDriver: "qa-channel",
-      evidenceMode: "full",
-      fastMode: false,
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      profile: "all",
-      providerMode: "mock-openai",
-      runtimePair: null,
-      runtimePairLane: null,
-      scenarioIds: ["dm-chat-baseline"],
-    });
+    const root = await mountRunner(createRunnerSelection());
 
     root.querySelector<HTMLInputElement>("[data-scenario-toggle-id='dm-chat-baseline']")?.click();
     const runButton = root.querySelector<HTMLButtonElement>("[data-action='run-suite']");

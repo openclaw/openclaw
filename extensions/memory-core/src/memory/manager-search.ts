@@ -1,9 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import {
-  cosineSimilarity,
-  parseEmbedding,
-  truncateUtf16Safe,
-} from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   normalizeStringEntries,
@@ -11,35 +6,18 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { VectorKnnRequest, VectorKnnResponse } from "./manager-search-knn.js";
+import {
+  projectMemorySearchRow,
+  resolveSnippetProjection,
+  type MemorySearchRow,
+  type SearchRowResult,
+} from "./manager-search-shared.js";
 
 const FTS_QUERY_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
 const EXACT_PATH_SPECIFICITY_SQL_FUNCTION = "openclaw_memory_exact_path_specificity";
 const NORMALIZED_CONTAINS_SQL_FUNCTION = "openclaw_memory_normalized_contains";
 
-// Scan fallback vector rows in bounded batches so large chunk tables (no usable
-// vec0 index) cannot pin the main thread for multi-second windows and starve
-// channel I/O / liveness signals. Matches the session-indexing yield pattern
-// introduced in #76978 for the same class of bug. Issue #81172.
-const FALLBACK_VECTOR_BATCH_SIZE = 256;
-
-function yieldToEventLoop(): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
 type SearchSource = MemorySource;
-
-type SearchRowResult = {
-  id: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  score: number;
-  snippet: string;
-  source: SearchSource;
-};
 
 type PathKeywordSearchResult = SearchRowResult & {
   textScore: 0;
@@ -242,16 +220,6 @@ function buildMatchQueryFromTerms(terms: string[]): string | null {
   return quoted.join(" AND ");
 }
 
-function resolveProviderModels(primary: string, aliases: string[] | undefined): string[] {
-  return Array.from(new Set([primary, ...(aliases ?? []).filter(Boolean)]));
-}
-
-function buildModelFilter(column: string, models: string[]): string {
-  return models.length === 1
-    ? `${column} = ?`
-    : `${column} IN (${models.map(() => "?").join(", ")})`;
-}
-
 function planKeywordSearch(params: {
   query: string;
   ftsTokenizer?: "unicode61" | "trigram";
@@ -332,183 +300,6 @@ function planPathKeywordSearch(params: {
   return plans;
 }
 
-export async function searchVector(params: {
-  db: DatabaseSync;
-  vectorTable: string;
-  providerModel: string;
-  providerModelAliases?: string[];
-  queryVec: number[];
-  limit: number;
-  snippetMaxChars: number;
-  signal?: AbortSignal;
-  ensureVectorReady: (dimensions: number) => Promise<boolean>;
-  runVectorKnn?: (request: VectorKnnRequest, signal?: AbortSignal) => Promise<VectorKnnResponse>;
-  runFallback?: () => Promise<SearchRowResult[]>;
-  sourceFilterVec: { sql: string; params: SearchSource[] };
-  sourceFilterChunks: { sql: string; params: SearchSource[] };
-}): Promise<SearchRowResult[]> {
-  if (params.queryVec.length === 0 || params.limit <= 0) {
-    return [];
-  }
-  params.signal?.throwIfAborted();
-  const providerModels = resolveProviderModels(params.providerModel, params.providerModelAliases);
-  const searchFallback =
-    params.runFallback ??
-    (() =>
-      searchChunksByEmbedding({
-        db: params.db,
-        providerModel: params.providerModel,
-        providerModelAliases: params.providerModelAliases,
-        sourceFilter: params.sourceFilterChunks,
-        queryVec: params.queryVec,
-        limit: params.limit,
-        snippetMaxChars: params.snippetMaxChars,
-        signal: params.signal,
-      }));
-  const vectorReady = await params.ensureVectorReady(params.queryVec.length);
-  params.signal?.throwIfAborted();
-  if (vectorReady) {
-    if (!params.runVectorKnn) {
-      throw new Error("memory vector KNN subprocess is unavailable");
-    }
-    const response = await params.runVectorKnn(
-      {
-        vectorTable: params.vectorTable,
-        providerModels,
-        queryVec: params.queryVec,
-        limit: params.limit,
-        snippetMaxChars: params.snippetMaxChars,
-        sourceFilter: params.sourceFilterVec,
-      },
-      params.signal,
-    );
-    if (response.fallbackScanRequired) {
-      return await searchFallback();
-    }
-    return response.rows.map((row) => ({
-      id: row.id,
-      path: row.path,
-      startLine: row.start_line,
-      endLine: row.end_line,
-      score: 1 - row.dist,
-      snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
-      source: row.source,
-    }));
-  }
-
-  return await searchFallback();
-}
-
-function resolveSnippetProjection(column: "text" | "c.text", snippetMaxChars: number) {
-  const snippetByteLimit =
-    Number.isSafeInteger(snippetMaxChars) && snippetMaxChars > 0 ? snippetMaxChars * 4 : undefined;
-  // Byte prefixes preserve NUL in UTF-8 and UTF-16 databases. Four bytes per
-  // UTF-16 unit leave final truncation to truncateUtf16Safe. SQLite returns
-  // NULL for an empty BLOB substring, so retain the original empty text.
-  return {
-    sql:
-      snippetByteLimit === undefined
-        ? column
-        : `COALESCE(CAST(substr(CAST(${column} AS BLOB), 1, ?) AS TEXT), ${column})`,
-    params: snippetByteLimit === undefined ? [] : [snippetByteLimit],
-  };
-}
-
-export async function searchChunksByEmbedding(params: {
-  db: DatabaseSync;
-  providerModel: string;
-  providerModelAliases?: string[];
-  sourceFilter: { sql: string; params: SearchSource[] };
-  queryVec: number[];
-  limit: number;
-  snippetMaxChars: number;
-  signal?: AbortSignal;
-}): Promise<SearchRowResult[]> {
-  if (params.limit <= 0) {
-    return [];
-  }
-  const providerModels = resolveProviderModels(params.providerModel, params.providerModelAliases);
-  const modelFilter = buildModelFilter("model", providerModels);
-  // Keep batches bounded instead of calling `.all()` across the entire chunks
-  // table, and do not hold a sqlite iterator open across the setImmediate yield
-  // below. The rowid cursor keeps memory bounded without OFFSET rescans.
-  const stmt = params.db.prepare(
-    `SELECT rowid, embedding\n` +
-      `  FROM memory_index_chunks\n` +
-      ` WHERE ${modelFilter} AND rowid > ?${params.sourceFilter.sql}\n` +
-      ` ORDER BY rowid ASC\n` +
-      ` LIMIT ?`,
-  );
-  type ChunkEmbeddingRow = {
-    rowid: number | bigint;
-    embedding: string;
-  };
-  const snippet = resolveSnippetProjection("text", params.snippetMaxChars);
-  const payloadStmt = params.db.prepare(
-    `SELECT id, path, start_line, end_line, ${snippet.sql} AS text, source FROM memory_index_chunks WHERE rowid = ?`,
-  );
-  type ChunkPayload = {
-    id: string;
-    path: string;
-    start_line: number;
-    end_line: number;
-    text: string;
-    source: SearchSource;
-  };
-
-  const topResults: SearchRowResult[] = [];
-  let lastRowid = 0;
-  while (true) {
-    const batch = stmt.iterate(
-      ...providerModels,
-      lastRowid,
-      ...params.sourceFilter.params,
-      FALLBACK_VECTOR_BATCH_SIZE,
-    ) as IterableIterator<ChunkEmbeddingRow>;
-    let batchSize = 0;
-    for (const row of batch) {
-      batchSize += 1;
-      lastRowid = typeof row.rowid === "bigint" ? Number(row.rowid) : row.rowid;
-      const score = cosineSimilarity(params.queryVec, parseEmbedding(row.embedding));
-      const lowest = topResults.at(-1);
-      if (
-        Number.isFinite(score) &&
-        (topResults.length < params.limit || (lowest && score > lowest.score))
-      ) {
-        // Hydrate contenders before yielding so an old score cannot acquire a
-        // replacement chunk's payload.
-        // SAFETY: these schema-defined columns belong to this rowid in the active read snapshot.
-        const payload = payloadStmt.get(...snippet.params, row.rowid) as ChunkPayload;
-        const result: SearchRowResult = {
-          id: payload.id,
-          path: payload.path,
-          startLine: payload.start_line,
-          endLine: payload.end_line,
-          score,
-          snippet: truncateUtf16Safe(payload.text, params.snippetMaxChars),
-          source: payload.source,
-        };
-        if (topResults.length < params.limit) {
-          topResults.push(result);
-          if (topResults.length === params.limit) {
-            topResults.sort((a, b) => b.score - a.score);
-          }
-        } else {
-          topResults[topResults.length - 1] = result;
-          topResults.sort((a, b) => b.score - a.score);
-        }
-      }
-    }
-    if (batchSize < FALLBACK_VECTOR_BATCH_SIZE) {
-      break;
-    }
-    await yieldToEventLoop();
-    params.signal?.throwIfAborted();
-  }
-  topResults.sort((a, b) => b.score - a.score);
-  return topResults;
-}
-
 export async function searchKeyword(params: {
   db: DatabaseSync;
   ftsTable: string;
@@ -537,15 +328,7 @@ export async function searchKeyword(params: {
   // Lexical FTS is model-agnostic (issue #48300), but old databases may
   // already contain orphaned FTS rows from prior model-scoped cleanup.
   const liveChunkClause = ` AND EXISTS (SELECT 1 FROM memory_index_chunks c WHERE c.id = ${params.ftsTable}.id)`;
-  let rows: Array<{
-    id: string;
-    path: string;
-    source: SearchSource;
-    start_line: number;
-    end_line: number;
-    text: string;
-    rank: number;
-  }>;
+  let rows: Array<MemorySearchRow & { rank: number }>;
   let usedMatch = false;
   const loadRows = (matchQuery: string | null, terms: string[]): typeof rows => {
     const filter = buildSubstringFilter({
@@ -620,17 +403,10 @@ export async function searchKeyword(params: {
           ftsScore: textScore,
         })
       : textScore;
-    return {
-      id: row.id,
-      path: row.path,
-      startLine: row.start_line,
-      endLine: row.end_line,
-      score,
+    return Object.assign(projectMemorySearchRow(row, params.snippetMaxChars, score), {
       textScore,
       hasBodyMatch: true as const,
-      snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
-      source: row.source,
-    };
+    });
   });
 }
 
@@ -675,13 +451,7 @@ export async function searchPathKeyword(params: {
   const hasExplicitExactPathHeadroom = params.exactPathLimit !== undefined;
   const exactPathLimit = Math.max(0, Math.floor(params.exactPathLimit ?? params.limit));
   const exactCandidatePatterns = buildExactPathCandidatePatterns(exactPathQuery);
-  type ExactPathRow = {
-    id: string;
-    path: string;
-    source: SearchSource;
-    start_line: number;
-    end_line: number;
-    text: string;
+  type ExactPathRow = MemorySearchRow & {
     exact_path_specificity: ExactPathSpecificity;
   };
   // ASCII identifiers use the path FTS plan before suffix filtering; Unicode
@@ -757,34 +527,18 @@ export async function searchPathKeyword(params: {
       exactRows = loadExactRows(false);
     }
   }
-  const exactResults = exactRows.map((row): PathKeywordSearchResult => {
-    const result: PathKeywordSearchResult = {
-      id: row.id,
-      path: row.path,
-      startLine: row.start_line,
-      endLine: row.end_line,
-      score: 0,
-      textScore: 0,
+  const exactResults = exactRows.map((row): PathKeywordSearchResult =>
+    Object.assign(projectMemorySearchRow(row, params.snippetMaxChars, 0), {
+      textScore: 0 as const,
       pathScore: 0,
       exactPathSpecificity: row.exact_path_specificity,
-      hasBodyMatch: false,
-      snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
-      source: row.source,
-    };
-    return result;
-  });
+      hasBodyMatch: false as const,
+    }),
+  );
   if (!pathPlans.some((entry) => entry.matchQuery || entry.substringTerms.length > 0)) {
     return exactResults;
   }
-  type PathLexicalRow = {
-    id: string;
-    path: string;
-    source: SearchSource;
-    start_line: number;
-    end_line: number;
-    text: string;
-    rank: number;
-  };
+  type PathLexicalRow = MemorySearchRow & { rank: number };
   const loadFilteredLexicalRows = (
     matchQuery: string | null,
     terms: string[],
@@ -872,19 +626,15 @@ export async function searchPathKeyword(params: {
     for (const row of rows) {
       const pathScore = usedMatch ? params.bm25RankToScore(row.rank) : 1;
       const exactPathSpecificity = matchExactPath(row.path);
-      const result: PathKeywordSearchResult = {
-        id: row.id,
-        path: row.path,
-        startLine: row.start_line,
-        endLine: row.end_line,
-        score: pathScore,
-        textScore: 0,
-        pathScore,
-        exactPathSpecificity,
-        hasBodyMatch: false,
-        snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
-        source: row.source,
-      };
+      const result: PathKeywordSearchResult = Object.assign(
+        projectMemorySearchRow(row, params.snippetMaxChars, pathScore),
+        {
+          textScore: 0 as const,
+          pathScore,
+          exactPathSpecificity,
+          hasBodyMatch: false as const,
+        },
+      );
       const existing = lexicalById.get(result.id);
       if (!existing) {
         lexicalById.set(result.id, result);
@@ -926,4 +676,3 @@ export async function searchPathKeyword(params: {
   const resultLimit = hasExplicitExactPathHeadroom ? exactPathLimit + params.limit : params.limit;
   return [...byId.values()].toSorted(comparePathKeywordSearchResults).slice(0, resultLimit);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

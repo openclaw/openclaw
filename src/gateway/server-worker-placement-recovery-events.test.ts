@@ -40,6 +40,7 @@ vi.mock("./server-worker-placement-session-evidence.js", () => ({
   createWorkerPlacementSessionEvidenceResolver: runtimeMocks.createSessionEvidenceResolver,
 }));
 
+import { getRuntimeConfig } from "../config/config.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 
@@ -88,7 +89,9 @@ async function withRecoveryRuntime(
     };
     changes: ReturnType<typeof vi.fn>;
     environments: { start: ReturnType<typeof vi.fn> };
-    readChangeSnapshot: ReturnType<typeof vi.fn<() => Promise<RecoveryPlacement[]>>>;
+    readChangeSnapshot: ReturnType<
+      typeof vi.fn<(profileIds?: readonly string[]) => Promise<RecoveryPlacement[]>>
+    >;
     placements: Map<string, RecoveryPlacement>;
     runtime: ReturnType<typeof createGatewayWorkerPlacementRuntime>;
     start: () => Promise<void>;
@@ -153,8 +156,16 @@ async function withRecoveryRuntime(
       stop: vi.fn().mockResolvedValue(undefined),
     };
     const warn = vi.fn();
-    const readChangeSnapshot = vi.fn(async () => structuredClone([...placements.values()]));
+    const readChangeSnapshot = vi.fn(async (profileIds?: readonly string[]) =>
+      structuredClone(
+        [...placements.values()].filter(
+          (placement) =>
+            !profileIds || (profileIds.includes("development") && placement.activeOwnerEpoch === 1),
+        ),
+      ),
+    );
     const runtime = createGatewayWorkerPlacementRuntime({
+      getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
@@ -210,6 +221,57 @@ async function withRecoveryRuntime(
 }
 
 describe("worker placement recovery session events", () => {
+  it("joins pending machine metadata reporting on stop without publishing a late reply", async () => {
+    const placement = recoveryPlacement();
+    await withRecoveryRuntime(
+      { placement },
+      async ({ changes, readChangeSnapshot, start, stop, catalogChanged }) => {
+        await start();
+        const initialVersion = changes.mock.calls.length;
+        const reading = createDeferredCore();
+        const reply = createDeferredCore<RecoveryPlacement[]>();
+        readChangeSnapshot.mockImplementationOnce(() => {
+          reading.resolve();
+          return reply.promise;
+        });
+        catalogChanged("development");
+        await reading.promise;
+        catalogChanged("development");
+        let stopped = false;
+        const stopping = stop().then(() => {
+          stopped = true;
+        });
+        try {
+          await Promise.resolve();
+          expect(stopped).toBe(false);
+        } finally {
+          reply.resolve([placement]);
+        }
+        await stopping;
+        expect(changes.mock.calls.length).toBe(initialVersion);
+      },
+    );
+  });
+
+  it("reports a later catalog notification queued as the previous batch finishes", async () => {
+    const placement = recoveryPlacement();
+    await withRecoveryRuntime({ placement }, async ({ changes, start, catalogChanged }) => {
+      await start();
+      const published = createDeferredCore();
+      let publications = 0;
+      changes.mockImplementation(() => {
+        if (++publications === 1) {
+          queueMicrotask(() => catalogChanged("development"));
+        } else {
+          published.resolve();
+        }
+      });
+      catalogChanged("development");
+      await published.promise;
+      expect(publications).toBe(2);
+    });
+  });
+
   it("refreshes correlated session observers when machine metadata arrives and unsubscribes on stop", async () => {
     const placement = recoveryPlacement();
     await withRecoveryRuntime(
@@ -225,7 +287,10 @@ describe("worker placement recovery session events", () => {
         const initialVersion = changes.mock.calls.length;
         catalogChanged("other-profile");
         expect(changes.mock.calls.length).toBe(initialVersion);
+        const published = createDeferredCore();
+        changes.mockImplementationOnce(() => published.resolve());
         catalogChanged("development");
+        await published.promise;
         await flushPendingSessionsChangedEvents(context);
         expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
           "sessions.changed",

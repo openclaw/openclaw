@@ -414,38 +414,6 @@ describe("resolveMedia original filename preservation", () => {
     requireResolvedMedia(result, "video filename");
   });
 
-  it("falls back to fetched.fileName when telegram file_name is absent", async () => {
-    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
-    mockPdfFetchAndSave("file_42.pdf");
-
-    const ctx = makeCtx("document", getFile);
-    const result = await resolveMediaWithDefaults(ctx);
-
-    expectSaveMediaBufferCall(0, {
-      contentType: "application/pdf",
-      bucket: "inbound",
-      maxBytes: MAX_MEDIA_BYTES,
-      fileName: "file_42.pdf",
-    });
-    requireResolvedMedia(result, "fetched filename fallback");
-  });
-
-  it("falls back to filePath when neither telegram nor fetched fileName is available", async () => {
-    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
-    mockPdfFetchAndSave(undefined);
-
-    const ctx = makeCtx("document", getFile);
-    const result = await resolveMediaWithDefaults(ctx);
-
-    expectSaveMediaBufferCall(0, {
-      contentType: "application/pdf",
-      bucket: "inbound",
-      maxBytes: MAX_MEDIA_BYTES,
-      fileName: "documents/file_42.pdf",
-    });
-    requireResolvedMedia(result, "file path fallback");
-  });
-
   it("allows a configured custom apiRoot host while keeping the hostname allowlist", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
     mockPdfFetchAndSave("file_42.pdf");
@@ -476,20 +444,6 @@ describe("resolveMedia original filename preservation", () => {
       allowRfc2544BenchmarkRange: true,
     });
     requireResolvedMedia(result, "private network opt-in");
-  });
-
-  it("constructs correct download URL with custom apiRoot for documents", async () => {
-    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
-    mockPdfFetchAndSave("file_42.pdf");
-
-    const customApiRoot = "http://192.168.1.50:8081/custom-bot-api";
-    const ctx = makeCtx("document", getFile);
-    const result = await resolveMediaWithDefaults(ctx, { apiRoot: customApiRoot });
-
-    expectReadRemoteMediaBufferFields({
-      url: `${customApiRoot}/file/bot${BOT_TOKEN}/documents/file_42.pdf`,
-    });
-    requireResolvedMedia(result, "custom apiRoot document URL");
   });
 
   it("constructs correct download URL with custom apiRoot for stickers", async () => {

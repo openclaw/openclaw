@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { vi } from "vitest";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import * as storeWriterQueue from "../../shared/store-writer-queue.js";
 import type { runQueuedStoreWrite } from "../../shared/store-writer-queue.js";
 import {
   openOpenClawAgentDatabase,
@@ -27,6 +29,7 @@ export async function joinSessionHistoryBudgetSweeps(
   work: Promise<unknown>[] = [],
 ): Promise<void> {
   let joined = 0;
+  const failures: unknown[] = [];
   for (;;) {
     const pending = spy.mock.calls.flatMap(([params], index) => {
       const outcome = spy.mock.results[index];
@@ -37,17 +40,57 @@ export async function joinSessionHistoryBudgetSweeps(
         : [];
     });
     if (joined === pending.length) {
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "Session history budget sweeps failed");
+      }
       return;
     }
     const next = pending.slice(joined);
     joined = pending.length;
     work.push(...next);
-    await Promise.all(next);
+    const outcomes = await Promise.allSettled(next);
+    failures.push(
+      ...outcomes.flatMap((outcome) => (outcome.status === "rejected" ? [outcome.reason] : [])),
+    );
     // A settled sweep may enqueue its existing pending-force continuation.
     // A single queue barrier can return before that follow-up pass completes.
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
+  }
+}
+
+/** Join the background producer owned by a synthetic mutation before its fixture can close. */
+export async function withSessionHistoryBudgetSweepsForTest<T>(run: () => Promise<T>): Promise<T> {
+  const queueSpy = vi.spyOn(storeWriterQueue, "runQueuedStoreWrite");
+  try {
+    let outcome: { ok: true; value: T } | { ok: false; error: unknown };
+    try {
+      outcome = { ok: true, value: await run() };
+    } catch (error) {
+      outcome = { ok: false, error };
+    }
+    try {
+      await joinSessionHistoryBudgetSweeps(queueSpy);
+    } catch (error) {
+      if (!outcome.ok) {
+        throw new AggregateError(
+          [outcome.error, error],
+          "Fixture mutation and maintenance failed",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    return outcome.value;
+  } finally {
+    queueSpy.mockRestore();
   }
 }
 

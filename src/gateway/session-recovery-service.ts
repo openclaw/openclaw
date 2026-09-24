@@ -159,6 +159,7 @@ export async function recoverGatewaySession(params: {
     idempotencyKey: string;
     sessionId: string;
     sessionKey: string;
+    storePath: string;
   }) => Promise<SessionRecoveryContinuationOutcome>;
 }): Promise<RecoverGatewaySessionResult> {
   const sourceTarget = resolveGatewaySessionStoreTarget({
@@ -197,6 +198,7 @@ export async function recoverGatewaySession(params: {
       idempotencyKey: `restart-recovery-reconcile:${repaired.sessionId}:${repaired.mainRestartRecovery?.cycleId}`,
       sessionId: repaired.sessionId,
       sessionKey: sourceTarget.canonicalKey,
+      storePath: sourceTarget.storePath,
     });
     return {
       ok: true,
@@ -444,6 +446,7 @@ export async function recoverGatewaySession(params: {
     idempotencyKey: `restart-recovery-rollover:${committed.successorEntry.sessionId}`,
     sessionId: committed.successorEntry.sessionId,
     sessionKey: committed.successorKey,
+    storePath: sourceTarget.storePath,
   });
   return {
     ok: true,

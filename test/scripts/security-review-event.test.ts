@@ -163,6 +163,33 @@ describe("automatic security review event resolution", () => {
     expect(result.requests.map(({ method }) => method)).toEqual(["GET", "WAIT", "GET", "POST"]);
   });
 
+  it("resolves the fresh head after a failed pending status before scheduling review", () => {
+    const nextHead = "b".repeat(40);
+    const result = evaluate({
+      eventName: "pull_request_target",
+      event: { action: "opened", pull_request: { number: 42 } },
+      responses: {
+        [`${prefix}/pulls/42`]: [
+          { body: pullRequest },
+          { body: { ...pullRequest, head: { ...pullRequest.head, sha: nextHead } } },
+        ],
+        [`${prefix}/statuses/${head}`]: { status: 500, body: { message: "Server error" } },
+      },
+    });
+    expect(result.status, result.error).toBe(0);
+    expect(result.waits).toEqual([1_000]);
+    expect(result.matrix).toEqual({ include: [{ pr: 42, head: nextHead }] });
+    expect(result.published.map(({ path }) => path)).toEqual([
+      `${prefix}/statuses/${head}`,
+      `${prefix}/statuses/${nextHead}`,
+    ]);
+    expect(result.published.every(({ hadOutput }) => !hadOutput)).toBe(true);
+    expect(result.published.at(-1)?.body?.state).toBe("pending");
+    expect(result.output).toBe(
+      `matrix={"include":[{"pr":42,"head":"${nextHead}"}]}\nhas-prs=true\n`,
+    );
+  });
+
   it.each(["pull_request_target", "issue_comment"])(
     "resolves %s through current PR metadata",
     (eventName) => {
@@ -209,6 +236,7 @@ describe("automatic security review event resolution", () => {
       },
     });
     expect(result).toMatchObject({ status: 1, output: "" });
+    expect(result.waits).toEqual([]);
     expect(result.published).toHaveLength(1);
     expect(result.published[0]?.hadOutput).toBe(false);
   });

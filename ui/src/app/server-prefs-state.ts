@@ -58,6 +58,7 @@ export const SYNCED_PREFS = {
     extract: normalizeSidebarAgentOrder,
     local: (settings) => normalizeSidebarAgentOrder(settings.sidebarAgentOrder) ?? [],
     write: (value) => ({ sidebarAgentOrder: value ?? [] }),
+    clearable: true,
     reset: () => ({ sidebarAgentOrder: [] }),
   }),
   theme: prefSpec<ThemeName>({

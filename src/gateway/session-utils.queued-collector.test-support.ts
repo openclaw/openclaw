@@ -4,7 +4,6 @@ import { subagentRuns } from "../agents/subagents/registry/subagent-registry-mem
 import {
   registerSubagentRun,
   resetSubagentRegistryForTests,
-  testing as registryTesting,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createInitialSubagentSession } from "../agents/subagents/spawn/subagent-spawn-session-patch.js";
 import { spawnSubagentDirect } from "../agents/subagents/spawn/subagent-spawn.js";
@@ -35,6 +34,24 @@ import { createSessionRowProjection, type SessionRowProjection } from "./session
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 
+vi.mock("./server-recovery-runtime-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-recovery-runtime-context.js")>()),
+  bindGatewayLifecycleRequest: () => async () => await new Promise<never>(() => {}),
+}));
+vi.mock("../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: async () => {},
+}));
+vi.mock("../agents/runtime-plugins.js", async () => {
+  const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
+  return { loadAgentRuntimePluginRegistryHandle: createEmptyPluginRegistry };
+});
+vi.mock("../agents/subagents/registry/subagent-registry-state.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../agents/subagents/registry/subagent-registry-state.js")
+  >()),
+  restoreSubagentRunsFromDisk: () => 0,
+}));
+
 export function useQueuedCollectorFixture() {
   const parentKey = "agent:main:dashboard:queued-projection";
   let state: OpenClawTestState;
@@ -55,13 +72,6 @@ export function useQueuedCollectorFixture() {
         defaults: { workspace: state.workspaceDir },
         entries: { main: { workspace: state.workspaceDir } },
       },
-    });
-    registryTesting.setDepsForTest({
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-      // These collectors own no browser sessions; lifecycle cleanup has separate coverage.
-      cleanupBrowserSessionsForLifecycleEnd: async () => {},
-      callGateway: async () => await new Promise<never>(() => {}),
-      restoreSubagentRunsFromDisk: () => 0,
     });
     spawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
@@ -121,7 +131,6 @@ export function useQueuedCollectorFixture() {
       clearAgentRunContext(runId);
     }
     resetSubagentRegistryForTests({ persist: false });
-    registryTesting.setDepsForTest();
     spawnTesting.setDepsForTest();
     resetAgentEventsForTest({ preserveListeners: true });
     resetGatewayWorkAdmission();
@@ -214,7 +223,12 @@ export function useQueuedCollectorFixture() {
     return results;
   }
 
-  async function createQueuedReservation(name = "reserved") {
+  async function createQueuedReservation(
+    name = "reserved",
+    creationPolicy: Parameters<typeof createInitialSubagentSession>[0]["creationPolicy"] = {
+      actor: { type: "agent", id: "main" },
+    },
+  ) {
     const childSessionKey = `agent:main:subagent:${name}`;
     const runId = `${name}-collector`;
     const groupId = `swarm:${parentKey}:parent-turn`;
@@ -228,7 +242,7 @@ export function useQueuedCollectorFixture() {
         incognito: false,
         requesterInternalKey: parentKey,
         completionOwnerSessionKey: parentKey,
-        creationPolicy: { actor: { type: "agent", id: "main" } },
+        creationPolicy,
         modelPatch: {},
         swarmGroupId: groupId,
         collect: true,

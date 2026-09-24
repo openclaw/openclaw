@@ -6,6 +6,11 @@ import type {
   WorkboardNotificationSubscription,
 } from "@openclaw/workboard-contract";
 
+export type WorkboardWriteAuthority = <T>(
+  assertCurrent: () => void,
+  run: () => Promise<T>,
+) => Promise<T>;
+
 export type PersistedWorkboardCard = {
   version: 1;
   card: WorkboardCard;

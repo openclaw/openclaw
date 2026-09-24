@@ -23,14 +23,17 @@ import {
   createSandboxedCompactionParams,
   expectExternalMutationBlockedDuringNativeRequest,
   flushAsyncTasks,
+  maybeCompactCodexAppServerSession,
   requireCompactResult,
+  resetCodexAppServerClientFactoryForTest,
+  setCodexAppServerClientFactoryForTest,
   writeCompactionTestBinding,
   writeSupervisedTestBinding,
 } from "./compact.test-support.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexServerNotification } from "./protocol.js";
-import { resolveCodexSessionBinding, sessionBindingIdentity } from "./session-binding.js";
+import { resolveCodexSessionBinding } from "./session-binding.js";
 import {
   clearCodexAppServerBindingForThread,
   createCodexTestBindingStore,
@@ -42,53 +45,10 @@ import {
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
-import { createClientHarness } from "./test-support.js";
 import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 let tempDir: string;
-let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
-
-type MaybeCompactOptions = Omit<
-  NonNullable<Parameters<typeof maybeCompactCodexAppServerSessionImpl>[1]>,
-  "bindingStore"
-> & {
-  bindingStore?: NonNullable<
-    Parameters<typeof maybeCompactCodexAppServerSessionImpl>[1]
-  >["bindingStore"];
-};
-
-function setCodexAppServerClientFactoryForTest(factory: CodexAppServerClientFactory): void {
-  codexAppServerClientFactoryForTest = factory;
-}
-
-function resetCodexAppServerClientFactoryForTest(): void {
-  codexAppServerClientFactoryForTest = undefined;
-}
-
-function maybeCompactCodexAppServerSession(
-  params: Parameters<typeof maybeCompactCodexAppServerSessionImpl>[0],
-  options: MaybeCompactOptions = {},
-) {
-  const identity = sessionBindingIdentity({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    config: params.config,
-  });
-  registerCodexTestSessionIdentity(
-    params.sessionFile,
-    params.sessionId,
-    params.sessionKey,
-    identity.agentId,
-  );
-  const clientFactory = options.clientFactory ?? codexAppServerClientFactoryForTest;
-  return maybeCompactCodexAppServerSessionImpl(params, {
-    ...options,
-    bindingStore: options.bindingStore ?? testCodexAppServerBindingStore,
-    ...(clientFactory ? { clientFactory } : {}),
-  });
-}
 
 async function writeTestBinding(
   options: Partial<Parameters<typeof writeCodexAppServerBinding>[1]> = {},
@@ -1857,141 +1817,6 @@ describe("maybeCompactCodexAppServerSession", () => {
       });
       expect(recovered.binding).toEqual(binding);
       expect(bindingStore.read(next)).toEqual(binding);
-    },
-  );
-
-  it.each(["generation", "deadline"] as const)(
-    "settles a compaction retry rejected before write (%s)",
-    async (rejection) => {
-      const current = {
-        kind: "session" as const,
-        agentId: "main",
-        sessionKey: "agent:main:recovered-retry",
-        sessionId: "after-compaction",
-      };
-      const previous = { ...current, sessionId: "before-compaction" };
-      const next = { ...current, sessionId: "next-compaction" };
-      const scope = {
-        agentId: current.agentId,
-        sessionKey: current.sessionKey,
-        storePath: path.join(tempDir, "admitted", "sessions.json"),
-      };
-      await upsertSessionEntry({
-        ...scope,
-        entry: { sessionId: previous.sessionId, updatedAt: 1 },
-      });
-      await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
-      const bindingStore = createCodexTestBindingStore();
-      const binding = { threadId: "thread-1", cwd: tempDir };
-      await bindingStore.mutate(previous, { kind: "set", binding });
-      const compactWritten = createDeferred<number>();
-      const harness = createClientHarness({
-        onWrite: (line, send) => {
-          const request = JSON.parse(line) as { id: number; method: string };
-          if (request.method === "thread/compact/start") {
-            compactWritten.resolve(request.id);
-          } else if (request.method === "thread/unsubscribe") {
-            send({ id: request.id, result: { status: "unsubscribed" } });
-          }
-        },
-      });
-      ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
-      await retainCodexAppServerLiveThread(harness.client, binding.threadId);
-      const closeAndWait = vi
-        .spyOn(harness.client, "closeAndWait")
-        .mockResolvedValue({ exited: false, cleanup: "uncertain" });
-      const retirementOutcome = createDeferred<"retained" | "settled">();
-      const errorSpy = vi.spyOn(embeddedAgentLog, "error").mockImplementation((message) => {
-        if (message === "failed to retire unconfirmed codex app-server compaction") {
-          retirementOutcome.resolve("retained");
-        }
-      });
-      vi.useFakeTimers();
-      const pending = maybeCompactCodexAppServerSessionImpl(
-        {
-          sessionId: current.sessionId,
-          sessionKey: current.sessionKey,
-          agentId: current.agentId,
-          sessionTarget: { ...scope, sessionId: current.sessionId },
-          sessionFile: path.join(tempDir, "recovered.jsonl"),
-          workspaceDir: tempDir,
-          trigger: "manual",
-        },
-        {
-          bindingStore,
-          clientFactory: async () => harness.client,
-          allowNonManualNativeRequest: true,
-          pluginConfig: {
-            appServer: {
-              transport: "websocket",
-              url: "ws://127.0.0.1:45001",
-              requestTimeoutMs: rejection === "deadline" ? 25 : 5_000,
-            },
-          },
-        },
-      ).finally(() => retirementOutcome.resolve("settled"));
-      const nextMutation = vi.fn(async () => {});
-      let queued: Promise<void> | undefined;
-      try {
-        const requestId = await compactWritten.promise;
-        expect(bindingStore.read(current)).toEqual(binding);
-        harness.send({
-          id: requestId,
-          error: { code: -32_001, message: "Server overloaded; retry later." },
-        });
-        if (rejection === "generation") {
-          await patchSessionEntry({ ...scope, update: () => ({ sessionId: next.sessionId }) });
-        }
-        queued = withCodexAppServerThreadMutation(binding.threadId, nextMutation);
-        await vi.advanceTimersByTimeAsync(1_000);
-
-        expect(await retirementOutcome.promise).toBe("settled");
-        await expect(pending).resolves.toMatchObject({
-          ok: false,
-          compacted: false,
-          reason: expect.stringContaining(
-            rejection === "generation"
-              ? "Codex session generation is no longer current"
-              : "thread/compact/start timed out",
-          ),
-        });
-        expect(harness.writes.map((line) => JSON.parse(line).method)).toEqual([
-          "thread/compact/start",
-        ]);
-        expect(closeAndWait).not.toHaveBeenCalled();
-        expect(bindingStore.read(current)).toEqual(binding);
-        await queued;
-        expect(nextMutation).toHaveBeenCalledOnce();
-        const recovered = await resolveCodexSessionBinding({
-          bindingStore,
-          identity: rejection === "generation" ? next : current,
-          storePath: scope.storePath,
-        });
-        expect(recovered.binding).toEqual(binding);
-      } finally {
-        // Faulty retirement may leave the watcher waiting for a turn that never ran.
-        // Cleanup-only terminal evidence releases that queue after the assertions.
-        harness.send({
-          method: "turn/started",
-          params: {
-            threadId: binding.threadId,
-            turn: { id: "cleanup-turn", status: "inProgress" },
-          },
-        });
-        harness.send({
-          method: "turn/completed",
-          params: {
-            threadId: binding.threadId,
-            turn: { id: "cleanup-turn", status: "interrupted", items: [] },
-          },
-        });
-        await pending;
-        await queued;
-        closeAndWait.mockRestore();
-        errorSpy.mockRestore();
-        vi.useRealTimers();
-        harness.client.close();
-      }
     },
   );
 

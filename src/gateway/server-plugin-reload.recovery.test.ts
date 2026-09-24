@@ -1005,7 +1005,7 @@ it.for(["replace", "remove", "disable", "rollback"] as const)(
           first.waitForActiveCapture(1, signal),
           sibling.waitForActiveCapture(2, signal),
         ]);
-        const retainedCapture = activeSessions.get(sibling.captures[1]!.session.sessionId);
+        const retainedCapture = sibling.getActiveCaptureForChannel(retainedSource);
         const result = await fixture
           .reload(nextConfig, [], ["transcripts.autoStart"])
           .catch((error: unknown) => error);
@@ -1038,7 +1038,7 @@ it.for(["replace", "remove", "disable", "rollback"] as const)(
           expect(sibling.watches).toHaveLength(2);
           expect(sibling.captures).toHaveLength(2);
         }
-        expect(activeSessions.get(sibling.captures[1]!.session.sessionId)).toBe(
+        expect(activeSessions.get(retainedCapture.session.sessionId)).toBe(
           change === "disable" ? undefined : retainedCapture,
         );
         expect(mocks.log.warn).not.toHaveBeenCalledWith(expect.stringContaining("already owns"));

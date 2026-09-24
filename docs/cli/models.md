@@ -58,6 +58,11 @@ The list shows model inventory. Status explains the configured default, fallback
 and authentication for their routes. It does not inspect a chat session's model
 override; use [`/model status`](/concepts/models#model-in-chat) in that session.
 
+For agents with `runtime.type: "acp"`, status and auth probes inspect the native
+default and native fallback policy. The agent's `model.primary` selects its ACP
+harness and is not a native probe candidate. Use ACP session controls to inspect
+or change the external harness model.
+
 #### Read status correctly
 
 These sections answer different questions:
@@ -126,9 +131,10 @@ For OpenAI ChatGPT/Codex OAuth troubleshooting, `openclaw models status`, `openc
 
 ### List
 
-`openclaw models list` reads published model inventory. It does not start model
-provider discovery or rewrite `models.json`. This also applies to `--all` and
-`--provider <id>`.
+`openclaw models list` returns published model inventory without waiting for
+provider discovery or rewriting `models.json`. This also applies to `--all` and
+`--provider <id>`. A Gateway-backed request can renew expired inventory in the
+background as described below.
 
 ```bash
 openclaw models list --agent <agentId>
@@ -142,8 +148,9 @@ agent on that Gateway. Provider filtering, model visibility and availability use
 the Gateway's captured config and auth facts. The command does not resolve local
 model-provider secrets for that request.
 
-When a provider's saved inventory expires, catalog reads return saved rows while
-the Gateway refreshes that provider in the background. A later read shows newly
+When a provider's saved inventory expires, inventory requests return saved rows while
+the Gateway refreshes that provider in the background. Internal chat and session
+metadata reads do not schedule discovery. A later inventory request shows newly
 published models. Failed refreshes preserve saved rows; use `--refresh` to retry.
 Chat model menus, the Control UI, and `models list` display the catalog's refresh
 warning. The CLI writes the warning to stderr, keeping JSON and plain stdout

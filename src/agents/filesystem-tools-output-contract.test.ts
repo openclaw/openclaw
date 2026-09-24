@@ -46,7 +46,7 @@ describe("filesystem tool output contracts", () => {
   });
 
   afterEach(async () => {
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 

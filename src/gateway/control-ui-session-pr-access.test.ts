@@ -1,19 +1,31 @@
 import { copyFileSync, renameSync } from "node:fs";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  captureStateDatabaseCoordinatorRuntime,
+  withStateDatabaseCoordinatorRuntimeDirectory,
+} from "../infra/state-database-coordinator.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import type {
   ControlUiSessionPullRequestCheckDetails,
   ControlUiSessionPullRequests,
@@ -39,7 +51,6 @@ import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 const METHOD = "controlUi.sessionPullRequests.subscribe";
 const EVENT = "controlUi.sessionPullRequests.changed";
 const sessionKey = "agent:main:guest-publication";
-const readerEmail = "guest-publication-reader@example.test";
 const branch = { owner: "synthetic", repo: "publication", branch: "guest-change" };
 const snapshot: ControlUiSessionPullRequests = { pullRequests: [], branch, rateLimited: false };
 const readerChanges = [
@@ -55,9 +66,19 @@ type Load = NonNullable<
   Parameters<typeof createControlUiSessionPullRequestSubscriptions>[0]["load"]
 >;
 
+let fixtureSequence = 0;
+let sharedState: OpenClawTestState | undefined;
+afterAll(async () => {
+  await sharedState?.cleanup();
+});
+
 async function createFixture(scope: OperatorScope, useDefaultLoader = false) {
+  const fixtureId = ++fixtureSequence;
+  const readerEmail = `guest-publication-reader-${fixtureId}@example.test`;
   const profile = ensureProfileForEmail(readerEmail);
-  const other = ensureProfileForEmail("publication-owner@example.test");
+  const other = ensureProfileForEmail(`publication-owner-${fixtureId}@example.test`);
+  const seeded = new Set<string>();
+  const sessionId = `${sessionKey}-${fixtureId}`;
   const cfg: OpenClawConfig = {
     gateway: {
       roles: {
@@ -75,10 +96,14 @@ async function createFixture(scope: OperatorScope, useDefaultLoader = false) {
   setUserProfileRole(profile.id, "reader");
   setRuntimeConfigSnapshot(cfg);
   const seed = async (key: string, creator = profile.id, patch: Partial<SessionEntry> = {}) => {
+    if (!seeded.has(key)) {
+      expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey: key })).toBeUndefined();
+      seeded.add(key);
+    }
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: key },
       {
-        sessionId: key,
+        sessionId: `${key}-${fixtureId}`,
         updatedAt: 1,
         createdActor: { type: "human", source: "profile", id: creator },
         spawnedCwd: "/synthetic/guest-publication",
@@ -141,6 +166,7 @@ async function createFixture(scope: OperatorScope, useDefaultLoader = false) {
     addReader,
     profile,
     other,
+    sessionId,
     cfg,
     seed,
     load,
@@ -200,7 +226,21 @@ async function createFixture(scope: OperatorScope, useDefaultLoader = false) {
     async close() {
       await subscriptions.stop();
       connections.clients.clear();
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
+    },
+    async removeSessions() {
+      for (const key of seeded) {
+        const original = loadSessionEntryReadOnly({ agentId: "main", sessionKey: key });
+        if (original) {
+          await deleteSessionEntryLifecycle({
+            agentId: "main",
+            storePath: loadGatewaySessionEntryReadOnly(key, { agentId: "main" }).storePath,
+            target: { canonicalKey: key, storeKeys: [key] },
+            expectedSessionId: original.sessionId,
+            archiveTranscript: false,
+          });
+        }
+      }
     },
   };
 }
@@ -208,15 +248,44 @@ async function createFixture(scope: OperatorScope, useDefaultLoader = false) {
 async function withFixture(
   scope: OperatorScope,
   run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
+  isolated = false,
 ) {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const fixture = await createFixture(scope);
-    try {
-      await run(fixture);
-    } finally {
-      await fixture.close();
-    }
-  });
+  if (isolated) {
+    return withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fixture = await createFixture(scope);
+      try {
+        await run(fixture);
+      } finally {
+        await fixture.close();
+      }
+    });
+  }
+  // Only the physical stores survive; every case owns its reader, projection and session rows.
+  sharedState ??= await createOpenClawTestState({ scenario: "minimal" });
+  sharedState.applyEnv();
+  await withStateDatabaseCoordinatorRuntimeDirectory(
+    { ...captureStateDatabaseCoordinatorRuntime(), keepAlive: false },
+    async () => {
+      const work = new AsyncWorkScope();
+      let fixture: Awaited<ReturnType<typeof createFixture>> | undefined;
+      try {
+        await work.track(async () => {
+          fixture = await createFixture(scope);
+          try {
+            await run(fixture);
+          } finally {
+            await fixture.close();
+          }
+        });
+      } finally {
+        try {
+          await work.drain();
+        } finally {
+          await fixture?.removeSessions();
+        }
+      }
+    },
+  );
 }
 
 function frames(socket: ReturnType<typeof createGatewayWsTestSocket>) {
@@ -396,7 +465,7 @@ describe("registered session PR subscriptions", () => {
             agentId: "main",
             storePath: original.storePath,
             target: { canonicalKey: original.canonicalKey, storeKeys: original.storeKeys },
-            expectedSessionId: sessionKey,
+            expectedSessionId: f.sessionId,
             archiveTranscript: false,
           }),
         ).resolves.toMatchObject({ deleted: true });
@@ -427,82 +496,86 @@ describe("registered session PR check details", () => {
     "literal-global-visibility",
     "store closure",
   ] as const)("keeps pending details bound to the original reader (%s)", async (change) => {
-    await withFixture("operator.read", async (f) => {
-      const key = change.startsWith("literal-global")
-        ? "agent:main:global"
-        : "agent:main:shared-checks";
-      if (change === "literal-global-visibility") {
-        await f.seed("global", f.profile.id, { sessionId: "separate-global-row" });
-      }
-      const mutation =
-        change === "literal-global"
-          ? "unchanged"
-          : change === "literal-global-visibility"
-            ? "visibility"
-            : change;
-      await f.seed(key, f.other.id);
-      const params = {
-        sessionKey: key,
-        owner: "synthetic",
-        repo: "publication",
-        number: 1,
-        headSha: "a".repeat(40),
-      };
-      const result: ControlUiSessionPullRequestCheckDetails = {
-        owner: params.owner,
-        repo: params.repo,
-        number: params.number,
-        headSha: params.headSha,
-        status: "ready",
-        rateLimited: false,
-        checks: [],
-      };
-      const entered = createDeferredCore();
-      const held = createDeferredCore<ControlUiSessionPullRequestCheckDetails>();
-      const load = vi.fn(async () => {
-        entered.resolve();
-        return await held.promise;
-      });
-      const respond = vi.fn();
-      const request = handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "pending-checks",
-          method: "controlUi.sessionPullRequests.checks",
-          params,
-        },
-        client: f.client,
-        context: f.context,
-        extraHandlers: createControlUiHandlers(undefined, undefined, load),
-        isWebchatConnect: () => false,
-        respond,
-      });
-      try {
-        await Promise.race([
-          entered.promise,
-          request.then(() => {
-            throw new Error("The registered check-details loader was not entered");
-          }),
-        ]);
-        if (mutation === "store closure") {
-          const source = loadGatewaySessionEntryReadOnly(key, { agentId: "main" }).readSource;
-          expect(source).toBeDefined();
-          await closeOpenClawAgentDatabaseByPathAsync(source!.path);
-        } else {
-          await f.changeReader(mutation, key);
+    await withFixture(
+      "operator.read",
+      async (f) => {
+        const key = change.startsWith("literal-global")
+          ? "agent:main:global"
+          : "agent:main:shared-checks";
+        if (change === "literal-global-visibility") {
+          await f.seed("global", f.profile.id, { sessionId: "separate-global-row" });
         }
-        held.resolve(result);
-        await request;
-        expect(respond).toHaveBeenCalledExactlyOnceWith(
-          mutation === "unchanged",
-          mutation === "unchanged" ? result : undefined,
-          mutation === "unchanged" ? undefined : expect.objectContaining({ code: "UNAVAILABLE" }),
-        );
-      } finally {
-        held.resolve(result);
-        await request;
-      }
-    });
+        const mutation =
+          change === "literal-global"
+            ? "unchanged"
+            : change === "literal-global-visibility"
+              ? "visibility"
+              : change;
+        await f.seed(key, f.other.id);
+        const params = {
+          sessionKey: key,
+          owner: "synthetic",
+          repo: "publication",
+          number: 1,
+          headSha: "a".repeat(40),
+        };
+        const result: ControlUiSessionPullRequestCheckDetails = {
+          owner: params.owner,
+          repo: params.repo,
+          number: params.number,
+          headSha: params.headSha,
+          status: "ready",
+          rateLimited: false,
+          checks: [],
+        };
+        const entered = createDeferredCore();
+        const held = createDeferredCore<ControlUiSessionPullRequestCheckDetails>();
+        const load = vi.fn(async () => {
+          entered.resolve();
+          return await held.promise;
+        });
+        const respond = vi.fn();
+        const request = handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "pending-checks",
+            method: "controlUi.sessionPullRequests.checks",
+            params,
+          },
+          client: f.client,
+          context: f.context,
+          extraHandlers: createControlUiHandlers(undefined, undefined, load),
+          isWebchatConnect: () => false,
+          respond,
+        });
+        try {
+          await Promise.race([
+            entered.promise,
+            request.then(() => {
+              throw new Error("The registered check-details loader was not entered");
+            }),
+          ]);
+          if (mutation === "store closure") {
+            const source = loadGatewaySessionEntryReadOnly(key, { agentId: "main" }).readSource;
+            expect(source).toBeDefined();
+            await closeOpenClawAgentDatabaseByPathAsync(source!.path);
+          } else {
+            await f.changeReader(mutation, key);
+          }
+          held.resolve(result);
+          await request;
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            mutation === "unchanged",
+            mutation === "unchanged" ? result : undefined,
+            mutation === "unchanged" ? undefined : expect.objectContaining({ code: "UNAVAILABLE" }),
+          );
+        } finally {
+          held.resolve(result);
+          await request;
+        }
+      },
+      change === "store closure",
+    );
   });
 });
 

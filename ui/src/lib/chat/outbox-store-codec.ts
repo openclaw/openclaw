@@ -222,6 +222,7 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   } else if (
     entry.sendState === "failed" ||
     entry.sendState === "unconfirmed" ||
+    entry.sendState === "held" ||
     entry.sendState === "waiting-idle" ||
     entry.sendState === "waiting-reconnect"
   ) {
@@ -262,12 +263,12 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
     (!Array.isArray(entry.mentions) || entry.mentions.length !== (mentions?.length ?? 0))
   ) {
     // A reconnect must not send a different recipient selection after losing its binding.
-    item.sendState = "failed";
+    item.sendState = item.sendState === "held" ? "held" : "failed";
     item.sendError = t("chat.mentions.restoreFailed");
   }
   if (entry.workContextUnavailable === true || item.workContextUnavailable) {
     item.workContextUnavailable = true;
-    item.sendState = "failed";
+    item.sendState = item.sendState === "held" ? "held" : "failed";
     item.sendError = t("chat.messages.attachedContext.restoreFailed");
   }
   return item;

@@ -42,7 +42,12 @@ async function captureLoadingState(
   }
   const skeletons = target.locator(".settings-loading-skeleton");
   await expect.poll(() => skeletons.count()).toBeGreaterThan(0);
-  expect(await target.textContent()).not.toContain("Loading");
+  expect(
+    await target
+      .getByText(/Loading/)
+      .filter({ visible: true })
+      .count(),
+  ).toBe(0);
 }
 
 async function withPage(run: (page: import("playwright").Page) => Promise<void>): Promise<void> {
@@ -270,7 +275,7 @@ suite.define(() => {
       await gateway.waitForRequest("tools.effective");
       const panel = page.locator("#agent-panel");
       await captureLoadingState(
-        panel.locator(".settings-section", { hasText: "Available right now" }).first(),
+        panel.locator(".settings-section", { hasText: "Tool preview" }).first(),
         "agent-tools-available",
       );
       await captureLoadingState(

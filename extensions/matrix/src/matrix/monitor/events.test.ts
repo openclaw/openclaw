@@ -1,7 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Matrix tests cover events plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getSentNoticeBody,
+  getSentNoticeBodyFromCall,
+  getSentNoticeBodies,
+  installMatrixMonitorTestRuntime,
+} from "../../test-runtime.js";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth } from "../client.js";
 import type { MatrixClient } from "../sdk.js";
@@ -14,19 +20,7 @@ type RoomEventListener = (roomId: string, event: MatrixRawEvent) => void;
 type FailedDecryptListener = (roomId: string, event: MatrixRawEvent, error: Error) => void;
 type VerificationSummaryListener = (summary: MatrixVerificationSummary) => void;
 
-function getSentNoticeBody(sendMessage: ReturnType<typeof vi.fn>, index = 0): string {
-  const calls = sendMessage.mock.calls as unknown[][];
-  return getSentNoticeBodyFromCall(calls[index] ?? []);
-}
-
-function getSentNoticeBodyFromCall(call: unknown[]): string {
-  const payload = (call[1] ?? {}) as { body?: string };
-  return payload.body ?? "";
-}
-
-function getSentNoticeBodies(sendMessage: ReturnType<typeof vi.fn>): string[] {
-  return (sendMessage.mock.calls as unknown[][]).map(getSentNoticeBodyFromCall);
-}
+beforeEach(() => installMatrixMonitorTestRuntime());
 
 function expectBodiesContain(bodies: string[], text: string) {
   expect(bodies.join("\n")).toContain(text);
@@ -968,11 +962,11 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(
       getSentNoticeBodies(sendMessage).some((body) => body.includes("SAS decimal: 2468 1357 9753")),
     ).toBe(true);
-    const calls = sendMessage.mock.calls as unknown[][];
+    const calls = sendMessage.mock.calls;
     const sasCall = calls.find((call) =>
       getSentNoticeBodyFromCall(call).includes("SAS decimal: 2468 1357 9753"),
     );
-    expect((sasCall?.[0] ?? "") as string).toBe("!dm-active:example.org");
+    expect(sasCall?.[0] ?? "").toBe("!dm-active:example.org");
   });
 
   it("retries SAS notice lookup when start arrives before SAS payload is available", async () => {

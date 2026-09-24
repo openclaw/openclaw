@@ -1,15 +1,15 @@
 // Gateway tool runtime-identity tests keep current-turn authority fail closed.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { withAgentRuntimeExecutionLineage } from "../../gateway/agent-runtime-execution-lineage.js";
 import {
-  createAgentRuntimeApprovalAuthorityValidator,
   mintAgentRuntimeIdentityToken,
   verifyAgentRuntimeIdentityToken,
 } from "../../gateway/agent-runtime-identity-token.js";
 import { resolveExecutionIdentitySpawnFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import { createTestApprovalManager } from "../../gateway/exec-approval-manager.test-support.js";
+import { createPreparedTestApprovalManager } from "../../gateway/exec-approval-manager.test-support.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
@@ -722,7 +722,7 @@ describe("gateway tool runtime identity", () => {
     "rejects late $method registration after permission change (ambient lifetime: $ambient)",
     async ({ method, ambient }, testContext) => {
       mocks.callGateway.mockResolvedValue({ id: "approval" });
-      const manager = createTestApprovalManager<{
+      const { manager } = await createPreparedTestApprovalManager<{
         command: string;
         title: string;
         description: string;

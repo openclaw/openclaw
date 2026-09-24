@@ -89,6 +89,8 @@ function warnIfIssuedBootstrapScopesWereStripped(params: {
 }
 
 type DeviceBootstrapTokenIssueParams = {
+  /** Revalidate caller authority at the worker's transaction and commit boundaries. */
+  assertCurrent?: () => void;
   baseDir?: string;
   profile?: DeviceBootstrapProfileInput;
   roles?: readonly string[];
@@ -98,6 +100,7 @@ type DeviceBootstrapTokenIssueParams = {
 async function issueDeviceBootstrapTokenRecord(
   params: DeviceBootstrapTokenIssueParams & { setupId?: string },
 ): Promise<{ token: string; expiresAtMs: number }> {
+  const assertCurrent = params.assertCurrent;
   return await withLock(async () => {
     const profile = resolveIssuedBootstrapProfile(params);
     warnIfIssuedBootstrapScopesWereStripped({
@@ -106,7 +109,7 @@ async function issueDeviceBootstrapTokenRecord(
     });
     return await executeDevicePairingMutation(
       { type: "bootstrap.issue", input: { profile, setupId: params.setupId, nowMs: Date.now() } },
-      { baseDir: params.baseDir },
+      { baseDir: params.baseDir, assertCurrent },
     );
   });
 }
@@ -211,13 +214,13 @@ export async function readDevicePairSetupCompletion(
 
 /** Remove every outstanding bootstrap token. */
 export async function clearDeviceBootstrapTokens(
-  params: BootstrapParams<"bootstrap.clear"> = {},
+  params: BootstrapParams<"bootstrap.clear"> & { assertCurrent?: () => void } = {},
 ): Promise<DeviceBootstrapOperations["bootstrap.clear"]["output"]> {
-  const { baseDir, ...input } = params;
+  const { baseDir, assertCurrent, ...input } = params;
   return await withLock(() =>
     executeDevicePairingMutation(
       { type: "bootstrap.clear", input: { ...input, nowMs: Date.now() } },
-      { baseDir },
+      { baseDir, assertCurrent },
     ),
   );
 }

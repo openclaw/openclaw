@@ -136,7 +136,14 @@ describe("native Codex tool response fidelity", () => {
           'cli_auth_credentials_store="ephemeral"',
           'web_search="disabled"',
           'approval_policy="never"',
-          'sandbox_mode="read-only"',
+          // The proof covers exec output fidelity, not sandboxing. Bubblewrap is
+          // the only Linux sandbox since Codex 0.154 and needs user plus network
+          // namespaces; namespace-restricted CI hosts fail with
+          // `bwrap: loopback: Failed RTM_NEWADDR` before `cat` runs, and the
+          // app-server then reports no commandExecution item for the call.
+          // Product launches pass `--sandbox` from the resolved exec policy, so
+          // this direct app-server dial mirrors that instead of a config default.
+          'sandbox_mode="danger-full-access"',
           "allow_login_shell=false",
           // The synthetic model uses fallback metadata; give the full-result case
           // an explicit history budget instead of relying on a model catalog default.
@@ -245,10 +252,19 @@ describe("native Codex tool response fidelity", () => {
             ),
           )
           .find((item) => item.type === "commandExecution" && item.id === callId),
-        "native command execution",
+        `native command execution; output=${JSON.stringify(output.slice(0, 500))} events=${JSON.stringify(
+          notifications.map((notification) => {
+            const item = isJsonObject(notification.params) ? notification.params.item : undefined;
+            return isJsonObject(item)
+              ? [notification.method, item.type, item.id, item.status]
+              : [notification.method];
+          }),
+        )}`,
       );
-      expect(command).toMatchObject({ status: "completed", exitCode: 0, aggregatedOutput: source });
-      expect(output).not.toBe(command.aggregatedOutput);
+      // Completion aggregates use a late streaming subscriber and can be null.
+      // Check the independently buffered response against the next request below.
+      expect(command).toMatchObject({ status: "completed", exitCode: 0 });
+      expect(output).not.toBe(source);
       expect(output).toContain("Process exited with code 0\n");
       expect(output).toContain("Output:\n");
       if (maxOutputTokens === 24_000) {

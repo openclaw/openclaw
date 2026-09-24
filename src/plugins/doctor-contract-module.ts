@@ -113,12 +113,36 @@ type PluginDoctorStateMigrationResult = {
   warningDisposition?: "recoverable";
 };
 
+export type PluginDoctorMigrationBackupResource = {
+  /** Absolute source or destination path, including destinations not created yet. */
+  path: string;
+  kind: "sqlite" | "file" | "directory";
+};
+
+export type PluginDoctorMigrationBackupWarning = {
+  kind: "undeclared-migration-resources";
+  pluginId: string;
+  message: string;
+};
+
 export type PluginDoctorStateMigration = {
   id: string;
   label: string;
   /** Import retired file state only during explicit `doctor --fix` repair. */
   doctorOnly?: boolean;
   phase?: "after-session-repair";
+  /** Read-only recovery inventory. Never open or migrate a writable store here. */
+  collectBackupResources?: (
+    params: Pick<
+      PluginDoctorStateMigrationInput,
+      "config" | "env" | "stateDir" | "serviceWorkspaceDir"
+    > & {
+      /** Rehearsal admission must reject remote or otherwise unlisted migration data. */
+      requireLocalResources?: boolean;
+    },
+  ) =>
+    | readonly PluginDoctorMigrationBackupResource[]
+    | Promise<readonly PluginDoctorMigrationBackupResource[]>;
   detectLegacyState: (
     params: PluginDoctorStateMigrationInput,
   ) =>
@@ -128,6 +152,18 @@ export type PluginDoctorStateMigration = {
   migrateLegacyState: (
     params: PluginDoctorStateMigrationInput,
   ) => Promise<PluginDoctorStateMigrationResult> | PluginDoctorStateMigrationResult;
+};
+
+export type PluginDoctorStateMigrationEntry = {
+  pluginId: string;
+  channelIds: string[];
+  /**
+   * Mirrors the runtime proxy's durable-store gate: only bundled plugins and trusted
+   * official installs may reach channel ingress queues. Doctor must not become a way
+   * around that for an activated workspace plugin.
+   */
+  trustedForDurableStores?: boolean;
+  migration: PluginDoctorStateMigration;
 };
 
 export type PluginDoctorContractModule = {
@@ -142,7 +178,7 @@ export type PluginDoctorContractModule = {
   stateMigrations?: unknown;
 };
 
-type PluginDoctorCompatibilityNormalizer = (params: { cfg: OpenClawConfig }) => {
+export type PluginDoctorCompatibilityNormalizer = (params: { cfg: OpenClawConfig }) => {
   config: OpenClawConfig;
   changes: string[];
 };
@@ -207,6 +243,7 @@ function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMig
     label: migration.label.trim(),
     doctorOnly: migration.doctorOnly === true ? true : undefined,
     phase: migration.phase === "after-session-repair" ? migration.phase : undefined,
+    collectBackupResources: migration.collectBackupResources,
     detectLegacyState: migration.detectLegacyState,
     migrateLegacyState: migration.migrateLegacyState,
   }));

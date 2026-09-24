@@ -30,7 +30,7 @@ type ArtifactInitialization = Pick<InitializedUpdate, "stagedPackage"> & {
 };
 
 /** Candidate hooks may initialize their own profile, never the profile awaiting admission. */
-async function withFreshUpdateArtifact<T>(
+export async function withPrivateStagedPackageInstall<T>(
   params: StageParams,
   use: (candidate: {
     stage: Awaited<ReturnType<typeof stagePackageInstallUpdate>>;
@@ -129,7 +129,7 @@ function readFreshUpdateArtifactMetadata(manifest: unknown) {
 export async function runFreshUpdateArtifact(
   params: {
     initialization: ArtifactInitialization;
-    stageParams: (progress: ReturnType<typeof createUpdateProgress>["progress"]) => StageParams;
+    stageParams: (presentation: ReturnType<typeof createUpdateProgress>) => StageParams;
     json: boolean;
   },
   run: () => Promise<void>,
@@ -138,8 +138,8 @@ export async function runFreshUpdateArtifact(
   const { initialization } = params;
   const { target } = initialization;
   try {
-    return await withFreshUpdateArtifact(
-      params.stageParams(presentation.progress),
+    return await withPrivateStagedPackageInstall(
+      params.stageParams(presentation),
       async ({ stage, manifest }) => {
         initialization.stagedPackage = stage;
         const metadata = readFreshUpdateArtifactMetadata(manifest);

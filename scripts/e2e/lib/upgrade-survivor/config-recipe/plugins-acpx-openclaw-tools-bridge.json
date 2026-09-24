@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "allow": ["acpx", "discord", "memory", "telegram", "whatsapp"],
+  "allow": ["anthropic", "google", "openai", "acpx", "discord", "memory", "telegram", "whatsapp"],
   "entries": {
     "acpx": {
       "enabled": true,

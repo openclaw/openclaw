@@ -8,6 +8,7 @@ const PROCESS_TREE_EXIT_POLL_MS = 25;
 export type ManagedLocalServiceProcess = {
   child: ChildProcess;
   closed: boolean;
+  windowsRootGone?: boolean;
   pendingSignals: Set<"SIGTERM" | "SIGKILL">;
 };
 
@@ -34,11 +35,17 @@ export function drainLocalServiceOutput(child: ChildProcess): void {
 }
 
 function isLocalServiceProcessTreeAlive(owned: ManagedLocalServiceProcess): boolean {
-  // Windows retires numeric PID authority at exit; POSIX still owns the process group.
-  return (
-    !(process.platform === "win32" && hasLocalServiceProcessExited(owned.child)) &&
-    isChildProcessTreeAlive(owned.child)
-  );
+  const windows = process.platform === "win32";
+  if (windows && (owned.windowsRootGone || hasLocalServiceProcessExited(owned.child))) {
+    owned.windowsRootGone = true;
+    return false;
+  }
+  const alive = isChildProcessTreeAlive(owned.child);
+  if (windows && !alive) {
+    // A later live numeric PID cannot restore authority over the original child.
+    owned.windowsRootGone = true;
+  }
+  return alive;
 }
 
 function isLocalServiceProcessSettled(owned: ManagedLocalServiceProcess): boolean {

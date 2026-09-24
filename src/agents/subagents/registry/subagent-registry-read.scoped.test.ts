@@ -1,8 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import {
-  buildLatestSubagentRunReadIndexFromRuns,
-  buildSubagentRunReadIndexFromRuns,
   countActiveDescendantRunsFromRuns,
   countPendingDescendantRunsFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
@@ -384,18 +382,6 @@ describe("subagent registry scoped reads", () => {
 
     const requester = resolveRequesterForChildSessionFromRuns(childSnapshot, reusedChild);
     const cases = [
-      {
-        name: "full snapshot index",
-        actual: mod.buildSubagentRunReadIndex(now).latestRunsByChildSessionKey,
-        expected: buildSubagentRunReadIndexFromRuns({ runs: snapshot, now })
-          .latestRunsByChildSessionKey,
-      },
-      {
-        name: "latest full snapshot index",
-        actual: mod.buildLatestSubagentRunReadIndex().getLatestSubagentRun(reusedChild),
-        expected:
-          buildLatestSubagentRunReadIndexFromRuns(snapshot).getLatestSubagentRun(reusedChild),
-      },
       {
         name: "controller snapshot",
         actual: mod.listSubagentRunsForController(controller),

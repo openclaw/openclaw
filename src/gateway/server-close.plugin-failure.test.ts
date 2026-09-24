@@ -11,6 +11,7 @@ import {
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
@@ -218,6 +219,12 @@ it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-on
       if (hasPluginFailure) {
         expect.soft(collectNestedErrorCandidates(error)).toContain(pluginFailure);
         expect(pluginSawOpenDatabase).toBe(true);
+        if (mode === "cache" || mode === "restart") {
+          // The process-cache reset retains the same outcome for its next observer.
+          expect((await waitForPluginCacheRetirement()).failures).toEqual([
+            { pluginId: fixture.pluginId, hookId: "instance", error: pluginFailure },
+          ]);
+        }
       } else {
         expect(error).toBeUndefined();
       }

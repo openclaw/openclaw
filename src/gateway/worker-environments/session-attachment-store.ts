@@ -5,7 +5,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import type {
   WorkerEnvironmentIntentInput,
@@ -76,6 +75,16 @@ function get(db: DatabaseSync, sessionId: string) {
   return row ? fromRow(row) : undefined;
 }
 
+export function readWorkerEnvironmentSessionAttachments(db: DatabaseSync, ids?: readonly string[]) {
+  if (ids?.length === 0) {
+    return [];
+  }
+  const rows = query(db).selectFrom("worker_environment_session_attachments").selectAll();
+  return executeSqliteQuerySync(db, ids ? rows.where("environment_id", "in", ids) : rows).rows.map(
+    fromRow,
+  );
+}
+
 export function hasWorkerEnvironmentSessionAttachment(
   db: DatabaseSync,
   environmentId: string,
@@ -92,7 +101,6 @@ export function hasWorkerEnvironmentSessionAttachment(
 }
 
 export function createWorkerEnvironmentSessionAttachmentStore(options: {
-  path: string;
   read: () => DatabaseSync;
   write: <T>(operation: (db: DatabaseSync) => T) => T;
   now: () => number;
@@ -113,40 +121,9 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
     }
   };
   return {
-    async hasSessionAttachment(environmentId: string): Promise<boolean> {
-      const reply = await executeExistingOpenClawStateRead(
-        { path: options.path },
-        { type: "workerEnvironments.hasSessionAttachment", environmentId },
-      );
-      if (!reply?.ok || reply.type !== "workerEnvironments.hasSessionAttachment") {
-        throw new Error("Conversation environment attachment read is unavailable");
-      }
-      return reply.attached;
-    },
     getSessionAttachmentRecord: (sessionId: string) => get(read(), sessionId),
-    listSessionAttachmentRecords: () => {
-      const db = read();
-      return executeSqliteQuerySync(
-        db,
-        query(db).selectFrom("worker_environment_session_attachments").selectAll(),
-      ).rows.map(fromRow);
-    },
-    findSessionAttachmentRecord(
-      identity: Pick<WorkerEnvironmentSessionIdentity, "agentId" | "sessionKey">,
-    ) {
-      const db = read();
-      const rows = executeSqliteQuerySync(
-        db,
-        query(db)
-          .selectFrom("worker_environment_session_attachments")
-          .selectAll()
-          .where("agent_id", "=", identity.agentId)
-          .where("session_key", "=", identity.sessionKey)
-          .where("closed_at_ms", "is", null),
-      ).rows;
-      return rows.length === 1 ? fromRow(rows[0]!) : undefined;
-    },
     createSessionAttachmentIntent(
+      this: void,
       input: WorkerEnvironmentIntentInput & WorkerEnvironmentSessionIdentity,
       assertCurrent: () => void,
     ) {
@@ -201,7 +178,7 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
         return { attachment: get(db, input.sessionId)!, environment };
       });
     },
-    closeSessionAttachment(sessionId: string, assertCurrent: () => void = () => {}) {
+    closeSessionAttachment(this: void, sessionId: string, assertCurrent: () => void = () => {}) {
       return write((db) => {
         assertCurrent();
         const current = get(db, sessionId);
@@ -218,7 +195,7 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
         return get(db, sessionId);
       });
     },
-    cancelSessionAttachmentReservation(record: WorkerEnvironmentAttachmentRecord) {
+    cancelSessionAttachmentReservation(this: void, record: WorkerEnvironmentAttachmentRecord) {
       write((db) => {
         const current = get(db, record.sessionId);
         const environment = options.getEnvironment(db, record.environmentId);
@@ -256,7 +233,11 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
         );
       });
     },
-    touchSessionAttachment(record: WorkerEnvironmentAttachmentRecord, assertCurrent: () => void) {
+    touchSessionAttachment(
+      this: void,
+      record: WorkerEnvironmentAttachmentRecord,
+      assertCurrent: () => void,
+    ) {
       write((db) => {
         assertCurrent();
         const current = get(db, record.sessionId);

@@ -23,11 +23,11 @@ import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.
 import {
   acquireStateDatabaseHandleLease,
   hasStateDatabaseSourceExclusion,
+  withStateDatabaseCoordinatorRuntimeDirectory,
 } from "../infra/state-database-coordinator.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { observeOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
 import {
   borrowOpenClawStateDatabaseForAsyncRead,
   retainOpenClawStateDatabaseForIndependentRead,
@@ -45,6 +45,10 @@ import {
   openOpenClawStateReadOnlyLocation,
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
+import {
+  withCachedOpenClawStateDatabaseReadOnly,
+  type ReusedOpenClawStateReadOnlyDatabase,
+} from "./openclaw-state-db-readonly-reuse.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
   existingPathOrUndefined,
@@ -72,6 +76,7 @@ import type {
   RetainedReadScope,
 } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 const artifactPreservingReads = resolveGlobalSingleton(
   Symbol.for("openclaw.artifactPreservingStateReads"),
@@ -252,8 +257,6 @@ export function withSynchronousArtifactPreservingStateSnapshot<T>(operation: () 
   return result;
 }
 
-type ReusedOpenClawStateReadOnlyDatabase<T> = { reused: false } | { reused: true; value: T };
-
 function resolveReadOnlyPath(options: OpenClawStateDatabaseOptions): string {
   const pathname = path.resolve(
     options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
@@ -269,6 +272,7 @@ function resolveReadOnlyPath(options: OpenClawStateDatabaseOptions): string {
 function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   pathname: string,
+  currentAuthority = false,
 ): ReusedOpenClawStateReadOnlyDatabase<T> {
   const snapshot = stateSnapshotReads.getStore();
   if (snapshot?.active && snapshot.path === pathname) {
@@ -281,22 +285,7 @@ function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
       value: withOpenClawStateReadOnlyLocation(operation, pathname, snapshot.location),
     };
   }
-  const opened = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(pathname);
-  if (!opened?.db.isOpen || opened.db.isTransaction) {
-    return { reused: false };
-  }
-  try {
-    // Process-local terminal failures evict this handle. Persisted quarantine
-    // is checked on the next physical open so hot reads do not poll metadata.
-    // A newer build can migrate this file while the handle stays open, so the
-    // forward-compatibility gate still runs before any reused read.
-    assertStateReadSchema(opened.db, pathname);
-    observeOpenClawDatabaseMaintenanceResource(opened.db);
-    return { reused: true, value: operation(opened) };
-  } catch (error) {
-    openClawStateDatabaseCache.evictOpenClawStateDatabaseAfterCorruption(opened, error);
-    throw error;
-  }
+  return withCachedOpenClawStateDatabaseReadOnly(operation, pathname, currentAuthority);
 }
 
 function withFreshOpenClawStateDatabaseReadOnly<T>(
@@ -402,11 +391,19 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
 export function executeExistingOpenClawStateRead(
   options: OpenClawStateDatabaseOptions,
   command: OpenClawStateReadCommand,
-  readOptions: OpenClawStateReadOptions = {},
+  { context, current, mapError }: OpenClawStateReadOptions = {},
 ): Promise<OpenClawStateReadReply | undefined> {
-  return mapOpenClawStateReadError(readOptions.mapError, (receipt) => {
-    const read = () => executeRetainedOpenClawStateRead(options, command, receipt);
-    return readOptions.current ? stateSnapshotReads.exit(read) : read();
+  return mapOpenClawStateReadError(mapError, (receipt) => {
+    context?.admission.assertCurrent();
+    const read = () => {
+      const execute = () => executeRetainedOpenClawStateRead(options, command, receipt, context);
+      return current ? stateSnapshotReads.exit(execute) : execute();
+    };
+    const run = () =>
+      context
+        ? withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, read)
+        : read();
+    return context?.runInCapturedSchemaScope ? context.runInCapturedSchemaScope(run) : run();
   });
 }
 
@@ -414,6 +411,7 @@ function executeRetainedOpenClawStateRead(
   options: OpenClawStateDatabaseOptions,
   command: OpenClawStateReadCommand,
   receipt: OpenClawStateReadReceipt,
+  capturedContext?: OpenClawStateWorkerContext,
 ): Promise<OpenClawStateReadReply | undefined> {
   const pathname = resolveReadOnlyPath(options);
   const current = stateSnapshotReads.getStore();
@@ -424,10 +422,15 @@ function executeRetainedOpenClawStateRead(
       (scope) => scope.active && scope.path === pathname,
     ),
   ];
-  const context = captureOpenClawStateWorkerContext({
-    path: pathname,
-    env: snapshot?.env ?? options.env,
-  });
+  const env = snapshot?.env ?? options.env;
+  const context = capturedContext ?? captureOpenClawStateWorkerContext({ path: pathname, env });
+  if (capturedContext) {
+    if (context.admission.databasePath !== pathname) {
+      throw new Error("Shared-state read context does not match its selected source");
+    }
+    context.maintenanceScope?.assertAdmission();
+    context.admission.assertCurrent();
+  }
   const excluded = hasStateDatabaseSourceExclusion(pathname);
   const preserveArtifacts = requiresArtifactPreservingSnapshot(pathname);
   const controller = new AbortController();
@@ -683,7 +686,7 @@ export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
   return stateSnapshotReads.exit(() => {
     // Maintenance admission belongs to a fresh private reader, never a cached writer.
     if (!openStateSchemaReadAdmission) {
-      const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
+      const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname, true);
       if (reused.reused) {
         return reused.value;
       }

@@ -83,7 +83,7 @@ export function createSqliteTableContract(
     normalizedTableSql !== null && /^CREATE VIRTUAL TABLE /iu.test(normalizedTableSql);
 
   return {
-    definition: isVirtualTable ? null : parseTableDefinition(table.sql, tableName),
+    definition: isVirtualTable ? null : parseSqliteTableDefinition(table.sql, tableName),
     indexes,
     strict: tableList.strict,
     triggers: normalizedTriggers,
@@ -119,7 +119,10 @@ function sqliteIndexTermKind(cid: number): SqliteIndexTermContract["kind"] {
   return cid === -2 ? "expression" : cid === -1 ? "rowid" : "column";
 }
 
-function parseTableDefinition(sql: string | null, tableName: string): SqliteTableDefinition {
+export function parseSqliteTableDefinition(
+  sql: string | null,
+  tableName: string,
+): SqliteTableDefinition {
   if (sql === null) {
     throw new Error(`Could not inspect SQLite table definition for ${tableName}.`);
   }

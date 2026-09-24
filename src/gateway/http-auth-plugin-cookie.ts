@@ -119,7 +119,7 @@ export function bindControlUiPluginCookieRequestAuthority(
       requestPath: params.requestPath,
       authGeneration: resolveSharedGatewaySessionGeneration(
         params.getResolvedAuth?.() ?? params.auth,
-        getRuntimeConfig().gateway?.trustedProxies ?? params.trustedProxies,
+        params.trustedProxies ?? getRuntimeConfig().gateway?.trustedProxies,
       ),
     });
     const currentGrants = current?.requestAuth.controlUiPluginGrants ?? [];

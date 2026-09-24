@@ -700,6 +700,7 @@ describe("sessions.dispatch", () => {
               ownerEpoch,
               createdAtMs: 1,
               idleSinceAtMs: null,
+              destroyRequestedAtMs: null,
               attachedSessionIds: [sessionId],
               desktopAvailable: false,
               desktopApps: [],

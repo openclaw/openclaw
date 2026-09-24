@@ -27,12 +27,23 @@ the existing single shared-state lease owner; independent Gateways must not shar
 mutable agent databases across state directories.
 
 Within a live lifecycle, an admitted owner can still lend its revocable,
-file-bound runtime proof to another handle. This also requires a matching
-verification record and a live lease; deleted or mismatched records force a
-full check even when runtime proof remains in memory.
+file-bound runtime proof to another handle with a live lease in the same known
+process. This proof does not require the persisted restart receipt. Peer leases
+with matching process ID and start time do not consume or block publication of
+that receipt; each handle retains its own lease until cleanup finishes.
+Explicit invalidation revokes shared runtime proof as well as durable metadata,
+including stale admission and unsettled Worker cleanup. A successful native close
+with a reader-blocked checkpoint removes restart metadata but preserves live
+runtime proof; failed close or uncertain storage errors revoke both. Cold opens and restarts
+still require matching clean-close metadata or a full check.
 Cleanup workers and native agent execution workers borrow that proof under their
 existing writer admission. Cleanup workers return new verification to the Gateway
 after they finish.
+Reclamation retains one Worker connection per database, so alternating agents
+reuse their admitted handles. Requests still share the archive FIFO. Each Worker
+retires after 30 idle minutes, on database close, or when idle under critical
+memory pressure; failed cleanup retains its original lease until settlement.
+Integrity revocation, schema checks, and update behavior are unchanged.
 Native execution workers can also borrow retained host proof after the host handle
 closes or is evicted. The receiving opener rechecks the physical file identity and
 shared revocation cell; a closed handle alone does not discard valid proof.
@@ -337,6 +348,15 @@ at most 32,768 forward filesystem observations. Simplify unusually long paths if
 those limits are exceeded. Incomplete probe cleanup never becomes a cached
 path-identity result.
 
+### A mount probe times out while opening a local database
+
+On macOS, native filesystem inspection can confirm APFS after mount enumeration
+times out. For a canonical database directory, OpenClaw then keeps WAL enabled
+instead of attempting a rollback-mode transition that conflicts with other open
+connections. Unknown filesystems, failed native inspection, and aliased paths
+retain the conservative rollback policy. The existing rules for network and
+cross-VM filesystems, including the refusal to write through SSHFS, still apply.
+
 ### A legacy Workshop index prevents shared-state reads
 
 The `legacy-workshop-review-index` error requires `openclaw doctor --fix`.
@@ -362,6 +382,16 @@ checkpoint when the WAL exceeds both twice the database size and the existing
 checkpoint clears the warning; a large WAL alone does not mean a checkpoint is
 blocked. File-size observation failures are recorded and logged separately from
 SQLite's completion result; they do not turn a completed checkpoint into a failure.
+
+Shared-state maintenance waits up to 350 ms for lifecycle coordination. A refused
+periodic attempt retries once after one second, then waits for the next interval.
+Contention is recorded as blocked. Status and Doctor warn after two consecutive
+refusals; maintenance logs once per five. A completed checkpoint resets that count and clears the history
+eviction gate. On Linux, `blockingOwner` includes the observed kernel lock holder's
+PID, process start time (boot ticks), command, and coordinator family when procfs
+is available. This best-effort snapshot is diagnostic only; the SQLite lock still
+owns exclusion. Other platforms and unavailable observations report `unknown`.
+Coordinator files remain write-free, and updates require no state migration.
 
 The warning includes observed WAL and database sizes, checkpointed and total WAL
 frames, the last observed complete checkpoint, the consecutive blocked count,
@@ -460,6 +490,18 @@ the underlying database error.
 ### A database is quarantined after integrity verification failed
 
 The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.
+
+For shared-state or per-agent index-only corruption, `openclaw doctor --fix` is
+the supported repair. Doctor requires every `integrity_check` finding to name missing,
+non-unique, or incorrectly counted index entries, verifies the table data without
+using the damaged indexes, and preserves the damaged database in an
+`openclaw-index-recovery-*` directory beside it before running `REINDEX`.
+It prints the backup path and a warning naming every rebuilt index, then requires
+clean integrity and foreign-key checks before clearing quarantine. Table rows
+are preserved. Page or b-tree damage, unreadable table data, and other integrity
+failures remain a refusal: preserve the database and its WAL, then restore a
+verified backup or use SQLite recovery. Runtime and startup never perform this
+repair automatically.
 
 <a id="downgrades-are-unsupported" />
 

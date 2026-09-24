@@ -15,6 +15,13 @@ title: "Database layout"
 
 The task registry uses the shared state database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
+In agent schema 23, `transcript_events` retains original event JSON as either
+`event_json` TEXT or `event_zstd` BLOB, with byte counts and bounded navigation
+metadata for compressed rows. Use the transcript accessor or supported exports
+to reconstruct history; selecting `event_json` alone omits compressed events.
+Memory chunk/cache embeddings are little-endian Float64 BLOBs. See
+[compact agent payload storage](/reference/database-schemas/agent-schema-history#compact-agent-payload-storage).
+
 Doctor normalizes historical task run and child-session identifiers together
 with their related subagent bindings, so scoped mutations can use the existing
 indexes. Legacy sidecar imports use the same transactional repair. Gateway
@@ -35,12 +42,13 @@ The latest recap survives restart and archival. Deleting the session removes it;
 
 ### Transcript search row ownership
 
-The per-agent `session_transcript_fts_rows` table maps each FTS `rowid` to its
-session. `fts_rowid` is the primary key, and `session_id` has a nonunique index.
-The projection's nullable `fts_row_count` distinguishes unknown legacy ownership
-from a complete mapping, including an empty index. The transcript projection
-owner maintains and removes these derived facts with the corresponding FTS rows.
-See [agent schema 22](/reference/database-schemas/agent-schema-history#transcript-fts-row-ownership)
+In agent schema 23, `session_transcript_fts_rows` maps each FTS `rowid` to its
+session and nullable message ID. `id` is the primary key; indexes on
+`session_id` and `(session_id, message_id)` support exact deletion and
+reconciliation. The transcript projection owner maintains these derived facts
+with their FTS rows. Migration preserves the FTS content and rowids while
+replacing schema 22's lazy mapping and completeness counter. See
+[compact agent payload storage](/reference/database-schemas/agent-schema-history#compact-agent-payload-storage)
 for migration, recovery and downgrade behavior.
 
 ### Cold transcript archives
@@ -209,6 +217,15 @@ verification facts, repair attempts, confirmation/finish timestamps, and known
 downtime. Each JSON column has a 16 KiB hard limit with deterministic truncation
 and redaction. The ledger stores bounded diagnostic summaries, not raw logs or
 credentials. There is no automatic history deletion.
+
+Candidate admission adds optional `origin.admission` metadata in the existing
+`origin_json` column: `owner` (`candidate` or `installed`), optional `protocol`,
+`candidateVersion`, `checks`, and `fallbackReason`. Reads expose the same metadata
+as `run.admission`. `origin.candidateAdmission` records the candidate's verdict,
+reasons, warnings, and facts within the existing redaction and byte limits.
+These observations do not grant execution authority. No column, table, or schema
+version changes; older records can omit them. See
+[candidate-owned admission](/cli/update#candidate-owned-admission).
 
 Asynchronous history lookup and listing run their queries and record decoding
 in the shared-state read worker. They preserve source artifacts and inherited

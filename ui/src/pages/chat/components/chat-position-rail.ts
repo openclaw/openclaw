@@ -342,7 +342,7 @@ class ChatPositionRailDirective extends AsyncDirective {
         // Intersections can precede resize compensation. Preserve the reader's
         // rail offset while keeping any keyboard-focused marker in view.
         this.followingResize = true;
-        this.followActive =
+        this.followActive ||=
           this.markerElements.get(this.interaction.focusedId ?? "")?.matches(":focus-visible") ??
           false;
         if (this.followActive) {

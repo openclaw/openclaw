@@ -83,4 +83,14 @@ describe("agent order synced preference", () => {
       sidebarAgentOrder: ["work"],
     });
   });
+
+  it("clears a cached order when the server removes the preference key", () => {
+    const onApplied = vi.fn();
+    applyServerUiPrefs(configWithPrefs({ sidebarAgentOrder: ["work", "main"] }), { onApplied });
+    expect(loadSettings().sidebarAgentOrder).toEqual(["work", "main"]);
+
+    expect(applyServerUiPrefs(configWithPrefs({}), { onApplied })).toBe(true);
+    expect(loadSettings().sidebarAgentOrder).toEqual([]);
+    expect(onApplied).toHaveBeenLastCalledWith({ sidebarAgentOrder: [] });
+  });
 });

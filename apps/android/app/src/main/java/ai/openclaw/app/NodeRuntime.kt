@@ -116,6 +116,7 @@ import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.PreviewVoiceWakeRecognizer
 import ai.openclaw.app.voice.SystemSpeechSpeaker
 import ai.openclaw.app.voice.TalkAudioPlayer
+import ai.openclaw.app.voice.TalkFailureNotice
 import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.TalkPttOnceStart
 import ai.openclaw.app.voice.TalkPttStopPayload
@@ -1147,7 +1148,13 @@ class NodeRuntime private constructor(
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val tlsProbeRunner = GatewayTlsProbeRunner(scope, tlsFingerprintProbe)
   private val deviceAuthStore = DeviceAuthStore(prefs)
-  val camera = CameraCaptureManager(appContext) { prefs.preferredCameraFacing.value }
+  val camera =
+    CameraCaptureManager(
+      context = appContext,
+      isForeground = { _isForeground.value },
+      cameraEnabled = { prefs.cameraEnabled.value },
+      defaultFacing = { prefs.preferredCameraFacing.value },
+    )
   val location = LocationCaptureManager(appContext)
   val sms = SmsManager(appContext)
   private val json = Json { ignoreUnknownKeys = true }
@@ -2481,8 +2488,8 @@ class NodeRuntime private constructor(
   val talkModeStatusText: StateFlow<String>
     get() = talkMode.statusText
 
-  val talkFailureText: StateFlow<String?>
-    get() = talkMode.failureText
+  internal val talkFailureNotice: StateFlow<TalkFailureNotice?>
+    get() = talkMode.failureNotice
 
   private val wearRealtimeLifecycleMutex = Mutex()
 
@@ -4052,6 +4059,10 @@ class NodeRuntime private constructor(
     micCapture.cancelMicCapture()
     setVoiceCaptureMode(VoiceCaptureMode.Off, persistManualMic = false)
     prefs.setVoiceMicEnabled(false)
+  }
+
+  internal fun acknowledgeTalkModeFailure(notice: TalkFailureNotice) {
+    talkMode.acknowledgeFailure(notice)
   }
 
   fun setTalkModeEnabled(value: Boolean) {

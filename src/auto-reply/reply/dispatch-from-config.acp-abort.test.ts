@@ -12,7 +12,6 @@ import type {
   AcpRuntime,
   AcpRuntimeEnsureInput,
   AcpRuntimeEvent,
-  AcpRuntimeHandle,
   AcpRuntimeTurnInput,
 } from "../../plugin-sdk/acp-runtime.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
@@ -31,6 +30,7 @@ import {
   sessionStoreMocks,
   setDiscordTestRegistry,
 } from "./dispatch-from-config.shared.test-harness.js";
+import { createAcpRuntime } from "./dispatch-from-config.test-harness.js";
 import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
 import {
   REPLY_OPERATION_RUN_STATE,
@@ -229,36 +229,25 @@ describe("dispatchReplyFromConfig ACP abort", () => {
   it("aborts ACP dispatch promptly when the caller abort signal fires", async () => {
     const turnStarted = createDeferred();
     const releaseTurn = createDeferred();
-    const runtime = {
-      ensureSession: vi.fn(
-        async (input: { sessionKey: string; mode: string; agent: string }) =>
-          ({
-            sessionKey: input.sessionKey,
-            backend: "acpx",
-            runtimeSessionName: `${input.sessionKey}:${input.mode}`,
-          }) as AcpRuntimeHandle,
-      ),
-      runTurn: vi.fn(async function* (params: { signal?: AbortSignal }) {
-        turnStarted.resolve();
-        await new Promise<void>((resolve) => {
-          if (params.signal?.aborted) {
-            resolve();
-            return;
-          }
-          const onAbort = () => resolve();
-          params.signal?.addEventListener("abort", onAbort, { once: true });
-          void releaseTurn.promise.then(() => {
-            params.signal?.removeEventListener("abort", onAbort);
-            resolve();
-          });
+    const runtime = createAcpRuntime([]);
+    runtime.runTurn.mockImplementation(async function* (params) {
+      turnStarted.resolve();
+      await new Promise<void>((resolve) => {
+        if (params.signal?.aborted) {
+          resolve();
+          return;
+        }
+        const onAbort = () => resolve();
+        params.signal?.addEventListener("abort", onAbort, { once: true });
+        void releaseTurn.promise.then(() => {
+          params.signal?.removeEventListener("abort", onAbort);
+          resolve();
         });
-        // Cancellation is prompt even while the runtime's final cleanup remains pending.
-        await releaseTurn.promise;
-        yield { type: "done" } as AcpRuntimeEvent;
-      }),
-      cancel: vi.fn(async () => {}),
-      close: vi.fn(async () => {}),
-    } satisfies AcpRuntime;
+      });
+      // Cancellation is prompt even while the runtime's final cleanup remains pending.
+      await releaseTurn.promise;
+      yield { type: "done" } as AcpRuntimeEvent;
+    });
     acpMocks.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex-acp:session-1",
       storeSessionKey: "agent:codex-acp:session-1",
@@ -304,7 +293,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
 
     let operation: ReturnType<typeof createReplyOperation> | undefined;
     try {
-      await Promise.race([turnStarted.promise, dispatchPromise]);
+      await Promise.race([
+        turnStarted.promise,
+        dispatchPromise.then(() => {
+          throw new Error("ACP dispatch completed before its runtime turn started");
+        }),
+      ]);
       expect(runtime.runTurn).toHaveBeenCalledTimes(1);
       operation = replyRunRegistry.get("agent:codex-acp:session-1");
       expect(operation?.ownerSettlement).toBeDefined();

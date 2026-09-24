@@ -247,15 +247,15 @@ describe("Gateway test environment lifecycle", () => {
         let stopAcquiredClient: (() => Promise<void>) | undefined;
         let stopping: Promise<void> | undefined;
         let stopSettled = false;
-        const startSpy = vi
-          .spyOn(GatewayClient.prototype, "start")
-          .mockImplementation(function (this: GatewayClient) {
-            stopAcquiredClient = () => stopAndWait.call(this, { timeoutMs: 1_000 });
-            start.call(this);
-            if (failureMode === "start error") {
-              throw startError;
-            }
-          });
+        const startSpy = vi.spyOn(GatewayClient.prototype, "start").mockImplementation(function (
+          this: GatewayClient,
+        ) {
+          stopAcquiredClient = () => stopAndWait.call(this, { timeoutMs: 1_000 });
+          start.call(this);
+          if (failureMode === "start error") {
+            throw startError;
+          }
+        });
         const stopSpy = vi
           .spyOn(GatewayClient.prototype, "stopAndWait")
           .mockImplementation(function (this: GatewayClient, options) {

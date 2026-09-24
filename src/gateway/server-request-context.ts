@@ -21,6 +21,7 @@ import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
 } from "./server-shared-auth-generation.js";
 import { recordClientPresenceActivity, refreshClientPresence } from "./server/client-presence.js";
+import type { GatewayClientRegistry } from "./server/client-registry.js";
 import {
   getHealthCache,
   getHealthVersion,
@@ -28,7 +29,6 @@ import {
 } from "./server/health-state.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 
 type GatewayRequestContextClient = GatewayClient & {
@@ -107,9 +107,10 @@ type GatewayRequestContextRuntime = Pick<
   > & {
     sessionObserver: NonNullable<GatewayRequestContext["sessionObserver"]>;
     sessionActivitySummaries?: GatewayRequestContext["sessionActivitySummaries"];
+    channelAdmissionAudit?: GatewayRequestContext["channelAdmissionAudit"];
     sessionCompanion: NonNullable<GatewayRequestContext["sessionCompanion"]>;
     isConnectionActive: NonNullable<GatewayRequestContext["isConnectionActive"]>;
-    clients: Set<GatewayWsClient>;
+    clients: GatewayClientRegistry;
     gatewayTls: Pick<GatewayCoreRuntime["gatewayTls"], "enabled" | "fingerprintSha256">;
     nodeDesktopService?: GatewayCoreRuntime["nodeDesktopService"];
     cancelRunBoundApprovals?: GatewayCoreRuntime["cancelRunBoundApprovals"];
@@ -272,6 +273,7 @@ export function createGatewayRequestContext(
     sessionCompanion: runtime.sessionCompanion,
     sessionObserver,
     sessionActivitySummaries,
+    channelAdmissionAudit: runtime.channelAdmissionAudit,
     mentionInbox: runtime.mentionInbox,
     applyPluginLifecycleChange: runtime.kernel.applyPluginLifecycleChange,
     getMcpAppSandboxPort: runtime.transportBridge.getMcpAppSandboxPort,
@@ -480,7 +482,7 @@ export function createGatewayRequestContext(
       disconnectDeviceTransports?.(deviceId, opts);
     },
     disconnectClientsForUserProfile: (profileId: string) => {
-      for (const gatewayClient of clients) {
+      for (const gatewayClient of clients.authorityClients) {
         if (gatewayClient.authenticatedUserProfile?.profileId !== profileId) {
           continue;
         }

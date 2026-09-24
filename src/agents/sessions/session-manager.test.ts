@@ -2,10 +2,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { serialize } from "node:v8";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import * as configEnv from "../../config/config-env-vars.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -20,6 +22,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import {
   buildSessionContext,
@@ -46,51 +49,71 @@ function openMarker(marker: string, sessionKey: string, cwd: string): SessionMan
 }
 
 describe("SessionManager.open", () => {
-  it("commits ordered model and thinking metadata without host transcript writes", async () => {
-    const dir = tempDirs.make("openclaw-session-metadata-worker-");
-    const target = {
-      agentId: "main",
-      sessionId: "metadata-worker",
-      sessionKey: "agent:main:metadata-worker",
-      storePath: path.join(dir, "agents", "main", "agent", "openclaw-agent.sqlite"),
-    };
-    const manager = SessionManager.open(target, dir);
-    // Preserve the implementation so each observed call uses its actual database receiver.
-    // oxlint-disable-next-line typescript/unbound-method
-    const nativePrepare = DatabaseSync.prototype.prepare;
-    const hostWrites: string[] = [];
-    const prepare = vi
-      .spyOn(DatabaseSync.prototype, "prepare")
-      .mockImplementation(function (this: DatabaseSync, sql) {
+  it.each(["native", "windows"])(
+    "commits ordered metadata with a %s environment without host transcript writes",
+    async (environment) => {
+      const dir = tempDirs.make("openclaw-session-metadata-worker-");
+      const target = {
+        agentId: "main",
+        sessionId: "metadata-worker",
+        sessionKey: "agent:main:metadata-worker",
+        storePath: path.join(dir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+      };
+      const manager = SessionManager.open(target, dir);
+      // Preserve the implementation so each observed call uses its actual database receiver.
+      // oxlint-disable-next-line typescript/unbound-method
+      const nativePrepare = DatabaseSync.prototype.prepare;
+      const hostWrites: string[] = [];
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
         const mutation = /^\s*(insert|update|delete|replace)\b/i.exec(sql)?.[1];
         if (mutation && /\b(?:transcript_events|session_windows|session_nodes)\b/i.test(sql)) {
           hostWrites.push(mutation);
         }
         return nativePrepare.call(this, sql);
       });
-    let ids: string[];
-    try {
-      ids = await Promise.all([
-        manager.appendModelChange("test-provider", "test-model"),
-        manager.appendThinkingLevelChange("high"),
+      const cloneEnv = configEnv.cloneEnvWithPlatformSemantics;
+      const clone =
+        environment === "windows"
+          ? vi.spyOn(configEnv, "cloneEnvWithPlatformSemantics").mockImplementation((env) => {
+              const { OPENCLAW_STATE_DIR, ...rest } = env;
+              const captured = withMockedPlatform("win32", () =>
+                cloneEnv({
+                  ...rest,
+                  OpenClaw_State_Dir: OPENCLAW_STATE_DIR,
+                }),
+              );
+              expect(() => serialize(captured)).toThrow("could not be cloned");
+              return captured;
+            })
+          : undefined;
+      let ids: string[];
+      try {
+        ids = await Promise.all([
+          manager.appendModelChange("test-provider", "test-model"),
+          manager.appendThinkingLevelChange("high"),
+        ]);
+      } finally {
+        prepare.mockRestore();
+        clone?.mockRestore();
+      }
+      expect(hostWrites).toEqual([]);
+      expect(manager.getEntries()).toMatchObject([
+        {
+          type: "model_change",
+          id: ids[0],
+          parentId: null,
+          provider: "test-provider",
+          modelId: "test-model",
+        },
+        { type: "thinking_level_change", id: ids[1], parentId: ids[0], thinkingLevel: "high" },
       ]);
-    } finally {
-      prepare.mockRestore();
-    }
-    expect(hostWrites).toEqual([]);
-    expect(manager.getEntries()).toMatchObject([
-      {
-        type: "model_change",
-        id: ids[0],
-        parentId: null,
-        provider: "test-provider",
-        modelId: "test-model",
-      },
-      { type: "thinking_level_change", id: ids[1], parentId: ids[0], thinkingLevel: "high" },
-    ]);
-    expect(SessionManager.open(target, dir).getEntries()).toEqual(manager.getEntries());
-    expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
-  });
+      expect(SessionManager.open(target, dir).getEntries()).toEqual(manager.getEntries());
+      expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
+    },
+  );
 
   it("opens SQLite markers without creating marker-named files and persists assistant replies", async () => {
     const dir = tempDirs.make("openclaw-session-manager-");

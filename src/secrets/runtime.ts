@@ -29,7 +29,7 @@ import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { secretRefKey } from "./ref-contract.js";
-import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
+import { listAuthProfileSecretOwnerIds } from "./runtime-auth-profile-owner.js";
 import { loadAdmittedAuthStores } from "./runtime-auth-store-admission.js";
 import type { DegradedSecretOwner } from "./runtime-degraded-state.js";
 import {
@@ -80,27 +80,17 @@ async function resolveLoadablePluginOrigins(params: {
 
 function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
   const entries = config.plugins?.entries;
-  return (
-    Boolean(entries) &&
-    typeof entries === "object" &&
-    !Array.isArray(entries) &&
-    Object.keys(entries).length > 0
-  );
+  return isRecord(entries) && Object.keys(entries).length > 0;
 }
 
 function hasConfiguredChannelEntries(config: OpenClawConfig): boolean {
   const channels = config.channels;
-  return (
-    Boolean(channels) &&
-    typeof channels === "object" &&
-    !Array.isArray(channels) &&
-    Object.keys(channels).some((channelId) => channelId !== "defaults")
-  );
+  return isRecord(channels) && Object.keys(channels).some((channelId) => channelId !== "defaults");
 }
 
 function hasConfiguredPluginIntegrationSecretProviders(config: OpenClawConfig): boolean {
   const providers = config.secrets?.providers;
-  if (!providers || typeof providers !== "object" || Array.isArray(providers)) {
+  if (!isRecord(providers)) {
     return false;
   }
   return Object.values(providers).some(
@@ -518,18 +508,6 @@ function selectProviderAuthConfig(config: OpenClawConfig): OpenClawConfig {
     ...(config.secrets === undefined ? {} : { secrets: config.secrets }),
     ...(config.models === undefined ? {} : { models: config.models }),
   };
-}
-
-function listAuthProfileSecretOwnerIds(
-  authStores: PreparedSecretsRuntimeSnapshot["authStores"],
-): Set<string> {
-  return new Set(
-    authStores.flatMap(({ agentDir, store }) =>
-      Object.keys(store.profiles).map((profileId) =>
-        resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
-      ),
-    ),
-  );
 }
 
 function mergeProviderAuthOwners(

@@ -2030,7 +2030,7 @@ describe("config view", () => {
     for (const title of [
       "Message width",
       "Show task progress cards",
-      "Collapse task progress by default",
+      "Collapse task progress by default on desktop",
       "Open external sessions in",
       "Hold microphone button to start dictation",
     ]) {
@@ -2050,7 +2050,7 @@ describe("config view", () => {
     const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
       (candidate) =>
         candidate.querySelector(".settings-row__title")?.textContent?.trim() ===
-        "Collapse task progress by default",
+        "Collapse task progress by default on desktop",
     );
     const toggle = row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
 

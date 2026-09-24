@@ -65,25 +65,14 @@ describe("memory legacy migration cleanup", () => {
           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
         VALUES (
           'chunk-canonical', 'memory/deleted.md', 'memory', 1, 2, 'canonical-chunk-hash',
-          'fts-only', 'obsolete saffronquasar', '[]', 200
+          'fts-only', 'obsolete saffronquasar', x'', 200
         );
         INSERT INTO memory_index_chunks
           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
         VALUES (
           'chunk-ownerless', 'memory/ownerless.md', 'memory', 1, 2, 'ownerless-chunk-hash',
-          'fts-only', 'obsolete ambercomet', '[]', 190
+          'fts-only', 'obsolete ambercomet', x'', 190
         );
-        INSERT INTO memory_index_chunks_fts
-          (text, id, path, source, model, start_line, end_line)
-        VALUES
-          (
-            'obsolete saffronquasar', 'chunk-canonical', 'memory/deleted.md',
-            'memory', 'fts-only', 1, 2
-          ),
-          (
-            'obsolete ambercomet', 'chunk-ownerless', 'memory/ownerless.md',
-            'memory', 'fts-only', 1, 2
-          );
         CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
           id TEXT PRIMARY KEY,
           embedding FLOAT[3]

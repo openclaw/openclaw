@@ -24,7 +24,8 @@ env:
 
 jobs:
   no-tabs:
-    if: github.event_name != 'workflow_dispatch'
+    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
+    if: (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (github.event_name != 'workflow_dispatch')
     runs-on: ubuntu-24.04
     steps:
       - &workflow_sanity_checkout_step
@@ -60,7 +61,8 @@ jobs:
           PY
 
   actionlint:
-    if: github.event_name != 'workflow_dispatch'
+    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
+    if: (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (github.event_name != 'workflow_dispatch')
     runs-on: ubuntu-24.04
     steps:
       - *workflow_sanity_checkout_step

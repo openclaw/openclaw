@@ -77,6 +77,7 @@ describe("on-demand prepared worker admission", () => {
     const f = await fixture();
     support.getDevelopmentProfile().readyWorkers = 0;
     const result = await f.service.prepare(f.request);
+    const baseCommit = await requireGit(f.projectPath, ["rev-parse", "HEAD"]);
     const record = support.testState.store.get(result.environmentId)!;
     expect(result).toEqual({
       environmentId: record.environmentId,
@@ -90,7 +91,7 @@ describe("on-demand prepared worker admission", () => {
         executionMode: "worker-turn",
         project: {
           root: f.projectPath,
-          baseCommit: await requireGit(f.projectPath, ["rev-parse", "HEAD"]),
+          baseCommit,
         },
       },
       preparation: { purpose: "build", demandAtMs: 1_000, expiresAtMs: 11_000, consumedAtMs: null },
@@ -100,9 +101,13 @@ describe("on-demand prepared worker admission", () => {
     );
     await support.waitForFast(() => expect(f.provision).toHaveBeenCalledOnce());
     expect(support.testState.store.get(record.environmentId)?.destroyRequestedAtMs).toBeNull();
-    expect(f.service.list()[0]?.preparation).toMatchObject({
+    expect(f.service.list()[0]?.preparation).toEqual({
       purpose: "build",
       key: result.preparationKey,
+      demandAtMs: 1_000,
+      expiresAtMs: 11_000,
+      consumedAtMs: null,
+      project: { label: "project", baseCommit },
     });
   });
 
@@ -117,7 +122,7 @@ describe("on-demand prepared worker admission", () => {
         executionMode: "worker-turn",
         setupAuthorized: true,
       });
-      const existing = support.testState.store.createIntent({
+      const existing = await support.testState.store.createIntent({
         environmentId: "existing-prepared",
         provisionOperationId: "existing-operation",
         providerId: intent.providerId,
@@ -204,7 +209,7 @@ describe("on-demand prepared worker admission", () => {
           executionMode: "worker-turn",
           setupAuthorized: true,
         });
-        ({ environmentId } = support.testState.store.createIntent({
+        ({ environmentId } = await support.testState.store.createIntent({
           environmentId: "automatic-reserve",
           provisionOperationId: "automatic-reserve-operation",
           providerId: intent.providerId,
@@ -223,8 +228,12 @@ describe("on-demand prepared worker admission", () => {
       if (purpose === "expired reserve") {
         support.testState.nowMs = 11_001;
       }
+      const cancelled = new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
       const destroyed = f.service.destroyUnattached(environmentId);
       try {
+        await cancelled;
         expect(support.testState.store.get(environmentId)?.destroyRequestedAtMs).toBe(
           support.testState.nowMs,
         );

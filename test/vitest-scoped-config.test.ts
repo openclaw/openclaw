@@ -85,6 +85,8 @@ import { toolingIsolatedTestFiles } from "./vitest/vitest.tooling-isolated-paths
 import { createToolingIsolatedVitestConfig } from "./vitest/vitest.tooling-isolated.config.ts";
 import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "./vitest/vitest.tui.config.ts";
+import { createUiIsolatedVitestConfig } from "./vitest/vitest.ui-isolated.config.ts";
+import { createUiTimingVitestConfig } from "./vitest/vitest.ui-timing.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { isUnitFastTestFile } from "./vitest/vitest.unit-fast-paths.mjs";
 import { bundledPluginDependentUnitTestFiles } from "./vitest/vitest.unit-paths.mjs";
@@ -511,6 +513,50 @@ describe("createScopedVitestConfig", () => {
       expect(methodsConfig.passWithNoTests).toBe(true);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps combined media and UI include files inside their owning projects", () => {
+    const projects = [
+      [createMediaVitestConfig, "src/media/web-media.test.ts", "media/web-media.test.ts"],
+      [
+        createMediaUnderstandingVitestConfig,
+        "src/media-understanding/apply.test.ts",
+        "media-understanding/apply.test.ts",
+      ],
+      [
+        createTuiVitestConfig,
+        "src/tui/tui-command-handlers.test.ts",
+        "tui/tui-command-handlers.test.ts",
+      ],
+      [
+        createUiIsolatedVitestConfig,
+        "ui/src/app/bootstrap.test.ts",
+        "ui/src/app/bootstrap.test.ts",
+      ],
+      [
+        createUiTimingVitestConfig,
+        "ui/src/components/markdown.progress.node.test.ts",
+        "ui/src/components/markdown.progress.node.test.ts",
+      ],
+      [
+        createWizardVitestConfig,
+        "src/wizard/setup.finalize.test.ts",
+        "wizard/setup.finalize.test.ts",
+      ],
+    ] as const;
+    const tempDirs: string[] = [];
+    const tempDir = makeTempDir(tempDirs, "openclaw-vitest-media-ui-");
+    try {
+      const includeFile = path.join(tempDir, "include.json");
+      fs.writeFileSync(includeFile, JSON.stringify(projects.map(([, file]) => file)), "utf8");
+      const env = { OPENCLAW_VITEST_INCLUDE_FILE: includeFile };
+
+      for (const [createConfig, file, expectedInclude] of projects) {
+        expect.soft(requireTestConfig(createConfig(env)).include, file).toEqual([expectedInclude]);
+      }
+    } finally {
+      cleanupTempDirs(tempDirs);
     }
   });
 
@@ -1042,6 +1088,8 @@ describe("scoped vitest configs", () => {
     expect(testConfig.dir).toBe(process.cwd());
     expect(testConfig.include).toEqual([
       "src/gateway/**/*.test.ts",
+      "test/plugins/browser-session-authority.gateway.test.ts",
+      "test/plugins/chat-abort-codex.gateway.test.ts",
       "test/plugins/codex-model-catalog.gateway.test.ts",
       "test/plugins/crabbox-allocation-authority.gateway.test.ts",
       "test/plugins/team-reports-http.gateway.test.ts",
@@ -1313,11 +1361,29 @@ describe("scoped vitest configs", () => {
     expect(testConfig.include).toEqual(["**/*.test.ts"]);
   });
 
-  it("normalizes plugins include patterns relative to the scoped dir", () => {
+  it("keeps plugin source forks and native-loader forks on their own loaders", async () => {
     const testConfig = requireTestConfig(defaultPluginsConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "src", "plugins"));
     expect(testConfig.include).toEqual(["**/*.test.ts"]);
     expect(testConfig.exclude).toContain("contracts/**");
+    const resolved = await resolveConfig({ config: false }, defaultPluginsConfig);
+    const projects = resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig);
+    expect(
+      projects.map((project) => ({
+        name: project.name,
+        pool: project.pool,
+        execArgv: project.execArgv,
+      })),
+    ).toEqual([
+      {
+        name: "plugins",
+        pool: "forks",
+        execArgv: process.versions.bun
+          ? ["--tsconfig-override", path.join(process.cwd(), "tsconfig.json")]
+          : ["--import", expect.any(String)],
+      },
+      { name: "plugins-native-loader", pool: "forks", execArgv: [] },
+    ]);
   });
 
   it("normalizes ui include patterns relative to the scoped dir", () => {

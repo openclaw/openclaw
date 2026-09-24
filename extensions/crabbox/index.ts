@@ -33,16 +33,18 @@ export default definePluginEntry({
       tags: ["cloud", "desktop"],
     });
     api.registerCli(
-      async ({ program }) => {
+      async ({ program, config }) => {
         const { registerCrabboxWarmImageCommands } =
           await import("./src/crabbox-worker-warm-image-cli.js");
         registerCrabboxWarmImageCommands(program, api.runtime.state);
+        const { registerCrabboxModelRunCommand } = await import("./src/crabbox-model-run-cli.js");
+        registerCrabboxModelRunCommand({ program, config });
       },
       {
         descriptors: [
           {
             name: "crabbox",
-            description: "Inspect and recover Crabbox warm images",
+            description: "Run model-backed commands and manage Crabbox warm images",
             hasSubcommands: true,
           },
         ],

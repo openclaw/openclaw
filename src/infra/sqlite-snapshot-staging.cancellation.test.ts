@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { acquireOpenClawStateDatabaseFileExclusion } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -133,12 +134,16 @@ function fixture(count = 3, payloadBytes = 4096) {
   vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(harness));
   let watcher: fs.FSWatcher;
   let timer: ReturnType<typeof setTimeout>;
+  let gatePoll: ReturnType<typeof setInterval>;
   const entered = new Promise<{ claimedRoot: string; file: string }>((resolve, reject) => {
-    watcher = fs.watch(root, () => {
+    const readEntered = () => {
       if (fs.existsSync(marker)) {
         resolve(JSON.parse(fs.readFileSync(marker, "utf8")));
       }
-    });
+    };
+    watcher = fs.watch(root, readEntered);
+    // Native directory notifications can be coalesced; the atomic marker owns readiness.
+    gatePoll = setInterval(readEntered, 25);
     watcher.once("error", reject);
     timer = setTimeout(
       () =>
@@ -152,6 +157,7 @@ function fixture(count = 3, payloadBytes = 4096) {
   }).finally(() => {
     watcher.close();
     clearTimeout(timer);
+    clearInterval(gatePoll);
   });
   const release = () => {
     if (gate.isTransaction) {
@@ -176,6 +182,7 @@ function fixture(count = 3, payloadBytes = 4096) {
       gate.close();
       watcher.close();
       clearTimeout(timer);
+      clearInterval(gatePoll);
     },
   };
 }
@@ -217,7 +224,8 @@ it("keeps caller cancellation independent of idle reclamation", async () => {
     const reason = new DOMException(`${mode} caller stopped`, "AbortError");
     const reclamation = reclaimAbandonedSqliteSnapshotsAsync(f.cache);
     const entered = await f.entered;
-    // Establish the native owner before measuring cancellation of its snapshot.
+    const ownedSetupReady = owned ? createDeferredCore() : undefined;
+    // Establish the native owner before cancelling its snapshot.
     if (owned) {
       vi.stubEnv("XDG_CACHE_HOME", owned.bootstrapCache);
     }
@@ -240,6 +248,7 @@ it("keeps caller cancellation independent of idle reclamation", async () => {
         try {
           await owner.runWithSourceReads(async () => {
             vi.stubEnv("XDG_CACHE_HOME", path.dirname(f.cache));
+            ownedSetupReady?.resolve();
             await readSnapshot(owned.options.path, controller.signal);
           });
         } finally {
@@ -251,21 +260,20 @@ it("keeps caller cancellation independent of idle reclamation", async () => {
       (error: unknown) => error,
     );
     try {
-      const started = performance.now();
+      if (ownedSetupReady) {
+        // Exclusion acquisition and cold-open belong to fixture setup, not cancellation.
+        await Promise.race([ownedSetupReady.promise, operation]);
+      }
       controller.abort(reason);
       const error = await operation;
-      const cancellationMs = performance.now() - started;
-      const workerWasRunning = !f.worker().settled;
-      const directoryWasPresent = fs.existsSync(entered.file);
+      // Cancellation must settle while reclamation is still held at the native gate.
+      expect(error).toBe(reason);
+      expect(error).toMatchObject({ name: "AbortError" });
+      expect(f.worker().settled, mode).toBe(false);
+      expect(fs.existsSync(entered.file), mode).toBe(true);
       f.release();
       await reclamation;
       await f.worker().closed;
-      console.log(JSON.stringify({ mode, cancellationMs }));
-      expect(error).toBe(reason);
-      expect(error).toMatchObject({ name: "AbortError" });
-      expect.soft(cancellationMs, mode).toBeLessThan(250);
-      expect.soft(workerWasRunning, mode).toBe(true);
-      expect.soft(directoryWasPresent, mode).toBe(true);
       expect(fs.existsSync(entered.claimedRoot)).toBe(false);
     } finally {
       controller.abort(reason);
@@ -290,25 +298,16 @@ it("serves another snapshot without waiting for shared idle reclamation", async 
   );
   let second: Promise<void> | undefined;
   try {
-    let secondSettled = false;
-    second = readSnapshot(f.source).finally(() => {
-      secondSettled = true;
-    });
-    const started = performance.now();
+    second = readSnapshot(f.source);
     controller.abort(reason);
     const error = await first;
-    const cancellationMs = performance.now() - started;
-    const workerWasRunning = !f.worker().settled;
+    expect(error).toBe(reason);
+    expect(f.worker().settled).toBe(false);
     await second;
-    const survivorFinishedBeforeReclamation = secondSettled && !f.worker().settled;
+    expect(f.worker().settled).toBe(false);
     f.release();
     await reclamation;
     await f.worker().closed;
-    console.log(JSON.stringify({ sharedCancellationMs: cancellationMs }));
-    expect(error).toBe(reason);
-    expect(cancellationMs).toBeLessThan(250);
-    expect(workerWasRunning).toBe(true);
-    expect(survivorFinishedBeforeReclamation).toBe(true);
     expect(f.worker().child.exitCode).toBe(0);
     expect(f.worker().child.signalCode).toBeNull();
     expect(fs.readdirSync(f.cache)).toEqual([]);

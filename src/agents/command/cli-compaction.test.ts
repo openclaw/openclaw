@@ -31,36 +31,8 @@ import {
   runCliTurnCompactionLifecycle,
   setCliCompactionTestDeps,
 } from "./cli-compaction.js";
+import { buildContextEngine } from "./cli-compaction.test-support.js";
 import { recordCliCompactionInStore as recordCliCompactionInStoreImpl } from "./session-store.js";
-
-function buildContextEngine(params: {
-  compactCalls: Array<Parameters<ContextEngine["compact"]>[0]>;
-}): ContextEngine {
-  return {
-    info: {
-      id: "legacy",
-      name: "Legacy Context Engine",
-    },
-    async ingest() {
-      return { ingested: false };
-    },
-    async assemble(assembleParams) {
-      return { messages: assembleParams.messages, estimatedTokens: 0 };
-    },
-    async compact(compactParams) {
-      params.compactCalls.push(compactParams);
-      return {
-        ok: true,
-        compacted: true,
-        result: {
-          summary: "compacted",
-          tokensBefore: compactParams.currentTokenCount ?? 0,
-          tokensAfter: 100,
-        },
-      };
-    },
-  };
-}
 
 async function writeSessionFile(params: { sessionFile: string; sessionId: string }) {
   // The lifecycle compacts canonical OpenClaw session JSONL, so tests write the
@@ -516,7 +488,12 @@ describe("runCliTurnCompactionLifecycle", () => {
     const compactCall = compactCalls[0];
     expect(compactCall?.sessionId).toBe(sessionId);
     expect(compactCall?.sessionKey).toBe(sessionKey);
-    expect(compactCall?.sessionTarget).toEqual({ sessionId, sessionKey, storePath });
+    expect(compactCall?.sessionTarget).toEqual({
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+    });
     expect(compactCall?.tokenBudget).toBe(1_000);
     expect(compactCall?.currentTokenCount).toBe(950);
     expect(compactCall?.force).toBe(true);
@@ -579,7 +556,12 @@ describe("runCliTurnCompactionLifecycle", () => {
     const { compactCalls, maintenance, sessionId, sessionKey, storePath } = scenario;
     await scenario.run();
 
-    expect(compactCalls[0]?.sessionTarget).toEqual({ sessionId, sessionKey, storePath });
+    expect(compactCalls[0]?.sessionTarget).toEqual({
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+    });
     expect(maintenance).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: successorSessionId,

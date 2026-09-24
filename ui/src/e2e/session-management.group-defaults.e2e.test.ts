@@ -1,4 +1,8 @@
-import { expect, it } from "vitest";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { afterEach, expect, it } from "vitest";
+import { readRepositoryBranches } from "../../../src/agents/worktrees/branches.runtime.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
@@ -8,8 +12,72 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 suite.define(() => {
+  it("saves current-checkout group defaults for an agent workspace without a commit", async () => {
+    const workspace = tempDirs.make("openclaw-group-unborn-");
+    await promisify(execFile)("git", ["init", "-b", "main", "--template=", workspace]);
+    const repository = await readRepositoryBranches(workspace, { includeRepositoryStatus: true });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([]),
+        "sessions.create": { key: "agent:main:unborn-group", runStarted: true },
+        "worktrees.branches": repository,
+      },
+      sessionGroups: ["Client work"],
+      workspace,
+      workspaceGit: true,
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const group = page.locator('[data-session-section="category:Client work"]');
+      await group.locator(".sidebar-recent-sessions__head").hover();
+      await group.getByRole("button", { name: "Group options for Client work" }).click();
+      await page.getByRole("menuitem", { name: "New session defaults" }).click();
+      const dialog = page.locator(
+        `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
+      );
+      await dialog.waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          dialog
+            .locator("[data-session-group-environment]")
+            .getAttribute("data-session-group-environment"),
+        )
+        .toBe("local");
+      const save = dialog.getByRole("button", { name: "Save" });
+      try {
+        await expect.poll(() => save.isEnabled()).toBe(true);
+      } finally {
+        await captureUiProof(suite, page, "group-defaults-unborn-workspace.png");
+      }
+      expect(await dialog.locator("#session-group-defaults-mode-trigger").count()).toBe(0);
+      await save.click();
+      expect((await gateway.waitForRequest("sessions.groups.update")).params).toMatchObject({
+        name: "Client work",
+        cwd: null,
+        worktree: false,
+      });
+      await dialog.waitFor({ state: "detached" });
+      await group.locator(".sidebar-recent-sessions__head").hover();
+      await group.getByRole("link", { name: "New session in Client work" }).click();
+      await page.locator(".new-session-page__message").fill("Start in the empty repository");
+      await page.getByRole("button", { name: "Start session" }).click();
+      const created = await gateway.waitForRequest("sessions.create");
+      expect(created.params).toMatchObject({
+        agentId: "main",
+        category: "Client work",
+        message: "Start in the empty repository",
+      });
+      expect(created.params).not.toHaveProperty("worktree");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("starts a session from a group with its saved folder and worktree defaults", async () => {
     const workspace = "/home/peter/openclaw";
     const initialGroupCwd = "/home/peter";

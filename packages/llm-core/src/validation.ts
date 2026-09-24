@@ -197,7 +197,7 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
 
 function applySchemaObjectCoercion(value: Record<string, unknown>, schema: JsonSchemaObject): void {
   const properties = schema.properties;
-  const definedKeys = new Set<string>(properties ? Object.keys(properties) : []);
+  const propertyKeys = properties ? Object.keys(properties) : [];
 
   if (properties) {
     for (const [key, propertySchema] of Object.entries(properties)) {
@@ -208,6 +208,7 @@ function applySchemaObjectCoercion(value: Record<string, unknown>, schema: JsonS
   }
 
   if (schema.additionalProperties && isJsonSchemaObject(schema.additionalProperties)) {
+    const definedKeys = new Set<string>(propertyKeys);
     for (const [key, propertyValue] of Object.entries(value)) {
       if (!definedKeys.has(key)) {
         value[key] = coerceWithJsonSchema(propertyValue, schema.additionalProperties);

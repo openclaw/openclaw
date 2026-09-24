@@ -8,6 +8,7 @@ import {
 } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
+import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { isCanvasDocumentHttpPath } from "../canvas/constants.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -20,7 +21,6 @@ import {
 import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
 import { readTailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveAssistantAgentId } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -66,6 +66,27 @@ import {
   PROVIDER_OAUTH_CALLBACK_PATH,
 } from "./provider-browser-auth.js";
 import {
+  getControlUiModule,
+  getControlUiPluginAssetsModule,
+  getCanvasServeModule,
+  getBoardHttpModule,
+  getEmbeddingsHttpModule,
+  getManagedMediaAttachmentsModule,
+  getArtifactDownloadsModule,
+  getMcpAppStandaloneModule,
+  getModelsHttpModule,
+  getOpenAiHttpModule,
+  getOpenResponsesHttpModule,
+  getSessionHistoryHttpModule,
+  getSessionKillHttpModule,
+  getToolsInvokeHttpModule,
+  getUserProfilesHttpModule,
+  getDevicePairingJoinHttpModule,
+  getPluginNodeCapabilityAuthModule,
+  getHttpAuthUtilsModule,
+  getPluginRouteRuntimeScopesModule,
+} from "./server-http-modules.js";
+import {
   getCachedPluginGatewayAuthBypassPaths,
   shouldEnforceDefaultPluginGatewayAuth,
   type ResolvePluginNodeCapabilityRoute,
@@ -97,37 +118,6 @@ import {
 
 type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-
-const getControlUiModule = createLazyRuntimeModule(() => import("./control-ui.js"));
-const getControlUiPluginAssetsModule = createLazyRuntimeModule(
-  () => import("./control-ui-plugin-assets.js"),
-);
-const getCanvasServeModule = createLazyRuntimeModule(() => import("../canvas/serve.runtime.js"));
-const getBoardHttpModule = createLazyRuntimeModule(() => import("./board-http.js"));
-const getEmbeddingsHttpModule = createLazyRuntimeModule(() => import("./embeddings-http.js"));
-const getManagedMediaAttachmentsModule = createLazyRuntimeModule(
-  () => import("./managed-image-attachments.js"),
-);
-const getMcpAppStandaloneModule = createLazyRuntimeModule(() => import("./mcp-app-standalone.js"));
-const getModelsHttpModule = createLazyRuntimeModule(() => import("./models-http.js"));
-const getOpenAiHttpModule = createLazyRuntimeModule(() => import("./openai-http.js"));
-const getOpenResponsesHttpModule = createLazyRuntimeModule(() => import("./openresponses-http.js"));
-const getSessionHistoryHttpModule = createLazyRuntimeModule(
-  () => import("./sessions-history-http.js"),
-);
-const getSessionKillHttpModule = createLazyRuntimeModule(() => import("./session-kill-http.js"));
-const getToolsInvokeHttpModule = createLazyRuntimeModule(() => import("./tools-invoke-http.js"));
-const getUserProfilesHttpModule = createLazyRuntimeModule(() => import("./user-profiles-http.js"));
-const getDevicePairingJoinHttpModule = createLazyRuntimeModule(
-  () => import("./device-pairing-join-http.js"),
-);
-const getPluginNodeCapabilityAuthModule = createLazyRuntimeModule(
-  () => import("./server/plugin-node-capability-auth.js"),
-);
-const getHttpAuthUtilsModule = createLazyRuntimeModule(() => import("./http-auth-utils.js"));
-const getPluginRouteRuntimeScopesModule = createLazyRuntimeModule(
-  () => import("./server/plugin-route-runtime-scopes.js"),
-);
 
 type GatewayHttpRequestStage = () => Promise<boolean> | boolean;
 
@@ -462,6 +452,16 @@ export function createGatewayHttpServer(opts: {
 
       addAdmittedStage(scopedRequestPath === PROVIDER_OAUTH_CALLBACK_PATH, () =>
         handleProviderOAuthCallback(req, res),
+      );
+      addAdmittedStage(
+        scopedRequestPath.startsWith(ARTIFACT_DOWNLOAD_PATH) ||
+          (controlUiRouteBasePath.length > 0 &&
+            scopedRequestPath.startsWith(`${controlUiRouteBasePath}${ARTIFACT_DOWNLOAD_PATH}`)),
+        async () =>
+          (await getArtifactDownloadsModule()).handleArtifactDownloadHttpRequest(req, res, {
+            clients,
+            basePath: controlUiRouteBasePath,
+          }),
       );
       // Before hooks: an operator hooks.path of "/oauth" would otherwise claim
       // this exact GET and 405 every provider redirect. The claim is exact-path

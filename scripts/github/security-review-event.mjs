@@ -6,7 +6,7 @@ import {
   parseApprovalCommands,
   publishGuardStatus,
   readSecurityReviewHistory,
-  withGitHubRateLimitRecovery,
+  withSecurityReviewRecovery,
 } from "./guard-shared.mjs";
 
 const shaPattern = /^[a-f0-9]{40}$/u;
@@ -201,7 +201,7 @@ async function main() {
   console.log(matrix);
 }
 
-withGitHubRateLimitRecovery(main).catch(
+withSecurityReviewRecovery(main).catch(
   /** @param {unknown} error */ (error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

@@ -4,6 +4,7 @@ import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/lo
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { ExecPolicyOverrides } from "../../agents/exec-defaults.js";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -29,25 +30,24 @@ import {
 } from "../reply-payload.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ThinkingCatalogEntry, VerboseLevel } from "../thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { ReplyPayload } from "../types.js";
 import {
   readAbortCutoffFromSessionEntry,
   resolveAbortCutoffFromContext,
   shouldSkipMessageByAbortCutoff,
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
-import {
-  takeCommandSessionMetadataChangesFromTargets,
-  type CommandSessionMetadataChange,
-} from "./command-session-metadata.js";
+import { takeCommandSessionMetadataChangesFromTargets } from "./command-session-metadata.js";
 import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { extractExplicitGroupId } from "./group-id.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { getStandaloneSlashCommandName } from "./reply-inline.js";
 import type { ReplyModelLevelResolver } from "./reply-model-levels.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { createSkillCommandLoaders } from "./skill-command-loaders.js";
 import type { TypingController } from "./typing.js";
 
@@ -55,10 +55,6 @@ type SkillToolDispatchRuntime = typeof import("../../skills/runtime/tool-dispatc
 type SkillToolDispatchDependencies = Parameters<
   SkillToolDispatchRuntime["resolveSkillDispatchTools"]
 >[1];
-
-type InternalGetReplyOptions = GetReplyOptions & {
-  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
-};
 
 const skillCommandsRuntimeLoader = createLazyImportLoader(
   () => import("../../skills/discovery/chat-commands.runtime.js"),
@@ -166,7 +162,7 @@ export async function handleInlineActions(params: {
   sessionScope: Parameters<typeof buildStatusReply>[0]["sessionScope"];
   workspaceDir: string;
   isGroup: boolean;
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   typing: TypingController;
   allowTextCommands: boolean;
   inlineStatusRequested: boolean;
@@ -241,11 +237,10 @@ export async function handleInlineActions(params: {
     abortedLastRun: initialAbortedLastRun,
     skillFilter,
   } = params;
-  const internalOpts = opts as InternalGetReplyOptions | undefined;
   const notifyInlineCommandSessionMetadataChanges = () => {
     const changes = takeCommandSessionMetadataChangesFromTargets([sessionCtx, ctx]);
     if (changes) {
-      internalOpts?.onSessionMetadataChanges?.(changes);
+      opts?.onSessionMetadataChanges?.(changes);
     }
   };
 
@@ -277,6 +272,14 @@ export async function handleInlineActions(params: {
         })
       : false;
     if (shouldSkip) {
+      const runState = resolveReplyOperationRunState(opts);
+      if (runState) {
+        // The stop owner cancelled this queued input; no answer remains due.
+        runState.replyCompletion = resolveReplyCompletion(
+          runState.replyCompletion?.expectation ?? "required",
+          "blocked",
+        );
+      }
       typing.cleanup();
       return { kind: "reply", reply: undefined };
     }

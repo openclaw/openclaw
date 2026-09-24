@@ -71,6 +71,7 @@ async function runUpdate(
   fixture: Fixture,
   prepareCandidate: (packageRoot: string) => Promise<void>,
   runLifecycleStep?: UpdateParams["runStep"],
+  admission: Pick<UpdateParams, "beforeVerifyCandidate" | "resolveLifecycleNodeRunner"> = {},
 ) {
   const stages: { prefix: string; packageRoot: string; bytes: string[] }[] = [];
   const lifecycleCalls: string[] = [];
@@ -83,6 +84,7 @@ async function runUpdate(
   });
   const result = await runGlobalPackageUpdateSteps({
     ...fixture.params,
+    ...admission,
     runStep: async (step) => {
       if (step.name === "package-install") {
         const prefixIndex = step.argv.indexOf("--prefix");
@@ -147,6 +149,75 @@ async function writeUncertainLock(
 }
 
 describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
+  it("runs pending lifecycle only after admission with the newly selected Node runner", async () => {
+    const fixture = await createFixture();
+    const selectedNode = path.join(fixture.globalRoot, "selected-node");
+    let nodeRunner: string | undefined;
+    let admitted = false;
+    const { result, lifecycleCalls } = await runUpdate(
+      fixture,
+      async () => {},
+      async (step) => {
+        expect(admitted).toBe(true);
+        expect(step.argv[0]).toBe(selectedNode);
+        expect(step.env?.PATH?.split(path.delimiter)[0]).toBe(path.dirname(selectedNode));
+        if (step.name === "npm-package-postinstall" && step.cwd) {
+          await fs.rm(path.join(step.cwd, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
+        }
+        return {
+          name: step.name,
+          command: step.argv.join(" "),
+          cwd: step.cwd!,
+          durationMs: 0,
+          exitCode: 0,
+        };
+      },
+      {
+        beforeVerifyCandidate: async (root) => {
+          await expect(
+            fs.readFile(path.join(root, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "utf8"),
+          ).resolves.toBe(pendingBytes);
+          nodeRunner = selectedNode;
+          admitted = true;
+        },
+        resolveLifecycleNodeRunner: () => nodeRunner,
+      },
+    );
+    expect(result.failedStep).toBeNull();
+    expect(lifecycleCalls).toEqual(["npm-package-preinstall", "npm-package-postinstall"]);
+    expect(result.afterVersion).toBe("2.0.0");
+  });
+
+  it("does not activate after a zero-exit output-limited postinstall", async () => {
+    const fixture = await createFixture();
+    const { result } = await runUpdate(
+      fixture,
+      async () => {},
+      async ({ name, argv, cwd }) => {
+        const outputLimitExceeded = name === "npm-package-postinstall";
+        if (outputLimitExceeded && cwd) {
+          await fs.rm(path.join(cwd, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
+        }
+        return {
+          name,
+          command: argv.join(" "),
+          cwd: cwd ?? fixture.packageRoot,
+          durationMs: 0,
+          exitCode: 0,
+          outputLimitExceeded,
+        };
+      },
+    );
+    expect(result.failedStep).toMatchObject({
+      name: "npm-package-postinstall",
+      exitCode: 0,
+      outputLimitExceeded: true,
+    });
+    expectNoActivation(fixture);
+    expect(await readPackageBytes(fixture.packageRoot)).toEqual(fixture.originalBytes);
+    await expectSiblingUntouched(fixture);
+  });
+
   it.each(["legacy directory", "malformed file"] as const)(
     "retains the exact pending candidate with an uncertain %s lock",
     async (shape) => {

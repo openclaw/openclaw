@@ -143,27 +143,41 @@ describe("doctor channel capabilities", () => {
     });
   });
 
-  it("falls back conservatively when channel plugin resolution throws", () => {
+  it("falls back conservatively when channel plugin resolution throws", async () => {
     channelPluginMocks.getChannelPlugin.mockImplementation(() => {
       throw new Error("missing generated bundled module");
     });
 
-    expect(resolveDoctorChannelAccountIds("telegram", {}, [])).toBeUndefined();
+    expect(await resolveDoctorChannelAccountIds("telegram", {}, [])).toBeUndefined();
   });
 
-  it("resolves configured and runtime account ids through plugin semantics", () => {
-    channelPluginMocks.getChannelPlugin.mockReturnValue({
-      config: {
-        listAccountIds: () => ["default", "Work"],
-        resolveAccount: (_cfg: unknown, accountId?: string | null) => ({
-          accountId: accountId === "Work" ? "work" : accountId,
-        }),
-      },
-    } as never);
+  it.each([false, true])(
+    "resolves account ids through plugin semantics (async: %s)",
+    async (asyncResolution) => {
+      const resolveAccount = (_cfg: unknown, accountId?: string | null) => ({
+        accountId: accountId === "Work" ? "work" : accountId,
+      });
+      channelPluginMocks.getChannelPlugin.mockReturnValue({
+        config: {
+          listAccountIds: () => ["default", "Work"],
+          resolveAccount: asyncResolution
+            ? () => {
+                throw new Error("legacy account resolution");
+              }
+            : resolveAccount,
+          ...(asyncResolution
+            ? {
+                resolveAccountAsync: async (cfg: unknown, accountId?: string | null) =>
+                  resolveAccount(cfg, accountId),
+              }
+            : {}),
+        },
+      } as never);
 
-    expect(resolveDoctorChannelAccountIds("signal", {}, ["Work"])).toEqual({
-      configured: ["work"],
-      runtime: ["default", "work"],
-    });
-  });
+      expect(await resolveDoctorChannelAccountIds("signal", {}, ["Work"])).toEqual({
+        configured: ["work"],
+        runtime: ["default", "work"],
+      });
+    },
+  );
 });

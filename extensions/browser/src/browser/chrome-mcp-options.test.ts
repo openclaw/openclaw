@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 
@@ -10,7 +12,27 @@ describe("Chrome MCP profile options", () => {
         mcpCommand,
       });
 
-      expect(command).toBe(process.execPath);
+      const identity = JSON.parse(
+        execFileSync(
+          command,
+          [
+            "--eval",
+            'process.stdout.write(JSON.stringify({ executable: require("node:fs").realpathSync(process.execPath), runtime: process.versions.bun ? "bun" : "node" }))',
+          ],
+          {
+            encoding: "utf8",
+            env: {
+              SystemRoot: process.env.SystemRoot,
+              SYSTEMROOT: process.env.SYSTEMROOT,
+              WINDIR: process.env.WINDIR,
+              TEMP: process.env.TEMP,
+              TMP: process.env.TMP,
+              TMPDIR: process.env.TMPDIR,
+            },
+          },
+        ),
+      );
+      expect(identity).toEqual({ executable: realpathSync(command), runtime: "node" });
       expect(args[0]).toMatch(
         /[/\\]chrome-devtools-mcp[/\\]build[/\\]src[/\\]bin[/\\]chrome-devtools-mcp\.js$/,
       );

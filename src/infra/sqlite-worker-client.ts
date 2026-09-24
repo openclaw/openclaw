@@ -10,7 +10,10 @@ import {
   type SqliteWorkerStore,
 } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-admission.js";
-import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
+import {
+  captureSqliteWorkerStateContext,
+  type SqliteWorkerStateContext,
+} from "./sqlite-worker-state-context.js";
 
 export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOperations, T>(
   client: StoreClient | undefined,
@@ -30,15 +33,7 @@ export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOp
     assertCurrent,
     active: true,
     pending: new Set(),
-    ...(stateContext
-      ? {
-          stateContext: {
-            environment: { ...stateContext.environment },
-            coordinatorRuntime: { ...stateContext.coordinatorRuntime },
-            existingSchemaPath: stateContext.existingSchemaPath,
-          },
-        }
-      : {}),
+    ...(stateContext ? { stateContext: captureSqliteWorkerStateContext(stateContext) } : {}),
   };
   const released = createDeferredCore();
   client.scopes.add(released.promise);
@@ -96,10 +91,13 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
       }
       let payload: Buffer;
       let assertCurrent: (() => void) | undefined;
+      const admission = scope?.assertCurrent;
+      const createAdmission = scope?.createAdmission;
+      // Queued callbacks run from Worker replies, outside this command's async context.
+      const inCaller = admission || createAdmission ? AsyncLocalStorage.snapshot() : undefined;
       try {
         const commandType = command.type;
-        const admission = scope?.assertCurrent;
-        assertCurrent = admission ? () => admission(commandType) : undefined;
+        assertCurrent = admission && inCaller ? () => inCaller(admission, commandType) : undefined;
         assertCurrent?.();
         // The queued guard and wire command must observe the same captured type.
         payload = serialize({ type: commandType, input: command.input });
@@ -108,8 +106,6 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
           toErrorObject(error, "SQLite worker command could not be serialized"),
         );
       }
-      const createAdmission = scope?.createAdmission;
-      const inCaller = createAdmission ? AsyncLocalStorage.snapshot() : undefined;
       const operation = owner.dispatch(
         payload,
         options.signal,
@@ -121,16 +117,11 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
       );
       pending.add(operation);
       scope?.pending.add(operation);
-      void operation.then(
-        () => {
-          pending.delete(operation);
-          scope?.pending.delete(operation);
-        },
-        () => {
-          pending.delete(operation);
-          scope?.pending.delete(operation);
-        },
-      );
+      const settled = () => {
+        pending.delete(operation);
+        scope?.pending.delete(operation);
+      };
+      void operation.then(settled, settled);
       return operation;
     },
   };

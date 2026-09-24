@@ -191,7 +191,11 @@ printf '%s\\n' "$pid" >"$FIXTURE_ROOT/renderers"`,
       mode: 0o700,
     });
   }
-  const script = createCrabboxWorkerDesktopSetup("cbx_desktop_test", wallpaper.toString("base64"))
+  const script = createCrabboxWorkerDesktopSetup(
+    "cbx_desktop_test",
+    wallpaper.toString("base64"),
+    "linux",
+  )
     .replaceAll("/var/lib/crabbox/desktop.env", path.join(root, "desktop.env"))
     .replaceAll("/proc/$process_pid/environ", `${proc}/$process_pid/environ`)
     .replaceAll("/usr/local/bin/", `${bin}/`);
@@ -221,7 +225,11 @@ printf '%s\\n' "$pid" >"$FIXTURE_ROOT/renderers"`,
 describe.skipIf(process.platform !== "linux")("Crabbox desktop renderer setup", () => {
   it("reuses the live browser after releasing only the completed launcher's lock", () => {
     const root = tempDirs.make("crabbox-browser-launch-");
-    const setup = createCrabboxWorkerDesktopSetup("cbx_browser_test", wallpaper.toString("base64"));
+    const setup = createCrabboxWorkerDesktopSetup(
+      "cbx_browser_test",
+      wallpaper.toString("base64"),
+      "linux",
+    );
     const launcher = setup.match(
       /<<'WORKER_BROWSER_LAUNCHER_EOF'\n([\s\S]*?)\nWORKER_BROWSER_LAUNCHER_EOF/u,
     )?.[1];

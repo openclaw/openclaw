@@ -316,13 +316,14 @@ export async function recordUpdatePackageCompletion(
     return;
   }
   const step = { ...retained, stderrTail: retained.stderrTail };
-  if (step.exitCode !== 0 && !step.stderrTail?.includes(transaction.backupRoot)) {
-    step.stderrTail = [
-      step.stderrTail,
-      `Recovery transaction backup path: ${transaction.backupRoot}`,
-    ]
-      .filter(Boolean)
-      .join("\n");
+  if (step.exitCode !== 0) {
+    const recoveryPath = `Recovery transaction backup path: ${transaction.backupRoot}`;
+    if (!step.advisory) {
+      step.warnings = [...(step.warnings ?? []), recoveryPath];
+    }
+    if (!step.stderrTail?.includes(transaction.backupRoot)) {
+      step.stderrTail = [step.stderrTail, recoveryPath].filter(Boolean).join("\n");
+    }
   }
   result.steps = [...result.steps, step];
   if (result.status !== "ok" && !result.recovery?.packageRollbackVerified) {
@@ -407,12 +408,13 @@ async function publishPreMutationUpdateOutcome(
 ): Promise<UpdateRunResult> {
   const run = params.opts.run;
   const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
-  if (run && active && params.message) {
+  const nextAction = params.nextAction ?? params.message;
+  if (run && active && nextAction) {
     recordUpdateRunPhase(
       run.runId,
       active.phase,
       {
-        origin: { nextAction: params.message },
+        origin: { nextAction },
         ...(params.installKind !== "unknown" ? { target: { kind: params.installKind } } : {}),
       },
       { env: run.env },
@@ -469,7 +471,7 @@ async function publishPreMutationUpdateOutcome(
   if (params.opts.json && params.message) {
     defaultRuntime.error(params.message);
   }
-  await printResult(result, params.opts, { nextAction: params.message });
+  await printResult(result, params.opts, { nextAction });
   return result;
 }
 

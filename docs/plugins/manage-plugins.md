@@ -301,8 +301,12 @@ owner update. Run `openclaw plugins reload <plugin-id>` after source or manifest
 edits. For API clients, `plugins.reload` takes `plugins: [{ pluginId }]` to reload
 one installed plugin, or multiple targets in the same request, and
 `plugins.refresh` refreshes the inventory.
-Both wait for runtime application and return `restartRequired: false` with a
-generation receipt. Explicit actions also work with `gateway.reload.mode: "off"`.
+Both wait for runtime application and return a generation receipt. Reloading
+unchanged bundled code or replacing captured external code returns
+`restartRequired: false`. If compiled bundled code remains loaded after its files
+change, or those files cannot be verified, reload reports `restartRequired: true`
+with a warning. Rebuild compiled output after editing source files, then restart
+the Gateway when the result requires it. Explicit actions also work with `gateway.reload.mode: "off"`.
 See [Plugin management RPCs](/gateway/protocol).
 
 Cleanup is best effort: disabling removes the plugin's registered capabilities

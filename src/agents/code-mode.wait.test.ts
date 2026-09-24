@@ -11,7 +11,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "./admitted-run-context.js";
-import * as worker from "./code-mode-worker.js";
+import * as worker from "./code-mode-executor.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -40,9 +40,9 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   it("marks yield suspensions and resumes the snapshot with wait", async () => {
@@ -106,31 +106,34 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       const requested = createDeferred();
       const decision = createDeferred();
       const resumed = createDeferred();
-      const runWorker = worker.runCodeModeWorker;
+      const runWorker = worker.runCodeModeExecutor;
       const continuationBudgets: number[] = [];
       let restoreCharged = false;
       const workerSpy = vi
-        .spyOn(worker, "runCodeModeWorker")
+        .spyOn(worker, "runCodeModeExecutor")
         .mockImplementation(async (...args) => {
-          const inlineHost = args[4];
+          const inlineHost = args[1].inlineHost;
           if (!inlineHost) {
             return await runWorker(...args);
           }
           const isResume = isRecord(args[0]) && args[0].kind === "resume";
-          return await runWorker(args[0], args[1], args[2], args[3], {
-            ...inlineHost,
-            onBoundary: async (...boundaryArgs) => {
-              if (mode === "yield" && isResume && !restoreCharged) {
-                // Charge active restore/guest time before entering the blocked host wait.
-                restoreCharged = true;
-                await vi.advanceTimersByTimeAsync(100);
-                resumed.resolve();
-              }
-              const command = await inlineHost.onBoundary(...boundaryArgs);
-              if (command.kind === "continue") {
-                continuationBudgets.push(command.timeoutMs);
-              }
-              return command;
+          return await runWorker(args[0], {
+            ...args[1],
+            inlineHost: {
+              ...inlineHost,
+              onBoundary: async (...boundaryArgs) => {
+                if (mode === "yield" && isResume && !restoreCharged) {
+                  // Charge active restore/guest time before entering the blocked host wait.
+                  restoreCharged = true;
+                  await vi.advanceTimersByTimeAsync(100);
+                  resumed.resolve();
+                }
+                const command = await inlineHost.onBoundary(...boundaryArgs);
+                if (command.kind === "continue") {
+                  continuationBudgets.push(command.timeoutMs);
+                }
+                return command;
+              },
             },
           });
         });
@@ -413,7 +416,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       error: expect.stringContaining(hostile),
     });
     expect(resumed.content[0]).toMatchObject({
-      text: expect.stringContaining("SECURITY NOTICE:"),
+      text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
     });
     expect(resumed.content[0]).not.toMatchObject({
       text: expect.stringContaining("<|endoftext|>"),

@@ -69,3 +69,15 @@ export function migrationCheckpointIdentitiesMatch(
     left.pluginMigrationFingerprint === right.pluginMigrationFingerprint
   );
 }
+
+export function checkpointIdentityForSnapshot(
+  snapshotRead: { snapshot: ConfigFileSnapshot; pluginMigrationFingerprint: string | null },
+  baseConfig = snapshotRead.snapshot.sourceConfig ?? snapshotRead.snapshot.config ?? {},
+) {
+  const { snapshot, pluginMigrationFingerprint } = snapshotRead;
+  return resolveMigrationCheckpointIdentity({
+    snapshot,
+    baseConfig,
+    pluginMigrationFingerprint,
+  });
+}

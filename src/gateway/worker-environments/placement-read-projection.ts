@@ -13,7 +13,7 @@ import {
   hasCurrentWorkspaceResultClaim,
   readWorkerWorkspaceReconciliationFacts,
 } from "./placement-workspace-result.js";
-import { decodeWorkerEnvironmentRow } from "./store.js";
+import { decodeWorkerEnvironmentRow } from "./store-row-codec.js";
 
 export function readWorkerSessionPlacementProjectionInDatabase(
   db: DatabaseSync,

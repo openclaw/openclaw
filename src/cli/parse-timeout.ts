@@ -21,10 +21,10 @@ export function parseTimeoutMs(raw: unknown): number | undefined {
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-function invalidTimeout(value?: string): Error {
+function invalidTimeout(flagName: string, value?: string): Error {
   const suffix = value ? ` Received: "${value}".` : "";
   return new Error(
-    `Invalid --timeout. Use a positive millisecond value, e.g. --timeout 30000.${suffix}`,
+    `Invalid ${flagName}. Use a positive millisecond value, e.g. ${flagName} 30000.${suffix}`,
   );
 }
 
@@ -34,8 +34,11 @@ export function parseTimeoutMsWithFallback(
   fallbackMs: number,
   options: {
     invalidType?: "fallback" | "error";
+    // Each caller registers its own flag token; the rejection has to match it.
+    flagName?: string;
   } = {},
 ): number {
+  const flagName = options.flagName ?? "--timeout";
   if (raw === undefined || raw === null) {
     return fallbackMs;
   }
@@ -49,21 +52,21 @@ export function parseTimeoutMsWithFallback(
 
   if (value === null) {
     if (options.invalidType === "error") {
-      throw invalidTimeout();
+      throw invalidTimeout(flagName);
     }
     return fallbackMs;
   }
 
   if (!value) {
     if (options.invalidType === "error") {
-      throw invalidTimeout();
+      throw invalidTimeout(flagName);
     }
     return fallbackMs;
   }
 
   const parsed = parseStrictPositiveInteger(value);
   if (parsed === undefined) {
-    throw invalidTimeout(value);
+    throw invalidTimeout(flagName, value);
   }
   return parsed;
 }

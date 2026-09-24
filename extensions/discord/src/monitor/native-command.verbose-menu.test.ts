@@ -7,6 +7,7 @@ import {
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordPlugin } from "../../api.js";
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import { nativeCommandRuntime } from "./native-command.runtime.js";
 import { createMockCommandInteraction } from "./native-command.test-helpers.js";
@@ -104,3 +105,5 @@ describe("Discord native verbose menu", () => {
     },
   );
 });
+
+installDiscordIngressTestRuntime();

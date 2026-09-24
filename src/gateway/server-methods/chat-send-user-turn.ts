@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
@@ -68,6 +67,7 @@ function resolveChatSendManagedMedia(
   return entries.map((entry) => ({
     path: entry.path,
     contentType: entry.fact.contentType ?? "application/octet-stream",
+    ...(entry.fact.fileName ? { fileName: entry.fact.fileName } : {}),
     ...(suppressInlineHydration && entry.imageKind === "inline"
       ? { hydrationSuppressed: true }
       : {}),
@@ -244,17 +244,13 @@ export function prepareChatSendUserTurn(params: {
     GatewayRunToolBindings: request.toolBindings,
     GatewayUiCommandTarget: gatewayUiCommandTarget,
   };
-  if (attachments.mediaPathOffloadPaths.length > 0) {
+  if (attachments.mediaPathOffloads.length > 0) {
     // Pre-staged offloads must use structured facts and marker text so the
     // dispatch path renders their prompt note without staging them a second time.
-    ctx.media = attachments.mediaPathOffloadPaths.map((pathValue, index) => ({
-      path: pathValue,
-      contentType: attachments.mediaPathOffloadTypes[index],
-      workspaceDir: attachments.mediaPathOffloadWorkspaceDir ?? path.dirname(pathValue),
-    }));
+    ctx.media = attachments.mediaPathOffloads;
   }
-  const mediaPathOffloadsIncludeImages = attachments.mediaPathOffloadTypes.some((type) =>
-    type.startsWith("image/"),
+  const mediaPathOffloadsIncludeImages = attachments.mediaPathOffloads.some((fact) =>
+    fact.contentType?.startsWith("image/"),
   );
   const participant = resolveGatewayInputParticipant(client, request.systemInputProvenance);
   if (participant) {

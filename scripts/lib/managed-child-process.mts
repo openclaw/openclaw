@@ -165,7 +165,8 @@ export function hasUnjoinedWork(value: unknown): boolean {
     if ("processTreeState" in current && current.processTreeState !== "terminated") {
       return true;
     }
-    if (current instanceof AggregateError) {
+    // Rolldown preserves plugin failures in a plain Error.errors array.
+    if ("errors" in current && Array.isArray(current.errors)) {
       for (const error of current.errors) {
         pending.push(error);
       }
@@ -779,11 +780,17 @@ export async function finalizeManagedChild(
         joined = true;
         // A missing group at signal time supersedes the earlier racy liveness probe.
         if (!signal && platform !== "win32" && termination?.processTreeState !== "terminated") {
+          const cleanupErrors = [termination?.error, ...signalErrors].filter(
+            (error) => error !== undefined,
+          );
           throw createManagedCommandCleanupError(
             "Managed command exited while its process group remained active",
             child,
             platform,
             "terminated",
+            cleanupErrors.length > 0
+              ? new AggregateError(cleanupErrors, "Managed process termination failed")
+              : undefined,
           );
         }
         break;

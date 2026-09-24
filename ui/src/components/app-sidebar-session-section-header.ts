@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { writeSidebarSectionDragData } from "../lib/sessions/drag.ts";
+import { renderSidebarReorderMenu } from "./sidebar-reorder.ts";
 
 export function renderSidebarSessionSectionHeader(params: {
   sectionId: string;
@@ -11,6 +12,10 @@ export function renderSidebarSessionSectionHeader(params: {
   onStartDrag: (sectionId: string) => void;
   onFinishDrag: () => void;
   onContextMenu?: (event: MouseEvent) => void;
+  reorder?: {
+    label: string;
+    onMove: (target: string, position: "before" | "after") => void | Promise<void>;
+  };
 }) {
   const draggable = params.draggable !== false && !params.disabledReason;
   return html`
@@ -60,6 +65,7 @@ export function renderSidebarSessionSectionHeader(params: {
     >
       <span class="sidebar-session-group-drag-handle" aria-hidden="true"></span>
       ${params.content}
+      ${draggable && params.reorder ? renderSidebarReorderMenu({ ...params.reorder, kind: "section" }) : nothing}
     </div>
   `;
 }

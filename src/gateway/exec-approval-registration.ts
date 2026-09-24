@@ -88,13 +88,13 @@ function readRequestString(request: unknown, key: string): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-export function prepareExecApprovalRegistration<TPayload>(params: {
+export async function prepareExecApprovalRegistration<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   kind: OperatorApprovalKind;
   presentation: ReturnType<typeof prepareExecApprovalPresentation>;
   runtimeEpoch: string;
   resolveAudienceSessionKeys?: ExecApprovalManagerOptions<TPayload>["resolveAudienceSessionKeys"];
-}): Parameters<typeof insertOperatorApproval>[0]["approval"] {
+}): Promise<Parameters<typeof insertOperatorApproval>[0]["approval"]> {
   const { record } = params;
   const source = {
     agentId: readRequestString(record.request, "agentId"),
@@ -107,10 +107,10 @@ export function prepareExecApprovalRegistration<TPayload>(params: {
   let audienceSessionKeys: string[] = [];
   if (source.sessionKey) {
     // Gateway owns lineage resolution; without it only the source is included.
-    audienceSessionKeys = params.resolveAudienceSessionKeys?.(
+    audienceSessionKeys = (await params.resolveAudienceSessionKeys?.(
       source.sessionKey,
       source.agentId,
-    ) ?? [source.sessionKey];
+    )) ?? [source.sessionKey];
   }
   return {
     id: record.id,

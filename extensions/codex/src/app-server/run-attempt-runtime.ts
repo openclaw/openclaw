@@ -331,6 +331,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       modelProviderOverride: usesSupervisionConnection
         ? undefined
         : resolveCodexAppServerThreadModelSelection({
+            homeScope: appServer.start.homeScope,
             provider: params.provider,
             model: params.modelId,
             binding: mutable.startupBinding,

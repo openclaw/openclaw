@@ -19,7 +19,10 @@ enum OpenClawProcessMain {
 }
 
 enum OpenClawProcessEntrypoint {
-    static func run(arguments: [String], launchApplication: () -> Void) -> Int32? {
+    static func run(arguments: [String], bundle: Bundle = .main, launchApplication: () -> Void) -> Int32? {
+        if let status = CloudWorkerHost.runIfRequested(arguments: arguments, bundle: bundle) {
+            return status
+        }
         if let status = ElevationExclusiveRename.runIfRequested(arguments: arguments) {
             return status
         }
@@ -290,6 +293,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Remote startup can spawn an SSH child. Admit tunnel work only after the
         // singleton check so a short-lived handoff process cannot orphan that child.
         GatewayEndpointStore.admitPrimaryAppLaunch()
+        ChromeExtensionSetup.shared.start(plan: launchPlan)
         GatewayConnectivityCoordinator.shared.start()
         self.state = AppStateStore.shared
         if let state {
@@ -379,6 +383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_: Notification) {
+        ChromeExtensionSetup.shared.stop()
         BackgroundSessionNotifications.shared.stop()
         self.statusMenuController?.stop()
         QuickChatController.shared.stop()

@@ -6,11 +6,26 @@ const closed = { additionalProperties: false } as const;
 const name = Type.String({ minLength: 1, maxLength: 256 });
 const filePath = Type.String({ minLength: 1, maxLength: 512 });
 
-/** The caller selects a declared skill, never a filesystem path. */
+/** Paths select files inside a declared skill; omitted means its SKILL.md entry. */
 export const PluginsSkillsReadParamsSchema = Type.Union([
-  Type.Object({ source: Type.Literal("installed"), pluginId: name, skillName: name }, closed),
   Type.Object(
-    { source: Type.Literal("catalog"), catalogId: name, version: name, skillName: name },
+    {
+      source: Type.Literal("installed"),
+      pluginId: name,
+      skillName: name,
+      path: Type.Optional(filePath),
+      version: Type.Optional(name),
+    },
+    closed,
+  ),
+  Type.Object(
+    {
+      source: Type.Literal("catalog"),
+      catalogId: name,
+      version: name,
+      skillName: name,
+      path: Type.Optional(filePath),
+    },
     closed,
   ),
 ]);
@@ -20,6 +35,7 @@ export const PluginSkillFileSchema = Type.Object(
     sizeBytes: Type.Integer({ minimum: 0 }),
     status: Type.Union([
       Type.Literal("ready"),
+      Type.Literal("deferred"),
       Type.Literal("binary"),
       Type.Literal("too-large"),
       Type.Literal("unavailable"),

@@ -174,8 +174,8 @@ export type UiSettings = {
   sidebarAgentsMode?: "chip" | "roster";
   sidebarPreTeamScope?: string | null; // null remembers All agents; undefined means unset.
   sidebarCollapsedAgentIds?: string[];
-  sidebarEntries: string[];
-  sidebarAgentOrder?: string[]; // Ordered routes, plugin navigation, and pinned sessions below Home
+  sidebarEntries: string[]; // Ordered routes, plugin navigation, and pinned sessions below Home
+  sidebarAgentOrder?: string[]; // Manual order of whole team-sidebar agent sections
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
   showAdvancedSettings?: boolean; // Expand advanced schema settings (default false)

@@ -462,7 +462,7 @@ export async function runSqliteSessionReclamation(params: {
   }
   return await withSqliteMutationWorkerLifetime(
     params.plan.databaseOptions,
-    async ({ assertCurrent, commitGate }) => {
+    async ({ assertCurrent, commitGate, signal }) => {
       const assertRequestCurrent = () => {
         assertCurrent();
         params.assertCommitAllowed?.();
@@ -474,6 +474,9 @@ export async function runSqliteSessionReclamation(params: {
           return retainOpenClawAgentDatabaseReadOnly(params.plan.databaseOptions);
         },
         "session.reclamation.retain",
+        undefined,
+        "foreground",
+        signal,
       );
       if (!retained.found) {
         throw new Error("SQLite session reclamation lost its prepared database");
@@ -500,10 +503,12 @@ export async function runSqliteSessionReclamation(params: {
                 worker,
                 assertRequestCurrent,
                 commitGate,
+                signal,
               },
             );
           },
           assertRequestCurrent,
+          signal,
         );
       } finally {
         claim.release();

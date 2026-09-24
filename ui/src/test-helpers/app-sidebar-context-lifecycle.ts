@@ -43,7 +43,7 @@ export function createSidebarContextLifecycle(
     theme,
     agentSelection,
     connectionBootstrap,
-    navigation: createApplicationNavigationPreferences(loadSettings(gateway.connection.gatewayUrl)),
+    navigation: createApplicationNavigationPreferences(theme),
   };
 }
 
