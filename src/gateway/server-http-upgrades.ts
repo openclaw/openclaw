@@ -36,11 +36,11 @@ import { normalizePluginNodeCapabilityScopedUrl } from "./plugin-node-capability
 import {
   getCachedPluginGatewayAuthBypassPaths,
   shouldEnforceDefaultPluginGatewayAuth,
-  type PluginGatewayDispatchContext,
   type ResolvePluginNodeCapabilityRoute,
 } from "./server-http-plugin-auth.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { rejectGatewayUpgradeServiceUnavailable } from "./server/http-work-admission.js";
+import type { PluginHttpUpgradeHandler } from "./server/plugins-http.js";
 import { resolvePluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import type { PluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
@@ -50,14 +50,6 @@ import {
   type GatewayIngressWebSocket,
   type GatewayWsClient,
 } from "./server/ws-types.js";
-
-type PluginHttpUpgradeHandler = (
-  req: IncomingMessage,
-  socket: import("node:stream").Duplex,
-  head: Buffer,
-  pathContext?: PluginRoutePathContext,
-  dispatchContext?: PluginGatewayDispatchContext,
-) => Promise<boolean>;
 
 const getPluginNodeCapabilityAuthModule = createLazyRuntimeModule(
   () => import("./server/plugin-node-capability-auth.js"),

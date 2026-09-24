@@ -1,6 +1,8 @@
 import { isMainThread } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   withDisposableOpenClawStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -11,9 +13,148 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { flushPendingSessionsChangedEvents } from "../server-methods/session-change-event.js";
-import { createGatewayWorkerPlacementChangePublisher } from "../server-worker-placement-change-events.js";
+import {
+  createGatewayWorkerPlacementChangePublisher,
+  subscribeGatewayWorkerMachineShapeChanges,
+} from "../server-worker-placement-change-events.js";
+import { readWorkerPlacementIdentity } from "./placement-projector.js";
 import type { WorkerSessionPlacementChangeSnapshot } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { createWorkerEnvironmentStore } from "./store.js";
+
+it("coalesces machine metadata bursts off thread and selects only correlated profile placements", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawStateDatabase();
+    const store = createWorkerSessionPlacementStore({ database, now: () => 1000 });
+    for (const sessionId of ["pending", "active", "terminal", "stale", "unowned", "other"]) {
+      const environmentId = `environment-${sessionId}`;
+      seedAttachedPlacementEnvironment(database, {
+        environmentId,
+        sessionId,
+        ownerEpoch: 7,
+        profileId: sessionId === "other" ? "other" : "development",
+      });
+      let placement = store.startDispatch({
+        sessionId,
+        sessionKey: `agent:main:${sessionId}`,
+        agentId: "main",
+      });
+      for (const step of [
+        { to: "provisioning", patch: { environmentId } },
+        { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
+        {
+          to: "starting",
+          patch: { workspaceBaseManifestRef: "manifest", remoteWorkspaceDir: "/workspace" },
+        },
+        { to: "active", patch: { activeOwnerEpoch: 7 } },
+      ] as const) {
+        placement = store.transition({
+          sessionId,
+          from: placement.state,
+          expectedGeneration: placement.generation,
+          ...step,
+        });
+        if (sessionId === "pending" || sessionId === "unowned") {
+          break;
+        }
+      }
+      if (sessionId === "terminal") {
+        placement = store.transition({
+          sessionId,
+          from: placement.state,
+          expectedGeneration: placement.generation,
+          to: "draining",
+        });
+        store.startReconcile({
+          sessionId,
+          environmentId,
+          ownerEpoch: 7,
+          expectedGeneration: placement.generation,
+        });
+      }
+      if (sessionId === "terminal" || sessionId === "unowned") {
+        store.fail({ sessionId, recoveryError: "synthetic failure" });
+      }
+      if (sessionId === "stale") {
+        seedAttachedPlacementEnvironment(database, { environmentId, sessionId, ownerEpoch: 8 });
+      }
+    }
+    const environments = await createWorkerEnvironmentStore({ database });
+    const expected = ["active", "pending", "terminal"];
+    expect(
+      store
+        .list()
+        .filter(
+          (row) =>
+            readWorkerPlacementIdentity(
+              row,
+              undefined,
+              row.environmentId ? (environments.get(row.environmentId) ?? null) : null,
+            )?.profileId === "development",
+        )
+        .map((row) => row.sessionId),
+    ).toEqual(expected);
+    expect((await store.readChangeSnapshot(["development"])).map((row) => row.sessionId)).toEqual(
+      expected,
+    );
+    expect(await store.readChangeSnapshot([])).toEqual([]);
+    expect(await store.readChangeSnapshot(["missing"])).toEqual([]);
+    let changed!: (profileId: string) => void;
+    const received: string[] = [];
+    const published = createDeferredCore();
+    const unlisten = sessionChanges.subscribe((change) => {
+      if ("sessionKey" in change) {
+        received.push(change.sessionKey!);
+        if (received.length === expected.length) {
+          published.resolve();
+        }
+      }
+    });
+    const context = {
+      broadcastToConnIds: vi.fn(),
+      chatAbortControllers: new Map(),
+      getRuntimeConfig: () => ({}),
+      getSessionEventSubscriberConnIds: () => new Set<string>(),
+    };
+    const warn = vi.fn();
+    const stop = subscribeGatewayWorkerMachineShapeChanges({
+      placements: store,
+      environments: {
+        subscribeMachineShapeChanged: (listener) => {
+          changed = listener;
+          return () => {};
+        },
+      },
+      getSessionChangeContext: () => context,
+      warn,
+    });
+    const { DatabaseSync, StatementSync } = requireNodeSqlite();
+    const calls = [
+      vi.spyOn(DatabaseSync.prototype, "prepare"),
+      vi.spyOn(DatabaseSync.prototype, "exec"),
+      ...(["get", "all", "run", "iterate"] as const).map((method) =>
+        vi.spyOn(StatementSync.prototype, method),
+      ),
+    ];
+    try {
+      for (let i = 0; i < 3; i++) {
+        changed("development");
+      }
+      await published.promise;
+      await stop();
+      changed("development");
+      expect(received).toEqual(expected.map((id) => `agent:main:${id}`));
+      expect(calls.reduce((count, call) => count + call.mock.calls.length, 0)).toBe(0);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      await stop();
+      vi.restoreAllMocks();
+      unlisten();
+      await environments.close();
+    }
+  });
+});
 
 it.each(["cached", "fresh"] as const)(
   "reads detached %s placement snapshots off thread and joins the captured source",

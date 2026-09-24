@@ -565,9 +565,17 @@ describe("shared missing skill ancestors", () => {
       }
       return originalUnwatchFile(...args);
     });
+    const observed: Array<{ watcher: ReturnType<typeof chokidar.watch>; ready: boolean }> = [];
+    const watcherErrors: unknown[] = [];
     const originalWatch = chokidar.watch;
     const watch = vi.spyOn(chokidar, "watch").mockImplementation((...args) => {
       const watcher = originalWatch(...args);
+      const observation = { watcher, ready: false };
+      observed.push(observation);
+      watcher.once("ready", () => {
+        observation.ready = true;
+      });
+      watcher.on("error", (error) => watcherErrors.push(error));
       if (resolveSkillsWatcherUsePolling()) {
         const originalEmit = watcher.emit.bind(watcher);
         vi.spyOn(watcher, "emit").mockImplementation((...emitArgs) => {
@@ -598,18 +606,11 @@ describe("shared missing skill ancestors", () => {
       }).map((entry) => entry.skill.name);
     ensureSkillsWatcher({ workspaceDir, config });
     expect(read()).toEqual([]);
-    await Promise.all(
-      watch.mock.results.map((result) => {
-        if (result.type !== "return") {
-          throw new Error("Watcher acquisition failed");
-        }
-        return new Promise<void>((resolve, reject) => {
-          result.value.once("ready", resolve);
-          result.value.once("error", reject);
-        });
-      }),
-    );
-    // Ready handlers reconcile synchronously before these promises resolve.
+    // Ready handlers may acquire another verification generation synchronously.
+    await vi.waitFor(() => {
+      expect(watcherErrors).toEqual([]);
+      expect(observed.every(({ watcher, ready }) => ready || watcher.closed)).toBe(true);
+    });
     // Unchanged empty inventory suppresses public events, but discovery still invalidates.
     const sourceVersion = getSkillsSourceVersion(workspaceDir);
     const chokidarAdmissionStart = replaceAncestor ? watch.mock.calls.length : 0;

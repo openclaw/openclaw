@@ -21,7 +21,6 @@ import type { HealthCheckContext } from "../flows/health-checks.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { createSkillProposalEvent } from "../skills/workshop/plugin-hooks.js";
 import { appendSkillProposalEvent } from "../skills/workshop/store-sqlite-event.js";
-import { importLegacySkillProposal } from "../skills/workshop/store.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
@@ -46,7 +45,7 @@ import {
   seedDoctorLintMcpToken,
   snapshotDoctorLintSqliteFamily,
 } from "./doctor-lint.test-support.js";
-import { createAppliedLegacyProposal } from "./doctor-skill-workshop-sqlite.test-support.js";
+import { seedAppliedLegacyProposal } from "./doctor-skill-workshop-sqlite.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -122,16 +121,16 @@ describe("doctor lint state isolation", () => {
         for (const { id, owner, root } of targets) {
           const skillDir = path.join(root, "workshop-skills", id);
           const content = `---\nname: ${id}\ndescription: Saved test procedure\n---\n`;
-          const record = createAppliedLegacyProposal({
+          await seedAppliedLegacyProposal({
             id,
             title: id,
             description: "Saved test procedure",
             content,
             target: { skillKey: id, skillDir },
+            env: state.env,
+            ownerAgentId: owner,
+            targetContent: content,
           });
-          fs.mkdirSync(skillDir, { recursive: true });
-          fs.writeFileSync(record.target.skillFile, content);
-          importLegacySkillProposal({ record, ownerAgentId: owner, store: { env: state.env } });
         }
         const databasePath = resolveOpenClawStateSqlitePath(state.env);
         await closeOpenClawStateDatabaseByPathAsync(databasePath);
@@ -196,16 +195,16 @@ describe("doctor lint state isolation", () => {
           await state.writeConfig(config);
           const legacyDir = path.join(state.workspaceDir, "skills", "relocated");
           const destination = path.join(state.agentDir("main"), "workshop-skills", "relocated");
-          const record = createAppliedLegacyProposal({
+          const record = await seedAppliedLegacyProposal({
             id: "relocated",
             title: "Relocated procedure",
             description: "Saved test procedure",
             content: "# Saved procedure\n",
             target: { skillKey: "relocated", skillDir: destination },
+            env: state.env,
+            ownerAgentId: "main",
+            targetContent: "# Saved procedure\n",
           });
-          fs.mkdirSync(destination, { recursive: true });
-          fs.writeFileSync(record.target.skillFile, "# Saved procedure\n");
-          importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
           appendSkillProposalEvent(
             openOpenClawStateDatabase({ env: state.env }).db,
             createSkillProposalEvent({

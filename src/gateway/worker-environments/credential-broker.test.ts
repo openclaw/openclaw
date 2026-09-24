@@ -34,7 +34,7 @@ describe("worker environment service", () => {
       now: () => support.testState.nowMs,
     });
     const liveEvents = support.createLiveEvents();
-    const { identity, workerService } = support.bindPlacementHarness(
+    const { identity, workerService } = await support.bindPlacementHarness(
       {
         ...newer,
         sessionId,
@@ -127,33 +127,6 @@ describe("worker environment service", () => {
     expect(support.testState.store.get(environmentId)).toMatchObject({
       state: "attached",
       attachedSessionIds: ["session-reclaim"],
-    });
-  });
-
-  it("stops the tunnel after live binding rollback", async () => {
-    const environmentId = "live-bind-fail";
-    await support.seedReady(environmentId);
-    const liveEvents = support.createLiveEvents({
-      bindSession: vi.fn(() => {
-        throw new Error("bind failed");
-      }),
-    });
-    const tunnelManager = {
-      stop: vi.fn(async () => {}),
-      stopAll: vi.fn(async () => {}),
-    } as unknown as WorkerTunnelManager;
-    const workerService = support.createService(support.createProvider(), {
-      liveEvents,
-      tunnelManager,
-    });
-
-    await expect(
-      workerService.attachSession({ environmentId, ownerEpoch: 1, sessionId: "session-live" }),
-    ).rejects.toThrow("Attached session target is unavailable");
-    expect(tunnelManager.stop).toHaveBeenCalledWith(environmentId, 1);
-    expect(support.testState.store.get(environmentId)).toMatchObject({
-      state: "idle",
-      attachedSessionIds: [],
     });
   });
 

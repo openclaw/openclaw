@@ -3,8 +3,7 @@ import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
-import type { MSTeamsActivityHandler } from "./monitor-handler.js";
-import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
+import type { createMSTeamsActivityHandler as CreateMSTeamsActivityHandler } from "./monitor-handler.js";
 import { getMSTeamsIngressMockState } from "./monitor-ingress-mock.test-support.js";
 import type { MSTeamsPollStore } from "./polls.js";
 
@@ -20,10 +19,7 @@ type ResolveMSTeamsUserAllowlistMock = (params: {
   cfg: unknown;
   entries: string[];
 }) => Promise<MSTeamsUserResolution[]>;
-type RegisterMSTeamsHandlersMock = (
-  handler: MSTeamsActivityHandler,
-  deps: MSTeamsMessageHandlerDeps,
-) => MSTeamsActivityHandler;
+
 type MockExpressFn = ReturnType<typeof vi.fn>;
 type MockExpressApp = MockExpressFn & {
   use: MockExpressFn;
@@ -81,8 +77,8 @@ vi.mock("express", () => ({
   ),
 }));
 
-const registerMSTeamsHandlers = vi.hoisted(() =>
-  vi.fn<RegisterMSTeamsHandlersMock>((handler) => handler),
+const createMSTeamsActivityHandler = vi.hoisted(() =>
+  vi.fn<typeof CreateMSTeamsActivityHandler>(() => vi.fn(async () => undefined)),
 );
 const resolveMSTeamsUserAllowlist = vi.hoisted(() =>
   vi.fn<ResolveMSTeamsUserAllowlistMock>(async () => []),
@@ -107,7 +103,7 @@ vi.mock("@microsoft/teams.apps", () => ({ ExpressAdapter: vi.fn() }));
 vi.mock("./monitor-handler.js", () => ({
   isCardActionInvokeAuthorized: vi.fn(async () => true),
   isSigninInvokeAuthorized: vi.fn(async () => true),
-  registerMSTeamsHandlers,
+  createMSTeamsActivityHandler,
 }));
 vi.mock("./file-consent-invoke.js", () => ({
   runMSTeamsFileConsentInvokeHandler: vi.fn(async () => {}),
@@ -182,7 +178,7 @@ function createRuntime(): RuntimeEnv {
 }
 
 function requireRegisteredMSTeamsConfig(): OpenClawConfig {
-  const registered = registerMSTeamsHandlers.mock.calls[0]?.[1];
+  const registered = createMSTeamsActivityHandler.mock.calls[0]?.[0];
   if (!registered?.cfg) {
     throw new Error("expected registered MSTeams handler config");
   }
@@ -202,7 +198,9 @@ async function withStartedProvider(
     pollStore: {} as MSTeamsPollStore,
   });
   try {
-    await vi.waitFor(() => expect(registerMSTeamsHandlers).toHaveBeenCalled(), { interval: 1 });
+    await vi.waitFor(() => expect(createMSTeamsActivityHandler).toHaveBeenCalled(), {
+      interval: 1,
+    });
     verify(requireRegisteredMSTeamsConfig());
   } finally {
     abort.abort();

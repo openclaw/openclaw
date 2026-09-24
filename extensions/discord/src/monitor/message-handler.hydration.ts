@@ -8,6 +8,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getChannelMessage, Message as DiscordMessage, type Message } from "../internal/discord.js";
 import type { DiscordChannelInfo } from "./message-channel-info.js";
+import { resolveDiscordMessageStickers } from "./message-forwarded.js";
 import { resolveDiscordMessageText } from "./message-text.js";
 
 function mergeFetchedDiscordMessage(base: Message, fetched: APIMessage): Message {
@@ -194,11 +195,18 @@ function resolveReferencedMessagePayloadState(message: Message): ReferencedMessa
   if (referenced == null) {
     return "complete";
   }
-  return typeof referenced === "object" &&
-    typeof referenced.id === "string" &&
-    referenced.id === reference.message_id
+  if (typeof referenced !== "object" || referenced.id !== reference.message_id) {
+    return "invalid";
+  }
+  const reply = message.referencedMessage;
+  // A matching ID can still carry an empty nested payload; recover the selected
+  // message before treating that absence as the user's intended reply context.
+  return reply?.author &&
+    (resolveDiscordMessageText(reply, { includeForwarded: true }) ||
+      reply.attachments.length > 0 ||
+      resolveDiscordMessageStickers(reply).length > 0)
     ? "complete"
-    : "invalid";
+    : "missing";
 }
 
 async function hydrateDiscordReplyReference(params: {

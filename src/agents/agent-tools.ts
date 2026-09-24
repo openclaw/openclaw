@@ -23,13 +23,13 @@ import {
 } from "./agent-tool-metadata.js";
 import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
+import { projectMemoryFlushTools } from "./agent-tools.memory-flush.js";
 import {
   filterToolsByMessageProvider,
   messageProviderExcludesTool,
 } from "./agent-tools.message-provider-policy.js";
 import { applyModelProviderToolPolicy } from "./agent-tools.model-provider-policy.js";
 import type { OpenClawCodingToolsOptions } from "./agent-tools.options.js";
-import { wrapToolMemoryFlushAppendOnlyWrite } from "./agent-tools.read.js";
 import {
   getActiveAgentRingZeroTools,
   mergeAgentRingZeroTools,
@@ -70,6 +70,7 @@ import { subagentAttachmentRootForRun } from "./subagents/subagent-attachment-pa
 import { resolveToolFsConfig } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
+import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
 import {
   expandToolGroups,
   hasRestrictiveAllowPolicy,
@@ -87,14 +88,13 @@ import {
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
 import { prepareSessionPortalToolAccess } from "./tools/session-portal-target.js";
 
-const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
-
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 
 /** Internal preparation data stays outside the public harness factory options. */
 export function createOpenClawCodingToolsInternal(
   options?: OpenClawCodingToolsOptions,
   skillReadResources?: SkillSnapshot["resolvedSkills"],
+  onPolicyFilter?: (event: ToolPolicyFilterEvent) => void,
 ): AnyAgentTool[] {
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const isMemoryFlushRun = options?.trigger === "memory";
@@ -659,30 +659,21 @@ export function createOpenClawCodingToolsInternal(
     options?.swarmCollector && options.swarmOutputSchema
       ? tools.find((tool) => tool.name === "structured_output")
       : undefined;
-  const toolsForMemoryFlush: AnyAgentTool[] = isMemoryFlushRun && memoryFlushWritePath ? [] : tools;
-  if (isMemoryFlushRun && memoryFlushWritePath) {
-    for (const tool of tools) {
-      if (!MEMORY_FLUSH_ALLOWED_TOOL_NAMES.has(tool.name)) {
-        continue;
-      }
-      if (tool.name === "write") {
-        toolsForMemoryFlush.push(
-          wrapToolMemoryFlushAppendOnlyWrite(tool, {
-            root: memoryFlushWriteRoot,
-            relativePath: memoryFlushWritePath,
-            memoryWriteProvenance,
-            containerWorkdir: sandbox?.containerWorkdir,
-            sandbox:
-              sandboxRoot && sandboxFsBridge
-                ? { root: sandboxRoot, bridge: sandboxFsBridge }
-                : undefined,
-          }),
-        );
-        continue;
-      }
-      toolsForMemoryFlush.push(tool);
-    }
-  }
+  const toolsForMemoryFlush = projectMemoryFlushTools(
+    tools,
+    isMemoryFlushRun && memoryFlushWritePath
+      ? {
+          root: memoryFlushWriteRoot,
+          relativePath: memoryFlushWritePath,
+          memoryWriteProvenance,
+          containerWorkdir: sandbox?.containerWorkdir,
+          sandbox:
+            sandboxRoot && sandboxFsBridge
+              ? { root: sandboxRoot, bridge: sandboxFsBridge }
+              : undefined,
+        }
+      : undefined,
+  );
   const unavailableCoreToolReason =
     isMemoryFlushRun && memoryFlushWritePath
       ? "memory-triggered compaction runs expose only read and append-only write"
@@ -706,7 +697,7 @@ export function createOpenClawCodingToolsInternal(
   });
   // Sender identity is primarily command/action auth, with one Gateway parity exception:
   // explicit non-owner callers never receive owner-only control-plane core tools.
-  const subagentFiltered = messageInvocationPolicy.filter();
+  const subagentFiltered = messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter);
   // Host-bound ring-zero tools carry their own authority checks. Agent policy
   // must not deadlock setup, but the tools still receive schema/hook wrappers.
   const authorizedTools = applySwarmCollectorToolContract(

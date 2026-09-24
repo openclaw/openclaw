@@ -33,10 +33,7 @@ describe("worker live event write settlement", () => {
       };
       await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
       support.testState.config.session = { store: storePath };
-      const receiver = createWorkerLiveEventReceiver({
-        startupBindings: [],
-        startupOwners: new Map(),
-      });
+      const receiver = createWorkerLiveEventReceiver();
       const { identity, placementStore, source, releaseSource, workerService } =
         await support.placementHarness(
           "worker-live-settlement",
@@ -48,13 +45,6 @@ describe("worker live event write settlement", () => {
         expectDefined(getAgentRunContextOwnership(identity.runId!), "source run owner").claimIds,
       );
       identity.protocolFeatures = ["worker-live-event-v1"];
-      expect(
-        receiver.bindSession({
-          environmentId: identity.environmentId,
-          runEpoch: identity.ownerEpoch,
-          sessionId,
-        }),
-      ).toBe(true);
       const terminal = support.terminalEvent(identity, { seq: 2 });
       await expect(workerService.pushLiveEvent(identity, terminal)).resolves.toEqual({
         ok: true,
@@ -117,10 +107,12 @@ describe("worker live event write settlement", () => {
         expect(phases).toEqual(["start", "end"]);
         // A duplicate ACK must join the same accepted prefix without replaying it.
         let replaySettled = false;
-        replay = receiver.apply({ identity, request: terminal, source }).then((result) => {
-          replaySettled = true;
-          return result;
-        });
+        replay = receiver
+          .apply({ identity, request: terminal, source, readAckedSeq: () => 0 })
+          .then((result) => {
+            replaySettled = true;
+            return result;
+          });
         let shutdownSettled = false;
         if (outcome === "revoked") {
           placementStore.validateWorkerTurn.mockReturnValue(false);

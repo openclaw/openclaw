@@ -32,12 +32,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../tasks/detached-task-runtime.js", () => ({
   createQueuedTaskRun: mocks.create,
-  startTaskRunByRunId: mocks.start,
   completeTaskRunByRunId: () => [],
   failTaskRunByRunId: () => [],
   recordTaskRunProgressByRunId: mocks.progress,
 }));
 vi.mock("../../tasks/detached-task-runtime.async.js", () => ({
+  startTaskRunByRunIdAsync: mocks.start,
   completeTaskRunByRunIdAsync: mocks.complete,
   failTaskRunByRunIdAsync: mocks.fail,
 }));
@@ -238,6 +238,7 @@ let sql: ReturnType<typeof observeMainThreadSql>;
 beforeEach(() => {
   sql = observeMainThreadSql();
   vi.clearAllMocks();
+  mocks.start.mockResolvedValue([]);
   mocks.complete.mockResolvedValue([]);
   mocks.fail.mockResolvedValue([]);
   resetCommandQueueStateForTest();
@@ -255,7 +256,7 @@ afterEach(() => {
 });
 
 describe("deferred maintenance synchronous preparation", () => {
-  it.each(["completion", "failure"] as const)(
+  it.each(["start", "completion", "failure"] as const)(
     "retains maintenance ownership until task %s settles",
     async (terminal) => {
       vi.useFakeTimers();
@@ -263,7 +264,12 @@ describe("deferred maintenance synchronous preparation", () => {
       const terminalEntered = createDeferred();
       const terminalRelease = createDeferred();
       let entered = false;
-      const transition = terminal === "completion" ? mocks.complete : mocks.fail;
+      const transition =
+        terminal === "start"
+          ? mocks.start
+          : terminal === "completion"
+            ? mocks.complete
+            : mocks.fail;
       transition.mockImplementationOnce(async () => {
         entered = true;
         terminalEntered.resolve();
@@ -278,6 +284,9 @@ describe("deferred maintenance synchronous preparation", () => {
         f.workRelease.resolve();
         await Promise.race([terminalEntered.promise, f.disposeEntered.promise]);
         expect(entered).toBe(true);
+        if (terminal === "start") {
+          expect(f.maintain).not.toHaveBeenCalled();
+        }
         const taskId = [...f.rows.keys()][0]!;
         expect(isContextEngineMaintenanceTaskOwnerActive(taskId)).toBe(true);
         expect(f.dispose).not.toHaveBeenCalled();

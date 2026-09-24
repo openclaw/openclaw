@@ -658,7 +658,7 @@ export class DiscordThreadDeleteListener extends ThreadDeleteListener {
       event: this.type,
       run: async () => {
         const threadId = data.id;
-        getThreadBindingManager(this.accountId)?.unbindThread({
+        await getThreadBindingManager(this.accountId)?.unbindThread({
           threadId,
           reason: "thread-delete",
           sendFarewell: false,

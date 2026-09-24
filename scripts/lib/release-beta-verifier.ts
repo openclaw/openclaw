@@ -73,7 +73,6 @@ type WorkflowRunSummary = {
   label: string;
   url?: string;
   durationSeconds?: number;
-  advisory?: { status: string; conclusion: string; failedJobs: string[] };
   bootstrapEvidence?: {
     targetSha: string;
     workflowSha: string;
@@ -1257,7 +1256,6 @@ function verifyWorkflowRun(params: {
   expectedRunAttempt?: number;
   expectedHeadSha?: string;
   allowedHeadBranches?: string[];
-  advisory?: boolean;
   rerunFailed: boolean;
   observe?: (run: JsonRecord, failedJobCount: number) => void;
 }): WorkflowRunSummary {
@@ -1324,10 +1322,7 @@ function verifyWorkflowRun(params: {
       `${params.label}: reran ${failedJobs.length} failed job(s); rerun verifier after it finishes.`,
     );
   }
-  if (
-    status !== "completed" ||
-    (!params.advisory && (conclusion !== "success" || failedJobs.length > 0))
-  ) {
+  if (status !== "completed" || conclusion !== "success" || failedJobs.length > 0) {
     const failedNames = failedJobs
       .map((job) => normalizeOptionalString(job.name) ?? "<unnamed>")
       .join(", ");
@@ -1349,15 +1344,6 @@ function verifyWorkflowRun(params: {
     label: params.label,
     url: normalizeOptionalString(run.url),
     durationSeconds,
-    ...(params.advisory
-      ? {
-          advisory: {
-            status: status ?? "unavailable",
-            conclusion: conclusion ?? "unavailable",
-            failedJobs: failedJobs.map((job) => normalizeOptionalString(job.name) ?? "<unnamed>"),
-          },
-        }
-      : {}),
   };
 }
 
@@ -1966,7 +1952,12 @@ export async function verifyBetaRelease(
   options: {
     rootDir?: string;
     pluginNpmReadback?: {
-      verify: (packageName: string, version: string, distTag: string) => Promise<void>;
+      // Resolves to an informational note for a superseded published version.
+      verify: (
+        packageName: string,
+        version: string,
+        distTag: string,
+      ) => Promise<string | undefined>;
       evidence: Record<string, unknown>[];
     };
   } = {},
@@ -2045,7 +2036,14 @@ export async function verifyBetaRelease(
       // Full publication owns tarball readback, including prior-parent publishes.
       // Only standalone health checks retain metadata verification.
       if (options.pluginNpmReadback) {
-        await options.pluginNpmReadback.verify(plugin.packageName, args.version, args.distTag);
+        const note = await options.pluginNpmReadback.verify(
+          plugin.packageName,
+          args.version,
+          args.distTag,
+        );
+        if (note !== undefined) {
+          lines.push(`plugin npm WARN: ${note}`);
+        }
       } else {
         await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
       }
@@ -2219,7 +2217,6 @@ export async function verifyBetaRelease(
           repo: args.repo,
           expectedWorkflowName: "NPM Telegram Beta E2E",
           allowedHeadBranches: allowedReleaseWorkflowHeadBranches,
-          advisory: true,
           rerunFailed: false,
           observe: (run, count) => diagnostic.observeRun("npmTelegram", run, count),
         }),
@@ -2227,15 +2224,9 @@ export async function verifyBetaRelease(
       diagnostic.success("npmTelegram");
     }
     for (const run of workflowRuns) {
-      if (run.advisory) {
-        lines.push(
-          `${run.label} advisory: ${run.id} (${run.advisory.status}/${run.advisory.conclusion}; failed jobs: ${run.advisory.failedJobs.join(", ") || "none"})${run.url ? ` ${run.url}` : ""}`,
-        );
-      } else {
-        lines.push(
-          `${run.label} OK: ${run.id} (${formatDuration(run.durationSeconds)})${run.url ? ` ${run.url}` : ""}`,
-        );
-      }
+      lines.push(
+        `${run.label} OK: ${run.id} (${formatDuration(run.durationSeconds)})${run.url ? ` ${run.url}` : ""}`,
+      );
     }
 
     diagnostic.data.verification = "success";

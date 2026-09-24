@@ -416,7 +416,14 @@ export function resolveMessageGroupSenderLabel(
       );
     });
     if (isError) {
-      return t("chat.messages.errorSender");
+      const isContention = group.messages.every(({ message }) => {
+        const entry = asNullableRecord(message);
+        return (
+          entry?.customType === "run-failed-before-reply" &&
+          asNullableRecord(entry.details)?.errorKind === "state_contention"
+        );
+      });
+      return t(isContention ? "common.system" : "chat.messages.errorSender");
     }
     return group.messages.every(({ message }) => workspaceResultConflictFromTranscript(message))
       ? t("chat.workspaceConflict.eventSender")

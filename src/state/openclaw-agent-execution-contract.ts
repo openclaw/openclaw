@@ -17,6 +17,7 @@ import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import type { AgentDatabaseDomainOperations } from "./openclaw-agent-execution-domain.js";
 
 /** Recorded by the native owner; a descriptor never grants access to that owner. */
@@ -37,7 +38,7 @@ export type AgentDatabaseExecutionOpen = {
   agentId: string;
   databasePath: string;
   stateDatabasePath: string;
-  environment: { OPENCLAW_STATE_DIR: string; OPENCLAW_SUPERVISOR_MODE?: "external" };
+  environment: SqliteWorkerStateContext["environment"];
   expectedIdentity?: AgentDatabaseExecutionFileIdentity;
 };
 

@@ -29,13 +29,12 @@ interface BrowserPanelStreamHost extends StreamState {
   readonly mode: "interact" | "annotate" | "inspect";
   readonly operations: Pick<
     BrowserPanelOperationOwnership,
-    "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "markNavigationReconciled"
+    "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "forgetNavigation"
   >;
   readonly urlDraftEditing: boolean;
   readonly observedViewportSize: { width: number; height: number } | null;
   setState<Key extends keyof StreamState>(key: Key, value: StreamState[Key]): void;
   clearUnavailableView(): boolean;
-  scheduleViewportSync(): void;
   refreshView(targetId: string): Promise<void>;
   refreshAll(): Promise<void>;
 }
@@ -69,7 +68,6 @@ export class BrowserPanelStream {
   private resizeTimer?: ReturnType<typeof setTimeout>;
   private recoveryTimer?: ReturnType<typeof setTimeout>;
   private recovery?: Recovery;
-  private viewportSyncPending = false;
   private readonly retiringUrls = new Set<string>();
 
   constructor(private readonly host: BrowserPanelStreamHost) {}
@@ -340,19 +338,9 @@ export class BrowserPanelStream {
             ? { browserTab: { ...this.host.operations.route, targetId: attempt.targetId } }
             : {}),
         });
-        this.host.operations.markNavigationReconciled(attempt.client, attempt.targetId);
+        this.host.operations.forgetNavigation(attempt.client, attempt.targetId);
         if (!this.host.urlDraftEditing) {
           this.host.setState("urlDraft", frame.url);
-        }
-        if (
-          this.host.observedViewportSize &&
-          (Math.abs(frame.cssWidth - this.host.observedViewportSize.width) > 1 ||
-            Math.abs(frame.cssHeight - this.host.observedViewportSize.height) > 1) &&
-          !this.viewportSyncPending
-        ) {
-          // The sync is debounced; a repainting page must not keep postponing it.
-          this.viewportSyncPending = true;
-          this.host.scheduleViewportSync();
         }
         if (!attempt.presented) {
           attempt.presented = true;
@@ -371,8 +359,6 @@ export class BrowserPanelStream {
   }
 
   resize(): void {
-    // The debounced viewport sync just ran; later mismatched frames may schedule again.
-    this.viewportSyncPending = false;
     this.restartAfterResize();
   }
 
@@ -427,8 +413,6 @@ export class BrowserPanelStream {
     this.recovery = undefined;
     clearTimeout(this.resizeTimer);
     this.resizeTimer = undefined;
-    // Invalidation cancels the pending sync timer; the next stream must be able to schedule one.
-    this.viewportSyncPending = false;
     const attempt = this.attempt;
     this.attempt = undefined;
     attempt?.settle(false);

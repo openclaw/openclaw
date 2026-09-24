@@ -427,7 +427,6 @@ export function createWorkerProviderOwnerLifecycle(
     identityResolverFor,
     requireCurrentOwner,
     stopOwner,
-    destroyLease,
     beginDrain,
     finishProvenDestroy,
     lifecycleLease,

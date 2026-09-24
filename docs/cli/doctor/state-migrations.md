@@ -71,6 +71,37 @@ is held, its migration records a skip and dependent auth repairs wait; unrelated
 Doctor repairs continue. Restore an intended agent before migrating its retained
 store. Pending file deletion keeps the deletion owner's existing safety checks.
 
+When deletion history is missing, Doctor reports the number of unverified stores
+held back from repair. Ordinary session creation and database leases record unknown
+deletion history and continue; a missing row or reconstruction receipt does not
+make an agent deleted or unusable. Runtime does not recreate an empty journal on existing state.
+A surviving quarantine/integrity database is evidence of prior state even when the
+shared database and its registry are gone. Reopening shared state without an agent
+path preserves unknown deletion history; retained external stores still need Doctor
+reconstruction before maintenance.
+Verified fresh SQLite setup initializes the journal normally, without a missing-history
+warning. Legacy JSON session files alone do not require journal reconstruction.
+Session SQLite import also admits ordinary historical agent databases when deletion
+history is unavailable. Recorded deletion and reconstruction holds, orphaned SQLite
+sidecars, and retained plugin inputs with import receipts remain protected.
+Unreadable history does not erase readable deletion identities or recorded holds.
+`openclaw doctor --fix` reconstructs the journal and records a receipt listing the
+held database paths in the existing migration tables. Reconstruction preserves
+those stores; it does not migrate or retire them. Runtime admission remains separate
+from Doctor's repair holds. Review the paths and use the
+noninteractive `openclaw agents add` command printed by Doctor to restore the
+intended agent, or `openclaw agents delete` to confirm deletion. An unconfigured
+agent must be restored before deletion. For a custom database filename, restore
+the original `session.store` configuration first; `agents add` refuses to create
+an empty replacement when it cannot select a held store. If Doctor cannot verify
+a custom store's owner, it leaves the journal unavailable and reports the path
+while continuing other repairs. Rerun Doctor after resolving the holds.
+
+Invalid configuration also leaves the journal unavailable: Doctor cannot record
+a complete recovery inventory until it can validate configured ownership paths.
+Repair the configuration, then rerun `openclaw doctor --fix` to discover and hold
+external stores before reconstruction.
+
 Doctor reports interrupted auth-profile archive recovery even when no new migration remains or you decline another migration. If recovery cannot finish, its warning includes the failure cause and leaves the pending source for recovery; do not delete it to silence the warning.
 
 `doctor --fix` also repairs an inconsistent completed auth migration only when its old receipt has no credential fingerprints, none of the migrated credentials remain in the current canonical store, and the preserved archive still matches the recorded source hash. Doctor reimports through the normal verified migration flow. Completed receipts with fingerprints, surviving migrated credentials, or no archive remain untouched, so removing credentials after a verified migration does not restore them from backup.

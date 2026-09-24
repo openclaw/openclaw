@@ -299,6 +299,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       16
     );
   }
+  if (command.type === "deliveryQueue.outbound") {
+    return bytes + Buffer.byteLength(command.id ?? "", "utf8");
+  }
   if (command.type === "tasks.mutationSnapshot") {
     const scope = command.input;
     const scopes = scope === undefined ? [] : "taskId" in scope ? [scope] : scope;
@@ -440,7 +443,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
 
 function requestBytes(request: OpenClawStateReadRequest): number {
   return [
-    ...Object.values(request.context.environment),
+    ...Object.entries(request.context.environment).flatMap(([key, value]) => [key, value]),
     request.context.coordinatorRuntime.directory,
     request.context.existingSchemaPath,
     request.databasePath,

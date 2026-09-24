@@ -106,12 +106,6 @@ export function collectAgentSandboxAssignments(params: {
           : typeof defaultsSandbox?.scope === "string"
             ? (defaultsSandbox.scope as "agent" | "session" | "shared")
             : undefined,
-      perSession:
-        typeof sandbox?.["perSession"] === "boolean"
-          ? sandbox["perSession"]
-          : typeof defaultsSandbox?.perSession === "boolean"
-            ? defaultsSandbox.perSession
-            : undefined,
     });
     // Existing registry entries remain inspectable/removable after an agent or its
     // sandbox is disabled, so SSH lifecycle credentials stay materialized while

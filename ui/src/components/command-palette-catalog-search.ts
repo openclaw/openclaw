@@ -81,75 +81,38 @@ export function commandPaletteCategoryLabel(category: string): string {
 
 const CATALOG_SEARCH_LIMIT = 10;
 
+function navigationItem(
+  routeId: RouteId,
+  label: string,
+  icon: IconName,
+  options: { id?: string; description?: string } = {},
+): CommandPaletteItem {
+  return {
+    ...options,
+    id: `nav-${options.id ?? routeId}`,
+    label,
+    icon,
+    category: "navigation",
+    action: `nav:${routeId}`,
+  };
+}
+
 function getCommandPaletteBaseItems(
   desktopAvailable: boolean,
   custodianAvailable: boolean,
 ): CommandPaletteItem[] {
   return [
-    {
-      id: "nav-new-session",
-      label: t("newSession.title"),
-      icon: "plus",
-      category: "navigation",
-      action: "nav:new-session",
-    },
-    {
-      id: "nav-sessions",
-      label: t("palette.items.sessions"),
-      icon: "fileText",
-      category: "navigation",
-      action: "nav:sessions",
-    },
-    {
-      id: "nav-meetings",
-      label: t("tabs.meetings"),
+    navigationItem("new-session", t("newSession.title"), "plus"),
+    navigationItem("sessions", t("palette.items.sessions"), "fileText"),
+    navigationItem("meetings", t("tabs.meetings"), "book", {
       description: t("subtitles.meetings"),
-      icon: "book",
-      category: "navigation",
-      action: "nav:meetings",
-    },
-    {
-      id: "nav-cron",
-      label: t("palette.items.scheduled"),
-      icon: "scrollText",
-      category: "navigation",
-      action: "nav:cron",
-    },
-    {
-      id: "nav-skills",
-      label: t("palette.items.skills"),
-      icon: "zap",
-      category: "navigation",
-      action: "nav:skills",
-    },
-    {
-      id: "nav-plugins",
-      label: t("palette.items.plugins"),
-      icon: "plug",
-      category: "navigation",
-      action: "nav:plugins",
-    },
-    {
-      id: "nav-apps",
-      label: t("palette.items.apps"),
-      icon: "layoutGrid",
-      category: "navigation",
-      action: "nav:apps",
-    },
-    {
-      id: "nav-settings",
-      label: t("palette.items.settings"),
-      icon: "settings",
-      category: "navigation",
-      action: "nav:appearance",
-    },
-    {
-      id: "nav-agents",
-      label: t("palette.items.agents"),
-      icon: "folder",
-      category: "navigation",
-      action: "nav:agents",
-    },
+    }),
+    navigationItem("cron", t("palette.items.scheduled"), "scrollText"),
+    navigationItem("skills", t("palette.items.skills"), "zap"),
+    navigationItem("plugins", t("palette.items.plugins"), "plug"),
+    navigationItem("apps", t("palette.items.apps"), "layoutGrid"),
+    navigationItem("appearance", t("palette.items.settings"), "settings", { id: "settings" }),
+    navigationItem("agents", t("palette.items.agents"), "folder"),
     {
       id: "slash:verbose",
       label: "/verbose",

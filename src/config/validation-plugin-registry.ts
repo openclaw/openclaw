@@ -101,6 +101,9 @@ export function createPluginRegistryConfigValidator(params: {
     }
     checked = true;
     for (const diagnostic of registry.diagnostics) {
+      if (diagnostic.level === "info") {
+        continue;
+      }
       if (diagnostic.configDisposition === "preserve") {
         params.warnings.push(pluginDiagnosticToConfigWarning(diagnostic, "plugins.load.paths"));
         continue;

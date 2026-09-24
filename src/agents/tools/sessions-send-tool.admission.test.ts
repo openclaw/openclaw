@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -6,6 +7,7 @@ import {
   captureGatewayDeviceRevocation,
   readGatewayDeviceSourceAuthority,
 } from "../../gateway/device-revocation.js";
+import { readInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   createContext,
@@ -24,7 +26,10 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { createOpenClawTools } from "../openclaw-tools.js";
 import "../test-helpers/fast-openclaw-tools-sessions.js";
+import * as inProcessGateway from "./in-process-gateway.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
@@ -131,6 +136,256 @@ describe("sessions_send dispatch admission", () => {
     } finally {
       finish.resolve();
       source.release();
+    }
+  });
+
+  it.each([
+    {
+      name: "default numeric-thread",
+      accountId: "default",
+      sourceKey: requesterSessionKey,
+      threadId: 42,
+    },
+    { name: "direct", accountId: "direct", sourceKey: requesterSessionKey, threadId: "42" },
+    {
+      name: "exact legacy DM",
+      accountId: "default",
+      sourceKey: "agent:main:telegram:direct:peer-1",
+      threadId: "42",
+    },
+    {
+      name: "current source over agent delivery fallback",
+      accountId: "default",
+      sourceKey: requesterSessionKey,
+      threadId: "42",
+    },
+  ])(
+    "preserves the original $name route when a later turn changes the shared session route",
+    async ({ name, accountId, sourceKey, threadId }) => {
+      const { runSessionsSendA2AFlow: runActualFlow } = await vi.importActual<
+        typeof import("./sessions-send-tool.a2a.js")
+      >("./sessions-send-tool.a2a.js");
+      let completion: Record<string, unknown> | undefined;
+      const settled = createDeferredCore();
+      vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(async (params) => {
+        try {
+          await runActualFlow(params);
+        } finally {
+          settled.resolve();
+        }
+      });
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: sourceKey },
+        { sessionId: "requester-session", updatedAt: 1, lifecycleRevision: "original-generation" },
+      );
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: targetSessionKey },
+        { sessionId: "target-session", updatedAt: 1, spawnedBy: sourceKey },
+      );
+      const callGateway = vi.fn();
+      callGateway.mockImplementation(
+        async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+          if (request.method === "sessions.resolve") {
+            return { key: targetSessionKey, agentId: "main" };
+          }
+          if (request.method === "sessions.list") {
+            return { sessions: [{ key: targetSessionKey, agentId: "main", kind: "direct" }] };
+          }
+          if (request.method === "agent.wait") {
+            return {
+              status: "ok",
+              terminalReply: { disposition: "visible", text: "Task complete" },
+            };
+          }
+          if (request.method === "agent") {
+            if (!isRecord(request.params)) {
+              throw new Error("Expected agent request parameters");
+            }
+            if (request.params.sessionKey === targetSessionKey) {
+              await replaceSessionEntry(
+                { agentId: "main", sessionKey: sourceKey },
+                {
+                  sessionId: "requester-session",
+                  updatedAt: 2,
+                  lifecycleRevision: "original-generation",
+                  delivery: normalizeSessionDeliveryState({
+                    context: { channel: "telegram", accountId: "other", to: "later-recipient" },
+                  }),
+                },
+              );
+              return { runId };
+            }
+            completion = request.params;
+            return { runId: "completion-run" };
+          }
+          throw new Error(`Unexpected Gateway method: ${request.method}`);
+        },
+      );
+      const gateway = vi
+        .spyOn(inProcessGateway, "callAgentToolGatewayRequest")
+        .mockImplementation(callGateway);
+      try {
+        const tool = createOpenClawTools({
+          agentSessionKey: sourceKey,
+          sessionId: "requester-session",
+          agentChannel: "telegram",
+          agentAccountId: accountId,
+          agentTo: "original-recipient",
+          agentThreadId: threadId,
+          ...(name === "current source over agent delivery fallback"
+            ? {
+                agentTo: "stale-recipient",
+                agentThreadId: 99,
+                currentMessagingTarget: "original-recipient",
+                currentChannelId: "native-channel-id",
+                currentThreadTs: "42",
+              }
+            : {}),
+          config,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+        }).find((candidate) => candidate.name === "sessions_send");
+        expect(tool).toBeDefined();
+        const result = await tool!.execute("send-routed-task", {
+          sessionKey: targetSessionKey,
+          message: "Complete this task",
+          mode: "followup",
+          timeoutSeconds: 0,
+        });
+        expect(result.details).toMatchObject({
+          status: "accepted",
+          delivery: { status: "pending" },
+        });
+        await settled.promise;
+        expect(completion).toMatchObject({
+          sessionKey: sourceKey,
+          expectedExistingSessionId: "requester-session",
+          expectedExistingSessionLifecycleRevision: "original-generation",
+          channel: "telegram",
+          accountId,
+          to: "original-recipient",
+          threadId: "42",
+          deliver: false,
+          sourceReplyDeliveryMode: "message_tool_only",
+        });
+      } finally {
+        gateway.mockRestore();
+      }
+    },
+  );
+
+  it("keeps an opaque self-send on its admitted source route after a later inbound turn", async () => {
+    const sessionKey = "agent:main:direct:identity-linked-person";
+    const originalRoute = { channel: "telegram", accountId: "default", to: "original-recipient" };
+    const laterRoute = { channel: "telegram", accountId: "other", to: "later-recipient" };
+    const { runSessionsSendA2AFlow: runActualFlow } = await vi.importActual<
+      typeof import("./sessions-send-tool.a2a.js")
+    >("./sessions-send-tool.a2a.js");
+    const settled = createDeferredCore();
+    vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(async (params) => {
+      try {
+        await runActualFlow(params);
+      } finally {
+        settled.resolve();
+      }
+    });
+    const entry = {
+      sessionId: "self-session",
+      updatedAt: 1,
+      lifecycleRevision: "original-generation",
+    };
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      { ...entry, delivery: normalizeSessionDeliveryState({ context: originalRoute }) },
+    );
+    const callGateway = vi.fn();
+    callGateway.mockImplementation(
+      async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+        switch (request.method) {
+          case "sessions.resolve":
+            return { key: sessionKey, agentId: "main" };
+          case "sessions.list":
+            return {
+              sessions: [{ key: sessionKey, agentId: "main", deliveryContext: laterRoute }],
+            };
+          case "agent":
+            await replaceSessionEntry(
+              { agentId: "main", sessionKey },
+              {
+                ...entry,
+                updatedAt: 2,
+                delivery: normalizeSessionDeliveryState({ context: laterRoute }),
+              },
+            );
+            return { runId };
+          case "agent.wait":
+            return {
+              status: "ok",
+              terminalReply: { disposition: "visible", text: "Task complete" },
+            };
+          case "send":
+            return { messageId: "final-reply" };
+          default:
+            throw new Error(`Unexpected Gateway method: ${request.method}`);
+        }
+      },
+    );
+    const gateway = vi
+      .spyOn(inProcessGateway, "callAgentToolGatewayRequest")
+      .mockImplementation(callGateway);
+    try {
+      const tool = createOpenClawTools({
+        agentSessionKey: sessionKey,
+        sessionId: entry.sessionId,
+        agentChannel: originalRoute.channel,
+        agentAccountId: originalRoute.accountId,
+        currentMessagingTarget: originalRoute.to,
+        config,
+        disableMessageTool: true,
+        disablePluginTools: true,
+        wrapBeforeToolCallHook: false,
+      }).find((candidate) => candidate.name === "sessions_send");
+      expect(tool).toBeDefined();
+      const result = await tool!.execute("self-followup", {
+        sessionKey,
+        message: "Complete this task",
+        mode: "followup",
+        timeoutSeconds: 0,
+      });
+      expect(result.details).toMatchObject({ status: "accepted", delivery: { status: "pending" } });
+      await settled.promise;
+      const requests = callGateway.mock.calls.map(([request]) => request);
+      expect.soft(requests.filter((request) => request.method === "agent")).toEqual([
+        expect.objectContaining({
+          params: expect.objectContaining({
+            ...originalRoute,
+            sessionKey,
+            deliver: false,
+            sourceReplyDeliveryMode: "message_tool_only",
+            inputProvenance: expect.objectContaining({
+              kind: "inter_session",
+              sourceSessionKey: sessionKey,
+            }),
+          }),
+        }),
+      ]);
+      expect.soft(requests.filter((request) => request.method === "send")).toEqual([
+        expect.objectContaining({
+          params: expect.objectContaining({ ...originalRoute, message: "Task complete" }),
+        }),
+      ]);
+      const sendParams = requests.find((request) => request.method === "send")?.params;
+      expect(readInProcessSessionDeliveryGeneration(sendParams)).toMatchObject({
+        agentId: "main",
+        sessionKey,
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+      });
+      expect(sendParams).toHaveProperty("idempotencyKey", `sessions-send:${runId}`);
+      expect(sendParams).not.toHaveProperty("sessionGeneration");
+    } finally {
+      gateway.mockRestore();
     }
   });
 

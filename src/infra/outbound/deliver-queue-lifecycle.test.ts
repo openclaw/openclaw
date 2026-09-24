@@ -19,9 +19,11 @@ vi.mock("./delivery-queue-ack.js", () => ({
   retireUnsentDelivery: mocks.retire,
   ackDelivery: mocks.ack,
 }));
-vi.mock("../../plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: () => undefined }));
 vi.mock("./message-sent-hook.js", () => ({
-  createMessageSentEmitter: () => ({ emitMessageSent: vi.fn(), hasMessageSentHooks: false }),
+  createOutboundMessageSentEmitter: () => ({
+    emitMessageSent: vi.fn(),
+    hasMessageSentHooks: false,
+  }),
 }));
 vi.mock("./outbound-audit.js", () => ({
   emitOutboundAuditTerminals: mocks.terminal,
@@ -66,7 +68,10 @@ function startDelivery() {
   const delivery = deliverOutboundPayloadsWithQueueCleanup(params, "queued-1", 1, "claim-1", lease);
   const outcome = delivery.then(
     (results) => ({ results, error: undefined }),
-    (error: unknown) => ({ results: undefined, error }),
+    (error: unknown) => {
+      entered.reject(error);
+      return { results: undefined, error };
+    },
   );
   return { controller, core, entered, stopped, stopEntered, lease, owner, outcome };
 }

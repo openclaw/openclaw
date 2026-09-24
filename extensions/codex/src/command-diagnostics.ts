@@ -211,7 +211,7 @@ async function confirmCodexDiagnosticsFeedback(
   }
   const scopeMismatch = readCodexDiagnosticsScopeMismatch(pending, ctx);
   if (scopeMismatch) {
-    return scopeMismatch.confirmMessage;
+    return scopeMismatch;
   }
   deletePendingCodexDiagnosticsConfirmation(token);
   if (!pending.privateRouted && !(await hasAnyCodexDiagnosticsIdentity(ctx))) {
@@ -249,7 +249,7 @@ function cancelCodexDiagnosticsFeedback(ctx: PluginCommandContext, token: string
   }
   const scopeMismatch = readCodexDiagnosticsScopeMismatch(pending, ctx);
   if (scopeMismatch) {
-    return scopeMismatch.cancelMessage;
+    return scopeMismatch;
   }
   deletePendingCodexDiagnosticsConfirmation(token);
   return [

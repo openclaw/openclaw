@@ -68,6 +68,7 @@ export type QaGatewayChildParams = {
   command?: QaGatewayChildCommand;
   useRepoCli?: boolean;
   providerBaseUrl?: string;
+  mockSessionObserverUrl?: string;
   transport?: Pick<QaTransportAdapter, "requiredPluginIds" | "createGatewayConfig">;
   transportBaseUrl: string;
   controlUiAllowedOrigins?: string[];
@@ -258,6 +259,7 @@ export async function prepareQaGatewayChild(
       // instead of making older release candidates appear to be downgrades.
       stampCurrentVersion: !usesPackagedCandidate,
       providerBaseUrl: params.providerBaseUrl,
+      mockSessionObserverUrl: params.mockSessionObserverUrl,
       workspaceDir,
       controlUiRoot: resolveQaControlUiRoot({
         repoRoot: params.repoRoot,

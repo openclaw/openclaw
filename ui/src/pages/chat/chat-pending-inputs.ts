@@ -67,7 +67,7 @@ export function buildPendingInputItems(
     items.push(
       ...buildMessageItems([input.message], () =>
         input.runId ? `send:${input.runId}` : `pending-input:${input.id}`,
-      ).flatMap((item) => projectChatSystemNotice(item) ?? []),
+      ).flatMap((item) => projectChatSystemNotice({ ...item, startsTurn: true }) ?? []),
     );
     if (input.state === "queued") {
       if (input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))) {

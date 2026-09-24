@@ -140,7 +140,10 @@ async function listBranches(options: GatewayRequestHandlerOptions): Promise<void
     respond(false, undefined, requestedAgent.error);
     return;
   }
-  const read = retainSessionScopedRead(options, sessionKey, requestedAgent.agentId);
+  // Branches depend on transcript/lifecycle state, not a label or activity update during I/O.
+  const read = retainSessionScopedRead(options, sessionKey, requestedAgent.agentId, {
+    allowMetadataChanges: true,
+  });
   try {
     const current = loadAccessorSessionEntryForGatewayTarget({
       key: sessionKey,

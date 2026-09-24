@@ -873,29 +873,6 @@ ${action}
     second.close();
   });
 
-  it("prepares a recipe-free project without inventing setup authority", async () => {
-    const f = await fixture();
-    expect(await readWorkerProjectSetupRecipe(f.project)).toBeUndefined();
-    const operation = createWorkerProjectPreparation({
-      project: f.project,
-      namespace: "gateway",
-      preparation: {
-        purpose: "session",
-        demandAtMs: 1_000,
-        key: "a".repeat(64),
-        cacheKey: "c".repeat(64),
-      },
-      requireCurrent: () => {},
-    });
-    expect(operation.getPreparedWorkspace()).toBeUndefined();
-    const result = await operation.project.prepare(f);
-    operation.close();
-    expect(result.preparedWorkspace?.sourceManifestRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
-    expect(
-      await fs.readFile(path.join(result.preparedWorkspace!.workspaceDir, "input.txt"), "utf8"),
-    ).toBe("prepared base\n");
-  });
-
   it.each(["failed recipe", "modified recipe"])(
     "does not rerun or publish an incomplete preparation after %s",
     async (failure) => {

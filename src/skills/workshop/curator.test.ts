@@ -68,7 +68,7 @@ describe("skill curator usage tracking", () => {
       "---\nname: daily-brief\ndescription: Synthetic usage proof.\n---\n# Daily brief\n",
     );
     openOpenClawStateDatabase({ env: testState.env });
-    recordSkillExperienceReviewOutcome(
+    await recordSkillExperienceReviewOutcome(
       "main",
       skillDir,
       { attemptedAtMs: 1200, outcome: "nothing" },
