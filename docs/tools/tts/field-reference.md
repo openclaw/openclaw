@@ -87,6 +87,7 @@ and resolved values still fail startup or reject the update.
     <ParamField path="speakerVoice" type="string">Gemini prebuilt voice name. Default `Kore`. Legacy aliases: `voiceName`, `voice`.</ParamField>
     <ParamField path="audioProfile" type="string">Natural-language delivery style. Gemini 3.8 sends it as `speech_metadata.style`. Gemini 3.1 and 2.5 preview models prepend it to the spoken text.</ParamField>
     <ParamField path="speakerName" type="string">Optional speaker label. Gemini 3.8 sends it as style metadata. Older preview models prepend `Speaker name:` before the spoken text.</ParamField>
+    <ParamField path="speakers" type="array">Exactly two `{ speaker, voice, style? }` entries. On Gemini 3.8, lines shaped as `Name: words` become conversational turns and the name is not spoken. Other transcripts stay single-voice.</ParamField>
     <ParamField path="promptTemplate" type='"audio-profile-v1"'>On Gemini 3.1 and 2.5 preview models, wrap active persona fields in a deterministic prompt. On Gemini 3.8, persona text stays in `speech_metadata` and is not read aloud.</ParamField>
     <ParamField path="personaPrompt" type="string">Google-specific persona direction. Gemini 3.8 sends it as style metadata. Older preview models append it to the audio-profile template's Director's Notes.</ParamField>
     <ParamField path="baseUrl" type="string">Only `https://generativelanguage.googleapis.com` is accepted.</ParamField>

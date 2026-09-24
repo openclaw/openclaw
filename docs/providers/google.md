@@ -325,6 +325,16 @@ asks for headerless 24 kHz PCM (`audio/l16`) and still wraps that PCM locally.
 `speech_metadata.style`, not spoken as part of the transcript. Momentary 3.8
 vocal tags use angle brackets, such as `<laugh>` or `<short pause>`.
 
+Set `speakers` to exactly two `{ speaker, voice, style? }` entries to cast a
+dialogue. Label each turn as `Name: spoken words`. Those labels are not spoken.
+A transcript with no labels stays on the single-voice path. Multi-speaker
+dialogue requires `gemini-3.8-flash-tts` or `gemini-3.8-flash-lite-tts`.
+
+```text
+Puck: Headphones on. <laugh> We opened it.
+Kore: It is waiting at the maintainer gate.
+```
+
 Gemini 3.1 and 2.5 preview TTS still use `generateContent`. Those models keep
 the older behavior: `audioProfile` is prepended to the transcript, and
 expressive tags use square brackets such as `[whispers]`. An unknown
@@ -345,6 +355,10 @@ To use Google as the default TTS provider:
         model: "gemini-3.8-flash-tts",
         speakerVoice: "Kore",
         audioProfile: "Speak professionally with a calm tone.",
+        speakers: [
+          { speaker: "Puck", voice: "Puck", style: "bright" },
+          { speaker: "Kore", voice: "Kore", style: "whispered" },
+        ],
       },
     },
   },
