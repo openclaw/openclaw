@@ -1,6 +1,7 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-system-prompt.sandbox-info.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-tool-search-prompt.test.ts",
   "src/config/sessions/session-entry-readonly.worker.test.ts",
   "src/cli/daemon-cli/restart-health-client.test.ts",
@@ -229,6 +230,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/compact.delegate-resources.test.ts",
   "src/agents/embedded-agent-runner/compact.foreground-resources.test.ts",
   "src/agents/embedded-agent-runner/compact.hooks.test.ts",
+  "src/agents/embedded-agent-runner/compact.sandbox-info.test.ts",
   "src/agents/embedded-agent-runner/compact.queued-successor.test.ts",
   "src/agents/embedded-agent-runner/compact.terminal-metadata.test.ts",
   "src/agents/embedded-agent-runner/transcript-rewrite-notifications.test.ts",
