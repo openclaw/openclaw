@@ -1301,15 +1301,10 @@ export function captureSharedCodexAppServerCatalogLifetime(
   return () => isCurrent() && client.getModelCatalogRevision() === revision;
 }
 
-/** Captures only the exact shared-client registration, without account/catalog revision. */
+/** Registration ends on retirement even when sibling leases keep the process alive. */
 export function captureSharedCodexAppServerClientRegistration(
   client: CodexAppServerClient,
 ): () => boolean {
-  return captureSharedClientRegistration(client);
-}
-
-/** Registration ends on retirement even when sibling leases keep the process alive. */
-function captureSharedClientRegistration(client: CodexAppServerClient): () => boolean {
   const state = getSharedCodexAppServerClientState();
   const entry = getCurrentSharedClientEntry(client);
   const generation = readCodexAppServerClientDesktopGeneration(client);
@@ -1369,7 +1364,7 @@ export function captureCodexAppServerClientLifetime(
   const isolated = requiredOwnership !== "connection" && state.isolatedClients.has(client);
   const isCurrent = isolated
     ? () => state.isolatedClients.has(client) && !client.getCloseError()
-    : captureSharedClientRegistration(client);
+    : captureSharedCodexAppServerClientRegistration(client);
   const assertCurrent = () => {
     if (!isCurrent()) {
       throw new CodexAdoptedThreadActiveError(

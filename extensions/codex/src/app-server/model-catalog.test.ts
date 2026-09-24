@@ -6,6 +6,7 @@ import { createCodexAppServerModelCatalog } from "./model-catalog.js";
 import { listAllCodexAppServerModels } from "./models.js";
 import { probeCodexNativeAuth } from "./native-auth.js";
 import { withCodexAppServerJsonClient } from "./request.js";
+import { fingerprintCodexModelCatalogAttemptAuthority } from "./thread-fingerprints.js";
 
 vi.mock("./models.js", () => ({
   listAllCodexAppServerModels: vi.fn(),
@@ -303,7 +304,7 @@ describe("Codex app-server model catalog", () => {
     },
   );
 
-  it("keeps agent-home profile auth current across its expected login revision", async () => {
+  it("pins agent-home profile auth after its expected login revision", async () => {
     profiles.store = {
       version: 1,
       profiles: {
@@ -344,9 +345,74 @@ describe("Codex app-server model catalog", () => {
       pluginConfig,
     );
     expect(assertSelectionCurrent).toBeTypeOf("function");
+    const originalBinding = await prepareCodexAppServerAuthBinding({
+      authProfileId: "openai:work",
+      authProfileStore: profiles.store,
+      agentDir: params.agentDir,
+      config: params.config,
+    });
+    expect(originalBinding?.fingerprint).toBeTruthy();
 
+    // The prepared profile login and its delayed account/updated notification are expected.
     rpc.epoch += 1;
     expect(() => assertSelectionCurrent?.()).not.toThrow();
+    const preparedAttemptFingerprint = fingerprintCodexModelCatalogAttemptAuthority({
+      clientInstanceId: "synthetic-attempt-client",
+      modelCatalogRevision: 2,
+    });
+    expect(() =>
+      assertSelectionCurrent?.({
+        phase: "assert",
+        authBindingFingerprint: originalBinding?.fingerprint,
+        attemptFingerprint: preparedAttemptFingerprint,
+      }),
+    ).toThrow("Codex native model catalog selection is no longer current");
+    const preparedAttempt = {
+      phase: "bind" as const,
+      authBindingFingerprint: originalBinding?.fingerprint ?? "",
+      attemptFingerprint: preparedAttemptFingerprint,
+    };
+    expect(() => assertSelectionCurrent?.(preparedAttempt)).not.toThrow();
+    expect(() =>
+      assertSelectionCurrent?.({
+        phase: "assert",
+        authBindingFingerprint: originalBinding?.fingerprint,
+        attemptFingerprint: preparedAttemptFingerprint,
+      }),
+    ).not.toThrow();
+
+    // A later account/config change or a replacement attempt client must fail closed.
+    const changedRevisionFingerprint = fingerprintCodexModelCatalogAttemptAuthority({
+      clientInstanceId: "synthetic-attempt-client",
+      modelCatalogRevision: 3,
+    });
+    expect(() =>
+      assertSelectionCurrent?.({
+        phase: "assert",
+        authBindingFingerprint: originalBinding?.fingerprint,
+        attemptFingerprint: changedRevisionFingerprint,
+      }),
+    ).toThrow("Codex native model catalog selection is no longer current");
+    const replacementClientFingerprint = fingerprintCodexModelCatalogAttemptAuthority({
+      clientInstanceId: "replacement-attempt-client",
+      modelCatalogRevision: 2,
+    });
+    expect(() =>
+      assertSelectionCurrent?.({
+        phase: "assert",
+        authBindingFingerprint: originalBinding?.fingerprint,
+        attemptFingerprint: replacementClientFingerprint,
+      }),
+    ).toThrow("Codex native model catalog selection is no longer current");
+
+    expect(() =>
+      assertSelectionCurrent?.({
+        phase: "bind",
+        authBindingFingerprint: originalBinding?.fingerprint ?? "",
+        attemptFingerprint: replacementClientFingerprint,
+      }),
+    ).toThrow("Codex native model catalog selection is no longer current");
+
     rpc.registered = false;
     expect(() => assertSelectionCurrent?.()).toThrow(
       "Codex native model catalog selection is no longer current",
@@ -398,23 +464,38 @@ describe("Codex app-server model catalog", () => {
       config: params.config,
     });
     expect(originalBinding?.fingerprint).toBeTruthy();
-    expect(() =>
-      assertSelectionCurrent?.({ authBindingFingerprint: originalBinding?.fingerprint }),
-    ).not.toThrow();
+    const attemptFingerprint = fingerprintCodexModelCatalogAttemptAuthority({
+      clientInstanceId: "synthetic-attempt-client",
+      modelCatalogRevision: 1,
+    });
+    const preparedAttempt = {
+      phase: "bind" as const,
+      authBindingFingerprint: originalBinding?.fingerprint ?? "",
+      attemptFingerprint,
+    };
+    expect(() => assertSelectionCurrent?.(preparedAttempt)).not.toThrow();
 
     // The attempt still holds the original prepared binding, but the live selected profile
     // changed after that preparation and before the physical turn/start assertion.
+    const originalProfile = profiles.store.profiles["openai:work"];
+    if (originalProfile?.type !== "oauth") {
+      throw new Error("Expected the OAuth fixture profile");
+    }
     profiles.store = {
       ...profiles.store,
       profiles: {
         "openai:work": {
-          ...profiles.store.profiles["openai:work"]!,
+          ...originalProfile,
           accountId: "synthetic-account-b",
         },
       },
     };
     expect(() =>
-      assertSelectionCurrent?.({ authBindingFingerprint: originalBinding?.fingerprint }),
+      assertSelectionCurrent?.({
+        phase: "assert",
+        authBindingFingerprint: originalBinding?.fingerprint,
+        attemptFingerprint,
+      }),
     ).toThrow("Codex native model catalog selection is no longer current");
     const reassignedBinding = await prepareCodexAppServerAuthBinding({
       authProfileId: "openai:work",
@@ -424,12 +505,16 @@ describe("Codex app-server model catalog", () => {
     });
     expect(reassignedBinding?.fingerprint).not.toBe(originalBinding?.fingerprint);
     expect(() =>
-      assertSelectionCurrent?.({ authBindingFingerprint: reassignedBinding?.fingerprint }),
+      assertSelectionCurrent?.({
+        phase: "assert",
+        authBindingFingerprint: reassignedBinding?.fingerprint,
+        attemptFingerprint,
+      }),
     ).toThrow("Codex native model catalog selection is no longer current");
 
     // A profile removed/revoked before attempt preparation has no fingerprint to match.
     profiles.store = { version: 1, profiles: {} };
-    expect(() => assertSelectionCurrent?.({ authBindingFingerprint: undefined })).toThrow(
+    expect(() => assertSelectionCurrent?.()).toThrow(
       "Codex native model catalog selection is no longer current",
     );
   });

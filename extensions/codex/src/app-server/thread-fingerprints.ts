@@ -8,6 +8,19 @@ import {
 import { hashCodexAppServerBindingFingerprint } from "./session-binding.js";
 import { resolveCodexGpt56MultiAgentVersion } from "./thread-binding-policy.js";
 
+/** Opaque identity for one native catalog-backed execution attempt. */
+export function fingerprintCodexModelCatalogAttemptAuthority(params: {
+  clientInstanceId: string;
+  modelCatalogRevision: number;
+}): string {
+  return hashCodexAppServerBindingFingerprint(
+    fingerprintJsonObject({
+      clientInstanceId: params.clientInstanceId,
+      modelCatalogRevision: params.modelCatalogRevision,
+    }),
+  );
+}
+
 export function codexDynamicToolsFingerprint(dynamicTools: readonly JsonValue[]): string {
   return hashCodexAppServerBindingFingerprint(codexLegacyDynamicToolsFingerprint(dynamicTools));
 }

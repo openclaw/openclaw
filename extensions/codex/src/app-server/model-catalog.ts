@@ -25,6 +25,17 @@ import {
 // discovery is bounded tightly so a wedged app-server degrades to the static catalog.
 const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 2500;
 type ModelInputType = NonNullable<ModelCatalogEntry["input"]>[number];
+type CodexModelCatalogSelectionAttempt =
+  | {
+      phase: "bind";
+      authBindingFingerprint: string;
+      attemptFingerprint: string;
+    }
+  | {
+      phase: "assert";
+      authBindingFingerprint?: string;
+      attemptFingerprint: string;
+    };
 const INPUT_TYPES: ReadonlySet<string> = new Set(["text", "image", "audio", "video", "document"]);
 
 function isModelInputType(value: string): value is ModelInputType {
@@ -142,11 +153,32 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       if (!isCurrent()) {
         return undefined;
       }
-      return (attempt?: { authBindingFingerprint?: string }) => {
+      let preparedAttemptAuthority: string | undefined;
+      return (attempt?: CodexModelCatalogSelectionAttempt) => {
+        if (!isCurrent()) {
+          throw new Error("Codex native model catalog selection is no longer current");
+        }
+        if (!observation?.profileAuthSelected || attempt === undefined) {
+          return;
+        }
+        if (attempt.phase === "bind") {
+          const validAttempt =
+            attempt.authBindingFingerprint === observation.authBindingFingerprint &&
+            typeof attempt.attemptFingerprint === "string" &&
+            attempt.attemptFingerprint.length > 0;
+          if (!validAttempt) {
+            throw new Error("Codex native model catalog selection is no longer current");
+          }
+          if (preparedAttemptAuthority && preparedAttemptAuthority !== attempt.attemptFingerprint) {
+            throw new Error("Codex native model catalog selection is no longer current");
+          }
+          preparedAttemptAuthority = attempt.attemptFingerprint;
+          return;
+        }
         if (
-          !isCurrent() ||
-          (attempt !== undefined &&
-            attempt.authBindingFingerprint !== observation?.authBindingFingerprint)
+          attempt.authBindingFingerprint !== observation.authBindingFingerprint ||
+          !preparedAttemptAuthority ||
+          attempt.attemptFingerprint !== preparedAttemptAuthority
         ) {
           throw new Error("Codex native model catalog selection is no longer current");
         }

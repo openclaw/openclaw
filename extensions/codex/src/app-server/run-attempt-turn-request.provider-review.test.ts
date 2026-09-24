@@ -3,6 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexTurn, CodexUserInput } from "./protocol.js";
 import { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
+import { fingerprintCodexModelCatalogAttemptAuthority } from "./thread-fingerprints.js";
 
 const cleanup = vi.hoisted(() => ({ interrupt: vi.fn(), retire: vi.fn() }));
 const references = vi.hoisted(() => ({
@@ -62,6 +63,10 @@ beforeEach(() => {
 });
 
 type Acknowledgment = NonNullable<AgentHarnessAttemptParamsV2["providerReviewAcknowledgment"]>;
+type NativeModelSelectionAssertion = NonNullable<
+  AgentHarnessAttemptParamsV2["assertNativeModelSelectionCurrent"]
+>;
+type NativeModelSelectionAttempt = Parameters<NativeModelSelectionAssertion>[0];
 const findings = {
   explanation: "Review the intended operation.",
   continuation: { message: "literal steer" },
@@ -119,9 +124,11 @@ async function prepare(
   acknowledgment?: Acknowledgment,
   native = createNativeThread(),
   usesSupervisionConnection = true,
-  assertNativeModelSelectionCurrent?: (attempt?: { authBindingFingerprint?: string }) => void,
+  assertNativeModelSelectionCurrent?: NativeModelSelectionAssertion,
   authBindingFingerprint?: string,
 ) {
+  let clientInstanceId = "synthetic-attempt-client";
+  let modelCatalogRevision = 1;
   const writtenMethods: string[] = [];
   const request = vi.fn(
     async (
@@ -141,7 +148,12 @@ async function prepare(
       throw new Error(`Unexpected fixture method: ${method}`);
     },
   );
-  const client = { request, addNotificationHandler: () => () => {} };
+  const client = {
+    request,
+    getInstanceId: () => clientInstanceId,
+    getModelCatalogRevision: () => modelCatalogRevision,
+    addNotificationHandler: () => () => {},
+  };
   const liveThreadOwnership = { assertCurrent: vi.fn(), release: vi.fn(), forget: vi.fn() };
   const route = { armTurn: vi.fn(), cancelTurn: vi.fn() };
   const nativeProcessAuthority = { bindTurn: vi.fn() };
@@ -212,6 +224,12 @@ async function prepare(
     request,
     writtenMethods,
     client,
+    setClientInstanceId: (value: string) => {
+      clientInstanceId = value;
+    },
+    setModelCatalogRevision: (value: number) => {
+      modelCatalogRevision = value;
+    },
     releaseCurrentRoute,
     resources,
     route,
@@ -308,11 +326,28 @@ describe("native acknowledged turn requests", () => {
   });
 
   it("writes turn/start after profile auth applies its expected account revision", async () => {
-    let profileAuthRevision = 1;
     let clientRegistered = true;
+    let preparedAuthority:
+      | { authBindingFingerprint: string; attemptFingerprint: string }
+      | undefined;
     const selectedProfileFingerprint = "synthetic-profile-binding";
-    const assertProfileSelectionCurrent = vi.fn((attempt?: { authBindingFingerprint?: string }) => {
-      if (!clientRegistered || attempt?.authBindingFingerprint !== selectedProfileFingerprint) {
+    const assertProfileSelectionCurrent = vi.fn((attempt?: NativeModelSelectionAttempt) => {
+      if (!clientRegistered || !attempt) {
+        throw new Error("Codex native model catalog selection is no longer current");
+      }
+      if (attempt.phase === "bind") {
+        if (attempt.authBindingFingerprint !== selectedProfileFingerprint) {
+          throw new Error("Codex native model catalog selection is no longer current");
+        }
+        preparedAuthority = attempt;
+        return;
+      }
+      if (
+        attempt.phase !== "assert" ||
+        attempt.authBindingFingerprint !== selectedProfileFingerprint ||
+        !preparedAuthority ||
+        attempt.attemptFingerprint !== preparedAuthority.attemptFingerprint
+      ) {
         throw new Error("Codex native model catalog selection is no longer current");
       }
     });
@@ -324,15 +359,79 @@ describe("native acknowledged turn requests", () => {
       selectedProfileFingerprint,
     );
 
-    profileAuthRevision += 1;
-    expect(profileAuthRevision).toBe(2);
+    attempt.setModelCatalogRevision(2);
+    assertProfileSelectionCurrent({
+      phase: "bind",
+      authBindingFingerprint: selectedProfileFingerprint,
+      attemptFingerprint: fingerprintCodexModelCatalogAttemptAuthority({
+        clientInstanceId: "synthetic-attempt-client",
+        modelCatalogRevision: 2,
+      }),
+    });
     await attempt.prepared.startCodexTurn();
     expect(assertProfileSelectionCurrent).toHaveBeenCalledWith({
+      phase: "assert",
       authBindingFingerprint: selectedProfileFingerprint,
+      attemptFingerprint: fingerprintCodexModelCatalogAttemptAuthority({
+        clientInstanceId: "synthetic-attempt-client",
+        modelCatalogRevision: 2,
+      }),
     });
     expect(attempt.writtenMethods).toContain("turn/start");
     clientRegistered = false;
   });
+
+  it.each(["late account/config revision", "replacement client"] as const)(
+    "rejects a profile-backed selection after a %s before writing turn/start",
+    async (change) => {
+      const selectedProfileFingerprint = "synthetic-profile-binding";
+      let preparedAuthority:
+        | { authBindingFingerprint: string; attemptFingerprint: string }
+        | undefined;
+      const assertProfileSelectionCurrent = vi.fn((attempt?: NativeModelSelectionAttempt) => {
+        if (!attempt) {
+          return;
+        }
+        if (attempt.phase === "bind") {
+          preparedAuthority = attempt;
+          return;
+        }
+        if (
+          attempt.phase !== "assert" ||
+          attempt.authBindingFingerprint !== selectedProfileFingerprint ||
+          !preparedAuthority ||
+          attempt.attemptFingerprint !== preparedAuthority.attemptFingerprint
+        ) {
+          throw new Error("Codex native model catalog selection is no longer current");
+        }
+      });
+      const attempt = await prepare(
+        undefined,
+        createNativeThread(),
+        true,
+        assertProfileSelectionCurrent,
+        selectedProfileFingerprint,
+      );
+      assertProfileSelectionCurrent({
+        phase: "bind",
+        authBindingFingerprint: selectedProfileFingerprint,
+        attemptFingerprint: fingerprintCodexModelCatalogAttemptAuthority({
+          clientInstanceId: "synthetic-attempt-client",
+          modelCatalogRevision: 2,
+        }),
+      });
+      if (change === "late account/config revision") {
+        attempt.setModelCatalogRevision(3);
+      } else {
+        attempt.setClientInstanceId("replacement-attempt-client");
+      }
+
+      await expect(attempt.prepared.startCodexTurn()).rejects.toThrow(
+        "Codex native model catalog selection is no longer current",
+      );
+      expect(attempt.writtenMethods).not.toContain("turn/start");
+    },
+  );
 
   it.each(["reassigned", "missing/revoked"] as const)(
     "rejects a %s selected profile binding before writing turn/start",
@@ -340,13 +439,20 @@ describe("native acknowledged turn requests", () => {
       const selectedProfileFingerprint = "synthetic-profile-binding-a";
       const attemptFingerprint =
         change === "reassigned" ? "synthetic-profile-binding-b" : undefined;
-      const assertProfileSelectionCurrent = vi.fn(
-        (attempt?: { authBindingFingerprint?: string }) => {
-          if (attempt?.authBindingFingerprint !== selectedProfileFingerprint) {
+      const assertProfileSelectionCurrent = vi.fn((attempt?: NativeModelSelectionAttempt) => {
+        if (!attempt) {
+          return;
+        }
+        if (attempt.phase === "bind") {
+          if (attempt.authBindingFingerprint !== selectedProfileFingerprint) {
             throw new Error("Codex native model catalog selection is no longer current");
           }
-        },
-      );
+          return;
+        }
+        if (attempt.authBindingFingerprint !== selectedProfileFingerprint) {
+          throw new Error("Codex native model catalog selection is no longer current");
+        }
+      });
       const attempt = await prepare(
         undefined,
         createNativeThread(),
@@ -359,7 +465,12 @@ describe("native acknowledged turn requests", () => {
         "Codex native model catalog selection is no longer current",
       );
       expect(assertProfileSelectionCurrent).toHaveBeenCalledWith({
+        phase: "assert",
         authBindingFingerprint: attemptFingerprint,
+        attemptFingerprint: fingerprintCodexModelCatalogAttemptAuthority({
+          clientInstanceId: "synthetic-attempt-client",
+          modelCatalogRevision: 1,
+        }),
       });
       expect(attempt.writtenMethods).not.toContain("turn/start");
       expect(cleanup.interrupt).not.toHaveBeenCalled();

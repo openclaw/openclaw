@@ -28,6 +28,7 @@ import {
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { fingerprintCodexModelCatalogAttemptAuthority } from "./thread-fingerprints.js";
 import { buildTurnStartParams } from "./thread-lifecycle.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
@@ -328,7 +329,12 @@ export async function prepareCodexAttemptTurnRequest(
           assertCurrent: () => {
             assertTurnCurrent();
             params.assertNativeModelSelectionCurrent?.({
+              phase: "assert",
               authBindingFingerprint: preparedAuthBinding?.fingerprint,
+              attemptFingerprint: fingerprintCodexModelCatalogAttemptAuthority({
+                clientInstanceId: turnClient.getInstanceId(),
+                modelCatalogRevision: turnClient.getModelCatalogRevision(),
+              }),
             });
             continuation?.dispatch();
           },

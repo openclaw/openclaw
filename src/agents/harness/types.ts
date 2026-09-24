@@ -583,6 +583,18 @@ export type AgentHarnessModelCatalogResult =
       outcomes?: readonly import("../../plugins/provider-catalog-outcome.js").ProviderCatalogOutcome[];
     };
 
+type AgentHarnessModelCatalogSelectionAttempt =
+  | {
+      phase: "bind";
+      authBindingFingerprint: string;
+      attemptFingerprint: string;
+    }
+  | {
+      phase: "assert";
+      authBindingFingerprint?: string;
+      attemptFingerprint: string;
+    };
+
 type AgentHarnessModelCatalogCapability = {
   /** Lists account-scoped models owned by this native runtime. */
   loadModelCatalog?(
@@ -598,14 +610,15 @@ type AgentHarnessModelCatalogCapability = {
     params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
   ): { accountType: string; authMode?: string } | undefined;
   /**
-   * Captures a secret-free revocation assertion for this exact native model selection.
-   * The host calls it immediately before first-turn model I/O; it must throw if the
-   * account/catalog observation or its owning runtime has changed since discovery.
-   * The optional attempt fingerprint is an opaque, secret-free auth-binding identity.
+   * Captures a secret-free authority assertion for this exact native model selection.
+   * The harness calls the returned callback after expected prepared-auth startup changes
+   * to bind the exact attempt, then immediately before first-turn model I/O to assert it
+   * remains current. It must throw if the selected account/catalog, owning runtime, or
+   * bound attempt has changed. Attempt fingerprints are opaque and secret-free.
    */
   captureModelCatalogSelectionAuthority?(
     params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
-  ): ((attempt?: { authBindingFingerprint?: string }) => void) | undefined;
+  ): ((attempt?: AgentHarnessModelCatalogSelectionAttempt) => void) | undefined;
 };
 
 type AgentHarnessTaskHistoryCapability = {
