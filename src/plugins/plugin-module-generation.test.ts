@@ -709,6 +709,7 @@ describe("plugin module generations", () => {
     "static",
     "dynamic",
     "explicit",
+    "assert",
     "commonjs",
     "commonjs-dynamic",
     "computed",
@@ -724,7 +725,7 @@ describe("plugin module generations", () => {
       source,
       mode.endsWith("dynamic") || computed
         ? `const name = './data.json'; export const read = async () => (await import(${computed ? "name" : "'./data.json'"})).default.value;`
-        : `import data from './data.json' ${mode === "explicit" ? "with { type: 'json' }" : ""};
+        : `import data from './data.json' ${mode === "explicit" ? "with { type: 'json' }" : mode === "assert" ? "assert { type: 'json' }" : ""};
              export const read = async () => data.value;`,
     );
     type JsonPlugin = { read(): Promise<string> };
@@ -776,7 +777,7 @@ describe("plugin module generations", () => {
     },
   );
 
-  it("resolves deferred TypeScript without acquiring the compiler until execution", () => {
+  it("resolves deferred TypeScript without acquiring its source transformers until execution", () => {
     const root = temp.make("plugin-resolve-only-typescript-");
     fs.writeFileSync(
       path.join(root, "index.cjs"),
@@ -789,8 +790,8 @@ describe("plugin module generations", () => {
       this: NodeJS.Module,
       id: string,
     ) {
-      if (id === "typescript") {
-        throw new Error("Resolution must not acquire the TypeScript compiler");
+      if (["@babel/parser", "@babel/traverse", "@babel/generator", "esbuild"].includes(id)) {
+        throw new Error("Resolution must not acquire source transformers");
       }
       return originalRequire.call(this, id);
     });
@@ -815,7 +816,7 @@ describe("plugin module generations", () => {
     await expect(plugin.read()).rejects.toThrow(
       process.versions.bun
         ? /ParseError: Unexpected token[\s\S]*broken\.ts:1:20/
-        : /^broken\.ts\(1,21\): error TS1110: Type expected\./,
+        : /^broken\.ts: Unexpected token \(1:20\)/,
     );
   });
 

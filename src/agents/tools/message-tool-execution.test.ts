@@ -5,7 +5,11 @@ import {
   GatewayErrorDetailCodes,
 } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { withGroupThreadTurn } from "../../auto-reply/group-thread-context.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { resolveReactionMessageId } from "../../channels/plugins/actions/reaction-message-id.js";
+import type {
+  ChannelPlugin,
+  ChannelMessageActionContext,
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearBootEchoContextForSession,
@@ -32,6 +36,15 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
+import { isDeliveredMessageToolOnlySourceReplyResult } from "../embedded-agent-message-tool-source-reply.js";
+import { resolveEmbeddedRunAttemptTerminalState } from "../embedded-agent-runner/run/terminal-outcome.js";
+import { resolveSettledTurnFinalizationRequest } from "../embedded-agent-runner/run/terminal-resolution.js";
+import {
+  buildEmbeddedRunnerAssistant,
+  makeEmbeddedRunnerAttempt,
+} from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { readToolResultDetails } from "../tool-result-error.js";
 import { jsonResult } from "./common.js";
 import { createMessageTool } from "./message-tool-execution.js";
 
@@ -200,6 +213,207 @@ describe("message tool prompt-cache contract", () => {
       expect(definitions[2]).toBe(definitions[0]);
     },
   );
+});
+
+describe("message tool terminal source actions", () => {
+  let turnCapability: string;
+  afterEach(() => {
+    revokeMessageActionTurnCapability(turnCapability);
+    resetPluginRuntimeStateForTest();
+  });
+
+  it.each<{
+    name: string;
+    args: Record<string, unknown>;
+    chatType?: "group";
+    payload?: Record<string, unknown>;
+    completes: boolean;
+  }>([
+    {
+      name: "explicit terminal reaction",
+      args: { messageId: "inbound-1", final: true },
+      completes: true,
+    },
+    { name: "implicit current-message reaction", args: { final: true }, completes: true },
+    {
+      name: "normalized current conversation",
+      args: { target: "channel:C12345678", final: true },
+      completes: true,
+    },
+    {
+      name: "normalized other conversation",
+      args: { target: "channel:C87654321", final: true },
+      completes: false,
+    },
+    { name: "group terminal reaction", args: { final: true }, chatType: "group", completes: true },
+    { name: "acknowledgment reaction", args: {}, completes: false },
+    { name: "nonterminal reaction", args: { final: false }, completes: false },
+    {
+      name: "added reaction receipt",
+      args: { final: true },
+      payload: { ok: true, added: "👍" },
+      completes: true,
+    },
+    {
+      name: "native WhatsApp/Telegram removal receipt",
+      args: { final: true, remove: true },
+      payload: { ok: true, removed: true },
+      completes: false,
+    },
+    {
+      name: "native empty-emoji removal receipt",
+      args: { final: true, emoji: "" },
+      payload: { ok: true, removed: true },
+      completes: false,
+    },
+    {
+      name: "provider-neutral removal success",
+      args: { final: true, remove: true },
+      payload: { ok: true },
+      completes: false,
+    },
+    { name: "blank reaction", args: { final: true, emoji: "  " }, completes: false },
+    { name: "missing reaction", args: { final: true, emoji: undefined }, completes: false },
+    {
+      name: "another message",
+      args: { messageId: "other-message", final: true },
+      completes: false,
+    },
+    { name: "another conversation", args: { target: "C87654321", final: true }, completes: false },
+    { name: "failed reaction", args: { final: true }, payload: { ok: false }, completes: false },
+    {
+      name: "partial reaction",
+      args: { final: true },
+      payload: { ok: false, sentBeforeError: true },
+      completes: false,
+    },
+    {
+      name: "no-op reaction",
+      args: { final: true },
+      payload: { ok: true, applied: false },
+      completes: false,
+    },
+    { name: "dry-run reaction", args: { final: true, dryRun: true }, completes: false },
+    {
+      name: "terminal send",
+      args: { action: "send", message: "Done", final: true },
+      completes: true,
+    },
+  ])("records completion only for $name", async ({ args, chatType, payload, completes }) => {
+    const handleAction = vi.fn(
+      async ({ action, params, toolContext }: ChannelMessageActionContext) => {
+        if (action === "react") {
+          expect(resolveReactionMessageId({ args: params, toolContext })).toBe(
+            args.messageId ?? "inbound-1",
+          );
+        }
+        return jsonResult(payload ?? { ok: true });
+      },
+    );
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          origin: "bundled",
+          plugin: {
+            ...workspaceTestPlugin,
+            actions: {
+              describeMessageTool: () => ({ actions: ["send", "react"] }),
+              providerOwnedReadGates: true,
+              handleAction,
+            },
+          },
+        },
+      ]),
+    );
+    const source = {
+      currentChannelProvider: "workspace",
+      currentChannelId: "C12345678",
+      currentMessagingTarget: "C12345678",
+      currentMessageId: "inbound-1",
+      currentChatType: chatType ?? ("direct" as const),
+    };
+    const sessionKey = `agent:main:workspace:${source.currentChatType}:C12345678`;
+    turnCapability = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "terminal-action",
+      sessionKey,
+      requesterAccountId: "default",
+      toolContext: source,
+    });
+    const tool = createMessageTool({
+      config: workspaceConfig,
+      agentSessionKey: sessionKey,
+      agentId: "main",
+      runId: "terminal-action",
+      agentAccountId: "default",
+      messageActionTurnCapability: turnCapability,
+      ...source,
+      sourceReplyDeliveryMode: "automatic",
+      getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
+      resolveCommandSecretRefsViaGateway: async ({ config }) => ({
+        resolvedConfig: config,
+        diagnostics: [],
+        targetStatesByPath: {},
+        hadUnresolvedTargets: false,
+      }),
+      runMessageAction: runRealMessageAction,
+    });
+
+    const result = await tool.execute("terminal-action", { action: "react", emoji: "👍", ...args });
+
+    expect(handleAction).toHaveBeenCalledTimes(args.dryRun ? 0 : 1);
+    if (completes) {
+      expect(result.details).toHaveProperty("messageDelivery.sourceReplyDelivered", true);
+    } else {
+      expect(result.details).not.toHaveProperty("messageDelivery.sourceReplyDelivered");
+    }
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "automatic",
+        toolName: "message",
+        args: { action: "react", ...args },
+        result,
+      }),
+    ).toBe(completes);
+    if (!args.dryRun) {
+      const assistant = buildEmbeddedRunnerAssistant({
+        content: [{ type: "text", text: "NO_REPLY" }],
+      });
+      const delivery = readEmbeddedMessageDeliveryFact(
+        readToolResultDetails(result)?.messageDelivery,
+      );
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        sourceReplyDelivered: delivery?.sourceReplyDelivered,
+        toolMetas: [{ toolName: "message", replaySafe: false }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      });
+      const finalization = resolveSettledTurnFinalizationRequest({
+        runParams: {
+          sessionId: "terminal-action",
+          runId: "terminal-action",
+          workspaceDir: "/tmp/openclaw-test",
+          prompt: "React to this message without a text reply",
+          timeoutMs: 60_000,
+          trigger: "user",
+          terminalReplyExpectation: "required",
+        },
+        attempt,
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        modelApi: "openai-responses",
+        executionContract: undefined,
+        payloadsWithToolMedia: [],
+        hasTerminalToolPresentation: false,
+        terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
+        settledTurnFinalizationAvailable: true,
+      });
+      expect(finalization === null).toBe(completes);
+    }
+  });
 });
 
 describe("message tool group thread replies", () => {

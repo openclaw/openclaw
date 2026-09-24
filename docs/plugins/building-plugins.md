@@ -197,6 +197,10 @@ local proof.
     sure `npm pack` includes that `dist/` output. TypeScript source entries are
     only for source checkouts and local development paths.
 
+    Plugin builds can use TypeScript 7. OpenClaw loads the emitted JavaScript;
+    local TypeScript source entries use OpenClaw's runtime transformer and do
+    not require the plugin to install the TypeScript compiler.
+
     Then pack the plugin and install the tarball with `npm-pack:`:
 
     ```bash

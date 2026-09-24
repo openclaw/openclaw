@@ -588,14 +588,15 @@ export function buildWhatsAppGroupDispatchReply(allInputText: string) {
   return QA_WHATSAPP_REPLY_TO_BOT_SEED_MARKER_RE.exec(allInputText)?.[0];
 }
 
-export function buildWhatsAppBatchedReply(allInputText: string) {
-  const finalMatch = QA_WHATSAPP_BATCHED_FINAL_MARKER_RE.exec(allInputText);
+export function buildWhatsAppBatchedReply(prompt: string) {
+  const { current } = splitMockConversationContext(prompt);
+  const finalMatch = QA_WHATSAPP_BATCHED_FINAL_MARKER_RE.exec(current);
   const suffix = finalMatch?.[1];
   if (!suffix) {
     return undefined;
   }
   const firstMarker = `WHATSAPP_QA_BATCHED_FIRST_${suffix}`;
-  if (!allInputText.includes(firstMarker)) {
+  if (!current.includes(firstMarker)) {
     return `WHATSAPP_QA_BATCHED_MISSING_CONTEXT_${suffix}`;
   }
   return finalMatch[0];

@@ -196,7 +196,7 @@ export function sessionTranscriptIssueToRepairEffect(
 }
 
 /** Reports or repairs session state through the canonical SQLite migration owner. */
-export async function noteSessionTranscriptHealth(params?: {
+export async function noteSessionTranscriptHealth(options?: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   shouldRepair?: boolean;
@@ -205,30 +205,11 @@ export async function noteSessionTranscriptHealth(params?: {
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
   onWarnings?: (warnings: readonly string[]) => void;
 }): Promise<LegacyStateMigrationStepReceipt | undefined> {
-  return await noteSessionSqliteMigrationHealth({
-    cfg: params?.cfg,
-    env: params?.env ?? process.env,
-    shouldRepair: params?.shouldRepair === true,
-    ...(params?.postSessionPluginMigration
-      ? { postSessionPluginMigration: params.postSessionPluginMigration }
-      : {}),
-    ...(params?.postSessionPluginMigrationPlanBound
-      ? { postSessionPluginMigrationPlanBound: true }
-      : {}),
-    ...(params?.onStepReceipt ? { onStepReceipt: params.onStepReceipt } : {}),
-    ...(params?.onWarnings ? { onWarnings: params.onWarnings } : {}),
-  });
-}
-
-async function noteSessionSqliteMigrationHealth(params: {
-  cfg?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  shouldRepair: boolean;
-  postSessionPluginMigration?: PreparedPostSessionPluginMigration;
-  postSessionPluginMigrationPlanBound?: boolean;
-  onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
-  onWarnings?: (warnings: readonly string[]) => void;
-}): Promise<LegacyStateMigrationStepReceipt | undefined> {
+  const params = {
+    ...options,
+    env: options?.env ?? process.env,
+    shouldRepair: options?.shouldRepair === true,
+  };
   // Public doctor owns the operator-facing SQLite import; the targeted
   // --session-sqlite subcommand remains the diagnostic/proof surface.
   const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");

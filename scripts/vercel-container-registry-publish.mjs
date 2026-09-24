@@ -14,9 +14,9 @@ import { verifyDockerAttestations } from "./verify-docker-attestations.mjs";
 
 const IMAGETOOLS_TIMEOUT_MS = 20 * 60_000;
 // Conservative decimal client caps, not independently verified server byte thresholds.
-// https://vercel.com/docs/container-registry/limits-and-pricing (September 9, 2026).
+// https://vercel.com/docs/container-registry/limits-and-pricing (September 23, 2026).
 const VCR_BYTE_CAPS = Object.freeze({
-  layer: 500_000_000,
+  layer: 2_000_000_000,
   total: 15_000_000_000,
   manifest: 4_000_000,
   config: 1_000_000,

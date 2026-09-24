@@ -310,8 +310,8 @@ non-billable credentials fail before the expensive release matrix.
 
 For regular beta/stable protected publication, after evidence validation run
 `pnpm release:publish-preflight` with the intended tag, exact Full Release
-Validation run and attempt, npm dist-tag, plugin scope, approved soak waiver when
-applicable, and protected publication tooling ref. `pnpm release:candidate`
+Validation run and attempt, npm dist-tag, plugin scope, and protected publication
+tooling ref. `pnpm release:candidate`
 invokes this check with its downloaded manifests; do not redownload them or
 replace the selected attempt. Use the report's exact dispatch command for the
 chosen publication route only after resolving every `FAIL` and owner-action
@@ -458,9 +458,9 @@ focused fixes; never widen automatically.
 Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
 unless a maintainer intentionally wants to cross-check a specific profile; the
 publish workflow reads the effective profile from the full-validation manifest.
-Stable publication requires soak unless the operator supplies `stable_soak_waiver`
-with a reason; the publisher forwards and records that reason in release evidence
-without changing validation coverage or other publication gates.
+Stable publication requires a stable/full validation profile, soak, and
+successful blocking performance evidence. Beta-profile evidence cannot authorize
+stable publication.
 
 ### Publish children
 

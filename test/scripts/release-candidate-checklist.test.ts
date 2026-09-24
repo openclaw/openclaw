@@ -294,8 +294,6 @@ describe("release candidate checklist", () => {
         "CHANGELOG.md": "# Fixture changelog\n\n## 2026.9.1\n\nFixture notes.\n",
       });
       const targetSha = git("rev-parse", "HEAD");
-      // A stable tag validated with the beta profile carries the operator's soak waiver.
-      const stableSoakWaiver = distTag === "latest" ? "operator-approved beta soak waiver" : "";
       // The target ref is authoritative even if another checkout has prepared a newer pin.
       writeFileSync(
         join(targetRoot, "apps/android/version.json"),
@@ -312,7 +310,6 @@ describe("release candidate checklist", () => {
         ...(!launch || launch === "skip" ? ["--skip-dispatch"] : []),
         ...(launch === "npm-only" ? ["--npm-preflight-run", "222"] : []),
         ...(distTag ? ["--npm-dist-tag", distTag] : []),
-        ...(stableSoakWaiver ? ["--stable-soak-waiver", stableSoakWaiver] : []),
         "--skip-parallels",
         "--skip-telegram",
         "--skip-local-generated-check",
@@ -410,7 +407,6 @@ describe("release candidate checklist", () => {
           preflightRunId: "222",
           tag,
           publicationRoute,
-          stableSoakWaiver,
           workflowRef: options.publishWorkflowRef || options.workflowRef,
         });
         return {
@@ -650,13 +646,6 @@ describe("release candidate checklist", () => {
         expect(evidence.publishPreflight.command).toContain("openclaw-release-prepare.yml");
         expect(output).not.toContain("openclaw-release-publish.yml");
       }
-      const waiverInput =
-        publicationRoute === "normal"
-          ? `'stable_soak_waiver=${stableSoakWaiver}'`
-          : `"stable_soak_waiver":"${stableSoakWaiver}"`;
-      expect(evidence.publishPreflight.command.includes(waiverInput)).toBe(
-        Boolean(stableSoakWaiver),
-      );
       if (preflightFailure) {
         expect(output).toContain("Obtain the exact bootstrap approval.");
         expect(output).not.toContain("direct publication / recovery command:");
@@ -1451,6 +1440,15 @@ describe("release candidate checklist", () => {
       "full",
     );
   });
+
+  it.each(["v2026.9.1", "v2026.9.1-1", "v2026.9.33"])(
+    "rejects beta-profile validation for stable candidate %s",
+    (tag) => {
+      expect(() => parseArgs(["--tag", tag, "--release-profile", "beta"])).toThrow(
+        "stable release candidates require --release-profile stable or full",
+      );
+    },
+  );
 
   it("defaults beta and alpha Parallels to postpublish confidence", () => {
     const beta = parseArgs(["--tag", "v2026.5.14-beta.3"]);

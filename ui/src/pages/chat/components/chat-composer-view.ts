@@ -237,11 +237,10 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         }
       `
     : nothing;
-  const offlineText = props.offline
-    ? props.queuedOutboxCount
+  const offlineText =
+    props.offline && props.queuedOutboxCount
       ? t("chat.composer.offlineQueuedHint", { count: String(props.queuedOutboxCount) })
-      : t("chat.composer.offlineHint")
-    : null;
+      : null;
   const primaryComposerStatus = props.disabledReason
     ? {
         text: props.disabledReason,

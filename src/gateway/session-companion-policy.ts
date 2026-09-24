@@ -4,6 +4,8 @@ import {
 } from "../agents/admitted-run-context.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Model } from "../llm/types.js";
+import { SessionCompanionAskError } from "./session-companion-errors.js";
 
 export const SESSION_COMPANION_TOOLS = ["read", "sessions_history", "sessions_search"] as const;
 
@@ -58,4 +60,14 @@ export function buildSessionCompanionSystemPrompt(sessionKey: string): string {
     "Answer from evidence in the inherited context, observer notes, and permitted tool reads; say plainly when you cannot know.",
     "Return a concise plain-text answer in American English with no markdown or JSON wrapper.",
   ].join(" ");
+}
+
+/** Validate the runner’s prepared model without a second route resolution or provider probe. */
+export function assertSessionCompanionImageInput(model: Pick<Model, "input">): void {
+  if (!model.input?.includes("image")) {
+    throw new SessionCompanionAskError(
+      "image-input-unsupported",
+      "The selected Side chat model does not support image input. Choose an image-capable utility model and retry.",
+    );
+  }
 }

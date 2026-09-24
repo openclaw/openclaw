@@ -525,6 +525,25 @@ serveOwnedWorkerTasks(
                     deferProfileDisplay: true,
                     resolveCronJobName: () => undefined,
                   };
+                  if (request.request.kind === "message-by-id") {
+                    const { target, messageId, options: lookupOptions } = request.request.params;
+                    return {
+                      kind: "message-by-id",
+                      result: await options.readers.readSessionMessageByIdAsync(
+                        target,
+                        messageId,
+                        lookupOptions,
+                      ),
+                    };
+                  }
+                  if (request.request.kind === "message-count") {
+                    return {
+                      kind: "message-count",
+                      count: await options.readers.readSessionMessageCountAsync(
+                        request.request.params.target,
+                      ),
+                    };
+                  }
                   if (request.request.kind === "message-lookup") {
                     return {
                       kind: "message-lookup",
@@ -607,7 +626,9 @@ serveOwnedWorkerTasks(
       if (
         error instanceof SyntaxError &&
         request.kind === "history-page" &&
-        request.request.kind === "message-lookup"
+        (request.request.kind === "message-lookup" ||
+          request.request.kind === "message-by-id" ||
+          request.request.kind === "message-count")
       ) {
         return { ok: false, error: { kind: "syntax", message: error.message } };
       }
