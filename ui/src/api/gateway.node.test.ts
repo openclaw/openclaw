@@ -28,9 +28,9 @@ import {
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { registerGatewayPayloadLimitNodeTests } from "./gateway-payload-limit.node.test-support.ts";
 import { expectSignedPayloadFields } from "./gateway-signature.test-support.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
-import { registerGatewayPayloadLimitNodeTests } from "./gateway-payload-limit.node.test-support.ts";
 
 const realLoadOrCreateDeviceIdentity = nodes.loadOrCreateDeviceIdentity;
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
