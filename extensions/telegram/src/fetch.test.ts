@@ -722,12 +722,7 @@ describe("resolveTelegramFetch", () => {
       .mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"))
       .mockResolvedValueOnce({ ok: true } as Response);
 
-    const resolved = resolveTelegramFetchOrThrow(undefined, {
-      network: {
-        autoSelectFamily: true,
-        dnsResultOrder: "ipv4first",
-      },
-    });
+    const resolved = resolveTelegramFetchOrThrow(undefined, STICKY_IPV4_FALLBACK_NETWORK);
 
     await expect(resolved("https://api.telegram.org/botx/deleteWebhook")).rejects.toThrow(
       "fetch failed",
@@ -757,15 +752,36 @@ describe("resolveTelegramFetch", () => {
     expect(getDispatcherFromUndiciCall(1)).not.toBe(getDispatcherFromUndiciCall(2));
   });
 
+  it.each(["sendMessage", "sendRichMessage"])(
+    "moves later %s requests off a failing route without replaying ambiguous sends",
+    async (method) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+      const failure = buildFetchFallbackError("UND_ERR_SOCKET");
+      undiciFetch.mockRejectedValue(failure);
+      const transport = resolveTelegramTransport(undefined, STICKY_IPV4_FALLBACK_NETWORK);
+      const url = "https://api.telegram.org/botx/" + method;
+      try {
+        for (let index = 0; index < 5; index += 1) {
+          await expect(transport.fetch(url)).rejects.toBe(failure);
+          expect(undiciFetch).toHaveBeenCalledTimes(index + 1);
+          expect(getDispatcherFromUndiciCall(index + 1)).toBe(getDispatcherFromUndiciCall(1));
+        }
+        undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+        await expect(transport.fetch(url)).resolves.toEqual({ ok: true });
+        expect(undiciFetch).toHaveBeenCalledTimes(6);
+        expect(getDispatcherFromUndiciCall(6)).not.toBe(getDispatcherFromUndiciCall(1));
+        expect(getDispatcherFromUndiciCall(6).options?.connect?.family).toBe(4);
+      } finally {
+        now.mockRestore();
+        await transport.close();
+      }
+    },
+  );
+
   it("cools down a repeatedly failing sticky fallback and probes earlier attempts", async () => {
     undiciFetch.mockRejectedValue(buildFetchFallbackError("ENETUNREACH"));
 
-    const resolved = resolveTelegramFetchOrThrow(undefined, {
-      network: {
-        autoSelectFamily: true,
-        dnsResultOrder: "ipv4first",
-      },
-    });
+    const resolved = resolveTelegramFetchOrThrow(undefined, STICKY_IPV4_FALLBACK_NETWORK);
 
     await expect(resolved("https://api.telegram.org/botx/deleteWebhook")).rejects.toThrow(
       "fetch failed",

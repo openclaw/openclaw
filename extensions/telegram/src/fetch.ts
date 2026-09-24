@@ -839,10 +839,11 @@ export function resolveTelegramTransport(
           );
         }
         err = caught;
+        // A failed route affects later requests even when replaying this send is unsafe.
+        recordAttemptFailure(attemptIndex, err);
         if (!shouldRetryRequest(err)) {
           throw err;
         }
-        recordAttemptFailure(attemptIndex, err);
       }
     }
 
