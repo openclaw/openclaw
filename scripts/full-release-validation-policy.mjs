@@ -1553,8 +1553,6 @@ export function isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef
     jobName === "Run QA Lab parity report" ||
     jobName.startsWith("Run QA Lab runtime-pair lane (") ||
     jobName === "Verify QA Lab runtime-pair lanes" ||
-    jobName === "Run QA Lab live Telegram lane" ||
-    jobName.startsWith("Run package acceptance / Telegram package acceptance / ") ||
     jobName === "Run QA Lab live Discord lane" ||
     jobName === "Run QA Lab live WhatsApp lane" ||
     jobName === "Run QA Lab live Slack lane"
@@ -1572,12 +1570,13 @@ export function isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef
   }
   return (
     releaseProfile === "beta" &&
-    jobName.startsWith("Run repo/live E2E validation / ") &&
-    (jobName.includes("Docker live") ||
-      jobName.includes("Live media suites") ||
-      jobName.includes("validate_live_provider_suites") ||
-      jobName.includes("validate_release_live_cache") ||
-      jobName.includes("prepare_live_test_image"))
+    (jobName.startsWith("Run package acceptance / Telegram package acceptance / ") ||
+      (jobName.startsWith("Run repo/live E2E validation / ") &&
+        (jobName.includes("Docker live") ||
+          jobName.includes("Live media suites") ||
+          jobName.includes("validate_live_provider_suites") ||
+          jobName.includes("validate_release_live_cache") ||
+          jobName.includes("prepare_live_test_image"))))
   );
 }
 
@@ -1586,7 +1585,7 @@ function isReleaseChecksChild(key) {
 }
 
 function isAdvisoryChild(key, releaseProfile) {
-  return key === "npmTelegram" || (key === "productPerformance" && releaseProfile === "beta");
+  return key === "productPerformance" && releaseProfile === "beta";
 }
 
 function isFailedJob(job) {

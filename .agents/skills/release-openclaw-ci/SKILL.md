@@ -513,10 +513,12 @@ preflight artifact readback` pins `workflow.runAttempt`, so attempt 2 fails
   `Preflight manifest workflow mismatch`. Only a fresh child works; since
   #156760 the parent re-dispatches one (at most twice) when only pack/preflight
   jobs failed.
-- Core child `Verify full release validation target` failing with
-  `pass lane_waiver=<reason> to acknowledge it`: the tooling tag predates
-  #156816 (waiver forwarded to children). Cut a new tooling tag from a `main`
-  that includes it; the candidate and validation evidence stay valid.
+- Validation evidence sealed under the removed operator lane-waiver policy:
+  run fresh Full Release Validation for the same candidate with current tooling
+  and all required lanes passing. Use the new run's evidence for publication;
+  changing only the tooling tag or adding a waiver acknowledgement cannot make
+  the old sealed evidence valid. The old `pass lane_waiver=<reason>` recovery
+  instructions no longer apply.
 
 ### Extended-stable validation
 
@@ -668,10 +670,12 @@ Interpret state precisely:
 - `cancelled_with_children`: the collector was cancelled while exact children
   remained active.
 
-Read **advisory** entries separately from Release Decision. Windows/macOS
-cross-OS lanes retain their actual conclusions in the manifest and summary;
-`passed` does not mean those advisory lanes passed. Selected lanes still need
-terminal evidence, and filtered-out lanes are not run, never passed.
+Read **advisory** entries separately from Release Decision. Beta live-provider
+and performance lanes retain their actual conclusions in the manifest and
+summary; `passed` does not mean those advisory lanes passed. Gateway install
+and upgrade checks on Linux, Windows, and macOS block beta/stable/full validation.
+Selected lanes still need terminal evidence, and filtered-out lanes are not run,
+never passed.
 
 The `full-release-diagnostics-<run-id>-<attempt>` artifact is the terminal
 failure and timing manifest. Use it after an early blocker instead of

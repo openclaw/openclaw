@@ -11817,7 +11817,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         "${{ (needs.resolve_target.outputs.telegram_waiver != '' || needs.resolve_target.outputs.skip_package_telegram_e2e == 'true') && 'none' || 'mock-openai' }}",
     });
     expect(packageAcceptanceJob.with).toMatchObject({
-      telegram_advisory: true,
+      telegram_advisory: "${{ needs.resolve_target.outputs.release_profile == 'beta' }}",
     });
     expect(workflow).not.toContain("telegram_scenarios:");
     expect(workflow).toContain("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}");
@@ -13707,7 +13707,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(telegramDispatch.run).toContain('[[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]');
     expect(telegramDispatch.run).not.toContain("commits/main");
     expect(telegramDispatch.run).not.toContain("dispatch_attempt");
-    expect(telegramCaller["continue-on-error"]).toBe(true);
+    expect(telegramCaller["continue-on-error"]).toBeUndefined();
     expect(telegramCaller.outputs?.identity_verified).toBe(
       "${{ steps.dispatch.outputs.identity_verified }}",
     );
@@ -13823,12 +13823,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     },
     ...(["cancelled", "failure", "skipped"] as const).map((currentResult) => ({
       emptyStderr: false,
-      expected: [
-        `::warning::qa_live_telegram_release_checks ended with ${currentResult}; Telegram release testing is best effort and does not block release validation.`,
-      ],
-      name: `reports a ${currentResult} selected Telegram child without blocking release`,
+      expected: [`::error::qa_live_telegram_release_checks ended with ${currentResult}`],
+      name: `rejects a ${currentResult} selected Telegram child`,
       params: { currentAttempt: "2", currentResult, telegramSelected: true },
-      status: 0,
+      status: 1,
     })),
     {
       emptyStderr: false,
@@ -13840,7 +13838,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     {
       emptyStderr: false,
       expected: ["::error::Telegram dispatch identity was not verified"],
-      name: "rejects an unverified Telegram child identity despite advisory execution",
+      name: "rejects an unverified Telegram child identity before accepting execution",
       params: {
         currentAttempt: "2",
         currentResult: "failure",
@@ -13854,7 +13852,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         "qa_live_telegram_release_checks ended with failure",
         "::error::package_acceptance_release_checks ended with failure",
       ],
-      name: "keeps package failures blocking alongside an advisory Telegram failure",
+      name: "keeps package failures blocking alongside a Telegram failure",
       params: {
         currentAttempt: "2",
         currentResult: "failure",
@@ -13878,7 +13876,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       emptyStderr: false,
       expected: [
         "qa_live_telegram_release_checks ended with cancelled",
-        "Telegram release testing is best effort",
+        "Tideclaw alpha treats non-package-safety release-check lanes as advisory.",
       ],
       name: "keeps a cancelled Telegram child non-blocking for Tideclaw alpha",
       params: {

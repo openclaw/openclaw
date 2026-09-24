@@ -1479,35 +1479,39 @@ describe("release decision policy", () => {
     expect(result).toMatchObject({ blockers: [], errors: [], state: "passed" });
   });
 
-  it.each(["beta", "stable", "full"])(
-    "keeps Telegram execution failures advisory for %s releases",
-    (releaseProfile) => {
+  it.each(
+    ["beta", "stable", "full"].flatMap((releaseProfile) =>
+      [
+        { key: "releaseChecks", name: "Run QA Lab live Telegram lane", passed: false },
+        { key: "npmTelegram", name: "Telegram package E2E", passed: false },
+        {
+          key: "releaseChecks",
+          name: "Run package acceptance / Telegram package acceptance / Run Telegram package E2E",
+          passed: releaseProfile === "beta",
+        },
+      ].map((lane) => Object.assign({ releaseProfile }, lane)),
+    ),
+  )(
+    "classifies failed Telegram $name for $releaseProfile",
+    ({ releaseProfile, key, name, passed }) => {
       const result = classifyReleaseSnapshot({
         children: [
-          child("releaseChecks", {
+          child(key, {
             conclusion: "failure",
             jobs: [
-              { conclusion: "failure", name: "Run QA Lab live Telegram lane", status: "completed" },
-              {
-                conclusion: "failure",
-                name: "Run package acceptance / Telegram package acceptance / Run Telegram package E2E",
-                status: "completed",
-              },
-              { conclusion: "success", name: "Verify release checks", status: "completed" },
+              { conclusion: "failure", name, status: "completed" },
+              ...(key === "releaseChecks"
+                ? [{ conclusion: "success", name: "Verify release checks", status: "completed" }]
+                : []),
             ],
-            status: "completed",
-          }),
-          child("npmTelegram", {
-            conclusion: "failure",
-            jobs: [{ conclusion: "failure", name: "Telegram package E2E", status: "completed" }],
-            runId: "202",
             status: "completed",
           }),
         ],
         releaseProfile,
         workflowRef: "main",
       });
-      expect(result).toMatchObject({ blockers: [], errors: [], state: "passed" });
+      expect(result.state).toBe(passed ? "passed" : "blocked_complete");
+      expect(result.blockers.length).toBe(passed ? 0 : 1);
     },
   );
 
@@ -1533,7 +1537,10 @@ describe("release decision policy", () => {
       workflowRef: "main",
     });
     expect(result).toMatchObject({
-      blockers: [expect.objectContaining({ job: "Run install smoke" })],
+      blockers: [
+        expect.objectContaining({ job: "Run install smoke" }),
+        expect.objectContaining({ child: "npmTelegram", kind: "workflow_failure" }),
+      ],
       errors: [expect.objectContaining({ kind: "identity_mismatch" })],
       state: "orchestration_error",
     });

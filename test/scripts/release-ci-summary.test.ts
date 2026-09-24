@@ -41,6 +41,7 @@ import {
   releaseExecutionPlanSha256,
   type ReleaseExecutionPlan,
 } from "../../scripts/full-release-validation-policy.mjs";
+import { evaluateReleasePublishGates } from "../../scripts/lib/release-publish-gates.mts";
 import {
   artifactDownloadArgs,
   artifactDownloadTimeoutMs,
@@ -1063,7 +1064,7 @@ describe("GitHub API commands", () => {
         {
           jobs: [
             {
-              name: "Run QA Lab live Telegram lane",
+              name: "Run QA Lab live Discord lane",
               status: "completed",
               conclusion: "failure",
             },
@@ -1253,7 +1254,7 @@ process.stdout.write(readFileSync(process.env.ARCHIVE));
         `child: ${childRunId} OpenClaw Release Checks completed/failure`,
       );
       expect(result.stdout).toContain(
-        "::warning title=Advisory lane failed::releaseChecksCandidate completed/failure Run QA Lab live Telegram lane",
+        "::warning title=Advisory lane failed::releaseChecksCandidate completed/failure Run QA Lab live Discord lane",
       );
       expect(result.stdout).toContain(
         "advisory: releaseChecksCandidate completed/success Run QA Lab parity lane (core)",
@@ -1670,6 +1671,7 @@ function rawManifest({
 }
 
 function trustedMainPackageFixture({
+  runId = "29071366025",
   manifestVersion = 2,
   parentPath = ".github/workflows/full-release-validation.yml",
   targetSha = "8".repeat(40),
@@ -1678,6 +1680,7 @@ function trustedMainPackageFixture({
   workflowRefType,
   workflowSha = "0".repeat(40),
 }: {
+  runId?: string;
   manifestVersion?: 2 | 3;
   parentPath?: string;
   targetSha?: string;
@@ -1686,7 +1689,6 @@ function trustedMainPackageFixture({
   workflowRefType?: "branch" | "tag";
   workflowSha?: string;
 } = {}) {
-  const runId = "29071366025";
   const childRunId = "29071382629";
   const manifest = rawManifest({
     rerunGroup: "package",
@@ -1840,8 +1842,8 @@ type ReleaseCiWatchState = {
   url?: string;
 };
 
-function trustedMainFullFixture() {
-  const fixture = trustedMainPackageFixture({ manifestVersion: 3 });
+function trustedMainFullFixture(parentRunId?: string) {
+  const fixture = trustedMainPackageFixture({ manifestVersion: 3, runId: parentRunId });
   const children = expectedChildDispatches(fixture.runId, 1, "main", 3).filter(
     (child) => child.manifestKey !== "npmTelegram",
   );
@@ -1902,8 +1904,8 @@ function trustedMainFullFixture() {
   return { ...fixture, client, manifest, runs };
 }
 
-function trustedMainNpmFixture(releaseProfile: "beta" | "stable" = "beta") {
-  const fixture = trustedMainFullFixture();
+function trustedMainNpmFixture(releaseProfile: "beta" | "stable" = "beta", parentRunId?: string) {
+  const fixture = trustedMainFullFixture(parentRunId);
   const beta = releaseProfile === "beta";
   const coveragePolicy = beta ? "npm-beta-v1" : "npm-stable-v1";
   const targetVersion = beta ? "2026.8.28-beta.1" : "2026.8.28";
@@ -2872,6 +2874,71 @@ describe("release CI summary child correlation", () => {
     );
   });
 
+  it("rejects sealed lane-waiver evidence and admits fresh strict evidence for the same candidate", async () => {
+    const old = trustedMainNpmFixture("stable");
+    const jobs = [
+      { name: "checks-node-core", status: "completed", conclusion: "failure" },
+      { name: "openclaw/ci-gate", status: "completed", conclusion: "failure" },
+    ];
+    const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
+      effectiveRunAttempt: 1,
+      plannedRunAttempt: 1,
+    });
+    const normalCi = old.manifest.childEvidence.normalCi;
+    if (!normalCi) {
+      throw new Error("The full validation fixture must include normal CI evidence.");
+    }
+    normalCi.compositeJobsSha256 = composite.sha256;
+    normalCi.jobs = composite.jobs;
+    Object.assign(old.manifest.validationInputs, { laneWaiver: "Release-owner exception" });
+    const oldManifest = {
+      ...old.manifest,
+      advisoryJobs: jobs.map((job) => ({
+        child: "normalCi",
+        job: job.name,
+        status: job.status,
+        conclusion: job.conclusion,
+        policy: "advisory",
+        reason: "lane_waiver",
+      })),
+    };
+    const options = {
+      runId: old.runId,
+      verifierSourceContent: readFileSync(SCRIPT),
+      verifierSourceSha: "c".repeat(40),
+    };
+    await expect(
+      validateReleaseRunEvidence(options, {
+        ...old.client,
+        loadManifest: () => ({ artifact: old.artifact, manifest: oldManifest }),
+      }),
+    ).rejects.toThrow("release validation advisory jobs differ from canonical policy evidence");
+
+    // New producer evidence is independent of the rejected sealed artifact.
+    const fresh = trustedMainNpmFixture("stable", "29071366026");
+    expect(fresh.runId).not.toBe(old.runId);
+    expect(fresh.targetSha).toBe(old.targetSha);
+    const evidence = await validateReleaseRunEvidence(
+      { ...options, runId: fresh.runId },
+      fresh.client,
+    );
+    expect(evidence).toMatchObject({
+      valid: true,
+      root: { manifest: { targetSha: old.targetSha } },
+    });
+    for (const consumer of ["publisher", "core-npm", "stable-closeout"] as const) {
+      expect(
+        evaluateReleasePublishGates({
+          consumer,
+          manifest: fresh.manifest,
+          releaseTag: `v${fresh.manifest.validationInputs.targetVersion}`,
+          npmDistTag: "latest",
+          expectedSha: old.targetSha,
+        }).filter((gate) => gate.status === "FAIL"),
+      ).toEqual([]);
+    }
+  });
+
   it("retains blocking product performance in sealed npm stable evidence", async () => {
     const fixture = trustedMainNpmFixture("stable");
     const options = {
@@ -3563,7 +3630,10 @@ describe("release CI summary child correlation", () => {
       },
       fixture.client,
     );
-    if (jobName.startsWith("cross_os_release_checks / ")) {
+    const advisory =
+      jobName === "Run QA Lab parity lane (core)" ||
+      (releaseProfile === "beta" && jobName.startsWith("Run package acceptance / Telegram"));
+    if (!advisory) {
       await expect(validation).rejects.toThrow("manifest child run does not pass release policy");
       return;
     }

@@ -22,6 +22,30 @@ const manifest = {
 };
 
 describe("release publication control admission", () => {
+  it.each(["publisher", "core-npm", "stable-closeout"] as const)(
+    "rejects legacy lane-waiver evidence at the %s publication boundary",
+    (consumer) => {
+      const gates = evaluateReleasePublishGates({
+        manifest: {
+          ...manifest,
+          validationInputs: {
+            ...manifest.validationInputs,
+            laneWaiver: "2026.9.5 approved exception",
+          },
+        },
+        consumer,
+        releaseTag: "v2026.9.5",
+        npmDistTag: "latest",
+      });
+      expect(gates.filter((gate) => gate.status === "FAIL")).toEqual([
+        expect.objectContaining({
+          id: `${consumer}.legacy-lane-waiver`,
+          remediation: expect.stringContaining("fresh Full Release Validation"),
+        }),
+      ]);
+    },
+  );
+
   it("rejects stable bootstrap approval that cannot cover the candidate package version", () => {
     const input = {
       releaseTag: "v2026.9.5",

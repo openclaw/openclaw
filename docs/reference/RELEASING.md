@@ -1482,11 +1482,13 @@ gh api "repos/openclaw/openclaw/git/ref/tags/$PUBLISH_REF" \
 ```
 
 Pass `--ref "$PUBLISH_REF"` to `gh workflow run`; real child publication from
-`main` is rejected before work starts. Under a lane waiver the Tooling SHA must
-include #156816, which forwards `lane_waiver` to the npm children; an older
-tag fails the core child's `Verify full release validation target` with
-`pass lane_waiver=<reason> to acknowledge it`, so cut a newer tooling tag. Docker-only recovery may use `main`;
-the matching Tideclaw alpha branch route is unchanged.
+`main` is rejected before work starts. Validation evidence sealed with an operator
+lane waiver cannot authorize publication under the current policy. Run fresh
+Full Release Validation for the same candidate with current tooling and all
+required lanes passing, then publish using the new run's evidence. Changing the
+tooling tag or adding a waiver acknowledgement does not repair the old sealed
+evidence. Docker-only recovery may use `main`; the matching Tideclaw alpha branch
+route is unchanged.
 
 Beta publish example (using the tooling tag above):
 

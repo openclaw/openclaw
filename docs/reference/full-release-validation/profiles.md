@@ -100,9 +100,12 @@ timeout.
 QA release-check failures block normal release validation, including selected
 parity, runtime-pair/restart, Matrix, and runtime tool coverage. Some QA jobs use
 `continue-on-error` to preserve diagnostics, but the release verifier checks
-their recorded status; that setting does not remove the gate. Source and package
-Telegram outcomes are advisory; failed, skipped, or deferred attempts are never
-reported as passed. Tideclaw alpha runs may still treat non-package-safety
+their recorded status; that setting does not remove the gate. Selected source
+Telegram QA and standalone npm Telegram tests must pass. Package Acceptance
+Telegram remains advisory for beta and blocking for stable/full; beta no-soak
+deferrals and reviewed version-specific omissions remain separate selection
+policies. Failed, skipped, or deferred attempts are never reported as passed.
+Tideclaw alpha runs may still treat non-package-safety
 release-check lanes as advisory. With
 `release_profile=beta`, the `Run repo/live E2E validation` live-provider suites
 are advisory: third-party model deployments change underneath a release, so
