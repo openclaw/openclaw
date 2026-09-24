@@ -425,6 +425,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           const hadMultipleIdentities = this.hasMultipleIdentities();
           const presence = readPresenceEntries(event.payload);
           this.presencePayload = presence ? { presence } : undefined;
+          this.pruneTypingActors();
           if (!this.hasMultipleIdentities()) {
             this.resetSessionSuggestions();
             this.clearTypingActors();
