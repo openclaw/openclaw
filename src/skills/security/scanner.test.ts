@@ -969,10 +969,11 @@ describe("scanDirectoryWithSummary", () => {
     const root = makeTmpDir();
     const fixture = path.join(root, "asset.png");
     await fs.writeFile(fixture, "image");
-    const [entry] = await fs.readdir(root, { withFileTypes: true });
-    const readdir = vi
-      .spyOn(fs, "readdir")
-      .mockResolvedValue(Array.from({ length: 100_001 }, () => entry!));
+    const readDirectory = fs.readdir.bind(fs);
+    const readdir = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+      const [entry] = await readDirectory(...args);
+      return Array.from({ length: 100_001 }, () => entry!);
+    });
     try {
       const summary = await scanDirectoryWithSummary(root);
       expect(summary.scannedFiles).toBe(0);

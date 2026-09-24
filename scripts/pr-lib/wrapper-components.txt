@@ -640,7 +640,6 @@ src/infra/file-lock-sync.ts
 src/infra/file-lock.ts
 src/infra/fixed-window-rate-limit.ts
 src/infra/fs-safe-copy.worker.ts
-src/infra/fs-safe-defaults.ts
 src/infra/fs-safe.ts
 src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.ts

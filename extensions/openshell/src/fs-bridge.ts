@@ -83,10 +83,13 @@ class OpenShellFsBridge implements SandboxFsBridge {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
     const root = await fsRoot(target.mountHostRoot);
-    const entries = await Array.fromAsync(
-      root.entries(relativeToRoot(target, hostPath), { order: "sorted" }),
-    );
-    return entries.map(({ name, isDirectory }) => ({ name, isDirectory }));
+    const entries: DirectoryEntry[] = [];
+    for await (const { name, isDirectory } of root.entries(relativeToRoot(target, hostPath), {
+      order: "sorted",
+    })) {
+      entries.push({ name, isDirectory });
+    }
+    return entries;
   }
 
   async writeFile(params: Parameters<SandboxFsBridge["writeFile"]>[0]): Promise<void> {
