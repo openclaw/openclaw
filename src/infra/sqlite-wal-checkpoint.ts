@@ -129,7 +129,7 @@ function readCheckpointResult(row: Record<string, SQLOutputValue> | undefined) {
 }
 
 function checkpoint(database: DatabaseSync, mode: SqliteWalCheckpointMode) {
-  return database.prepare(`PRAGMA wal_checkpoint(${mode});`).get();
+  return database.prepare(`PRAGMA wal_checkpoint(${mode});`).get(); // sqlite-allow-raw -- WAL checkpoint primitive under caller-owned admission.
 }
 
 /** Offline maintenance must stop before compaction or recovery if truncation remains busy. */
