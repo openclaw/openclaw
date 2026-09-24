@@ -6790,7 +6790,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_android_access_native == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -7136,6 +7136,7 @@ jobs:
       - ios-screenshot-shard
       - ios-screenshot-evidence
       - android
+      - android-access-native
       - docker-seed-e2e
       - ci-gate
     if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}

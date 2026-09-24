@@ -1636,6 +1636,7 @@ function buildLegacyStateMigrationSteps(
               detected,
               config: params.config,
               env,
+              inventory: params.pluginStateMigrationInventory,
               ...(plannedPluginDescriptor
                 ? {
                     plannedActions: plannedPluginDescriptor.actions.map((action) => ({
@@ -1712,7 +1713,7 @@ function buildLegacyStateMigrationSteps(
       collectNotices: true,
       deferredExecution: {
         kind: "post-session-plugin",
-        plannedActions: plannedPostSessionPluginMigration.plannedActions,
+        migration: plannedPostSessionPluginMigration,
       },
     });
   }
@@ -3521,10 +3522,7 @@ async function executeLegacyStateMigrations(
     ],
     ...(deferredPostSessionStep?.deferredExecution
       ? {
-          postSessionPluginMigration: {
-            step: migrationStepPlan(deferredPostSessionStep),
-            plannedActions: deferredPostSessionStep.deferredExecution.plannedActions,
-          },
+          postSessionPluginMigration: deferredPostSessionStep.deferredExecution.migration,
         }
       : {}),
     ...(notices.length > 0 ? { notices } : {}),

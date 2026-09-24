@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import module from "node:module";
 import path from "node:path";
-import { parse, type Node as AcornNode, type Program } from "acorn";
+import { Parser, type Node as AcornNode, type Program } from "acorn";
 import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../src/shared/worker-bundle-hash.js";
 import { reportLimitViolations, type LimitViolation } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -42,6 +42,49 @@ const GATEWAY_RUN_FORBIDDEN_STATIC_IMPORTS = [
 ];
 const STATIC_IMPORT_RE =
   /\b(?:import|export)\s+(?:(?:[^'"()]*?\s+from\s+)|)["'](?<specifier>[^"']+)["']/gu;
+
+// Acorn exposes Parser.extend but omits these scope hooks from its declarations.
+declare module "acorn" {
+  interface Parser {
+    enterScope(flags: number): void;
+    currentScope(): { lexical: string[]; var: string[]; functions: string[] };
+  }
+}
+
+// Acorn's scope lists only append names, search with indexOf, and read the first
+// catch binding. Keep those arrays and validation rules; index repeated searches.
+class AppendOnlyScopeNames extends Array<string> {
+  private readonly firstIndices = new Map<string, number>();
+
+  override push(...names: string[]): number {
+    const start = this.length;
+    const length = super.push(...names);
+    for (let index = 0; index < names.length; index += 1) {
+      const name = names[index]!;
+      if (!this.firstIndices.has(name)) {
+        this.firstIndices.set(name, start + index);
+      }
+    }
+    return length;
+  }
+
+  override indexOf(name: string, fromIndex = 0): number {
+    return fromIndex === 0 ? (this.firstIndices.get(name) ?? -1) : super.indexOf(name, fromIndex);
+  }
+}
+
+const WorkerArtifactParser = Parser.extend(
+  (BaseParser) =>
+    class extends BaseParser {
+      override enterScope(flags: number): void {
+        super.enterScope(flags);
+        const scope = this.currentScope();
+        scope.lexical = new AppendOnlyScopeNames();
+        scope.var = new AppendOnlyScopeNames();
+        scope.functions = new AppendOnlyScopeNames();
+      }
+    },
+);
 
 type CliBootstrapCheckParams = {
   rootDir?: string;
@@ -193,7 +236,7 @@ function listRuntimeImportSpecifiers(source: string): string[] {
     }
   };
   // Acorn appends completed statements while keeping module binding checks in parser scope.
-  parse(source, {
+  WorkerArtifactParser.parse(source, {
     ecmaVersion: "latest",
     sourceType: "module",
     allowHashBang: true,
