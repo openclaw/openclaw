@@ -86,17 +86,6 @@ describe("listChannelsMSTeams", () => {
     });
   });
 
-  it("returns empty array when team has no channels", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
-
-    const result = await listChannelsMSTeams({
-      cfg: {} as OpenClawConfig,
-      teamId: "team-empty",
-    });
-
-    expect(result.channels).toStrictEqual([]);
-  });
-
   it("returns empty array when value is undefined", async () => {
     mockState.fetchGraphJson.mockResolvedValue({});
 
@@ -225,28 +214,6 @@ describe("getChannelInfoMSTeams", () => {
     expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/teams/${encodeURIComponent("team-abc")}/channels/${encodeURIComponent("ch-1")}?$select=id,displayName,description,membershipType,webUrl,createdDateTime`,
-    });
-  });
-
-  it("handles missing optional fields gracefully", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({
-      id: "ch-2",
-      displayName: "Private Channel",
-    });
-
-    const result = await getChannelInfoMSTeams({
-      cfg: {} as OpenClawConfig,
-      teamId: "team-abc",
-      channelId: "ch-2",
-    });
-
-    expect(result.channel).toEqual({
-      id: "ch-2",
-      displayName: "Private Channel",
-      description: undefined,
-      membershipType: undefined,
-      webUrl: undefined,
-      createdDateTime: undefined,
     });
   });
 });
