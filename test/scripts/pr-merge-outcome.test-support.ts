@@ -6,7 +6,7 @@ import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts"
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMergeGitFixtureFactory } from "./pr-merge-fixture-git.test-support.js";
-import { landingSnapshotQuery } from "./pr-merge-snapshot.test-support.js";
+import { headFenceQuery, landingSnapshotQuery } from "./pr-merge-snapshot.test-support.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
 
 export function createMergeOutcomeFixtureHarness() {
@@ -197,6 +197,31 @@ export function createMergeOutcomeFixtureHarness() {
       mutations: 0,
       cancellations: 0,
       cancellation: "success",
+      draftTransitions: 0,
+      readyTransitions: 0,
+      draftResponse: "success",
+      readyResponse: "success",
+      headProtection: null as null | {
+        id: string;
+        pattern: string;
+        lockBranch: boolean;
+        isAdminEnforced: boolean;
+        allowsForcePushes: boolean;
+        allowsDeletions: boolean;
+        lockAllowsFetchAndMerge: boolean;
+      },
+      protectionReads: 0,
+      protectionReadFault: "",
+      replaceProtectionAt: 0,
+      dropProtectionAt: 0,
+      protectedHeadOverride: "",
+      collaboratorHead: "",
+      collaboratorRole: "write",
+      rejectedHeadWrites: 0,
+      acceptedHeadWrites: 0,
+      writerPermission: "write",
+      permissionReads: 0,
+      revokePermissionAt: 0,
       mergeBody: null as string | null,
       previewBody: "Fixture body",
       previewHeadline: "Configured squash headline (#123)" as string | null,
@@ -230,6 +255,7 @@ export function createMergeOutcomeFixtureHarness() {
       audit: false,
       gates: "pass",
       requiredCheckName: "CI",
+      staleDraftSkip: false,
       refusalCapture: "error: string rewrite protection blocked unsafe input\n",
       ciExit: 0,
       duringChecks: null as null | {
@@ -381,6 +407,38 @@ else if(args[0]==="api"&&args.some(arg=>new RegExp("^repos/[^/]+/[^/]+$").test(a
   }
   out(args.includes("--include")?"HTTP/2.0 200 OK\\n\\n"+JSON.stringify(s.repoAuthority):s.repoAuthority);
 }
+else if(args.includes("repos/fixture/repo/branches/"+encodeURIComponent(s.pr.headRefName)+"/protection")) {
+  fail("REST branch protection requires Administration(read); fixture operator is a maintainer");
+}
+else if(args.includes("graphql")&&args.some(arg=>arg.includes("branchProtectionRule{"))) {
+  if(args.find(arg=>arg.startsWith("query="))!==${JSON.stringify(headFenceQuery)}||!args.includes("ref=refs/heads/"+s.pr.headRefName)||
+    !args.includes("owner=fixture")||!args.includes("name=repo")||!args.includes("Cache-Control: max-age=0")||!args.includes("--include")) fail("unbound or non-writer protection query");
+  s.protectionReads++;
+  if(s.dropProtectionAt&&s.protectionReads>=s.dropProtectionAt) s.headProtection=null;
+  if(s.replaceProtectionAt&&s.protectionReads>=s.replaceProtectionAt&&s.headProtection) s.headProtection.id="replacement-rule";
+  save();
+  if(s.protectionReadFault==="forbidden") {
+    out("HTTP/2.0 403 Forbidden\\n\\n"+JSON.stringify({message:"Resource not accessible by integration"}));
+    fail("GraphQL protection read forbidden");
+  }
+  const repo={id:s.repoGraphql.id,nameWithOwner:s.repoGraphql.nameWithOwner,url:s.repoGraphql.url,viewerPermission:s.protectionReadFault==="viewer"?"READ":"MAINTAIN",
+    ref:{name:s.pr.headRefName,prefix:"refs/heads/",target:{oid:s.pr.headRefOid},branchProtectionRule:s.headProtection}};
+  if(s.protectionReadFault==="repo-id") repo.id="other-repo";
+  if(s.protectionReadFault==="repo-name") repo.nameWithOwner="fixture/other";
+  if(s.protectionReadFault==="repo-url") repo.url="https://elsewhere.invalid/fixture/repo";
+  if(s.protectionReadFault==="ref-name") repo.ref.name="other";
+  if(s.protectionReadFault==="ref-prefix") repo.ref.prefix="refs/tags/";
+  if(s.protectionReadFault==="head") repo.ref.target.oid=main();
+  out({data:{repository:repo},...(s.protectionReadFault==="errors"?{errors:[{message:"partial protection error"}]}:{})});
+}
+else if(args.includes("repos/fixture/repo/git/ref/heads/"+encodeURIComponent(s.pr.headRefName))) {
+  if(!args.includes("Cache-Control: max-age=0")) fail("missing fresh head observation");
+  out({ref:"refs/heads/"+s.pr.headRefName,object:{type:"commit",sha:s.protectedHeadOverride||git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse","refs/heads/"+s.pr.headRefName])}});
+}
+else if(args.some(arg=>arg.includes("/collaborators/")&&arg.endsWith("/permission"))) {
+  s.permissionReads++; save();
+  out(s.revokePermissionAt&&s.permissionReads>=s.revokePermissionAt?"read":s.writerPermission);
+}
 else if(args[0]==="api"&&args.includes("user")) {
   if(route==="direct"&&JSON.stringify(args)===JSON.stringify(["api","--hostname","github.com","user","--include"])) out("HTTP/2.0 200 OK\\n\\n"+JSON.stringify({login:s.operator}));
   else out("relay-reader");
@@ -481,7 +539,7 @@ else if(args[0]==="pr"&&args[1]==="checks") {
     else fs.appendFileSync(path,"\\n# changed during checks\\n");
   }
   if(s.duringChecks?.receiptField) { const receipt=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/prep.env"; fs.writeFileSync(receipt,fs.readFileSync(receipt,"utf8").replace(new RegExp("^"+s.duringChecks.receiptField+"=.*$","m"),s.duringChecks.receiptField+"="+main())); }
-  out([{name:s.requiredCheckName,bucket:s.gates,state:s.gates==="pass"?"SUCCESS":"FAILURE"}]);}
+  out([{name:s.requiredCheckName,bucket:s.gates,state:s.gates==="pass"?"SUCCESS":"FAILURE"},...(s.staleDraftSkip?[{name:"openclaw/ci-gate",bucket:"skipping",state:"SKIPPED"}]:[])]);}
 else if(args[0]==="pr"&&args[1]==="view") {
   const fields=args[args.indexOf("--json")+1].split(",");
   if(fields.includes("headRefName")&&!fields.includes("headRefOid")) fail("missing live cleanup metadata");
@@ -490,6 +548,33 @@ else if(args[0]==="pr"&&args[1]==="view") {
   if(route==="path"&&s.stale) {pr.state="OPEN";pr.mergeCommit=null;}
   if(args.includes("--jq")) {const q=args[args.indexOf("--jq")+1];out(q===".state"?pr.state:q===".mergeCommit.oid"?pr.mergeCommit?.oid??"null":pr.url);}
   else out(pr);
+} else if(args[0]==="pr"&&args[1]==="ready") {
+  const draft=args.includes("--undo");
+  const record=JSON.parse(git(["show","refs/openclaw/pr-merge-outcomes/123:outcome.json"]));
+  if(draft ? record.suspension?.state!=="requested" : record.phase!=="ready") fail("draft transition intent missing");
+  if(draft) s.draftTransitions++; else s.readyTransitions++;
+  const response=draft?s.draftResponse:s.readyResponse;
+  save();
+  if(response==="rejected") fail("draft transition refused");
+  // Model the server's head-write gate, not a post-effect client check. This
+  // attempted collaborator write lands in the final observation/ready gap.
+  if(!draft&&s.collaboratorHead) {
+    if(s.headProtection?.lockBranch&&(s.collaboratorRole!=="admin"||s.headProtection.isAdminEnforced)) {
+      s.rejectedHeadWrites++;
+    } else {
+      git(["push","-q","--force","origin",s.collaboratorHead+":refs/heads/topic",s.collaboratorHead+":refs/pull/123/head"]);
+      s.pr.headRefOid=s.collaboratorHead;s.acceptedHeadWrites++;
+    }
+  }
+  s.pr.isDraft=draft;
+  if(response==="merged") {
+    const parent=main();
+    const landed=git(["commit-tree",git(["merge-tree","--write-tree",parent,s.pr.headRefOid]),"-p",parent],"Concurrent merge\\n");
+    git(["push","-q","origin",landed+":refs/heads/main"]);
+    s.pr.state="MERGED";s.pr.mergeCommit={oid:landed};s.pr.isDraft=false;
+  }
+  save();
+  if(response==="lost") fail("draft transition response lost");
 } else if((args[0]==="pr"&&args[1]==="merge")||restMerge||graphqlMerge) {
   if(s.mode==="octopool-refusal") {
     if(process.env.OCTOPOOL_DIAGNOSTICS!=="1"||!args.includes("--subject")) fail("missing protected merge publication inputs");
@@ -639,7 +724,7 @@ pr_gh() {
 pr_gh_plain() {
   if [ "$1" = repo-authority ] || [ "$1" = issue-comments ] || [ "$1" = writer-login ]; then
     pr_gh_run plain "$@"
-  elif { [ "$1" = pr ] && [ "$2" = view ]; } ||
+  elif [[ " $* " == *"branchProtectionRule{"* ]] || { [ "$1" = pr ] && [ "$2" = view ]; } ||
     { [ "$FIXTURE_REAL_GH" = true ] && { [ "$1" = pr ] && { [ "$2" = checks ] || [ "$2" = merge ]; } || [[ " $* " == *" graphql "* ]]; }; }; then
     pr_gh_run "\${pr_gh_quota_route:-plain}" "$@"
   else
@@ -677,11 +762,11 @@ export FIXTURE_LEADER="$$"
 acquire_pr_operation_lock 123
 begin_pr_operation_validation_phase
 if [ "\${9:-}" = verify ]; then
-  merge_verify 123 '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"observation":null}'
+  merge_verify 123 '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"recoveryMode":"none","observation":null}'
 elif [ -n "\${5:-}" ]; then
   merge_complete 123 "$5"
 else
-  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}"
+  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}" "\${10:-false}"
 fi
 `,
       true,
@@ -726,6 +811,7 @@ fi
       cancelAuto = false,
       refusalDirectory = "",
       verifyOnly = false,
+      suspendAuto = false,
     ) => {
       const result = spawnSync(
         nodeExecutable,
@@ -743,6 +829,7 @@ fi
           String(cancelAuto),
           refusalDirectory,
           verifyOnly ? "verify" : "",
+          String(suspendAuto),
         ],
         {
           cwd,
@@ -854,6 +941,21 @@ fi
       complete: (oid: string) => run(false, repo, "squash", "", "", "", oid),
       verify: () => run(false, repo, "squash", "", "", "", "", "", false, "", true),
       cancel: (oid: string) => run(false, repo, "squash", oid, "", "", "", "", true),
+      suspend: (oid: string) =>
+        run(false, repo, "squash", oid, "", "", "", "", false, "", false, true),
+      protectHead: () =>
+        save({
+          ...state(),
+          headProtection: {
+            id: "fixture-head-lock",
+            pattern: "topic",
+            lockBranch: true,
+            isAdminEnforced: true,
+            allowsForcePushes: false,
+            allowsDeletions: false,
+            lockAllowsFetchAndMerge: false,
+          },
+        }),
       recover,
       advance,
       record,

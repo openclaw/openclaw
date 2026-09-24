@@ -544,6 +544,9 @@ Usage:
     Keeps prior evidence and reruns admission; requires the same method and no auto/queue/admin route.
     --cancel-auto instead retires the exact accepted non-queue auto request before any head repair.
     Repeated cancellation reconciles only. Use its current outcome OID for later reviewed/prepared recovery.
+    --suspend-auto fences an uncertain unaccepted auto intent by converting its exact PR/head to draft.
+    Recovery from confirmed suspension verifies completed exact-head evidence before one ready transition.
+    The ready outcome requires a separate explicit recovery for immediate dispatch; neither transition is blindly repeated.
   scripts/pr merge-complete <PR> <OUTCOME_OID> --confirmed-operator-completion
     Finish a verified merge receipt after cleanup; never dispatches a merge or deletes resources.
     Posts a first completion comment only from merged; uncertain comment attempts are lookup-only.
@@ -643,7 +646,7 @@ main() {
         [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ "$3" = --confirmed-operator-completion ] || { usage; exit 2; }
       ;;
     merge-run | merge-recover)
-      local merge_pr="${1-}" auto_merge=false recovery_oid="" replacement_head="" body_path="" legacy_directory="" cancel_auto=false refusal_directory=""
+      local merge_pr="${1-}" auto_merge=false recovery_oid="" replacement_head="" body_path="" legacy_directory="" cancel_auto=false refusal_directory="" suspend_auto=false
       [ -n "$merge_pr" ] || { usage; exit 2; }
       shift
       if [ "$cmd" = merge-recover ]; then
@@ -654,6 +657,11 @@ main() {
       fi
       while [ "$#" -gt 0 ]; do
         case "$1" in
+          --suspend-auto)
+            [ "$cmd" = merge-recover ] && [ "$suspend_auto" = false ] || { usage; exit 2; }
+            suspend_auto=true
+            shift
+            ;;
           --cancel-auto)
             [ "$cmd" = merge-recover ] && [ "$cancel_auto" = false ] || { usage; exit 2; }
             cancel_auto=true
@@ -694,6 +702,7 @@ main() {
       [ -z "$legacy_directory" ] || [ -n "$replacement_head" ] || { usage; exit 2; }
       [ -z "$refusal_directory" ] || [ -z "$legacy_directory" ] || { usage; exit 2; }
       [ "$cancel_auto" = false ] || [ -z "$replacement_head$body_path$legacy_directory$refusal_directory" ] || { usage; exit 2; }
+      [ "$suspend_auto" = false ] || { [ "$cancel_auto" = false ] && [ -z "$replacement_head$body_path$legacy_directory$refusal_directory" ]; } || { usage; exit 2; }
       set -- "$merge_pr"
       ;;
     review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-correction-init | prepare-correction-review-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify)
@@ -829,10 +838,10 @@ main() {
     merge-verify)
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
-      merge_verify "$pr" '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"observation":null}'
+      merge_verify "$pr" '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"recoveryMode":"none","observation":null}'
       ;;
     merge-run | merge-recover)
-      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto" "$refusal_directory"
+      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto" "$refusal_directory" "$suspend_auto"
       ;;
     merge-complete)
       merge_complete "$1" "$2"

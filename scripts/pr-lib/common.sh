@@ -619,7 +619,7 @@ cleanup_pr_worktree() {
   pr=$(pr_number_from_worktree_dir "$path") || return 1
   merge_outcome_load_local "$pr" || return 1
   if [ -n "$MERGE_OUTCOME_OID" ] &&
-    printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '.phase != "intent"' >/dev/null; then
+    printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '.phase != "intent" and .phase != "ready"' >/dev/null; then
     retained="$MERGE_OUTCOME_REF"
   fi
   remove_worktree_if_present "$path" || return $?

@@ -615,6 +615,15 @@ describe("scripts/pr wrappers", () => {
       ["123", "a".repeat(40), "--confirmed-no-running-tools"],
       ["123", "a".repeat(40), "--confirmed-operator-recovery", "--auto-merge"],
       ["123", "a".repeat(40), "--confirmed-operator-recovery", "--cancel-auto", "--cancel-auto"],
+      ...[
+        ["--suspend-auto"],
+        ["--cancel-auto"],
+        ["--replacement-head", "b".repeat(40)],
+        ["--body-file", "message.md"],
+        ["--pre-dispatch-refusal", "proof"],
+      ].map((suffix) =>
+        ["123", "a".repeat(40), "--confirmed-operator-recovery", "--suspend-auto"].concat(suffix),
+      ),
       [
         "123",
         "a".repeat(40),
@@ -709,7 +718,7 @@ describe("scripts/pr wrappers", () => {
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toBe(
-      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n<false>\n<>\n`,
+      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n<false>\n<>\n<false>\n`,
     );
   });
 
@@ -778,10 +787,16 @@ describe("scripts/pr wrappers", () => {
       join(fixture.canonical, "scripts/pr-lib/merge.sh"),
       `merge_run() { printf '<%s>\\n' "$@"; }\n`,
     );
-    for (const replacement of [[], ["--replacement-head", "b".repeat(40)], ["--cancel-auto"]]) {
+    for (const replacement of [
+      [],
+      ["--replacement-head", "b".repeat(40)],
+      ["--cancel-auto"],
+      ["--suspend-auto"],
+    ]) {
       for (const body of [[], ["--body-file", "message.md"]]) {
         const cancel = replacement[0] === "--cancel-auto";
-        if (cancel && body.length) {
+        const suspend = replacement[0] === "--suspend-auto";
+        if ((cancel || suspend) && body.length) {
           continue;
         }
         const result = spawnSync(
@@ -798,7 +813,7 @@ describe("scripts/pr wrappers", () => {
         );
         expect(result.status, result.stdout + result.stderr).toBe(0);
         expect(result.stdout).toBe(
-          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n<${body.length ? join(fixture.canonical, "message.md") : ""}>\n<>\n<${cancel}>\n<>\n`,
+          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n<${body.length ? join(fixture.canonical, "message.md") : ""}>\n<>\n<${cancel}>\n<>\n<${suspend}>\n`,
         );
       }
     }
@@ -838,7 +853,7 @@ describe("scripts/pr wrappers", () => {
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toBe(
-        `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${flag === "legacy-refusal" ? join(caller, "proof") : ""}>\n<false>\n<${flag === "pre-dispatch-refusal" ? join(caller, "proof") : ""}>\n`,
+        `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${flag === "legacy-refusal" ? join(caller, "proof") : ""}>\n<false>\n<${flag === "pre-dispatch-refusal" ? join(caller, "proof") : ""}>\n<false>\n`,
       );
     },
   );

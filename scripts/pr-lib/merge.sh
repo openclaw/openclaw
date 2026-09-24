@@ -198,19 +198,22 @@ merge_verify() {
     echo "merge_verify requires a PR number and verification options." >&2
     return 2
   fi
-  local pr="$1" options="$2" replacement_head auto_merge_requested qualified_refusal json
+  local pr="$1" options="$2" replacement_head auto_merge_requested qualified_refusal json recovery_mode
   if ! printf '%s\n' "$options" | jq -e '
-    type == "object" and keys == ["autoMergeRequested","observation","qualifiedRefusal","replacementHead"] and
+    type == "object" and keys == ["autoMergeRequested","observation","qualifiedRefusal","recoveryMode","replacementHead"] and
     (.replacementHead | type == "string") and (.autoMergeRequested | type == "boolean") and
-    (.qualifiedRefusal | type == "boolean") and
+    (.qualifiedRefusal | type == "boolean") and (.recoveryMode | IN("none","suspension","ready")) and
     (.observation == null or (.observation | type == "object"))
   ' >/dev/null; then
-    echo "Invalid merge verification options: require replacementHead, autoMergeRequested, qualifiedRefusal, and observation." >&2
+    echo "Invalid merge verification options: require replacementHead, autoMergeRequested, qualifiedRefusal, recoveryMode (none/suspension/ready), and observation." >&2
     return 2
   fi
   replacement_head=$(printf '%s\n' "$options" | jq -r .replacementHead) || return 1
   auto_merge_requested=$(printf '%s\n' "$options" | jq -r .autoMergeRequested) || return 1
   qualified_refusal=$(printf '%s\n' "$options" | jq -r .qualifiedRefusal) || return 1
+  # The public CLI passes none; only merge_run selects recovery after validating
+  # its retained outcome. Inherited shell variables are not recovery authority.
+  recovery_mode=$(printf '%s\n' "$options" | jq -r .recoveryMode) || return 1
   json=$(printf '%s\n' "$options" | jq -c '.observation // empty') || return 1
   MERGE_USE_CRABBOX_ADMIN_BYPASS=false
   enter_worktree "$pr" false || return 1
@@ -252,7 +255,7 @@ merge_verify() {
   fi
   local is_draft
   is_draft=$(printf '%s\n' "$json" | jq -r .isDraft)
-  if [ "$is_draft" = "true" ]; then
+  if [ "$is_draft" = "true" ] && [ "$recovery_mode" != suspension ]; then
     echo "PR is draft."
     exit 1
   fi
@@ -287,13 +290,22 @@ merge_verify() {
     # PR-only watcher, which cannot observe accepted hosted release gates.
     derive_prepare_gate_change_plan "$PREP_HEAD_SHA" || return 1
     run_hosted_prepare_gates "$pr" "$PREP_HEAD_SHA" "$PREPARE_GATE_CHANGELOG_ONLY" "$json" || return 1
+    if [ "$recovery_mode" != none ]; then
+      jq -e --arg head "$PREP_HEAD_SHA" '
+        .headSha == $head and .reusedFromSha == null and
+        (.evidenceHeadSha == null or .evidenceHeadSha == $head) and
+        any(.workflows[]; .name == "CI" and .headSha == $head and .status == "completed" and .conclusion == "success")
+      ' .local/gates-hosted-checks.json >/dev/null || {
+        echo "Draft recovery requires completed exact-head CI, not parent or in-progress gate reuse." >&2; return 1;
+      }
+    fi
   else
     # Local/Crabbox preparation retains the attached-CI wait. Required checks
     # below remain merge authority; optional contexts cannot stall this path.
     local watch_args=("$pr" "$PREP_HEAD_SHA" --completion ci-run)
     [ -z "${MERGE_REPO_NAME:-}" ] || watch_args+=(--repo "$MERGE_REPO_NAME")
     if ! node "$script_parent_dir/watch-pr-ci.mjs" "${watch_args[@]}" >.local/merge-checks-watch.log 2>&1; then
-      if [ -n "$replacement_head" ]; then
+      if [ -n "$replacement_head" ] || [ "$recovery_mode" != none ]; then
         echo "Replacement-head recovery requires completed CI proof; inspect .local/merge-checks-watch.log." >&2
         return 1
       fi
@@ -331,6 +343,9 @@ merge_verify() {
   if [ "$required_count" -eq 0 ]; then
     echo "No required checks configured for this PR."
   fi
+  if [ "$recovery_mode" != none ] && [ "$github_pending" = true ]; then
+    echo "Draft recovery requires completed CI, not deferred GitHub gates." >&2; return 1
+  fi
   if [ "$github_pending" = true ] && ! printf '%s\n' "$checks_json" | jq -e \
     'any(.[]; .name == "openclaw/ci-gate")' >/dev/null; then
     echo "Deferred GitHub gates require the enforced openclaw/ci-gate context." >&2
@@ -339,12 +354,13 @@ merge_verify() {
   printf '%s\n' "$checks_json" | jq -r '.[] | "\(.bucket)\t\(.name)\t\(.state)"' || return 1
 
   local failed_required
-  # gh retains the draft's skipped check beside the current CI status. Deferred
-  # admission still requires that same enforced gate to be pending or passing.
-  failed_required=$(printf '%s\n' "$checks_json" | jq --argjson deferred "$github_pending" '
+  # gh retains the draft's skipped check beside a successful manual CI gate.
+  # Deferred admission permits pending; draft recovery separately requires completed CI.
+  failed_required=$(printf '%s\n' "$checks_json" | jq --argjson deferred "$github_pending" \
+    --arg recoveryMode "$recovery_mode" '
     . as $checks | [.[] |
       select(.bucket != "pass" and .bucket != "pending") |
-      select(($deferred and .name == "openclaw/ci-gate" and
+      select((($deferred or $recoveryMode != "none") and .name == "openclaw/ci-gate" and
         .bucket == "skipping" and .state == "SKIPPED" and
         any($checks[]; .name == "openclaw/ci-gate" and
           (.bucket == "pass" or .bucket == "pending"))) | not)
@@ -541,7 +557,8 @@ merge_run() {
   local recovery_artifact_head="$replacement_head"
   local body_path="${5:-}" captured_body="" merge_body_snapshot=""
   local legacy_directory="${6:-}" legacy_refusal="" legacy_captures=()
-  local cancel_auto="${7:-false}"
+  local cancel_auto="${7:-false}" suspend_auto="${9:-false}"
+  local recovery_mode=none MERGE_ADMISSION_ACTIVE=false MERGE_HEAD_FENCE=""
   local refusal_directory="${8:-}" refusal="" qualified_refusal=false
   local MERGE_REFUSAL_DIRECTORY=""
   [ -z "$refusal_directory" ] || refusal_directory=$(node -e 'process.stdout.write(require("node:path").resolve(process.argv[1]))' -- "$refusal_directory") || return 1
@@ -554,6 +571,12 @@ merge_run() {
   local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
   local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION MERGE_ENTRY_OBSERVATION MERGE_TRANSPORT=rest
   merge_outcome_init "$pr" || return 1
+  if [ "$suspend_auto" = true ]; then
+    [ -n "$recovery_oid" ] && [ -z "$replacement_head$body_path$legacy_directory$refusal_directory" ] &&
+      [ "$auto_merge_requested" = false ] && [ "$cancel_auto" = false ] || return 2
+    merge_outcome_suspend_auto "$pr" "$recovery_oid"
+    return
+  fi
   if [ "$cancel_auto" = true ]; then
     [ -n "$recovery_oid" ] && [ -z "$replacement_head$body_path$legacy_directory$refusal_directory" ] && [ "$auto_merge_requested" = false ] || return 2
     merge_outcome_cancel_auto "$pr" "$recovery_oid"
@@ -566,14 +589,36 @@ merge_run() {
   elif [ -n "$recovery_oid" ]; then
     if [ "$recovery_oid" != "$MERGE_OUTCOME_OID" ] ||
       ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg refusal "$refusal_directory" '
-        .phase == "intent" and
-        ((.accepted == false and (.route == "immediate" or ($refusal != "" and .route == "auto" and .method == "squash"))) or
-         (.accepted == true and .route == "auto" and .cancellation.state == "confirmed"))
+        ((.phase == "ready" and .route == "immediate" and .accepted == false) or
+         (.phase == "intent" and
+          ((.accepted == false and (.route == "immediate" or
+             (.route == "auto" and .method == "squash" and ($refusal != "" or .suspension.state == "confirmed")))) or
+           (.accepted == true and .route == "auto" and .cancellation.state == "confirmed"))))
       ' >/dev/null; then
       merge_outcome_stop "operator recovery requires the exact unaccepted immediate intent or confirmed auto cancellation; no attempt was authorized"
       return 1
     fi
     recovery_record="$MERGE_OUTCOME_RECORD"
+    if printf '%s\n' "$recovery_record" | jq -e '.suspension.state == "confirmed" or .phase == "ready" or has("headFence")' >/dev/null; then
+      [ -n "$recovery_artifact_head" ] || recovery_artifact_head=$(printf '%s\n' "$recovery_record" | jq -r .head) || return 1
+      if [ "$(printf '%s\n' "$recovery_record" | jq -r .suspension.state)" = confirmed ]; then
+        recovery_mode=suspension
+      else
+        recovery_mode=ready
+        if [ -n "$replacement_head" ] && [ "$replacement_head" != "$(printf '%s\n' "$recovery_record" | jq -r .head)" ]; then
+          if printf '%s\n' "$MERGE_ENTRY_OBSERVATION" | jq -e --arg head "$replacement_head" '
+            .state == "OPEN" and .isDraft == true and .headRefOid == $head
+          ' >/dev/null; then
+            recovery_mode=suspension
+          else
+            merge_outcome_stop "ready recovery cannot replace the released head without a fresh draft barrier"; return 1
+          fi
+        fi
+        if [ "$(printf '%s\n' "$MERGE_ENTRY_OBSERVATION" | jq -r .state)" = MERGED ]; then
+          merge_outcome_resume "$pr"; return
+        fi
+      fi
+    fi
   elif [ -n "$refusal_directory" ]; then
     merge_outcome_stop "pre-dispatch qualification requires explicit operator recovery"; return 1
   elif [ -n "$MERGE_OUTCOME_OID" ]; then
@@ -661,10 +706,13 @@ merge_run() {
   local verify_options
   verify_options=$(jq -cn --arg replacementHead "$replacement_head" \
     --argjson autoMergeRequested "$auto_merge_requested" --argjson observation "$MERGE_ENTRY_OBSERVATION" \
-    --argjson qualifiedRefusal "$qualified_refusal" \
-    '{replacementHead:$replacementHead,autoMergeRequested:$autoMergeRequested,qualifiedRefusal:$qualifiedRefusal,observation:$observation}') || return 1
+    --argjson qualifiedRefusal "$qualified_refusal" --arg recoveryMode "$recovery_mode" \
+    '{replacementHead:$replacementHead,autoMergeRequested:$autoMergeRequested,qualifiedRefusal:$qualifiedRefusal,recoveryMode:$recoveryMode,observation:$observation}') || return 1
   merge_verify "$pr" "$verify_options" || return 1
   MERGE_ENTRY_OBSERVATION="$PR_HEAD_OBSERVATION"
+  if [ "$recovery_mode" = ready ]; then
+    merge_outcome_head_fence "$pr" "$recovery_artifact_head" "$(printf '%s\n' "$recovery_record" | jq -c .headFence)" || return 1
+  fi
   # shellcheck disable=SC1091
   source .local/prep.env
 
@@ -726,6 +774,12 @@ merge_run() {
   if [ "$auto_merge_requested" = "true" ] && [ "$merge_method" != "squash" ]; then
     echo "Auto-merge requires squash; unset OPENCLAW_PR_MERGE_METHOD or set it to squash."
     exit 2
+  fi
+
+  if [ "$recovery_mode" = suspension ]; then
+    [ -z "$body_path$refusal_directory$legacy_directory" ] || { merge_outcome_stop "suspension release does not dispatch a merge body"; return 1; }
+    merge_outcome_release_suspension "$pr" "$recovery_oid" "$recovery_record" "$replacement_head" "$recovery_artifacts" "${required_artifacts[@]}"
+    return
   fi
 
   local merge_args=(--match-head-commit "$PREP_HEAD_SHA")
@@ -873,7 +927,11 @@ merge_run() {
     fi
   fi
   if [ -n "$recovery_oid" ]; then
-    recovery_actor=$(pr_gh_writer_login "$MERGE_REPO_HOST") || return 1
+    if [ "$recovery_mode" = ready ]; then
+      recovery_actor=$(merge_outcome_recovery_writer) || return 1
+    else
+      recovery_actor=$(pr_gh_writer_login "$MERGE_REPO_HOST") || return 1
+    fi
     [ -n "$recovery_actor" ] || { merge_outcome_stop "cannot identify the operator recovery actor"; return 1; }
   fi
   # Ordinary squash has one final authority observation after comment collection.
@@ -894,6 +952,10 @@ merge_run() {
     return 1
   fi
   validate_clawsweeper_review_comments "$pr" "$PREP_HEAD_SHA" || return 1
+  if [ "$recovery_mode" = ready ] &&
+    [ "$(printf '%s\n' "$CLAWSWEEPER_REVIEW_EVIDENCE" | jq -r .reviewedSha)" != "$PREP_HEAD_SHA" ]; then
+    merge_outcome_stop "ready recovery requires completed exact-head review"; return 1
+  fi
   if [ -n "$recovery_artifact_head" ]; then
     if [ "$recovery_artifacts" != "$(pr_git hash-object --no-filters -- "${required_artifacts[@]}")" ]; then
       merge_outcome_stop "recovery artifacts changed during admission"
@@ -940,6 +1002,10 @@ merge_run() {
     [ "$correction_gates_oid" = "$(pr_git hash-object --no-filters .local/gates.env)" ] || return 1
     require_correction_publication_gates "$pr" "$(pr_git rev-parse HEAD)" || return 1
   fi
+  if [ "$recovery_mode" = ready ]; then
+    merge_outcome_head_fence "$pr" "$PREP_HEAD_SHA" "$(printf '%s\n' "$recovery_record" | jq -c .headFence)" || return 1
+    [ "$recovery_actor" = "$(merge_outcome_recovery_writer)" ] || return 1
+  fi
   local intent attempt
   attempt=$(node -e 'process.stdout.write(require("node:crypto").randomUUID())') || return 1
   intent=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -c --argjson repo "$MERGE_REPO" \
@@ -960,6 +1026,9 @@ merge_run() {
       --argjson previous "$recovery_record" --arg actor "$recovery_actor" --arg replacement "$replacement_head" \
       '.recovery=({outcome:$outcome,attempt:$previous.attempt,actor:$actor,reason:"explicit-operator-recovery"} +
         if $replacement == "" then {} else {replacementHead:$replacement} end)') || return 1
+  fi
+  if [ "$recovery_mode" = ready ]; then
+    intent=$(printf '%s\n' "$intent" | jq -c --argjson fence "$MERGE_HEAD_FENCE" '.headFence=$fence') || return 1
   fi
   if [ -n "$refusal" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson refusal "$refusal" '.recovery.preDispatchRefusal=$refusal') || return 1
@@ -1021,7 +1090,10 @@ merge_run() {
   # Only this uninterrupted completion path owns cleanup. The exact-head lease
   # protects advanced/different-head recreations, but cannot detect same-SHA recreation.
   local MERGE_HEAD_REF MERGE_HEAD_REPO cleanup_complete=true
-  if merge_outcome_head_branch "$pr"; then
+  if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("headFence")' >/dev/null; then
+    cleanup_complete=false
+    echo "Merge confirmed; preserve the head fence until operator-owned protection restoration and exact-head remote cleanup. No policy or protected branch deletion attempted."
+  elif merge_outcome_head_branch "$pr"; then
     local cleanup_error ref_status=0
     if ! cleanup_error=$(pr_git push --force-with-lease="refs/heads/$MERGE_HEAD_REF:$PREP_HEAD_SHA" \
       "https://$MERGE_REPO_HOST/$MERGE_HEAD_REPO.git" ":refs/heads/$MERGE_HEAD_REF" 2>&1); then

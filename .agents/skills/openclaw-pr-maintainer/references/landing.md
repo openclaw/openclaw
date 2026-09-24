@@ -142,6 +142,51 @@ Use the completed-evidence preparation path above. Neither command deletes the
 prior outcome or bypasses review and merge admission. Queue cancellation is not
 supported by this path.
 
+For an **uncertain, unaccepted auto request with no observed auto request**, keep
+the original PR and use a draft barrier instead of pretending cancellation occurred:
+
+```bash
+scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery --suspend-auto
+```
+
+Read back the current outcome OID. Only confirmed draft suspension permits head
+repair. Keep the PR draft, refresh review and completed-evidence preparation,
+and complete exact-head CI. The existing `scripts/pr ci-dispatch <PR>` can run
+its exact-SHA release-gate workflow on a same-repository draft; skipped draft
+checks and `github_pending` do not count as completed proof. A completed
+ClawSweeper review must name the exact release head. Do not manually mark ready.
+
+Before releasing that draft, an authorized repository administrator must lock the
+exact same-repository head branch read-only, with enforcement for admins and
+custom bypass roles and no force-push, deletion, or fork-sync allowance. Inspect
+and preserve existing protection; the wrapper only reads policy and does not
+create, weaken, or remove it. Evidence comes from the maintainer-readable,
+writer-bound GraphQL `ref.branchProtectionRule` query, with exact repository,
+ref, rule ID/pattern, permission and lock-flag checks, followed by a canonical
+Git-ref read. The live protected branch must still name the reviewed head. Missing or bypassable protection is a blocker, not risk approval.
+
+Explicit `merge-recover` with the suspension OID and `--replacement-head <SHA>`
+validates that evidence and records a new `ready` outcome **before** one ready
+request. It does not submit a merge. Read the new OID and explicitly recover it
+for ordinary immediate admission. A lost draft/ready response is never blindly
+repeated. Reconcile any concurrent auto request or merge instead of dispatching.
+The outcome retains the head branch and protection fingerprint; every subsequent
+recovery revalidates that fence. Keep it held through a verified merge. Cleanup
+never deletes protected branches or restores policy: the operator restores the
+previously inspected protection only after settlement, then performs exact-head
+branch cleanup. If a new fix is needed before merge, first re-establish and
+observe the draft barrier while the lock remains held, then relax only the
+task-owned lock for editing, retaining its rule ID and preexisting restrictions.
+Reinstate the same fence after review and completed CI; explicit
+replacement recovery requires the PR to be draft before it can release again.
+
+The old uncertainty and capture remain retained. Draft alone is not a generation
+fence against late auto enablement; readiness has no atomic expected-head input.
+The server-enforced head lock prevents a collaborator push from replacing the
+reviewed candidate during release or settlement. A late auto request can merge
+only that candidate while the fence remains held; the replacement-bound receipt
+then verifies the result without another merge request.
+
 A failed operation can retain a lock. Verify no owned child tools remain, then
 recover only with the exact token and command the wrapper printed. Never remove
 locks by hand or start competing retries. After throttling, inspect quota before

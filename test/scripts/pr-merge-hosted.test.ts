@@ -58,6 +58,26 @@ describePosix("native hosted merge handoff", () => {
     expect(events.some((event) => event.kind === "ci-watched")).toBe(false);
   });
 
+  it.each(["suspension", "ready"])("accepts completed exact-head manual CI for %s", (mode) => {
+    const result = f.shell(
+      `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false,"recoveryMode":"${mode}"}' || exit 1`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(
+      JSON.parse(readFileSync(join(f.local, "gates-hosted-checks.json"), "utf8")),
+    ).toMatchObject({
+      headSha: f.head,
+      workflows: expect.arrayContaining([
+        expect.objectContaining({
+          name: "CI",
+          headSha: f.head,
+          status: "completed",
+          conclusion: "success",
+        }),
+      ]),
+    });
+  });
+
   it.each([
     "missing",
     "stale",
@@ -143,7 +163,7 @@ describePosix("native hosted merge handoff", () => {
       );
       const before = f.events().length;
       const result = f.shell(
-        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false}' || exit 1`,
+        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false,"recoveryMode":"none"}' || exit 1`,
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
       const events = f.events().slice(before);
@@ -216,6 +236,69 @@ describePosix("native hosted merge handoff", () => {
   });
 });
 
+describePosix("standalone merge verification authority", () => {
+  it("rejects missing or malformed recovery modes before reading PR state", () => {
+    const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-merge-options-"));
+    const before = f.events().length;
+    for (const recoveryMode of [undefined, null, true, "automatic", ""]) {
+      const options = {
+        replacementHead: "",
+        autoMergeRequested: false,
+        qualifiedRefusal: false,
+        recoveryMode,
+        observation: null,
+      };
+      const result = f.shell(`merge_verify 42 '${JSON.stringify(options)}'`);
+      expect(result.status, result.stdout + result.stderr).toBe(2);
+      expect(result.stderr).toContain("Invalid merge verification options");
+    }
+    expect(f.events().slice(before)).toEqual([]);
+  });
+
+  it.each(["draft", "pending"] as const)(
+    "rejects %s despite exported internal recovery names",
+    (state) => {
+      const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-merge-env-"));
+      f.seedPreparedMerge();
+      delete f.env.OPENCLAW_TESTBOX;
+      f.configure({
+        hostedCi: "release",
+        requiredChecks: state === "pending" ? "pending" : "pass",
+        metadata: { ...f.metadata, isDraft: state === "draft" },
+      });
+      Object.assign(f.env, {
+        MERGE_SUSPENSION_RELEASE: "true",
+        MERGE_READY_RECOVERY: "true",
+        recovery_mode: "suspension",
+        recoveryMode: "suspension",
+      });
+      const result = f.run("merge-verify");
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stdout + result.stderr).toContain(
+        state === "draft" ? "PR is draft." : "Required checks are still pending.",
+      );
+      expect(
+        f.git(
+          f.canonical,
+          "for-each-ref",
+          "--format=%(refname)",
+          "refs/openclaw/pr-merge-outcomes/42",
+        ),
+      ).toBe("");
+      expect(
+        f
+          .events()
+          .some(
+            (event) =>
+              event.kind === "gh" &&
+              event.args?.[0] === "pr" &&
+              ["ready", "merge"].includes(event.args[1] ?? ""),
+          ),
+      ).toBe(false);
+    },
+  );
+});
+
 describePosix("native pending GitHub merge handoff", () => {
   let f: ReturnType<typeof createMainRefreshFixture>;
   let pendingGates: string;
@@ -252,6 +335,7 @@ describePosix("native pending GitHub merge handoff", () => {
       autoMergeRequested: fault !== "missing auto request",
       observation: null,
       qualifiedRefusal: false,
+      recoveryMode: "none",
     };
     let command = `merge_verify 42 '${JSON.stringify(verification)}'`;
     if (fault === "different gate head") {
@@ -308,7 +392,7 @@ describePosix("native pending GitHub merge handoff", () => {
         ],
       });
       const result = f.shell(
-        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":true,"observation":null,"qualifiedRefusal":false}' || exit 1`,
+        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":true,"observation":null,"qualifiedRefusal":false,"recoveryMode":"none"}' || exit 1`,
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
     },
