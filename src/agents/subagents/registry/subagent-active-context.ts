@@ -50,11 +50,21 @@ function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
   if (entry.requesterSettleWake) {
     return true;
   }
-  return (
-    entry.completion?.required === true &&
-    entry.delivery?.disposition !== "intentional_non_delivery" &&
-    ["pending", "in_progress", "failed", "suspended"].includes(entry.delivery?.status ?? "pending")
-  );
+  if (entry.completion?.required !== true) {
+    return false;
+  }
+  if (entry.delivery?.disposition === "intentional_non_delivery") {
+    return false;
+  }
+  const status = entry.delivery?.status ?? "pending";
+  if (status === "failed") {
+    // `finalizeResumedAnnounceGiveUp` writes `failed` and then completes cleanup
+    // bookkeeping, which is terminal: `resumeSubagentRun` returns early once
+    // `cleanupCompletedAt` is set, so no path advances the row again. A failed
+    // delivery without completed cleanup is still resumable and stays pending.
+    return !Number.isFinite(entry.cleanupCompletedAt);
+  }
+  return status === "pending" || status === "in_progress" || status === "suspended";
 }
 
 function formatPendingResult(entry: SubagentRunRecord): string {

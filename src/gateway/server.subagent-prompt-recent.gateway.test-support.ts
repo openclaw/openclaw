@@ -89,7 +89,7 @@ async function runParentAgentTurn(
 }
 
 describe("Completed child results on a real parent-agent turn", () => {
-  test.each(["lifecycle", "outstanding"] as const)(
+  test.each(["lifecycle", "outstanding", "settled-failure"] as const)(
     "later parent model request includes the completed child: %s",
     { timeout: 90_000 },
     async (kind) => {
@@ -192,7 +192,7 @@ describe("Completed child results on a real parent-agent turn", () => {
           plugins: { slots: { memory: "none" } },
           tools: {
             profile: "coding",
-            ...(kind === "outstanding" ? { deny: ["sessions_spawn"] } : {}),
+            ...(kind === "lifecycle" ? {} : { deny: ["sessions_spawn"] }),
           },
         } satisfies OpenClawConfig;
 
@@ -257,6 +257,65 @@ describe("Completed child results on a real parent-agent turn", () => {
               heartbeatDisabled: true,
               requesterSawResult: true,
               unrelatedRequesterSawResult: false,
+              deliveryStateUnchanged: true,
+            })}`,
+          );
+          return;
+        }
+
+        if (kind === "settled-failure") {
+          const result = `Settled-result-${randomUUID()}`;
+          const endedAt = Date.now() - 7_200_000;
+          // #154834: `finalizeResumedAnnounceGiveUp` writes a terminal `failed`
+          // delivery and then completes cleanup bookkeeping. From that point
+          // `resumeSubagentRun` refuses to advance the row, so the entry can never
+          // be delivered and must stop rendering on later parent turns. The
+          // `outstanding` case above pins the counterpart: a failed delivery whose
+          // cleanup has not completed is still resumable and stays visible.
+          const settled: SubagentRunRecord = {
+            runId: "persisted-settled-failure",
+            childSessionKey: CHILD_SESSION_KEY,
+            requesterSessionKey: PARENT_SESSION_KEY,
+            requesterStorePath: resolvePhysicalSessionStorePath(
+              { sessionKey: PARENT_SESSION_KEY },
+              cfg,
+            ),
+            requesterAgentId: "main",
+            requesterDisplayKey: "main",
+            task: "child task whose completion delivery gave up",
+            cleanup: "keep",
+            expectsCompletionMessage: true,
+            createdAt: endedAt - 1_000,
+            execution: {
+              status: "terminal",
+              endedAt,
+              outcome: { status: "error", error: "network connection error" },
+            },
+            completion: { required: true, resultText: result, capturedAt: endedAt },
+            delivery: { status: "failed", attemptCount: 3, lastError: "message tool missing" },
+            cleanupHandled: true,
+            cleanupCompletedAt: endedAt + 60_000,
+          };
+          // Publish the settled custody through the production owner without
+          // registering an active child, so the parent turn reads the real store.
+          persistSubagentRunsToDiskOrThrow(new Map([[settled.runId, settled]]), [settled.runId]);
+          const before = loadSubagentRunsByRunIdsFromSqlite([settled.runId]);
+          const cursor = requests.length;
+          await runParentAgentTurn(gateway.client, "Continue using any outstanding child result.");
+          const parentRequest = requests.slice(cursor).join("\n");
+          expect(parentRequest).not.toContain("## Child results awaiting delivery");
+          expect(parentRequest).not.toContain(result);
+          expect(parentRequest).not.toContain(settled.runId);
+          expect(loadSubagentRunsByRunIdsFromSqlite([settled.runId])).toEqual(before);
+          console.log(
+            `OPENCLAW_ISOLATED_GATEWAY_SETTLED_VERDICT ${JSON.stringify({
+              surface: "isolated-gateway",
+              path: "real-parent-model-request",
+              source: "seeded-registry-owner-settled-failure",
+              result,
+              deliveryStatus: "failed",
+              cleanupCompletedAt: settled.cleanupCompletedAt,
+              requesterSawStaleEntry: false,
               deliveryStateUnchanged: true,
             })}`,
           );

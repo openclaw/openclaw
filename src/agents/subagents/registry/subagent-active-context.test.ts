@@ -388,4 +388,13 @@ describe("buildActiveSubagentRuntimeContext", () => {
     expect(laterParentTurn).toContain("run-later-parent-turn");
     expect(laterParentTurn).toContain('taskName_json="summarize_inbox"');
   });
+
+  // The settled-vs-recoverable failed-delivery contract (#154834) is pinned at
+  // the real Gateway boundary in
+  // `server.subagent-prompt-recent.gateway.test-support.ts` (`settled-failure`
+  // vs `outstanding` cases), which runs a real parent-agent turn and asserts on
+  // the actual model request. Registry-store seeding through the Bun
+  // compatibility lane (`test/vitest/vitest.shared.config.ts` swaps the SQLite
+  // library) does not model that boundary, so this file keeps only the
+  // context-builder cases that lane can serve.
 });
