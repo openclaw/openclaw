@@ -3,6 +3,7 @@ summary: "Heartbeat polling messages and notification rules"
 read_when:
   - Adjusting heartbeat cadence or messaging
   - Deciding between heartbeat and automations for scheduled work
+  - Enabling experimental heartbeat questions with a decision model
 title: "Heartbeat"
 sidebarTitle: "Heartbeat"
 ---
@@ -14,7 +15,9 @@ choosing the system-owned monitor or an independently scheduled job.
 
 Heartbeat is a system-owned automation that runs **periodic agent turns** in the
 main session so the model can surface anything that needs attention without
-spamming you.
+spamming you. The default `agent` mode keeps this behavior. Experimental
+[question mode](/gateway/heartbeat#experimental-question-mode) checks saved
+questions with a decision model before starting a scheduled agent turn.
 
 Heartbeat is a scheduled main-session turn - it does **not** create [background task](/automation/tasks) records. Task records are for detached work (ACP runs, subagents, isolated automation jobs).
 
@@ -126,6 +129,128 @@ Proactive heartbeat behavior is opt-in:
 Heartbeat can react to completed [background tasks](/automation/tasks), but a heartbeat run itself does not create a task record.
 
 If you want a heartbeat to do something very specific (e.g. "check Gmail PubSub stats" or "verify gateway health"), set `agents.defaults.heartbeat.prompt` (or `agents.entries.*.heartbeat.prompt`) to a custom body (sent verbatim).
+
+## Experimental question mode
+
+Set `heartbeat.mode: "questions"` to evaluate agent-managed yes/no questions
+before scheduled heartbeat turns. Questions are answered by the
+[decision model](/concepts/decision-models) you selected for the agent, for
+example Jev through the [TypeSafe AI plugin](/plugins/typesafe#enable-and-configure)
+or a local [ONNX](/plugins/onnx) classifier. Question mode also requires the
+[Decision assistance](/concepts/experimental-features#decision-assistance) Labs
+opt-in:
+
+```json5
+{
+  agents: {
+    ownership: "explicit",
+    defaults: {
+      experimental: { decisionAssistance: true },
+    },
+    entries: {
+      assistant: {
+        decisionModel: "typesafe/jev-1.13.0",
+        heartbeat: { mode: "questions", every: "30m" },
+      },
+    },
+  },
+}
+```
+
+You can also set `decisionModel` and `heartbeat.mode` under `agents.defaults`;
+the agent-level `decisionModel` wins, and an explicit empty per-agent value
+disables question mode for that agent. Without an effective decision model or
+the Labs opt-in, the agent keeps ordinary heartbeat turns and does not receive
+the `heartbeat_questions` tool. The ordinary chat model still performs the work
+when a question triggers a turn; `heartbeat.model` continues to override that
+agent model if configured.
+
+Ask the agent in a normal conversation to save a group of checks, for example:
+“Check the latest CI runs for my repository and wake up if a run failed. Keep
+pull request checks in a separate group.” The agent uses `heartbeat_questions`
+to manage its own monitor's groups. Groups belong to the agent and are shared
+across its sessions; access follows the agent's tool policy.
+
+| Action   | Fields                        | Effect                                         |
+| -------- | ----------------------------- | ---------------------------------------------- |
+| `list`   | None                          | Read saved groups, commands, and questions.    |
+| `upsert` | `id`, `commands`, `questions` | Add a group or replace the entire group by ID. |
+| `remove` | `id`                          | Remove a saved group.                          |
+
+Each group has shell commands that collect its state and questions about that
+state. For example, the agent can make these two tool calls after replacing
+`OWNER/REPO` with your repository:
+
+```json
+{
+  "action": "upsert",
+  "id": "ci",
+  "commands": ["gh run list --repo OWNER/REPO --limit 5 --json status,conclusion,displayTitle"],
+  "questions": [{ "id": "failed", "question": "Has any listed CI run completed with a failure?" }]
+}
+```
+
+```json
+{
+  "action": "upsert",
+  "id": "pull-requests",
+  "commands": [
+    "gh pr list --repo OWNER/REPO --state open --limit 10 --json number,title,isDraft,reviewDecision"
+  ],
+  "questions": [
+    {
+      "id": "changes",
+      "question": "Does any listed non-draft pull request have reviewDecision CHANGES_REQUESTED?"
+    }
+  ]
+}
+```
+
+These examples require an authenticated GitHub CLI. Use commands that observe
+state, with filters and explicit output limits. Commands run under the agent's
+existing execution policy; saving a group does not authorize otherwise-blocked
+execution. Do not include credentials in command output: selecting a hosted
+decision model sends the collected state to that provider.
+
+OpenClaw evaluates each group in a separate decision request. Each request
+includes that group's command outputs, the current time, full heartbeat notes,
+and a shared bounded slice of recent conversation: up to 6 visible user and
+assistant messages from a recent 8 KiB transcript window. Other groups' command
+outputs are excluded. Split unrelated sources into separate groups so each
+request contains only the command evidence its questions need.
+
+Each monitor supports up to 16 groups, each with up to 5 commands and 32
+questions. Group and question IDs contain 1–64 letters, digits, underscores, or
+hyphens; question text is limited to 2,000 characters. The complete serialized
+decision request for each group, including questions and shared context, is
+capped at 24 KiB. Commands have a combined output limit of 16 KiB and a 30-second
+budget per group. These are OpenClaw limits, not the provider's token limit.
+Oversized or truncated output falls back to the ordinary agent instead of being
+treated as evidence for a no answer. The fallback asks the agent to reduce
+command output, split groups, or shorten heartbeat notes; the conversation
+window is already bounded.
+
+Each question is evaluated as a Boolean probability:
+
+- Any `probabilityTrue >= 0.5` starts one ordinary heartbeat agent turn.
+- All answers in all groups below `0.5` skip the agent turn.
+- An empty group list skips the scheduled turn without commands or a decision request.
+- A failed or timed-out command, unavailable decision model, failed request,
+  or unusable result falls back to the ordinary heartbeat turn. Cancellation
+  does not start fallback work.
+
+Triggered turns receive the evaluated evidence. Fallback turns receive the
+registered checks and available evidence so the agent can investigate.
+Manual wakes, queued events, due task wakes, and completion notifications bypass
+the question check. Existing scheduling and eligibility guards still apply.
+A yes answer starts the usual agent; it does not bypass tool policy or approvals.
+
+Groups persist alongside the notes in the existing monitor scratch storage.
+Agent updates to heartbeat notes preserve the groups. Set `mode: "agent"`
+to restore ordinary heartbeats without deleting the saved groups or notes.
+Removing `mode` also restores the default unless the agent inherits `questions`
+from `agents.defaults`. Existing configurations keep ordinary
+heartbeats and need no migration to continue working.
 
 ## Response contract
 
@@ -268,6 +393,10 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 
 ### Field notes
 
+<ParamField path="mode" type="string" default="agent">
+  `agent` runs ordinary heartbeat turns. Experimental `questions` evaluates saved
+  groups of command outputs and questions with the agent’s decision model before scheduled turns.
+</ParamField>
 <ParamField path="every" type="string">
   Heartbeat interval (duration string, default unit minutes).
 </ParamField>
@@ -532,8 +661,9 @@ openclaw system heartbeat disable  # disable heartbeats
 
 ## Cost awareness
 
-Heartbeats run full agent turns. Shorter intervals burn more tokens. To reduce cost:
+By default, heartbeats run full agent turns. Shorter intervals burn more tokens. To reduce cost:
 
+- Try [experimental question mode](/gateway/heartbeat#experimental-question-mode) for checks answerable from small, focused command outputs.
 - Use `isolatedSession: true` to avoid sending full conversation history (~100K tokens down to ~2-5K per run).
 - Use `lightContext: true` to skip workspace bootstrap files for heartbeat runs.
 - Set a cheaper `model` (e.g. `ollama/llama3.2:1b`).

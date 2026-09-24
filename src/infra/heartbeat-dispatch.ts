@@ -33,7 +33,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import { mergeSessionEntry } from "../config/sessions/types.js";
-import { writeCronJobScratch } from "../cron/scratch-store.js";
+import { readCronJobScratchState, writeCronJobScratch } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { formatErrorMessage } from "./errors.js";
@@ -42,6 +42,10 @@ import { HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX } from "./heartbeat-events-filter
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { heartbeatLog as log } from "./heartbeat-log.js";
 import { persistHeartbeatOutcome } from "./heartbeat-outcome-store.js";
+import {
+  parseHeartbeatQuestionDocument,
+  serializeHeartbeatQuestionDocument,
+} from "./heartbeat-questions.js";
 import { resolveHeartbeatChannelPlugin } from "./heartbeat-runner-config.js";
 import type {
   HeartbeatRunOptions,
@@ -232,11 +236,28 @@ async function prepareHeartbeatDispatchReply(
       log.warn("heartbeat: scratch update ignored because no monitor job exists");
     } else {
       try {
+        const cronStorePath = resolveCronJobsStorePathFromConfig(cfg);
+        let content = scratch;
+        let expectedRevision = preflight.scratchRevision ?? 0;
+        const current = readCronJobScratchState(cronStorePath, preflight.scratchJobId);
+        const parsed = parseHeartbeatQuestionDocument(current.scratch?.content);
+        if (parsed.status === "invalid") {
+          throw new Error("Invalid heartbeat question document; notes were not overwritten");
+        }
+        if (parsed.status === "valid" || policy.wake.heartbeat?.mode === "questions") {
+          const original = parseHeartbeatQuestionDocument(preflight.heartbeatScratchContent);
+          // Question edits may advance scratch during this turn. Merge only when notes
+          // still match the input, preserving concurrent edits to either responsibility.
+          if (original.status !== "invalid" && original.document.notes === parsed.document.notes) {
+            expectedRevision = current.currentRevision;
+          }
+          content = serializeHeartbeatQuestionDocument({ ...parsed.document, notes: scratch });
+        }
         const written = writeCronJobScratch({
-          storePath: resolveCronJobsStorePathFromConfig(cfg),
+          storePath: cronStorePath,
           jobId: preflight.scratchJobId,
-          content: scratch,
-          expectedRevision: preflight.scratchRevision ?? 0,
+          content,
+          expectedRevision,
         });
         if (!written.ok) {
           log.warn("heartbeat: scratch update lost a concurrent revision race");

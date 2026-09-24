@@ -117,6 +117,7 @@ export function buildExecForegroundResult(params: {
       exitReason: params.outcome.exitReason,
       durationMs: params.outcome.durationMs,
       aggregated: params.outcome.aggregated,
+      truncated: params.aggregateOutputDropped === true,
       timedOut: params.outcome.timedOut,
       noOutputTimedOut: params.outcome.noOutputTimedOut,
       cwd: params.cwd,
@@ -130,6 +131,7 @@ export function buildExecForegroundResult(params: {
     exitReason: params.outcome.exitReason,
     durationMs: params.outcome.durationMs,
     aggregated: params.outcome.aggregated,
+    truncated: params.aggregateOutputDropped === true,
     noOutputTimedOut: params.outcome.noOutputTimedOut,
     cwd: params.cwd,
   });

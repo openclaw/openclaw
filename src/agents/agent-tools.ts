@@ -371,7 +371,7 @@ export function createOpenClawCodingToolsInternal(
       channelContext: options?.channelContext,
       accountId: options?.agentAccountId,
       approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
-      nonInteractiveApproval: options?.swarmCollector,
+      nonInteractiveApproval: options?.swarmCollector || options?.exec?.nonInteractiveApproval,
       backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
       timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
       approvalRunningNoticeMs:

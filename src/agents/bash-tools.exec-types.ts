@@ -209,6 +209,8 @@ export type ExecToolDetails = {
       exitReason?: TerminationReason;
       durationMs: number;
       aggregated: string;
+      /** True when capture discarded output before the result was returned. */
+      truncated?: boolean;
       timedOut?: boolean;
       noOutputTimedOut?: boolean;
       cwd?: string;

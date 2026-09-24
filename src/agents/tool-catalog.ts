@@ -355,6 +355,13 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "heartbeat_questions",
+    description: "Manage experimental heartbeat questions",
+    sectionId: "automation",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "heartbeat_respond",
     description: "Accept heartbeat outcomes for post-turn handling",
     sectionId: "automation",

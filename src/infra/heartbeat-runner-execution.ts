@@ -13,7 +13,7 @@ import {
 } from "../auto-reply/reply/reply-run-registry.js";
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.public.js";
 import { createReplyPrefixContext } from "../channels/reply-prefix.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, getRuntimeConfigSnapshot } from "../config/config.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -41,6 +41,7 @@ import { resolveHeartbeatForWake, type HeartbeatConfig } from "./heartbeat-confi
 import { isExecCompletionEvent } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import { heartbeatLog as log } from "./heartbeat-log.js";
+import { isHeartbeatQuestionModeActive } from "./heartbeat-questions.js";
 import { shouldUseHeartbeatResponseToolPrompt } from "./heartbeat-runner-config.js";
 import {
   resolveHeartbeatPreflight,
@@ -60,6 +61,7 @@ import {
 } from "./heartbeat-wake-policy.js";
 import {
   areHeartbeatsEnabled,
+  getHeartbeatWakeAbortSignal,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   type HeartbeatScheduledTask,
@@ -126,6 +128,7 @@ export type HeartbeatRunOptions = {
 };
 
 export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
+  const runtimeConfigSnapshot = getRuntimeConfigSnapshot();
   const cfg = opts.cfg ?? getRuntimeConfig();
   const explicitAgentId = typeof opts.agentId === "string" ? opts.agentId.trim() : "";
   const forcedSessionAgentId =
@@ -339,14 +342,21 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
 
   return {
     kind: "ready",
+    runtimeConfigSnapshot,
     cfg,
     agentId,
+    intent: opts.intent,
     wakeSource,
     heartbeat,
     scheduledTasks,
     startedAt,
     isEmbeddedRunActive,
     isReplyRunActive,
+    hasNewActivity: () =>
+      getSize(CommandLane.Main) > 0 ||
+      getSize(sessionLaneKey) > 0 ||
+      hasActiveRunForAgent(agentId, listActiveReplyRuns) ||
+      hasActiveRunForAgent(agentId, listActiveEmbeddedRuns),
     preflight,
   } as const;
 }
@@ -438,6 +448,30 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
           accountId: delivery.accountId,
         })
       : { showOk: false, showAlerts: true, useIndicator: true };
+  let questionPrompt: string | undefined;
+  if (
+    isHeartbeatQuestionModeActive(cfg, agentId, heartbeat) &&
+    (wake.intent === undefined || wake.intent === "scheduled") &&
+    (wake.wakeSource === undefined || wake.wakeSource === "interval") &&
+    scheduledTasks.length === 0 &&
+    preflight.pendingEventEntries.length === 0 &&
+    (visibility.showAlerts || visibility.showOk || visibility.useIndicator)
+  ) {
+    const { evaluateHeartbeatQuestions } = await import("./heartbeat-question-evaluation.js");
+    const decision = await evaluateHeartbeatQuestions(
+      wake,
+      getHeartbeatWakeAbortSignal() ?? new AbortController().signal,
+    );
+    // A question edit or new conversation event invalidates even a successful decision.
+    // Reuse the wake owner's retained-work retry instead of settling the old snapshot.
+    if (!decision.isCurrent()) {
+      return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
+    }
+    if (decision.kind === "idle") {
+      return skippedHeartbeatStage(decision.reason, startedAt);
+    }
+    questionPrompt = decision.prompt;
+  }
   const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery });
   const replyPrefix = createReplyPrefixContext({
     cfg,
@@ -595,6 +629,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     outboundPolicySessionKey,
     internalProjection,
     ...heartbeatRunPrompt,
+    ...(questionPrompt ? { prompt: `${heartbeatRunPrompt.prompt}\n\n${questionPrompt}` } : {}),
   } as const;
 }
 

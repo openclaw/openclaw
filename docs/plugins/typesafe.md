@@ -91,6 +91,24 @@ incur TypeSafe's normal usage charges.
 Consumer scheduling and publication permissions remain unchanged. Clearing the
 role or explicitly disabling the plugin prevents its use by those consumers.
 
+## Experimental heartbeat questions
+
+To use Jev before scheduled heartbeat turns, select it as the agent's
+`decisionModel`, turn on
+[Decision assistance](/concepts/experimental-features#decision-assistance), and
+enable [heartbeat question mode](/gateway/heartbeat#experimental-question-mode). The
+agent manages groups of commands and questions with `heartbeat_questions`.
+Jev receives each group's command outputs, a bounded recent conversation slice,
+full heartbeat notes, and the current time in a separate request. Any yes starts one ordinary agent turn, while all no across all groups
+skips the turn. Enabling this plugin alone does not change heartbeat behavior.
+
+[Jev 1.13's documented context limits](https://docs.typesafe.ai/models) are
+32k tokens for state plus the longest question and 64k tokens for state plus
+all questions. Heartbeat groups use a smaller 24 KiB serialized request limit,
+including questions, command outputs, conversation context, and notes.
+Keep command outputs focused and split unrelated checks into separate groups;
+oversized or failed collection falls back to the ordinary agent.
+
 ## Local System One server
 
 ### Run Kev

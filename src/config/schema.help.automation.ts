@@ -346,6 +346,10 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Sliding window length in seconds for pair loop budgets. Default for supporting channels is 60.",
   "channels.defaults.botLoopProtection.cooldownSeconds":
     "Cooldown seconds applied to a pair after it exceeds the loop budget. Default for supporting channels is 60.",
+  "agents.defaults.heartbeat.mode":
+    'Heartbeat execution mode: "agent" preserves ordinary agent turns (default); experimental "questions" collects command output for agent-managed question groups and evaluates each group with recent conversation, heartbeat notes, and the agent’s selected decisionModel before scheduled turns. Requires an effective decisionModel and agents.defaults.experimental.decisionAssistance; otherwise behaves like "agent". Any yes runs the agent once; all no or no groups skips it. Collection or decision failures fall back to an agent turn.',
+  "agents.entries.*.heartbeat.mode":
+    'Per-agent heartbeat mode override: "agent" (default) or experimental "questions" using the agent’s selected decisionModel (with Decision assistance enabled) and saved groups of context commands and questions.',
   "agents.defaults.heartbeat.directPolicy":
     'Controls whether heartbeat delivery may target direct/DM chats: "allow" (default) permits DM delivery and "block" suppresses direct-target sends.',
   "agents.entries.*.heartbeat.directPolicy":

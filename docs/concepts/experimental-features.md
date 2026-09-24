@@ -60,9 +60,11 @@ that default.
 
 ## Decision assistance
 
-**Foundation only:** this Labs entry saves intent but connects no automatic
-Decision consumers. Turning it on does not start inference, enable consumer
-modes, select a provider, provision credentials, or download models.
+This Labs entry gates automatic Decision consumers. The only current consumer
+is [experimental heartbeat question mode](/gateway/heartbeat#experimental-question-mode),
+which also requires its own `heartbeat.mode: "questions"` setting. Turning the
+switch on does not start inference, enable consumer modes, select a provider,
+provision credentials, or download models.
 
 The switch and manually authored config use the same global Boolean:
 
@@ -82,7 +84,7 @@ unrelated experimental options do not. Objects such as
 removes its override and restores off, preserving model selections and sibling
 settings. There is no browser-local preference.
 
-Saved opt-in is not per-agent eligibility. Future automatic consumers also need
+Saved opt-in is not per-agent eligibility. Automatic consumers also need
 an effective [Decision model](/concepts/decision-models) for their owning agent.
 An unset agent model inherits `agents.defaults.decisionModel`; an explicit empty
 `agents.entries.<id>.decisionModel` disables eligibility for that agent. A model

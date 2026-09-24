@@ -242,6 +242,7 @@ function formatNodeRunToolResult(params: {
       exitCode,
       durationMs: Date.now() - params.startedAt,
       aggregated: output,
+      ...(typeof payloadObj.truncated === "boolean" ? { truncated: payloadObj.truncated } : {}),
       nodeId: params.nodeId,
       ...(timedOut ? { timedOut: true } : {}),
       cwd: params.cwd,

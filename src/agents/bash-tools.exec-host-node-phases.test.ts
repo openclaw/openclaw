@@ -348,6 +348,23 @@ describe("direct node run", () => {
     expect(result.details).toMatchObject({ aggregated: output, nodeId: "node-1" });
   });
 
+  it.each([true, false, undefined])(
+    "preserves node output completeness (%s)",
+    async (truncated) => {
+      callGatewayToolMock.mockResolvedValueOnce({
+        payload: { success: true, stdout: "ok", stderr: "", exitCode: 0, truncated },
+      });
+      const result = await dispatchNodeSystemRun(createDirectNodeRun());
+      expect(result.details).toMatchObject({ status: "completed", aggregated: "ok" });
+      expect(result.details).toMatchObject(
+        truncated === undefined ? { nodeId: "node-1" } : { truncated },
+      );
+      if (truncated === undefined) {
+        expect(result.details).not.toHaveProperty("truncated");
+      }
+    },
+  );
+
   it("identifies the node in the successful result the model reads", async () => {
     const result = await dispatchNodeSystemRun(createDirectNodeRun());
 

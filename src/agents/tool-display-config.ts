@@ -219,6 +219,15 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         wake: displayAction("wake", ["text", "mode"]),
       },
     },
+    heartbeat_questions: {
+      emoji: "💓",
+      title: "Heartbeat Questions",
+      actions: {
+        list: displayAction("list"),
+        upsert: displayAction("upsert", ["id"]),
+        remove: displayAction("remove", ["id"]),
+      },
+    },
     get_goal: {
       emoji: "🎯",
       title: "Get Goal",
