@@ -1,5 +1,9 @@
 // Markdown block-reply chunking and fence preservation.
 import { describe, expect, it, vi } from "vitest";
+import {
+  readReplyPayloadSourceOccurrence,
+  type ReplyPayloadSourceOccurrence,
+} from "../auto-reply/reply-payload.js";
 import { createBlockReplyPipeline } from "../auto-reply/reply/block-reply-pipeline.js";
 import {
   createParagraphChunkedBlockReplyHarness,
@@ -260,6 +264,7 @@ describe("oversized fenced block chunking", () => {
     "delivers identical fenced chunks as distinct source occurrences $name",
     async ({ coalescing }) => {
       const delivered: string[] = [];
+      const sourceOccurrences: ReplyPayloadSourceOccurrence[] = [];
       const pipeline = createBlockReplyPipeline({
         onBlockReply: (payload) => {
           delivered.push(payload.text ?? "");
@@ -269,7 +274,13 @@ describe("oversized fenced block chunking", () => {
       });
       const { emit } = createParagraphChunkedBlockReplyHarness({
         chunking: { minChars: 10, maxChars: 30 },
-        onBlockReply: (payload) => pipeline.enqueue(payload),
+        onBlockReply: (payload) => {
+          const occurrence = readReplyPayloadSourceOccurrence(payload);
+          if (occurrence) {
+            sourceOccurrences.push(occurrence);
+          }
+          pipeline.enqueue(payload);
+        },
       });
       const text = `\`\`\`txt\n${"a".repeat(80)}\n\`\`\``;
 
@@ -278,6 +289,17 @@ describe("oversized fenced block chunking", () => {
 
       expect(delivered.length).toBeGreaterThan(2);
       expect(pipeline.hasSentPayload({ text })).toBe(true);
+      expect(
+        sourceOccurrences.some((occurrence, index) =>
+          sourceOccurrences
+            .slice(index + 1)
+            .some(
+              (candidate) =>
+                candidate.sourceText === occurrence.sourceText &&
+                candidate.sourceRange[0] !== occurrence.sourceRange[0],
+            ),
+        ),
+      ).toBe(true);
     },
   );
 

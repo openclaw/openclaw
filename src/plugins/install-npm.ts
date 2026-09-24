@@ -21,10 +21,7 @@ import {
   validateNpmResolutionCompatibility,
 } from "./install-npm-metadata.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
-import {
-  preflightPluginNpmInstallPolicy,
-  type InstallSafetyOverrides,
-} from "./install-security-scan.js";
+import { preflightPluginNpmInstallPolicy } from "./install-security-scan.js";
 import {
   defaultLogger,
   emitSuccessfulPluginInstallSecurityEvent,
@@ -35,28 +32,20 @@ import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
-  type PluginInstallArtifactConsentHandler,
-  type PluginInstallLogger,
+  type PackageInstallCommonParams,
   type PluginNpmIntegrityDriftParams,
 } from "./install-types.js";
 
 export async function installPluginFromNpmSpec(
-  params: InstallSafetyOverrides & {
+  params: Omit<
+    PackageInstallCommonParams,
+    "requirePluginManifest" | "allowSourceTypeScriptEntries" | "installPolicyRequest"
+  > & {
     spec: string;
-    extensionsDir?: string;
-    npmDir?: string;
-    timeoutMs?: number;
-    workTimeoutMs?: number | null;
     signal?: AbortSignal;
-    logger?: PluginInstallLogger;
-    mode?: "install" | "update";
-    dryRun?: boolean;
-    expectedPluginId?: string;
     expectedReplacementPluginId?: string;
     expectedIntegrity?: string;
     onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
-    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
-    beforePersistentApply?: () => void;
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -115,6 +104,7 @@ export async function installPluginFromNpmSpec(
           resolvedPrereleaseVersion: npmResolution.version,
           timeoutMs,
           signal: params.signal,
+          killProcessTree: true,
           logger,
         })
       : null;

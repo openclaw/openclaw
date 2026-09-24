@@ -158,26 +158,19 @@ function readPersistedTarget(target: unknown): SignalApprovalReactionTarget | nu
   if (value.route.deliveryMode === "target" && !targetRouteTo) {
     return null;
   }
-  const route: SignalApprovalReactionRoute =
-    value.route.deliveryMode === "target"
+  const route: SignalApprovalReactionRoute = {
+    ...(value.route.deliveryMode === "target"
       ? {
-          deliveryMode: "target",
+          deliveryMode: "target" as const,
           to: targetRouteTo!,
           ...(typeof value.route.accountId === "string"
             ? { accountId: value.route.accountId }
             : {}),
-          ...(typeof value.route.agentId === "string" ? { agentId: value.route.agentId } : {}),
-          ...(typeof value.route.sessionKey === "string"
-            ? { sessionKey: value.route.sessionKey }
-            : {}),
         }
-      : {
-          deliveryMode: "session",
-          ...(typeof value.route.agentId === "string" ? { agentId: value.route.agentId } : {}),
-          ...(typeof value.route.sessionKey === "string"
-            ? { sessionKey: value.route.sessionKey }
-            : {}),
-        };
+      : { deliveryMode: "session" as const }),
+    ...(typeof value.route.agentId === "string" ? { agentId: value.route.agentId } : {}),
+    ...(typeof value.route.sessionKey === "string" ? { sessionKey: value.route.sessionKey } : {}),
+  };
   return {
     ...record,
     targetAuthorKeys: value.targetAuthorKeys,
@@ -228,30 +221,23 @@ export async function registerSignalApprovalReactionTarget(params: {
   if (targetAuthorKeys.length === 0) {
     return null;
   }
-  const route =
+  const agentId = normalizeOptionalString(params.route.agentId);
+  const sessionKey = normalizeOptionalString(params.route.sessionKey);
+  const accountId =
     params.route.deliveryMode === "target"
-      ? ({
-          deliveryMode: "target",
+      ? normalizeOptionalString(params.route.accountId)
+      : undefined;
+  const route: SignalApprovalReactionRoute = {
+    ...(params.route.deliveryMode === "target"
+      ? {
+          deliveryMode: "target" as const,
           to: params.route.to,
-          ...(normalizeOptionalString(params.route.accountId)
-            ? { accountId: normalizeOptionalString(params.route.accountId) }
-            : {}),
-          ...(normalizeOptionalString(params.route.agentId)
-            ? { agentId: normalizeOptionalString(params.route.agentId) }
-            : {}),
-          ...(normalizeOptionalString(params.route.sessionKey)
-            ? { sessionKey: normalizeOptionalString(params.route.sessionKey) }
-            : {}),
-        } satisfies SignalApprovalReactionRoute)
-      : ({
-          deliveryMode: "session",
-          ...(normalizeOptionalString(params.route.agentId)
-            ? { agentId: normalizeOptionalString(params.route.agentId) }
-            : {}),
-          ...(normalizeOptionalString(params.route.sessionKey)
-            ? { sessionKey: normalizeOptionalString(params.route.sessionKey) }
-            : {}),
-        } satisfies SignalApprovalReactionRoute);
+          ...(accountId ? { accountId } : {}),
+        }
+      : { deliveryMode: "session" as const }),
+    ...(agentId ? { agentId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+  };
   const target: SignalApprovalReactionTarget = {
     approvalId,
     approvalKind: params.approvalKind,

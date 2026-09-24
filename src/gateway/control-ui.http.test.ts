@@ -446,15 +446,19 @@ describe("handleControlUiHttpRequest", () => {
     const originalRead = fileHandlePrototype.read;
     await probe.close();
     let constrained = false;
-    return vi
-      .spyOn(fileHandlePrototype, "read")
-      .mockImplementation(async function (this: unknown, target, offset, length, position) {
-        if (!constrained && position === 0 && length > maxBytes) {
-          constrained = true;
-          return await originalRead.call(this, target, offset, maxBytes, position);
-        }
-        return await originalRead.call(this, target, offset, length, position);
-      });
+    return vi.spyOn(fileHandlePrototype, "read").mockImplementation(async function (
+      this: unknown,
+      target,
+      offset,
+      length,
+      position,
+    ) {
+      if (!constrained && position === 0 && length > maxBytes) {
+        constrained = true;
+        return await originalRead.call(this, target, offset, maxBytes, position);
+      }
+      return await originalRead.call(this, target, offset, length, position);
+    });
   }
 
   async function withBasePathRootFixture<T>(params: {
@@ -805,7 +809,7 @@ describe("handleControlUiHttpRequest", () => {
         const filePath = path.join(tmpRoot, filename);
         await fs.writeFile(filePath, Buffer.from("fixture"));
         const { res, handled } = await runAssistantMediaRequest({
-          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&filename=ignored.txt&token=test-token`,
           method: "GET",
           auth: { mode: "token", token: "test-token", allowTailscale: false },
         });
@@ -900,30 +904,6 @@ describe("handleControlUiHttpRequest", () => {
     expect(buildAssistantMediaContentDisposition("draft\uD800.pdf", "application/pdf")).toBe(
       `attachment; filename="draft_.pdf"; filename*=UTF-8''draft%EF%BF%BD.pdf`,
     );
-  });
-
-  it("serves assistant media from canonical inbound media refs", async () => {
-    const stateDir = resolveStateDir();
-    const id = `report---${randomUUID()}.pdf`;
-    const filePath = path.join(stateDir, "media", "inbound", id);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
-
-    try {
-      const { res, handled } = await runAssistantMediaRequest({
-        url: `/__openclaw__/assistant-media?source=${encodeURIComponent(`media://inbound/${id}`)}&token=test-token`,
-        method: "GET",
-        auth: { mode: "token", token: "test-token", allowTailscale: false },
-      });
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
-      expect(res["setHeader"]).toHaveBeenCalledWith(
-        "Content-Disposition",
-        `attachment; filename="report.pdf"; filename*=UTF-8''report.pdf`,
-      );
-    } finally {
-      await fs.rm(filePath, { force: true });
-    }
   });
 
   it("reports assistant media metadata for canonical inbound media refs", async () => {

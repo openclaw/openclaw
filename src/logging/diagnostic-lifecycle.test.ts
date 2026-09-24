@@ -6,6 +6,7 @@ import {
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
+  type DiagnosticMessageProcessedEvent,
 } from "../infra/diagnostic-events.js";
 import {
   getDiagnosticSessionState,
@@ -20,6 +21,7 @@ import {
   stopDiagnosticHeartbeat,
 } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
+import { createDiagnosticMessageLifecycle } from "./message-lifecycle.js";
 
 afterEach(() => {
   resetDiagnosticStateForTest();
@@ -78,4 +80,29 @@ it("retires interrupted diagnostic observations before re-enable without revivin
   } finally {
     unsubscribe();
   }
+});
+
+it("attributes message.processed to the ingesting agent recorded at the lifecycle owner", () => {
+  const processed: DiagnosticMessageProcessedEvent[] = [];
+  const unsubscribe = onDiagnosticEvent((event) => {
+    if (event.type === "message.processed") {
+      processed.push(event);
+    }
+  });
+  try {
+    const lifecycle = createDiagnosticMessageLifecycle({
+      enabled: true,
+      channel: "test",
+      source: "test",
+      sessionKey: "agent:main:lifecycle",
+      trackSessionState: false,
+      agentId: "main",
+    });
+    lifecycle.markProcessed("completed");
+  } finally {
+    unsubscribe();
+  }
+
+  expect(processed).toHaveLength(1);
+  expect(processed[0]?.agentId).toBe("main");
 });

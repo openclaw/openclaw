@@ -161,26 +161,28 @@ export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
   // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted database receiver.
   const originalExec = native.DatabaseSync.prototype.exec;
   const spies = [
-    vi
-      .spyOn(native.DatabaseSync.prototype, "prepare")
-      .mockImplementation(function (this: DatabaseSync, sql) {
-        if (!isControl(this)) {
-          prepare(sql);
-          queries.push(sql);
-        }
-        const statement = originalPrepare.call(this, sql);
-        databases.set(statement, this);
-        return statement;
-      }),
-    vi
-      .spyOn(native.DatabaseSync.prototype, "exec")
-      .mockImplementation(function (this: DatabaseSync, sql) {
-        if (!isControl(this)) {
-          exec(sql);
-          queries.push(sql);
-        }
-        return originalExec.call(this, sql);
-      }),
+    vi.spyOn(native.DatabaseSync.prototype, "prepare").mockImplementation(function (
+      this: DatabaseSync,
+      sql,
+    ) {
+      if (!isControl(this)) {
+        prepare(sql);
+        queries.push(sql);
+      }
+      const statement = originalPrepare.call(this, sql);
+      databases.set(statement, this);
+      return statement;
+    }),
+    vi.spyOn(native.DatabaseSync.prototype, "exec").mockImplementation(function (
+      this: DatabaseSync,
+      sql,
+    ) {
+      if (!isControl(this)) {
+        exec(sql);
+        queries.push(sql);
+      }
+      return originalExec.call(this, sql);
+    }),
   ];
   const statements = (["get", "all", "run", "iterate"] as const).map((method) => {
     const called = vi.fn();

@@ -19,7 +19,10 @@ import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/opencl
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-lifecycle.js";
 import { cleanupRetiredAgentDatabaseLease } from "../../state/openclaw-agent-execution-cleanup.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
-import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
+import {
+  publishOpenClawStateDatabaseWorkerAdmission,
+  registerOpenClawStateDatabaseAsyncResource,
+} from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
@@ -471,17 +474,29 @@ export class SqliteReclamationWorker {
         this.healthyCloseAcknowledged = this.closeRequested && message.settled;
         this.closed.resolve();
       } else if (message.type === "lease") {
-        if (
-          message.receipt.agentId !== this.options.agentId ||
-          message.receipt.path !== this.options.path ||
-          message.receipt.ownerPid !== process.pid ||
-          message.receipt.sharedStateIdentity !== this.stateContext.admission.identity.key ||
-          (this.lease && !isDeepStrictEqual(this.lease, message.receipt))
-        ) {
-          this.failure = new Error("SQLite reclamation Worker changed its lease receipt");
-          this.requestTermination(transport);
-        } else {
+        try {
+          // First creation binds the captured path admission; replacement still revokes it.
+          publishOpenClawStateDatabaseWorkerAdmission(this.stateContext.admission);
+        } catch (error) {
+          this.failure ??= toStringifiedError(error);
+        }
+        try {
+          // Revoked read authority cannot discard an already acquired exact cleanup receipt.
+          if (
+            message.receipt.agentId !== this.options.agentId ||
+            message.receipt.path !== this.options.path ||
+            message.receipt.ownerPid !== process.pid ||
+            message.receipt.sharedStateIdentity !== this.stateContext.admission.identity.key ||
+            (this.lease && !isDeepStrictEqual(this.lease, message.receipt))
+          ) {
+            throw new Error("SQLite reclamation Worker changed its lease receipt");
+          }
           this.lease = message.receipt;
+        } catch (error) {
+          this.failure ??= toStringifiedError(error);
+        }
+        if (this.failure) {
+          this.requestTermination(transport);
         }
       }
     });

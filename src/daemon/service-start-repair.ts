@@ -9,25 +9,6 @@ import type { GatewayServiceStartRepairIssue, GatewayServiceState } from "./serv
 const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"].map((entry) =>
   path.resolve(entry),
 );
-function pathIsSameOrChild(candidate: string, parent: string): boolean {
-  return candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
-}
-
-function isTemporaryProgramPath(value: string | undefined): boolean {
-  if (!value || !path.isAbsolute(value)) {
-    return false;
-  }
-  const resolved = path.resolve(value);
-  return TEMP_PROGRAM_ROOTS.some((root) => pathIsSameOrChild(resolved, root));
-}
-
-function isMissingProgramPath(value: string | undefined): boolean {
-  if (!value || !path.isAbsolute(value)) {
-    return false;
-  }
-  return !fs.existsSync(value);
-}
-
 export function collectGatewayServiceStartRepairIssues(
   state: GatewayServiceState,
   expectedPort?: number,
@@ -50,14 +31,22 @@ export function collectGatewayServiceStartRepairIssues(
     command.programArguments[0],
     resolveServiceEntrypoint(command),
   ])) {
-    if (isTemporaryProgramPath(candidate)) {
+    if (!candidate || !path.isAbsolute(candidate)) {
+      continue;
+    }
+    const resolved = path.resolve(candidate);
+    if (
+      TEMP_PROGRAM_ROOTS.some(
+        (root) => resolved === root || resolved.startsWith(`${root}${path.sep}`),
+      )
+    ) {
       issues.push({
         code: "temporary-program",
         message: `service command points at a temporary path: ${candidate}`,
       });
       continue;
     }
-    if (isMissingProgramPath(candidate)) {
+    if (!fs.existsSync(candidate)) {
       issues.push({
         code: "missing-program",
         message: `service command points at a missing path: ${candidate}`,

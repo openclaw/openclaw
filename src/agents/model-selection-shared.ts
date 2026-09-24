@@ -19,7 +19,7 @@ import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
-import { resolveAgentConfig } from "./agent-scope-config.js";
+import { resolveAgentConfig, resolveAgentModelConfigForRuntime } from "./agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { hasExactConfiguredProviderModel } from "./configured-provider-model.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
@@ -48,8 +48,7 @@ export { resolvePrimaryStringValue as normalizeModelSelection } from "@openclaw/
 let log: ReturnType<typeof createSubsystemLogger> | null = null;
 
 function getLog(): ReturnType<typeof createSubsystemLogger> {
-  log ??= createSubsystemLogger("model-selection");
-  return log;
+  return (log ??= createSubsystemLogger("model-selection"));
 }
 
 const OPENROUTER_COMPAT_FREE_ALIAS = "openrouter:free";
@@ -261,10 +260,7 @@ function sanitizeModelWarningValue(value: string): string {
       break;
     }
   }
-  if (controlBoundary === -1) {
-    return sanitizeForLog(stripped);
-  }
-  return sanitizeForLog(stripped.slice(0, controlBoundary));
+  return sanitizeForLog(controlBoundary === -1 ? stripped : stripped.slice(0, controlBoundary));
 }
 
 // Metadata follows literal rows, even when display keys collapse provider-prefixed IDs.
@@ -649,13 +645,13 @@ export function resolveConfiguredPrimaryProviderFallback(
 /** Resolve the default configured model ref, including aliases and fallback provider rows. */
 export function resolveConfiguredModelRef(
   params: ConfiguredModelSelectionParams & { defaultModel: string },
+  modelRuntime: "native" | "acp" = "native",
 ): ModelRef {
+  const agentEntry = params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
+  const agentModel = resolveAgentModelConfigForRuntime(agentEntry, modelRuntime);
   const rawModel =
-    (params.agentId
-      ? resolveAgentModelPrimaryValue(resolveAgentConfig(params.cfg, params.agentId)?.model)
-      : undefined) ??
-    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ??
-    "";
+    resolveAgentModelPrimaryValue(agentModel) ??
+    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model);
   if (rawModel) {
     const trimmed = rawModel.trim();
     const { model: modelWithoutProfile } = splitTrailingAuthProfile(trimmed);
@@ -795,11 +791,13 @@ export function resolveConfiguredModelRef(
         });
       }
 
-      const safeTrimmed = sanitizeModelWarningValue(trimmed);
-      const safeResolved = sanitizeForLog(`${params.defaultProvider}/${safeTrimmed}`);
-      getLog().warn(
-        `Model "${safeTrimmed}" specified without provider. Falling back to "${safeResolved}". Please use "${safeResolved}" in your config.`,
-      );
+      if (modelRuntime !== "acp") {
+        const safeTrimmed = sanitizeModelWarningValue(trimmed);
+        const safeResolved = sanitizeForLog(`${params.defaultProvider}/${safeTrimmed}`);
+        getLog().warn(
+          `Model "${safeTrimmed}" specified without provider. Falling back to "${safeResolved}". Please use "${safeResolved}" in your config.`,
+        );
+      }
     }
 
     // Bare defaults still use prepared runtime hooks without starting manifest discovery.
@@ -814,11 +812,13 @@ export function resolveConfiguredModelRef(
       return resolved.ref;
     }
 
-    const safe = sanitizeForLog(trimmed);
-    const safeFallback = sanitizeForLog(`${params.defaultProvider}/${params.defaultModel}`);
-    getLog().warn(
-      `Model "${safe}" could not be resolved. Falling back to default "${safeFallback}".`,
-    );
+    if (modelRuntime !== "acp") {
+      const safe = sanitizeForLog(trimmed);
+      const safeFallback = sanitizeForLog(`${params.defaultProvider}/${params.defaultModel}`);
+      getLog().warn(
+        `Model "${safe}" could not be resolved. Falling back to default "${safeFallback}".`,
+      );
+    }
   }
   return (
     resolveConfiguredPrimaryProviderFallback(params) ?? {

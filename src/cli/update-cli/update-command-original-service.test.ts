@@ -628,6 +628,9 @@ it.each([
   "missing-schema",
   "unverified-health",
   "definition-raced",
+  "operator-overrides",
+  "unknown-overrides",
+  "reload-pending",
   "authority-revoked",
   "no-restart",
   "certified-doctor-failure",
@@ -647,6 +650,15 @@ it.each([
   }
   if (scenario === "missing-env") {
     before.serviceEnv = undefined;
+  }
+  if (scenario === "operator-overrides" || scenario === "unknown-overrides") {
+    serviceState.command!.managedDefinition = structuredClone(serviceState.command!);
+    if (scenario === "operator-overrides") {
+      serviceState.command!.managedOverrides = { environment: { keys: ["NODE_OPTIONS"] } };
+    }
+  }
+  if (scenario === "reload-pending") {
+    serviceState.command!.reloadPending = true;
   }
   if (scenario === "missing-schema") {
     const metadata = JSON.parse(await fs.readFile(path.join(rootA, "package.json"), "utf8"));

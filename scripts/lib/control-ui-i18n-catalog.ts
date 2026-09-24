@@ -22,6 +22,7 @@ import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts"
 import { registerDreamingEnglish } from "../../ui/src/i18n/locales/en-dreaming.ts";
 import { registerFilePreviewEnglish } from "../../ui/src/i18n/locales/en-file-preview.ts";
 import { registerGitHubEnglish } from "../../ui/src/i18n/locales/en-github.ts";
+import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
 import { registerLinkReaderEnglish } from "../../ui/src/i18n/locales/en-link-reader.ts";
 import { registerLoginEnglish } from "../../ui/src/i18n/locales/en-login.ts";
 import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.ts";
@@ -30,9 +31,11 @@ import { registerModelAccountsEnglish } from "../../ui/src/i18n/locales/en-model
 import { registerModelControlsEnglish } from "../../ui/src/i18n/locales/en-model-controls.ts";
 import { registerModelSetupEnglish } from "../../ui/src/i18n/locales/en-model-setup.ts";
 import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new-session-setup.ts";
+import { registerPersonalInstructionsEnglish } from "../../ui/src/i18n/locales/en-personal-instructions.ts";
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerPluginManagementEnglish } from "../../ui/src/i18n/locales/en-plugin-management.ts";
 import { registerPortalsEnglish } from "../../ui/src/i18n/locales/en-portals.ts";
+import { registerProfileEnglish } from "../../ui/src/i18n/locales/en-profile.ts";
 import { registerSessionPeopleEnglish } from "../../ui/src/i18n/locales/en-session-people.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
@@ -41,6 +44,7 @@ import { registerSkillLibraryEnglish } from "../../ui/src/i18n/locales/en-skill-
 import { registerSkillWorkshopEnglish } from "../../ui/src/i18n/locales/en-skill-workshop.ts";
 import { registerSkillsBrowserEnglish } from "../../ui/src/i18n/locales/en-skills-browser.ts";
 import { registerSystemsEnglish } from "../../ui/src/i18n/locales/en-systems.ts";
+import { registerToolDiagnosticsEnglish } from "../../ui/src/i18n/locales/en-tool-diagnostics.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
 import { registerUpdateActionsEnglish } from "../../ui/src/i18n/locales/en-update-actions.ts";
 import { registerUsageEnglish } from "../../ui/src/i18n/locales/en-usage.ts";
@@ -78,6 +82,7 @@ const sourceFiles = [
   "en-devices.ts",
   "en-dreaming.ts",
   "en-file-preview.ts",
+  "en-labs.ts",
   "en-login.ts",
   "en-link-reader.ts",
   "en-github.ts",
@@ -86,12 +91,14 @@ const sourceFiles = [
   "en-model-accounts.ts",
   "en-model-controls.ts",
   "en-model-setup.ts",
+  "en-personal-instructions.ts",
   "en-session-people.ts",
   "en-session-placement.ts",
   "en-new-session-setup.ts",
   "en-plugin-consent.ts",
   "en-plugin-management.ts",
   "en-portals.ts",
+  "en-profile.ts",
   "en-settings.ts",
   "en-sidebar-attention.ts",
   "en-skill-library.ts",
@@ -99,6 +106,7 @@ const sourceFiles = [
   "en-skills-browser.ts",
   "en-systems.ts",
   "en-update-actions.ts",
+  "en-tool-diagnostics.ts",
   "en-transcripts.ts",
   "en-usage.ts",
 ];
@@ -148,7 +156,11 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         welcome: registerCommandPaletteEnglish.catalog.chat.welcome,
         messages: registerChatMessageMetadataEnglish.catalog.chat.messages,
       },
-      agentTools: { ...registerGitHubEnglish.catalog.agentTools, ...en.agentTools },
+      agentTools: {
+        ...registerGitHubEnglish.catalog.agentTools,
+        ...en.agentTools,
+        ...registerToolDiagnosticsEnglish.catalog.agentTools,
+      },
       board: { ...en.board, widget: boardWidget },
       newSession,
       sessionsView,
@@ -158,6 +170,10 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       debug: registerDebugEnglish.catalog.debug,
       desktop: registerDesktopEnglish.catalog.desktop,
       attention: registerSidebarAttentionEnglish.catalog.attention,
+      profilePage: {
+        ...en.profilePage,
+        identity: registerProfileEnglish.catalog.profilePage.identity,
+      },
     },
     registerActivityEnglish.catalog,
     registerAgentsHomeEnglish.catalog,
@@ -172,6 +188,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerDevicesEnglish.catalog,
     registerDreamingEnglish.catalog,
     registerFilePreviewEnglish.catalog,
+    registerLabsEnglish.catalog,
     registerLoginEnglish.catalog,
     registerLinkReaderEnglish.catalog,
     registerMeetingsEnglish.catalog,
@@ -179,11 +196,13 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerModelAccountsEnglish.catalog,
     registerModelControlsEnglish.catalog,
     registerModelSetupEnglish.catalog,
+    registerPersonalInstructionsEnglish.catalog,
     registerSessionPlacementEnglish.catalog,
     registerNewSessionSetupEnglish.catalog,
     registerPluginConsentEnglish.catalog,
     registerPluginManagementEnglish.catalog,
     registerPortalsEnglish.catalog,
+    registerProfileEnglish.catalog,
     registerSettingsEnglish.catalog,
     registerSidebarAttentionEnglish.catalog,
     registerSkillWorkshopEnglish.catalog,

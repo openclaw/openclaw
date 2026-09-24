@@ -1,5 +1,6 @@
 // Provider/account summary helpers for `openclaw agents list`.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveChannelAccount } from "../channels/account-resolution.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../channels/account-snapshot-fields.js";
 import { isChannelVisibleInConfiguredLists } from "../channels/plugins/exposure.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
@@ -149,7 +150,7 @@ async function resolveReadOnlyAccount(params: {
   if (params.plugin.config.inspectAccount) {
     return await Promise.resolve(params.plugin.config.inspectAccount(params.cfg, params.accountId));
   }
-  return params.plugin.config.resolveAccount(params.cfg, params.accountId);
+  return resolveChannelAccount(params);
 }
 
 /** Inspect configured provider accounts and classify their display state. */

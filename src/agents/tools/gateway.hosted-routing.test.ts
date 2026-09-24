@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { createTestApprovalManager } from "../../gateway/exec-approval-manager.test-support.js";
 import { sanitizeSystemRunParamsForForwarding } from "../../gateway/node-invoke-system-run-approval.js";

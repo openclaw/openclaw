@@ -35,12 +35,12 @@ import {
   resolveConfigIncludesForRead,
   resolveConfigPathForDeps,
 } from "./io.read-helpers.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import { autoOwnerDisplaySecretByPath } from "./io.state.js";
 import type {
   ConfigIoFactoryOptions,
   ConfigRecoveryCandidate,
   ConfigRecoveryCandidatePreparation,
-  NormalizedConfigIoDeps,
 } from "./io.types.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
@@ -90,7 +90,6 @@ export type ConfigIoContext = {
     assertCurrent?: () => void,
   ) => Promise<OpenClawConfig>;
   createValidationPluginMetadataSnapshotLoader: (params: {
-    effectiveConfigRaw: unknown;
     env: NodeJS.ProcessEnv;
     allowCurrentPluginMetadata?: boolean;
   }) => ValidationPluginMetadataSnapshotLoader;
@@ -223,7 +222,6 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
   }
 
   function createValidationPluginMetadataSnapshotLoader(params: {
-    effectiveConfigRaw: unknown;
     env: NodeJS.ProcessEnv;
     allowCurrentPluginMetadata?: boolean;
   }): ValidationPluginMetadataSnapshotLoader {
@@ -353,7 +351,6 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
           authoredCandidate,
           effectiveConfigRaw,
           pluginMetadata: createValidationPluginMetadataSnapshotLoader({
-            effectiveConfigRaw,
             env: candidateEnv,
           }),
           validationOptions: {

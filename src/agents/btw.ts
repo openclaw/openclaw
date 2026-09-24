@@ -1018,10 +1018,10 @@ export async function runBtwSideQuestion(
               params.messageThreadId === undefined ? undefined : String(params.messageThreadId),
           },
           pluginId: resolveAgentHarnessOwnerPluginId(selectedHarness),
+          nativeModelPolicySupport: selectedHarness.nativeModelPolicySupport,
         });
         const sideParams = {
           ...hostAttempt,
-          images: params.images,
           hostCapabilities: host.capabilities,
           sandbox,
           provider: runtimeModel.provider,

@@ -53,7 +53,7 @@ function readSource(sourceRoot: string, relativePath: string): string | undefine
   }
 }
 
-export function isPrePartialFailureRecoveryTarget(sourceRoot: string): boolean {
+function isPrePartialFailureRecoveryTarget(sourceRoot: string): boolean {
   const subscriber = readSource(sourceRoot, "src/agents/embedded-agent-subscribe.ts");
   const draftStream = readSource(sourceRoot, "extensions/telegram/src/draft-stream.ts");
   const dispatch = readSource(sourceRoot, "extensions/telegram/src/bot-message-dispatch.ts");
@@ -66,7 +66,7 @@ export function isPrePartialFailureRecoveryTarget(sourceRoot: string): boolean {
   );
 }
 
-export function isPreSettledEmptyResponseTarget(sourceRoot: string): boolean {
+function isPreSettledEmptyResponseTarget(sourceRoot: string): boolean {
   return (
     readSource(
       sourceRoot,
@@ -75,27 +75,27 @@ export function isPreSettledEmptyResponseTarget(sourceRoot: string): boolean {
   );
 }
 
-export function isPreProgressToolVisibilityTarget(sourceRoot: string): boolean {
+function isPreProgressToolVisibilityTarget(sourceRoot: string): boolean {
   return (
     readSource(sourceRoot, "qa/scenarios/channels/telegram-progress-tool-visibility.yaml") ===
     undefined
   );
 }
 
-export function isPreProviderFailureBeforeOutputTarget(sourceRoot: string): boolean {
+function isPreProviderFailureBeforeOutputTarget(sourceRoot: string): boolean {
   return (
     readSource(sourceRoot, "qa/scenarios/channels/telegram-provider-failure-before-output.yaml") ===
     undefined
   );
 }
 
-export function isPreQueueInvalidModeTarget(sourceRoot: string): boolean {
+function isPreQueueInvalidModeTarget(sourceRoot: string): boolean {
   return (
     readSource(sourceRoot, "qa/scenarios/channels/telegram-queue-invalid-mode.yaml") === undefined
   );
 }
 
-export function isPreRichInlineCompositionTarget(sourceRoot: string): boolean {
+function isPreRichInlineCompositionTarget(sourceRoot: string): boolean {
   return (
     readSource(sourceRoot, "qa/scenarios/channels/telegram-rich-inline-composition.yaml") ===
     undefined

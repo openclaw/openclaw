@@ -2,17 +2,19 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
-import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import { assertCanonicalSqliteSessionRowsCurrent } from "./session-canonical-key.js";
+import type { SessionEntry } from "./types.js";
 
 /** Retain canonical target facts independently of the listing cache's invalidation lifecycle. */
 export function captureSessionEntryRead(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
   sessionKey: string,
+  allowMetadataChanges?: (previous: SessionEntry, current: SessionEntry) => boolean,
 ) {
-  assertCanonicalSqliteSessionKeysCurrent(database);
   const capture = () =>
     runSqliteDeferredTransactionSync(database.db, () => {
       // Entry, owner, and participant projections must come from one committed snapshot.
+      assertCanonicalSqliteSessionRowsCurrent(database, [sessionKey]);
       const selected = readExactSessionEntryRow(database, sessionKey, "list");
       return selected
         ? {
@@ -45,9 +47,9 @@ export function captureSessionEntryRead(
         current.agentId === selected.agentId &&
         current.sessionKey === selected.sessionKey &&
         current.sessionId === selected.sessionId &&
-        current.updatedAt === selected.updatedAt &&
         current.lifecycleRevision === selected.lifecycleRevision &&
-        current.digest === selected.digest
+        ((current.updatedAt === selected.updatedAt && current.digest === selected.digest) ||
+          allowMetadataChanges?.(selected.entry, current.entry) === true)
       );
     },
     release: () => {

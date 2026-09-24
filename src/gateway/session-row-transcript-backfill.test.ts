@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
@@ -17,6 +19,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
+import { readSessionRowTranscriptFields } from "./session-row-transcript-backfill.kernel.js";
 
 const generateConversationLabelWithFallback = vi.hoisted(() => vi.fn());
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
@@ -121,9 +124,17 @@ describe("session row transcript backfill", () => {
     await withSession(
       async (params) => {
         await withColdStore(params, async () => {
-          await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
-            lastMessagePreview: "Found the slow query",
-          });
+          const hostSql = observeHostDataSql();
+          try {
+            await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
+              lastMessagePreview: "Found the slow query",
+            });
+            for (const statement of hostSql.calls) {
+              expect(statement).not.toHaveBeenCalled();
+            }
+          } finally {
+            hostSql.restore();
+          }
           expect(sessionAccessor.loadSessionEntryReadOnly(params)).toEqual(params.sessionEntry);
           expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
         });
@@ -208,6 +219,61 @@ describe("session row transcript backfill", () => {
     },
   );
 
+  it("uses the host's runtime aliases when projecting worker-read terminal fallback facts", async () => {
+    await withSession(
+      async (params) => {
+        cliBackendsTesting.setDepsForTest({
+          resolvePluginSetupCliBackend: () => undefined,
+          resolveRuntimeCliBackends: () => [
+            {
+              id: "synthetic-cli",
+              modelProvider: "unit-test",
+              pluginId: "synthetic-runtime",
+              config: { command: "synthetic-cli" },
+            },
+          ],
+        });
+        const hostSql = observeHostDataSql();
+        try {
+          await expect(
+            backfillSessionRowTranscriptFields({
+              ...params,
+              model: {
+                selectedProvider: "synthetic-cli",
+                selectedModel: "same",
+                config: {},
+              },
+            }),
+          ).resolves.toEqual({ lastMessagePreview: "Finished on equivalent runtime" });
+          for (const statement of hostSql.calls) {
+            expect(statement).not.toHaveBeenCalled();
+          }
+        } finally {
+          hostSql.restore();
+          cliBackendsTesting.resetDepsForTest();
+        }
+      },
+      [
+        {
+          role: "assistant",
+          content: "Finished on equivalent runtime",
+          provider: "unit-test",
+          model: "same",
+          stopReason: "stop",
+          __openclaw: { runId: "terminal-run" },
+        },
+      ],
+      {
+        lastRunId: "terminal-run",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "synthetic-cli/same",
+          activeModel: "unit-test/same",
+        },
+      },
+    );
+  });
+
   it("does not parse oversized bodies or name a session from an incomplete prefix", async () => {
     const oversized = `oversized-title-payload ${"x".repeat(70 * 1024)}`;
     await withSession(
@@ -220,7 +286,7 @@ describe("session row transcript backfill", () => {
           }
           return parse(text, reviver);
         });
-        await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
+        expect(readSessionRowTranscriptFields(params)).toEqual({
           lastMessagePreview: "Latest reply",
         });
         expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBeUndefined();

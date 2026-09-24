@@ -15,22 +15,23 @@ import {
 const originalPrepare = Reflect.get(DatabaseSync.prototype, "prepare") as DatabaseSync["prepare"];
 
 async function loadNodeSqliteWithVersion(version: string, extensionLoadingOmitted?: number) {
-  const prepare = vi
-    .spyOn(DatabaseSync.prototype, "prepare")
-    .mockImplementation(function (this: DatabaseSync, sql) {
-      if (sql === "SELECT sqlite_version() AS version") {
-        return {
-          get: () => ({ version }),
-        } as unknown as StatementSync;
-      }
-      if (
-        extensionLoadingOmitted !== undefined &&
-        sql === "SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted"
-      ) {
-        return { get: () => ({ omitted: extensionLoadingOmitted }) } as unknown as StatementSync;
-      }
-      return originalPrepare.call(this, sql);
-    });
+  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+    this: DatabaseSync,
+    sql,
+  ) {
+    if (sql === "SELECT sqlite_version() AS version") {
+      return {
+        get: () => ({ version }),
+      } as unknown as StatementSync;
+    }
+    if (
+      extensionLoadingOmitted !== undefined &&
+      sql === "SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted"
+    ) {
+      return { get: () => ({ omitted: extensionLoadingOmitted }) } as unknown as StatementSync;
+    }
+    return originalPrepare.call(this, sql);
+  });
   return { ...(await import("./node-sqlite.js")), prepare };
 }
 

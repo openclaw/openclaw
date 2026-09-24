@@ -29,6 +29,9 @@ describe("retained package backup retirement", () => {
       });
       expect(result).toMatchObject({ status: "failed", activePackageRoot: packageRoot });
       expect(result.step.stderrTail).toBe("mutation admission refused");
+      expect(result.step.failureFacts).toMatchObject([
+        { check: "package-swap", code: "Error", message: "mutation admission refused" },
+      ]);
       const backup = (await fs.readdir(globalRoot)).find((entry) =>
         entry.startsWith(".openclaw.shim-backup-"),
       );

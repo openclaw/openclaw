@@ -12,7 +12,10 @@ import { handleGatewayRequest } from "./server-methods.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import { admitChatSend } from "./server-methods/chat-send-admission.js";
 import { normalizeChatSendRequest } from "./server-methods/chat-send-request.js";
-import { prepareChatSendSession } from "./server-methods/chat-send-session.js";
+import {
+  prepareChatSendSession,
+  qualifyChatSendSession,
+} from "./server-methods/chat-send-session.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
@@ -147,13 +150,14 @@ describe("pending Stop producer binding", () => {
         },
       });
       await entered.promise;
+      const preparedSession = qualifyChatSendSession(session.value);
       const admission = admitChatSend({
         request: request.value,
-        session: session.value,
+        session: preparedSession,
         client,
         context,
         respond: vi.fn(),
-      });
+      }).finally(preparedSession.releaseSessionTarget);
       try {
         await vi.waitFor(() =>
           expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true),

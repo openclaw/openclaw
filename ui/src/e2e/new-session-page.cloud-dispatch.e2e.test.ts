@@ -15,6 +15,7 @@ import {
   WORKSPACE,
   captureUiProof,
   captureUiProofEnabled,
+  checkoutBaseRefInput,
   controlUiSessionPath,
   controlUiSessionUrl,
   createCloudAgentsListResponse,
@@ -314,7 +315,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Use this folder" }).click();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await checkoutTrigger.click();
-      const baseRef = checkout.getByLabel("From", { exact: true });
+      const baseRef = checkoutBaseRefInput(checkout);
       await expect.poll(() => baseRef.getAttribute("placeholder")).toBe("main");
       expect(await baseRef.inputValue()).toBe("");
       await baseRef.fill("release");

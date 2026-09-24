@@ -7,7 +7,7 @@ import {
   normalizeOptionalString,
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isJsonObject } from "./protocol.js";
+import { isJsonObject, type JsonObject } from "./protocol.js";
 
 export type NativeSubagentAssignment = {
   runId: string;
@@ -62,4 +62,25 @@ export function readNativeSubagentThreadIds(value: unknown): string[] {
     return [];
   }
   return value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
+}
+
+export function readThreadParentThreadId(
+  thread: Record<string, unknown> | undefined,
+): string | undefined {
+  return (
+    readString(thread, "parentThreadId")?.trim() ??
+    readString(readThreadSpawnSource(thread), "parent_thread_id")?.trim()
+  );
+}
+
+export function readThreadSpawnSource(
+  thread: Record<string, unknown> | undefined,
+): JsonObject | undefined {
+  const source = isJsonObject(thread?.source) ? thread.source : undefined;
+  const subAgent = isJsonObject(source?.subAgent) ? source.subAgent : undefined;
+  return isJsonObject(subAgent?.thread_spawn) ? subAgent.thread_spawn : undefined;
+}
+
+export function normalizeIdentifier(value: string | undefined): string | undefined {
+  return value?.replace(/[^a-z0-9]/giu, "").toLowerCase();
 }

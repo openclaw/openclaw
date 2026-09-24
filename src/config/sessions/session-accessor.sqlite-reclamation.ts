@@ -474,6 +474,9 @@ export async function runSqliteSessionReclamation(params: {
           return retainOpenClawAgentDatabaseReadOnly(params.plan.databaseOptions);
         },
         "session.reclamation.retain",
+        undefined,
+        "foreground",
+        signal,
       );
       if (!retained.found) {
         throw new Error("SQLite session reclamation lost its prepared database");
@@ -500,6 +503,7 @@ export async function runSqliteSessionReclamation(params: {
                 worker,
                 assertRequestCurrent,
                 commitGate,
+                signal,
               },
             );
           },

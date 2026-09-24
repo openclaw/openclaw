@@ -137,6 +137,21 @@ raw callback string. Actor and source-message checks remain channel-owned.
     auto-selection requires `configured: true`; callers can still select the channel
     explicitly when configuration status is unknown.
 
+    Operational account reads can be asynchronous. Define
+    `config.resolveAccountAsync(cfg, accountId)` when account resolution reads
+    durable credentials, and `config.hasConfiguredStateAsync({ cfg, env })` for
+    the matching operational configured-state check. These optional callbacks
+    return a Promise of the same result as their synchronous counterparts.
+    Core awaits them when present; a rejection stays an error and never retries
+    the synchronous callback. Keep synchronous counterparts for older hosts and
+    external consumers of the existing contract.
+
+    Prepare current credentials for each operation, and revalidate live authority
+    after awaited preparation before any side effect. Account objects and registry
+    generations are not credential caches. Read-only `inspectAccount` and
+    config-only bootstrap activation remain separate; persisted credentials alone
+    do not enable a channel.
+
     Create `src/channel.ts`:
 
     ```typescript src/channel.ts

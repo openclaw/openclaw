@@ -97,24 +97,12 @@ const SYSTEMD_MEMORY_CURRENT_WARNING_BYTES = 2 * 1024 * 1024 * 1024;
 // is stale from earlier crashes and must not drive start-limit detection.
 const SYSTEMD_NO_RESTART_EXIT_STATUS = 78;
 
-function isRiskySystemdKillMode(value: string | undefined): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  return normalized === "process" || normalized === "none";
-}
-
-function formatBytesAsGiB(value: number): string {
-  const gib = value / 1024 / 1024 / 1024;
-  const formatted = gib >= 1 ? gib.toFixed(1).replace(/\.0$/, "") : `${value}B`;
-  return gib >= 1 ? `${formatted}GiB` : formatted;
-}
-
-function describeSystemdCgroupLoadWarnings(runtime?: GatewayServiceSystemdRuntime): string[] {
-  if (!runtime) {
-    return [];
-  }
-  const killMode = runtime?.killMode;
-  if (!isRiskySystemdKillMode(killMode)) {
-    return [];
+export function getSystemdCgroupHygieneSummary(
+  runtime?: GatewayServiceSystemdRuntime,
+): string | null {
+  const killMode = normalizeLowercaseStringOrEmpty(runtime?.killMode);
+  if (!runtime || (killMode !== "process" && killMode !== "none")) {
+    return null;
   }
   // KillMode=process/none only becomes noisy when the cgroup is visibly large.
   const details: string[] = [];
@@ -130,18 +118,9 @@ function describeSystemdCgroupLoadWarnings(runtime?: GatewayServiceSystemdRuntim
     Number.isSafeInteger(runtime.memoryCurrent) &&
     runtime.memoryCurrent >= SYSTEMD_MEMORY_CURRENT_WARNING_BYTES
   ) {
-    details.push(`memory=${formatBytesAsGiB(runtime.memoryCurrent)}`);
+    const gib = (runtime.memoryCurrent / 1024 ** 3).toFixed(1).replace(/\.0$/, "");
+    details.push(`memory=${gib}GiB`);
   }
-  return details;
-}
-
-export function getSystemdCgroupHygieneSummary(
-  runtime?: GatewayServiceSystemdRuntime,
-): string | null {
-  if (!runtime || !runtime.killMode) {
-    return null;
-  }
-  const details = describeSystemdCgroupLoadWarnings(runtime);
   if (details.length === 0) {
     return null;
   }

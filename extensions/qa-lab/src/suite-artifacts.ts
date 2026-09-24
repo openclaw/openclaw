@@ -12,7 +12,7 @@ import {
 import type { QaProviderMode } from "./model-selection.js";
 import type { QaTransportDriver } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
-import { renderQaMarkdownReport, type QaReportScenario } from "./report.js";
+import { renderQaMarkdownReport } from "./report.js";
 import type { RuntimeId } from "./runtime-parity.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
@@ -139,35 +139,22 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
   };
 }
 
-export async function writeQaSuiteArtifacts(params: {
-  status?: QaSuiteSummaryJson["run"]["status"];
-  repoRoot?: string;
-  outputDir: string;
-  startedAt: Date;
-  finishedAt: Date;
-  scenarios: QaSuiteScenarioResult[];
-  scenarioDefinitions?: readonly QaSeedScenarioWithSource[];
-  evidenceMode?: QaScorecardEvidenceMode;
-  recordedEvidence?: QaEvidenceSummaryJson;
-  metrics?: QaSuiteSummaryJson["metrics"];
-  transport: QaTransportAdapter;
-  // Reuse the canonical QaProviderMode union instead of re-declaring it
-  // inline. Loop 6 already unified `QaSuiteSummaryJsonParams.providerMode`
-  // on this type; keeping the writer in sync prevents drift when model-
-  // selection.ts adds a new provider mode.
-  providerMode: QaProviderMode;
-  primaryModel: string;
-  alternateModel: string;
-  fastMode: boolean;
-  concurrency: number;
-  channel?: string | null;
-  channelDriver?: QaTransportDriver | null;
-  transportArtifacts?: QaRunnerTransportArtifacts;
-  isolatedWorkers?: boolean;
-  scenarioIds?: readonly string[];
-  runtimePair?: [RuntimeId, RuntimeId];
-  writeEvidenceFile?: boolean;
-}) {
+export async function writeQaSuiteArtifacts(
+  params: Omit<
+    QaSuiteSummaryJsonParams,
+    "evidence" | "channelCapabilityMatrixPath" | "channelDriverSmokePath"
+  > & {
+    repoRoot?: string;
+    outputDir: string;
+    scenarioDefinitions?: readonly QaSeedScenarioWithSource[];
+    evidenceMode?: QaScorecardEvidenceMode;
+    recordedEvidence?: QaEvidenceSummaryJson;
+    transport: QaTransportAdapter;
+    transportArtifacts?: QaRunnerTransportArtifacts;
+    isolatedWorkers?: boolean;
+    writeEvidenceFile?: boolean;
+  },
+) {
   const reportPath = path.join(params.outputDir, "qa-suite-report.md");
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
@@ -183,13 +170,7 @@ export async function writeQaSuiteArtifacts(params: {
     inProgress: params.status === "running",
     startedAt: params.startedAt,
     finishedAt: params.finishedAt,
-    checks: [],
-    scenarios: params.scenarios.map((scenario) => ({
-      name: scenario.name,
-      status: scenario.status,
-      details: scenario.details,
-      steps: scenario.steps,
-    })) satisfies QaReportScenario[],
+    scenarios: params.scenarios,
     notes: createQaSuiteReportNotes({
       ...params,
       transportArtifactNotes: params.transportArtifacts?.reportNotes,
