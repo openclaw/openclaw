@@ -249,6 +249,32 @@ describe("message tool terminal source actions", () => {
     { name: "acknowledgment reaction", args: {}, completes: false },
     { name: "nonterminal reaction", args: { final: false }, completes: false },
     {
+      name: "added reaction receipt",
+      args: { final: true },
+      payload: { ok: true, added: "👍" },
+      completes: true,
+    },
+    {
+      name: "native WhatsApp/Telegram removal receipt",
+      args: { final: true, remove: true },
+      payload: { ok: true, removed: true },
+      completes: false,
+    },
+    {
+      name: "native empty-emoji removal receipt",
+      args: { final: true, emoji: "" },
+      payload: { ok: true, removed: true },
+      completes: false,
+    },
+    {
+      name: "provider-neutral removal success",
+      args: { final: true, remove: true },
+      payload: { ok: true },
+      completes: false,
+    },
+    { name: "blank reaction", args: { final: true, emoji: "  " }, completes: false },
+    { name: "missing reaction", args: { final: true, emoji: undefined }, completes: false },
+    {
       name: "another message",
       args: { messageId: "other-message", final: true },
       completes: false,
@@ -351,7 +377,7 @@ describe("message tool terminal source actions", () => {
         result,
       }),
     ).toBe(completes);
-    if (!payload && !args.dryRun) {
+    if (!args.dryRun) {
       const assistant = buildEmbeddedRunnerAssistant({
         content: [{ type: "text", text: "NO_REPLY" }],
       });

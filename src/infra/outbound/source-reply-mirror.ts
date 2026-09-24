@@ -459,7 +459,12 @@ function resolveDeliveredCurrentSourceReply(
   }
   switch (params.action.trim().toLowerCase()) {
     case "react":
-      return params.sourceReplyFinal === true && isDeliveredCurrentSourceReplyAction(params);
+      return (
+        params.sourceReplyFinal === true &&
+        params.actionParams.remove !== true &&
+        Boolean(normalizeOptionalString(params.actionParams.emoji)) &&
+        isDeliveredCurrentSourceReplyAction(params)
+      );
     case "reply":
       return isDeliveredCurrentSourceReplyAction(params);
     case "thread-reply":
