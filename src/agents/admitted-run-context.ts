@@ -464,7 +464,9 @@ export function prepareAgentRunAdmission(params: {
         sourceAssertion?.();
         assertOperatorCurrent?.();
       } catch (error) {
-        sourceFailure = new Error("source execution authority is no longer active", { cause: error });
+        sourceFailure = new Error("source execution authority is no longer active", {
+          cause: error,
+        });
         throw error;
       }
     });
