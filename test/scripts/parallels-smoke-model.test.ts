@@ -2285,7 +2285,7 @@ if (commandArgs[0] === "list") {
       const grandchildPidPath = join(tempDir, "grandchild.pid");
       let grandchildPid = 0;
       // Outlive the assertion bound, but self-clean if PID setup fails.
-      const grandchildScript = "setTimeout(() => process.exit(0), 1_000);";
+      const grandchildScript = "setTimeout(() => process.exit(0), 3_000);";
       const parentScript = [
         "const { spawn } = require('node:child_process');",
         "const { renameSync, writeFileSync } = require('node:fs');",
