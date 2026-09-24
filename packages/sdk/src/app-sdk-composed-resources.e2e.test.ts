@@ -116,6 +116,7 @@ function workerRecord(state: "requested" | "ready" | "destroyed"): WorkerEnviron
     ownerEpoch: 1,
     createdAtMs: 1_000,
     idleSinceAtMs: null,
+    destroyRequestedAtMs: null,
     attachedSessionIds: ["session-sdk-e2e"],
     desktopAvailable: false,
     desktopApps: [],
@@ -160,6 +161,8 @@ async function createFakeGateway(): Promise<FakeGateway> {
     supportsExecutionMode: (profileId, mode) =>
       profileId === "development" && mode === "worker-turn",
     readProviderDisplayId: () => undefined,
+    readPreparedPoolSummary: () => ({ maxTotal: 4, reservedEnvironmentIds: [] }),
+    readReadyWorkerTarget: () => 1,
     listMachineOptions: async () => undefined,
     listOperatingSystems: async () => undefined,
     prepare: async () => {

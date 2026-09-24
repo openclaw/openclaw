@@ -227,6 +227,38 @@ const enSettings = {
     },
   },
   cloudWorkersPage: {
+    pool: {
+      tab: "Pool",
+      title: "Ready pool",
+      description:
+        "Workers preparing for upcoming sessions and spares already running. Refreshes every 10 seconds while this view is visible.",
+      ready: "Ready",
+      preparing: "Preparing",
+      releasing: "Releasing",
+      attention: "Needs attention",
+      expired: "Expired",
+      unavailable: "Unavailable",
+      unknownProject: "Unknown project",
+      reserve: "Automatic reserve",
+      build: "On-demand build",
+      age: "Age: {age}",
+      expiresAt: "Expires {time}",
+      expiredAt: "Expired {time}",
+      offline: "Connect to the Gateway to view the ready pool.",
+      adminRequired: "Administrator access is required to view the ready pool.",
+      refreshFailed: "Could not refresh the pool: {error}.",
+      lastUpdated: "Showing the last update from {time}.",
+      capacity: "{used} of {limit} reserve slots in use",
+      disabledCapacity: "Unused workers awaiting release: {count}",
+      capacityHelp:
+        "Preparing workers and pending cleanup count toward the limit. Unused running workers incur machine charges.",
+      disabled:
+        "The pool is disabled. Unused workers are being released; active sessions continue.",
+      inventoryUnavailable: "Pool inventory unavailable",
+      target: "Ready workers per eligible project: {count}",
+      empty:
+        "No unassigned prepared workers. Eligible sessions prepare a reserve after activation; Profiles controls the target and pool limit.",
+    },
     snapshots: {
       title: "Snapshots",
       viewLabel: "Cloud worker view",
