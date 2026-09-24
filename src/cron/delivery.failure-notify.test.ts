@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn().mockResolvedValue({ ok: true }),
   resolveOutboundSessionRoute: vi.fn(),
   ensureOutboundSessionEntry: vi.fn(),
+  loadCronSessionEntryLatest: vi.fn(),
 }));
 
 vi.mock("./isolated-agent/delivery-target.js", () => ({
@@ -41,7 +42,7 @@ vi.mock("../config/sessions/transcript.runtime.js", () => ({
   appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
 }));
 vi.mock("./isolated-agent/session.js", () => ({
-  loadCronSessionEntryLatest: () => ({ sessionId: "destination-session", updatedAt: 1 }),
+  loadCronSessionEntryLatest: mocks.loadCronSessionEntryLatest,
 }));
 
 const { sendCronAnnouncePayloadStrict } = await import("./delivery.js");
@@ -49,6 +50,10 @@ const { sendCronAnnouncePayloadStrict } = await import("./delivery.js");
 describe("sendCronAnnouncePayloadStrict", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.loadCronSessionEntryLatest.mockReset().mockReturnValue({
+      sessionId: "destination-session",
+      updatedAt: 1,
+    });
     mocks.resolveDeliveryTarget.mockResolvedValue({
       ok: true,
       channel: "telegram",
@@ -57,8 +62,8 @@ describe("sendCronAnnouncePayloadStrict", () => {
       threadId: 42,
       mode: "explicit",
     });
-    mocks.deliverOutboundPayloads.mockResolvedValue([{ ok: true }]);
-    mocks.resolveOutboundSessionRoute.mockResolvedValue({
+    mocks.deliverOutboundPayloads.mockReset().mockResolvedValue([{ ok: true }]);
+    mocks.resolveOutboundSessionRoute.mockReset().mockResolvedValue({
       sessionKey: "agent:main:telegram:group:123:topic:42",
       baseSessionKey: "agent:main:telegram:group:123",
     });
@@ -128,6 +133,62 @@ describe("sendCronAnnouncePayloadStrict", () => {
       }),
     );
   });
+
+  it("mirrors main-scoped direct announcements into the canonical global conversation", async () => {
+    const job = makeJob({ kind: "command", argv: ["/bin/echo", "report"] });
+    mocks.resolveOutboundSessionRoute.mockResolvedValue({
+      sessionKey: "agent:main:main",
+      baseSessionKey: "agent:main:main",
+    });
+    mocks.deliverOutboundPayloads.mockImplementationOnce(async (params) => {
+      params.onPayload?.({ text: "report", mediaUrls: [] });
+      return [{ channel: "telegram", messageId: "confirmed-message" }];
+    });
+    await sendCronAnnouncePayloadStrict({
+      deps: {} as never,
+      cfg: { session: { scope: "global" } },
+      agentId: "main",
+      jobId: job.id,
+      target: { channel: "telegram", to: "123" },
+      payload: { text: "report" },
+      completion: { job, runStartedAt: 1000 },
+      abortSignal: new AbortController().signal,
+    });
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionKey: "global", text: "report" }),
+    );
+  });
+
+  it.each(["route", "transcript"] as const)(
+    "preserves confirmed delivery when the optional %s lookup rejects",
+    async (boundary) => {
+      const job = makeJob({ kind: "command", argv: ["/bin/echo", "report"] });
+      if (boundary === "route") {
+        mocks.resolveOutboundSessionRoute.mockRejectedValueOnce(new Error("route unavailable"));
+      } else {
+        mocks.loadCronSessionEntryLatest.mockImplementationOnce(() => {
+          throw new Error("session read unavailable");
+        });
+      }
+      mocks.deliverOutboundPayloads.mockImplementationOnce(async (params) => {
+        params.onPayload?.({ text: "report", mediaUrls: [] });
+        return [{ channel: "telegram", messageId: "confirmed-message" }];
+      });
+      const result = await sendCronAnnouncePayloadStrict({
+        deps: {} as never,
+        cfg: {},
+        agentId: "main",
+        jobId: job.id,
+        target: { channel: "telegram", to: "123" },
+        payload: { text: "report" },
+        completion: { job, runStartedAt: 1000 },
+        abortSignal: new AbortController().signal,
+      });
+      expect(result.status).toBe("sent");
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
+      expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not begin delivery when target resolution settles after cancellation", async () => {
     let resolvePendingTarget: (value: unknown) => void = () => {};

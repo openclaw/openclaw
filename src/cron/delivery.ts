@@ -11,7 +11,6 @@ import { resolveSessionStorePathCore } from "../config/sessions/inbound.runtime.
 import type { OpenClawConfig } from "../config/types.js";
 import type { NormalizedOutboundPayload } from "../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
-import { resolveOutboundSessionRoute } from "../infra/outbound/outbound-session.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { CRON_DIRECT_DELIVERY_CONTEXT_KIND } from "../shared/transcript-only-openclaw-assistant.js";
 import "./delivery-plan.js";
@@ -19,6 +18,7 @@ import {
   appendAdmittedDirectCronDeliveryTranscriptMirror,
   commitDirectCronOutboundRoute,
   projectDeliveredDirectCronPayloadsForMirror,
+  resolveCronDeliveryRouteSessionKey,
   resolveDirectCronTranscriptMirrorText,
 } from "./isolated-agent/delivery-dispatch-awareness.js";
 import { buildDirectCronDeliveryIdempotencyKey } from "./isolated-agent/delivery-dispatch-policy.js";
@@ -115,16 +115,22 @@ export async function sendCronAnnouncePayloadStrict(params: {
   if (!delivery.ok) {
     throw delivery.error;
   }
+  const runSessionKey = resolveCronNotificationSessionKey({
+    jobId: params.jobId,
+    sessionKey: params.target.sessionKey,
+  });
   const route =
     params.completion && delivery.resolvedTarget.mode === "explicit"
-      ? await resolveOutboundSessionRoute({
-          cfg: params.cfg,
-          agentId: params.agentId,
-          channel: delivery.resolvedTarget.channel,
-          accountId: delivery.resolvedTarget.accountId,
-          target: delivery.resolvedTarget.to,
-          threadId: delivery.resolvedTarget.threadId,
-        })
+      ? (
+          await resolveCronDeliveryRouteSessionKey({
+            cfg: params.cfg,
+            job: params.completion.job,
+            agentId: params.agentId,
+            agentSessionKey: runSessionKey,
+            delivery: delivery.resolvedTarget,
+            warningContext: "completion announcement mirror",
+          })
+        ).route
       : null;
   // Resolution can settle after its caller's deadline; never start plugin
   // delivery once the Gateway has released ownership of the timed-out work.
@@ -163,10 +169,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
   if (send.status === "sent" && route && params.completion) {
     await commitDirectCronOutboundRoute({
       cfg: params.cfg,
-      runSessionKey: resolveCronNotificationSessionKey({
-        jobId: params.jobId,
-        sessionKey: params.target.sessionKey,
-      }),
+      runSessionKey,
       delivery: delivery.resolvedTarget,
       route,
     });
