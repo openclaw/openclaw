@@ -24,7 +24,7 @@ import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
 import {
   listMatrixAccountIds,
   resolveDefaultMatrixAccountId,
-  resolveMatrixAccount,
+  resolveMatrixAccountAsync,
   resolveMatrixAccountConfig,
 } from "./matrix/accounts.js";
 import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
@@ -98,7 +98,7 @@ async function promptMatrixAllowFrom(params: {
   const accountId = resolveMatrixOnboardingAccountId(cfg, params.accountId);
   const existingConfig = resolveMatrixAccountConfig({ cfg, accountId });
   const existingAllowFrom = existingConfig.dm?.allowFrom ?? [];
-  const account = resolveMatrixAccount({ cfg, accountId });
+  const account = await resolveMatrixAccountAsync({ cfg, accountId });
   const canResolve = account.configured;
 
   const isFullUserId = (value: string) => value.startsWith("@") && value.includes(":");
@@ -432,7 +432,7 @@ async function runMatrixConfigure(params: {
   }
 
   const existing = resolveMatrixAccountConfig({ cfg: next, accountId });
-  const account = resolveMatrixAccount({ cfg: next, accountId });
+  const account = await resolveMatrixAccountAsync({ cfg: next, accountId });
   if (!account.configured) {
     await noteMatrixAuthHelp(params.prompter);
   }
@@ -616,7 +616,7 @@ export const matrixOnboardingAdapter: ChannelSetupWizardAdapter = {
         selectionHint: !sdkReady ? "install Matrix deps" : "set defaultAccount",
       };
     }
-    const account = resolveMatrixAccount({
+    const account = await resolveMatrixAccountAsync({
       cfg: resolvedCfg,
       accountId: resolveMatrixOnboardingAccountId(resolvedCfg, accountOverrides[channel]),
     });

@@ -2,6 +2,10 @@
 // Keep lane names, commands, image kind, timeout, resources, and release chunks
 // here. Planning and execution live in separate modules.
 import { fileURLToPath } from "node:url";
+import {
+  listRecordedFirstHopSourceVersions,
+  updateFirstHopCompatLaneName,
+} from "./update-first-hop-lanes.mjs";
 
 export type DockerE2eImageKind = "bare" | "functional";
 export type DockerE2eReleaseProfile = "beta" | "stable" | "full";
@@ -19,8 +23,6 @@ export type DockerE2eLane = {
   noOutputTimeoutMs?: number;
   prepublishPluginPackages?: string[];
   resources: string[];
-  retries: number;
-  retryPatterns: RegExp[];
   stateScenario?: string;
   timeoutMs?: number;
   upgradeSurvivorScenario?: string;
@@ -32,7 +34,6 @@ type LaneOptions = Partial<Omit<DockerE2eLane, "command" | "e2eImageKind" | "nam
   providers?: string[];
 };
 
-export const DEFAULT_LIVE_RETRIES = 1;
 const LIVE_DOCKER_DEFAULT_HARNESS_DIR =
   /[\\/]\.release-harness[\\/]/u.test(fileURLToPath(import.meta.url)) &&
   process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT
@@ -62,10 +63,20 @@ const updateMigrationCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"',
 );
-const updateRunPackageSelfUpgradeCommand =
-  "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade";
-const updateFirstHopCompatCommand =
-  "OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat";
+// One lane per recorded source release so the hops run concurrently; each hop
+// takes ~9-11 minutes on hosted runners as of 2026.9.6.
+const updateFirstHopCompatLanes = listRecordedFirstHopSourceVersions().map((version) =>
+  npmLane(
+    updateFirstHopCompatLaneName(version),
+    `OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_UPDATE_FIRST_HOP_SOURCE_VERSIONS=${version} OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat`,
+    {
+      resources: ["service"],
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 25 * 60 * 1000,
+      weight: 1,
+    },
+  ),
+);
 const CODEX_HARNESS_API_KEY_ENV = "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key";
 const npmOnboardLaneOptions = {
   prepublishPluginPackages: ["@openclaw/codex"],
@@ -73,15 +84,6 @@ const npmOnboardLaneOptions = {
   stateScenario: "empty",
   weight: 3,
 } satisfies LaneOptions;
-
-const LIVE_RETRY_PATTERNS = [
-  /529\b/i,
-  /overloaded/i,
-  /capacity/i,
-  /rate.?limit/i,
-  /gateway closed \(1000 normal closure\)/i,
-  /ECONNRESET|ETIMEDOUT|ENOTFOUND/i,
-];
 
 export function liveDockerScriptCommand(
   script: string,
@@ -118,8 +120,6 @@ function lane(name: string, command: string, options: LaneOptions = {}): DockerE
     ...(options.needsPackage ? { needsPackage: true } : {}),
     needsLiveImage: options.needsLiveImage,
     prepublishPluginPackages: options.prepublishPluginPackages,
-    retryPatterns: options.retryPatterns ?? [],
-    retries: options.retries ?? 0,
     resources: options.resources ?? [],
     stateScenario: options.stateScenario,
     timeoutMs: options.timeoutMs,
@@ -166,8 +166,6 @@ function liveLane(name: string, command: string, options: LaneOptions = {}) {
     // not require building the separate source live-test image.
     needsLiveImage: options.needsLiveImage ?? !options.e2eImageKind,
     resources: ["live", ...liveProviderResources(options), ...(options.resources ?? [])],
-    retryPatterns: options.retryPatterns ?? LIVE_RETRY_PATTERNS,
-    retries: options.retries ?? DEFAULT_LIVE_RETRIES,
     weight: options.weight ?? 3,
   });
 }
@@ -216,8 +214,6 @@ function createPackageUpdateMaintenanceLanes() {
       },
     ),
     npmLane("skill-install", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install", {
-      retryPatterns: LIVE_RETRY_PATTERNS,
-      retries: 1,
       stateScenario: "empty",
       timeoutMs: 10 * 60 * 1000,
       weight: 2,
@@ -246,20 +242,7 @@ function createPackageUpdateMaintenanceLanes() {
       upgradeSurvivorScenario: "base",
       weight: 3,
     }),
-    npmLane("update-first-hop-compat", updateFirstHopCompatCommand, {
-      resources: ["service"],
-      stateScenario: "upgrade-survivor",
-      // Four serial packaged-updater hops (2026.9.1 through 2026.9.4) take
-      // ~6 minutes each on hosted runners; 25 minutes cut the fourth hop off.
-      timeoutMs: 45 * 60 * 1000,
-      weight: 3,
-    }),
-    npmLane("update-run-package-self-upgrade", updateRunPackageSelfUpgradeCommand, {
-      resources: ["service"],
-      stateScenario: "upgrade-survivor",
-      timeoutMs: 45 * 60 * 1000,
-      weight: 3,
-    }),
+    ...updateFirstHopCompatLanes,
   ];
 }
 
@@ -421,8 +404,6 @@ export const mainLanes: DockerE2eLane[] = [
   liveLane("live-anthropic-cache", liveDockerScriptCommand("e2e/anthropic-cache-live-docker.sh"), {
     e2eImageKind: "functional",
     provider: "claude",
-    retries: 0,
-    retryPatterns: [],
     timeoutMs: 15 * 60 * 1000,
     weight: 2,
   }),
@@ -456,7 +437,7 @@ export const mainLanes: DockerE2eLane[] = [
     "live-cli-backend-gemini",
     liveDockerScriptCommand(
       "test-live-cli-backend-docker.sh",
-      "OPENCLAW_LIVE_CLI_BACKEND_ADVISORY=1 OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP=1 OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
+      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
     ),
     {
       cacheKey: "cli-backend-gemini",
@@ -926,8 +907,7 @@ const releasePathPackageMigrationLanes = scheduledLaneList(
 );
 const releasePathPackageSelfUpgradeLanes = scheduledLaneList(
   "upgrade-survivor",
-  "update-first-hop-compat",
-  "update-run-package-self-upgrade",
+  ...updateFirstHopCompatLanes.map((entry) => entry.name),
 );
 const releasePathPackageUpdateCoreLanes = [
   ...releasePathPackageOnboardingLanes,

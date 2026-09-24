@@ -33,6 +33,11 @@ export function resolveOpenClawStateDirForDatabasePath(databasePath: string): st
   return path.basename(databaseDir) === "state" ? path.dirname(databaseDir) : databaseDir;
 }
 
+/** Resolve the integrity/quarantine store that survives loss of the primary state database. */
+export function resolveQuarantineStorePath(env: NodeJS.ProcessEnv): string {
+  return path.join(resolveOpenClawStateSqliteDir(env), "openclaw-quarantine.sqlite");
+}
+
 /** Resolve the durable registry form for one agent database path. */
 export function resolveOpenClawAgentDatabaseStoredPath(
   registryDatabasePath: string,

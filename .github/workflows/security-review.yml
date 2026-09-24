@@ -19,11 +19,17 @@ permissions:
 # can be mistaken for fork code after a merge when it matches merge_commit_sha.
 # Sparse checkout also enables blobless fetches. PR contents come from the API,
 # so neither job needs the product source tree.
-# Allow one hourly API quota reset; scripts share a 65-minute recovery deadline.
+# Allow checkout recovery and one hourly API quota reset; scripts share a
+# 65-minute recovery deadline after bootstrap.
 jobs:
   resolve:
+    # PR prose is not an approval input. Keep base/permission changes and
+    # unknown edit payloads, plus command edits/deletions that revoke approval.
     if: >-
-      ${{ (github.event_name != 'issue_comment' || (github.event.issue.pull_request &&
+      ${{ (github.event_name != 'pull_request_target' || github.event.action != 'edited' ||
+      github.event.changes.base || github.event.changes.maintainer_can_modify ||
+      (!github.event.changes.title && !github.event.changes.body)) &&
+      (github.event_name != 'issue_comment' || (github.event.issue.pull_request &&
       (contains(github.event.comment.body, '/allow-security-sensitive-change') ||
       contains(github.event.comment.body, '/allow-dependencies-change') ||
       (github.event.action == 'edited' &&
@@ -32,19 +38,39 @@ jobs:
       (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request' ||
       github.event.workflow_run.event == 'workflow_dispatch') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 85
     outputs:
       matrix: ${{ steps.event.outputs.matrix }}
       has-prs: ${{ steps.event.outputs.has-prs }}
     steps:
       - name: Check out trusted workflow scripts
+        id: checkout
+        continue-on-error: true
         timeout-minutes: 5
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           sparse-checkout: |
-            /scripts/github/
-            /scripts/lib/
+            /scripts/github/guard-shared.mjs
+            /scripts/github/security-review-event.mjs
+            /scripts/lib/bounded-response.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Report checkout infrastructure retry
+        if: ${{ !cancelled() && steps.checkout.outcome == 'failure' }}
+        run: echo "::warning::Trusted workflow checkout failed; retrying GitHub source transport once."
+
+      - name: Retry trusted workflow checkout
+        id: checkout_retry
+        if: ${{ !cancelled() && steps.checkout.outcome == 'failure' }}
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /scripts/github/guard-shared.mjs
+            /scripts/github/security-review-event.mjs
+            /scripts/lib/bounded-response.mjs
           sparse-checkout-cone-mode: false
 
       - name: Setup supported Node runtime
@@ -76,24 +102,61 @@ jobs:
       issues: write
       statuses: write
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 85
     env:
       OPENCLAW_SECURITY_REVIEW_PR_NUMBER: ${{ matrix.pr }}
       OPENCLAW_SECURITY_REVIEW_HEAD_SHA: ${{ matrix.head }}
     steps:
       - name: Check out trusted workflow scripts
+        id: checkout
+        continue-on-error: true
         timeout-minutes: 5
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           sparse-checkout: |
-            /scripts/github/
-            /scripts/lib/
+            /scripts/github/dependency-guard.mjs
+            /scripts/github/guard-review.mjs
+            /scripts/github/guard-shared.mjs
+            /scripts/github/security-review-policy.mjs
+            /scripts/github/security-review-rollout.mjs
+            /scripts/github/security-review.mjs
+            /scripts/github/security-sensitive-guard.mjs
+            /scripts/lib/bounded-response.mjs
             /.github/security-review-policy.yml
-            /.github/actions/setup-security-review/
+            /.github/actions/setup-security-review/action.yml
+            /.github/actions/setup-security-review/package.json
+            /.github/actions/setup-security-review/package-lock.json
+          sparse-checkout-cone-mode: false
+
+      - name: Report checkout infrastructure retry
+        if: ${{ !cancelled() && steps.checkout.outcome == 'failure' }}
+        run: echo "::warning::Trusted workflow checkout failed; retrying GitHub source transport once."
+
+      - name: Retry trusted workflow checkout
+        id: checkout_retry
+        if: ${{ !cancelled() && steps.checkout.outcome == 'failure' }}
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /scripts/github/dependency-guard.mjs
+            /scripts/github/guard-review.mjs
+            /scripts/github/guard-shared.mjs
+            /scripts/github/security-review-policy.mjs
+            /scripts/github/security-review-rollout.mjs
+            /scripts/github/security-review.mjs
+            /scripts/github/security-sensitive-guard.mjs
+            /scripts/lib/bounded-response.mjs
+            /.github/security-review-policy.yml
+            /.github/actions/setup-security-review/action.yml
+            /.github/actions/setup-security-review/package.json
+            /.github/actions/setup-security-review/package-lock.json
           sparse-checkout-cone-mode: false
 
       - name: Setup trusted policy runtime
+        id: runtime
         timeout-minutes: 3
         uses: ./.github/actions/setup-security-review
 
@@ -138,8 +201,36 @@ jobs:
         run: node scripts/github/security-review.mjs
 
       - name: Enforce security review
-        if: always()
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENCLAW_SECURITY_REVIEW_MODE: enforce
         run: node scripts/github/security-review.mjs
+
+      # Bootstrap failures cannot load the repository's normal status publisher.
+      # This checkout-independent path can only fail the scheduled head closed.
+      - name: Report security review bootstrap failure
+        if: ${{ failure() && !cancelled() && steps.runtime.outcome != 'success' }}
+        timeout-minutes: 3
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          retries: 3
+          script: |
+            const pull_number = Number(process.env.OPENCLAW_SECURITY_REVIEW_PR_NUMBER);
+            const sha = process.env.OPENCLAW_SECURITY_REVIEW_HEAD_SHA;
+            if (!Number.isSafeInteger(pull_number) || pull_number <= 0 || !/^[a-f0-9]{40}$/.test(sha ?? '')) {
+              throw new Error('Invalid scheduled security review identity.');
+            }
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number });
+            if (pr.state !== 'open' || pr.head.sha !== sha) {
+              core.info('The PR closed or moved to another head; skipping the obsolete bootstrap failure.');
+              return;
+            }
+            await github.rest.repos.createCommitStatus({
+              ...context.repo,
+              sha,
+              context: 'openclaw/ci-gate',
+              state: 'failure',
+              description: `PR #${pull_number}: Security review setup failed; see workflow details`,
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });

@@ -85,11 +85,17 @@ function readScheduleTarget(value: unknown): UpdateScheduleState["target"] | nul
 /** Optional install metadata: a malformed entry is dropped, never fatal to the status. */
 function readGitInstallMetadata(value: Record<string, unknown>): {
   currentSha?: string;
+  upstreamSha?: string;
+  repositoryUrl?: string;
   commitAtMs?: number;
   installedAtMs?: number;
 } {
   return {
     ...(isNonEmptyProtocolString(value.currentSha) ? { currentSha: value.currentSha } : {}),
+    ...(isNonEmptyProtocolString(value.upstreamSha) ? { upstreamSha: value.upstreamSha } : {}),
+    ...(isNonEmptyProtocolString(value.repositoryUrl)
+      ? { repositoryUrl: value.repositoryUrl }
+      : {}),
     ...(isBoundedInteger(value.commitAtMs, 0) ? { commitAtMs: value.commitAtMs } : {}),
     ...(isBoundedInteger(value.installedAtMs, 0) ? { installedAtMs: value.installedAtMs } : {}),
   };

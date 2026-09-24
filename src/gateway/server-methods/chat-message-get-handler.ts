@@ -85,7 +85,13 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
 }
 
 export const chatMessageGetHandlers: GatewayRequestHandlers = {
-  "chat.message.get": async ({ params, respond, context, client }) => {
+  "chat.message.get": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateChatMessageGetParams, "chat.message.get", respond)) {
       return;
     }
@@ -106,6 +112,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       return;
     }
     const canReadSession = (current: typeof session): boolean => {
+      sessionMutationAuthorization?.assertCurrent();
       if (
         !current.entry ||
         current.agentId !== session.agentId ||
@@ -125,7 +132,10 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         );
         return false;
       }
-      const entryFilter = createSessionListEntryFilter({ client, cfg: current.cfg });
+      const entryFilter = createSessionListEntryFilter({
+        client,
+        cfg: context.getCommittedRuntimeConfig?.() ?? current.cfg,
+      });
       if (entryFilter?.(current.canonicalKey, current.entry) === false) {
         respond(false, undefined, hiddenSessionNotFound(canonicalKey));
         return false;

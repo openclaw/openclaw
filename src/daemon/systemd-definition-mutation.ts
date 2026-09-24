@@ -13,7 +13,6 @@ import { canonicalPathFromExistingAncestor, findExistingAncestor } from "../infr
 import {
   readServiceFileState,
   type GatewayServiceDefinitionTransactionHooks,
-  type GatewayServiceStagedFiles,
 } from "./service-stage.js";
 import {
   assertServiceDefinitionWritable,
@@ -42,8 +41,6 @@ import { splitSystemdLogicalLines } from "./systemd-unit.js";
 type Snapshot = { contents: Buffer; mode: number } | null;
 type SystemdDefinitionMutation = {
   snapshots: Map<string, Snapshot>;
-  stagedFiles: GatewayServiceStagedFiles["files"];
-  assertCurrent: () => Promise<void>;
   publish: (file: string, contents: string | Buffer, mode: number) => Promise<void>;
   restore: (file: string, snapshot: Snapshot) => Promise<boolean>;
   restoreAll: () => Promise<boolean>;
@@ -252,9 +249,26 @@ export async function readSystemdDefinitionMutationCapability(
     } catch (error) {
       const owned =
         isSystemSystemdOwnershipError(error) && error.ownership.status !== "unverifiable";
-      return owned
-        ? { kind: "sealed", reason: "system-owned" }
-        : { kind: "unknown", reason: "system-ownership-unverified" };
+      if (owned) {
+        return { kind: "sealed", reason: "system-owned" };
+      }
+      const unverified = { kind: "unknown", reason: "system-ownership-unverified" } as const;
+      // A loaded user unit whose artifacts this account owns is the manager in
+      // charge; an unreachable system manager cannot make it a competing owner.
+      if (!options?.requireLoaded || !isSystemSystemdOwnershipError(error)) {
+        return unverified;
+      }
+      const loaded = await inspect(
+        env,
+        options.environment ?? env,
+        remaining(),
+        true,
+        options.systemdReadBinding,
+      ).then(
+        (inspection) => inspection.capability,
+        () => undefined,
+      );
+      return loaded?.kind === "writable" ? loaded : unverified;
     }
   }
   try {
@@ -339,7 +353,6 @@ export async function withSystemdDefinitionMutation<T>(
     const allowed = new Set([unit, generated, `${unit}.bak`]);
     const snapshots = initial.snapshots;
     const publications = new Map<string, string>();
-    const stagedFiles: GatewayServiceStagedFiles["files"] = [];
     let reloadPending = false;
     const reloadRestoredDefinition = async () => {
       if (!reloadPending) {
@@ -379,7 +392,7 @@ export async function withSystemdDefinitionMutation<T>(
       await options?.definitionTransaction?.beforeWrite();
       await refresh(true);
       const previous = initial.snapshots.get(file) ?? null;
-      const before = await readServiceFileState(file);
+      await readServiceFileState(file);
       await refresh(true);
       const directory = await fs.realpath(path.dirname(file));
       const temporary = path.join(directory, `${path.basename(file)}.${randomUUID()}.tmp`);
@@ -425,7 +438,6 @@ export async function withSystemdDefinitionMutation<T>(
             throw new Error("Managed service artifact changed after publication.");
           }
           await refresh(true);
-          stagedFiles.push({ sourcePath: file, before, after });
           if (file === unit || file === generated) {
             await options?.definitionTransaction?.fileWritten(file, contents);
           }
@@ -503,16 +515,6 @@ export async function withSystemdDefinitionMutation<T>(
     };
     return await run({
       snapshots,
-      stagedFiles,
-      assertCurrent: async () => {
-        await refresh(true);
-        for (const file of stagedFiles) {
-          if (!isDeepStrictEqual(await readServiceFileState(file.sourcePath), file.after)) {
-            throw new Error("Staged service identity changed before native load.");
-          }
-        }
-        await refresh(true);
-      },
       publish,
       restore,
       restoreAll: async () => {

@@ -97,12 +97,13 @@ it.each([false, true])(
       const originalExec = DatabaseSync.prototype.exec;
       const executions: Array<{ database: DatabaseSync; location: string | null; sql: string }> =
         [];
-      const exec = vi
-        .spyOn(DatabaseSync.prototype, "exec")
-        .mockImplementation(function (this: DatabaseSync, sql) {
-          executions.push({ database: this, location: this.location(), sql });
-          return Reflect.apply(originalExec, this, [sql]);
-        });
+      const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        executions.push({ database: this, location: this.location(), sql });
+        return Reflect.apply(originalExec, this, [sql]);
+      });
       const statements = (["get", "all", "run", "iterate"] as const).map((method) =>
         vi.spyOn(StatementSync.prototype, method),
       );

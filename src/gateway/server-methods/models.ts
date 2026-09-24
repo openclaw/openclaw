@@ -11,14 +11,18 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
+import { authorizeCurrentOperatorRoleScopes } from "../operator-role-policy.js";
+import { READ_SCOPE, SESSION_READ_SCOPE } from "../operator-scopes.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
 import { resolveChatMetadataReadParams } from "./chat-metadata-handler.js";
 import { projectSessionModelCatalog } from "./chat-metadata-session-projection.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { resolveAuthenticatedProfileId } from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 export { buildModelsListResult };
 
@@ -30,6 +34,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
       return;
     }
     let scope: ChatMetadataReadParams | undefined;
+    let publicationScope: ChatMetadataReadParams | undefined;
     try {
       const scoped = Boolean(params.sessionKey || params.authProfileId);
       scope = scoped ? resolveChatMetadataReadParams(options, params) : undefined;
@@ -48,6 +53,36 @@ export const modelsHandlers: GatewayRequestHandlers = {
       if (!resolved) {
         return;
       }
+      if (!scope) {
+        const roleError = authorizeCurrentOperatorRoleScopes(client, cfg);
+        if (roleError) {
+          respond(false, undefined, roleError);
+          return;
+        }
+        const scopes = client?.connect.scopes ?? [];
+        const limitedSessionRead =
+          roleScopesAllow({
+            role: "operator",
+            requestedScopes: [SESSION_READ_SCOPE],
+            allowedScopes: scopes,
+          }) &&
+          !roleScopesAllow({
+            role: "operator",
+            requestedScopes: [READ_SCOPE],
+            allowedScopes: scopes,
+          });
+        if (limitedSessionRead) {
+          scope = resolveChatMetadataReadParams(options, { agentId: resolved.agentId });
+          if (!scope) {
+            return;
+          }
+        }
+      }
+      publicationScope =
+        scope ?? resolveChatMetadataReadParams(options, { agentId: resolved.agentId });
+      if (!publicationScope) {
+        return;
+      }
       const result = await buildModelsListResult({
         source: { kind: "gateway", context },
         agentId: resolved.agentId,
@@ -56,22 +91,30 @@ export const modelsHandlers: GatewayRequestHandlers = {
           client?.connect.caps,
           GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
         ),
-        requesterProfileId: scope?.requesterProfileId ?? resolveAuthenticatedProfileId(client),
+        requesterProfileId: publicationScope.requesterProfileId,
         ...(scope ? { readScope: scope } : {}),
       });
-      scope?.draftAccountSelection?.assertCurrent();
-      scope?.assertCurrent?.();
-      respond(
-        true,
+      publicationScope.draftAccountSelection?.assertCurrent();
+      publicationScope.assertCurrent?.();
+      const currentConfig = context.getRuntimeConfig();
+      const projected =
         scope && params.view !== "provider-config"
           ? {
               ...result,
-              models: projectSessionModelCatalog(scope, result.models, context.getRuntimeConfig()),
+              models: projectSessionModelCatalog(scope, result.models, currentConfig),
             }
-          : result,
-        undefined,
-      );
+          : result;
+      const policy = prepareOperatorModelPresentation({
+        cfg: currentConfig,
+        policyConfig: context.getCommittedRuntimeConfig?.() ?? currentConfig,
+        client,
+      })?.forAgent(resolved.agentId, projected.models);
+      respond(true, policy ? policy.catalog(projected) : projected, undefined);
     } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        respond(false, undefined, error.error);
+        return;
+      }
       if (error instanceof PreparedModelRuntimePublicationSupersededError) {
         respond(
           false,
@@ -85,7 +128,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
       }
       respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
     } finally {
-      scope?.release?.();
+      (publicationScope ?? scope)?.release?.();
     }
   },
 };

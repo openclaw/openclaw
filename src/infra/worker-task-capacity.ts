@@ -42,6 +42,13 @@ export function getWorkerComputeCapacity() {
       requestCheckpoints();
     };
     return {
+      getSnapshot: () => ({
+        limit,
+        active: active.size,
+        waitingPools: waiting.size,
+        pendingTasks,
+        pendingBytes,
+      }),
       admit(bytes: number): boolean {
         if (
           pendingTasks >= DEFAULT_WORKER_PENDING_TASKS ||

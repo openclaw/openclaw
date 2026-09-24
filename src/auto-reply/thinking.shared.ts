@@ -2,7 +2,6 @@
 import {
   type FastMode,
   normalizeFastMode,
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ThinkingLevelMap } from "../llm/types.js";
@@ -76,7 +75,7 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (collapsed === "adaptive" || collapsed === "auto") {
     return "adaptive";
   }
-  if (collapsed === "max") {
+  if (collapsed === "max" || collapsed === "maximum") {
     return "max";
   }
   if (collapsed === "ultra") {
@@ -119,67 +118,39 @@ export function isSessionDefaultDirectiveValue(raw?: string | null): boolean {
   return ["default", "inherit", "inherited", "clear", "reset", "unpin"].includes(key);
 }
 
-type OnOffFullLevel = "off" | "on" | "full";
-
-function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefined {
+function normalizeAliasedLevel<T extends string>(
+  raw: string | null | undefined,
+  aliases: ReadonlyArray<readonly [T, ...string[]]>,
+): T | undefined {
   const key = normalizeOptionalLowercaseString(raw);
-  if (!key) {
-    return undefined;
-  }
-  if (["off", "false", "no", "0"].includes(key)) {
-    return "off";
-  }
-  if (["full", "all", "everything"].includes(key)) {
-    return "full";
-  }
-  if (["on", "minimal", "true", "yes", "1"].includes(key)) {
-    return "on";
-  }
-  return undefined;
+  return key ? aliases.find((group) => group.includes(key))?.[0] : undefined;
 }
 
 /** Normalizes /verbose values. */
 export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undefined {
-  return normalizeOnOffFullLevel(raw);
+  return normalizeAliasedLevel(raw, [
+    ["off", "false", "no", "0"],
+    ["full", "all", "everything"],
+    ["on", "minimal", "true", "yes", "1"],
+  ]);
 }
 
 /** Normalizes /trace values. */
 export function normalizeTraceLevel(raw?: string | null): TraceLevel | undefined {
-  const key = normalizeOptionalLowercaseString(raw);
-  if (!key) {
-    return undefined;
-  }
-  if (["off", "false", "no", "0"].includes(key)) {
-    return "off";
-  }
-  if (["on", "true", "yes", "1"].includes(key)) {
-    return "on";
-  }
-  if (["raw", "unfiltered"].includes(key)) {
-    return "raw";
-  }
-  return undefined;
+  return normalizeAliasedLevel(raw, [
+    ["off", "false", "no", "0"],
+    ["on", "true", "yes", "1"],
+    ["raw", "unfiltered"],
+  ]);
 }
 
 /** Normalizes response usage display values. */
 export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const key = normalizeLowercaseStringOrEmpty(raw);
-  if (["off", "false", "no", "0", "disable", "disabled"].includes(key)) {
-    return "off";
-  }
-  if (["on", "true", "yes", "1", "enable", "enabled"].includes(key)) {
-    return "tokens";
-  }
-  if (["tokens", "token", "tok", "minimal", "min"].includes(key)) {
-    return "tokens";
-  }
-  if (["full", "session"].includes(key)) {
-    return "full";
-  }
-  return undefined;
+  return normalizeAliasedLevel(raw, [
+    ["off", "false", "no", "0", "disable", "disabled"],
+    ["tokens", "token", "tok", "minimal", "min", "on", "true", "yes", "1", "enable", "enabled"],
+    ["full", "session"],
+  ]);
 }
 
 /** Resolves response usage display mode with the persisted default. */
@@ -220,39 +191,19 @@ export function resolveEffectiveResponseUsage(
 
 /** Normalizes elevated execution policy values. */
 export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const key = normalizeLowercaseStringOrEmpty(raw);
-  if (["off", "false", "no", "0"].includes(key)) {
-    return "off";
-  }
-  if (["full", "auto", "auto-approve", "autoapprove"].includes(key)) {
-    return "full";
-  }
-  if (["ask", "prompt", "approval", "approve"].includes(key)) {
-    return "ask";
-  }
-  if (["on", "true", "yes", "1"].includes(key)) {
-    return "on";
-  }
-  return undefined;
+  return normalizeAliasedLevel(raw, [
+    ["off", "false", "no", "0"],
+    ["full", "auto", "auto-approve", "autoapprove"],
+    ["ask", "prompt", "approval", "approve"],
+    ["on", "true", "yes", "1"],
+  ]);
 }
 
 /** Normalizes reasoning visibility values. */
 export function normalizeReasoningLevel(raw?: string | null): ReasoningLevel | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const key = normalizeLowercaseStringOrEmpty(raw);
-  if (["off", "false", "no", "0", "hide", "hidden", "disable", "disabled"].includes(key)) {
-    return "off";
-  }
-  if (["on", "true", "yes", "1", "show", "visible", "enable", "enabled"].includes(key)) {
-    return "on";
-  }
-  if (["stream", "streaming", "draft", "live"].includes(key)) {
-    return "stream";
-  }
-  return undefined;
+  return normalizeAliasedLevel(raw, [
+    ["off", "false", "no", "0", "hide", "hidden", "disable", "disabled"],
+    ["on", "true", "yes", "1", "show", "visible", "enable", "enabled"],
+    ["stream", "streaming", "draft", "live"],
+  ]);
 }

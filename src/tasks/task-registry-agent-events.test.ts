@@ -89,11 +89,13 @@ describe("task agent event persistence", () => {
     { phase: "start", outcome: "replacement" },
     { phase: "start", outcome: "ABA" },
     { phase: "start", outcome: "observer ABA" },
+    { phase: "start", outcome: "settlement ABA" },
     { phase: "end", outcome: "commit" },
     { phase: "end", outcome: "rollback" },
     { phase: "end", outcome: "replacement" },
     { phase: "end", outcome: "ABA" },
     { phase: "end", outcome: "observer ABA" },
+    { phase: "end", outcome: "settlement ABA" },
   ] as const)(
     "publishes native $phase delivery only after outer $outcome",
     async ({ phase, outcome }) => {
@@ -149,7 +151,16 @@ describe("task agent event persistence", () => {
         } catch (error) {
           transactionError = error;
         }
+        if (outcome === "settlement ABA") {
+          const published = tasks.get(task.taskId)!;
+          updateTask(task.taskId, { ...published, task: "Settlement replacement" });
+          updateTask(task.taskId, published);
+        }
         try {
+          // The event publishes its detached delivery only after leaving the accepted prefix.
+          await Promise.allSettled([
+            captureTaskRegistryReadFence(captureOpenClawStateWorkerContext().admission),
+          ]);
           await deliveries.settle();
           await joinEvents();
         } finally {

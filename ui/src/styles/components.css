@@ -811,6 +811,11 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   flex: 0 0 auto;
 }
 
+.login-gate__recovery {
+  margin-top: var(--space-5);
+  text-align: center;
+}
+
 /* ── First-run help (no failure yet) ── */
 
 .login-gate__help {
@@ -1226,12 +1231,12 @@ openclaw-session-owner-chip .viewer-avatar__initials {
     box-shadow var(--duration-fast) var(--ease-out);
 }
 
-.btn:hover {
+.btn:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: var(--bg-hover);
   border-color: var(--border-strong);
 }
 
-.btn:active {
+.btn:active:where(:not(:disabled, [aria-disabled="true"])) {
   background: var(--secondary);
 }
 
@@ -1247,30 +1252,21 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .btn.primary {
-  border-color: var(--accent);
+  border-color: transparent;
   background: var(--primary);
   color: var(--primary-foreground);
   box-shadow: 0 1px 3px var(--accent-subtle);
 }
 
-.btn.primary:hover {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
+.btn.primary:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  background: var(--primary-hover);
   box-shadow: 0 2px 12px var(--accent-glow);
-}
-
-:root[data-theme="dark"] .btn.primary:hover {
-  background: var(--primary-hover);
-}
-
-:root[data-theme="openknot"] .btn.primary:hover {
-  background: var(--primary-hover);
 }
 
 .btn.active {
   border-color: var(--accent);
   background: var(--accent-subtle);
-  color: var(--accent);
+  color: var(--text);
 }
 
 .btn.danger {
@@ -1279,7 +1275,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   color: var(--danger);
 }
 
-.btn.danger:hover {
+.btn.danger:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: color-mix(in srgb, var(--danger) 15%, transparent);
 }
 
@@ -1502,7 +1498,7 @@ openclaw-toast-host[data-toast-placement="shell"]
   background: rgba(255, 255, 255, 0.06);
 }
 
-.btn--icon:hover {
+.btn--icon:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: rgba(255, 255, 255, 0.12);
   border-color: rgba(255, 255, 255, 0.2);
 }
@@ -1858,7 +1854,7 @@ openclaw-session-progress-hovercard-provider {
   color: var(--muted);
 }
 
-.btn--ghost:hover {
+.btn--ghost:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: var(--bg-hover);
   color: var(--text);
   border-color: transparent;
@@ -2101,24 +2097,20 @@ select.input {
   border-color: var(--input);
 }
 
-:root[data-theme-mode="light"] .btn {
+:root[data-theme-mode="light"] .btn:where(:not(.primary, .danger)) {
   background: var(--bg);
   border-color: var(--input);
 }
 
-:root[data-theme-mode="light"] .btn:hover {
+:root[data-theme-mode="light"]
+  .btn:hover:where(:not(.primary, .danger, :disabled, [aria-disabled="true"])) {
   background: var(--bg-hover);
 }
 
 :root[data-theme-mode="light"] .btn.active {
   border-color: var(--accent);
   background: var(--accent-subtle);
-  color: var(--accent);
-}
-
-:root[data-theme-mode="light"] .btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  color: var(--text);
 }
 
 :root[data-theme-mode="light"] .btn--icon {
@@ -2128,7 +2120,7 @@ select.input {
   color: var(--muted);
 }
 
-:root[data-theme-mode="light"] .btn--icon:hover {
+:root[data-theme-mode="light"] .btn--icon:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: var(--button-icon-bg);
   border-color: var(--border-strong);
   color: var(--text);
@@ -2143,7 +2135,7 @@ select.input {
   box-shadow: none;
 }
 
-:root[data-theme-mode="light"] .btn--ghost:hover {
+:root[data-theme-mode="light"] .btn--ghost:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: var(--bg-hover);
   border-color: transparent;
 }
@@ -3742,16 +3734,6 @@ td.data-table-key-col {
   white-space: nowrap;
 }
 
-.btn--ghost:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.btn--ghost:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 .agents-main {
   display: grid;
   gap: 14px;
@@ -4977,8 +4959,8 @@ td.data-table-key-col {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  height: 22px;
-  min-height: 22px;
+  height: 24px;
+  min-height: 24px;
   max-height: 66px;
   margin: 0;
   padding: 0 calc(var(--cmd-palette-actions-width) + 20px) 0 0;

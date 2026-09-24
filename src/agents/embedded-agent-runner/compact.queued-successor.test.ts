@@ -31,7 +31,7 @@ const [
     replaceSessionEntrySync,
     upsertSessionEntryCore,
   },
-  { closeOpenClawAgentDatabasesForTest },
+  { closeOpenClawAgentDatabasesAsync, closeOpenClawAgentDatabasesForTest },
   { SessionManager: PersistentSessionManager },
   safetyTimeout,
   realSafetyTimeout,
@@ -49,7 +49,9 @@ const [
 ]);
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
+    // Native work can outlive cached handles; join it before removing the fixture root.
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     cleanup();
   }),

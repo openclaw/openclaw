@@ -717,6 +717,30 @@ describe("Team Reports scheduler lifecycle", () => {
     expect((await scheduler.health()).warnings).toBe(1);
   });
 
+  it("names failed activity sources in run errors, logs, and service health", async () => {
+    const { scheduler, nextRun, store, github, discord, context } = await setup({ discord: true });
+    github.collect.mockResolvedValueOnce({
+      items: [],
+      status: { ...healthy, ok: false, warnings: ["GitHub access unavailable"] },
+    });
+    discord.collect.mockResolvedValueOnce({
+      messages: [],
+      status: { ...healthy, ok: false, warnings: ["Discord access unavailable"] },
+    });
+    await scheduler.start();
+    const id = await scheduler.generate();
+    await nextRun();
+
+    const run = (await store.listRuns()).find((candidate) => candidate.id === id);
+    expect(run?.status).toBe("error");
+    expect(run?.error).toContain("day/2026-08-19/github");
+    expect(run?.error).toContain("day/2026-08-19/discord");
+    expect(context.logger.error).toHaveBeenCalledWith(`team-reports: ${run?.error}`);
+    expect(context.serviceHealth.reportFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ message: run?.error }),
+    );
+  });
+
   it("reports source failures with redacted errors and clears health on the next successful run", async () => {
     const { scheduler, nextRun, store, github, context } = await setup();
     github.collect.mockRejectedValueOnce(new Error("Access failed for fixture-github-token"));

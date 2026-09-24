@@ -187,7 +187,7 @@ async function runWorkerEmbeddedTurnWithResources(
     baseSessionManager.appendMessage(structuredClone(message));
   }
 
-  const transcriptRuntime = createWorkerTranscriptRuntime(params.transcript);
+  const transcriptRuntime = createWorkerTranscriptRuntime(params.transcript, params.signal);
   const sessionManager = guardSessionManager(baseSessionManager, {
     suppressNextUserMessagePersistence: params.suppressPromptTranscript,
     onMessagePersisted: transcriptRuntime.onMessagePersisted,

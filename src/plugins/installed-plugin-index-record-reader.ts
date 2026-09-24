@@ -97,8 +97,9 @@ function resolveRecoveredManagedNpmRoot(options: InstalledPluginIndexStoreOption
 function resolveRecoveredManagedNpmPluginId(params: {
   packageName: string;
   packageDir: string;
+  packageManifest: Record<string, unknown> | null;
 }): string | undefined {
-  const packageManifest = readJsonObjectFileSync(path.join(params.packageDir, "package.json"));
+  const { packageManifest } = params;
   if (!packageManifest || !hasPackagePluginMetadata(packageManifest)) {
     return undefined;
   }
@@ -159,11 +160,15 @@ function buildRecoveredManagedNpmInstallCandidatesForRoot(params: {
     if (hasRetainedManagedNpmInstallMarker(packageDir)) {
       continue;
     }
-    const pluginId = resolveRecoveredManagedNpmPluginId({ packageName, packageDir });
+    const packageManifest = readJsonObjectFileSync(path.join(packageDir, "package.json"));
+    const pluginId = resolveRecoveredManagedNpmPluginId({
+      packageName,
+      packageDir,
+      packageManifest,
+    });
     if (!pluginId) {
       continue;
     }
-    const packageManifest = readJsonObjectFileSync(path.join(packageDir, "package.json"));
     const version =
       typeof packageManifest?.version === "string" && packageManifest.version.trim()
         ? packageManifest.version.trim()

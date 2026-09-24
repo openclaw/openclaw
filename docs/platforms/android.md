@@ -117,6 +117,27 @@ Google Play and standalone APK installs use different update channels and may ha
 Building a release artifact (APK or app bundle) from source or a fork requires your own Android signing identity. Debug builds use an automatically generated debug signing key. The official OpenClaw release key is not included in the repository. See [Sign your app](https://developer.android.com/studio/publish/app-signing) for how to generate and configure a signing key for release builds.
 </Note>
 
+## App and Gateway compatibility
+
+The Android app and Gateway do not need matching release version numbers.
+Connection compatibility depends on the Gateway protocol versions they support,
+not the release tag that contains the APK.
+
+Android uses separate connections for chat and UI actions (the operator
+connection) and device capabilities (the node connection). The operator connection
+must support the Gateway's current protocol. An authenticated node connection may
+use the previous protocol within the documented compatibility window; that
+exception does not extend to chat or UI actions. See [Gateway protocol
+versioning](/gateway/protocol/versioning) for the current versions and node
+capability restrictions.
+
+Successful pairing does not guarantee that every feature works across an arbitrary
+app/Gateway version combination. New features may require updates on both sides.
+If a connection reports `protocol mismatch`, check the protocol requirements and
+available updates for both the app and Gateway. For sideloaded apps, use the APK
+selection and verification steps above rather than assuming the latest Gateway
+release contains a newer app.
+
 ## Mirror and control Android from a remote Mac
 
 [scrcpy](https://github.com/Genymobile/scrcpy) mirrors an Android screen in a macOS window and
@@ -474,7 +495,7 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 
 ### 9. Workspace files (read-only)
 
-Open **Work** from the sidebar's **Pages** menu to find the **Files** card. It browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` Gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the Gateway.
+Open **Overview** from the sidebar's **Pages** menu to find the **Files** card. It browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` Gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the Gateway.
 
 If the app cannot prepare a file or open the share sheet, it shows **Could not share file** and keeps the preview open so you can retry or go back.
 

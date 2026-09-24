@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   prove:
-    name: Prove failed-job rerun boundary
+    name: Prove targeted job rerun boundary
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:

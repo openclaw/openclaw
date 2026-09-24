@@ -176,6 +176,23 @@ describe("check-deadcode-exports", () => {
     );
   });
 
+  it("models upgrade survivor inline imports from the shell source", () => {
+    const runner = "scripts/e2e/lib/upgrade-survivor/run.sh";
+    const source = fs.readFileSync(runner, "utf8");
+    const compile = knipConfig.compilers.sh;
+    for (const workspace of [knipConfig.workspaces["."], fullRootWorkspace, scriptRootWorkspace]) {
+      expect(workspace.entry).toContain(`${runner}!`);
+    }
+    expect(compile(source, runner)).toContain(
+      'import { readPostCoreSnapshot } from "./diagnostics.mjs";',
+    );
+    const withoutSnapshot = source.replace(/^import \{ readPostCoreSnapshot \}[^\n]+\n/mu, "");
+    const remaining = compile(withoutSnapshot, runner);
+    expect(remaining).not.toContain("readPostCoreSnapshot");
+    expect(remaining).toContain('from "../../../lib/release-version.mjs";');
+    expect(compile(source, "scripts/e2e/lib/upgrade-survivor/other.sh")).toBe("");
+  });
+
   it("audits executable code outside the main source trees", () => {
     expect(knipConfig.workspaces["."].project).toEqual(
       expect.arrayContaining([
@@ -304,12 +321,56 @@ describe("check-deadcode-exports", () => {
   });
 
   it.each([
-    "packages/agent-core",
-    "packages/markdown-core",
-    "packages/media-core",
-    "packages/acp-core",
-    "packages/terminal-core",
-  ] as const)("mirrors the published entry map for %s", (workspace) => {
+    "gateway-client",
+    "gateway-protocol",
+    "sdk",
+    "retry",
+    "normalization-core",
+    "net-policy",
+    "media-understanding-common",
+    "media-generation-core",
+    "media-core",
+    "acp-core",
+    "markdown-core",
+    "terminal-core",
+    "model-catalog-core",
+  ] as const)("derives public audit roots from the %s export map", (packageDir) => {
+    const workspace = "packages/" + packageDir;
+    const manifest = JSON.parse(fs.readFileSync(workspace + "/package.json", "utf8")) as {
+      exports: Record<string, { import: string }>;
+    };
+    const expected = Object.values(manifest.exports)
+      .map(({ import: target }) => target.replace("./dist/", "src/").replace(/\.mjs$/u, ".ts!"))
+      .toSorted();
+    if (packageDir === "normalization-core") {
+      // The QA Lab Vite alias is a distinct source consumer, not a package export.
+      expect(fs.readFileSync("extensions/qa-lab/web/vite.config.ts", "utf8")).toContain(
+        "../../../packages/normalization-core/src/browser-error-runtime.ts",
+      );
+      expected.push("src/browser-error-runtime.ts!");
+      expected.sort();
+    }
+    const production = Object.entries(knipConfig.workspaces).find(
+      ([name]) => name === workspace,
+    )?.[1];
+    const full = allExportsKnipConfig.workspaces[workspace];
+    expect(production?.entry.toSorted(), workspace).toEqual(expected);
+    expect(production?.project).toEqual(["src/**/*.ts!"]);
+    expect(full?.entry).toEqual(expect.arrayContaining(expected));
+    for (const entry of expected) {
+      expect(fs.existsSync(workspace + "/" + entry.slice(0, -1)), entry).toBe(true);
+    }
+  });
+
+  it("does not promote private implementation or build-only artifacts to public audit roots", () => {
+    expect(knipConfig.workspaces["packages/gateway-client"].entry).not.toContain(
+      "src/protocol-client.ts!",
+    );
+    expect(knipConfig.workspaces["packages/acp-core"].entry).not.toContain("src/error-format.ts!");
+  });
+
+  it("preserves the agent-core relocated source-entry contract", () => {
+    const workspace = "packages/agent-core";
     const packageJson = JSON.parse(
       fs.readFileSync(new URL(`../../${workspace}/package.json`, import.meta.url), "utf8"),
     ) as { exports: Record<string, unknown> };
@@ -322,21 +383,18 @@ describe("check-deadcode-exports", () => {
           new URL(`../../${workspace}/${entry.slice(0, -"!".length)}`, import.meta.url),
         ),
     );
-    expect(missingConventionalEntries).toEqual(
-      workspace === "packages/agent-core"
-        ? ["src/harness/compaction.ts!", "src/harness/branch-summarization.ts!"]
-        : [],
-    );
-    if (workspace === "packages/agent-core") {
-      for (const sourcePath of [
-        "src/harness/compaction/compaction.ts",
-        "src/harness/compaction/branch-summarization.ts",
-      ]) {
-        expect(
-          fs.existsSync(new URL(`../../${workspace}/${sourcePath}`, import.meta.url)),
-          sourcePath,
-        ).toBe(true);
-      }
+    expect(missingConventionalEntries).toEqual([
+      "src/harness/compaction.ts!",
+      "src/harness/branch-summarization.ts!",
+    ]);
+    for (const sourcePath of [
+      "src/harness/compaction/compaction.ts",
+      "src/harness/compaction/branch-summarization.ts",
+    ]) {
+      expect(
+        fs.existsSync(new URL(`../../${workspace}/${sourcePath}`, import.meta.url)),
+        sourcePath,
+      ).toBe(true);
     }
     const expected = conventionalEntries
       .filter((entry) => !missingConventionalEntries.includes(entry))

@@ -1,11 +1,13 @@
 // Model-bound thinking cannot be exposed or replayed after a model switch.
 import {
   CLAUDE_FABLE_5_THINKING_PROFILE,
+  CLAUDE_OPUS_55_THINKING_PROFILE,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus55ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaudeNativeMaxEffort,
@@ -30,6 +32,7 @@ export {
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus55ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
@@ -166,9 +169,11 @@ export function resolveAnthropicThinkingEffort(
 ): AnthropicEffort {
   const requestedLevel: ModelThinkingLevel | undefined =
     level ??
-    (resolveClaudeFable5ModelIdentity(model)
-      ? CLAUDE_FABLE_5_THINKING_PROFILE.defaultLevel
-      : undefined);
+    (resolveClaudeOpus55ModelIdentity(model)
+      ? CLAUDE_OPUS_55_THINKING_PROFILE.defaultLevel
+      : resolveClaudeFable5ModelIdentity(model)
+        ? CLAUDE_FABLE_5_THINKING_PROFILE.defaultLevel
+        : undefined);
   const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
   const clampModel = {
     ...model,

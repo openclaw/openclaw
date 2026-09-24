@@ -54,7 +54,7 @@ function createContext(params: {
   mainKey?: string;
   agents?: Array<{ id: string; default?: boolean }>;
 }) {
-  const rollbackSubscription = vi.fn();
+  const rollbackSubscription = Object.assign(vi.fn(), { commit: vi.fn() });
   const subscribeSessionMessageEvents = vi.fn(() => rollbackSubscription);
   const listSessionPendingApprovals = vi.fn(async () => {
     if (params.replayError) {
@@ -307,6 +307,35 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     );
   });
 
+  it("rolls back after one retry when replay keeps changing", async () => {
+    const replay = {
+      sessionKey: "agent:main:child",
+      updatedAtMs: 42,
+      approvals: [],
+      truncated: false,
+    } satisfies SessionApprovalReplay;
+    const { context, listSessionPendingApprovals, rollbackSubscription } = createContext({
+      replay,
+    });
+    listSessionPendingApprovals
+      .mockResolvedValueOnce({ replay, isCurrent: () => false })
+      .mockResolvedValueOnce({ replay, isCurrent: () => false });
+
+    const respond = await subscribe({
+      body: { key: "child", includeApprovals: true },
+      client: createClient({ scopes: ["operator.admin"] }),
+      context,
+    });
+
+    expect(listSessionPendingApprovals.mock.calls.length).toBe(2);
+    expect(rollbackSubscription).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+    );
+  });
+
   it("allows a paired device with approval scope", async () => {
     const approvalReplay = {
       sessionKey: "agent:main:child",
@@ -378,11 +407,11 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     });
 
     expect(listSessionPendingApprovals).not.toHaveBeenCalled();
-    expect(subscribeSessionMessageEvents).toHaveBeenCalled();
-    expect(subscribeSessionMessageEvents.mock.calls[0]?.slice(0, 2)).toEqual([
+    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
       "conn-approval-reviewer",
       "agent:main:child",
-    ]);
+      { provisional: true },
+    );
     expect(respond).toHaveBeenCalledWith(
       true,
       { subscribed: true, key: "agent:main:child" },
@@ -403,6 +432,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
       "conn-approval-reviewer",
       "agent:main:work",
+      { provisional: true },
     );
     expect(respond).toHaveBeenCalledWith(
       true,

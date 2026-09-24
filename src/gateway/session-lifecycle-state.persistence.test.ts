@@ -1,5 +1,7 @@
 import path from "node:path";
-import { expect, it, vi, type MockInstance } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, expect, it, vi, type MockInstance } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
@@ -14,6 +16,7 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   emitAgentEvent,
   emitAgentEventForOwner,
@@ -238,7 +241,19 @@ it.each(["success", "failed-write"])(
     const runId = "native-cancel-run";
     const chatRunState = createChatRunState();
     const broadcast = vi.fn();
-    const broadcastToConnIds = vi.fn();
+    const terminalChanged = createDeferred();
+    const broadcastToConnIds = vi.fn<GatewayRequestContext["broadcastToConnIds"]>(
+      (event, payload) => {
+        if (
+          event === "sessions.changed" &&
+          isRecord(payload) &&
+          payload.runId === runId &&
+          payload.status === "killed"
+        ) {
+          terminalChanged.resolve();
+        }
+      },
+    );
     const context = {
       chatRunState,
       chatAbortControllers: new Map(),
@@ -448,6 +463,7 @@ it.each(["success", "failed-write"])(
           abortedLastRun: true,
         },
       });
+      await terminalChanged.promise;
       expect(broadcastToConnIds).toHaveBeenCalledWith(
         "sessions.changed",
         expect.objectContaining({ runId, status: "killed", hasActiveRun: false, runtimeMs: 1_000 }),
@@ -484,7 +500,13 @@ it.each(["success", "failed-write"])(
   },
 );
 
-it.each([
+const ownerClaimFixture = createFixtureLifetime();
+afterEach(async () => {
+  // Vitest may finish its timeout wrapper before the body retires its owners.
+  await ownerClaimFixture.cleanup();
+});
+
+it.for([
   { label: "end", phase: "end", data: {}, status: "done" },
   {
     label: "cancellation",
@@ -500,113 +522,123 @@ it.each([
   },
 ])(
   "keeps an owner claim active until its queued $label write commits",
-  async ({ phase, data, status }) => {
-    const tempDirs = createTempDirTracker();
-    const target = {
-      storePath: path.join(tempDirs.make("openclaw-owner-terminal-"), "sessions.json"),
-      sessionKey: "agent:main:worker-terminal",
-    };
-    const runId = "worker-terminal-run";
-    const sessionId = "worker-terminal-session";
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const writerStarted = createDeferred();
-    const releaseWriter = createDeferred();
-    let claimId: string | undefined;
-    let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
-    let heldWriter: Promise<unknown> | undefined;
-    persistenceTestWarnings.mockReset();
-    routing.loadSessionEntry.mockImplementation(() => ({
-      ...target,
-      canonicalKey: target.sessionKey,
-      entry: loadSessionEntry(target),
-    }));
-    try {
-      await replaceSessionEntry(target, {
-        lifecycleRunId: runId,
-        sessionId,
-        startedAt: 1_000,
-        status: "running",
-        updatedAt: 1_000,
-      });
-      heldWriter = patchSessionEntryCore(target, async () => {
-        writerStarted.resolve();
-        await releaseWriter.promise;
-        return null;
-      });
-      await writerStarted.promise;
-      claimId = claimAgentRunContext(
-        runId,
-        { lifecycleGeneration, sessionId, sessionKey: target.sessionKey },
-        { exclusive: true, ownsContext: true, trackOwner: true },
-      );
-      if (!claimId) {
-        throw new Error("expected worker terminal claim");
-      }
-      const terminalClaimId = claimId;
-      const chatRunState = createChatRunState();
-      const markFinal = vi.spyOn(chatRunState.toolEventRecipients, "markFinal");
-      const agentRunSeq = new Map<string, number>();
-      subscriptions = startGatewayEventSubscriptions({
-        signal: new AbortController().signal,
-        log: silentLog,
-        broadcast: vi.fn(),
-        broadcastToConnIds: vi.fn(),
-        nodeHasSessionSubscribers: () => false,
-        nodeSendToSession: vi.fn(),
-        agentRunSeq,
-        chatRunState,
-        toolEventRecipients: chatRunState.toolEventRecipients,
-        sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-        chatAbortControllers: new Map(),
-        restartRecoveryCandidates: new Map(),
-        terminalSessions: { closeTaskSessions: vi.fn() },
-        refreshConnectedUserProfiles: vi.fn(),
-      });
-
-      emitAgentEventForOwner(
-        {
-          runId,
+  ({ phase, data, status }, { signal }) =>
+    ownerClaimFixture.run(async () => {
+      const tempDirs = createTempDirTracker();
+      const target = {
+        storePath: path.join(tempDirs.make("openclaw-owner-terminal-"), "sessions.json"),
+        sessionKey: "agent:main:worker-terminal",
+      };
+      const runId = "worker-terminal-run";
+      const sessionId = "worker-terminal-session";
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const writerStarted = createDeferred();
+      const releaseWriter = createDeferred();
+      const clearRequested = createDeferred<string>();
+      let claimId: string | undefined;
+      let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
+      let heldWriter: Promise<unknown> | undefined;
+      persistenceTestWarnings.mockReset();
+      routing.loadSessionEntry.mockImplementation(() => ({
+        ...target,
+        canonicalKey: target.sessionKey,
+        entry: loadSessionEntry(target),
+      }));
+      try {
+        await replaceSessionEntry(target, {
+          lifecycleRunId: runId,
           sessionId,
-          sessionKey: target.sessionKey,
-          stream: "lifecycle",
-          data: { phase, ...data, startedAt: 1_000, endedAt: 2_000 },
-        },
-        claimId,
-      );
-      await vi.waitFor(
-        () =>
-          expect(
-            markFinal.mock.calls.length + persistenceTestWarnings.mock.calls.length,
-          ).toBeGreaterThan(0),
-        { timeout: 10_000 },
-      );
-      expect(persistenceTestWarnings).not.toHaveBeenCalled();
-      expect(markFinal).toHaveBeenCalledWith(runId);
+          startedAt: 1_000,
+          status: "running",
+          updatedAt: 1_000,
+        });
+        heldWriter = patchSessionEntryCore(target, async () => {
+          writerStarted.resolve();
+          await releaseWriter.promise;
+          return null;
+        });
+        await writerStarted.promise;
+        claimId = claimAgentRunContext(
+          runId,
+          { lifecycleGeneration, sessionId, sessionKey: target.sessionKey },
+          {
+            exclusive: true,
+            ownsContext: true,
+            trackOwner: true,
+            onClearRequested: clearRequested.resolve,
+          },
+        );
+        if (!claimId) {
+          throw new Error("expected worker terminal claim");
+        }
+        const terminalClaimId = claimId;
+        const chatRunState = createChatRunState();
+        const markFinal = vi.spyOn(chatRunState.toolEventRecipients, "markFinal");
+        const agentRunSeq = new Map<string, number>();
+        subscriptions = startGatewayEventSubscriptions({
+          signal: new AbortController().signal,
+          log: silentLog,
+          broadcast: vi.fn(),
+          broadcastToConnIds: vi.fn(),
+          nodeHasSessionSubscribers: () => false,
+          nodeSendToSession: vi.fn(),
+          agentRunSeq,
+          chatRunState,
+          toolEventRecipients: chatRunState.toolEventRecipients,
+          sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+          sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
+          chatAbortControllers: new Map(),
+          restartRecoveryCandidates: new Map(),
+          terminalSessions: { closeTaskSessions: vi.fn() },
+          refreshConnectedUserProfiles: vi.fn(),
+        });
 
-      expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
-        "active",
-      );
-      releaseWriter.resolve();
-      await heldWriter;
-      await vi.waitFor(() => expect(loadSessionEntry(target)?.status).toBe(status));
-      await vi.waitFor(() =>
+        emitAgentEventForOwner(
+          {
+            runId,
+            sessionId,
+            sessionKey: target.sessionKey,
+            stream: "lifecycle",
+            data: { phase, ...data, startedAt: 1_000, endedAt: 2_000 },
+          },
+          claimId,
+        );
+        await vi.waitFor(
+          () =>
+            expect(
+              markFinal.mock.calls.length + persistenceTestWarnings.mock.calls.length,
+            ).toBeGreaterThan(0),
+          { timeout: 10_000 },
+        );
+        expect(persistenceTestWarnings).not.toHaveBeenCalled();
+        expect(markFinal).toHaveBeenCalledWith(runId);
+
+        expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
+          "active",
+        );
+        releaseWriter.resolve();
+        await heldWriter;
+        // Failed runs also persist a transcript receipt after the row update.
+        expect(await racePromiseWithAbortSignal(clearRequested.promise, signal)).toBe(
+          terminalClaimId,
+        );
+        expect(persistenceTestWarnings).not.toHaveBeenCalled();
+        expect(loadSessionEntry(target)?.status).toBe(status);
         expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
           "clear-requested",
-        ),
-      );
-    } finally {
-      releaseWriter.resolve();
-      await heldWriter;
-      await subscriptions?.agentUnsub();
-      subscriptions?.heartbeatUnsub();
-      subscriptions?.transcriptUnsub();
-      subscriptions?.lifecycleUnsub();
-      await subscriptions?.taskUnsub();
-      releaseAgentRunContext(runId, claimId);
-      routing.loadSessionEntry.mockReset();
-      closeOpenClawAgentDatabasesForTest();
-      tempDirs.cleanup();
-    }
-  },
+        );
+      } finally {
+        releaseWriter.resolve();
+        await heldWriter;
+        await subscriptions?.agentUnsub();
+        subscriptions?.heartbeatUnsub();
+        subscriptions?.transcriptUnsub();
+        subscriptions?.lifecycleUnsub();
+        await subscriptions?.taskUnsub();
+        releaseAgentRunContext(runId, claimId);
+        routing.loadSessionEntry.mockReset();
+        closeOpenClawAgentDatabasesForTest();
+        tempDirs.cleanup();
+      }
+    }),
 );

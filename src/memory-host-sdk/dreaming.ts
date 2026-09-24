@@ -20,7 +20,6 @@ import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identit
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const DEFAULT_MEMORY_DREAMING_ENABLED = true;
-const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
 const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
 const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
 const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
@@ -295,58 +294,24 @@ function normalizeScore(value: unknown, fallback: number): number {
   return num;
 }
 
-function normalizeStringArray<T extends string>(
-  value: unknown,
-  allowed: readonly T[],
-  fallback: readonly T[],
-): T[] {
+function normalizeStringArray<T extends string>(value: unknown, fallback: readonly T[]): T[] {
   if (!Array.isArray(value)) {
     return [...fallback];
   }
-  const allowedSet = new Set(allowed);
   const normalized: T[] = [];
   for (const entry of value) {
     const normalizedEntry = normalizeOptionalLowercaseString(entry);
-    if (!normalizedEntry || !allowedSet.has(normalizedEntry as T)) {
-      continue;
-    }
-    if (!normalized.includes(normalizedEntry as T)) {
-      normalized.push(normalizedEntry as T);
+    const match = fallback.find((option) => option === normalizedEntry);
+    if (match && !normalized.includes(match)) {
+      normalized.push(match);
     }
   }
   return normalized.length > 0 ? normalized : [...fallback];
 }
 
-function normalizeStorageMode(value: unknown): MemoryDreamingStorageMode {
+function normalizeChoice<T extends string>(value: unknown, choices: readonly T[]): T | undefined {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "inline" || normalized === "separate" || normalized === "both") {
-    return normalized;
-  }
-  return DEFAULT_MEMORY_DREAMING_STORAGE_MODE;
-}
-
-function normalizeSpeed(value: unknown): MemoryDreamingSpeed | undefined {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "fast" || normalized === "balanced" || normalized === "slow") {
-    return normalized;
-  }
-  return undefined;
-}
-
-function normalizeThinking(value: unknown): MemoryDreamingThinking | undefined {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "low" || normalized === "medium" || normalized === "high") {
-    return normalized;
-  }
-  return undefined;
-}
-
-function normalizeBudget(value: unknown): MemoryDreamingBudget | undefined {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "cheap" || normalized === "medium" || normalized === "expensive") {
-    return normalized;
-  }
-  return undefined;
+  return choices.find((choice) => choice === normalized);
 }
 
 function resolveExecutionConfig(
@@ -364,9 +329,9 @@ function resolveExecutionConfig(
   const model = normalizeOptionalString(record?.model) ?? fallback.model;
 
   return {
-    speed: normalizeSpeed(record?.speed) ?? fallback.speed,
-    thinking: normalizeThinking(record?.thinking) ?? fallback.thinking,
-    budget: normalizeBudget(record?.budget) ?? fallback.budget,
+    speed: normalizeChoice(record?.speed, ["fast", "balanced", "slow"]) ?? fallback.speed,
+    thinking: normalizeChoice(record?.thinking, ["low", "medium", "high"]) ?? fallback.thinking,
+    budget: normalizeChoice(record?.budget, ["cheap", "medium", "expensive"]) ?? fallback.budget,
     ...(model ? { model } : {}),
     ...(typeof maxOutputTokens === "number" ? { maxOutputTokens } : {}),
     ...(typeof temperature === "number" ? { temperature } : {}),
@@ -415,8 +380,7 @@ export function resolveMemoryDreamingConfig(params: {
     normalizeOptionalString(dreaming?.frequency) ?? DEFAULT_MEMORY_DREAMING_FREQUENCY;
   const timezone =
     normalizeOptionalString(dreaming?.timezone) ??
-    normalizeOptionalString(params.cfg?.agents?.defaults?.userTimezone) ??
-    DEFAULT_MEMORY_DREAMING_TIMEZONE;
+    normalizeOptionalString(params.cfg?.agents?.defaults?.userTimezone);
   const storage = asNullableRecord(dreaming?.storage);
   const execution = asNullableRecord(dreaming?.execution);
   const phases = asNullableRecord(dreaming?.phases);
@@ -443,7 +407,9 @@ export function resolveMemoryDreamingConfig(params: {
     verboseLogging:
       parseBoolean(dreaming?.verboseLogging) ?? DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING,
     storage: {
-      mode: normalizeStorageMode(storage?.mode),
+      mode:
+        normalizeChoice(storage?.mode, ["inline", "separate", "both"]) ??
+        DEFAULT_MEMORY_DREAMING_STORAGE_MODE,
       separateReports:
         parseBoolean(storage?.separateReports) ?? DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS,
     },
@@ -462,11 +428,7 @@ export function resolveMemoryDreamingConfig(params: {
           light?.dedupeSimilarity,
           DEFAULT_MEMORY_LIGHT_DREAMING_DEDUPE_SIMILARITY,
         ),
-        sources: normalizeStringArray(
-          light?.sources,
-          ["daily", "sessions", "recall"] as const,
-          DEFAULT_MEMORY_LIGHT_DREAMING_SOURCES,
-        ),
+        sources: normalizeStringArray(light?.sources, DEFAULT_MEMORY_LIGHT_DREAMING_SOURCES),
         execution: resolveExecutionConfig(light?.execution, {
           ...defaultExecution,
           speed: "fast",
@@ -488,22 +450,14 @@ export function resolveMemoryDreamingConfig(params: {
         recencyHalfLifeDays:
           parseStrictNonNegativeInteger(deep?.recencyHalfLifeDays) ??
           DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS,
-        ...(typeof maxAgeDays === "number"
-          ? { maxAgeDays }
-          : typeof DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS === "number"
-            ? { maxAgeDays: DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS }
-            : {}),
+        maxAgeDays: maxAgeDays ?? DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS,
         maxPromotedSnippetTokens:
           maxPromotedSnippetTokens ?? DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
         maxPriorEntryLossFraction: normalizeScore(
           deep?.maxPriorEntryLossFraction,
           DEFAULT_MEMORY_DEEP_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
         ),
-        sources: normalizeStringArray(
-          deep?.sources,
-          ["daily", "memory", "sessions", "logs", "recall"] as const,
-          DEFAULT_MEMORY_DEEP_DREAMING_SOURCES,
-        ),
+        sources: normalizeStringArray(deep?.sources, DEFAULT_MEMORY_DEEP_DREAMING_SOURCES),
         recovery: {
           enabled:
             parseBoolean(deepRecovery?.enabled) ?? DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_ENABLED,
@@ -544,11 +498,7 @@ export function resolveMemoryDreamingConfig(params: {
           rem?.minPatternStrength,
           DEFAULT_MEMORY_REM_DREAMING_MIN_PATTERN_STRENGTH,
         ),
-        sources: normalizeStringArray(
-          rem?.sources,
-          ["memory", "daily", "deep"] as const,
-          DEFAULT_MEMORY_REM_DREAMING_SOURCES,
-        ),
+        sources: normalizeStringArray(rem?.sources, DEFAULT_MEMORY_REM_DREAMING_SOURCES),
         execution: resolveExecutionConfig(rem?.execution, {
           ...defaultExecution,
           speed: "slow",
@@ -560,6 +510,19 @@ export function resolveMemoryDreamingConfig(params: {
   };
 }
 
+function resolveMemoryDreamingPhaseConfig<T extends MemoryDreamingPhaseName>(
+  resolved: MemoryDreamingConfig,
+  phase: T,
+) {
+  return {
+    ...resolved.phases[phase],
+    enabled: resolved.enabled && resolved.phases[phase].enabled,
+    ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
+    verboseLogging: resolved.verboseLogging,
+    storage: resolved.storage,
+  };
+}
+
 export function resolveMemoryDeepDreamingConfig(params: {
   pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;
@@ -568,14 +531,7 @@ export function resolveMemoryDeepDreamingConfig(params: {
   verboseLogging: boolean;
   storage: MemoryDreamingStorageConfig;
 } {
-  const resolved = resolveMemoryDreamingConfig(params);
-  return {
-    ...resolved.phases.deep,
-    enabled: resolved.enabled && resolved.phases.deep.enabled,
-    ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
-    verboseLogging: resolved.verboseLogging,
-    storage: resolved.storage,
-  };
+  return resolveMemoryDreamingPhaseConfig(resolveMemoryDreamingConfig(params), "deep");
 }
 
 export function resolveMemoryLightDreamingConfig(params: {
@@ -586,14 +542,7 @@ export function resolveMemoryLightDreamingConfig(params: {
   verboseLogging: boolean;
   storage: MemoryDreamingStorageConfig;
 } {
-  const resolved = resolveMemoryDreamingConfig(params);
-  return {
-    ...resolved.phases.light,
-    enabled: resolved.enabled && resolved.phases.light.enabled,
-    ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
-    verboseLogging: resolved.verboseLogging,
-    storage: resolved.storage,
-  };
+  return resolveMemoryDreamingPhaseConfig(resolveMemoryDreamingConfig(params), "light");
 }
 
 export function resolveMemoryRemDreamingConfig(params: {
@@ -604,14 +553,7 @@ export function resolveMemoryRemDreamingConfig(params: {
   verboseLogging: boolean;
   storage: MemoryDreamingStorageConfig;
 } {
-  const resolved = resolveMemoryDreamingConfig(params);
-  return {
-    ...resolved.phases.rem,
-    enabled: resolved.enabled && resolved.phases.rem.enabled,
-    ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
-    verboseLogging: resolved.verboseLogging,
-    storage: resolved.storage,
-  };
+  return resolveMemoryDreamingPhaseConfig(resolveMemoryDreamingConfig(params), "rem");
 }
 
 let memoryDreamingDayFormatter: { timezone: string; formatter: Intl.DateTimeFormat } | undefined;

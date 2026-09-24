@@ -35,6 +35,8 @@ const restartRecoveryLog = createSubsystemLogger("main-session-restart-recovery"
 type LifecyclePhase = "start" | "end" | "error";
 
 type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
+  controlUiVisible?: boolean;
+  isHeartbeat?: boolean;
   contextClaimId?: string;
   runId?: string;
   clientRunId?: string;
@@ -47,6 +49,7 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
     aborted?: unknown;
     stopReason?: unknown;
     error?: unknown;
+    errorKind?: unknown;
     livenessState?: unknown;
     timeoutPhase?: unknown;
     providerStarted?: unknown;
@@ -64,6 +67,7 @@ type LifecycleSessionShape = Pick<
   | "startedAt"
   | "endedAt"
   | "runtimeMs"
+  | "lastActivityAt"
   | "abortedLastRun"
 >;
 
@@ -76,6 +80,7 @@ type PersistedLifecycleSessionShape = Pick<
   | "startedAt"
   | "endedAt"
   | "runtimeMs"
+  | "lastActivityAt"
   | "abortedLastRun"
   | "restartRecoveryRuns"
   | "restartRecoveryForceSafeTools"
@@ -213,12 +218,21 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   return {
     updatedAt,
     status,
-    lastRunError: terminal ? resolveSessionRunError(terminal, status) : undefined,
+    lastRunError: terminal
+      ? resolveSessionRunError({ ...terminal, errorKind: params.event.data?.errorKind }, status)
+      : undefined,
     startedAt,
     endedAt: interruptedForRestart ? undefined : endedAt,
     runtimeMs: interruptedForRestart
       ? undefined
       : resolveRuntimeMs({ startedAt, endedAt, existingRuntimeMs: existing?.runtimeMs }),
+    ...(terminal &&
+    !interruptedForRestart &&
+    params.event.controlUiVisible === true &&
+    params.event.isHeartbeat !== true &&
+    endedAt !== undefined
+      ? { lastActivityAt: Math.max(existing?.lastActivityAt ?? 0, endedAt) }
+      : {}),
     abortedLastRun: interruptedForRestart || status === "killed",
   };
 }
@@ -403,7 +417,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
 
   const exactCronRun = parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined;
   let terminalRecovery: { runId: string; outcome: AgentRunTerminalOutcome } | undefined;
-  let failedRun: { runId: string; error: unknown } | undefined;
+  let failedRun: { runId: string; error: unknown; errorKind?: "state_contention" } | undefined;
   const persisted = await patchSessionEntryCore(
     {
       storePath: sessionEntry.storePath,
@@ -494,6 +508,8 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       ) {
         failedRun = {
           runId: eventRunId,
+          errorKind:
+            params.event.data?.errorKind === "state_contention" ? "state_contention" : undefined,
           error:
             resolveTerminalOutcome(params.event).error ??
             (patch.status === "timeout" ? "Run timed out" : undefined),
@@ -541,7 +557,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
     restartRecoveryLog[terminalRecovery.outcome.status === "ok" ? "info" : "warn"](message);
   }
   if (persisted && failedRun) {
-    const { runId, error } = failedRun;
+    const { runId, error, errorKind } = failedRun;
     // Only accepted errors pay for branch navigation; assistant detection and
     // report deduplication share the appender's authoritative write snapshot.
     await recordGatewaySessionRunFailure({
@@ -554,6 +570,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       },
       runId,
       error,
+      errorKind,
       assertCommitAllowed: params.assertCommitAllowed,
     });
   }

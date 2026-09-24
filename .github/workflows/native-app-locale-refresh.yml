@@ -16,15 +16,10 @@ on:
       - apps/.i18n/native/**
       - apps/.i18n/native-source.json
       - scripts/control-ui-i18n.ts
-      - scripts/lib/control-ui-i18n-catalog.ts
       - scripts/lib/control-ui-i18n-catalog-values.ts
-      - ui/src/i18n/lib/config-hint-translation.ts
-      - ui/src/lib/fnv1a.ts
-      - src/config/schema*.ts
-      - src/config/zod-schema*.ts
-      - src/config/media-audio-field-metadata.ts
-      - src/config/talk-defaults.ts
-      - src/config/channel-config-keys.ts
+      - scripts/lib/control-ui-i18n-config.json
+      - scripts/lib/control-ui-i18n-config.ts
+      - scripts/lib/control-ui-i18n-sync-plan.ts
       - scripts/android-app-i18n.ts
       - scripts/apple-app-i18n.ts
       - scripts/native-app-i18n.ts
@@ -32,6 +27,7 @@ on:
       - ui/src/i18n/.i18n/glossary.*.json
       - .github/actions/create-generated-pr-tokens/action.yml
       - .github/actions/publish-generated-pr/action.yml
+      - .github/actions/publish-generated-pr/policy.py
       - .github/workflows/native-app-locale-refresh.yml
   workflow_dispatch:
     inputs:
@@ -291,15 +287,10 @@ jobs:
             apps/macos/Package.swift
             apps/shared/OpenClawKit/Sources
             scripts/control-ui-i18n.ts
-            scripts/lib/control-ui-i18n-catalog.ts
             scripts/lib/control-ui-i18n-catalog-values.ts
-            ui/src/i18n/lib/config-hint-translation.ts
-            ui/src/lib/fnv1a.ts
-            src/config/schema*.ts
-            src/config/zod-schema*.ts
-            src/config/media-audio-field-metadata.ts
-            src/config/talk-defaults.ts
-            src/config/channel-config-keys.ts
+            scripts/lib/control-ui-i18n-config.json
+            scripts/lib/control-ui-i18n-config.ts
+            scripts/lib/control-ui-i18n-sync-plan.ts
             scripts/android-app-i18n.ts
             scripts/apple-app-i18n.ts
             scripts/native-app-i18n.ts
@@ -307,6 +298,7 @@ jobs:
             ui/src/i18n/.i18n/glossary.*.json
             .github/actions/create-generated-pr-tokens/action.yml
             .github/actions/publish-generated-pr/action.yml
+            .github/actions/publish-generated-pr/policy.py
             .github/workflows/native-app-locale-refresh.yml
           pr-body: |
             ## What Problem This Solves
