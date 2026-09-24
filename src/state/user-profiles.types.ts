@@ -16,6 +16,15 @@ export type UserProfileDisplay = {
 
 export type CachedGitHubIdentity = { profileId: string; updatedAt: number };
 
+export type StoredGitHubIdentity = { accountId: number; login: string };
+
+export type UserProfileGitHubAttribution = Map<string, StoredGitHubIdentity | null>;
+
+export type UserProfileGitHubAttributionRead = {
+  identities: UserProfileGitHubAttribution;
+  canonicalProfileIds: string[];
+};
+
 export type UserChannelIdentity = { channelId: string; accountId: string; senderId: string };
 export type UserChannelIdentityLink = { profileId: string; identity: UserChannelIdentity };
 export type UserChannelIdentityAuthorityFacts = {

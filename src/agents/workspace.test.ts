@@ -834,6 +834,25 @@ describe("ensureAgentWorkspace", () => {
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
   });
 
+  it("keeps bootstrap pending when SOUL.md holds a previously shipped template", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_SOUL_FILENAME,
+      content: await fs.readFile(
+        "test/fixtures/agents/retired-workspace-templates/SOUL.md",
+        "utf8",
+      ),
+    });
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
+    await expect(
+      fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
+    ).resolves.toBeUndefined();
+  });
+
   it("does not treat git alone as stale bootstrap completion evidence", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });

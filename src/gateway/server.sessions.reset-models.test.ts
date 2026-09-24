@@ -590,6 +590,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
         createdVia: "spawn",
         createdActor: { type: "agent", id: "agent:main:main" },
         createdAt: 1_000,
+        inheritedGitContributorProfileIds: ["original-contributor"],
         forkSource: {
           sessionKey: "agent:main:root",
           sessionId: "root-session",
@@ -607,6 +608,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
 
   expect(reset.ok).toBe(true);
   expectOwnedChildMetadata(reset.payload?.entry);
+  expect(reset.payload?.entry).not.toHaveProperty("inheritedGitContributorProfileIds");
   expect(reset.payload?.entry).toMatchObject({
     createdVia: "spawn",
     createdActor: { type: "agent", id: "agent:main:main" },
@@ -624,6 +626,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
     createdVia: "spawn",
     createdActor: { type: "agent", id: "agent:main:main" },
     createdAt: 1_000,
+    inheritedGitContributorProfileIds: ["original-contributor"],
     forkSource: {
       sessionKey: "agent:main:root",
       sessionId: "root-session",

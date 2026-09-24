@@ -88,6 +88,7 @@ describe("on-demand prepared worker admission", () => {
       const result = await f.service.prepare(f.request);
       // Provider entry follows the committed provisioning transition; hold it during reads.
       await entered.promise;
+      const baseCommit = await requireGit(f.projectPath, ["rev-parse", "HEAD"]);
       const record = support.testState.store.get(result.environmentId)!;
       expect(result).toEqual({
         environmentId: record.environmentId,
@@ -101,7 +102,7 @@ describe("on-demand prepared worker admission", () => {
           executionMode: "worker-turn",
           project: {
             root: f.projectPath,
-            baseCommit: await requireGit(f.projectPath, ["rev-parse", "HEAD"]),
+            baseCommit,
           },
         },
         preparation: {
@@ -116,9 +117,13 @@ describe("on-demand prepared worker admission", () => {
       );
       expect(f.provision).toHaveBeenCalledOnce();
       expect(support.testState.store.get(record.environmentId)?.destroyRequestedAtMs).toBeNull();
-      expect(f.service.list()[0]?.preparation).toMatchObject({
+      expect(f.service.list()[0]?.preparation).toEqual({
         purpose: "build",
         key: result.preparationKey,
+        demandAtMs: 1_000,
+        expiresAtMs: 11_000,
+        consumedAtMs: null,
+        project: { label: "project", baseCommit },
       });
     } finally {
       release.resolve();

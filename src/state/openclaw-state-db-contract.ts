@@ -103,6 +103,7 @@ export const LAZY_ADDITIVE_STATE_INDEXES = [
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
+export const STATE_WAL_COORDINATOR_WAIT_MS = 350;
 /** User-facing guide for schema refusals; lives here so error sites avoid import cycles. */
 export const OPENCLAW_DATABASE_SCHEMA_DOCS_URL =
   "https://docs.openclaw.ai/reference/database-schemas";

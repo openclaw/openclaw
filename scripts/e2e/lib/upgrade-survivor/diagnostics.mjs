@@ -39,6 +39,12 @@ const logNames = [
   "workshop-baseline-doctor.json",
   "workshop-recovered-upgrade.json",
   "workshop-candidate-doctor.json",
+  "physical-baseline-update.json",
+  "physical-baseline-update.err",
+  "physical-baseline-refusal.json",
+  "physical-baseline-restoration.json",
+  "physical-candidate-doctor.log",
+  "physical-candidate-repair.json",
   "legacy-operator-cron-history-proof.json",
   "legacy-operator-baseline-turn.out",
   "legacy-operator-baseline-turn.err",
@@ -1639,7 +1645,16 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
         "repair.json",
         "recovery-update.json",
         ...(snapshot.scenario === "workshop-doctor-recovery"
-          ? ["workshop-doctor-recovery.json", "baseline-doctor.log", "doctor.log"]
+          ? [
+              "workshop-doctor-recovery.json",
+              "baseline-doctor.log",
+              "doctor.log",
+              "physical-baseline-update.json",
+              "physical-baseline-refusal.json",
+              "physical-baseline-restoration.json",
+              "physical-candidate-doctor.log",
+              "physical-candidate-repair.json",
+            ]
           : []),
         ...(snapshot.scenario === "legacy-operator-state" &&
         snapshot.updateRestartMode === "manual" &&

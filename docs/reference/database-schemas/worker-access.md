@@ -53,6 +53,14 @@ behavior.
 
 ## Carry facts, publish after commit
 
+Memory session preparation retains only export text, provenance, timestamps, and
+classification/reset facts from each decoded SQLite event. Full-message observers
+retain their original snapshot, and callbacks run after its read transaction closes.
+Conversation-recall reset checks use the existing reset navigation projection in
+the same background reader pool, without hydrating message bodies. Both paths
+retain the transcript read fence and raw line ordinals. Full indexing still scans
+the transcript; stored data, exported content, hashes, and update behavior are unchanged.
+
 Before yielding, capture the physical store target, source/admission scope,
 request identity, and the owning projection revision. The lifecycle owner retains
 that source until reader cleanup or write settlement completes. Workers return

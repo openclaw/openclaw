@@ -418,8 +418,6 @@ const rootEntries = [
   "src/commands/doctor/shared/deprecation-compat.ts!",
   // Compiled as the package-boundary failure canary by the extension checker.
   "src/plugins/contracts/rootdir-boundary-canary.ts!",
-  // Mintlify executes every JavaScript file in the docs content directory on each page.
-  "docs/nav-tabs-underline.js!",
   // Native applications load these JavaScript assets directly rather than through Node imports.
   "apps/android/app/src/main/assets/katex/katex.min.js!",
   "apps/android/app/src/main/assets/katex/renderer.js!",

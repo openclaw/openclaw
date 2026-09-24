@@ -21,35 +21,36 @@ import {
   EnvironmentsListResultSchema,
   EnvironmentsStatusParamsSchema,
   EnvironmentsStatusResultSchema,
-} from "../../../packages/gateway-protocol/src/index.js";
-import { AgentWaitParamsSchema } from "../../../packages/gateway-protocol/src/schema/agent.js";
+} from "../../packages/gateway-protocol/src/index.js";
+import { AgentWaitParamsSchema } from "../../packages/gateway-protocol/src/schema/agent.js";
 import {
   ArtifactsDownloadResultSchema,
   ArtifactsGetResultSchema,
   ArtifactsListResultSchema,
-} from "../../../packages/gateway-protocol/src/schema/artifacts.js";
-import { environmentsHandlers } from "../../../src/gateway/server-methods/environments.js";
-import type {
-  GatewayRequestHandlerOptions,
-  RespondFn,
-} from "../../../src/gateway/server-methods/types.js";
+} from "../../packages/gateway-protocol/src/schema/artifacts.js";
+import {
+  GatewayClientTransport,
+  OpenClaw,
+  type OpenClawEvent,
+} from "../../packages/sdk/src/index.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { withTimeout } from "../utils/with-timeout.js";
+import { environmentsHandlers } from "./server-methods/environments.js";
+import type { GatewayRequestHandlerOptions, RespondFn } from "./server-methods/types.js";
 import {
   installGatewayTestHooks,
   startServer,
   testState,
   writeSessionStore,
-} from "../../../src/gateway/test-helpers.js";
+} from "./test-helpers.js";
 import type {
   WorkerEnvironmentServiceContract,
   WorkerEnvironmentServiceRecord,
-} from "../../../src/gateway/worker-environments/service-contract.js";
-import { emitAgentEvent } from "../../../src/infra/agent-events.js";
-import { registerAgentRunContext } from "../../../src/infra/agent-run-registry.js";
-import { withTimeout } from "../../../src/utils/with-timeout.js";
-import { GatewayClientTransport, OpenClaw, type OpenClawEvent } from "./index.js";
+} from "./worker-environments/service-contract.js";
 
-vi.mock("../../../src/infra/device-pairing.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/infra/device-pairing.js")>();
+vi.mock("../infra/device-pairing.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-pairing.js")>();
   return {
     ...actual,
     listDevicePairing: vi.fn(async () => ({ pending: [], paired: [] })),
@@ -57,8 +58,8 @@ vi.mock("../../../src/infra/device-pairing.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../src/infra/device-pairing-node.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/infra/device-pairing-node.js")>();
+vi.mock("../infra/device-pairing-node.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-pairing-node.js")>();
   return {
     ...actual,
     listNodePairing: vi.fn(async () => ({ pending: [], paired: [] })),
@@ -116,6 +117,7 @@ function workerRecord(state: "requested" | "ready" | "destroyed"): WorkerEnviron
     ownerEpoch: 1,
     createdAtMs: 1_000,
     idleSinceAtMs: null,
+    destroyRequestedAtMs: null,
     attachedSessionIds: ["session-sdk-e2e"],
     desktopAvailable: false,
     desktopApps: [],
@@ -160,6 +162,8 @@ async function createFakeGateway(): Promise<FakeGateway> {
     supportsExecutionMode: (profileId, mode) =>
       profileId === "development" && mode === "worker-turn",
     readProviderDisplayId: () => undefined,
+    readPreparedPoolSummary: () => ({ maxTotal: 4, reservedEnvironmentIds: [] }),
+    readReadyWorkerTarget: () => 1,
     listMachineOptions: async () => undefined,
     listOperatingSystems: async () => undefined,
     prepare: async () => {
