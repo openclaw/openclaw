@@ -36,7 +36,7 @@ Use `xurl` for X API work. Shortcut commands return JSON; raw mode works for any
 
 - `~/.xurl` holds tokens; check auth with `xurl auth status` instead of reading it.
 - Pass secrets to auth commands through the prompt, not inline, so they stay out of shell history.
-- `--verbose` prints auth headers; use it only when debugging auth.
+- `--verbose` prints auth headers into tool output.
 
 ## Common shortcuts
 

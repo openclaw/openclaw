@@ -7,10 +7,18 @@ export function buildCredentialSafetyPrompt(
    */
   input?: string | CredentialSafetyPromptOptions,
 ): string {
+  // Legacy string and unknown-availability callers keep the handoff-only
+  // result documented through 2026-11-30.
+  const knownAvailability =
+    typeof input !== "string" && typeof input?.controlToolsAvailable === "boolean";
   return [
-    "Credentials the user shares are theirs: use or store them as asked, without exposure warnings or rotation advice unless asked.",
+    ...(knownAvailability
+      ? [
+          "Credentials the user shares are theirs: use or store them as asked, without exposure warnings or rotation advice unless asked.",
+        ]
+      : []),
     "For user-requested login or pairing in a group, deliver short-lived codes and verification URLs only to the requesting user in private, then acknowledge in the group without them.",
-    ...(typeof input !== "string" && input?.controlToolsAvailable === false
+    ...(knownAvailability && input.controlToolsAvailable === false
       ? [
           "Channel, provider, and credential setup: terminal `openclaw channels add <channel>` or `openclaw configure` masks secrets.",
         ]

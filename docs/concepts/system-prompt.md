@@ -70,14 +70,14 @@ At the `ultra` thinking level, a **Proactive Sub-Agent Orchestration** section i
 The `secrets` tool description teaches metadata-first discovery, task-needed
 masked requests, and returned store SecretRefs for supported config fields.
 Setup tool descriptions route credential collection through masked flows.
-The **Safety** section directs user-requested login or pairing codes and
-verification URLs from group conversations to the requesting user in private,
-followed by a group acknowledgment without the code or URL. When neither
-`openclaw` nor `gateway` is available, it directs
-channel, provider, and credential setup to `openclaw channels add <channel>` or
-`openclaw configure` in a terminal, where prompts mask secrets. Tokens, API keys,
-and passwords are not collected in chat. This credential guidance also appears
-in Codex and Copilot prompts, based on their callable control tools.
+The **Care** section tells the agent to use or store credentials the user shares
+as asked, and directs user-requested login or pairing codes and verification URLs
+from group conversations to the requesting user in private, followed by a group
+acknowledgment without the code or URL. When neither `openclaw` nor `gateway` is
+available, it directs channel, provider, and credential setup to
+`openclaw channels add <channel>` or `openclaw configure` in a terminal, where
+prompts mask secrets. This credential guidance also appears in Codex and Copilot
+prompts, based on their callable control tools.
 See [Secrets](/tools/secrets).
 
 UI presentation guidance is shared with native Codex developer instructions.
@@ -93,7 +93,7 @@ not a bare `publicUrl`; token-bearing URLs stay private. The agent must verify t
 delivered interaction or say it is unverified. Tool descriptions and linked docs
 own the detailed sandbox, permission, and server-setup instructions.
 
-Safety guardrails in the system prompt are advisory, not enforcement. Use tool policy, exec approvals, sandboxing, and channel allowlists for hard enforcement; operators can disable prompt guardrails by design.
+Risk is enforced at runtime, not in prompt prose. Tool policy, exec approvals, sandboxing, and channel allowlists decide what runs or needs confirmation; the prompt tells the agent to act on requested work and let those gates decide.
 
 Gateway-owned prompt assembly carries context provenance separately from message text.
 Context producers distinguish runtime instructions from conversation data and
@@ -122,7 +122,7 @@ On channels with native approval cards/buttons, the prompt tells the agent to re
 OpenClaw renders smaller system prompts for sub-agents. The runtime sets a `promptMode` per run (not user-facing config):
 
 - `full` (default): all sections above.
-- `minimal`: used for sub-agents; omits the memory prompt section (bundled as **Memory Recall**), **Model Aliases**, **User Identity**, **Assistant Output Directives**, **Messaging**, **Collapsible Details**, and **Silent Replies**. Tooling, **Safety**, **Skills** (when supplied), Workspace, Sandbox, Current Date & Time (when known), Runtime, and injected context stay available.
+- `minimal`: used for sub-agents; omits the memory prompt section (bundled as **Memory Recall**), **Model Aliases**, **User Identity**, **Assistant Output Directives**, **Messaging**, **Collapsible Details**, and **Silent Replies**. Tooling, **Care**, **Skills** (when supplied), Workspace, Sandbox, Current Date & Time (when known), Runtime, and injected context stay available.
 - `none`: returns only the base identity line.
 
 Under `promptMode=minimal`, extra injected prompts are labeled **Subagent Context** instead of **Group Chat Context**.
