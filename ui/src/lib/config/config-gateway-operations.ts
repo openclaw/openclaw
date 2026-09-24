@@ -10,6 +10,7 @@ import { formatUiError, formatUiExternalText } from "../format-error.ts";
 import { showToast } from "../toast.ts";
 import {
   adoptConfigWriteAck,
+  isConfigWriteAck,
   configFormForSubmit,
   assertConfigDraftCurrent,
   type ConfigSubmittedDraft,
@@ -646,6 +647,24 @@ export async function patchConfig(
     return true;
   } catch (err) {
     if (isCurrentConfigConnection(state, client, connectionEpoch)) {
+      if (
+        err instanceof GatewayRequestError &&
+        isGatewayProtocolResponseError(err) &&
+        err.gatewayCode === ErrorCodes.UNAVAILABLE &&
+        isRecord(err.details) &&
+        err.details.publication !== "partial" &&
+        err.details.publication !== "complete" &&
+        isConfigWriteAck(err.details.persistedConfig)
+      ) {
+        // This negative response confirms persistence, not runtime application.
+        const receipt = err.details.persistedConfig;
+        onSubmitted?.({ ...submitted, ack: receipt });
+        const adoptedStatus = adoptConfigWriteAck(state, submitted, receipt);
+        state.configNeedsApply = true;
+        if (adoptedStatus === "conflict") {
+          return false;
+        }
+      }
       const outcome = configMutationFailure(state, err);
       state.lastError = outcome.message;
       state.configAutoSaveStatus = outcome.status;
