@@ -109,7 +109,7 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions &
     applyTranscriptCommit?: WorkerTranscriptCommitApplication;
     liveEvents?: Pick<
       WorkerLiveEventReceiver,
-      "apply" | "bindSession" | "clear" | "clearEnvironment" | "rotateCredential"
+      "apply" | "clear" | "clearEnvironment" | "rotateCredential"
     >;
     executeInference: WorkerInferenceExecutor;
     inferenceStore?: WorkerInferenceStore;
@@ -244,7 +244,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
     if (to !== "attached") {
       inference.cancelEnvironment(record.environmentId);
-      options.liveEvents?.clearEnvironment(record.environmentId);
+      options.liveEvents?.clearEnvironment(record.environmentId, record.ownerEpoch);
     }
     return next;
   };

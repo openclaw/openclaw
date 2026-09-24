@@ -2,6 +2,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  readSqliteCacheDataVersion,
+} from "../../infra/sqlite-schema-facts.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 
 /** Connection revision shared by entry snapshots and maintenance age facts. */
@@ -18,17 +22,19 @@ type SessionEntryRevisionDatabase = {
 };
 
 function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
-  const schemaRow = executeSqliteQueryTakeFirstSync(
-    database,
-    getNodeSqliteKysely<SessionEntryRevisionDatabase>(database)
-      .selectFrom("pragma_schema_version")
-      .select("schema_version"),
-  );
-  if (typeof schemaRow?.schema_version !== "number") {
+  const schemaVersion =
+    getAdmittedSqliteSchemaFacts(database)?.schemaVersion ??
+    executeSqliteQueryTakeFirstSync(
+      database,
+      getNodeSqliteKysely<SessionEntryRevisionDatabase>(database)
+        .selectFrom("pragma_schema_version")
+        .select("schema_version"),
+    )?.schema_version;
+  if (typeof schemaVersion !== "number") {
     throw new Error("SQLite did not return a numeric PRAGMA schema_version");
   }
   const trackedSchemaVersion = sessionNodesGenerationTrackerSchemaVersions.get(database);
-  if (trackedSchemaVersion === schemaRow.schema_version) {
+  if (trackedSchemaVersion === schemaVersion) {
     return;
   }
   const hasParticipants = tableExists(database, "session_participants");
@@ -66,9 +72,9 @@ function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
   `);
   // A rolled-back schema change can reuse its version on retry after SQLite removes the triggers.
   if (!database.isTransaction) {
-    sessionNodesGenerationTrackerSchemaVersions.set(database, schemaRow.schema_version);
+    sessionNodesGenerationTrackerSchemaVersions.set(database, schemaVersion);
   } else {
-    const version = schemaRow.schema_version;
+    const version = schemaVersion;
     stageSqliteTransactionState(database, {
       stage: () => sessionNodesGenerationTrackerSchemaVersions.set(database, version),
       rollback: () => sessionNodesGenerationTrackerSchemaVersions.delete(database),
@@ -95,9 +101,11 @@ export function readSessionNodesGeneration(database: DatabaseSync): number {
 
 export function readSessionEntryCacheValidityToken(
   database: DatabaseSync,
+  mode: "fresh" | "cached" = "fresh",
 ): SqliteSessionEntryRevision {
   return {
-    dataVersion: readSqliteDataVersion(database),
+    dataVersion:
+      mode === "cached" ? readSqliteCacheDataVersion(database) : readSqliteDataVersion(database),
     sessionNodesGeneration: readSessionNodesGeneration(database),
   };
 }
@@ -110,4 +118,39 @@ export function cacheValidityTokensEqual(
     left.dataVersion === right.dataVersion &&
     left.sessionNodesGeneration === right.sessionNodesGeneration
   );
+}
+
+class SessionEntryRevisionConflictError extends Error {
+  readonly code = "invalid_state";
+}
+
+/** Reuse prepared facts until this connection observes a write, then compare only their predicate. */
+export function createSessionEntryRevisionGuard(
+  database: DatabaseSync,
+  assertSourceCurrent: () => void,
+  matches: () => boolean,
+): () => void {
+  let verified: SqliteSessionEntryRevision | undefined;
+  return () => {
+    assertSourceCurrent();
+    const before = readSessionEntryCacheValidityToken(database);
+    if (verified && cacheValidityTokensEqual(verified, before)) {
+      assertSourceCurrent();
+      return;
+    }
+    if (!matches()) {
+      throw new SessionEntryRevisionConflictError(
+        "Prepared session entry facts are no longer current",
+      );
+    }
+    const after = readSessionEntryCacheValidityToken(database);
+    assertSourceCurrent();
+    // A foreign commit during the predicate must not be hidden by its later revision.
+    if (!cacheValidityTokensEqual(before, after)) {
+      throw new SessionEntryRevisionConflictError(
+        "Session entry facts changed during their mutation check",
+      );
+    }
+    verified = after;
+  };
 }

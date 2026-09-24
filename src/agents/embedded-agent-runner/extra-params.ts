@@ -348,8 +348,7 @@ function createStreamFnWithExtraParams(
   }
   const resolvedResponseFormat = resolveAliasedParamValue(
     [extraParams],
-    "response_format",
-    "responseFormat",
+    ["response_format", "responseFormat"],
   );
   if (
     resolvedResponseFormat &&
@@ -382,11 +381,11 @@ function createStreamFnWithExtraParams(
   // so transport layers can filter by API type (e.g. openai-responses skips penalty params).
   // Resolve aliased params: camelCase (runtime/request) checked first so
   // per-request gateway overrides take priority over configured snake_case values.
-  const resolvedFrequencyPenalty = resolveAliasedParamValueFromKeys(
+  const resolvedFrequencyPenalty = resolveAliasedParamValue(
     [extraParams],
     ["frequencyPenalty", "frequency_penalty"],
   );
-  const resolvedPresencePenalty = resolveAliasedParamValueFromKeys(
+  const resolvedPresencePenalty = resolveAliasedParamValue(
     [extraParams],
     ["presencePenalty", "presence_penalty"],
   );
@@ -450,14 +449,6 @@ function createStreamFnWithExtraParams(
 
 function resolveAliasedParamValue(
   sources: Array<Record<string, unknown> | undefined>,
-  snakeCaseKey: string,
-  camelCaseKey: string,
-): unknown {
-  return resolveAliasedParamValueFromKeys(sources, [snakeCaseKey, camelCaseKey]);
-}
-
-function resolveAliasedParamValueFromKeys(
-  sources: Array<Record<string, unknown> | undefined>,
   keys: readonly string[],
 ): unknown {
   let resolved: unknown = undefined;
@@ -484,56 +475,38 @@ function canonicalizeExtraParamAlias(
   keys: readonly [string, string],
   canonical = keys[0],
 ): void {
-  const resolved = resolveAliasedParamValueFromKeys(sources, keys);
+  const resolved = resolveAliasedParamValue(sources, keys);
   if (resolved !== undefined) {
     merged[canonical] = resolved;
     delete merged[keys[0] === canonical ? keys[1] : keys[0]];
   }
 }
 
-function applyCanonicalAliasedParamValue(params: {
-  merged: Record<string, unknown>;
-  sources: Array<Record<string, unknown> | undefined>;
-  keys: readonly string[];
-  canonicalKey: string;
-}): void {
-  const resolved = resolveAliasedParamValueFromKeys(params.sources, params.keys);
-  if (resolved === undefined) {
-    return;
-  }
-  for (const key of params.keys) {
-    delete params.merged[key];
-  }
-  params.merged[params.canonicalKey] = resolved;
-}
+const OPENROUTER_RESPONSE_CACHE_PARAM_ALIASES = [
+  ["responseCache", "response_cache"],
+  [
+    "responseCacheTtlSeconds",
+    "response_cache_ttl_seconds",
+    "responseCacheTtl",
+    "response_cache_ttl",
+  ],
+  ["responseCacheClear", "response_cache_clear"],
+] as const;
 
 function canonicalizeOpenRouterResponseCacheParams(
   merged: Record<string, unknown>,
   sources: Array<Record<string, unknown> | undefined>,
 ): void {
-  applyCanonicalAliasedParamValue({
-    merged,
-    sources,
-    keys: ["responseCache", "response_cache"],
-    canonicalKey: "responseCache",
-  });
-  applyCanonicalAliasedParamValue({
-    merged,
-    sources,
-    keys: [
-      "responseCacheTtlSeconds",
-      "response_cache_ttl_seconds",
-      "responseCacheTtl",
-      "response_cache_ttl",
-    ],
-    canonicalKey: "responseCacheTtlSeconds",
-  });
-  applyCanonicalAliasedParamValue({
-    merged,
-    sources,
-    keys: ["responseCacheClear", "response_cache_clear"],
-    canonicalKey: "responseCacheClear",
-  });
+  for (const keys of OPENROUTER_RESPONSE_CACHE_PARAM_ALIASES) {
+    const resolved = resolveAliasedParamValue(sources, keys);
+    if (resolved === undefined) {
+      continue;
+    }
+    for (const key of keys) {
+      delete merged[key];
+    }
+    merged[keys[0]] = resolved;
+  }
 }
 
 function createParallelToolCallsWrapper(
@@ -763,8 +736,7 @@ function applyPostPluginStreamWrappers(
 
   const rawChatTemplateKwargs = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],
-    "chat_template_kwargs",
-    "chatTemplateKwargs",
+    ["chat_template_kwargs", "chatTemplateKwargs"],
   );
   const configuredChatTemplateKwargs = resolveExtraBodyRecord(
     rawChatTemplateKwargs,
@@ -779,8 +751,7 @@ function applyPostPluginStreamWrappers(
 
   const rawExtraBody = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],
-    "extra_body",
-    "extraBody",
+    ["extra_body", "extraBody"],
   );
   const extraBody = resolveExtraBodyRecord(rawExtraBody, "extra_body");
   if (extraBody) {
@@ -790,8 +761,7 @@ function applyPostPluginStreamWrappers(
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],
-    "parallel_tool_calls",
-    "parallelToolCalls",
+    ["parallel_tool_calls", "parallelToolCalls"],
   );
   if (rawParallelToolCalls === undefined) {
     return;

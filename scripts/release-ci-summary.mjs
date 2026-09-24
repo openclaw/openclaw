@@ -3593,8 +3593,9 @@ async function main() {
       console.log(`lane-waiver: ${sourceManifest.validationInputs.laneWaiver}`);
     }
     for (const job of sourceManifest.advisoryJobs) {
+      const failed = job.status === "completed" && job.conclusion !== "success";
       console.log(
-        `advisory${job.reason === "lane_waiver" ? " (lane waiver)" : ""}: ${job.child} ${job.status}/${job.conclusion || "none"} ${job.job}`,
+        `${failed ? "::warning title=Advisory lane failed::" : "advisory: "}${job.reason === "lane_waiver" ? "(lane waiver) " : ""}${job.child} ${job.status}/${job.conclusion || "none"} ${job.job}`,
       );
     }
     const expectedChildren = expectedSelectedChildDispatches(

@@ -238,7 +238,7 @@ export class ComposedGatewayHarness {
     this.placementStore = placements.createWorkerSessionPlacementStore({
       database: this.database,
     });
-    this.liveEventsValue = this.createLiveEvents(true);
+    this.liveEventsValue = liveEvents.createWorkerLiveEventReceiver();
     this.placementLifecycle = new WorkerFaultPlacementLifecycle({
       agentId: "main",
       bundleHash: BUNDLE_HASH,
@@ -384,7 +384,7 @@ export class ComposedGatewayHarness {
     this.chat.state.clear();
     this.abandonedServices.push(this.serviceValue);
     this.liveEventsValue.clear();
-    this.liveEventsValue = this.createLiveEvents(false);
+    this.liveEventsValue = liveEvents.createWorkerLiveEventReceiver();
     this.placementGateValue = createWorkerSessionPlacementGate(this.placementStore, {
       rejectExistingWorkerClaims: true,
     });
@@ -435,16 +435,7 @@ export class ComposedGatewayHarness {
         },
       },
     });
-    this.liveEventsValue.clearEnvironment(ENVIRONMENT_ID);
-    if (
-      !this.liveEventsValue.bindSession({
-        environmentId: ENVIRONMENT_ID,
-        runEpoch: next.ownerEpoch,
-        sessionId: SESSION_ID,
-      })
-    ) {
-      throw new Error("replacement live-event binding failed");
-    }
+    this.liveEventsValue.clearEnvironment(ENVIRONMENT_ID, staleClaim.owner.ownerEpoch);
     await this.placementLifecycle.prepareRun(runId, credential);
     return next.ownerEpoch;
   }
@@ -504,24 +495,6 @@ export class ComposedGatewayHarness {
       rootPath: this.root,
     });
     await fs.rm(this.root, { recursive: true, force: true });
-  }
-
-  private createLiveEvents(corroborateOwner: boolean): liveEvents.WorkerLiveEventReceiver {
-    const binding = {
-      environmentId: ENVIRONMENT_ID,
-      runEpoch: this.epoch,
-      sessionId: SESSION_ID,
-    };
-    const receiver = liveEvents.createWorkerLiveEventReceiver({
-      startupBindings: corroborateOwner ? [binding] : [],
-      startupOwners: corroborateOwner
-        ? new Map([[ENVIRONMENT_ID, this.epoch]])
-        : new Map<string, number>(),
-    });
-    if (!corroborateOwner && !receiver.bindSession(binding)) {
-      throw new Error("live-event restart binding failed");
-    }
-    return receiver;
   }
 
   private createService(): workerEnv.WorkerEnvironmentService {

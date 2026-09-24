@@ -16,7 +16,10 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import * as nodePairing from "../infra/device-pairing-node-state.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
-import { NODE_WORKER_PORTAL_STREAM_COMMAND } from "../infra/node-commands.js";
+import {
+  NODE_WORKER_PORTAL_STREAM_COMMAND,
+  NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+} from "../infra/node-commands.js";
 import {
   NODE_WORKER_PORTAL_STREAM_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -263,6 +266,19 @@ it("carries authenticated session previews through the node and retires access b
               return;
             }
             const frame = coerceNodeInvokePayload(event.payload);
+            if (frame?.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND) {
+              const maintenance = (async () => {
+                await rpcReq(node.socket, "node.invoke.result", {
+                  id: frame.id,
+                  nodeId: frame.nodeId,
+                  ok: true,
+                  payloadJSON: JSON.stringify({ applied: true, deleted: 0, hasMore: false }),
+                });
+              })();
+              running.add(maintenance);
+              void maintenance.finally(() => running.delete(maintenance)).catch(() => {});
+              return;
+            }
             assert(frame && frame.command === NODE_WORKER_PORTAL_STREAM_COMMAND);
             invocations.push(frame.id);
             const controller = new AbortController();

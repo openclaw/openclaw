@@ -8,6 +8,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
 /** Runtime helpers that must never appear as undeclared declaration exports. */
@@ -204,4 +205,12 @@ export function sanitizeBundlerHelperDtsExportTree(root: string): number {
     }
   }
   return changed;
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const root = process.argv[2];
+  if (!root || process.argv.length !== 3) {
+    throw new Error("usage: sanitize-bundler-helper-dts-exports.mts <dist-root>");
+  }
+  sanitizeBundlerHelperDtsExportTree(path.resolve(root));
 }
