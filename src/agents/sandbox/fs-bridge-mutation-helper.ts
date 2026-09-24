@@ -19,6 +19,14 @@ const SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES = [
   "/bin/python3",
 ] as const;
 
+export const PINNED_MUTATION_ACTION_LABELS = {
+  write: "write files",
+  create: "create files",
+  mkdir: "create directories",
+  remove: "remove files",
+  "copy-destination": "copy files",
+} as const;
+
 export const SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL = `'${GUEST_FILESYSTEM_PYTHON.replaceAll("'", `'\\''`)}'`;
 
 export type PinnedSandboxOperation =

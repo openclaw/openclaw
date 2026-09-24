@@ -17,6 +17,7 @@ import {
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
+  createDirectOutboundTestAdapter,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -54,7 +55,10 @@ async function withWebchatTool(
       createTestRegistry(
         ["discord", "telegram"].map((id) => ({
           pluginId: id,
-          plugin: createChannelTestPluginBase({ id, config: { isConfigured: () => true } }),
+          plugin: {
+            ...createChannelTestPluginBase({ id, config: { isConfigured: () => true } }),
+            outbound: createDirectOutboundTestAdapter({ channel: id }),
+          },
           source: "test:webchat-cron",
         })),
       ),

@@ -302,7 +302,6 @@ export function createProvider(overrides: Partial<WorkerProvider> = {}): WorkerP
 export function createLiveEvents(overrides: Record<string, unknown> = {}) {
   return {
     apply: vi.fn(async () => LIVE_EVENT_ACK),
-    bindSession: vi.fn(() => true),
     clear: vi.fn(),
     clearEnvironment: vi.fn(),
     rotateCredential: vi.fn(() => true),

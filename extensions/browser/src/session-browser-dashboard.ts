@@ -13,13 +13,13 @@ import type {
 import { getBrowserStateRuntime, getOptionalBrowserStateRuntime } from "./browser-runtime-state.js";
 import { resolveCdpControlPolicy } from "./browser/cdp-reachability-policy.js";
 import { isLocalManagedProfile } from "./browser/config.js";
-import { startBrowserControlServiceFromConfig } from "./browser/control-service.js";
 import { getPwAiModule } from "./browser/pw-ai-module.js";
 import { browserNavigationPolicyForProfile } from "./browser/routes/agent.shared.js";
 import {
   getProfileLifecycle,
   isProfileGenerationCurrent,
 } from "./browser/server-context.lifecycle.js";
+import { startBrowserControlServiceFromConfig } from "./control-service.js";
 
 type SessionBorrow = ReturnType<SessionBrowserAuthority["retainSession"]>;
 const MAX_SESSION_DASHBOARDS = 64;

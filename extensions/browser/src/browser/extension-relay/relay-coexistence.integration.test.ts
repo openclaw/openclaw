@@ -8,6 +8,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
+import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, expect, it } from "vitest";
@@ -18,7 +19,6 @@ import {
   startBrowserControlServiceFromConfig,
   stopBrowserControlService,
 } from "../../control-service.js";
-import { extractErrorCode } from "../../infra/errors.js";
 import { resolveBrowserConfig, resolveProfile } from "../config.js";
 import { runExtensionRelayDaemon } from "../relay-daemon.js";
 import { captureBrowserOperationTarget } from "../routes/agent.snapshot-target.js";

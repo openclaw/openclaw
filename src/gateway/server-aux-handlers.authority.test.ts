@@ -468,8 +468,7 @@ describe("gateway auxiliary authority lifecycle", () => {
         ownerEpoch: placement.activeOwnerEpoch,
       },
     });
-    const authority = { kind: "worker" as const, ...runAuthority, turnClaim };
-    await bindWorkerTurnOwner(
+    const { capability } = await bindWorkerTurnOwner(
       placements,
       turnClaim,
       undefined,
@@ -477,6 +476,11 @@ describe("gateway auxiliary authority lifecycle", () => {
       { ...identity, storePath: fixture.statePath("agents", "main", "sessions", "sessions.json") },
       () => {},
     );
+    const authority = await capability.run((owner) => ({
+      kind: "worker" as const,
+      ...owner.delegatedAuthority,
+      turnClaim: owner.turnClaim,
+    }));
     const validateAuthority = createAgentRuntimeApprovalAuthorityValidator(placements);
     const lifecycle = vi.fn();
     const gatewayAux = createAuthorityHarness({
@@ -539,6 +543,15 @@ describe("gateway auxiliary authority lifecycle", () => {
         }),
       onResolved: questionResolved,
     });
+
+    for (const record of [execRecord, pluginRecord]) {
+      expect(await getOperatorApprovalDetailed({ id: record.id })).toMatchObject({
+        outcome: "found",
+        record: { status: "pending" },
+      });
+    }
+    expect(questionResolved).not.toHaveBeenCalled();
+    expect(publishResolved).not.toHaveBeenCalled();
 
     placements.releaseTurn(turnClaim);
 

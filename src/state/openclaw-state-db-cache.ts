@@ -24,8 +24,8 @@ import {
   acquireStateDatabaseHandleExclusion,
 } from "../infra/state-database-coordinator.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
-import { assertOpenClawStateDatabaseNotQuarantined } from "./openclaw-quarantine-store.js";
+import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
+import { readOpenClawDatabaseQuarantineFailure } from "./openclaw-quarantine-store.js";
 import {
   createOpenClawStateDatabaseAsyncLifecycle,
   getOpenClawDatabaseMaintenanceScope,
@@ -427,7 +427,25 @@ function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
   onNativeCleanupFailure?: (error: OpenClawQuarantineReadCleanupError) => void,
 ): void {
   assertOpenClawStateDatabaseOpenAllowed(pathname);
-  assertOpenClawStateDatabaseNotQuarantined(pathname, env, onNativeCleanupFailure);
+  let quarantineFailure: Error | undefined;
+  try {
+    quarantineFailure = readOpenClawDatabaseQuarantineFailure("state", pathname, { env });
+  } catch (error) {
+    if (!(error instanceof OpenClawQuarantineReadCleanupError)) {
+      throw error;
+    }
+    onNativeCleanupFailure?.(error);
+    return;
+  }
+  if (quarantineFailure?.cause instanceof OpenClawQuarantineReadCleanupError) {
+    onNativeCleanupFailure?.(quarantineFailure.cause);
+  }
+  if (quarantineFailure) {
+    // Another process can record quarantine. Revoke admitted owners without a
+    // process-local latch that could outlive the durable decision's generation.
+    runtimeFailures.closeTerminalFailure(pathname, quarantineFailure);
+    throw quarantineFailure;
+  }
 }
 
 /** Explicit retirement can checkpoint WAL and must join the lifecycle writer gate. */
@@ -612,6 +630,7 @@ export const openClawStateDatabaseCache = {
   getCachedOpenClawStateDatabase,
   waitForCachedOpenClawStateSchemaProbe,
   getOpenClawStateDatabaseRuntimeFailure: runtimeFailures.get,
+  getOpenClawStateDatabaseRecordedFailure: terminalOpenLatch.peek,
   getOpenClawStateDatabaseIfOpenAtPath,
   getKnownOpenClawStateDatabaseIdentity: asyncResources.knownIdentity,
   isOpenClawStateDatabaseOpen,

@@ -34,6 +34,7 @@ import {
   turn,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
 describe("worker turn recovery after environment reconciliation errors", () => {
   beforeEach(setupWorkerTurnLauncherTest);
@@ -98,9 +99,9 @@ describe("worker turn recovery after environment reconciliation errors", () => {
         runReclaimBarrier: async ({ begin, reclaim }) =>
           await reclaim({ kind: "local", path: root }, begin()),
         runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-        resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
-        reportWorkspaceResultConflict: async () => {},
-        resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
+        ...createWorkerWorkspaceRecoveryFixture({
+          resolveWorkspace: async () => ({ kind: "local", path: root }),
+        }),
       }),
       (_request, run) => run(),
     );

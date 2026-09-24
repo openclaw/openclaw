@@ -130,33 +130,6 @@ describe("worker environment service", () => {
     });
   });
 
-  it("stops the tunnel after live binding rollback", async () => {
-    const environmentId = "live-bind-fail";
-    await support.seedReady(environmentId);
-    const liveEvents = support.createLiveEvents({
-      bindSession: vi.fn(() => {
-        throw new Error("bind failed");
-      }),
-    });
-    const tunnelManager = {
-      stop: vi.fn(async () => {}),
-      stopAll: vi.fn(async () => {}),
-    } as unknown as WorkerTunnelManager;
-    const workerService = support.createService(support.createProvider(), {
-      liveEvents,
-      tunnelManager,
-    });
-
-    await expect(
-      workerService.attachSession({ environmentId, ownerEpoch: 1, sessionId: "session-live" }),
-    ).rejects.toThrow("Attached session target is unavailable");
-    expect(tunnelManager.stop).toHaveBeenCalledWith(environmentId, 1);
-    expect(support.testState.store.get(environmentId)).toMatchObject({
-      state: "idle",
-      attachedSessionIds: [],
-    });
-  });
-
   it("renews in place and binds delivery acknowledgement to the exact grant", async () => {
     const environmentId = "worker-credential-replacement";
     await support.seedReady(environmentId);

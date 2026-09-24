@@ -4729,7 +4729,7 @@ describe("operator lane waiver", () => {
 
   it("waives a lost first-hop lane only behind green survivor lanes", () => {
     const firstHop =
-      "Run package acceptance / Docker product acceptance (artifact-only) / Docker E2E targeted lanes (update-first-hop-compat)";
+      "Run package acceptance / Docker product acceptance (artifact-only) / Docker E2E targeted lanes (update-first-hop-compat-2026.9.5)";
     const survivor = (conclusion: string) =>
       job(
         "Run package acceptance / Docker product acceptance (artifact-only) / Docker E2E targeted lanes (upgrade-survivor)",

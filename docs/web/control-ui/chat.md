@@ -373,6 +373,7 @@ Newly uploaded text files remain file cards, even when their names resemble
 pasted-text attachments. Older history without origin metadata recognizes
 `text/plain` attachments named `pasted-text-<digits>.txt` as pasted text.
 
+Uploaded attachments keep their original filenames on download, including spaces and Unicode characters.
 Select **Open** on an uploaded text attachment to read it directly in the **Files** side
 panel. Plain-text attachments, CSV, and JSON preserve line breaks and indentation. Markdown attachments render as documents
 with interactive code blocks. When an open attachment refreshes with unchanged
