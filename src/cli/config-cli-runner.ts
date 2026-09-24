@@ -3,10 +3,15 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveManagedUnsetPathsForWrite } from "../config/config-path-mutation.js";
 import { replaceConfigFile } from "../config/config.js";
 import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
+import { resolveKeyedAgentEntryIncludePreservation } from "../config/include-write-boundary.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
-import { prepareConfigWriteValues } from "../config/io.write-prepare.js";
+import {
+  prepareConfigWriteValues,
+  resolvePersistCandidateForWrite,
+} from "../config/io.write-prepare.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
+import { resolveConfigIncludeWriteBoundary } from "../config/mutate.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
@@ -505,6 +510,11 @@ export async function runConfigOperations(params: {
     env: preparedValues.resolutionEnv,
     previousEnv: preparedPreviousValues.resolutionEnv,
   };
+  // Preview-only probe: arms the committing writer's persistence checks so a
+  // guarded roster removal is refused before the preview reports success
+  // (issue #133895). Built here, but invoked after validation below, mirroring
+  // the commit's ordering (validation errors surface before persistence checks).
+  let dryRunPersistenceProbe: (() => void) | undefined;
   if (options.dryRun) {
     const topology = prepareConfigWriteTopology({
       snapshot,
@@ -521,7 +531,56 @@ export async function runConfigOperations(params: {
       env: topology.resolutionEnv,
       previousEnv: preparedPreviousValues.resolutionEnv,
     };
+    dryRunPersistenceProbe = () => {
+      // Mirror replaceConfigFileUnlocked: it routes to the include writer on
+      // the pre-topology authored candidate (CLI source writes carry
+      // inputBase "source") before the root writer projects persistence. An
+      // edit owned by an authored $include is persisted by the include
+      // writer, so the root writer's persistence projection must not reject
+      // it. Route with the same options the committing write receives: the
+      // commit selects the include writer before topology preparation, so a
+      // topology-derived flag (persistCanonicalAgentRoster) must not force
+      // root routing here when the committing CLI never supplies it.
+      const includeBoundary = resolveConfigIncludeWriteBoundary({
+        snapshot,
+        nextConfig: authoredNextConfig,
+        persistCanonicalAgentRoster: mutationStart.writeOptions.persistCanonicalAgentRoster,
+        explicitSetPaths: normalizedExplicitSetPaths,
+      });
+      if (includeBoundary) {
+        return;
+      }
+      // Only root-owned writes run the same persistence projection as the
+      // commit. Mirror writeConfigFileFromContext (io.write.ts): the root
+      // writer arms the roster-retention guard from the topology's authored
+      // projections. loadValidConfigForWrite guarantees snapshot.valid, so
+      // the projection's roster-retention guard is always armed here.
+      const keyedAgentEntryIncludes = resolveKeyedAgentEntryIncludePreservation({
+        configPath: snapshot.path,
+        provenance: snapshot.includeProvenance,
+      });
+      resolvePersistCandidateForWrite({
+        inputBasis: { kind: "source", config: topology.authoredSourceConfig },
+        runtimeConfig: topology.authoredRuntimeConfig,
+        sourceConfig: topology.authoredSourceConfig,
+        sourceConfigValid: snapshot.valid,
+        sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
+        nextConfig: topology.authoredConfig,
+        rootAuthoredConfig: snapshot.parsed,
+        agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
+        keyedAgentEntryIncludePaths: keyedAgentEntryIncludes?.includePaths,
+        unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
+        explicitSetPaths: topology.explicitSetPaths,
+        explicitSetValueSource: topology.explicitSetValueSource,
+        persistCanonicalAgentRoster: topology.persistCanonicalAgentRoster,
+        preserveLegacyAgentRoster: topology.preserveLegacyAgentRoster,
+      });
+    };
   }
+  const unchanged =
+    params.successMode === "set" &&
+    isDeepStrictEqual(currentConfig, nextConfig) &&
+    isDeepStrictEqual(authoredPreviousConfig, authoredNextConfig);
   const validation = await validateConfigMutation({
     config: nextConfig,
     modelValidation,
@@ -529,14 +588,16 @@ export async function runConfigOperations(params: {
     operations: appliedOperations,
     options,
     configPath: snapshot.path,
-    unchanged:
-      params.successMode === "set" &&
-      isDeepStrictEqual(currentConfig, nextConfig) &&
-      isDeepStrictEqual(authoredPreviousConfig, authoredNextConfig),
+    unchanged,
     pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
     deferredPluginMigrations: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
   });
   if (validation.kind === "dry-run") {
+    // The committing command reports "No change" before persistence, so a
+    // no-op preview must not trip root-only persistence checks either.
+    if (validation.result.ok && !unchanged) {
+      dryRunPersistenceProbe?.();
+    }
     printConfigDryRunResult(validation.result, runtime, options.json);
     return;
   }
