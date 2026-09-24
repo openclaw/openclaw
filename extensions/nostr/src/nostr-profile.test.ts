@@ -29,7 +29,8 @@ async function publishTestProfile(profile: NostrProfile, lastPublishedAt?: numbe
   if (!publishedEvent) {
     throw new Error("expected profile event to be published");
   }
-  return publishedEvent;
+  // Relay serialization drops nostr-tools' cached signature verification symbol.
+  return JSON.parse(JSON.stringify(publishedEvent)) as Event;
 }
 
 // ============================================================================
@@ -186,6 +187,10 @@ describe("createProfileEvent", () => {
     const event = await publishTestProfile(profile);
 
     expect(verifyEvent(event)).toBe(true);
+
+    const tampered = JSON.parse(JSON.stringify(event)) as Event;
+    tampered.content = '{"name":"tampered"}';
+    expect(verifyEvent(tampered)).toBe(false);
   });
 
   it("uses current timestamp when no lastPublishedAt provided", async () => {

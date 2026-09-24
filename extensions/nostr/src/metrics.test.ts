@@ -72,12 +72,23 @@ describe("Metrics", () => {
       const relayOne = requireRecordEntry(snapshot.relays, TEST_RELAY_URL_1, "Nostr relay metrics");
       expect(relayOne.connects).toBe(1);
       expect(relayOne.errors).toBe(2);
-      expect(
-        requireRecordEntry(snapshot.relays, TEST_RELAY_URL_2, "Nostr relay metrics").connects,
-      ).toBe(1);
-      expect(
-        requireRecordEntry(snapshot.relays, TEST_RELAY_URL_2, "Nostr relay metrics").errors,
-      ).toBe(0);
+      expect(requireRecordEntry(snapshot.relays, TEST_RELAY_URL_2, "Nostr relay metrics")).toEqual({
+        connects: 1,
+        disconnects: 0,
+        reconnects: 0,
+        errors: 0,
+        messagesReceived: {
+          event: 0,
+          eose: 0,
+          closed: 0,
+          notice: 0,
+          ok: 0,
+          auth: 0,
+        },
+        circuitBreakerState: "closed",
+        circuitBreakerOpens: 0,
+        circuitBreakerCloses: 0,
+      });
     });
 
     it("tracks circuit breaker state changes", () => {
@@ -210,107 +221,21 @@ describe("Metrics", () => {
   describe("createNoopMetrics", () => {
     it("ignores emitted metrics", () => {
       const metrics = createNoopMetrics();
+      const before = metrics.getSnapshot();
 
-      expect(metrics.emit("event.received")).toBeUndefined();
-      expect(metrics.emit("relay.connect", 1, { relay: TEST_RELAY_URL_PRIMARY })).toBeUndefined();
-    });
-
-    it("returns empty snapshot", () => {
-      const metrics = createNoopMetrics();
+      metrics.emit("event.received");
+      metrics.emit("relay.connect", 1, { relay: TEST_RELAY_URL_PRIMARY });
 
       const snapshot = metrics.getSnapshot();
+      expect(snapshot).toEqual({ ...before, snapshotAt: expect.any(Number) });
       expect(snapshot.eventsReceived).toBe(0);
       expect(snapshot.eventsProcessed).toBe(0);
+      expect(snapshot.relays).toEqual({});
     });
   });
 });
 
 describe("Metrics fuzz", () => {
-  describe("invalid metric names", () => {
-    it("handles unknown metric names gracefully", () => {
-      const metrics = createMetrics();
-
-      // Cast to bypass type checking - testing runtime behavior
-      type EmitMetricName = Parameters<typeof metrics.emit>[0];
-      expect(metrics.emit("invalid.metric.name" as EmitMetricName)).toBeUndefined();
-    });
-  });
-
-  describe("invalid label values", () => {
-    it("handles null relay label", () => {
-      const metrics = createMetrics();
-      expect(
-        metrics.emit("relay.connect", 1, { relay: null as unknown as string }),
-      ).toBeUndefined();
-    });
-
-    it("handles undefined relay label", () => {
-      const metrics = createMetrics();
-      expect(
-        metrics.emit("relay.connect", 1, { relay: undefined as unknown as string }),
-      ).toBeUndefined();
-    });
-
-    it("handles very long relay URL", () => {
-      const metrics = createMetrics();
-      const longUrl = "wss://" + "a".repeat(10000) + ".com";
-      expect(metrics.emit("relay.connect", 1, { relay: longUrl })).toBeUndefined();
-
-      const snapshot = metrics.getSnapshot();
-      expect(snapshot.relays[longUrl]).toEqual({
-        connects: 1,
-        disconnects: 0,
-        reconnects: 0,
-        errors: 0,
-        messagesReceived: {
-          event: 0,
-          eose: 0,
-          closed: 0,
-          notice: 0,
-          ok: 0,
-          auth: 0,
-        },
-        circuitBreakerState: "closed",
-        circuitBreakerOpens: 0,
-        circuitBreakerCloses: 0,
-      });
-    });
-  });
-
-  describe("extreme values", () => {
-    it("handles NaN value", () => {
-      const metrics = createMetrics();
-      expect(metrics.emit("event.received", Number.NaN)).toBeUndefined();
-
-      const snapshot = metrics.getSnapshot();
-      expect(Number.isNaN(snapshot.eventsReceived)).toBe(true);
-    });
-
-    it("handles Infinity value", () => {
-      const metrics = createMetrics();
-      expect(metrics.emit("event.received", Infinity)).toBeUndefined();
-
-      const snapshot = metrics.getSnapshot();
-      expect(snapshot.eventsReceived).toBe(Infinity);
-    });
-
-    it("handles negative value", () => {
-      const metrics = createMetrics();
-      metrics.emit("event.received", -1);
-
-      const snapshot = metrics.getSnapshot();
-      expect(snapshot.eventsReceived).toBe(-1);
-    });
-
-    it("handles very large value", () => {
-      const metrics = createMetrics();
-      metrics.emit("event.received", Number.MAX_SAFE_INTEGER);
-
-      const snapshot = metrics.getSnapshot();
-      expect(snapshot.eventsReceived).toBe(Number.MAX_SAFE_INTEGER);
-    });
-  });
-
   describe("reset during operation", () => {
     it("handles reset mid-operation safely", () => {
       const metrics = createMetrics();

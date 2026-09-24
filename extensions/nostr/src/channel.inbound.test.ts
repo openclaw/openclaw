@@ -51,10 +51,6 @@ function createMockBus() {
 }
 
 function createRuntimeHarness() {
-  const recordInboundSession = vi.fn(async () => {});
-  const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions }) => {
-    await dispatcherOptions.deliver({ text: "**Table:** [docs](https://example.com)" });
-  });
   const convertMarkdownTables = vi.fn((text: string) => text);
   const runtime = {
     channel: {
@@ -66,24 +62,6 @@ function createRuntimeHarness() {
         shouldComputeCommandAuthorized: vi.fn(() => true),
         resolveCommandAuthorizedFromAuthorizers: vi.fn(() => true),
       },
-      routing: {
-        resolveAgentRoute: vi.fn(({ accountId, peer }) => ({
-          agentId: "agent-nostr",
-          accountId,
-          sessionKey: `nostr:${peer.id}`,
-        })),
-      },
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/nostr-session-store"),
-        readSessionUpdatedAt: vi.fn(() => undefined),
-        recordInboundSession,
-      },
-      reply: {
-        formatAgentEnvelope: vi.fn(({ body }) => `envelope:${body}`),
-        resolveEnvelopeFormatOptions: vi.fn(() => ({ mode: "agent" })),
-        finalizeInboundContext: vi.fn((ctx) => ctx),
-        dispatchReplyWithBufferedBlockDispatcher,
-      },
       pairing: {
         readAllowFromStore: vi.fn(async () => []),
         upsertPairingRequest: vi.fn(async () => ({ code: "PAIR1234", created: true })),
@@ -93,8 +71,6 @@ function createRuntimeHarness() {
 
   return {
     runtime,
-    recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher,
     convertMarkdownTables,
   };
 }

@@ -1,6 +1,5 @@
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 // Nostr tests cover channel.outbound plugin behavior.
-import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createPluginRuntimeMock,
   createStartAccountContext,
@@ -269,36 +268,37 @@ describe("nostr outbound cfg threading", () => {
     expect(nostrPlugin.messaging?.targetResolver?.looksLikeId?.("NPUB1XYZ123")).toBe(true);
   });
 
-  it("backs declared message adapter capabilities with outbound sends", async () => {
+  it("declares text delivery capabilities and returns a receipt from the message adapter", async () => {
     installOutboundRuntime();
     const { cleanup, sendDm } = await startOutboundAccount();
-    const adapter = nostrPlugin.message;
-    if (!adapter?.send?.text) {
-      throw new Error("expected Nostr message adapter with text sender");
+    try {
+      const adapter = nostrPlugin.message;
+      if (!adapter?.send?.text) {
+        throw new Error("expected Nostr message adapter with text sender");
+      }
+      expect(adapter.durableFinal?.capabilities).toEqual({
+        text: true,
+        messageSendingHooks: true,
+      });
+      expect(adapter.send.media).toBeUndefined();
+
+      const result = await adapter.send.text({
+        cfg: createCfg() as OpenClawConfig,
+        to: "NPUB123",
+        text: "hello",
+        accountId: "default",
+      });
+      expect(sendDm).toHaveBeenCalledOnce();
+      expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello", expect.any(Object));
+      const eventId = "a".repeat(64);
+      expect(result.messageId).toBe(eventId);
+      expect(result.receipt.primaryPlatformMessageId).toBe(eventId);
+      expect(result.receipt.platformMessageIds).toEqual([eventId]);
+      expect(result.receipt.parts).toEqual([
+        expect.objectContaining({ kind: "text", platformMessageId: eventId, index: 0 }),
+      ]);
+    } finally {
+      await cleanup.stop();
     }
-    const sendText = adapter.send.text;
-    expect(adapter.send.media).toBeUndefined();
-
-    await verifyChannelMessageAdapterCapabilityProofs({
-      adapterName: "nostrMessageAdapter",
-      adapter,
-      proofs: {
-        text: async () => {
-          const result = await sendText({
-            cfg: createCfg() as OpenClawConfig,
-            to: "NPUB123",
-            text: "hello",
-            accountId: "default",
-          });
-          expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello", expect.any(Object));
-          expect(result.receipt.parts[0]?.kind).toBe("text");
-        },
-        messageSendingHooks: () => {
-          expect(sendText).toBeTypeOf("function");
-        },
-      },
-    });
-
-    await cleanup.stop();
   });
 });
