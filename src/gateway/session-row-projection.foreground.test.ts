@@ -49,7 +49,7 @@ function holdBackfillPublication(signal?: AbortSignal) {
     }
     signal.throwIfAborted();
     return new Promise<T>((resolve, reject) => {
-      const abort = () => reject(signal.reason);
+      const abort = () => reject(new Error("Backfill wait aborted", { cause: signal.reason }));
       signal.addEventListener("abort", abort, { once: true });
       void work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
     });
