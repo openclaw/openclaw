@@ -190,7 +190,9 @@ describe("first-turn native model catalog resolution", () => {
             NonNullable<PreparedModelRuntimeSnapshot["loadNativeModelCatalog"]>
           >[1],
         ) => {
-          await new Promise((resolve) => setTimeout(resolve, 15_000));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 15_000);
+          });
           return { ...catalog([luna]), authoritative: false };
         },
       );

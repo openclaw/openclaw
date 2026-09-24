@@ -165,8 +165,20 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   preparedTtsPreferences?: import("../../../tts/tts-preferences.js").PreparedTtsPreferences;
-  /** Revalidates a selected native catalog account immediately before first-turn model I/O. */
-  assertNativeModelSelectionCurrent?: (attempt?: { authBindingFingerprint?: string }) => void;
+  /** Binds expected startup auth changes and revalidates the native attempt before model I/O. */
+  assertNativeModelSelectionCurrent?: (
+    attempt?:
+      | {
+          phase: "bind";
+          authBindingFingerprint: string;
+          attemptFingerprint: string;
+        }
+      | {
+          phase: "assert";
+          authBindingFingerprint?: string;
+          attemptFingerprint: string;
+        },
+  ) => void;
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
   initialReplayState?: EmbeddedRunReplayState;
