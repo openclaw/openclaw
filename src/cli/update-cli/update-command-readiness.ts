@@ -332,10 +332,10 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     deadlineAt: Date.now() + remainingMs(),
     probeTimeoutMs: probeTimeoutMs(),
     delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
-    onObservation: (http) =>
+    onObservation: (observation) =>
       params.onProgress?.(
         "http",
-        `HTTP healthz=${http.healthz ?? "unavailable"}; readyz=${http.readyz ?? "unavailable"}`,
+        `HTTP healthz=${observation.healthz ?? "unavailable"}; readyz=${observation.readyz ?? "unavailable"}`,
       ),
     ...(params.signal ? { signal: params.signal } : {}),
   });
