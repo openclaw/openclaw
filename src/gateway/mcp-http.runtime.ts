@@ -217,6 +217,13 @@ function resolveMcpLoopbackTools(
     surface: "loopback",
     isGrantCurrent: params.isGrantCurrent,
     excludeToolNames,
+    // The core coding tools are withheld above only because this caller's own
+    // harness materializes them, so they remain part of its real authority and
+    // must stay inheritable by anything it spawns. `web_search` is excluded for
+    // the opposite reason (genuinely disabled), so it stays out of this set.
+    requesterOwnedToolNames: Array.from(excludeToolNames).filter((name) =>
+      NATIVE_TOOL_EXCLUDE.has(name),
+    ),
     mediatedToolNames: mediatedNativeTools,
     includeNodeExecTool,
     nodeExecAvailable: params.nodeExecAvailability?.isAvailable,
