@@ -4508,19 +4508,6 @@ setImmediate(() => {
           );
           continue;
         }
-        if (step.with?.path === "full-release-flake-intent") {
-          expect(file).toBe(".github/workflows/full-release-validation.yml");
-          expect(jobId).toBe("automatic_flake_retry");
-          expect(step.uses).toBe(CACHE_SAVE_V5);
-          expect(step.with).toEqual({
-            path: "full-release-flake-intent",
-            key: "full-release-flake-intent-v1-${{ github.run_id }}-${{ matrix.child }}",
-          });
-          expect(step.if).toBe(
-            "${{ github.run_attempt == 1 && steps.intent_witness.outcome == 'success' }}",
-          );
-          continue;
-        }
         if (step.with?.path === ".cache/openclaw-cross-os-npm-cache/_cacache") {
           expect([
             ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
@@ -5533,7 +5520,7 @@ server.listen(0, "127.0.0.1", () => {
       );
       expect(pipeline.uses).toBe("./.github/workflows/openclaw-repo-e2e-reusable.yml");
       expect(pipeline.with.ref).toBe("${{ needs.validate_selected_ref.outputs.selected_sha }}");
-      expect(pipeline.with.advisory).toBe("${{ inputs.advisory }}");
+      expect(pipeline.with.advisory).toBeUndefined();
       expect(pipeline.with.allow_frozen_target_scenario_omissions).toBe(
         "${{ inputs.allow_frozen_target_scenario_omissions }}",
       );
@@ -5561,7 +5548,7 @@ server.listen(0, "127.0.0.1", () => {
     expect(repoE2e.name).toBe("Repo E2E (${{ matrix.name }})");
     expect(repoE2e["timeout-minutes"]).toBe(90);
     expect(repoE2e.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 4 });
-    expect(repoE2e["continue-on-error"]).toBe("${{ inputs.advisory }}");
+    expect(repoE2e["continue-on-error"]).toBeUndefined();
     const producerSteps = producer.steps as WorkflowStep[];
     expect(producerSteps.find((step) => step.name === "Build dist for repo E2E")?.run).toContain(
       "full) pnpm build",
@@ -10339,7 +10326,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
       "${{ needs.preflight.outputs.compatibility_target == 'true' && '660000' || '300000' }}",
     );
-    expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
+    expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBeUndefined();
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64).toBe(

@@ -6,6 +6,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { listCoreToolFactoryDescriptors } from "../../agents/core-tool-factory-descriptors.js";
+import { filterToolsByPolicy } from "../../agents/tool-policy-match.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
@@ -187,6 +189,26 @@ describe("tools.catalog handler", () => {
         group.tools.map((tool) => tool.id),
       ),
     ).toContain("agents_wait");
+  });
+
+  it("lets the catalog's Disable All deny every configurable core factory tool", async () => {
+    const identityCount = vi
+      .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
+      .mockReturnValue(true);
+    try {
+      const { respond, invoke } = createInvokeParams({ includePlugins: false });
+      await invoke();
+      const deny = expectCatalogPayload(respond).groups.flatMap((group) =>
+        group.tools.map((tool) => tool.id),
+      );
+      // Collector output is required by its per-run schema, not operator tool policy.
+      const configurableTools = listCoreToolFactoryDescriptors().filter(
+        (tool) => tool.name !== "structured_output",
+      );
+      expect(filterToolsByPolicy(configurableTools, { allow: ["*"], deny })).toEqual([]);
+    } finally {
+      identityCount.mockRestore();
+    }
   });
 
   it("includes plugin groups with plugin metadata", async () => {

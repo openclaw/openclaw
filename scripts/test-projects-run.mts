@@ -51,11 +51,9 @@ import {
   resolveParallelFullSuiteConcurrency,
   resolveChangedTestTargetPlanForArgs,
   resolveChangedTargetArgs,
-  shouldRetryVitestNoOutputTimeout,
   type FailedVitestShard,
   type VitestRunSpec as BaseVitestRunSpec,
   type VitestCacheAssignment,
-  withRetryNoOutputTimeout,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mts";
 
@@ -196,16 +194,9 @@ function applyDefaultParallelVitestWorkerBudget(specs: VitestRunSpec[], env: Nod
 async function runLoggedVitestSpec(spec: VitestRunSpec, reports: VitestReportOwner) {
   console.error(`[test] starting ${spec.config}`);
   const startedAt = performance.now();
-  let result = await runVitestSpec(spec, reports);
-  if (result.noOutputTimedOut && !spec.watchMode && shouldRetryVitestNoOutputTimeout(spec.env)) {
-    assertCacheLeaseJoined(spec, result);
-    console.error(`[test] retrying ${spec.config} after no-output timeout`);
-    const firstJoined = result.groupJoined;
-    result = await runVitestSpec(withRetryNoOutputTimeout(spec), reports);
-    result = { ...result, groupJoined: firstJoined && result.groupJoined };
-  }
+  const result = await runVitestSpec(spec, reports);
   const durationMs = performance.now() - startedAt;
-  if (result.noOutputTimedOut && result.signal) {
+  if (result.noOutputTimedOut) {
     console.error(`[test] ${spec.config} exceeded no-output timeout`);
     return {
       ...result,

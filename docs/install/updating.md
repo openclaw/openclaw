@@ -201,6 +201,11 @@ This candidate-side behavior also applies when the installed updater is 2026.9.3
 That older updater still caps the entire validation sequence at five minutes;
 its `--timeout` option cannot increase this cap.
 
+Plugin rehearsal copies are temporary and rebuilt after interruption. Copying
+them avoids a disk flush for every file; canonical state and recovery backups
+retain their existing durability guarantees. An older installed updater keeps
+its initial snapshot behavior until you launch an update from the newer version.
+
 Package updates also check npm availability for enabled configured plugins before
 stopping the serving Gateway or replacing the installed core. Registry targets
 are checked early; explicit package artifacts are checked using the privately

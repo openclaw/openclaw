@@ -27,7 +27,7 @@ type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
 const SESSION_IMPORT_BATCH_SIZE = 256;
 
 export async function importLegacySessionRecords(
-  target: SessionStoreTarget,
+  { target, env }: { target: SessionStoreTarget; env: NodeJS.ProcessEnv },
   records: readonly LegacySessionRecord[],
   report: DoctorSessionSqliteTargetReport,
   activeRun?: ActiveSessionSqliteMigrationRun,
@@ -49,7 +49,7 @@ export async function importLegacySessionRecords(
             importedTranscriptSources,
             existingSnapshot.ok ? existingSnapshot.snapshot : undefined,
           );
-          return prepared ? [{ ...prepared, record }] : [];
+          return prepared ? [{ ...prepared, params: { ...prepared.params, env }, record }] : [];
         });
       const imported = await importSqliteSessionRowsBatch(pending.map((entry) => entry.params));
       for (const [index, result] of imported.entries()) {

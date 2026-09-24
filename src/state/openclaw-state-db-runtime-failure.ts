@@ -49,7 +49,7 @@ export function createOpenClawStateDatabaseRuntimeFailureOwner(owner: FailureOwn
         return undefined;
       }
       try {
-        // Admission owns schema facts and bounds the foreign-commit probe to one per turn.
+        // Admission retains schema facts but checks foreign commits before reusing them.
         assertSupportedStateSchemaVersion(cached.db, resolvedPath);
         return undefined;
       } catch (error) {
