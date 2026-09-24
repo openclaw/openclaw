@@ -1450,7 +1450,6 @@
     "native.android.cee2b043b9ff723d": "Grupy",
     "native.android.cee7ae53f86ff1c8": "Nie udało się wczytać szczegółów ClawHub dla ${skill.reference}.",
     "native.android.cee89e52e2b139f2": "Żądanie działania",
-    "native.android.cf320580ecbef407": "Praca",
     "native.android.cf52b615bd004b95": "Problem z połączeniem",
     "native.android.cf576be7d9474fa6": "tekst: $value",
     "native.android.cf7b99fc56670b51": "Migawka: $snapshotLabel",

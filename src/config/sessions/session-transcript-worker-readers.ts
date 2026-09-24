@@ -103,7 +103,8 @@ export function createSessionHistoryWorkerReaders(
         if (
           typeof value === "boolean" ||
           Array.isArray(value) ||
-          (value.kind !== "rpc" &&
+          (value.kind !== "transcript-binding" &&
+            value.kind !== "rpc" &&
             value.kind !== "http" &&
             value.kind !== "delta" &&
             value.kind !== "recent" &&

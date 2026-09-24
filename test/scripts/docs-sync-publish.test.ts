@@ -85,11 +85,7 @@ describe("docs-sync-publish", () => {
     try {
       const checker = path.join(root, ".openclaw-sync", "check-docs-mdx.mts");
       fs.mkdirSync(path.join(root, ".openclaw-sync", "lib"), { recursive: true });
-      for (const name of [
-        "check-docs-mdx.mts",
-        "lib/arg-utils.runtime.mjs",
-        "lib/mintlify-accordion.mjs",
-      ]) {
+      for (const name of ["check-docs-mdx.mts", "lib/arg-utils.runtime.mjs"]) {
         fs.copyFileSync(path.join("scripts", name), path.join(root, ".openclaw-sync", name));
       }
       fs.symlinkSync(
@@ -137,7 +133,6 @@ describe("docs-sync-publish", () => {
       expect(Object.keys(JSON.parse(fs.readFileSync(cache, "utf8")).files)).toEqual(["docs/b.MD"]);
       for (const name of [
         ".openclaw-sync/check-docs-mdx.mts",
-        ".openclaw-sync/lib/mintlify-accordion.mjs",
         "package-lock.json",
         "node_modules/.package-lock.json",
       ]) {
@@ -162,6 +157,12 @@ describe("docs-sync-publish", () => {
     writePublisherDependencies(publishRoot, publisherDependencies(sourceSlugifyVersion));
     fs.writeFileSync(path.join(clawhubRoot, "docs", "index.md"), "# ClawHub\n");
     fs.writeFileSync(minimalMdx, "# Valid MDX\n\nThis file is valid.\n");
+    const retiredHelper = path.join(publishRoot, ".openclaw-sync", "lib", "mintlify-accordion.mjs");
+    fs.mkdirSync(path.dirname(retiredHelper), { recursive: true });
+    fs.writeFileSync(retiredHelper, "obsolete");
+    fs.mkdirSync(path.join(publishRoot, "docs", "fa"), { recursive: true });
+    const translation = "<Note>\n  </Note>\n";
+    fs.writeFileSync(path.join(publishRoot, "docs", "fa", "index.md"), translation);
     fs.symlinkSync(
       path.resolve("node_modules"),
       path.join(publishRoot, "node_modules"),
@@ -179,6 +180,16 @@ describe("docs-sync-publish", () => {
         [path.join(publishRoot, ".openclaw-sync", "check-docs-mdx.mjs"), minimalMdx],
         { cwd: publishRoot, stdio: "pipe" },
       );
+      expect(fs.existsSync(retiredHelper)).toBe(false);
+      expect(fs.readFileSync(path.join(publishRoot, "docs", "fa", "index.md"), "utf8")).toBe(
+        translation,
+      );
+      const published = JSON.parse(
+        fs.readFileSync(path.join(publishRoot, "docs", "docs.json"), "utf8"),
+      );
+      expect(
+        published.navigation.languages.map((entry: { language: string }) => entry.language),
+      ).toEqual(expect.arrayContaining(["fa", "th"]));
       const anchors = execFileSync(
         process.execPath,
         [

@@ -23,6 +23,8 @@ import {
 } from "./auth-v2.js";
 import { RawHttpConnection } from "./relay-http.test-support.js";
 
+const INITIAL_PORT_SELECTION_ATTEMPTS = 3;
+
 /** An ordinary external v2 client: HTTP authentication/discovery/upgrade on one socket. */
 export async function externalRelayClient(port: number, token: string): Promise<WebSocket> {
   const connection = await RawHttpConnection.connect(port);
@@ -104,39 +106,58 @@ export async function withConnectedDaemon(
     send: (message: Record<string, unknown>) => void,
   ) => boolean,
 ) {
-  const portClaim = await acquireTestPortBlock({ offsets: [0] });
+  let portClaim: Awaited<ReturnType<typeof acquireTestPortBlock>> | undefined =
+    await acquireTestPortBlock({ offsets: [0] });
+  const releasePortClaim = async () => {
+    const claim = portClaim;
+    portClaim = undefined;
+    await claim?.release();
+  };
   try {
     await withTempDir("relay-coexistence-", async (dir) => {
       const stateDir = await fs.realpath(dir);
       const credentials = path.join(stateDir, "credentials");
-      const port = portClaim.port;
       const token = relayTestKey(9);
       await fs.mkdir(credentials);
       await fs.writeFile(path.join(credentials, "browser-extension-relay.secret"), token, {
         mode: 0o600,
       });
-      const config = {
-        gateway: { auth: { mode: "token" as const, token: "coexistence-test" } },
-        browser: { profiles: { chrome: { driver: "extension" as const, cdpPort: port } } },
-      };
-      setRuntimeConfigSnapshot(config, config);
       await withEnvAsync(
         { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_OAUTH_DIR: credentials },
         async () => {
-          const start = async () => {
-            const started = startDaemon
-              ? await startDaemon(port, stateDir, config)
-              : await runExtensionRelayDaemon({ port });
-            if (started.port !== port) {
+          const start = async (mayReselectPort = false) => {
+            const attempts = mayReselectPort ? INITIAL_PORT_SELECTION_ATTEMPTS : 1;
+            for (let attempt = 1; attempt <= attempts; attempt += 1) {
+              portClaim ??= await acquireTestPortBlock({ offsets: [0] });
+              const port = portClaim.port;
+              const config = {
+                gateway: { auth: { mode: "token" as const, token: "coexistence-test" } },
+                browser: {
+                  profiles: { chrome: { driver: "extension" as const, cdpPort: port } },
+                },
+              };
+              setRuntimeConfigSnapshot(config, config);
+              const started = startDaemon
+                ? await startDaemon(port, stateDir, config)
+                : await runExtensionRelayDaemon({ port });
+              if (started.port === port) {
+                return { daemon: started, port };
+              }
               started.stop();
               const reason = await started.done;
+              if (reason === "port-in-use" && attempt < attempts) {
+                await releasePortClaim();
+                continue;
+              }
               throw new Error(
                 `Relay fixture startup failed: expected port ${port}, got ${started.port ?? "no listener"} (${String(reason)})`,
               );
             }
-            return started;
+            throw new Error("Relay fixture exhausted its initial port selections");
           };
-          let daemon = await start();
+          const started = await start(true);
+          const port = started.port;
+          let daemon = started.daemon;
           const extension = new WebSocket(
             `ws://127.0.0.1:${port}/extension`,
             BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
@@ -240,7 +261,7 @@ export async function withConnectedDaemon(
               restartDaemon: async () => {
                 daemon.stop();
                 await daemon.done;
-                daemon = await start();
+                daemon = (await start()).daemon;
               },
               holdDetach: () => {
                 detachHeld = true;
@@ -290,6 +311,6 @@ export async function withConnectedDaemon(
       );
     });
   } finally {
-    await portClaim.release();
+    await releasePortClaim();
   }
 }

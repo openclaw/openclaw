@@ -41,14 +41,14 @@ export function mountPage(
     result?: ReturnType<typeof snapshotListFixture>;
     config?: Record<string, unknown>;
     failMutation?: boolean;
-    response?: (method: string) => unknown;
+    response?: (method: string, params?: Record<string, unknown>) => unknown;
     scopes?: string[];
   } = {},
 ) {
   let result = options.result ?? snapshotListFixture();
   let config = options.config ?? {};
   const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-    const response = options.response?.(method);
+    const response = options.response?.(method, params);
     if (response !== undefined) {
       return response;
     }

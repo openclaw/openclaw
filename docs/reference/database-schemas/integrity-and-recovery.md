@@ -383,7 +383,11 @@ checkpoint clears the warning; a large WAL alone does not mean a checkpoint is
 blocked. File-size observation failures are recorded and logged separately from
 SQLite's completion result; they do not turn a completed checkpoint into a failure.
 
-Shared-state maintenance waits up to 350 ms for lifecycle coordination. A refused
+Shared-state maintenance waits up to 350 ms for lifecycle coordination. Periodic
+maintenance yields between acquisition attempts so the Gateway event loop can
+continue. It rechecks the same database owner and physical file before proceeding;
+retirement cancels and joins pending admission. Explicit synchronous checkpoint
+and close operations retain their existing contract. A refused
 periodic attempt retries once after one second, then waits for the next interval.
 Contention is recorded as blocked. Status and Doctor warn after two consecutive
 refusals; maintenance logs once per five. A completed checkpoint resets that count and clears the history
@@ -490,6 +494,18 @@ the underlying database error.
 ### A database is quarantined after integrity verification failed
 
 The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.
+
+For shared-state or per-agent index-only corruption, `openclaw doctor --fix` is
+the supported repair. Doctor requires every `integrity_check` finding to name missing,
+non-unique, or incorrectly counted index entries, verifies the table data without
+using the damaged indexes, and preserves the damaged database in an
+`openclaw-index-recovery-*` directory beside it before running `REINDEX`.
+It prints the backup path and a warning naming every rebuilt index, then requires
+clean integrity and foreign-key checks before clearing quarantine. Table rows
+are preserved. Page or b-tree damage, unreadable table data, and other integrity
+failures remain a refusal: preserve the database and its WAL, then restore a
+verified backup or use SQLite recovery. Runtime and startup never perform this
+repair automatically.
 
 <a id="downgrades-are-unsupported" />
 

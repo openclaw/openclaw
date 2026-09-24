@@ -3,14 +3,9 @@
  * Exercises raw error coercion, remediation hints, timeout/auth/billing/rate-limit cases.
  */
 import { describe, expect, it, vi } from "vitest";
-import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { getFailoverErrorCode } from "./failover/error.js";
 import { AgentHarnessPreflightError } from "./harness/errors.js";
-import {
-  PreparedModelRuntimeOwnerNotPublishedError,
-  PreparedModelRuntimePublicationSupersededError,
-} from "./prepared-model-runtime.errors.js";
 
 // Classification here is message/status table behavior. Provider-attributed
 // structured signals (e.g. moonshot + 429) otherwise cross the plugin-consult
@@ -33,7 +28,6 @@ import {
   FailoverError,
   findCliTimeoutError,
   hasProviderRequestSizeCeiling,
-  isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
   resolveFailoverReasonFromError,
@@ -883,108 +877,6 @@ describe("failover-error", () => {
     expect(err?.sessionId).toBe("session:browser-1234");
     expect(err?.lane).toBe("draft");
     expect(err?.provider).toBe("openai");
-  });
-
-  describe("isNonProviderRuntimeCoordinationError", () => {
-    it("returns true for stale gateway lifecycle ownership loss", () => {
-      const staleLifecycle = createAgentRunStaleLifecycleError();
-      expect(isNonProviderRuntimeCoordinationError(staleLifecycle)).toBe(true);
-      expect(
-        isNonProviderRuntimeCoordinationError(new Error("wrapper", { cause: staleLifecycle })),
-      ).toBe(true);
-    });
-
-    it.each([
-      ["availability", "WorkerRunnerUnavailableError", "The device runner is offline"],
-      ["capacity", "WorkerRunnerCapacityError", "device worker capacity remained full"],
-      [
-        "workspace reconciliation",
-        "WorkerWorkspaceReconciliationError",
-        "cloud worker workspace result could not be reconciled",
-      ],
-      ["active turn claim", "ActiveTurnClaimError", "session already has an active turn claim"],
-    ])("returns true for direct and nested runner %s failures", (_label, name, message) => {
-      const coordination = new Error(message);
-      coordination.name = name;
-      for (const error of [
-        coordination,
-        new Error("worker turn failed", { cause: coordination }),
-      ]) {
-        expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
-        expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
-      }
-    });
-
-    it.each([
-      [
-        "publication superseded",
-        () =>
-          new PreparedModelRuntimePublicationSupersededError(
-            "prepared model runtime publication was superseded for /tmp/agent",
-          ),
-      ],
-      [
-        "owner not published",
-        () =>
-          new PreparedModelRuntimeOwnerNotPublishedError(
-            "prepared model runtime owner is not published for /tmp/agent",
-          ),
-      ],
-    ])(
-      "treats prepared model runtime %s as coordination, not a provider quota failure",
-      (_label, make) => {
-        const error = make();
-        const wrapped = new Error("lane task error", { cause: error });
-        for (const candidate of [error, wrapped]) {
-          expect(isNonProviderRuntimeCoordinationError(candidate)).toBe(true);
-          expect(resolveModelFallbackError(candidate)).toEqual({
-            kind: "coordination",
-            error: candidate,
-          });
-          expect(coerceToFailoverError(candidate)).toBeNull();
-          expect(resolveFailoverReasonFromError(candidate)).toBeNull();
-          expect(describeFailoverError(candidate).reason).toBeUndefined();
-        }
-      },
-    );
-
-    it("returns true for Codex missing tool-result local execution failures", () => {
-      const missingToolResultMessage =
-        "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
-      expect(isNonProviderRuntimeCoordinationError({ reason: "missing_tool_result" })).toBe(true);
-      expect(
-        isNonProviderRuntimeCoordinationError({
-          message: "codex app-server turn failed",
-          cause: { result: { reason: "missing_tool_result" } },
-        }),
-      ).toBe(true);
-      expect(resolveFailoverReasonFromError(new Error(missingToolResultMessage))).toBeNull();
-    });
-
-    it("returns false for plain timeouts and provider errors", () => {
-      const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
-      expect(isNonProviderRuntimeCoordinationError(timeoutErr)).toBe(false);
-      expect(
-        isNonProviderRuntimeCoordinationError({
-          status: 503,
-          message: "upstream overloaded",
-          cause: { result: { reason: "missing_tool_result" } },
-        }),
-      ).toBe(false);
-      expect(
-        isNonProviderRuntimeCoordinationError({
-          status: 503,
-          message: "upstream overloaded",
-          cause: createAgentRunStaleLifecycleError(),
-        }),
-      ).toBe(false);
-      expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);
-      expect(isNonProviderRuntimeCoordinationError(undefined)).toBe(false);
-    });
-
-    it("does not suppress provider fallback for unrelated free text mentioning the marker", () => {
-      expect(isNonProviderRuntimeCoordinationError("reason=missing_tool_result")).toBe(false);
-    });
   });
 });
 

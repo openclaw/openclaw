@@ -8,7 +8,6 @@ import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { renderDocsHeadingMap } from "./docs-list.js";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
-import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 const ROOT = resolveRepoRoot(import.meta.url);
@@ -57,10 +56,6 @@ const SYNC_SUPPORT_FILES = [
   {
     source: path.join(ROOT, "scripts", "tsx.mjs"),
     target: path.join(".openclaw-sync", "tsx.mjs"),
-  },
-  {
-    source: path.join(ROOT, "scripts", "lib", "mintlify-accordion.mjs"),
-    target: path.join(".openclaw-sync", "lib", "mintlify-accordion.mjs"),
   },
   {
     source: path.join(ROOT, ".github", "codex", "prompts", "docs-mdx-repair.md"),
@@ -165,12 +160,6 @@ const GENERATED_LOCALES = [
     navFile: "fa-navigation.json",
     tmFile: "fa.tm.jsonl",
     navMode: "clone-en",
-    // Mintlify rejected `fa` in navigation.languages when this override was
-    // added (2026-04-29). The `fa/` docs tree is still generated and published;
-    // only the navigation entry is withheld. Keep generated docs and
-    // translation memory so the locale stays available once the docs host
-    // accepts it. Re-test against the host before removing this flag.
-    navigation: false,
   },
   {
     language: "tr",
@@ -206,12 +195,6 @@ const GENERATED_LOCALES = [
     navFile: "th-navigation.json",
     tmFile: "th.tm.jsonl",
     navMode: "clone-en",
-    // Mintlify rejected `th` in navigation.languages when this override was
-    // added (2026-04-29). The `th/` docs tree is still generated and published;
-    // only the navigation entry is withheld. Keep generated docs and
-    // translation memory so the locale stays available once the docs host
-    // accepts it. Re-test against the host before removing this flag.
-    navigation: false,
   },
   {
     language: "ru",
@@ -536,14 +519,10 @@ export function composeDocsConfig() {
   }
 
   const englishNav = languages.find((entry) => entry?.language === "en");
-  const generatedLanguageSet = new Set(
-    GENERATED_LOCALES.filter((entry) => entry.navigation !== false).map((entry) => entry.language),
-  );
+  const generatedLanguageSet = new Set(GENERATED_LOCALES.map((entry) => entry.language));
   const withoutGenerated = languages.filter((entry) => !generatedLanguageSet.has(entry?.language));
   const enIndex = withoutGenerated.findIndex((entry) => entry?.language === "en");
-  const generated = GENERATED_LOCALES.filter((entry) => entry.navigation !== false).map((entry) =>
-    composeLocaleNav(entry, englishNav),
-  );
+  const generated = GENERATED_LOCALES.map((entry) => composeLocaleNav(entry, englishNav));
   if (enIndex === -1) {
     withoutGenerated.push(...generated);
   } else {
@@ -586,26 +565,6 @@ export function reportOrphanLocaleDocs(targetDocsDir) {
     console.log(`Deferred ${orphaned} orphan localized doc(s) to translation finalization.`);
   }
   return orphaned;
-}
-
-function repairGeneratedLocaleDocs(targetDocsDir) {
-  let repaired = 0;
-  for (const locale of GENERATED_LOCALES) {
-    const localeDir = path.join(targetDocsDir, locale.dir);
-    for (const filePath of walkMarkdownFiles(localeDir)) {
-      const raw = fs.readFileSync(filePath, "utf8");
-      const repairedRaw = repairMintlifyAccordionIndentation(raw);
-      if (repairedRaw === raw) {
-        continue;
-      }
-      fs.writeFileSync(filePath, repairedRaw);
-      repaired += 1;
-    }
-  }
-
-  if (repaired > 0) {
-    console.log(`Repaired Mintlify accordion indentation in ${repaired} generated locale doc(s).`);
-  }
 }
 
 function pruneInternalDocs(targetDocsDir) {
@@ -834,7 +793,6 @@ function syncDocsTree(targetRoot, options = {}) {
     sourceSha: options.clawhubSourceSha,
   });
   reportOrphanLocaleDocs(targetDocsDir);
-  repairGeneratedLocaleDocs(targetDocsDir);
   writeJson(path.join(targetDocsDir, "docs.json"), composeDocsConfig());
   return { clawhub: clawhubSource };
 }
@@ -918,6 +876,10 @@ export function validateDocsSyncDependencies(targetRoot, baseline) {
 }
 
 function syncSupportFiles(targetRoot) {
+  // Retired support files must disappear from existing publish checkouts too.
+  fs.rmSync(path.join(targetRoot, ".openclaw-sync", "lib", "mintlify-accordion.mjs"), {
+    force: true,
+  });
   const baseline = readPublishDependencies(targetRoot);
   const version = sourceSlugifyVersion();
   if (!matchesSlugifyVersion(baseline, version)) {

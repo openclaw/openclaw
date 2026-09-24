@@ -331,10 +331,19 @@ their own environment retain an isolated catalog worker for that environment.
 Provider-discovery entries use the exact selected runtime instance's captured
 source when it is already loaded, so discovery does not create a second copy of
 the same plugin package. Standalone discovery keeps its own setup lifetime.
-Each worker retains one prepared catalog generation. Replacement releases the
-previous generation's registrations after its work settles. Successfully disposed
-registrations leave their plugin caches; unchanged registrations remain reusable
-across agent requests within the same inventory.
+Each worker retains one plugin registration context, shared by agents with the
+same configuration, environment, plugin inventory, and loader workspace. Agent
+credentials and configured model facts travel with each request; catalog jobs do
+not rebuild the agent workspace. Discovery reuses the registrations already
+acquired by that context. Replacement releases them after admitted work settles.
+Successfully disposed registrations leave their plugin caches.
+
+Catalog observation is passive. Inventory requests can ask the catalog owner to
+renew expired providers while returning its accepted rows. Chat metadata and
+session projections only observe publication, so a refresh cannot schedule itself
+through its own notifications. Selected native-model discovery has an independent
+acquisition owner and does not wait for provider inventory renewal. Both owners
+merge their results with the latest accepted counterpart before publication.
 Catalog workers use a 512 MiB V8 old-generation limit rather than inheriting the
 Gateway's default heap budget. Explicit process-wide heap flags override this
 limit; native and external allocations are outside it.

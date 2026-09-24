@@ -4882,7 +4882,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     }
   });
 
-  it("validates each healthy doctor repair once and detects corruption after a clean repair", () => {
+  it("bounds healthy Doctor integrity scans and repairs later index corruption explicitly", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const databasePath = materializeCurrentStateDatabase(stateDir);
@@ -4894,6 +4894,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({ changes: [], warnings: [] });
         const statements = prepare.mock.calls.map(([sql]) => sql);
         expect(statements.filter((sql) => /^PRAGMA integrity_check/iu.test(sql))).toEqual([
+          "PRAGMA integrity_check(2147483647)",
           "PRAGMA integrity_check;",
         ]);
         expect(statements.filter((sql) => /^PRAGMA foreign_key_check/iu.test(sql))).toHaveLength(1);
@@ -4904,8 +4905,13 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
     createUnsafeIndexDrift(databasePath);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-      changes: [],
-      warnings: [expect.stringMatching(/integrity_check failed.*unsafe_index_records_value/iu)],
+      changes: [
+        expect.stringContaining("Saved pre-repair SQLite backup:"),
+        expect.stringContaining(
+          "Rebuilt corrupt shared-state SQLite indexes: unsafe_index_records_value",
+        ),
+      ],
+      warnings: [],
     });
   });
 
@@ -5021,7 +5027,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     );
   });
 
-  it("repairs same-version Claw bootstrap columns with physical index drift", () => {
+  it("requires Doctor before repairing bootstrap columns alongside physical index damage", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeCurrentStateDatabase(stateDir);
@@ -5037,6 +5043,9 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       shippedSchema.close();
     }
     createTaskRunStatusIndexPhysicalDrift(databasePath);
+
+    expect(() => openOpenClawStateDatabase({ env })).toThrow(/integrity_check failed/);
+    expect(repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
 
     const reopened = openOpenClawStateDatabase({ env });
     const columns = reopened.db.prepare("PRAGMA table_info(claw_installs)").all() as Array<{
@@ -5062,7 +5071,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     { columnName: "desktop_json", tableName: "worker_environments" },
     { columnName: "shared_host", tableName: "worker_environments" },
   ])(
-    "appends same-version $columnName to $tableName before schema validation",
+    "requires Doctor for index damage before adding $columnName to $tableName",
     ({ columnName, tableName }) => {
       const stateDir = createTempStateDir();
       const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -5079,6 +5088,9 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         shippedSchema.close();
       }
       createTaskRunStatusIndexPhysicalDrift(databasePath);
+
+      expect(() => openOpenClawStateDatabase({ env })).toThrow(/integrity_check failed/);
+      expect(repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
 
       const reopened = openOpenClawStateDatabase({ env });
       const columns = reopened.db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
@@ -5225,50 +5237,34 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     }
   });
 
-  it.each(["runtime", "doctor"])(
-    "repairs physical ordinary-index drift through %s",
-    (repairPath) => {
-      const stateDir = createTempStateDir();
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const databasePath = materializeCurrentStateDatabase(stateDir);
-      createTaskRunStatusIndexPhysicalDrift(databasePath);
+  it("requires explicit Doctor repair for physical ordinary-index damage", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    createTaskRunStatusIndexPhysicalDrift(databasePath);
 
-      if (repairPath === "doctor") {
-        const { DatabaseSync } = requireNodeSqlite();
-        const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-        try {
-          expect(repairOpenClawStateDatabaseSchema({ env })).toEqual({
-            changes: [
-              expect.stringMatching(
-                /^Rebuilt canonical shared-state SQLite indexes \([1-9]\d*\)$/u,
-              ),
-            ],
-            warnings: [],
-          });
-          const statements = prepare.mock.calls.map(([sql]) => sql);
-          expect(statements.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(2);
-          expect(statements.some((sql) => /^PRAGMA integrity_check\(/iu.test(sql))).toBe(true);
-          expect(statements.filter((sql) => /^PRAGMA foreign_key_check/iu.test(sql))).toHaveLength(
-            1,
-          );
-        } finally {
-          prepare.mockRestore();
-        }
-      }
-
-      const reopened = openOpenClawStateDatabase({ env });
-      expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
-        integrity_check: "ok",
-      });
-      expect(
-        reopened.db
-          .prepare(
-            "SELECT task_id FROM task_runs INDEXED BY idx_task_runs_status WHERE status = 'running'",
-          )
-          .all(),
-      ).toEqual([{ task_id: "task-index-repair" }]);
-    },
-  );
+    expect(() => openOpenClawStateDatabase({ env })).toThrow(
+      /integrity_check failed.*doctor --fix/,
+    );
+    expect(repairOpenClawStateDatabaseSchema({ env })).toEqual({
+      changes: [
+        expect.stringContaining("Saved pre-repair SQLite backup:"),
+        expect.stringContaining(
+          "Rebuilt corrupt shared-state SQLite indexes: idx_task_runs_status",
+        ),
+      ],
+      warnings: [],
+    });
+    const reopened = openOpenClawStateDatabase({ env });
+    expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT task_id FROM task_runs INDEXED BY idx_task_runs_status WHERE status = 'running'",
+        )
+        .all(),
+    ).toEqual([{ task_id: "task-index-repair" }]);
+  });
 
   it("rejects a missing current-schema table instead of recreating it empty", () => {
     const stateDir = createTempStateDir();
@@ -6387,19 +6383,23 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(() => openOpenClawStateDatabase(options)).toThrow(
       /integrity_check failed.*missing from index unsafe_index_records_value/iu,
     );
-    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-      changes: [],
-      warnings: [
-        expect.stringMatching(
-          /integrity_check failed.*missing from index unsafe_index_records_value/iu,
-        ),
-      ],
-    });
     const checkpointCallback = vi.fn();
     expect(() =>
       withOpenClawStateStartupMigrationCheckpointDatabase(checkpointCallback, options),
     ).toThrow(/integrity_check failed.*missing from index unsafe_index_records_value/iu);
     expect(checkpointCallback).not.toHaveBeenCalled();
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [
+        expect.stringContaining("Saved pre-repair SQLite backup:"),
+        expect.stringContaining(
+          "Rebuilt corrupt shared-state SQLite indexes: unsafe_index_records_value",
+        ),
+      ],
+      warnings: [],
+    });
+    expect(openOpenClawStateDatabase(options).db.prepare("PRAGMA integrity_check").get()).toEqual({
+      integrity_check: "ok",
+    });
   });
 
   it("configures checkpoint lock waits before schema mutation", () => {

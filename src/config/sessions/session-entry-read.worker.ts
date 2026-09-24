@@ -12,6 +12,7 @@ import { readSessionActivitySummary } from "./activity-summary.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
+import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
 import { readTranscriptHeaderFromDatabase } from "./session-accessor.sqlite-read.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
@@ -146,6 +147,13 @@ export function readExactSessionEntriesWithLifecycle(
                           sessionKey,
                           listSessionMembersInDatabase(database, sessionKey),
                         ]),
+                      ),
+                    }
+                  : {}),
+                ...(request.includeParticipantRecords
+                  ? {
+                      participantRecords: Object.fromEntries(
+                        participantRecordsBySessionKey(database.db, request.sessionKeys),
                       ),
                     }
                   : {}),
