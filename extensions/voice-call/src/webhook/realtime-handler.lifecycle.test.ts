@@ -202,7 +202,7 @@ describe("RealtimeCallHandler lifecycle", () => {
             ? expect(closing).rejects.toThrow("provider cleanup failed")
             : expect(closing).resolves.toBeUndefined();
         const concurrentClose = handler.close();
-        handler.issueStreamSession();
+        handler.issueStreamSession({ providerName: "twilio", callId: "CA-shutdown-pending" });
         let closeSettled = false;
         void closing.then(
           () => {
@@ -273,6 +273,7 @@ describe("RealtimeCallHandler lifecycle", () => {
 
     try {
       handler.issueStreamSession({
+        providerName: "twilio",
         callId: "call-never-connected",
         from: "+15550001111",
         to: "+15550002222",
@@ -300,7 +301,10 @@ describe("RealtimeCallHandler lifecycle", () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { handler } = createCarrierLifecycleHarness(() => createBridge(vi.fn()));
-    const { token } = handler.issueStreamSession({ callId: "call-connected" });
+    const { token } = handler.issueStreamSession({
+      providerName: "twilio",
+      callId: "call-connected",
+    });
 
     try {
       (
@@ -823,7 +827,10 @@ describe("RealtimeCallHandler lifecycle", () => {
     );
     const consult = vi.fn(async () => ({ text: "This should not run." }));
     handler.registerToolHandler("openclaw_agent_consult", consult);
-    const { streamUrl } = handler.issueStreamSession();
+    const { streamUrl } = handler.issueStreamSession({
+      providerName: "twilio",
+      callId: "CA-settling-consult",
+    });
     const server = await startUpgradeWsServer({
       urlPath: new URL(streamUrl).pathname,
       onUpgrade: (request, socket, head) => {
@@ -938,7 +945,10 @@ describe("RealtimeCallHandler lifecycle", () => {
         );
       });
     });
-    const { streamUrl } = handler.issueStreamSession();
+    const { streamUrl } = handler.issueStreamSession({
+      providerName: "twilio",
+      callId: "CA-consult",
+    });
     const server = await startUpgradeWsServer({
       urlPath: new URL(streamUrl).pathname,
       onUpgrade: (request, socket, head) => {

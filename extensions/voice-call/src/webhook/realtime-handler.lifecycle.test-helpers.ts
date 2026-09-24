@@ -130,7 +130,10 @@ export function createCarrierLifecycleHarness(
 }
 
 export async function connectCarrierStream(handler: RealtimeCallHandler) {
-  const { streamUrl } = handler.issueStreamSession();
+  const { streamUrl } = handler.issueStreamSession({
+    providerName: "twilio",
+    callId: "CA-startup",
+  });
   const server = await startUpgradeWsServer({
     urlPath: new URL(streamUrl).pathname,
     onUpgrade: (request, socket, head) => {
