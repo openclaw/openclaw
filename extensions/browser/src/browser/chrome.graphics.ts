@@ -1,3 +1,10 @@
+/**
+ * Managed Chrome graphics diagnostics.
+ *
+ * Reads the browser-level SystemInfo domain and caches normalized facts on the
+ * exact RunningChrome instance that owns the process.
+ */
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
   asFiniteNumber,
@@ -5,13 +12,6 @@ import {
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-/**
- * Managed Chrome graphics diagnostics.
- *
- * Reads the browser-level SystemInfo domain and caches normalized facts on the
- * exact RunningChrome instance that owns the process.
- */
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { redactCdpErrorText, withCdpSocket } from "./cdp.helpers.js";
 import { getChromeWebSocketEndpoint, type RunningChrome } from "./chrome.js";
 import type {

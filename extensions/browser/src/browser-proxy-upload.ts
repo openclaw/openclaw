@@ -7,6 +7,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -18,7 +19,6 @@ import {
   type BrowserProxyUploadV1,
 } from "./browser-proxy-envelope.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingUploadPaths } from "./browser/paths.js";
-import { sanitizeUntrustedFileName } from "./sdk-security-runtime.js";
 
 const logger = createSubsystemLogger("browser");
 const BROWSER_PROXY_UPLOAD_ROOT_NAME = ".proxy-uploads";

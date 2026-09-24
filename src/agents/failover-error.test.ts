@@ -7,6 +7,10 @@ import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-erro
 import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { getFailoverErrorCode } from "./failover/error.js";
 import { AgentHarnessPreflightError } from "./harness/errors.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
 
 // Classification here is message/status table behavior. Provider-attributed
 // structured signals (e.g. moonshot + 429) otherwise cross the plugin-consult
@@ -910,6 +914,39 @@ describe("failover-error", () => {
         expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
       }
     });
+
+    it.each([
+      [
+        "publication superseded",
+        () =>
+          new PreparedModelRuntimePublicationSupersededError(
+            "prepared model runtime publication was superseded for /tmp/agent",
+          ),
+      ],
+      [
+        "owner not published",
+        () =>
+          new PreparedModelRuntimeOwnerNotPublishedError(
+            "prepared model runtime owner is not published for /tmp/agent",
+          ),
+      ],
+    ])(
+      "treats prepared model runtime %s as coordination, not a provider quota failure",
+      (_label, make) => {
+        const error = make();
+        const wrapped = new Error("lane task error", { cause: error });
+        for (const candidate of [error, wrapped]) {
+          expect(isNonProviderRuntimeCoordinationError(candidate)).toBe(true);
+          expect(resolveModelFallbackError(candidate)).toEqual({
+            kind: "coordination",
+            error: candidate,
+          });
+          expect(coerceToFailoverError(candidate)).toBeNull();
+          expect(resolveFailoverReasonFromError(candidate)).toBeNull();
+          expect(describeFailoverError(candidate).reason).toBeUndefined();
+        }
+      },
+    );
 
     it("returns true for Codex missing tool-result local execution failures", () => {
       const missingToolResultMessage =

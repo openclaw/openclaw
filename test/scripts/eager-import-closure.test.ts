@@ -15,30 +15,38 @@ import { join, relative } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const itPosix = process.platform === "win32" ? it.skip : it;
 
-it("acquires and releases wrapper leases without the application command runtime", () => {
+it("acquires and releases wrapper leases without the application command runtime", async () => {
   const root = tempDirs.make("openclaw-pr-lease-bootstrap-");
   copyPrWrapperSources(root);
   linkPrWrapperDependencies(root);
+  await prepareCopiedSourceModules(root, [
+    "src/state/openclaw-state-lease.ts",
+    "src/state/openclaw-state-db.ts",
+    "src/state/openclaw-state.worker.ts",
+    "src/state/openclaw-state-lease-worker.ts",
+    "src/state/openclaw-state-lease-heartbeat.worker.ts",
+    "src/infra/sqlite-store.worker.ts",
+    "src/infra/sqlite-readonly-location.worker.ts",
+  ]);
   expect(existsSync(join(root, "src/state/openclaw-state-worker-runtime.ts"))).toBe(false);
   const result = spawnSync(
     process.execPath,
     [
-      "--import",
-      join(root, "scripts/tsx.mjs"),
       "--input-type=module",
       "-e",
       `
         import assert from "node:assert/strict";
-        import { withOpenClawStateLease } from "./src/state/openclaw-state-lease.ts";
+        import { withOpenClawStateLease } from "./src/state/openclaw-state-lease.js";
         import {
           closeOpenClawStateDatabaseAsync,
           openOpenClawStateDatabase,
-        } from "./src/state/openclaw-state-db.ts";
+        } from "./src/state/openclaw-state-db.js";
         const options = {
           scope: "core:wrapper-bootstrap",
           key: "lease",
@@ -329,6 +337,61 @@ it("captures lazy platform modules and their runtime dependencies without loadin
     ["entry.mts", "platform.mts", "native.ts"]
       .map((file) => relative(process.cwd(), join(directory, file)).replaceAll("\\", "/"))
       .toSorted(),
+  );
+});
+
+it("resolves runtime aliases and import/require conditions without following declarations", () => {
+  const root = tempDirs.make("openclaw-runtime-resolution-");
+  mkdirSync(join(root, "src"));
+  writeFileSync(
+    join(root, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        verbatimModuleSyntax: true,
+        paths: { "@fixture/*": ["./src/*.ts"] },
+      },
+    }),
+  );
+  writeFileSync(
+    join(root, "package.json"),
+    JSON.stringify({
+      type: "module",
+      imports: { "#branch": { import: "./import.ts", require: "./require.ts" } },
+    }),
+  );
+  for (const [file, source] of Object.entries({
+    "entry.ts":
+      'import "@fixture/alias"; import "./native.js"; import "./common.cts"; require("#branch");',
+    "common.cts": 'export const load = () => import("#branch");',
+    launch: "#!/bin/sh\nexit 0\n",
+    "src/alias.ts": 'import type { Missing } from "./erased.js";',
+    "native.js": 'import "./native-dependency.js";',
+    "native.d.ts": 'export * from "./declaration-only.js";',
+    "native-dependency.ts": "export const native = true;",
+    "import.ts": "export const imported = true;",
+    "require.ts": "export const required = true;",
+  })) {
+    writeFileSync(join(root, file), source);
+  }
+
+  expect(
+    collectRuntimeImportClosure(root, ["entry.ts", "launch"], { includeDynamicImports: true }),
+  ).toEqual([
+    "common.cts",
+    "entry.ts",
+    "import.ts",
+    "launch",
+    "native-dependency.ts",
+    "native.js",
+    "require.ts",
+    "src/alias.ts",
+  ]);
+  expect(collectRuntimeImportClosure(root, ["launch"])).toEqual(["launch"]);
+  writeFileSync(join(root, "native.js"), 'import "./missing.js";');
+  expect(() => collectRuntimeImportClosure(root, ["entry.ts"])).toThrow(
+    "native.js: unresolved ./missing.js",
   );
 });
 

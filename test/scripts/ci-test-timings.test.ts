@@ -31,7 +31,12 @@ import {
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import * as localCheckRuntime from "../../scripts/lib/local-check-runtime.mts";
 import { createCompactSplitTimingGeneration } from "../../scripts/lib/vitest-shard-metadata.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
+import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
 
 function uiLog(files: Record<string, number>, overhead = 0.6) {
   const body = Object.values(files).reduce((sum, value) => sum + value, 0);
@@ -792,9 +797,10 @@ if (args[1] === "--help") {
           [
             "--require",
             clock,
-            "--import",
-            "tsx",
-            "scripts/ci-refit-test-timings.mts",
+            ...resolveRuntimeWorkerArgv(
+              resolveRuntimeWorkerUrl(toolingProbeRuntimeEntrypoints.ciRefitTestTimings),
+              process.execPath,
+            ),
             "--runs",
             String(count),
             "--repo",
@@ -1227,7 +1233,7 @@ it.todo("retains todo coverage");
         ...baseline,
         compactGroupSeconds: {
           blacksmith: { observed: 20, deleted: 30 },
-          github: { observed: 20, deleted: 40 },
+          github: { observed: 20, deleted: 40, "release-full-fixture": 900 },
         },
         uiE2e: {
           ...baseline.uiE2e,
@@ -1253,7 +1259,9 @@ it.todo("retains todo coverage");
       const { timings, changes } = refitTestTimings(runs, previous);
       expect(timings.compactGroupSeconds.blacksmith).toEqual({ observed: 20 });
       expect(timings.compactGroupSeconds.github).toEqual(
-        count >= 3 ? { observed: 20 } : previous.compactGroupSeconds.github,
+        count >= 3
+          ? { observed: 20, "release-full-fixture": 900 }
+          : previous.compactGroupSeconds.github,
       );
       expect(timings.uiE2e.fileSeconds).toEqual(
         count >= 3 ? { [measuredFile]: 100 } : previous.uiE2e.fileSeconds,

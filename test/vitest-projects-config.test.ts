@@ -373,13 +373,13 @@ describe("projects vitest config", () => {
       createUnitFastIsolatedVitestConfig,
       "src/system-agent/assistant.configured.test.ts",
     ],
-    ["fake timers", createUnitFastFakeTimersVitestConfig, "src/acp/control-plane/manager.test.ts"],
+    ["fake timers", createUnitFastFakeTimersVitestConfig, "src/acp/translator.stop-reason.test.ts"],
   ])("limits %s unit-fast include files to the project's owned tests", (_, createConfig, owned) => {
     const unrelated = "src/gateway/openresponses-http.test.ts";
     const mixedIncludeFile = patternFiles.writePatternFile("mixed-unit-fast-include.json", [
       "src/plugin-sdk/text-chunking.test.ts",
       "src/system-agent/assistant.configured.test.ts",
-      "src/acp/control-plane/manager.test.ts",
+      "src/acp/translator.stop-reason.test.ts",
       unrelated,
     ]);
     const unrelatedIncludeFile = patternFiles.writePatternFile("unrelated-unit-fast-include.json", [

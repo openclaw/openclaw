@@ -1,5 +1,8 @@
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
-import type { SessionTranscriptDisplayDeltaResult } from "./session-accessor.sqlite-history-query.js";
+import type {
+  SessionTranscriptDisplayDeltaResult,
+  SessionTranscriptMessageByIdOptions,
+} from "./session-accessor.sqlite-history-query.js";
 import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptReadScope,
@@ -65,12 +68,12 @@ export type SessionHistorySnapshot = {
   transcriptPath?: string;
 };
 
-export type SessionHistoryTranscriptTarget = {
-  agentId?: string;
+export type SessionHistoryTranscriptTarget = Pick<
+  SessionTranscriptReadScope,
+  "agentId" | "env" | "sessionId" | "storePath"
+> & {
   sessionEntry?: SessionEntry;
-  sessionId: string;
   sessionKey: string;
-  storePath?: string;
 };
 
 export type SessionHistoryReadParams = {
@@ -95,9 +98,26 @@ export type SessionHistoryDelta = {
   subagentCoordination: SessionHistorySubagentFacts;
 };
 
+export type ReadSessionMessageByIdResult = {
+  message?: unknown;
+  seq?: number;
+  oversized: boolean;
+  found: boolean;
+  serializedBytes?: number;
+};
+
 export type SessionHistoryWorkerRequest =
   | { kind: "rpc"; params: ChatHistoryPageParams & { sessionId: string; storePath: string } }
   | { kind: "message-lookup"; params: { target: SessionTranscriptReadScope; messageId: string } }
+  | {
+      kind: "message-by-id";
+      params: {
+        target: SessionTranscriptReadScope;
+        messageId: string;
+        options?: SessionTranscriptMessageByIdOptions & { allowResetArchiveFallback?: boolean };
+      };
+    }
+  | { kind: "message-count"; params: { target: SessionTranscriptReadScope } }
   | {
       kind: "recent";
       params: {
@@ -116,6 +136,8 @@ export type SessionHistoryWorkerRequest =
 export type SessionHistoryWorkerResult =
   | { kind: "rpc"; page: ChatHistoryPage }
   | { kind: "message-lookup"; messages: unknown[] }
+  | { kind: "message-by-id"; result: ReadSessionMessageByIdResult }
+  | { kind: "message-count"; count: number }
   | { kind: "recent"; messages: unknown[] }
   | ({ kind: "delta" } & SessionHistoryDelta)
   | { kind: "http"; snapshot: SessionHistorySnapshot };

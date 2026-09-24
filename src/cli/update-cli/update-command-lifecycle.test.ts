@@ -24,6 +24,7 @@ import {
   registerRepairCustodyTests,
 } from "./update-command-lifecycle-repair.test-support.js";
 import {
+  registerPrivateHandoffBindingTests,
   validConfigSnapshot,
   expectLifecycleBoundary,
   finalizationCleanupCases,
@@ -263,6 +264,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
   });
 
+  registerPrivateHandoffBindingTests();
   registerAbandonedRepairHistoryTests();
 
   it.each([false, true])(
@@ -957,6 +959,31 @@ describe("update plugin lifecycle lease boundaries", () => {
   );
 
   registerRepairCustodyTests(mocks);
+
+  it("includes service restoration warnings in the repair outcome", async () => {
+    const warnings: string[] = [];
+    const warning = "Gateway was already stopped before repair; run openclaw gateway start.";
+    mocks.maintenance.mockResolvedValue({
+      run: <T>(operation: () => T): T => operation(),
+      release: async () => {},
+      releaseState: async () => {},
+      finish: async () => {
+        warnings.push(warning);
+      },
+      warnings,
+    });
+    vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
+    await updateFinalizeCommand(
+      { json: true, yes: true, timeout: "5", deferCompletionCache: true },
+      [],
+    );
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "warning",
+        postUpdate: expect.objectContaining({ doctor: { status: "warning", warnings: [warning] } }),
+      }),
+    );
+  });
 
   it("keeps nonfatal Doctor warnings in terminal JSON without failing finalization", async () => {
     mocks.doctorWarnings = ["Optional version probe timed out; recheck after restart."];

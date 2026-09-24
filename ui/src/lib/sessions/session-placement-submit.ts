@@ -54,6 +54,14 @@ export async function advanceSessionPlacementDraft(params: {
   // Dispatch and send require both fences. After accepted delivery, inspect
   // them separately so lifecycle interruption is not reported as takeover.
   const isCurrentOwner = () => params.isLifecycleCurrent() && params.ownsRecovery();
+  const deleteDraft = async (recovered = recovering) => {
+    const cleanup = recovered ? deleteRecoveredSessionPlacementDraft : deleteSessionPlacementDraft;
+    const error = await cleanup(params.client, recovery.sessionKey, recovery.agentId);
+    if (!error) {
+      params.clearRecovery("resolved");
+    }
+    return error;
+  };
   if (
     recovery.phase === "sending" ||
     (recovery.phase === "paused" && recovery.reason === "unconfirmed")
@@ -118,16 +126,7 @@ export async function advanceSessionPlacementDraft(params: {
         ? existingRecovery?.messageId === recovery.messageId
         : writeSessionPlacementRecoveryIfAvailable(recovery)
       : false;
-    const cleanupError = recovering
-      ? await deleteRecoveredSessionPlacementDraft(
-          params.client,
-          recovery.sessionKey,
-          recovery.agentId,
-        )
-      : await deleteSessionPlacementDraft(params.client, recovery.sessionKey, recovery.agentId);
-    if (!cleanupError) {
-      params.clearRecovery("resolved");
-    }
+    const cleanupError = await deleteDraft();
     return {
       status: "cancelled",
       cleanupError,
@@ -150,16 +149,7 @@ export async function advanceSessionPlacementDraft(params: {
         recoveryPersisted: false,
       };
     }
-    const cleanupError = recovering
-      ? await deleteRecoveredSessionPlacementDraft(
-          params.client,
-          recovery.sessionKey,
-          recovery.agentId,
-        )
-      : await deleteSessionPlacementDraft(params.client, recovery.sessionKey, recovery.agentId);
-    if (!cleanupError) {
-      params.clearRecovery("resolved");
-    }
+    const cleanupError = await deleteDraft();
     return { status: "cancelled", cleanupError, recoveryPersisted };
   }
 
@@ -206,14 +196,7 @@ export async function advanceSessionPlacementDraft(params: {
     return placementStart;
   }
   if (placementStart.status === "cancelled") {
-    const cleanupError = await deleteSessionPlacementDraft(
-      params.client,
-      recovery.sessionKey,
-      recovery.agentId,
-    );
-    if (!cleanupError) {
-      params.clearRecovery("resolved");
-    }
+    const cleanupError = await deleteDraft(false);
     return { status: "cancelled", cleanupError, recoveryPersisted: persistRecovery };
   }
   if (placementStart.status === "cleanup-rejected") {

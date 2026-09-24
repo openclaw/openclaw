@@ -4,7 +4,7 @@ import path from "node:path";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
@@ -16,6 +16,7 @@ import {
 } from "../security/install-policy.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
+import type { PluginHookBeforeInstallPlugin, PluginHookBeforeInstallSkill } from "./hook-types.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
 import type {
   InstallSecurityScanResult,
@@ -304,14 +305,6 @@ function isSamePathOrInside(parentPath: string, candidatePath: string): boolean 
   return parentPath === candidatePath || isPathInside(parentPath, candidatePath);
 }
 
-function getErrnoCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null || !("code" in error)) {
-    return undefined;
-  }
-  const code = (error as { code?: unknown }).code;
-  return typeof code === "string" ? code : undefined;
-}
-
 function isInstallScannableDependencyName(name: string): boolean {
   if (name.startsWith("@")) {
     const parts = name.split("/");
@@ -353,7 +346,7 @@ async function resolveInstalledPackageScanRoot(params: {
   try {
     stats = await fs.stat(packageDir);
   } catch (error) {
-    if (getErrnoCode(error) === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;
@@ -560,18 +553,8 @@ async function runBeforeInstallHook(params: {
   requestKind: InstallPolicyRequestKind;
   requestMode: "install" | "update";
   requestedSpecifier?: string;
-  skill?: {
-    installId: string;
-    installSpec?: SkillInstallSpecMetadata;
-  };
-  plugin?: {
-    contentType: "bundle" | "package" | "file";
-    pluginId: string;
-    packageName?: string;
-    manifestId?: string;
-    version?: string;
-    extensions?: string[];
-  };
+  skill?: PluginHookBeforeInstallSkill;
+  plugin?: PluginHookBeforeInstallPlugin;
 }): Promise<InstallSecurityScanResult | undefined> {
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_install")) {
@@ -697,33 +680,17 @@ function shouldBypassOpenClawInstallFriction(params: {
   );
 }
 
-async function runOperatorInstallPolicy(params: {
-  config?: OpenClawConfig;
-  logger: InstallScanLogger;
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  origin: InstallPolicyOrigin;
-  source?: InstallPolicySource;
-  sourcePath: string;
-  sourcePathKind: "file" | "directory";
-  targetName: string;
-  targetType: "skill" | "plugin";
-  requestKind: InstallPolicyRequestKind;
-  requestMode: "install" | "update";
-  requestedSpecifier?: string;
-  skill?: {
-    installId: string;
-    installSpec?: SkillInstallSpecMetadata;
-  };
-  plugin?: {
-    contentType: "bundle" | "package" | "file" | "dependency-tree";
-    pluginId: string;
-    packageName?: string;
-    manifestId?: string;
-    version?: string;
-    extensions?: string[];
-  };
-  trustedSourceLinkedOfficialInstall?: boolean;
-}): Promise<InstallSecurityScanResult | undefined> {
+async function runOperatorInstallPolicy(
+  params: Omit<Parameters<typeof runBeforeInstallHook>[0], "installLabel" | "origin" | "plugin"> & {
+    config?: OpenClawConfig;
+    onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+    origin: InstallPolicyOrigin;
+    plugin?: Omit<PluginHookBeforeInstallPlugin, "contentType"> & {
+      contentType: PluginHookBeforeInstallPlugin["contentType"] | "dependency-tree";
+    };
+    trustedSourceLinkedOfficialInstall?: boolean;
+  },
+): Promise<InstallSecurityScanResult | undefined> {
   const request = {
     targetName: params.targetName,
     targetType: params.targetType,

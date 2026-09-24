@@ -3,8 +3,8 @@ import { releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   isDefinitiveWorkerTerminalEvent,
   type WorkerLiveTrajectoryRecorder,
-  type WorkerLiveTrajectoryTarget,
 } from "./live-event-projection.js";
+import type { WorkerTurnTranscriptSource } from "./placement-turn-claim-events.js";
 import type { WorkerTurnLiveEventOwner } from "./worker-turn-run-owner.js";
 
 export type PendingLiveEvent = {
@@ -12,6 +12,7 @@ export type PendingLiveEvent = {
   sizeBytes: number;
   recordApplied?: (event: WorkerLiveEventParams["event"]) => void;
   runOwner?: WorkerTurnLiveEventOwner;
+  source: WorkerTurnTranscriptSource;
 };
 
 export type OwnedLiveRun = {
@@ -44,7 +45,7 @@ export type LiveEventWindow = {
   trajectoryWrites: Set<Promise<void>>;
   runEpoch: number;
   sessionId: string;
-  target: WorkerLiveTrajectoryTarget;
+  source: WorkerTurnTranscriptSource;
   terminalRuns: Map<string, number>;
 };
 

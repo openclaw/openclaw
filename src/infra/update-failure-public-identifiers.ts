@@ -97,6 +97,7 @@ const PUBLIC_CODES = new Set<string>([
   "unmanaged-package-install",
   "package-update-requires-cli",
   "swap-failed",
+  "baseline-scan-failed",
   "verification-result-missing",
   "finalization-timeout",
   "finalization-failed",

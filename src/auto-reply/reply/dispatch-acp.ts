@@ -56,7 +56,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { cleanDeferredFinalText, shouldDeferFinalTtsText } from "../../tts/captioned-final.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
@@ -87,11 +87,11 @@ import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
 
-const dispatchAcpManagerRuntimeLoader = createLazyImportLoader(
+const loadDispatchAcpManagerRuntime = createLazyPromise(
   () => import("./dispatch-acp-manager.runtime.js"),
 );
-const dispatchAcpAuditRuntimeLoader = createLazyImportLoader(
-  () => import("../../agents/command/attempt-execution.runtime.js"),
+const loadDispatchAcpAuditRuntime = createLazyPromise(
+  () => import("../../agents/command/acp-lifecycle.js"),
 );
 
 type OrderedAcpAttachment = {
@@ -124,28 +124,10 @@ function resolveMergedAcpAttachments(entries: OrderedAcpAttachment[]): AcpTurnAt
     })
     .map((entry) => entry.attachment);
 }
-const dispatchAcpTtsRuntimeLoader = createLazyImportLoader(
-  () => import("../../tts/tts.runtime.js"),
-);
-const dispatchAcpTranscriptRuntimeLoader = createLazyImportLoader(
+const loadDispatchAcpTtsRuntime = createLazyPromise(() => import("../../tts/tts.runtime.js"));
+const loadDispatchAcpTranscriptRuntime = createLazyPromise(
   () => import("./dispatch-acp-transcript.runtime.js"),
 );
-
-function loadDispatchAcpManagerRuntime() {
-  return dispatchAcpManagerRuntimeLoader.load();
-}
-
-function loadDispatchAcpAuditRuntime() {
-  return dispatchAcpAuditRuntimeLoader.load();
-}
-
-function loadDispatchAcpTtsRuntime() {
-  return dispatchAcpTtsRuntimeLoader.load();
-}
-
-function loadDispatchAcpTranscriptRuntime() {
-  return dispatchAcpTranscriptRuntimeLoader.load();
-}
 
 type DispatchProcessedRecorder = (
   outcome: "completed" | "skipped" | "error",
@@ -154,10 +136,6 @@ type DispatchProcessedRecorder = (
     error?: string;
   },
 ) => void;
-
-function resolveAcpPromptText(ctx: FinalizedRuntimeMsgContext): string {
-  return ctx.agentText.trim();
-}
 
 function resolveAcpRequestId(ctx: FinalizedRuntimeMsgContext): string {
   const id = ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
@@ -359,14 +337,10 @@ async function finalizeAcpTurnOutput(params: {
           transcriptSource: { kind: "blocks" },
         });
         queuedFinal = queuedFinal || delivered;
-      } else if (shouldDeferVisibleTextForTts && ttsSyntheticReply.text?.trim()) {
-        const delivered = await params.delivery.deliver(
-          "final",
-          { text: ttsSyntheticReply.text },
-          { skipTts: true, transcriptSource: { kind: "blocks" } },
-        );
-        queuedFinal = queuedFinal || delivered;
-      } else if (needsTtsFallback(true, accumulatedVisibleBlockText, ttsSyntheticReply.text)) {
+      } else if (
+        (shouldDeferVisibleTextForTts && ttsSyntheticReply.text?.trim()) ||
+        needsTtsFallback(true, accumulatedVisibleBlockText, ttsSyntheticReply.text)
+      ) {
         const delivered = await params.delivery.deliver(
           "final",
           { text: ttsSyntheticReply.text },
@@ -560,7 +534,7 @@ export async function tryDispatchAcpReplyCore(params: {
     abortSignal: params.abortSignal,
     runId: params.runId,
   });
-  const pendingAnswerText = resolveAcpPromptText(params.ctx);
+  const pendingAnswerText = params.ctx.agentText.trim();
   const inputRecorder = params.userTurnTranscriptRecorder;
   const assertInputCurrent = () => {
     params.abortSignal?.throwIfAborted();
@@ -857,7 +831,7 @@ export async function tryDispatchAcpReplyCore(params: {
       }
     }
 
-    const promptText = resolveAcpPromptText(params.ctx);
+    const promptText = params.ctx.agentText.trim();
     const describedImageIndexes = collectDescribedImageAttachmentIndexes(params.ctx);
     const recentHistoryStart =
       resolvedTurnAttachments.attachments.length -

@@ -532,6 +532,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       }
     }
 
+    await params.opts.beforeTerminalDelivery?.();
     const { deliverAgentCommandResult } = await loadDeliveryRuntime();
     const deliveryParams = {
       cfg,

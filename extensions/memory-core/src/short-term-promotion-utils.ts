@@ -11,6 +11,8 @@ import type {
   ShortTermRecallStore,
 } from "./short-term-promotion-types.js";
 
+const GENERIC_DAY_HEADING_RE =
+  /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
 const SHORT_TERM_SESSION_CORPUS_RE =
@@ -56,6 +58,21 @@ export function toFiniteScore(value: unknown, fallback: number): number {
     return fallback;
   }
   return num;
+}
+
+export function isGenericDailyHeading(heading: string): boolean {
+  const normalized = heading.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return true;
+  }
+  const lower = normalized.toLowerCase();
+  if (lower === "today" || lower === "yesterday" || lower === "tomorrow") {
+    return true;
+  }
+  if (lower === "morning" || lower === "afternoon" || lower === "evening" || lower === "night") {
+    return true;
+  }
+  return GENERIC_DAY_HEADING_RE.test(normalized);
 }
 
 export function normalizeSnippet(raw: string): string {

@@ -1966,7 +1966,12 @@ export async function verifyBetaRelease(
   options: {
     rootDir?: string;
     pluginNpmReadback?: {
-      verify: (packageName: string, version: string, distTag: string) => Promise<void>;
+      // Resolves to an informational note for a superseded published version.
+      verify: (
+        packageName: string,
+        version: string,
+        distTag: string,
+      ) => Promise<string | undefined>;
       evidence: Record<string, unknown>[];
     };
   } = {},
@@ -2045,7 +2050,14 @@ export async function verifyBetaRelease(
       // Full publication owns tarball readback, including prior-parent publishes.
       // Only standalone health checks retain metadata verification.
       if (options.pluginNpmReadback) {
-        await options.pluginNpmReadback.verify(plugin.packageName, args.version, args.distTag);
+        const note = await options.pluginNpmReadback.verify(
+          plugin.packageName,
+          args.version,
+          args.distTag,
+        );
+        if (note !== undefined) {
+          lines.push(`plugin npm WARN: ${note}`);
+        }
       } else {
         await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
       }

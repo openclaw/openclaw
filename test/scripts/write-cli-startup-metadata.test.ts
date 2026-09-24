@@ -5,9 +5,13 @@ import fs, { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
 import { testing } from "../../scripts/write-cli-startup-metadata.ts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { waitForChildClose, waitForPidFile } from "../helpers/process-wait.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -18,6 +22,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 // These subprocess tests use explicit ready/close signals; timeout only catches broken fixtures.
 const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
+const metadataUrl = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.cliStartupMetadata);
 const COMMAND_HELP_RENDER_CONCURRENCY = 2;
 const DEFAULT_COMMAND_HELP_NAMES = [
   "browser",
@@ -665,9 +670,7 @@ describe("write-cli-startup-metadata", () => {
         tempRoot,
         "runner.mjs",
         [
-          `const { testing } = await import(${JSON.stringify(
-            pathToFileURL(path.resolve("scripts/write-cli-startup-metadata.ts")).href,
-          )});`,
+          `const { testing } = await import(${JSON.stringify(metadataUrl.href)});`,
           "const { writeFileSync } = await import('node:fs');",
           "const renderCommand = (commandPath, failureMessage) => (context, taskContext) => {",
           "  if (!taskContext) throw new Error('missing render task context');",
@@ -702,10 +705,14 @@ describe("write-cli-startup-metadata", () => {
         ].join("\n"),
       );
 
-      const runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
-        cwd: process.cwd(),
-        stdio: "ignore",
-      });
+      const runner = spawn(
+        process.execPath,
+        [...resolveRuntimeWorkerArgv(metadataUrl).slice(0, -1), runnerPath],
+        {
+          cwd: process.cwd(),
+          stdio: "ignore",
+        },
+      );
       let grandchildPid = 0;
 
       try {

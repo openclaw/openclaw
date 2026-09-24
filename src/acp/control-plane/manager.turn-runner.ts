@@ -1,8 +1,16 @@
 /** Runs ACP turns, failover, timeout cleanup, and detached-task progress mirroring. */
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
+import {
+  assertOperatorModelAllowed,
+  bindOperatorModelExecution,
+  readAdmittedRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../../agents/admitted-run-context.js";
+import { normalizeModelRef } from "../../agents/model-ref-shared.js";
 import { logVerbose } from "../../globals.js";
+import { getProcessGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import {
   recordSessionHumanDirectMessage,
   recordSubagentTerminalState,
@@ -75,6 +83,19 @@ export async function runManagerTurn(params: {
   isCurrentActor: () => boolean;
 }): Promise<void> {
   const { input, sessionKey, agentId } = params;
+  const operatorAuthority = readAdmittedRunOperatorAuthority(input.admittedRunContext);
+  const manifestPlugins = getProcessGatewayPluginMetadataSnapshot() ?? [];
+  const resolveModelRef = (model: string | undefined) => {
+    const ref = model ? parseModelCatalogRef(model) : undefined;
+    return ref
+      ? normalizeModelRef(ref.provider, ref.modelId, {
+          allowPluginNormalization: false,
+          manifestPlugins,
+        })
+      : undefined;
+  };
+  const assertModelAllowed = (model: string | undefined) =>
+    assertOperatorModelAllowed(operatorAuthority, resolveModelRef(model));
   if (input.admittedRunContext.operationalRunInstance.runId !== input.requestId) {
     throw new Error("ACP operational run instance disagrees with the admitted request");
   }
@@ -106,13 +127,29 @@ export async function runManagerTurn(params: {
     agentId,
   });
   const initialMeta = requireReadySessionMeta(initialResolution);
-  recordSessionHumanDirectMessage({
-    sessionKey,
-    entry: initialResolution.kind === "ready" ? initialResolution.entry : undefined,
-    actor: { actorType: input.provenance },
-    channel: "acp",
-    runId: input.requestId,
-  });
+  const assertSignalAdmission = resolveAdmittedRunActiveAssertion(
+    input.admittedRunContext,
+    input.signal,
+  );
+  const assertSignalCurrent = () => {
+    if (!params.isCurrentActor()) {
+      throw createSupersededActorError(sessionKey);
+    }
+    input.signal?.throwIfAborted();
+    assertSignalAdmission?.();
+  };
+  await recordSessionHumanDirectMessage(
+    {
+      sessionKey,
+      agentId,
+      entry: initialResolution.kind === "ready" ? initialResolution.entry : undefined,
+      actor: { actorType: input.provenance },
+      channel: "acp",
+      runId: input.requestId,
+    },
+    { assertCurrent: assertSignalCurrent },
+  );
+  assertSignalCurrent();
   // ACP children bypass the subagent registry; terminal outcomes are projected into
   // the signal log here so changesSince histories are not spawn-only for ACP runs.
   const spawnedByWatcher =
@@ -209,6 +246,7 @@ export async function runManagerTurn(params: {
                 agentId,
               });
         const resolvedMeta = requireReadySessionMeta(resolution);
+        assertModelAllowed(resolvedMeta.runtimeOptions?.model);
         let runtime: AcpRuntime | undefined;
         let handle: AcpRuntimeHandle | undefined;
         let meta: SessionAcpMeta | undefined;
@@ -221,6 +259,9 @@ export async function runManagerTurn(params: {
         let completionEvidenceText = "";
         let completionEvidenceBytes = 0;
         let completionEvidenceOverflowed = false;
+        let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
+        const onModelRevoked = () =>
+          params.acceptedTurn.abortController.abort(modelExecution?.signal.reason);
         try {
           const ensured = await params.ensureRuntimeHandle({
             cfg: input.cfg,
@@ -236,6 +277,12 @@ export async function runManagerTurn(params: {
           runtime = ensured.runtime;
           handle = ensured.handle;
           meta = ensured.meta;
+          let appliedModel = handle.appliedModel
+            ? handle.appliedModel.kind === "applied"
+              ? handle.appliedModel.model
+              : undefined
+            : meta.runtimeOptions?.model;
+          assertModelAllowed(appliedModel);
           activeTurn = {
             requestId: input.requestId,
             instanceId: input.admittedRunContext.operationalRunInstance.instanceId,
@@ -255,6 +302,10 @@ export async function runManagerTurn(params: {
               meta,
               isCurrentActor: params.isCurrentActor,
               getCachedRuntimeState: () => params.runtimeHandles.get(params),
+              onModelApplied: (model) => {
+                appliedModel = model;
+                assertModelAllowed(appliedModel);
+              },
               onOptionsChanged: async (runtimeOptions) => {
                 await params.writeSessionMeta({
                   cfg: input.cfg,
@@ -268,6 +319,13 @@ export async function runManagerTurn(params: {
               },
             });
           }
+
+          modelExecution = bindOperatorModelExecution(
+            operatorAuthority,
+            resolveModelRef(appliedModel),
+          );
+          modelExecution?.signal.addEventListener("abort", onModelRevoked, { once: true });
+          modelExecution?.assertCurrent();
 
           if (!input.signal?.aborted) {
             await params.setSessionState({
@@ -298,7 +356,10 @@ export async function runManagerTurn(params: {
               onElicitation: input.onElicitation,
             },
             eventGate,
-            onBeforePrompt: input.onBeforePrompt,
+            onBeforePrompt: async () => {
+              await input.onBeforePrompt?.();
+              modelExecution?.assertCurrent();
+            },
             onCancellation: () =>
               cancelManagerActiveTurn({
                 activeTurn: turnToCancel,
@@ -346,6 +407,7 @@ export async function runManagerTurn(params: {
               }
             },
             onOutputEvent: (event) => {
+              modelExecution?.signal.throwIfAborted();
               if (!params.isCurrentActor()) {
                 return;
               }
@@ -373,6 +435,7 @@ export async function runManagerTurn(params: {
               }
             },
             onEvent: async (event) => {
+              modelExecution?.signal.throwIfAborted();
               if (params.isCurrentActor()) {
                 await input.onEvent?.(event);
               }
@@ -414,6 +477,7 @@ export async function runManagerTurn(params: {
           if (!params.isCurrentActor()) {
             throw createSupersededActorError(sessionKey);
           }
+          modelExecution?.assertCurrent();
           if (!turnOutcome.terminalStatus) {
             throw new AcpRuntimeError(
               "ACP_TURN_FAILED",
@@ -515,6 +579,8 @@ export async function runManagerTurn(params: {
           }
           break;
         } finally {
+          modelExecution?.signal.removeEventListener("abort", onModelRevoked);
+          modelExecution?.release();
           if (params.acceptedTurn.activeTurn === activeTurn) {
             params.acceptedTurn.activeTurn = undefined;
           }

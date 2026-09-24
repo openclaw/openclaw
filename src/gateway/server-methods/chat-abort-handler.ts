@@ -7,6 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
 import { abortQueuedChatTurnById, type QueuedChatTurnEntry } from "../chat-queued-turns.js";
@@ -17,6 +18,7 @@ import {
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
 import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
+import { resolveWorkerInferenceTarget } from "../worker-environments/inference-control-internal.js";
 import {
   canRequesterAbortChatRun,
   canRequesterAbortPreRegisteredRun,
@@ -34,6 +36,7 @@ import {
 import {
   abortedPartialPersistenceError,
   captureAbortedPartial,
+  deferAbortedPartialPersistence,
   withAbortedPartialPersistenceWarning,
 } from "./chat-aborted-partial.js";
 import {
@@ -48,7 +51,6 @@ import { assertValidParams } from "./validation.js";
 type ChatAbortLifecycle = {
   onAuthorizedAfterQueuedAbort?: () => boolean;
   onDescendantsCancelled?: () => void;
-  excludeRunIds?: ReadonlySet<string>;
   cascadeDescendants?: true;
 };
 
@@ -178,7 +180,6 @@ export async function handleChatAbortRequestWithLifecycle(
       requester,
       assertCurrent,
       preserveSideRuns,
-      excludeRunIds: lifecycle.excludeRunIds,
       onAuthorizedAfterQueuedAbort: lifecycle.onAuthorizedAfterQueuedAbort,
       cascadeDescendants: lifecycle.cascadeDescendants,
     });
@@ -249,11 +250,12 @@ export async function handleChatAbortRequestWithLifecycle(
   };
 
   const active = context.chatAbortControllers.get(runId);
+  const workerTarget = resolveWorkerInferenceTarget(context.workerEnvironmentService, runId);
   // Broad same-device Stop can name an active run on another session. Capture
   // that original producer's SID before descendant or transcript work yields.
   const workerCancellation = captureWorkerInferenceForSession({
     context,
-    sessionId: active?.sessionId ?? abortSessionEntry?.sessionId,
+    sessionId: active?.sessionId ?? workerTarget?.sessionId ?? abortSessionEntry?.sessionId,
     runId,
   });
   const respondWithWorkerRuns = (localRunIds: string[], warning?: string): void => {
@@ -322,15 +324,30 @@ export async function handleChatAbortRequestWithLifecycle(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
         return;
       }
-      assertCurrent();
-      const aborted = writePreRegisteredAgentAbort({
-        context,
-        runId,
-        sessionKey: pendingAgentMatch.sessionKey,
-        payload: pendingAgentPayload,
-        expectedPayload: pendingAgentPayload,
-        stopReason: "rpc",
+      let aborted = false;
+      const descendants = await abortControlledSubagents({
+        cfg: abortCfg,
+        sessionKey: pendingAgentMatch.sessionKey ?? canonicalAbortSessionKey,
+        agentId: abortAgentId,
+        requesterTurnRunId: runId,
+        assertCurrent,
+        beforeKill: () => {
+          assertCurrent();
+          return (aborted = writePreRegisteredAgentAbort({
+            context,
+            runId,
+            sessionKey: pendingAgentMatch.sessionKey,
+            payload: pendingAgentPayload,
+            expectedPayload: pendingAgentPayload,
+            stopReason: "rpc",
+          }));
+        },
       });
+      const error = descendantAbortError(descendants, "Parent run");
+      if (error) {
+        respond(false, undefined, error);
+        return;
+      }
       respondWithWorkerRuns(aborted ? [runId] : []);
       return;
     }
@@ -390,6 +407,7 @@ export async function handleChatAbortRequestWithLifecycle(
           agentId: agentId ?? abortAgentId,
           text: partialText,
           abortOrigin: "rpc",
+          resolveTerminalProducer: active.resolveTerminalProducer,
           ...(sessionKey === rawSessionKey || sessionKey === canonicalAbortSessionKey
             ? { session: abortSession }
             : {}),
@@ -416,7 +434,15 @@ export async function handleChatAbortRequestWithLifecycle(
         ) {
           throw new Error("Run changed before cancellation; retry Stop.");
         }
-        return (aborted = abortChatRunById(ops, { runId, sessionKey, stopReason: "rpc" }).aborted);
+        return abortChatRunById(ops, {
+          runId,
+          sessionKey,
+          stopReason: "rpc",
+          onAbortCommitted: () => {
+            aborted = true;
+            deferAbortedPartialPersistence(snapshot, context);
+          },
+        }).aborted;
       },
     });
   } catch (error) {
@@ -447,5 +473,24 @@ export async function handleChatAbortRequestWithLifecycle(
 }
 
 export async function handleChatAbortRequest(options: GatewayRequestHandlerOptions): Promise<void> {
-  await handleChatAbortRequestWithLifecycle(options);
+  try {
+    await handleChatAbortRequestWithLifecycle(options);
+  } catch (error) {
+    const contention = resolveStateContentionPresentation(error);
+    if (!contention) {
+      throw error;
+    }
+    // A session read can fail even though cancellation takes effect. Do not
+    // replay Stop or claim it had no effect; preserve uncertainty at the RPC boundary.
+    options.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        "The server is busy. Check this turn's status before trying Stop again.\n\n" +
+          "StateDatabaseCoordinatorContentionError: state-lifecycle acquisition remained busy. Stopping may already have taken effect.",
+        { details: { errorKind: contention.errorKind } },
+      ),
+    );
+  }
 }

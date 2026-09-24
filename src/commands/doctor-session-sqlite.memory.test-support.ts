@@ -7,10 +7,10 @@ import { withSuppressedNotes } from "../../packages/terminal-core/src/note.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { getNodeSqliteKysely, prepareSqliteQueryIterator } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 

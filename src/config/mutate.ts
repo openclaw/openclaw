@@ -50,11 +50,8 @@ import {
   type ConfigWriteOptions,
   type ConfigWriteResult,
 } from "./io.js";
-import {
-  containsConfigIncludeDirective,
-  hashConfigRaw,
-  resolveManagedRuntimeEnvBaseline,
-} from "./io.read-helpers.js";
+import { containsConfigIncludeDirective, hashConfigRaw } from "./io.read-helpers.js";
+import { resolveManagedRuntimeEnvBaseline } from "./io.runtime-env.js";
 import { configWriteCommittedSnapshot } from "./io.types.js";
 import { ConfigWritePostCommitError, type ConfigWriteRollbackStatus } from "./io.write-errors.js";
 import {

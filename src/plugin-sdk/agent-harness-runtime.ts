@@ -46,15 +46,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
 import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
 import type { ImageContent } from "../llm/types.js";
-import { redactToolDetail } from "../logging/redact.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
-import { truncateUtf16Safe } from "../utils.js";
 
 export { projectAgentActivityItem } from "../agents/agent-activity-presentation.js";
 export { projectAgentToolActivity } from "../infra/agent-activity-events.js";
 
-/** Default truncation limit for user-facing tool progress output. */
-export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
+export {
+  formatToolProgressOutput,
+  TOOL_PROGRESS_OUTPUT_MAX_CHARS,
+} from "../agents/harness/projection-tool-output.js";
 
 /** Core exec mode algebra for plugin-owned policy adapters. */
 export const execPolicy = Object.freeze({ resolveExecModePolicy, minSecurity, maxAsk });
@@ -233,7 +233,7 @@ export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
 export { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 export { classifyEmbeddedAgentRunResultForModelFallback } from "../agents/embedded-agent-runner/result-fallback-classifier.js";
 export { resolveUserPath } from "../utils.js";
-export { callGatewayTool } from "../agents/tools/gateway.js";
+export { callGatewayTool, readGatewayToolOperatorScopes } from "../agents/tools/gateway.js";
 export { hasGatewayToolRoutingContext } from "../agents/tools/in-process-gateway.js";
 export type { NodeListNode } from "../agents/tools/nodes-utils.js";
 export {
@@ -617,25 +617,6 @@ export function inferToolMetaFromArgs(
   options?: { detailMode?: ToolProgressDetailMode },
 ): string | undefined {
   return inferToolMetaFromArgsCore(toolName, args, options);
-}
-
-/**
- * Prepare verbose tool output for user-facing progress messages.
- */
-export function formatToolProgressOutput(
-  output: string,
-  options?: { maxChars?: number },
-): string | undefined {
-  const trimmed = output.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const redacted = redactToolDetail(trimmed);
-  const maxChars = options?.maxChars ?? TOOL_PROGRESS_OUTPUT_MAX_CHARS;
-  if (redacted.length <= maxChars) {
-    return redacted;
-  }
-  return `${truncateUtf16Safe(redacted, maxChars)}\n...(truncated)...`;
 }
 
 /** Inputs used to classify a finished harness turn with little or no visible assistant output. */

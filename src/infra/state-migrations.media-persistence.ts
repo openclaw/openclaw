@@ -67,6 +67,8 @@ import {
 } from "./state-migrations.media-persistence-database.js";
 import {
   listTranscriptArchives,
+  prepareAgentDatabaseMigrationDiscovery,
+  agentDatabaseMigrationAdvisory,
   resolveAgentDatabaseMigrationTargets,
   type AgentDatabaseMigrationTarget,
   type PreparedAgentDatabaseMigrationDiscovery,
@@ -201,26 +203,31 @@ async function migrateAgentDatabase(params: {
     assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaMode);
     const legacyTextStorage = userVersion < AGENT_STORAGE_SCHEMA_VERSION;
     if (!mediaSchemaUpgrade) {
-      const detected = runSqliteDeferredTransactionSync(
+      const needsRepair = runSqliteDeferredTransactionSync(
         database,
-        () => ({
-          rewrittenSessions: scanTranscriptRows({
+        () =>
+          scanTranscriptRows({
             database,
             pathname: params.pathname,
             legacyTextStorage,
-          }),
-          rewrittenTrajectoryRows: scanTrajectoryRows({
+          }) > 0 ||
+          scanTrajectoryRows({
             database,
             pathname: params.pathname,
             rewrite: false,
-          }),
-        }),
+          }) > 0,
         { databaseLabel: params.pathname, operationLabel: "media-persistence-detection" },
       );
-      if (detected.rewrittenSessions === 0 && detected.rewrittenTrajectoryRows === 0) {
+      if (!needsRepair) {
         const rewrittenArchives = await migrateArchives();
         refreshAgentDatabasePlannerStatistics(database);
-        return { ...detected, rewrittenArchives, initialVersion, finalVersion: userVersion };
+        return {
+          rewrittenSessions: 0,
+          rewrittenTrajectoryRows: 0,
+          rewrittenArchives,
+          initialVersion,
+          finalVersion: userVersion,
+        };
       }
     }
 
@@ -351,11 +358,10 @@ function migrateTranscriptArchive(
   if (!transformed.changed) {
     return false;
   }
-  const rewritten = transformed.content;
   const compressed = filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
   const encoded = compressed
-    ? encodeSessionArchiveContent(rewritten)
-    : { bytes: Buffer.from(rewritten, "utf8"), suffix: "" as const };
+    ? encodeSessionArchiveContent(transformed.content)
+    : { bytes: Buffer.from(transformed.content, "utf8"), suffix: "" as const };
   if (compressed && encoded.suffix !== SESSION_ARCHIVE_ZSTD_SUFFIX) {
     throw new Error(`${filePath} could not be re-encoded with its zstd codec`);
   }
@@ -372,17 +378,17 @@ function migrateTranscriptArchive(
         throw new Error(`${filePath} changed before atomic media migration replacement`);
       }
       const staged = decodeSessionArchiveBytes(fs.readFileSync(tempPath), compressed);
-      if (staged !== rewritten) {
+      if (staged !== transformed.content) {
         throw new Error(`${filePath} failed codec readback before replacement`);
       }
       assertEventIdentitiesUnchanged(
-        parseArchiveContent(rewritten, filePath),
+        parseArchiveContent(transformed.content, filePath),
         parseArchiveContent(staged, tempPath),
         filePath,
       );
     },
   });
-  if (readSessionArchiveContentSync(filePath) !== rewritten) {
+  if (readSessionArchiveContentSync(filePath) !== transformed.content) {
     throw new Error(`${filePath} failed codec readback after replacement`);
   }
   return true;
@@ -408,13 +414,23 @@ export async function migrateLegacyMediaPersistence(
   const refusedAgentDatabasePaths: string[] = [];
   const recoveredAgentDatabasePaths = new Set<string>();
   try {
+    const preparedDiscovery = prepareAgentDatabaseMigrationDiscovery({
+      env,
+      configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
+      preparedDiscovery: params.preparedDiscovery,
+    });
+    const advisory = agentDatabaseMigrationAdvisory(preparedDiscovery.discovery);
+    if (advisory) {
+      params.onPreparedTargets?.([]);
+      return advisory;
+    }
     await withAgentDatabaseMaintenanceLease({ env }, async (maintenance) => {
       const discovery = resolveAgentDatabaseMigrationTargets({
         changes,
         configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
         env,
         warnings,
-        preparedDiscovery: params.preparedDiscovery,
+        preparedDiscovery,
       });
       recoverableWarningCount = discovery.recoverableWarningCount;
       const recoveries = recoverMisplacedAgentDatabaseCopies({

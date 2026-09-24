@@ -9,16 +9,11 @@ import type {
 } from "./detached-task-runtime-contract.js";
 import {
   createTaskRecord,
-  findTaskByRunId as findTaskByRunIdInRegistry,
   getTaskById,
   isParentFlowLinkError,
   linkTaskToFlowById,
   listTasksForFlowId,
-  markTaskTerminalById as markTaskTerminalByIdInRegistry,
-  markTaskRunningByRunId,
   finalizeTaskRecordByRunId,
-  recordTaskProgressByRunId,
-  setTaskRunDeliveryStatusByRunId,
 } from "./runtime-internal.js";
 import {
   hasAuthoritativeTaskBacking,
@@ -45,13 +40,15 @@ import {
 import { isOneTaskFlowEligible } from "./task-initial-flow.rules.js";
 import { withTaskRegistryMutation } from "./task-registry-state.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
-import type {
-  TaskDeliveryState,
-  TaskDeliveryStatus,
-  TaskRecord,
-  TaskRegistrySummary,
-  TaskRuntime,
-} from "./task-registry.types.js";
+import type { TaskDeliveryState, TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
+
+export {
+  findTaskByRunId,
+  markTaskRunningByRunId as startTaskRunByRunIdCore,
+  markTaskTerminalById as finalizeTaskRunById,
+  recordTaskProgressByRunId as recordTaskRunProgressByRunIdCore,
+  setTaskRunDeliveryStatusByRunId as setDetachedTaskDeliveryStatusByRunIdCore,
+} from "./runtime-internal.js";
 
 const log = createSubsystemLogger("tasks/executor");
 
@@ -127,36 +124,6 @@ export function createRunningTaskRunCore(
   });
 }
 
-export function findTaskByRunId(runId: string): TaskRecord | undefined {
-  return findTaskByRunIdInRegistry(runId);
-}
-
-export function startTaskRunByRunIdCore(params: {
-  runId: string;
-  taskId?: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  startedAt?: number;
-  lastEventAt?: number;
-  progressSummary?: string | null;
-  eventSummary?: string | null;
-}) {
-  return markTaskRunningByRunId(params);
-}
-
-export function recordTaskRunProgressByRunIdCore(params: {
-  runId: string;
-  taskId?: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  childSessionKey?: string | null;
-  lastEventAt?: number;
-  progressSummary?: string | null;
-  eventSummary?: string | null;
-}) {
-  return recordTaskProgressByRunId(params);
-}
-
 export function completeTaskRunByRunIdCore(params: DetachedTaskCompleteParams) {
   return finalizeTaskRunByRunIdCore({
     ...params,
@@ -168,27 +135,11 @@ export function finalizeTaskRunByRunIdCore(params: DetachedTaskFinalizeParams) {
   return finalizeTaskRecordByRunId(params);
 }
 
-export function finalizeTaskRunById(
-  params: Parameters<typeof markTaskTerminalByIdInRegistry>[0],
-): TaskRecord | null {
-  return markTaskTerminalByIdInRegistry(params);
-}
-
 export function failTaskRunByRunIdCore(params: DetachedTaskFailParams) {
   return finalizeTaskRunByRunIdCore({
     ...params,
     status: params.status ?? "failed",
   });
-}
-
-export function setDetachedTaskDeliveryStatusByRunIdCore(params: {
-  runId: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  deliveryStatus: TaskDeliveryStatus;
-  error?: string;
-}) {
-  return setTaskRunDeliveryStatusByRunId(params);
 }
 
 type CancelFlowResult = {
@@ -432,22 +383,8 @@ export function runTaskInFlowForOwner(
         };
       }
       return runTaskInFlow({
+        ...params,
         flowId: flow.flowId,
-        runtime: params.runtime,
-        sourceId: params.sourceId,
-        childSessionKey: params.childSessionKey,
-        parentTaskId: params.parentTaskId,
-        agentId: params.agentId,
-        runId: params.runId,
-        label: params.label,
-        task: params.task,
-        preferMetadata: params.preferMetadata,
-        notifyPolicy: params.notifyPolicy,
-        deliveryStatus: params.deliveryStatus,
-        status: params.status,
-        startedAt: params.startedAt,
-        lastEventAt: params.lastEventAt,
-        progressSummary: params.progressSummary,
       });
     },
     () => {

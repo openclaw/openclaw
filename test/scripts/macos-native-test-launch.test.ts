@@ -138,7 +138,7 @@ if (tool === 'swift' && args[0] === 'test') {
   if (env.OPENCLAW_TEST_MENU_CAPTURE_DIR) {
     const bulk = args.some(arg => arg.includes('|QuickChatCatalogPresentationTests'));
     const captureNames = env.OPENCLAW_PROFILE === 'default'
-      ? (rendered ? ['catalog'] : bulk ? ['browser-sign-in-before', 'browser-sign-in-after'] : ['catalog', 'browser-sign-in-before', 'browser-sign-in-after'])
+      ? (rendered ? ['catalog', 'history-message-recovery'] : bulk ? ['browser-sign-in-before', 'browser-sign-in-after'] : ['catalog', 'browser-sign-in-before', 'browser-sign-in-after'])
       : ['thread-reasoning', 'model-initial'];
     for (const captureName of captureNames) {
       fs.writeFileSync(path.join(env.OPENCLAW_TEST_MENU_CAPTURE_DIR, captureName + '-window.png'), 'synthetic-png-bytes');
@@ -362,7 +362,7 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
           index === 0
             ? ["browser-sign-in-before", "browser-sign-in-after"]
             : index === 1
-              ? ["catalog"]
+              ? ["catalog", "history-message-recovery"]
               : ["thread-reasoning", "model-initial"];
         const exported = captures[index];
         if (!exported) {

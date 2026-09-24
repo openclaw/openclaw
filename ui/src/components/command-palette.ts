@@ -5,8 +5,17 @@ import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
+import { t } from "../i18n/index.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../lib/chat/human-mentions.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
+import {
+  loadModelCatalog,
+  modelCatalogRefreshError,
+  peekModelCatalog,
+  readAgentModelCatalog,
+  subscribeModelCatalogCache,
+} from "../lib/model-catalog-store.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import { GatewayPageController } from "../lit/gateway-page-controller.ts";
@@ -18,6 +27,7 @@ import {
 } from "../pages/chat/components/chat-composer-mention-menu.ts";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import {
+  getCommandPaletteModelItems,
   getStaticCommandPaletteCatalogItems,
   loadCommandPaletteCatalogItems,
   toCommandPaletteItems,
@@ -114,7 +124,6 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @state() private activeId: string | null = null;
   @state() private sessionItems: readonly PaletteItem[] = [];
   @state() private catalogItems: readonly PaletteItem[] = [];
-  @state() private modelSearchError: string | null = null;
   @state() private sessionSearchPending = false;
   @state() private sessionSearchFailed = false;
   @state() private sessionSearchPartial = false;
@@ -130,6 +139,14 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     promise: Promise<void>;
     loadedAt?: number;
   };
+  // Models publish through the shared catalog cache, independently of slower categories.
+  @state() private modelLoad?: {
+    client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
+    agentId: string;
+    controller: AbortController;
+    pending: boolean;
+    failed: boolean;
+  };
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     invalidateRequests: () => {
@@ -143,16 +160,30 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
 
   constructor() {
     super();
+    this.subscriptions.watch(
+      () => this.context?.gateway.snapshot.client,
+      subscribeModelCatalogCache,
+      () => {
+        // Another view's accepted publication supersedes this palette's failed read.
+        const load = this.modelLoad;
+        if (load?.failed && peekModelCatalog(load.client, { agentId: load.agentId })) {
+          this.modelLoad = { ...load, failed: false };
+        }
+      },
+    );
     this.subscriptions.effect(
       () => this.context?.gateway,
       (gateway) =>
         gateway.subscribeEvents((event) => {
+          const invalidation = modelCatalogEventInvalidation(event);
+          // Palette search includes skills even when the model cache remains current.
           if (
             this.context?.gateway === gateway &&
-            (event.event === "cron" ||
-              event.event === "config.changed" ||
-              event.event === "chat.metadata.changed")
+            (event.event === "cron" || event.event === "chat.metadata.changed" || invalidation)
           ) {
+            if (invalidation === "clear") {
+              this.clearCatalogSearch();
+            }
             if (this.open) {
               void this.ensureCatalogItems(true);
             } else {
@@ -335,9 +366,10 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   }
 
   private clearCatalogSearch() {
+    this.modelLoad?.controller.abort();
+    this.modelLoad = undefined;
     this.catalogLoad = undefined;
     this.catalogItems = [];
-    this.modelSearchError = null;
   }
 
   private ensureCatalogItems(force = false): Promise<void> {
@@ -359,26 +391,31 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     const agentId =
       context.agentSelection.state.selectedId ?? resolveUiSelectedGlobalAgentId(gateway.snapshot);
     const current = this.catalogLoad;
-    if (
+    const reuseCatalog =
       !force &&
       current?.client === client &&
       current.agentId === agentId &&
-      (current.loadedAt === undefined || Date.now() - current.loadedAt < CATALOG_CACHE_TTL_MS)
+      (current.loadedAt === undefined || Date.now() - current.loadedAt < CATALOG_CACHE_TTL_MS);
+    const modelLoad = this.modelLoad;
+    if (
+      !reuseCatalog ||
+      modelLoad?.client !== client ||
+      modelLoad.agentId !== agentId ||
+      modelLoad.failed
     ) {
+      this.loadModelItems(gateway, client, agentId);
+    }
+    if (reuseCatalog) {
       return current.promise;
     }
     const snapshot = gateway.snapshot;
     const scope = gatewayPresentationScope(gateway);
-    const previousModels =
-      current?.client === client && current.agentId === agentId
-        ? this.catalogItems.filter((item) => item.category === "models")
-        : [];
     const promise = loadCommandPaletteCatalogItems({
       client,
       agentId,
       agents: () => context.agents?.ensureList?.() ?? Promise.resolve(null),
       methodAvailable: (method) => Boolean(isGatewayMethodAdvertised(snapshot, method)),
-    }).then(({ items, modelRequestFailed, modelSearchError }) => {
+    }).then((items) => {
       if (
         this.catalogLoad?.promise === promise &&
         gatewayPresentationScope(gateway) === scope &&
@@ -386,16 +423,37 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         this.context?.agentSelection === context.agentSelection &&
         gateway.snapshot.client === client
       ) {
-        this.catalogItems = [
-          ...toCommandPaletteItems(items),
-          ...(modelRequestFailed ? previousModels : []),
-        ];
-        this.modelSearchError = modelSearchError;
-        this.catalogLoad = { ...this.catalogLoad, loadedAt: modelRequestFailed ? 0 : Date.now() };
+        this.catalogItems = toCommandPaletteItems(items);
+        this.catalogLoad = { ...this.catalogLoad, loadedAt: Date.now() };
       }
     });
     this.catalogLoad = { client, agentId, promise };
     return promise;
+  }
+
+  private loadModelItems(
+    gateway: ApplicationContext["gateway"],
+    client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>,
+    agentId: string,
+  ) {
+    this.modelLoad?.controller.abort();
+    const controller = new AbortController();
+    const scope = gatewayPresentationScope(gateway);
+    const settle = (failed: boolean) => {
+      if (
+        this.modelLoad?.controller === controller &&
+        gatewayPresentationScope(gateway) === scope &&
+        this.context?.gateway === gateway &&
+        gateway.snapshot.client === client
+      ) {
+        this.modelLoad = { ...this.modelLoad, pending: false, failed };
+      }
+    };
+    this.modelLoad = { client, agentId, controller, pending: true, failed: false };
+    void loadModelCatalog(client, { agentId, signal: controller.signal }).then(
+      () => settle(false),
+      () => settle(true),
+    );
   }
 
   private scheduleSessionSearch(query: string, immediate = false) {
@@ -553,6 +611,8 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
 
   override render() {
     this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
+    const modelLoad = this.modelLoad;
+    const models = modelLoad && readAgentModelCatalog(modelLoad.client, modelLoad.agentId);
     return renderCommandPalette(() => ({
       basePath: this.context?.basePath ?? "",
       open: this.open,
@@ -600,7 +660,12 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         this.context?.agentSelection.state.selectedId ??
         resolveUiSelectedGlobalAgentId(this.context?.gateway.snapshot ?? {}),
       sessionItems: this.sessionItems,
-      modelSearchError: this.modelSearchError,
+      modelSearchError: modelLoad?.failed
+        ? t("palette.modelSearchFailed")
+        : models?.hasSnapshot
+          ? modelCatalogRefreshError(models)
+          : null,
+      primaryModelSearch: Boolean(models?.hasSnapshot && !models.modelSelectionPolicy?.restricted),
       catalogItems: [
         ...toCommandPaletteItems(
           getStaticCommandPaletteCatalogItems(
@@ -609,13 +674,13 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
           ),
         ),
         ...this.catalogItems,
+        ...(models ? toCommandPaletteItems(getCommandPaletteModelItems(models)) : []),
       ],
       sessionSearchPending: this.sessionSearchPending,
       catalogSearchPending: Boolean(
         normalizeOptionalString(this.searchQuery) &&
         !this.promptMode &&
-        this.catalogLoad &&
-        this.catalogLoad.loadedAt === undefined,
+        ((this.catalogLoad && this.catalogLoad.loadedAt === undefined) || this.modelLoad?.pending),
       ),
       sessionSearchFailed: this.sessionSearchFailed,
       sessionSearchPartial: this.sessionSearchPartial,

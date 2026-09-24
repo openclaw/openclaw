@@ -97,6 +97,29 @@ separately; post-process-exit sampling and guaranteed reclamation remain unsuppo
 These observations establish neither a leak nor a budget violation. Repeat comparable pairs through the campaign owner before drawing
 performance conclusions; do not sum individual plugin costs.
 
+### Plugin coverage inventory
+
+Export the source plugin inventory before a profiling campaign:
+
+```bash
+pnpm --silent plugins:inventory:json > plugin-inventory.json
+pnpm --silent plugins:inventory:json --commit <full-commit-sha> > plugin-inventory.json
+```
+
+The command reads committed Git objects, defaults to `HEAD`, and needs Git 2.45
+or newer. It works without installed dependencies or a complete working tree.
+Local edits do not affect the export. Missing objects fail the command; it does
+not fetch them or load plugin code.
+
+The versioned JSON includes the commit and tree, plugin IDs, relative paths,
+package metadata, distribution classes, and declared surfaces. It shares the
+documentation inventory's collector and distribution rules but excludes
+docs-only external seeds. `sha256` hashes the payload without that field using
+the shared stable JSON serializer (object keys sorted, array order preserved).
+Declaration in this inventory is not evidence that a workload was exercised.
+Keep import, registration, workload, and cleanup coverage separate when joining
+profiling results to this inventory.
+
 ### Reusing the resource host
 
 Source-checkout campaign tools can import `resolveResourceGatewayRuntime` and
@@ -278,6 +301,13 @@ reproduce allocation pressure from a busy Gateway. Build with `pnpm build`
 first. The default mock provider needs no key. Dreaming is disabled in this
 isolated benchmark; ordinary indexing, recaps, and database idle retention keep
 their normal settings.
+
+If a sample fails, `--output` and `--json` retain completed measured runs,
+completed `warmupRuns`, and a `failedAttempt` with its phase, one-based index,
+available observations, and workload, diagnostics, or cleanup errors. Failed
+attempts and warmups do not enter aggregate summaries. Null or absent partial
+measurements mean unavailable, not zero. The command still exits with status 1;
+live and activity-summary diagnostic failure sidecars remain available.
 
 ```bash
 pnpm test:gateway:concurrency -- --concurrency 16 --tool-events --workspace-fanout --session-count 100 --history-messages 20 --history-clients 4 --subscribers 4 --visible-observer --control-plane --heap-prof-dir .artifacts/gateway-heap --output .artifacts/gateway-concurrency.json

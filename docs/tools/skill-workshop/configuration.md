@@ -37,6 +37,7 @@ In `propose` and `auto` modes, OpenClaw can review one finished substantial turn
 after the agent system becomes idle. It records the finished turn's boundary and
 reads that turn's model context asynchronously with the same provider and model.
 Review transcript and session metadata stay detached from foreground work.
+Incognito turns are excluded from automatic experience review.
 In `propose` mode, only `skill_workshop` executes and the reviewer can stage one
 pending mutation. In `auto` mode, ordinary file tools can inspect, edit, and
 verify several connected files in the Workshop directory. The review inherits

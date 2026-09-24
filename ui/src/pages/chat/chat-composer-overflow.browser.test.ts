@@ -9,6 +9,7 @@ import { renderAttachmentPreview } from "./components/chat-attachments.ts";
 import { clearGoalElapsedTimers, renderChatGoal } from "./components/chat-composer-goal.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
+import { subscribeTranscriptScroll } from "./components/chat-transcript-scroll-events.ts";
 import baseStyles from "../../styles/base.css?inline";
 import contextStripStyles from "../../styles/chat/composer-context-strip.css?inline";
 import goalStyles from "../../styles/chat/composer-progress.css?inline";
@@ -424,6 +425,7 @@ describe("composer overflow presentation", () => {
     "ellipsizes empty focused and blurred composers at $viewport px without clipping drafts",
     async ({ viewport, width }) => {
       await page.viewport(viewport, 800);
+      container.classList.add("chat");
       container.style.width = `${width}px`;
       const props = createComposerProps({
         assistantName: "A deliberately long assistant name ".repeat(8),
@@ -432,7 +434,12 @@ describe("composer overflow presentation", () => {
           draw();
         },
       });
-      const draw = () => render(renderChatComposer(props), container);
+      const draw = () =>
+        render(
+          html`<div class="chat-thread"></div>
+            ${renderChatComposer(props)}`,
+          container,
+        );
       draw();
       const textarea = container.querySelector<HTMLTextAreaElement>(
         ".agent-chat__composer-combobox > textarea",
@@ -442,6 +449,31 @@ describe("composer overflow presentation", () => {
       )!;
       const control = page.elementLocator(textarea);
       await afterLayout();
+      const expectStableSize = async (draft: string) => {
+        const mutations = vi.fn();
+        const observer = new MutationObserver(mutations);
+        observer.observe(textarea, { attributes: true, attributeFilter: ["style"] });
+        const resized = vi.fn();
+        const stop = subscribeTranscriptScroll(
+          container.querySelector<HTMLElement>(".chat-thread")!,
+          (observation) => {
+            if (observation.type === "resize") {
+              resized(observation);
+            }
+          },
+        );
+        const height = textarea.clientHeight;
+        try {
+          await control.fill(draft);
+          await afterLayout();
+          expect(textarea.clientHeight).toBe(height);
+          expect(mutations).not.toHaveBeenCalled();
+          expect(resized).not.toHaveBeenCalled();
+        } finally {
+          observer.disconnect();
+          stop();
+        }
+      };
 
       expect(placeholder).not.toBeNull();
       expect(placeholder.textContent).toBe(textarea.placeholder);
@@ -466,6 +498,7 @@ describe("composer overflow presentation", () => {
       }
 
       const emptyHeight = textarea.clientHeight;
+      await expectStableSize("A short editable draft.");
       const draft =
         "A typed line that wraps within the available composer width. ".repeat(8) +
         "\nA second editable line.";
@@ -476,6 +509,8 @@ describe("composer overflow presentation", () => {
       expect(placeholder.checkVisibility()).toBe(false);
       expect(getComputedStyle(textarea).whiteSpace).toBe("pre-wrap");
       expect(textarea.clientHeight).toBeGreaterThan(emptyHeight);
+      expect(textarea.scrollHeight).toBeGreaterThan(textarea.clientHeight);
+      await expectStableSize(`${draft}\nAnother line in the capped draft.`);
 
       await control.fill("");
       await afterLayout();
@@ -626,6 +661,35 @@ describe("composer overflow presentation", () => {
       expect(commands.getBoundingClientRect().top).toBe(commandBox.top);
       await page.getByRole("button", { name: "Hide goal details", exact: true }).click();
       expect(getComputedStyle(commands).display).toBe("none");
+    },
+  );
+
+  it.each([1440, 1600])(
+    "lets native textarea sizing grow and cap multiline drafts at %ipx",
+    async (width) => {
+      await page.viewport(width, 900);
+      render(renderChatComposer(createComposerProps()), container);
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+      expect(getComputedStyle(textarea).fieldSizing).toBe("content");
+
+      textarea.value = "one line";
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      await afterLayout();
+      const singleLineHeight = textarea.getBoundingClientRect().height;
+
+      textarea.value = "line 1\nline 2\nline 3";
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      await afterLayout();
+      expect(textarea.getBoundingClientRect().height).toBeGreaterThan(singleLineHeight);
+
+      textarea.value = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      await afterLayout();
+      const capped = textarea.getBoundingClientRect();
+      expect(capped.height).toBeCloseTo(Number.parseFloat(getComputedStyle(textarea).maxHeight), 0);
+      expect(textarea.scrollHeight).toBeGreaterThan(textarea.clientHeight);
+      expect(textarea.scrollWidth).toBeLessThanOrEqual(textarea.clientWidth + 1);
+      expect(container.getBoundingClientRect().width).toBe(760);
     },
   );
 

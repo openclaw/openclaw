@@ -14,7 +14,10 @@ import { formatDurationCompact } from "../lib/format-duration.ts";
 import { renderHoverMarquee } from "../lib/hover-marquee.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-users.ts";
-import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import type {
+  SessionMethodAccess,
+  SessionMethodAccessRequest,
+} from "../lib/session-method-access.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { canArchiveSessionRow, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
@@ -62,7 +65,9 @@ export interface SessionListHost {
   readonly sessionData: Pick<
     SessionDataController,
     | "childSessionErrorsByParent"
+    | "dismissSessionMutationError"
     | "loadMoreSessionCatalog"
+    | "loadMoreSidebarSessions"
     | "presenceInstanceId"
     | "presencePayload"
     | "refreshSessionCatalogs"
@@ -77,12 +82,23 @@ export interface SessionListHost {
     SessionOrganizerController,
     | "draggingSidebarSection"
     | "draggingSessionKey"
+    | "finishSessionDrag"
+    | "finishSidebarSectionDrag"
+    | "handleSessionListDragLeave"
+    | "handleSessionListDragOver"
+    | "handleSessionListDrop"
+    | "sectionDragLeave"
+    | "sectionDragOver"
+    | "sectionDrop"
     | "sessionDropTarget"
     | "sidebarSectionDropTarget"
     | "sessionListRemovalDrop"
     | "setSessionsStatusFilter"
+    | "startSessionDrag"
+    | "startSidebarSectionDrag"
     | "archiveSessionWithUndo"
     | "patchSession"
+    | "reorderSidebarSection"
   >;
   readonly sidebarMenus: Pick<
     SidebarMenusController,
@@ -114,8 +130,6 @@ export interface SessionListHost {
   setSessionOwnerFilter(ownerId: string | null, involvingMe?: boolean): void;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
   isSessionChildrenFullyShown(sessionKey: string): boolean;
-  startSessionDrag(session: SidebarRecentSession): void;
-  finishSessionDrag(): void;
   sidebarSessionHref(session: SidebarRecentSession): string;
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession): void;
   toggleSessionChildren(session: SidebarRecentSession): void;
@@ -126,33 +140,13 @@ export interface SessionListHost {
     catalogMenu?: CatalogSessionMenuRequest,
   ): void;
   showMoreChildren(sessionKey: string): void;
-  sectionDragOver(event: DragEvent, sectionId: string, group?: string): void;
-  sectionDragLeave(event: DragEvent, sectionId: string, group?: string): void;
-  sectionDrop(event: DragEvent, sectionId: string, group?: string): void;
-  startSidebarSectionDrag(sectionId: string): void;
-  finishSidebarSectionDrag(): void;
   toggleSection(sectionId: string): void;
   expandedAgentId(): string;
-  readNewSessionAccess(): import("../lib/session-method-access.ts").SessionMethodAccess;
-  readSessionMutationAccess(request: {
-    method: string;
-    params?: unknown;
-    requiredScope?: "operator.write" | "operator.admin";
-  }): import("../lib/session-method-access.ts").SessionMethodAccess;
+  readNewSessionAccess(): SessionMethodAccess;
+  readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void;
   setVisibleSessionLimit(sectionId: string, limit: number): void;
   clearSessionSelection(): void;
-  handleSessionListDragOver(event: DragEvent): void;
-  handleSessionListDragLeave(event: DragEvent): void;
-  handleSessionListDrop(event: DragEvent): void;
-  dismissSessionMutationError(): void;
-  openCatalogMenu(
-    request: CatalogSessionMenuRequest,
-    x: number,
-    y: number,
-    trigger?: HTMLElement,
-  ): void;
-  retargetCatalogMenuTrigger(key: CatalogSessionKey, element: Element | undefined): void;
 }
 
 export function visibleSessionChildren(params: {
@@ -333,10 +327,14 @@ export function renderRecentSession(params: {
   const pinAccess = host.readSessionMutationAccess({
     method: "sessions.patch",
     params: { key: session.key, pinned: !session.pinned },
+    sessionScope: true,
+    session,
   });
   const archiveAccess = host.readSessionMutationAccess({
     method: "sessions.patch",
     params: { key: session.key, archived: !session.archived },
+    sessionScope: true,
+    session,
   });
   const archiveAllowed =
     session.archived ||
@@ -369,7 +367,7 @@ export function renderRecentSession(params: {
       (event.currentTarget as HTMLElement).querySelector(".sidebar-recent-session__link"),
       (trigger, x, y) => {
         if (display?.catalogMenu) {
-          host.openCatalogMenu(display.catalogMenu, x, y, trigger ?? undefined);
+          host.sidebarMenus.catalogMenu.open(display.catalogMenu, x, y, trigger ?? undefined);
           return;
         }
         host.sidebarMenus.openSessionMenu(session, x, y, trigger);
@@ -451,7 +449,7 @@ export function renderRecentSession(params: {
           : (event: DragEvent) => {
               if (event.dataTransfer) {
                 writeSessionDragData(event.dataTransfer, session.key);
-                host.startSessionDrag(session);
+                host.sessionOrganizer.startSessionDrag(session);
               }
             }
       }
@@ -459,7 +457,7 @@ export function renderRecentSession(params: {
         !rowDraggable
           ? nothing
           : () => {
-              host.finishSessionDrag();
+              host.sessionOrganizer.finishSessionDrag();
             }
       }
       @contextmenu=${openMenuFromEvent}
@@ -477,7 +475,18 @@ export function renderRecentSession(params: {
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__title-row"> ${marqueeLabel} </span>
           <span class="sidebar-recent-session__details">
-            ${session.channelPresentation ? html`<span class="sidebar-recent-session__channel" aria-label=${t("sessionHovercard.linkedChannel", { channel: session.channelPresentation.channelLabel })}>${session.channelPresentation.channelLabel}</span>` : nothing}
+            ${
+              session.channelPresentation
+                ? html`<span class="sidebar-recent-session__channel">
+                    <span class="sr-only"
+                      >${t("sessionHovercard.linkedChannel", {
+                        channel: session.channelPresentation.channelLabel,
+                      })}</span
+                    >
+                    <span aria-hidden="true">${session.channelPresentation.channelLabel}</span>
+                  </span>`
+                : nothing
+            }
             ${team ? nothing : renderSidebarSessionSubtitle({ subtitle, narration })}
             ${indicators.content}
           </span>
@@ -552,7 +561,13 @@ export function renderRecentSession(params: {
               @click=${(event: MouseEvent) => {
                 event.stopPropagation();
                 if (session.archived) {
-                  void host.sessionOrganizer.patchSession(session, { archived: false });
+                  void host.sessionOrganizer.patchSession(
+                    session,
+                    { archived: false },
+                    {
+                      sessionScope: true,
+                    },
+                  );
                 } else {
                   void host.sessionOrganizer.archiveSessionWithUndo(session);
                 }

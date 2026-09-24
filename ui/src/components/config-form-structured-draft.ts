@@ -15,10 +15,6 @@ export type ConfigFormStructuredDraftProps = {
   renderNode: ConfigNodeRenderer;
 };
 
-function cloneDraftValue(value: Record<string, unknown> | unknown[]) {
-  return structuredClone(value);
-}
-
 export function structuredDraftInitialValue(
   params: ConfigNodeRenderParams,
 ): Record<string, unknown> | unknown[] | undefined {
@@ -34,7 +30,7 @@ export function structuredDraftInitialValue(
       !Array.isArray(schemaDefault)) ||
     (type === "array" && Array.isArray(schemaDefault))
   ) {
-    return cloneDraftValue(schemaDefault as Record<string, unknown> | unknown[]);
+    return structuredClone(schemaDefault as Record<string, unknown> | unknown[]);
   }
   return type === "object" ? {} : [];
 }
@@ -70,7 +66,7 @@ class ConfigFormStructuredDraft extends OpenClawLightDomElement {
         previous.identity !== next.identity ||
         !Object.is(previous.sourceIdentity, next.sourceIdentity))
     ) {
-      this.draftValue = cloneDraftValue(next.initialValue);
+      this.draftValue = structuredClone(next.initialValue);
       this.error = "";
     }
   }

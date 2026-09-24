@@ -10,7 +10,6 @@ import type { ReplyPayload } from "../types.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
-import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
@@ -184,17 +183,17 @@ export async function executeFollowupTurn(params: {
             }
           })
       : undefined;
-  const wrapVisibility = <T>(
-    callback: ((value: T) => Promise<boolean | void> | boolean | void) | undefined,
+  const wrapVisibility = <Args extends unknown[]>(
+    callback: ((...args: Args) => Promise<boolean | void> | boolean | void) | undefined,
     allowed = progressAllowed,
   ) =>
     callback
-      ? (value: T) =>
+      ? (...args: Args) =>
           enqueueProgressResult(async () => {
             if (!allowed()) {
               return false;
             }
-            return (await settleProgressVisibilityCallbackResult(callback(value))).visible;
+            return (await settleProgressVisibilityCallbackResult(callback(...args))).visible;
           })
       : undefined;
   const baseTypingSignals = createTypingSignaler({
@@ -251,32 +250,17 @@ export async function executeFollowupTurn(params: {
     onApprovalEvent: wrapVisibility(sourceOpts?.onApprovalEvent, shouldEmitStructuredProgress),
     onPatchSummary: wrapVisibility(sourceOpts?.onPatchSummary, shouldEmitStructuredProgress),
     onCompactionStart: sourceOpts?.onCompactionStart
-      ? () =>
-          enqueueProgressResult(async () =>
-            progressAllowed()
-              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onCompactionStart!()))
-                  .visible
-              : false,
-          )
+      ? wrapVisibility(() => sourceOpts.onCompactionStart!())
       : undefined,
     onCompactionEnd: sourceOpts?.onCompactionEnd
-      ? (payload) =>
-          enqueueProgressResult(async () =>
-            progressAllowed()
-              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onCompactionEnd!(payload)))
-                  .visible
-              : false,
-          )
+      ? wrapVisibility((payload: Parameters<NonNullable<typeof sourceOpts.onCompactionEnd>>[0]) =>
+          sourceOpts.onCompactionEnd!(payload),
+        )
       : undefined,
     onReasoningStream: wrapVisibility(sourceOpts?.onReasoningStream),
     onReasoningProgress: wrap(sourceOpts?.onReasoningProgress),
     onReasoningEnd: sourceOpts?.onReasoningEnd
-      ? () =>
-          enqueueProgressResult(async () =>
-            progressAllowed()
-              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onReasoningEnd!())).visible
-              : false,
-          )
+      ? wrapVisibility(() => sourceOpts.onReasoningEnd!())
       : undefined,
     onToolResult: async (payload) => {
       return await enqueueProgressResult(async () => {
@@ -409,31 +393,6 @@ export async function executeFollowupTurn(params: {
           shouldEmitToolResult,
           shouldEmitToolOutput,
           pendingToolTasks,
-          resetSessionAfterRoleOrderingConflict: async (reason) => {
-            const session = turn.session;
-            if (session.kind !== "session") {
-              return false;
-            }
-            return await resetReplyRunSession({
-              options: {
-                failureLabel: "role ordering conflict",
-                buildLogMessage: (nextSessionId) =>
-                  `Role ordering conflict (${reason}). Restarting session ${session.key} -> ${nextSessionId}.`,
-                cleanupTranscripts: true,
-              },
-              sessionKey: session.key,
-              queueKey: session.key,
-              activeSessionEntry: session.current(),
-              activeSessionStore: turn.sessionStore,
-              storePath: session.storePath,
-              followupRun: turn.queued,
-              onActiveSessionEntry: (entry) => {
-                session.adopt(entry);
-                turn.operation.updateSessionId(entry.sessionId);
-              },
-              onNewSession: () => undefined,
-            });
-          },
           isHeartbeat,
           sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
           runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,

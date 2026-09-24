@@ -20,7 +20,10 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
@@ -50,6 +53,8 @@ export function createLegacyDatabaseFixture(params: {
   path?: string;
   schemaVersion?: number;
 }): string {
+  // Establish known deletion history before writing this active legacy store.
+  openOpenClawStateDatabase({ env: params.env });
   const agentId = params.agentId ?? "main";
   const schemaVersion = params.schemaVersion ?? PREVIOUS_VERSION;
   const legacy = schemaVersion < OPENCLAW_AGENT_SCHEMA_VERSION;

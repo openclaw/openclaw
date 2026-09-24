@@ -73,17 +73,7 @@ function normalizeMappedRoomIds(direct: MatrixDirectAccountData, remoteUserId: s
   if (!Array.isArray(current)) {
     return [];
   }
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-  for (const value of current) {
-    const roomId = normalizeOptionalString(value) ?? "";
-    if (!roomId || seen.has(roomId)) {
-      continue;
-    }
-    seen.add(roomId);
-    normalized.push(roomId);
-  }
-  return normalized;
+  return normalizeRoomIdList(current.filter((value) => typeof value === "string"));
 }
 
 function normalizeRoomIdList(values: readonly string[]): string[] {
@@ -98,16 +88,6 @@ function normalizeRoomIdList(values: readonly string[]): string[] {
     normalized.push(roomId);
   }
   return normalized;
-}
-
-function hasMatrixDirectRoomMappings(params: {
-  directContent: MatrixDirectAccountData;
-  remoteUserId: string;
-  roomIds: readonly string[];
-}): boolean {
-  const current = normalizeMappedRoomIds(params.directContent, params.remoteUserId);
-  const next = normalizeRoomIdList([...params.roomIds, ...current]);
-  return current.length === next.length && current.every((roomId, index) => roomId === next[index]);
 }
 
 function resolveDirectAccountDataWriteQueue(client: MatrixClient): KeyedAsyncQueue {
@@ -129,16 +109,11 @@ async function writeMatrixDirectRoomMappings(params: {
     DIRECT_ACCOUNT_DATA_QUEUE_KEY,
     async () => {
       const directContentBefore = await readMatrixDirectAccountData(params.client);
-      const directContentAfter = buildNextDirectContent({
-        directContent: directContentBefore,
-        remoteUserId: params.remoteUserId,
-        roomIds: params.roomIds,
-      });
-      const changed = !hasMatrixDirectRoomMappings({
-        directContent: directContentBefore,
-        remoteUserId: params.remoteUserId,
-        roomIds: params.roomIds,
-      });
+      const current = normalizeMappedRoomIds(directContentBefore, params.remoteUserId);
+      const next = normalizeRoomIdList([...params.roomIds, ...current]);
+      const directContentAfter = { ...directContentBefore, [params.remoteUserId]: next };
+      const changed =
+        current.length !== next.length || current.some((roomId, index) => roomId !== next[index]);
       if (changed) {
         await params.client.setAccountData(EventType.Direct, directContentAfter);
       }
@@ -164,29 +139,14 @@ async function classifyDirectRoomCandidate(params: {
     remoteUserId: params.remoteUserId,
     selfUserId: params.selfUserId,
   });
+  const strict =
+    evidence.strict && (params.source === "account-data" || evidence.memberStateFlag !== false);
   return {
     roomId: params.roomId,
     joinedMembers: evidence.joinedMembers,
-    strict:
-      evidence.strict && (params.source === "account-data" || evidence.memberStateFlag !== false),
-    explicit:
-      evidence.strict &&
-      (params.source === "account-data" || evidence.memberStateFlag !== false) &&
-      (params.source === "account-data" || evidence.viaMemberState),
+    strict,
+    explicit: strict && (params.source === "account-data" || evidence.viaMemberState),
     source: params.source,
-  };
-}
-
-function buildNextDirectContent(params: {
-  directContent: MatrixDirectAccountData;
-  remoteUserId: string;
-  roomIds: readonly string[];
-}): MatrixDirectAccountData {
-  const current = normalizeMappedRoomIds(params.directContent, params.remoteUserId);
-  const nextRooms = normalizeRoomIdList([...params.roomIds, ...current]);
-  return {
-    ...params.directContent,
-    [params.remoteUserId]: nextRooms,
   };
 }
 

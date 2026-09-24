@@ -11,6 +11,7 @@ import {
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
+import { boundedWorkerError } from "./worker-error.js";
 import type { RepositoryWorkerProjectSnapshot } from "./workspace-git-base.js";
 
 const DEFAULT_READY_WORKERS = 1;
@@ -39,7 +40,7 @@ type PoolOptions = {
   prepareRetention: (
     record: WorkerEnvironmentRecord,
     signal: AbortSignal,
-  ) => Promise<{ assertCurrent: () => void } | undefined>;
+  ) => Promise<{ isCurrent: () => boolean } | undefined>;
   reconcile: (
     record: WorkerEnvironmentRecord,
     signal: AbortSignal,
@@ -135,11 +136,18 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         preparationKey: string;
         demandAtMs: number;
         expiresAtMs: number;
-        retention?: { assertCurrent: () => void };
+        retention?: { isCurrent: () => boolean };
+        deferred?: boolean;
         intent?: WorkerProviderPreparedIntent;
         slots?: number;
       }
     >();
+    const defer = (generation: NonNullable<ReturnType<typeof eligible.get>>, error: unknown) => {
+      generation.deferred = true;
+      options.warn(
+        `Prepared worker maintenance deferred (${generation.source.profileId}); retaining unused capacity until its original expiry: ${boundedWorkerError(error)}`,
+      );
+    };
     for (const [key, { record, demandAtMs }] of sources) {
       const limits = policy(record);
       if (
@@ -149,10 +157,13 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       ) {
         continue;
       }
+      const preparationKey = readWorkerProjectPreparation(record.profileSnapshot.project)!.key;
       try {
-        const timeout = options
-          .resolveProvider(record.providerId)
-          ?.resolvePreparedIdleTimeoutMs?.(snapshotSettings(record));
+        const provider = options.resolveProvider(record.providerId);
+        if (!provider) {
+          throw new Error(`Worker provider is unavailable (${record.providerId})`);
+        }
+        const timeout = provider.resolvePreparedIdleTimeoutMs?.(snapshotSettings(record));
         if (
           Number.isSafeInteger(timeout) &&
           timeout &&
@@ -161,32 +172,48 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         ) {
           eligible.set(key, {
             source: record,
-            preparationKey: readWorkerProjectPreparation(record.profileSnapshot.project)!.key,
+            preparationKey,
             demandAtMs,
             expiresAtMs: demandAtMs + timeout,
           });
         }
-      } catch {
+      } catch (error) {
         current();
-        options.warn(
-          `Prepared worker policy is unavailable (${record.profileId}); unused workers will retire`,
-        );
+        // Unknown provider policy cannot renew demand or invalidate an already owned lease.
+        const expiresAtMs = inventory.reduce((latest, reserved) => {
+          const preparation = reserved.preparation;
+          return preparation?.consumedAtMs === null &&
+            preparation.key === preparationKey &&
+            groupKey(reserved) === key &&
+            reserved.destroyRequestedAtMs === null &&
+            !["failed", "destroyed"].includes(reserved.state)
+            ? Math.max(latest, preparation.expiresAtMs)
+            : latest;
+        }, 0);
+        const generation = { source: record, preparationKey, demandAtMs, expiresAtMs };
+        defer(generation, error);
+        if (expiresAtMs > now()) {
+          eligible.set(key, generation);
+        }
       }
     }
-    const assertGenerationCurrent = (generation: NonNullable<ReturnType<typeof eligible.get>>) => {
+    const isGenerationCurrent = (generation: NonNullable<ReturnType<typeof eligible.get>>) => {
       current();
-      generation.retention!.assertCurrent();
-      if (generation.intent) {
-        options.assertIntentCurrent(generation.source.profileId, generation.intent);
-      }
       if (
         !isDeepStrictEqual(
           store.get(generation.source.environmentId)?.profileSnapshot,
           generation.source.profileSnapshot,
         )
       ) {
-        throw new Error("Prepared worker source changed during maintenance");
+        return false;
       }
+      if (!generation.retention?.isCurrent()) {
+        return false;
+      }
+      if (generation.intent) {
+        options.assertIntentCurrent(generation.source.profileId, generation.intent);
+      }
+      return true;
     };
     const reconcile = async (record: WorkerEnvironmentRecord) => {
       current();
@@ -207,7 +234,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         if (owned.preparation.expiresAtMs <= now()) {
           retirementReason = "expired";
         } else if (
-          !generation?.retention ||
+          !generation ||
           generation.preparationKey !== owned.preparation.key ||
           !store.isPreparedIntentWithinCapacity({
             environmentId: owned.environmentId,
@@ -215,14 +242,17 @@ export function createPreparedWorkerPool(options: PoolOptions) {
           })
         ) {
           retirementReason = "invalidated";
+        } else if (generation.deferred) {
+          throw new Error("Prepared worker maintenance is deferred");
         } else {
           try {
-            assertGenerationCurrent(generation);
-          } catch {
+            if (!isGenerationCurrent(generation)) {
+              retirementReason = "invalidated";
+            }
+          } catch (error) {
             current();
-            // Queued allocation may already own a lease. Preserve its cleanup
-            // obligation even when local policy or admission changed while waiting.
-            retirementReason = "invalidated";
+            defer(generation, error);
+            throw error;
           }
         }
         if (retirementReason) {
@@ -305,7 +335,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         const valid =
           !expired &&
           generation?.preparationKey === record.preparation.key &&
-          (!requireRetention || generation.retention !== undefined) &&
+          (!requireRetention || generation.retention !== undefined || generation.deferred) &&
           ((record.preparation.purpose === "build" && record.state !== "ready") ||
             count < limits.target) &&
           totalKept < limits.maxTotal;
@@ -321,7 +351,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
             cleaned.add(record.environmentId);
             cleanup.push(latest);
           }
-        } else {
+        } else if (!generation?.deferred) {
           work.push(latest);
         }
       }
@@ -337,18 +367,18 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         if (!generation.retention) {
           eligible.delete(key);
         }
-      } catch {
+      } catch (error) {
         current();
-        eligible.delete(key);
-        options.warn(
-          `Prepared worker contents are no longer compatible (${generation.source.profileId}); unused workers will retire`,
-        );
+        defer(generation, error);
       }
     }
     await reconcileAll((await retain(true)).cleanup);
     let plannedTotal = 0;
     for (const [key, generation] of eligible) {
       current();
+      if (generation.deferred) {
+        continue;
+      }
       const { source } = generation;
       const limits = policy(source);
       const project = readWorkerProjectSnapshot(source.profileSnapshot.project)!;
@@ -390,11 +420,10 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         generation.intent = intent;
         generation.slots = slots;
         plannedTotal += slots;
-      } catch {
+      } catch (error) {
         current();
-        eligible.delete(key);
         options.warn(
-          `Prepared worker source is unavailable (${source.profileId}); unused workers will retire`,
+          `Prepared worker refill deferred (${source.profileId}): ${boundedWorkerError(error)}`,
         );
       }
     }
@@ -426,7 +455,9 @@ export function createPreparedWorkerPool(options: PoolOptions) {
           projectKey: project.key,
           ...limits,
           assertCurrent: () => {
-            assertGenerationCurrent(generation);
+            if (!isGenerationCurrent(generation)) {
+              throw new Error("Prepared worker contents changed before allocation");
+            }
             if (!isDeepStrictEqual(policy(source), limits)) {
               throw new Error("Prepared worker admission policy changed");
             }
@@ -507,9 +538,9 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         }
       });
     }
-    await schedule().catch(() => {
+    await schedule().catch((error: unknown) => {
       if (!signal.aborted) {
-        options.warn("Prepared worker maintenance failed; cleanup will retry");
+        options.warn(`Prepared worker maintenance will retry: ${boundedWorkerError(error)}`);
       }
     });
   };

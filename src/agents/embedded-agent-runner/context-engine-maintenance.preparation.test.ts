@@ -8,6 +8,7 @@ import {
   getAsyncWorkSignal,
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
+import { isContextEngineMaintenanceTaskOwnerActive } from "../../tasks/context-engine-maintenance-task-owner.js";
 import type { DetachedTaskCreateParams } from "../../tasks/detached-task-runtime-contract.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
@@ -31,10 +32,14 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../tasks/detached-task-runtime.js", () => ({
   createQueuedTaskRun: mocks.create,
-  startTaskRunByRunId: mocks.start,
-  completeTaskRunByRunId: mocks.complete,
-  failTaskRunByRunId: mocks.fail,
+  completeTaskRunByRunId: () => [],
+  failTaskRunByRunId: () => [],
   recordTaskRunProgressByRunId: mocks.progress,
+}));
+vi.mock("../../tasks/detached-task-runtime.async.js", () => ({
+  startTaskRunByRunIdAsync: mocks.start,
+  completeTaskRunByRunIdAsync: mocks.complete,
+  failTaskRunByRunIdAsync: mocks.fail,
 }));
 vi.mock("../session-async-task-status.js", () => ({ findActiveSessionTask: mocks.findActive }));
 vi.mock("../../tasks/task-owner-access.js", () => ({
@@ -233,6 +238,9 @@ let sql: ReturnType<typeof observeMainThreadSql>;
 beforeEach(() => {
   sql = observeMainThreadSql();
   vi.clearAllMocks();
+  mocks.start.mockResolvedValue([]);
+  mocks.complete.mockResolvedValue([]);
+  mocks.fail.mockResolvedValue([]);
   resetCommandQueueStateForTest();
   resetDeferredTurnMaintenanceStateForTest();
 });
@@ -241,12 +249,64 @@ afterEach(() => {
     sql.expectIdle();
   } finally {
     sql.restore();
+    vi.useRealTimers();
     resetDeferredTurnMaintenanceStateForTest();
     resetCommandQueueStateForTest();
   }
 });
 
 describe("deferred maintenance synchronous preparation", () => {
+  it.each(["start", "completion", "failure"] as const)(
+    "retains maintenance ownership until task %s settles",
+    async (terminal) => {
+      vi.useFakeTimers();
+      const f = fixture();
+      const terminalEntered = createDeferred();
+      const terminalRelease = createDeferred();
+      let entered = false;
+      const transition =
+        terminal === "start"
+          ? mocks.start
+          : terminal === "completion"
+            ? mocks.complete
+            : mocks.fail;
+      transition.mockImplementationOnce(async () => {
+        entered = true;
+        terminalEntered.resolve();
+        await terminalRelease.promise;
+        return [];
+      });
+      if (terminal === "failure") {
+        f.maintain.mockRejectedValueOnce(new Error("Synthetic maintenance failure"));
+      }
+      try {
+        await f.schedule();
+        f.workRelease.resolve();
+        await Promise.race([terminalEntered.promise, f.disposeEntered.promise]);
+        expect(entered).toBe(true);
+        if (terminal === "start") {
+          expect(f.maintain).not.toHaveBeenCalled();
+        }
+        const taskId = [...f.rows.keys()][0]!;
+        expect(isContextEngineMaintenanceTaskOwnerActive(taskId)).toBe(true);
+        expect(f.dispose).not.toHaveBeenCalled();
+        expect(f.release).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(mocks.progress).not.toHaveBeenCalled();
+        terminalRelease.resolve();
+        f.releaseAll();
+        await Promise.all(f.deferred);
+        expect(isContextEngineMaintenanceTaskOwnerActive(taskId)).toBe(false);
+        expect(f.dispose).toHaveBeenCalledOnce();
+        expect(f.release).toHaveBeenCalledOnce();
+        expect(f.failure).not.toHaveBeenCalled();
+      } finally {
+        terminalRelease.resolve();
+        await f.cleanup();
+      }
+    },
+  );
+
   it.each(["lookup", "creation"] as const)(
     "reserves one tracked owner before synchronous %s reentry",
     async (kind) => {

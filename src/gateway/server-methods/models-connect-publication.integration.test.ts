@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFailed, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -50,6 +50,21 @@ vi.mock("../server-runtime-services.js", async (importOriginal) => {
 });
 
 it("connect negotiates snapshots and preserves draft and saved-session catalog scopes", async () => {
+  const startedAt = performance.now();
+  const phases: { phase: string; elapsedMs: number }[] = [];
+  const publications: ModelsSnapshotEvent[] = [];
+  const enterPhase = (phase: string) => {
+    phases.push({ phase, elapsedMs: Math.round(performance.now() - startedAt) });
+  };
+  onTestFailed(() => {
+    console.error("Model catalog integration phases", {
+      phases,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      snapshots: publications.length,
+      activeRootWork: getActiveGatewayRootWorkCount(),
+    });
+  });
+  enterPhase("test state");
   const state = await createOpenClawTestState({
     label: "models-connect-publication",
     env: {
@@ -61,7 +76,6 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
     },
   });
   const token = "synthetic-catalog-gateway-token";
-  const publications: ModelsSnapshotEvent[] = [];
   try {
     state.applyEnv();
     await state.writeAuthProfiles(
@@ -82,6 +96,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       },
       "alpha",
     );
+    enterPhase("Gateway startup and connect");
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     const { port } = portClaim;
     const { client, server } = await startGatewayWithClient({
@@ -137,6 +152,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       },
     });
     try {
+      enterPhase("draft catalogs");
       await expect
         .poll(() => publications, { timeout: 15_000 })
         .toMatchObject([
@@ -180,6 +196,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           await disconnectGatewayClient(other);
         }
       }
+      enterPhase("saved-session catalogs");
       const sessionKey = "agent:alpha:dashboard:12345678-1234-4123-8123-123456789abc";
       await upsertSessionEntryCore(
         { agentId: "alpha", sessionKey },
@@ -248,6 +265,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           await disconnectGatewayClient(saved);
         }
       }
+      enterPhase("initial publication supersession");
       const acquisitionStarted = createDeferred();
       const releaseAcquisition = createDeferred();
       const readPreparedCatalog = modelCatalogAuth.readPreparedCatalog;
@@ -344,6 +362,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           await disconnectGatewayClient(racingClient);
         }
       }
+      enterPhase("catalog request supersession");
       const unrelatedKey = "agent:alpha:catalog-other";
       await upsertSessionEntryCore(
         { agentId: "alpha", sessionKey: unrelatedKey },
@@ -383,6 +402,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         pendingAcquisition.mockRestore();
         await Promise.allSettled([pendingCatalog, superseded]);
       }
+      enterPhase("legacy clients");
       for (const clientName of [
         GATEWAY_CLIENT_IDS.CONTROL_UI,
         GATEWAY_CLIENT_IDS.CLI,
@@ -413,10 +433,13 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         }
       }
     } finally {
+      enterPhase("client cleanup");
       await disconnectGatewayClient(client);
+      enterPhase("Gateway cleanup");
       await server.close({ reason: "catalog publication test complete" });
     }
   } finally {
+    enterPhase("test state cleanup");
     await state.cleanup();
   }
 }, 60_000);
