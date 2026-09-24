@@ -1355,7 +1355,12 @@ Canonical validation belongs to the admitted physical database:
 first admission requires full proof, then the schema-21 pending-key projection
 records changes independently of connection lifetime. Startup and initial Gateway
 authorization of an unadmitted reader use the existing mutation worker for pending
-validation and recheck live authority after awaiting it. Native readers preserve
+validation and recheck live authority after awaiting it. Concurrent runtime readers
+on the same native database owner share its active validation drain. Each waiter
+retains its own lifecycle claim and rechecks physical ownership and canonical proof
+afterward; completion or failure removes the shared drain. Startup's scoped workers
+retain their own batch lifecycle. Schemas, stored data, and update behavior are unchanged.
+Native readers preserve
 their existing main-key admission and raw-row parser behavior; each new reader
 checks pending keys without rescanning unrelated certified entries. Synchronous commit guards still read committed
 rows. See [incremental canonical validation](/reference/database-schemas/agent-schema-history#incremental-canonical-session-validation)
