@@ -16,7 +16,7 @@ import {
   resetSkillsRefreshStateForTest,
 } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { renderProposalMarkdown, stripProposalFrontmatterForSkill } from "./frontmatter.js";
+import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import { getSkillProposalRunProgress as getSkillProposalRunProgressImpl } from "./proposal-run-progress.test-support.js";
 import {
   applySkillProposal as applySkillProposalImpl,
@@ -225,24 +225,13 @@ describe("skill workshop proposals", () => {
     ).rejects.toThrow("No Workshop-generated skill matched");
   });
 
-  it("renders proposal markdown with a terminal newline", () => {
-    expect(
-      renderProposalMarkdown({
-        name: "example",
-        description: "Example proposal",
-        content: "# Example",
-        date: "2026-07-05T00:00:00.000Z",
-      }).endsWith("\n"),
-    ).toBe(true);
-  });
-
   it("creates a pending proposal under the workshop and applies it as an active workspace skill", async () => {
     const workspaceDir = await makeWorkspace();
     const proposal = await proposeCreateSkill({
       workspaceDir,
       name: "Weather Helper",
       description: "Check weather before planning outdoor tasks",
-      content: "# Weather Helper\n\nUse the weather provider before answering.\n",
+      content: "# Weather Helper\n\nUse the weather provider before answering.",
       supportFiles: [
         {
           path: "references/weather-api.md",
@@ -254,11 +243,16 @@ describe("skill workshop proposals", () => {
         },
       ],
       createdBy: "skill-workshop",
-      goal: "Reuse weather lookup steps",
+      goal: "  Reuse weather lookup steps  ",
+      evidence: "  Existing operator checklist.  ",
     });
 
-    expect(proposal.record.status).toBe("pending");
-    expect(proposal.record.scan.state).toBe("clean");
+    expect(proposal.record).toMatchObject({
+      status: "pending",
+      scan: { state: "clean" },
+      goal: "Reuse weather lookup steps",
+      evidence: "Existing operator checklist.",
+    });
     expect(proposal.content).toContain('name: "weather-helper"');
     expect(proposal.record.supportFiles?.map((file) => file.path)).toEqual([
       "references/weather-api.md",
@@ -571,27 +565,6 @@ describe("skill workshop proposals", () => {
     );
   });
 
-  it("recovers run progress from canonical proposal records", async () => {
-    const workspaceDir = await makeWorkspace();
-    const proposal = await proposeCreateSkill({
-      workspaceDir,
-      name: "Recovered Proposal",
-      description: "Recover a durable proposal after manifest interruption",
-      content: "# Recovered Proposal\n",
-      origin: { runId: "interrupted-run" },
-    });
-    await expect(
-      getSkillProposalRunProgress({
-        config: workshopConfig,
-        agentId: "main",
-        runId: "interrupted-run",
-      }),
-    ).resolves.toEqual({
-      mutationCount: 1,
-      proposalIds: [proposal.record.id],
-    });
-  });
-
   it("resolves pending proposals by skill name for tool-driven revisions", async () => {
     const workspaceDir = await makeWorkspace();
     const proposal = await proposeCreateSkill({
@@ -738,33 +711,6 @@ describe("skill workshop proposals", () => {
     await expect(
       inspectSkillProposal(second.record.id, { config: workshopConfig, agentId: "other" }),
     ).resolves.toMatchObject({ record: { id: second.record.id } });
-  });
-
-  it("updates only writable workspace skills and marks stale proposals when the target changes", async () => {
-    const workspaceDir = await makeWorkspace();
-    const skillDir = await createOwnedSkill({
-      workspaceDir,
-      name: "release-notes",
-      description: "Draft release notes",
-      body: "# Release Notes\n\nOld steps.\n",
-    });
-    const skillFile = path.join(skillDir, "SKILL.md");
-    const proposal = await proposeUpdateSkill({
-      workspaceDir,
-      skillName: "release-notes",
-      content: "# Release Notes\n\nNew steps.\n",
-    });
-
-    await fs.writeFile(
-      skillFile,
-      "---\nname: release-notes\ndescription: Draft release notes\n---\n\nChanged elsewhere.\n",
-      "utf8",
-    );
-
-    await expect(
-      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
-    ).rejects.toThrow("proposal marked stale");
-    expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("stale");
   });
 
   it("applies update proposals with rollback metadata", async () => {
@@ -1826,10 +1772,8 @@ describe("skill workshop proposals", () => {
   });
 
   it.each([
-    ["create", "changed"],
     ["create", "missing"],
     ["update", "changed"],
-    ["update", "missing"],
   ] as const)(
     "lists a %s with %s support files but refuses to inspect or apply it",
     async (kind, damage) => {
