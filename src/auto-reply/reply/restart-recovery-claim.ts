@@ -102,6 +102,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   resolveDeliveryContext: (entry: SessionEntry | undefined) => DeliveryContext | undefined;
   requesterAccountId?: unknown;
   requesterSenderId?: unknown;
+  hasObservedSourceReplyDelivery?: () => boolean;
   resolveUserTurnTarget?: (params: {
     entry: SessionEntry;
     sessionId: string;
@@ -446,6 +447,11 @@ export function createReplyRestartRecoveryClaimController(params: {
         const terminalPending = current.restartRecoveryDeliveryReceiptState === "terminal-pending";
         const preservesPendingFinal =
           !terminalPending && current.pendingFinalDelivery !== undefined;
+        const recordTerminalSource =
+          terminalPending ||
+          current.restartRecoverySourceReplyDeliveryMode !== "message_tool_only" ||
+          params.hasObservedSourceReplyDelivery?.() === true ||
+          preservesPendingFinal;
         const completesHandledSilent =
           current.restartRecoveryBeforeAgentReplyState === "handled-silent" &&
           !preservesPendingFinal;
@@ -453,7 +459,7 @@ export function createReplyRestartRecoveryClaimController(params: {
         return {
           ...buildRestartRecoveryClaimCleanupPatch({
             entry: current,
-            recordTerminalSource: true,
+            recordTerminalSource,
             terminalSourceRunId: recoverySourceRunId,
           }),
           ...(terminalPending ? { pendingFinalDelivery: undefined } : {}),

@@ -162,7 +162,8 @@ export async function completeReplyAgentRun(input: {
       sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
       successfulSourceReplyDelivery: completedSourceReplyDelivery,
       isHeartbeat,
-      isRoomEvent: sessionCtx.InboundEventKind === "room_event",
+      isRoomEvent:
+        sessionCtx.InboundEventKind === "room_event" && followupRun.run.senderIsOwner !== true,
     });
     if (recovery.kind === "retry" || (recovery.kind === "diagnostic" && recovery.warn)) {
       warnPrivateMessageToolFinal({

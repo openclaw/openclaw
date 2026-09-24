@@ -324,6 +324,7 @@ export function createReplyAgentRestartRecoveryController(
     activeSessionStore: Record<string, SessionEntry> | undefined;
     cfg: OpenClawConfig;
     getActiveSessionEntry: () => SessionEntry | undefined;
+    hasObservedSourceReplyDelivery?: () => boolean;
     replyOperation: ReplyOperation;
     restartRecoverySourceTurnId: string | undefined;
     setActiveSessionEntry: (entry: SessionEntry) => void;
@@ -386,6 +387,7 @@ export function createReplyAgentRestartRecoveryController(
     requesterAccountId:
       followupRun.originatingAccountId ?? sessionCtx.AccountId ?? followupRun.run.agentAccountId,
     requesterSenderId: sessionCtx.SenderId,
+    hasObservedSourceReplyDelivery: context.hasObservedSourceReplyDelivery,
     resolveUserTurnTarget: ({
       entry,
       sessionId,
