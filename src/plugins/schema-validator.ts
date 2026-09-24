@@ -12,6 +12,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import {
   isRuntimeConfigUnknownPath,
+  resolveRuntimeOptionalValuePath,
   omitRuntimeConfigPaths,
 } from "../config/validation-runtime.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -469,9 +470,10 @@ function runtimeSchemaPropertyNames(
     if (current === null || typeof current !== "object") {
       return undefined;
     }
+    const owner = current;
     // Other branches can declare or depend on a property rejected here. Removing
     // it can satisfy the schema by changing its meaning, even when revalidation passes.
-    if (semanticSchemaKeywords.some((keyword) => Object.hasOwn(current, keyword))) {
+    if (semanticSchemaKeywords.some((keyword) => Object.hasOwn(owner, keyword))) {
       return undefined;
     }
     const patterns = asOptionalObjectRecord(Reflect.get(current, "patternProperties"));
@@ -507,6 +509,89 @@ function runtimeSchemaPropertyNames(
   return names;
 }
 
+function isScalarSchema(value: unknown): boolean {
+  const schema = asOptionalObjectRecord(value);
+  if (
+    !schema ||
+    semanticSchemaKeywords.some(
+      (keyword) => keyword !== "anyOf" && keyword !== "oneOf" && Object.hasOwn(schema, keyword),
+    )
+  ) {
+    return false;
+  }
+  const variants = [schema.anyOf, schema.oneOf].filter(Array.isArray);
+  if (variants.length > 0) {
+    return variants.every((choices) => choices.length > 0 && choices.every(isScalarSchema));
+  }
+  if (Array.isArray(schema.enum)) {
+    return schema.enum.every((entry) => entry === null || typeof entry !== "object");
+  }
+  if (Object.hasOwn(schema, "const")) {
+    return schema.const === null || typeof schema.const !== "object";
+  }
+  return ["boolean", "string", "number", "integer", "null"].includes(String(schema.type));
+}
+
+function resolveRuntimeOptionalPath(
+  error: TypeBoxValidationError,
+  schema: JsonSchemaValue,
+  value: unknown,
+  prefix: readonly (string | number)[],
+): (string | number)[] | undefined {
+  if (
+    ![
+      "type",
+      "enum",
+      "const",
+      "minimum",
+      "maximum",
+      "exclusiveMinimum",
+      "exclusiveMaximum",
+      "multipleOf",
+      "minLength",
+      "maxLength",
+      "pattern",
+      "format",
+      "anyOf",
+      "oneOf",
+    ].includes(error.keyword ?? "")
+  ) {
+    return undefined;
+  }
+  const path = resolveTypeBoxInstancePath(value, error.instancePath ?? "");
+  if (!path || !resolveRuntimeOptionalValuePath([...prefix, ...path])) {
+    return undefined;
+  }
+  const schemaPath = resolveTypeBoxInstancePath(schema, (error.schemaPath ?? "#").slice(1));
+  const property =
+    schemaPath?.findLastIndex(
+      (key, index) => key === "properties" && schemaPath[index + 1] === path.at(-1),
+    ) ?? -1;
+  if (
+    !schemaPath ||
+    property < 0 ||
+    runtimeSchemaPropertyNames(schema, schemaPath.slice(0, property)) === undefined
+  ) {
+    return undefined;
+  }
+  const owner = asOptionalObjectRecord(
+    schemaPath
+      .slice(0, property)
+      .reduce<unknown>(
+        (current, key) =>
+          current !== null && typeof current === "object" ? Reflect.get(current, key) : undefined,
+        schema,
+      ),
+  );
+  const key = path.at(-1);
+  const fields = asOptionalObjectRecord(owner?.properties);
+  return typeof key === "string" &&
+    !(Array.isArray(owner?.required) && owner.required.includes(key)) &&
+    isScalarSchema(fields?.[key])
+    ? path
+    : undefined;
+}
+
 /**
  * Result of validating manifest-sourced input. `schemaError` on the failure branch tells
  * callers whether the schema itself is unusable (true) versus the value failing a
@@ -528,11 +613,17 @@ export function validatePluginSchemaValue(
   params: Parameters<typeof validateJsonSchemaValue>[0] & {
     origin: PluginOrigin;
     ignoreUnknownProperties?: boolean;
+    /** Internal config-reader location; only bundled channel owners qualify scalar fallback. */
+    runtimeConfigPath?: readonly (string | number)[];
   },
 ): PluginSchemaValidationResult {
-  const { origin, ignoreUnknownProperties, ...validationParams } = params;
+  const { origin, ignoreUnknownProperties, runtimeConfigPath, ...validationParams } = params;
   if (origin === "bundled") {
-    const result = validateJsonSchemaValueInternal(validationParams, ignoreUnknownProperties);
+    const result = validateJsonSchemaValueInternal(
+      validationParams,
+      ignoreUnknownProperties,
+      runtimeConfigPath,
+    );
     return result.ok ? result : { ...result, schemaError: false };
   }
   try {
@@ -565,6 +656,7 @@ export function validateJsonSchemaValue(params: {
 function validateJsonSchemaValueInternal(
   params: Parameters<typeof validateJsonSchemaValue>[0],
   ignoreUnknownProperties = false,
+  runtimeConfigPath?: readonly (string | number)[],
 ):
   | { ok: true; value: unknown; ignoredPaths?: (string | number)[][] }
   | { ok: false; errors: JsonSchemaValidationError[] } {
@@ -610,12 +702,29 @@ function validateJsonSchemaValueInternal(
       ignoreUnknownProperties &&
       checked.complete &&
       params.sourceValue === undefined &&
-      errors?.length &&
-      errors.every((error) => error.keyword === "additionalProperties")
+      errors?.length
     ) {
-      // Do not reinterpret union/conditional/required failures as harmless extras.
       const schema = normalizeJsonSchemaForTypeBox(cached.schema);
-      const paths = errors.flatMap((error) => {
+      const optionalPaths = errors.map((error) =>
+        runtimeConfigPath
+          ? resolveRuntimeOptionalPath(error, schema, value, runtimeConfigPath)
+          : undefined,
+      );
+      // Unknown-key recovery retains its conservative union/conditional boundary.
+      const recoverUnknown = errors.every(
+        (error, index) =>
+          error.keyword === "additionalProperties" || optionalPaths[index] !== undefined,
+      );
+      const paths = errors.flatMap((error, index) => {
+        if (!recoverUnknown) {
+          return [];
+        }
+        if (optionalPaths[index]) {
+          return [optionalPaths[index]];
+        }
+        if (error.keyword !== "additionalProperties") {
+          return [];
+        }
         const schemaPath = resolveTypeBoxInstancePath(schema, (error.schemaPath ?? "#").slice(1));
         const propertyNames = schemaPath && runtimeSchemaPropertyNames(schema, schemaPath);
         const owner = schemaPath?.reduce<unknown>(
@@ -637,8 +746,8 @@ function validateJsonSchemaValueInternal(
         return parent ? resolveAdditionalProperties(error).map((key) => parent.concat(key)) : [];
       });
       if (paths.length > 0) {
-        ignoredPaths = paths;
-        const projected = omitRuntimeConfigPaths(originalValue, paths);
+        ignoredPaths = [...new Map(paths.map((path) => [JSON.stringify(path), path])).values()];
+        const projected = omitRuntimeConfigPaths(originalValue, ignoredPaths);
         value =
           params.applyDefaults && cached.hasDefaults
             ? applyJsonSchemaDefaults(params.schema, projected)

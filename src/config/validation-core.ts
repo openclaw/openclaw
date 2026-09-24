@@ -51,7 +51,11 @@ import {
   mergeUnsupportedMutableSecretRefIssues,
   withConfigIssuePath,
 } from "./validation-issues.js";
-import { isRuntimeConfigUnknownPath, omitRuntimeConfigPaths } from "./validation-runtime.js";
+import {
+  isRuntimeConfigUnknownPath,
+  resolveRuntimeOptionalValuePath,
+  omitRuntimeConfigPaths,
+} from "./validation-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { McpServerNameSchema, NodeHostMcpServerNameSchema } from "./zod-schema.root-support.js";
 
@@ -436,12 +440,22 @@ export function validateConfigObjectRaw(
   let ignoredPaths: (string | number)[][] = [];
   let validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success && opts?.schemaValidation === "runtime") {
+    const optionalPaths = validated.error.issues.map((issue) =>
+      issue.code === "custom"
+        ? undefined
+        : resolveRuntimeOptionalValuePath(
+            issue.path.map((segment) => (typeof segment === "number" ? segment : String(segment))),
+          ),
+    );
+    const recoverOptional = validated.error.issues.every(
+      (issue, index) => issue.code === "unrecognized_keys" || optionalPaths[index] !== undefined,
+    );
     const legacyPaths = findLegacyConfigIssues(normalizedRaw, opts?.sourceRaw).map(
       (issue) => issue.path,
     );
-    const paths = validated.error.issues.flatMap((issue) => {
+    const paths = validated.error.issues.flatMap((issue, index) => {
       if (issue.code !== "unrecognized_keys") {
-        return [];
+        return recoverOptional && optionalPaths[index] ? [optionalPaths[index]] : [];
       }
       const structuralPath = resolveConfigSchemaStructuralPath(OpenClawSchema, issue.path);
       return issue.keys
@@ -480,8 +494,10 @@ export function validateConfigObjectRaw(
         });
     });
     if (paths.length > 0) {
-      validated = OpenClawSchema.safeParse(omitRuntimeConfigPaths(normalizedRaw, paths));
-      ignoredPaths = paths;
+      ignoredPaths = [
+        ...new Map(paths.map((segments) => [JSON.stringify(segments), segments])).values(),
+      ];
+      validated = OpenClawSchema.safeParse(omitRuntimeConfigPaths(normalizedRaw, ignoredPaths));
     }
   }
   if (!validated.success || mcpServerNameIssues.length > 0) {

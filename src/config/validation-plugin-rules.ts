@@ -521,6 +521,7 @@ export function validatePreparedConfigWithPlugins(
           cacheKey: `channel:${trimmed}`,
           value: config.channels[trimmed],
           ignoreUnknownProperties: opts.schemaValidation === "runtime",
+          runtimeConfigPath: ["channels", trimmed],
           applyDefaults: true, // Always apply defaults for plugin schema validation;
           // writeConfigFile persists persistCandidate, not validated.config (#61841)
         },

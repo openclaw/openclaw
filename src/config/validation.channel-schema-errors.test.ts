@@ -99,6 +99,105 @@ describe("channel schema error ownership", () => {
     expect(value).toEqual(original);
   });
 
+  it.each([
+    {
+      name: "dependent schema",
+      schema: {
+        type: "object",
+        properties: { requireMention: { type: "boolean" } },
+        dependentSchemas: {
+          requireMention: { properties: { requireMention: { const: true } } },
+        },
+        additionalProperties: false,
+      },
+      value: false,
+      issuePath: "requireMention",
+    },
+    {
+      name: "referenced constraint",
+      schema: {
+        type: "object",
+        properties: { requireMention: { type: "boolean", $ref: "#/$defs/MentionPolicy" } },
+        $defs: { MentionPolicy: { const: true } },
+        additionalProperties: false,
+      },
+      value: false,
+      issuePath: "requireMention",
+    },
+    {
+      name: "dependency",
+      schema: {
+        type: "object",
+        properties: { requireMention: { type: "boolean" }, token: { type: "string" } },
+        dependentRequired: { requireMention: ["token"] },
+        additionalProperties: false,
+      },
+      value: "bad",
+      issuePath: "token",
+    },
+    {
+      name: "leaf conditional",
+      schema: JSON.parse(`{
+        "type": "object",
+        "properties": {"requireMention": {
+          "type": "boolean", "if": {"type": "object"}, "then": {"required": ["permit"]}
+        }},
+        "additionalProperties": false
+      }`),
+      value: {},
+      issuePath: "requireMention",
+    },
+  ])(
+    "does not erase a $name requirement by omitting its invalid trigger",
+    ({ schema, value, issuePath }) => {
+      const registry = createRegistry("bundled");
+      registry.plugins[0].channelConfigs = {
+        "schema-channel": {
+          schema,
+        },
+      };
+      const result = validateConfigObjectRawWithPlugins(
+        { channels: { "schema-channel": { requireMention: value } } },
+        { schemaValidation: "runtime", pluginMetadataSnapshot: { manifestRegistry: registry } },
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        issues: expect.arrayContaining([
+          expect.objectContaining({ path: `channels.schema-channel.${issuePath}` }),
+        ]),
+      });
+    },
+  );
+
+  it.each([
+    { name: "external owner", origin: "global" as const, field: { type: "boolean" }, required: [] },
+    {
+      name: "required value",
+      origin: "bundled" as const,
+      field: { type: "boolean" },
+      required: ["requireMention"],
+    },
+    { name: "container", origin: "bundled" as const, field: { type: "object" }, required: [] },
+  ])("does not weaken $name contracts for a familiar field name", ({ origin, field, required }) => {
+    const registry = createRegistry(origin);
+    registry.plugins[0].channelConfigs = {
+      "schema-channel": {
+        schema: {
+          type: "object",
+          properties: { requireMention: field },
+          required,
+          additionalProperties: false,
+        },
+      },
+    };
+    expect(
+      validateConfigObjectRawWithPlugins(
+        { channels: { "schema-channel": { requireMention: "bad" } } },
+        { schemaValidation: "runtime", pluginMetadataSnapshot: { manifestRegistry: registry } },
+      ).ok,
+    ).toBe(false);
+  });
+
   it.each(["bundled", "global"] as const)("projects extras using the %s schema owner", (origin) => {
     const registry = createRegistry(origin, {
       type: "object",

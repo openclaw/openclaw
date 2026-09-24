@@ -80,8 +80,31 @@ field map and defaults.
 <Warning>
 Gateway startup and reload ignore unknown nonessential properties in otherwise valid settings. They omit those properties from the runtime view without changing the saved file, includes, or plugin-owned source data, and without routine warnings. Explicit validation and settings writes still report unsupported properties.
 
-Known invalid values, malformed structures, known migration marker values, and authority or isolation settings remain strict. Unknown fields in tool policy or directly in agent execution records also remain errors, so a misspelled sandbox or access setting cannot silently select a permissive default. Unknown migration marker properties are preserved on disk and ignored at runtime; known marker semantics stay unchanged. An unknown property inside an ambiguous schema branch is not treated as harmless. Gateway startup first applies safe legacy-key migrations to eligible single-file configs; remaining essential validation failures cause the Gateway to **refuse to start**.
+Invalid optional values with established omission behavior also fall back at runtime. OpenClaw omits the unusable value and lets its existing default or inheritance apply; it does not coerce strings or disable the containing channel. Explicit validation and settings writes still report the invalid value.
+
+Malformed structures, required values, known migration marker values, and authority, isolation, routing, or storage contracts remain strict. Unknown fields in tool policy or directly in agent execution records also remain errors, so a misspelled sandbox or access setting cannot silently select a permissive default. Unknown migration marker properties are preserved on disk and ignored at runtime; known marker semantics stay unchanged. An unknown property inside an ambiguous schema branch is not treated as harmless. Gateway startup first applies safe legacy-key migrations to eligible single-file configs; remaining essential validation failures cause the Gateway to **refuse to start**.
 </Warning>
+
+Runtime optional-value fallback covers logging levels and console style; message
+prefixes and acknowledgment reactions; agent typing, human-delay, timeout, and concurrency settings;
+provider/model API overrides, per-model endpoint overrides, and model context caps;
+speech text/time limits, media concurrency and result/time limits, browser snapshot mode;
+the opt-in OpenTelemetry enable flag; UI seam color and theme/mode/accent preferences,
+community invitation visibility, and the optional environment annotation; and
+bundled channel mention gates, prefixes, acknowledgment reactions, text chunk limits,
+reply modes, Markdown table rendering, and scalar streaming presentation settings.
+Plugin-specific settings without a qualified omission contract remain strict.
+Schema-valid values still reach their normal semantic checks: an incompatible model
+route, a missing credential, or an unusably small context window is not repaired by omission.
+
+For example, if a Discord guild has `requireMention: false` and a channel override
+contains `requireMention: "true"`, the invalid override is omitted from the runtime
+view and the channel inherits the guild's `false`. The string is not interpreted
+as a boolean. With no valid parent setting, Discord keeps its normal require-mention
+default. Sender user/role allowlists remain independent and continue to apply.
+The authored string remains on disk for correction. Scalar recovery leaves parent objects in place, preserving each
+owner's rules for object-level overrides and defaults. The optional environment badge
+is one label/color value: if either required part is unusable, that annotation is omitted.
 
 `openclaw config schema` prints the canonical JSON Schema used by Control UI
 and validation. `config.schema.lookup` fetches a single path-scoped node plus
