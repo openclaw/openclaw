@@ -158,7 +158,7 @@ To reserve capacity outside ordinary PR/main pools:
 Full Release Validation starts source-only children alongside artifact producers
 after admission and reuse selection. Candidate consumers start as soon as the
 candidate is verified, while npm qualification and independent validation can
-continue; see the [release fast path](/reference/RELEASING#fast-path-default).
+continue; see the [release procedure](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/regular-release.md).
 
 Release-dispatched validation children add one best-effort hosted receipt job
 each, up to seven per full campaign and none for ordinary PR/main CI. It retains

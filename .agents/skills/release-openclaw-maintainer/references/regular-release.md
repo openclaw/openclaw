@@ -69,7 +69,8 @@ publish within an hour, with actual timing recorded separately. Backports are
 merged `main` PRs cherry-picked before dispatch (pure-data model/catalog
 additions and bundled-runtime bumps qualify); after dispatch admit only a fix
 for a required-lane defect. A second cut (re-basing the candidate on newer
-`main`) needs an explicit operator request for that release; otherwise cherry-pick
+`main`) requires the approval specified in the parent skill's
+[release authority rules](../SKILL.md#shared-release-boundaries); otherwise cherry-pick
 merged `main` commits only for a confirmed release blocker and name each one in
 the handoff record.
 
