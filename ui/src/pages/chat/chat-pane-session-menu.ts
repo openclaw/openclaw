@@ -45,10 +45,7 @@ import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.t
 
 export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   protected resolveHeaderSessionTitle(row: GatewaySessionRow | undefined): string {
-    if (row && normalizeOptionalString(row.label)) {
-      return resolveSessionDisplayName(row.key, row);
-    }
-    // Retain generated names through partial reconnect reads, without hiding a rename.
+    // The roster owns accepted titles; pane metadata fills absent cross-agent rows.
     return (
       this.presentationTitle ??
       resolveSessionDisplayName(row?.key ?? this.state?.sessionKey ?? this.sessionKey, row)

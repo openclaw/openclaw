@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
@@ -61,6 +62,14 @@ describe("chat pane session menu boundary", () => {
             rows.filter((row) => row.agentId === asOptionalRecord(params)?.agentId),
             1,
           ),
+        "sessions.patch": (_method, params) => {
+          const request = asOptionalRecord(params);
+          expect(request?.key).toBe(primary.key);
+          expect(request?.expectedSessionId).toBe(primary.sessionId);
+          expect(request?.label).toBe("Reviewed ledger");
+          rows[0] = { ...primary, label: "Reviewed ledger", updatedAt: 2 };
+          return { ok: true, key: primary.key, entry: rows[0] };
+        },
       },
     );
     await sessions.refresh({ agentId: "main", force: true });
@@ -69,6 +78,12 @@ describe("chat pane session menu boundary", () => {
     await Promise.all([ledger, verifier].map(refreshPane));
     const container = document.body.appendChild(document.createElement("div"));
     const title = (pane: TestChatPane) => {
+      const presentation = sessions.presentation.result?.sessions.find(
+        (row) => row.key === pane.sessionKey,
+      );
+      pane.presentationTitle = presentation
+        ? resolveSessionDisplayName(pane.sessionKey, presentation)
+        : undefined;
       render(
         pane.renderPaneHeader(
           createSessionWorkspaceProps(pane.state),
@@ -107,6 +122,19 @@ describe("chat pane session menu boundary", () => {
     expect(verifier.headerRenameValue).toBe("Reviewed conversation");
     verifier.cancelHeaderRename();
     expect(title(ledger)).toBe("Ledger reconciliation");
+
+    const patch = vi.spyOn(sessions, "patch");
+    container.querySelector<HTMLButtonElement>(".chat-pane__session-title-button")?.click();
+    ledger.headerRenameValue = "Reviewed ledger";
+    ledger.commitHeaderRename();
+    expect(patch).toHaveBeenCalledOnce();
+    await patch.mock.results[0]?.value;
+    expect(sessions.presentation.result?.sessions[0]?.label).toBe("Reviewed ledger");
+    expect(title(ledger)).toBe("Reviewed ledger");
+    const menu = container.querySelector<HTMLElement & { session: { label: string } }>(
+      "openclaw-chat-header-session-menu",
+    );
+    expect(menu?.session.label).toBe("Reviewed ledger");
   });
 
   it("keeps reconnect presentation and catalog names ahead of incomplete pane metadata", () => {
@@ -139,11 +167,11 @@ describe("chat pane session menu boundary", () => {
     };
     expect(draw(undefined)).toBe("Retained conversation");
     expect(draw(row)).toBe("Retained conversation");
-    expect(draw({ ...row, label: "Renamed conversation" })).toBe("Renamed conversation");
+    expect(draw({ ...row, label: "Older scoped label" })).toBe("Retained conversation");
     const menu = container.querySelector<HTMLElement & { session: { label: string } }>(
       "openclaw-chat-header-session-menu",
     );
-    expect(menu?.session.label).toBe("Renamed conversation");
+    expect(menu?.session.label).toBe("Retained conversation");
     pane.catalogSession = {
       threadId: "catalog",
       name: "Imported conversation",
