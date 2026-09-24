@@ -96,11 +96,12 @@ function bind(
 }
 
 async function receive(bot: Bot, message: NonNullable<Update["message"]>) {
-  // Match durable ingress dispatch; HTTP acknowledgement has a separate owner.
-  await bot.handleUpdate({
+  const update: Update = {
     update_id: ++updateId,
     message: { ...message, entities: message.text?.startsWith("@") ? message.entities : [] },
-  });
+  };
+  // Telegram JSON omits grammY's undefined-only reply fields.
+  await bot.handleUpdate(JSON.parse(JSON.stringify(update)));
 }
 
 describe("Telegram recorded session destinations", () => {
@@ -377,6 +378,7 @@ describe("Telegram recorded session destinations", () => {
         date: 1736380700,
         chat: groupChat,
         forum_topic_created: { name: "Deployments", icon_color: 0x6fb9f0 },
+        reply_to_message: undefined,
       },
     });
     expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({

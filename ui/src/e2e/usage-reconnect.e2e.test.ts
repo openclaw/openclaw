@@ -193,6 +193,15 @@ suite.define(() => {
     let usageUpdatedAt = Date.now();
     const gateway = await installMockGateway(page, {
       methodResponses: {
+        "agents.list": {
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "other", name: "Other" },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
         "sessions.usage": originalResponse,
         "usage.status": { updatedAt: Date.now(), providers: [] },
       },
