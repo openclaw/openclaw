@@ -53,6 +53,8 @@ GRADLE_ASSEMBLE_TASK=":app:assemblePlayDebug"
 APP_PACKAGE="ai.openclaw.app.debug"
 ACTIVITY_COMPONENT="$APP_PACKAGE/ai.openclaw.app.MainActivity"
 EMULATOR_PID=""
+EMULATOR_EXIT_STATUS=""
+STARTUP_SERIAL=""
 EMULATOR_LOG=""
 STARTED_EMULATOR=0
 ARTIFACT_ROOT="${ROOT_DIR}/.artifacts/android-screenshots/latest"
@@ -188,32 +190,77 @@ if (( SCREENSHOT_MIN_DIMENSION < 320 || SCREENSHOT_MAX_DIMENSION > 3840 || SCREE
   exit 1
 fi
 
-cleanup_started_emulator() {
-  local stopped=0
+# Called only by the shell that launched the emulator, never a command substitution.
+owned_emulator_running() {
+  if [[ -n "$EMULATOR_EXIT_STATUS" ]]; then
+    return 1
+  fi
+  if kill -0 "$EMULATOR_PID" 2>/dev/null; then
+    return 0
+  fi
+  if wait "$EMULATOR_PID"; then
+    EMULATOR_EXIT_STATUS=0
+  else
+    EMULATOR_EXIT_STATUS=$?
+  fi
+  return 1
+}
 
+report_emulator_startup_failure() {
+  if owned_emulator_running; then
+    printf '[android-emulator] liveness=running exit_status=unavailable (before cleanup)\n' >&2
+  else
+    printf '[android-emulator] liveness=exited exit_status=%s (before cleanup)\n' "$EMULATOR_EXIT_STATUS" >&2
+  fi
+  if [[ -f "$EMULATOR_LOG" ]]; then
+    printf '[android-emulator] startup log excerpt (last 8192 bytes, at most 40 lines, 512 characters per line):\n' >&2
+    # Bound before decoding/filtering; strip terminal controls and break CI command
+    # delimiters before prefixing. Do not expose credential-bearing log lines.
+    local log_bytes
+    log_bytes="$(wc -c <"$EMULATOR_LOG")"
+    tail -c 8192 "$EMULATOR_LOG" |
+      # Discard a possibly cut credential key at the byte boundary, not just its value.
+      awk -v truncated="$((log_bytes > 8192))" 'NR > 1 || !truncated' | tail -n 40 |
+      LC_ALL=C sed -E "s/$(printf '\033')\[[0-?]*[ -/]*[@-~]//g" |
+      LC_ALL=C tr -cd '\11\12\40-\176' |
+      LC_ALL=C awk '{
+        if (tolower($0) ~ /token|password|passwd|secret|authorization|private.key|credential|api[_ -]?key|access[_ -]?key|bearer/) {
+          print "[android-emulator] [redacted sensitive log line]"
+        } else {
+          line = $0
+          gsub(/::/, ": : ", line)
+          gsub(/##\[/, "# #[", line)
+          print "[android-emulator] " substr(line, 1, 512)
+        }
+      }' >&2
+  fi
+}
+
+cleanup_started_emulator() {
   if [[ "$STARTED_EMULATOR" != "1" || "$KEEP_EMULATOR" == "1" ]]; then
-    return
+    return 0
   fi
-  if [[ -n "${ADB_BIN:-}" && -n "${ADB_SERIAL:-}" ]]; then
-    if "$ADB_BIN" -s "$ADB_SERIAL" emu kill >/dev/null 2>&1; then
-      stopped=1
-      local deadline=$((SECONDS + 30))
-      while (( SECONDS < deadline )); do
-        if ! "$ADB_BIN" devices | awk 'NR > 1 && $2 == "device" { print $1 }' | grep -Fxq "$ADB_SERIAL"; then
-          break
-        fi
-        sleep 1
-      done
-    fi
+  if ! owned_emulator_running; then
+    return 0
   fi
-  if [[ "$stopped" != "1" && -n "$EMULATOR_PID" ]]; then
+  local deadline=$((SECONDS + 30))
+  if [[ -z "${ADB_SERIAL:-}" ]] ||
+    ! "$ADB_BIN" -s "$ADB_SERIAL" emu kill >/dev/null 2>&1; then
     kill "$EMULATOR_PID" >/dev/null 2>&1 || true
+  fi
+  # ADB disappearance alone is not process settlement: join before starting Wear.
+  while owned_emulator_running && (( SECONDS < deadline )); do
+    sleep 1
+  done
+  if owned_emulator_running; then
+    kill -9 "$EMULATOR_PID" >/dev/null 2>&1 || true
+    wait "$EMULATOR_PID" 2>/dev/null || true
   fi
 }
 
 restore_device_display() {
   if [[ "$DISPLAY_OVERRIDDEN" != "1" || -z "${ADB_BIN:-}" || -z "${ADB_SERIAL:-}" ]]; then
-    return
+    return 0
   fi
   if [[ -n "$ORIGINAL_WM_SIZE" ]]; then
     "$ADB_BIN" -s "$ADB_SERIAL" shell wm size "$ORIGINAL_WM_SIZE" >/dev/null 2>&1 || true
@@ -229,7 +276,7 @@ restore_device_display() {
 
 restore_device_timezone() {
   if [[ "$TIMEZONE_OVERRIDDEN" != "1" || -z "${ADB_BIN:-}" || -z "${ADB_SERIAL:-}" ]]; then
-    return
+    return 0
   fi
   if [[ -n "$ORIGINAL_TIME_ZONE" ]]; then
     "$ADB_BIN" -s "$ADB_SERIAL" shell cmd alarm set-timezone "$ORIGINAL_TIME_ZONE" >/dev/null 2>&1 || true
@@ -246,6 +293,8 @@ cleanup_emulator_log() {
 }
 
 cleanup() {
+  # No-op helpers must return 0 explicitly: Bash 5.2's bare return inherits the
+  # failing EXIT status, and errexit would skip the remaining cleanup helpers.
   restore_device_display
   restore_device_timezone
   cleanup_started_emulator
@@ -360,10 +409,14 @@ wait_for_single_device() {
   local count
 
   while (( SECONDS < deadline )); do
+    if ! owned_emulator_running; then
+      echo "Owned Android emulator exited before device readiness." >&2
+      return 1
+    fi
     devices="$(connected_devices "$adb")"
     count="$(device_count "$devices")"
     if [[ "$count" == "1" ]]; then
-      printf '%s\n' "$devices"
+      STARTUP_SERIAL="$devices"
       return
     fi
     sleep 2
@@ -381,8 +434,12 @@ wait_for_boot_completed() {
   local deadline=$((SECONDS + timeout_seconds))
   local boot_completed
 
-  "$adb" -s "$serial" wait-for-device
+  "$adb" -s "$serial" wait-for-device || return $?
   while (( SECONDS < deadline )); do
+    if ! owned_emulator_running; then
+      echo "Owned Android emulator exited before boot completion." >&2
+      return 1
+    fi
     boot_completed="$("$adb" -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
     if [[ "$boot_completed" == "1" ]]; then
       "$adb" -s "$serial" shell input keyevent 82 >/dev/null 2>&1 || true
@@ -496,7 +553,6 @@ boot_emulator() {
   local emulator
   local emulator_args
   local extra_args
-  local serial
 
   ensure_screenshot_avd "$avd"
   emulator="$(emulator_bin)"
@@ -511,9 +567,19 @@ boot_emulator() {
   EMULATOR_PID="$!"
   STARTED_EMULATOR=1
 
-  serial="$(wait_for_single_device "$adb")"
-  wait_for_boot_completed "$adb" "$serial"
-  ADB_SERIAL="$serial"
+  # Readiness and wait must stay in the launching shell to retain child status.
+  local startup_status=0
+  wait_for_single_device "$adb" || startup_status=$?
+  if [[ "$startup_status" == "0" ]]; then
+    wait_for_boot_completed "$adb" "$STARTUP_SERIAL" || startup_status=$?
+  fi
+  if [[ "$startup_status" != "0" ]]; then
+    report_emulator_startup_failure || true
+    return "$startup_status"
+  fi
+  # Preserve the original shutdown boundary: failed startup owns only the launch
+  # PID; do not arm serial-based shutdown until boot completion has succeeded.
+  ADB_SERIAL="$STARTUP_SERIAL"
 }
 
 resolve_device() {

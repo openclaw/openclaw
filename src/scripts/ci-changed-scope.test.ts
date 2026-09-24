@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -185,6 +186,71 @@ describe("detectChangedScope", () => {
       runControlUiI18n: false,
       runUiTests: false,
     });
+  });
+
+  it("registers the full mobile authority suite in one existing macOS Node part", () => {
+    const { scripts } = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    const authorityTest = "test/scripts/mobile-release-authority.test.ts";
+    const parts = [1, 2, 3].map((part) => `test:macos:ci:${part}`);
+    const authorityParts = parts.filter((part) =>
+      expectDefined(scripts[part], part).split(/\s+/u).includes(authorityTest),
+    );
+    expect(authorityParts).toHaveLength(1);
+    for (const part of authorityParts) {
+      expect(scripts[part]).toMatch(
+        /^\/bin\/bash --version && node --import \.\/scripts\/tsx\.mjs scripts\/test-projects\.mts(?: [^\s]+\.test\.ts)+$/u,
+      );
+      expect(expectDefined(scripts["test:macos:ci"], "Mac aggregate").split(" && ")).toContain(
+        `pnpm ${part}`,
+      );
+    }
+  });
+
+  it("routes every registered native test through its package-owned platform lane", () => {
+    const { scripts } = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    for (const [platform, parts, scopeKey] of [
+      ["macos", [1, 2, 3], "runMacosNode"],
+      ["windows", [1, 2], "runWindows"],
+    ] as const) {
+      for (const part of parts) {
+        const scriptName = `test:${platform}:ci:${part}`;
+        const targets = expectDefined(scripts[scriptName], scriptName)
+          .split(/\s+/u)
+          .filter((arg) => arg.endsWith(".test.ts"));
+        expect(targets.length).toBeGreaterThan(0);
+        for (const target of targets) {
+          expect(detectChangedScope([target]), target).toMatchObject({
+            runNode: true,
+            [scopeKey]: true,
+          });
+        }
+      }
+    }
+  });
+
+  it("adds only macOS Node proof for mobile authority without losing Linux coverage", () => {
+    const changedPaths = ["test/scripts/mobile-release-authority.test.ts"];
+    expect(detectChangedScope(changedPaths)).toEqual({
+      ...expectedNodeOnlyScope,
+      runMacosNode: true,
+    });
+    expect(detectNodeFastScope(changedPaths).runFastOnly).toBe(false);
+    expect(shouldRunIosScreenshots(changedPaths)).toBe(false);
+    expect(shouldRunNativeI18n(changedPaths)).toBe(false);
+  });
+
+  it.each([
+    "test/scripts/mobile-release-authority-extra.test.ts",
+    "test/scripts/mobile-release-authority.test-support.ts",
+    "test/scripts/mobile-release-authority.test.ts.bak",
+    "test/scripts/mobile-release-version.test.ts",
+    "src/daemon/runtime-paths-extra.test.ts",
+  ])("keeps unregistered sibling %s on Linux Node only", (changedPath) => {
+    expect(detectChangedScope([changedPath])).toEqual(expectedNodeOnlyScope);
   });
 
   it("enables node lane for node-relevant files", () => {
@@ -848,6 +914,22 @@ describe("detectChangedScope", () => {
     ["empty diff without a manifest", "", "missing", false],
     ["declared native test", "src/process/exec.windows.integration.test.ts", "valid", false],
     ["Mac fixture helper", "test/scripts/mac-script-fixture.test-support.ts", "valid", false],
+    ["mobile authority", "test/scripts/mobile-release-authority.test.ts", "valid", false],
+    [
+      "unregistered authority sibling",
+      "test/scripts/mobile-release-authority-extra.test.ts",
+      "valid",
+      false,
+    ],
+    ["declared Mac test", "src/daemon/runtime-paths.test.ts", "valid", false],
+    [
+      "package-owned Mac fixture test",
+      "test/scripts/fixture-native.test.ts",
+      "fixture-macos",
+      false,
+    ],
+    ["missing Mac inventory", "src/process/exec.test.ts", "missing-macos", true],
+    ["empty Mac inventory", "src/process/exec.test.ts", "empty-macos", true],
     ["shared Talk fixture", "test/fixtures/talk-config-contract.json", "valid", false],
     ["unrelated process test", "src/process/exec.test.ts", "valid", false],
     ["missing manifest", "src/process/exec.test.ts", "missing", true],
@@ -877,12 +959,24 @@ describe("detectChangedScope", () => {
       execFileSync("git", ["commit", "-m", "test"], { cwd: repoDir });
 
       if (manifest !== "missing") {
-        const contents =
+        let contents =
           manifest === "valid"
             ? fs.readFileSync("package.json", "utf8")
             : manifest === "invalid"
               ? "{"
               : JSON.stringify({ scripts: { "test:windows:ci:1": "" } });
+        if (["fixture-macos", "missing-macos", "empty-macos"].includes(manifest)) {
+          const fixture = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+            scripts: Record<string, string>;
+          };
+          if (manifest === "missing-macos") {
+            delete fixture.scripts["test:macos:ci:3"];
+          } else {
+            fixture.scripts["test:macos:ci:3"] =
+              manifest === "empty-macos" ? "" : `pnpm test ${changedPath}`;
+          }
+          contents = JSON.stringify(fixture);
+        }
         writeRepoFile(repoDir, "package.json", contents);
       }
       if (changedPath) {
@@ -924,6 +1018,9 @@ describe("detectChangedScope", () => {
             (key === "run_android" && changedPath === "test/fixtures/talk-config-contract.json") ||
             (key === "run_macos_node" &&
               (changedPath === "test/scripts/mac-script-fixture.test-support.ts" ||
+                changedPath === "test/scripts/mobile-release-authority.test.ts" ||
+                changedPath === "src/daemon/runtime-paths.test.ts" ||
+                manifest === "fixture-macos" ||
                 changedPath === "test/fixtures/talk-config-contract.json")) ||
             (key === "run_macos" && changedPath === "test/fixtures/talk-config-contract.json") ||
             (key === "run_windows" &&

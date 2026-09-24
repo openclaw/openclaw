@@ -214,20 +214,25 @@ export function detectChangedScope(changedPaths) {
   const scripts = JSON.parse(
     readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   ).scripts;
-  const windowsCiTests = new Set(
-    [1, 2].flatMap((part) => {
-      const targets = scripts[`test:windows:ci:${part}`].match(/[^\s"']+\.test\.ts/g);
-      if (!targets) {
-        throw new Error(`Windows CI part ${part} must declare explicit test paths`);
-      }
-      return targets;
-    }),
-  );
+  /** @param {string} platform @param {number[]} parts */
+  const nativeCiTests = (platform, parts) =>
+    new Set(
+      parts.flatMap((part) => {
+        const scriptName = `test:${platform}:ci:${part}`;
+        const targets = scripts[scriptName]?.match(/[^\s"']+\.test\.ts/g);
+        if (!targets) {
+          throw new Error(`${scriptName} must declare explicit test paths`);
+        }
+        return targets;
+      }),
+    );
+  const windowsCiTests = nativeCiTests("windows", [1, 2]);
+  const macosCiTests = nativeCiTests("macos", [1, 2, 3]);
 
   let runNode = false;
   let runMacos = false;
   let hasGitOwnerChanges = false;
-  let hasMacosNodeTestSupportChanges = false;
+  let hasMacosNodeTestChanges = false;
   let runIosBuild = false;
   let runAndroid = false;
   let runWindows = false;
@@ -253,8 +258,9 @@ export function detectChangedScope(changedPaths) {
 
     hasNonDocs = true;
     hasGitOwnerChanges ||= GIT_OWNER_SCOPE_RE.test(path);
-    // Native shell fixture support needs Darwin proof, not Swift or Windows builds.
-    hasMacosNodeTestSupportChanges ||= path === "test/scripts/mac-script-fixture.test-support.ts";
+    // Native tests and shell fixture support need Darwin proof, not Swift builds.
+    hasMacosNodeTestChanges ||=
+      macosCiTests.has(path) || path === "test/scripts/mac-script-fixture.test-support.ts";
 
     if (SKILLS_PYTHON_SCOPE_RE.test(path)) {
       runSkillsPython = true;
@@ -349,7 +355,7 @@ export function detectChangedScope(changedPaths) {
   return {
     runNode,
     runMacos,
-    runMacosNode: runMacos || hasGitOwnerChanges || hasMacosNodeTestSupportChanges,
+    runMacosNode: runMacos || hasGitOwnerChanges || hasMacosNodeTestChanges,
     runIosBuild,
     runAndroid,
     runWindows: runWindows || hasGitOwnerChanges,
