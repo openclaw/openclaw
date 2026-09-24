@@ -8,7 +8,7 @@ const activeBarriers = resolveGlobalSet<SignalExitBarrier>(
   Symbol.for("openclaw.signalExitBarriers"),
   "close-and-restart",
 );
-const activeGates = resolveGlobalSet<Promise<void>>(
+const activeGates = resolveGlobalSet<{ finished: Promise<void>; interrupt?: () => void }>(
   Symbol.for("openclaw.signalExitGates"),
   "close-and-restart",
 );
@@ -17,7 +17,11 @@ const activeFinalizers = resolveGlobalSet<SignalExitBarrier>(
   "close-and-restart",
 );
 
-export function registerSignalExitGate(gate: Promise<void>): () => void {
+export function registerSignalExitGate(
+  finished: Promise<void>,
+  interrupt?: () => void,
+): () => void {
+  const gate = { finished, interrupt };
   activeGates.add(gate);
   return () => activeGates.delete(gate);
 }
@@ -65,7 +69,11 @@ export function waitForSignalExitBarriers(): Promise<void> {
 }
 
 async function drainSignalExitBarriers(): Promise<void> {
-  const gateResults = await Promise.allSettled(activeGates);
+  const gates = [...activeGates];
+  for (const gate of gates) {
+    gate.interrupt?.();
+  }
+  const gateResults = await Promise.allSettled(gates.map((gate) => gate.finished));
   const barrierResults = await Promise.allSettled(
     [...activeBarriers].map((barrier) => Promise.resolve().then(barrier)),
   );
@@ -82,13 +90,17 @@ async function drainSignalExitBarriers(): Promise<void> {
 
 let cliSignalExit: Promise<void> | undefined;
 let cliSignalOwners = 0;
+let cliDoctorSignalOwner = false;
 
 function handleCliSignal(signal: "SIGINT" | "SIGTERM"): void {
   if (cliSignalExit) {
     return;
   }
   const listener = signal === "SIGINT" ? onCliSigint : onCliSigterm;
-  if (process.listeners(signal).some((existing) => existing !== listener)) {
+  if (
+    !cliDoctorSignalOwner &&
+    process.listeners(signal).some((existing) => existing !== listener)
+  ) {
     // Run first and relinquish the fallback synchronously: signal-exit observers
     // must see their original listener count, and custom owners retain their drain.
     detachCliSignalExitHandlers();
@@ -105,6 +117,23 @@ function handleCliSignal(signal: "SIGINT" | "SIGTERM"): void {
 
 const onCliSigint = () => handleCliSignal("SIGINT");
 const onCliSigterm = () => handleCliSignal("SIGTERM");
+const onCliSigpipe = () => {
+  if (cliSignalOwners > 0) {
+    exitAfterSignalExitBarriers(141);
+  }
+};
+
+/** Doctor keeps termination custody when progress spinners observe signals.
+ * Retain SIGPIPE until exit: removing its last listener restores SIG_DFL, not SIG_IGN. */
+export function installCliDoctorSignalExitHandlers(): void {
+  if (cliSignalOwners === 0) {
+    return;
+  }
+  cliDoctorSignalOwner = true;
+  if (!process.listeners("SIGPIPE").includes(onCliSigpipe)) {
+    process.on("SIGPIPE", onCliSigpipe);
+  }
+}
 
 function detachCliSignalExitHandlers(): void {
   process.off("SIGINT", onCliSigint);
@@ -125,6 +154,7 @@ export function installCliSignalExitHandlers(): () => void {
     }
     active = false;
     if (--cliSignalOwners === 0) {
+      cliDoctorSignalOwner = false;
       detachCliSignalExitHandlers();
     }
   };

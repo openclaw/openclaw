@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -17,6 +17,7 @@ function interruptionScript(
   eventsPath: string,
   pendingApproval: boolean,
   restoringApproval: boolean,
+  progress: boolean,
 ) {
   return `
     import { registerHooks } from "node:module";
@@ -47,6 +48,7 @@ function interruptionScript(
       state: { installed: true, running: false, env, command, loadState: { status: "loaded" }, runtime: { status: "stopped" } },
     };
     const overrides = new Map([
+      ["/commands/doctor.js", 'export const doctorCommand = () => globalThis.doctorFixture.runDoctor();'],
       ["/config/paths.js", 'export const isDefaultInstallIdentity = () => true;'],
       ["/commands/doctor-service-repair-policy.js", 'export const shouldManageGatewayService = async () => true; export const isServiceRepairExternallyManaged = () => false; export const resolveUpdateParentGatewayActivation = () => undefined;'],
       ["/commands/doctor-maintenance-admission.js", 'export const resolveDoctorUpdateAdmission = () => () => {};'],
@@ -74,6 +76,14 @@ function interruptionScript(
     const { beginDoctorMaintenance } = await import(${JSON.stringify(new URL("../../commands/doctor-maintenance.js", registrar).href)});
     const { createNonExitingRuntime } = await import(${JSON.stringify(new URL("../../runtime.js", registrar).href)});
     enableConsoleCapture();
+    fixture.runDoctor = async () => {
+    if (${progress}) {
+      const { spinner } = await import("@clack/prompts");
+      const { PassThrough } = await import("node:stream");
+      const output = new PassThrough();
+      output.resume();
+      spinner({ output }).start("Checking state");
+    }
     const runtime = createNonExitingRuntime();
     const maintenance = await beginDoctorMaintenance({ root, options: { repair: true, nonInteractive: true },
       runtime });
@@ -102,15 +112,47 @@ function interruptionScript(
       } catch (error) { failure = error; record("repair-cancelled"); }
       finally { await maintenance.finish({}, ${restoringApproval} ? async cfg => cfg : undefined, failure); }
     } finally { await maintenance.release(); }
+    };
+    const { installCliSignalExitHandlers } = await import(${JSON.stringify(new URL("../signal-exit-barrier.js", registrar).href)});
+    const { withCliProcessScope } = await import(${JSON.stringify(new URL("../runtime-cleanup-scope.js", registrar).href)});
+    const { registerMaintenanceCommands } = await import(${JSON.stringify(registrar.href)});
+    const { Command } = await import("commander");
+    const { ExitError } = await import(${JSON.stringify(new URL("../../runtime.js", registrar).href)});
+    installCliSignalExitHandlers();
+    const program = new Command();
+    registerMaintenanceCommands(program);
+    try { await withCliProcessScope(() => program.parseAsync(["node", "openclaw", "doctor", "--fix", "--non-interactive"])); }
+    catch (error) { if (!(error instanceof ExitError) || error.code !== 0) throw error; }
     if (process.connected) process.disconnect();
   `;
 }
+
+it.skipIf(process.platform === "win32")(
+  "preserves the embedding process's ignored SIGPIPE after maintenance releases",
+  () => {
+    const result = spawnSync(
+      resolveTestNodeExecPath(),
+      createNodeEvalArgs(`
+        const { holdDoctorMaintenanceExit } = await import(${JSON.stringify(new URL("../../commands/doctor-maintenance-exit.js", registrar).href)});
+        holdDoctorMaintenanceExit().release();
+        process.kill(process.pid, "SIGPIPE");
+        setImmediate(() => process.stdout.write("still running"));
+      `),
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.signal, result.stderr).toBeNull();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("still running");
+  },
+);
 
 it.skipIf(process.platform === "win32").each([
   { interruption: "closed stdout", code: 0 },
   { interruption: "SIGINT", code: 130 },
   { interruption: "SIGTERM", code: 143 },
   { interruption: "SIGPIPE", code: 141 },
+  { interruption: "SIGTERM with progress", code: 143 },
   { interruption: "SIGTERM while approving", code: 143 },
   { interruption: "SIGTERM while restoring", code: 143 },
 ] as const)(
@@ -122,7 +164,14 @@ it.skipIf(process.platform === "win32").each([
     const restoringApproval = interruption === "SIGTERM while restoring";
     const child = spawn(
       resolveTestNodeExecPath(),
-      createNodeEvalArgs(interruptionScript(eventsPath, pendingApproval, restoringApproval)),
+      createNodeEvalArgs(
+        interruptionScript(
+          eventsPath,
+          pendingApproval,
+          restoringApproval,
+          interruption === "SIGTERM with progress",
+        ),
+      ),
       {
         env: {
           ...process.env,
@@ -164,7 +213,7 @@ it.skipIf(process.platform === "win32").each([
       } else if (interruption === "closed stdout") {
         child.stdout!.destroy();
       } else {
-        child.kill(interruption);
+        child.kill(interruption === "SIGTERM with progress" ? "SIGTERM" : interruption);
       }
       if (!pendingApproval && !restoringApproval) {
         child.send("continue", () => {});
