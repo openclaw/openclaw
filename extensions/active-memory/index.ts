@@ -316,6 +316,15 @@ export default definePluginEntry({
               logRecallSkipped("harness-session");
               return undefined;
             }
+            // Status belongs to this turn. Clear it after the harness guard, which
+            // must stay side-effect free, and before awaited preflight work, which
+            // may time out or fail without producing a replacement status.
+            await persistPluginStatusLines({
+              api,
+              agentId: effectiveAgentId,
+              sessionKey: resolvedSessionKey,
+            });
+            toolAuthority.assertActive();
             const sessionDisabled = await isSessionActiveMemoryDisabled({
               api,
               sessionKey: resolvedSessionKey,
@@ -324,11 +333,6 @@ export default definePluginEntry({
             toolAuthority.assertActive();
             if (sessionDisabled) {
               logRecallSkipped("session-disabled");
-              await persistPluginStatusLines({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              });
               return undefined;
             }
             const sessionContext = {
@@ -337,11 +341,6 @@ export default definePluginEntry({
             };
             if (!isEligibleInteractiveSession(sessionContext)) {
               logRecallSkipped("session-ineligible");
-              await persistPluginStatusLines({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              });
               return undefined;
             }
             const destinationContext = {
@@ -466,11 +465,6 @@ export default definePluginEntry({
             }
             if (!activeMemoryAllowed && !productRecallAllowed) {
               logRecallSkipped("destination-not-allowed");
-              await persistPluginStatusLines({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              });
               return laneOneContext ? { prependContext: laneOneContext } : undefined;
             }
             const escalationDecision = resolveRecallEscalationDecision({

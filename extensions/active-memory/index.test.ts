@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -33,19 +32,24 @@ import {
   vi,
 } from "vitest";
 import plugin, { testing } from "./index.js";
+import {
+  UNPAIRED_SURROGATE_RE,
+  createStrongTriggerHitManager,
+  deniedMemoryToolAuthority,
+  expectLinesNotToContain,
+  expectLinesToContain,
+  expectSingleTranscriptArtifact,
+  makeMemoryToolAllowlistError,
+  requireNonEmptyString,
+  requireRecord,
+  usableMemoryTranscriptRecord,
+  waitForAbort,
+  writeTranscriptJsonl,
+  writeUsableMemoryTranscript,
+} from "./index.test-support.js";
 import * as recallRun from "./recall-run.js";
 import { resolveActiveRecallForRun } from "./recall-state.js";
 import * as transcriptWatch from "./transcript-watch.js";
-
-// Match only lone surrogates so valid supplementary-plane characters remain allowed.
-const UNPAIRED_SURROGATE_RE =
-  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-
-async function expectSingleTranscriptArtifact(directory: string): Promise<string> {
-  const files = await fs.readdir(directory);
-  expect(files).toEqual([expect.stringMatching(/^active-memory-[a-z0-9]+-[a-f0-9]{8}\.jsonl$/)]);
-  return path.join(directory, expectDefined(files[0], "transcript artifact"));
-}
 
 const hoisted = vi.hoisted(() => {
   const sessionStore: Record<string, Record<string, unknown>> = {
@@ -398,20 +402,6 @@ describe("active-memory plugin", () => {
       | undefined;
     return entries?.find((entry) => entry.pluginId === "active-memory")?.lines ?? [];
   };
-  const expectLinesToContain = (lines: string[], text: string) => {
-    expect(lines.join("\n")).toContain(text);
-  };
-  const expectLinesNotToContain = (lines: string[], text: string) => {
-    expect(lines.join("\n")).not.toContain(text);
-  };
-  const writeTranscriptJsonl = async (sessionFile: string, records: unknown[]) => {
-    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-    await fs.writeFile(
-      sessionFile,
-      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
-      "utf8",
-    );
-  };
   let runtimeTranscriptCounter = 0;
   const writeRuntimeTranscript = async (
     records: Array<{ type?: string; message: Record<string, unknown> }>,
@@ -427,48 +417,6 @@ describe("active-memory plugin", () => {
     }
     return target;
   };
-  const usableMemoryTranscriptRecord = (text: string) => ({
-    message: {
-      role: "toolResult",
-      toolName: "memory_search",
-      details: { results: [{ text }] },
-      content: [{ type: "text", text: JSON.stringify({ results: [{ text }] }) }],
-    },
-  });
-  const writeUsableMemoryTranscript = async (sessionFile: string, text: string) => {
-    await writeTranscriptJsonl(sessionFile, [usableMemoryTranscriptRecord(text)]);
-  };
-  const waitForAbort = async (abortSignal?: AbortSignal): Promise<never> => {
-    if (abortSignal?.aborted) {
-      throw toLintErrorObject(
-        (abortSignal.reason as unknown) ?? new Error("Operation aborted"),
-        "Non-Error thrown",
-      );
-    }
-    return await new Promise<never>((_resolve, reject) => {
-      abortSignal?.addEventListener(
-        "abort",
-        () => {
-          reject(
-            toLintErrorObject(
-              (abortSignal.reason as unknown) ?? new Error("Operation aborted"),
-              "Non-Error rejection",
-            ),
-          );
-        },
-        { once: true },
-      );
-    });
-  };
-  const makeMemoryToolAllowlistError = (
-    reason: string,
-    sources = "runtime toolsAllow: memory_search, memory_get",
-  ) =>
-    new Error(
-      `No callable tools remain after resolving explicit tool allowlist ` +
-        `(${sources}); ${reason}. ` +
-        `Fix the allowlist or enable the plugin that registers the requested tool.`,
-    );
   const hasDebugLine = (needle: string) =>
     vi
       .mocked(api.logger.debug)
@@ -485,18 +433,6 @@ describe("active-memory plugin", () => {
     expect(typeof (result as { prependContext?: unknown } | undefined)?.prependContext).toBe(
       "string",
     );
-  };
-  const requireRecord = (value: unknown, message: string): Record<string, unknown> => {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-      throw new Error(message);
-    }
-    return value as Record<string, unknown>;
-  };
-  const requireNonEmptyString = (value: unknown, message: string): string => {
-    if (typeof value !== "string" || value.length === 0) {
-      throw new Error(message);
-    }
-    return value;
   };
   const requirePrependContext = (result: unknown): string =>
     requireNonEmptyString(
@@ -616,6 +552,15 @@ describe("active-memory plugin", () => {
   };
   const seedSession = (sessionKey: string, sessionId: string, updatedAt = 0) => {
     hoisted.sessionStore[sessionKey] = { sessionId, updatedAt };
+  };
+  const seedDeniedStatus = async (sessionKey: string, pluginDebugEntries: unknown[] = []) => {
+    hoisted.sessionStore[sessionKey] = { sessionId: "denied", updatedAt: 25, pluginDebugEntries };
+    const denied = await runPromptBuild(
+      { prompt: "what did we decide?" },
+      { sessionKey, toolAuthority: deniedMemoryToolAuthority },
+    );
+    expect(denied).toBeUndefined();
+    expectLinesToContain(getActiveMemoryLines(sessionKey), "status=policy-disabled");
   };
 
   beforeAll(async () => {
@@ -1919,6 +1864,38 @@ describe("active-memory plugin", () => {
     expect(hasInfoLine("active-memory: recall skipped reason=no-recall-intent")).toBe(false);
   });
 
+  it.each([
+    { mode: "escalate", reason: "no-recall-intent", hasStrongHit: false },
+    { mode: "off", reason: "mode-off", hasStrongHit: false },
+    { mode: "escalate", reason: "strong-lane-one-hit", hasStrongHit: true },
+  ])("clears denied-turn status when the next turn skips recall for $reason", async (testCase) => {
+    registerPluginConfig({ mode: testCase.mode });
+    const sessionKey = "agent:main:telegram:direct:owner";
+    const otherPluginEntry = { pluginId: "other-plugin", lines: ["Other plugin status"] };
+    await seedDeniedStatus(sessionKey, [otherPluginEntry]);
+    expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
+    if (testCase.hasStrongHit) {
+      hoisted.getActiveMemorySearchManager.mockResolvedValueOnce(createStrongTriggerHitManager());
+    }
+
+    const allowed = await runPromptBuild(
+      { prompt: "Help when booking a flight" },
+      { sessionKey, messageProvider: "telegram", channelId: "owner" },
+    );
+
+    if (testCase.hasStrongHit) {
+      expectPrependContextContains(allowed, "Prefer aisle seats.");
+    } else if (testCase.reason === "no-recall-intent") {
+      expectPrependContextContains(allowed, skippedRecallContext);
+    } else {
+      expect(allowed).toBeUndefined();
+    }
+    expect(hasDebugLine(`active-memory: recall skipped reason=${testCase.reason}`)).toBe(true);
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(hoisted.sessionStore[sessionKey]?.pluginDebugEntries).toEqual([otherPluginEntry]);
+    expect(hoisted.sessionStore[sessionKey]?.updatedAt).toBe(25);
+  });
+
   it("does not run deep recall when the live active-memory plugin entry is removed", async () => {
     configFile = {
       plugins: {
@@ -1967,6 +1944,19 @@ describe("active-memory plugin", () => {
         agentHarnessId: "codex",
       },
     },
+    {
+      label: "a model-locked session with an Active Memory status entry",
+      sessionKey: "agent:main:locked-codex-status",
+      entry: {
+        sessionId: "codex-3",
+        updatedAt: 25,
+        modelSelectionLocked: true,
+        agentHarnessId: "codex",
+        pluginDebugEntries: [
+          { pluginId: "active-memory", lines: ["🧩 Active Memory: status=policy-disabled"] },
+        ],
+      },
+    },
   ])(
     "skips recall before state or model side effects for $label",
     async ({ sessionKey, entry }) => {
@@ -1983,8 +1973,11 @@ describe("active-memory plugin", () => {
       );
 
       expect(result).toBeUndefined();
+      expect(hasInfoLine("active-memory: recall skipped reason=harness-session")).toBe(true);
       expect(openKeyedStore).not.toHaveBeenCalled();
       expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
+      expect(hoisted.patchSessionEntry).not.toHaveBeenCalled();
+      expect(hoisted.sessionStore[sessionKey]).toBe(entry);
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
     },
   );
@@ -2216,27 +2209,7 @@ describe("active-memory plugin", () => {
   });
 
   it("logs deterministic trigger injections when invocation logging is enabled", async () => {
-    hoisted.getActiveMemorySearchManager.mockResolvedValueOnce({
-      manager: {
-        search: vi.fn(async () => []),
-        listTriggerCandidates: vi.fn(async () => [
-          {
-            path: "MEMORY.md",
-            startLine: 1,
-            endLine: 1,
-            score: 1,
-            snippet: "Prefer aisle seats.",
-            source: "memory" as const,
-            provenance: {
-              originClass: "agent" as const,
-              sessionKind: "interactive" as const,
-              observedAt: 1,
-            },
-            triggers: "booking a flight",
-          },
-        ]),
-      },
-    } as never);
+    hoisted.getActiveMemorySearchManager.mockResolvedValueOnce(createStrongTriggerHitManager());
 
     await runPromptBuild(
       { prompt: "Help when booking a flight" },
@@ -4868,6 +4841,8 @@ describe("active-memory plugin", () => {
 
   it("fails open at the live deadline when pre-recall session state stalls", async () => {
     vi.useFakeTimers();
+    const sessionKey = "agent:main:stalled-toggle";
+    await seedDeniedStatus(sessionKey);
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
@@ -4886,9 +4861,7 @@ describe("active-memory plugin", () => {
 
     const resultPromise = runPromptBuild(
       { prompt: "what food do i usually order? stalled toggle lookup" },
-      {
-        sessionKey: "agent:main:stalled-toggle",
-      },
+      { sessionKey },
     );
     await vi.advanceTimersByTimeAsync(1_525);
 
@@ -4898,6 +4871,8 @@ describe("active-memory plugin", () => {
       .mocked(api.logger.warn)
       .mock.calls.map((call: unknown[]) => String(call[0]));
     expectLinesToContain(warnLines, "before_prompt_build preflight timed out after 1500ms");
+    expect(getActiveMemoryLines(sessionKey)).toEqual([]);
+    expect(hoisted.sessionStore[sessionKey]?.updatedAt).toBe(25);
     resolveLookup?.(undefined);
     await vi.advanceTimersByTimeAsync(0);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
@@ -5318,11 +5293,11 @@ describe("active-memory plugin", () => {
   });
 
   it("returns undefined instead of throwing when an unexpected error escapes prompt building", async () => {
+    const sessionKey = "agent:main:escape-test";
+    await seedDeniedStatus(sessionKey);
     const result = await runPromptBuild(
       { prompt: "what should i eat? escape test", messages: undefined as never },
-      {
-        sessionKey: "agent:main:escape-test",
-      },
+      { sessionKey },
     );
 
     expect(result).toBeUndefined();
@@ -5330,6 +5305,8 @@ describe("active-memory plugin", () => {
       .mocked(api.logger.warn)
       .mock.calls.map((call: unknown[]) => String(call[0]));
     expectLinesToContain(warnLines, "before_prompt_build");
+    expect(getActiveMemoryLines(sessionKey)).toEqual([]);
+    expect(hoisted.sessionStore[sessionKey]?.updatedAt).toBe(25);
   });
 
   it("honors configured timeoutMs values above the former 60 000 ms ceiling", async () => {
