@@ -163,6 +163,7 @@ fs.appendFileSync(calls, JSON.stringify(args) + "\\n");
 const control = JSON.parse(fs.readFileSync(${JSON.stringify(control)}, "utf8"));
 if (args[0] === "notarytool") {
   const count = prior.filter(call => call[1] === args[1]).length;
+  if (args[1] === "submit") fs.writeFileSync(${JSON.stringify(clock)}, String(Number(fs.readFileSync(${JSON.stringify(clock)}, "utf8")) + (control.submitElapsed || 0)));
   if (args[1] === "submit" && count < (control.submitFailures || 0)) {
     if (control.submitId) console.log(JSON.stringify({id: ${JSON.stringify(submissionId)}}));
     console.error('NSURLErrorDomain -1009 "The Internet connection appears to be offline"');
@@ -294,6 +295,7 @@ describe("notarization submission recovery", () => {
       fixture.control,
       JSON.stringify({
         submitFailures: 1,
+        submitElapsed: 600,
         history: [
           {
             id: submissionId,

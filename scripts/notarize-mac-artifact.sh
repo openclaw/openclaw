@@ -173,10 +173,10 @@ retry_notarization() {
       # A lost response can hide a successful upload. Reconcile before resubmitting.
       history_result="$(xcrun notarytool history "${auth_args[@]}" --output-format json)" || history_result=""
       now="$(date +%s)"
-      candidate="$(jq -c --arg name "$upload_name" --argjson now "$now" '
+      candidate="$(jq -c --arg name "$upload_name" --argjson now "$now" --argjson started "$started" '
         [.history[:100][] | select(.name == $name) |
           select((try (.createdDate | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch 0) as $created |
-            $created >= ($now - 300) and $created <= $now)] | sort_by(.createdDate) | last
+            $created >= ($started - 300) and $created <= $now)] | sort_by(.createdDate) | last
       ' <<<"$history_result" 2>/dev/null)" || candidate=""
       notary_id="$(jq -er "$id_filter" <<<"$candidate" 2>/dev/null)" || notary_id=""
       if [[ -n "$notary_id" ]]; then
