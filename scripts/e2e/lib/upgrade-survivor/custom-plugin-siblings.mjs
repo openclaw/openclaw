@@ -26,7 +26,14 @@ function processIdentity(pid) {
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
     const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-    return { pid, group: Number(fields[2]), start: fields[19], state: fields[0] };
+    return {
+      pid,
+      ppid: Number(fields[1]),
+      command: stat.slice(stat.indexOf("(") + 1, stat.lastIndexOf(")")),
+      group: Number(fields[2]),
+      start: fields[19],
+      state: fields[0],
+    };
   } catch (error) {
     if (error.code === "ENOENT") {
       return null;
@@ -164,7 +171,10 @@ function cleanupRefusal() {
     return;
   }
   const survivors = survivingRefusalProcesses();
-  write(path.join(artifacts, "sibling-refusal-cleanup.json"), JSON.stringify({ survivors }));
+  write(
+    path.join(artifacts, "sibling-refusal-cleanup.json"),
+    JSON.stringify({ survivors, namespaceInit: processIdentity(1) }),
+  );
   // These are not this process's children. Preserve identities for the container
   // owner instead of signalling a stale group or claiming that a signal joined it.
   assert.deepEqual(survivors, [], "Refusal cleanup incomplete; recorded processes remain");
@@ -242,6 +252,7 @@ if (isMainThread &&
     process.argv[1]?.endsWith("/dist/commands/doctor-lint.worker.js")) {
   fs.writeFileSync(${JSON.stringify(refusalWorker)}, JSON.stringify({
     worker: processIdentity(process.pid),
+    namespaceInit: processIdentity(1),
     entry: process.argv[1],
     stateDir: privateRoot,
     configPath: process.env.OPENCLAW_CONFIG_PATH,
@@ -258,7 +269,7 @@ import { once } from "node:events";
 ${processIdentity.toString()}
 const worker = processIdentity(process.ppid);
 const child = processIdentity(process.pid);
-fs.writeFileSync(${JSON.stringify(refusalChild)}, JSON.stringify({ worker, child }), { flag: "wx" });
+fs.writeFileSync(${JSON.stringify(refusalChild)}, JSON.stringify({ worker, child, namespaceInit: processIdentity(1) }), { flag: "wx" });
 const bytes = Buffer.alloc(2 * 1024 * 1024, " ");
 for (let offset = 0; offset < bytes.length; offset += 64 * 1024) {
   if (!process.stdout.write(bytes.subarray(offset, offset + 64 * 1024))) {
