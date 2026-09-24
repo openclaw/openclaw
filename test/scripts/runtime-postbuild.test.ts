@@ -1341,6 +1341,79 @@ describe("previous release update compatibility", () => {
     },
   );
 
+  it.each([
+    { name: "published bootstrap" },
+    { name: "different owner", owner: "src/cli/update-cli/update-command-runtime.ts" },
+    {
+      name: "mutable root",
+      binding: "let driverRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });",
+    },
+    { name: "unknown root", binding: "" },
+    { name: "target root", binding: "const driverRoot = root;" },
+    {
+      name: "cwd root",
+      binding: "const driverRoot = resolveOpenClawPackageRootSync({ cwd: process.cwd() });",
+    },
+    {
+      name: "different module",
+      binding: "const driverRoot = resolveOpenClawPackageRootSync({ moduleUrl: targetUrl });",
+    },
+    {
+      name: "extra root options",
+      binding:
+        "const driverRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url, cwd: root });",
+    },
+    { name: "extra path", target: 'path.join(driverRoot, "node-runtime-recovery.mjs", "extra")' },
+    { name: "dist path", target: 'path.join(driverRoot, "dist", "node-runtime-recovery.mjs")' },
+    { name: "traversal", target: 'path.join(driverRoot, "../node-runtime-recovery.mjs")' },
+    { name: "dynamic path", target: "path.join(driverRoot, entry)" },
+    {
+      name: "different URL form",
+      url: 'new URL("node-runtime-recovery.mjs", import.meta.url).href',
+    },
+    { name: "import options", suffix: ", { with: options }" },
+    { name: "for-of shadow", prefix: "for (const driverRoot of roots) ", declaration: "" },
+    {
+      name: "for initializer shadow",
+      prefix: "for (const driverRoot = root; driverRoot;) ",
+      declaration: "",
+    },
+    { name: "arrow shadow", prefix: "const load = async (driverRoot) => ", declaration: "" },
+  ])(
+    "records dist edges while qualifying the package bootstrap ($name)",
+    ({
+      name,
+      owner = "src/cli/update-cli/update-command-node-runtime-resolution.ts",
+      binding = "const driverRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });",
+      target = 'path.join(driverRoot, "node-runtime-recovery.mjs")',
+      url = `pathToFileURL(${target}).href`,
+      suffix = "",
+      prefix = "",
+      declaration = "const { findUsableNodeRuntime } = ",
+    }) => {
+      const expression = `await (async () => {
+        ${binding}
+        if (!driverRoot) return;
+        ${prefix}${declaration}await import(${url}${suffix});
+        return (await import("./surface-abcdefgh.js")).x;
+      })()`;
+      const record = () =>
+        recordImportedFixture(
+          expression,
+          { "surface-abcdefgh.js": "//#region src/infra/value.ts\nexport const x = 1;\n" },
+          undefined,
+          owner,
+        );
+      if (name !== "published bootstrap") {
+        expect(record).toThrow("Nonliteral post-swap import");
+        return;
+      }
+      expect(record().inventory.releases[0]?.chunks.map((chunk) => chunk.path)).toEqual([
+        "surface-abcdefgh.js",
+      ]);
+    },
+  );
+
   it.each(
     previousReleaseInventory.releases
       .filter(({ version }) => ["2026.9.1", "2026.9.2", "2026.9.3", "2026.9.4"].includes(version))

@@ -8,7 +8,6 @@ import {
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
-import { parsePort } from "../cli/shared/parse-port.js";
 import { resolveGatewayPort } from "../config/config.js";
 import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -21,6 +20,7 @@ import {
 } from "../gateway/gateway-config-prompts.shared.js";
 import { isLoopbackAddress, isTrustedProxyAddress } from "../gateway/net.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { t } from "../wizard/i18n/index.js";
@@ -37,7 +37,7 @@ type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 type GatewayTokenInputMode = "plaintext" | "ref";
 
 export function validateGatewayPortInput(value: unknown): string | undefined {
-  if (parsePort(value) === null) {
+  if (parseTcpPort(value) === null) {
     return formatPortRangeHint();
   }
   return undefined;
@@ -61,7 +61,7 @@ export async function promptGatewayConfig(
     runtime,
     1,
   );
-  const port = parsePort(portRaw) ?? resolveGatewayPort(cfg);
+  const port = parseTcpPort(portRaw) ?? resolveGatewayPort(cfg);
 
   let bind = guardCancel(
     await select({

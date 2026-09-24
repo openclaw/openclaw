@@ -4,46 +4,49 @@ import {
   createTransportActivityStatusPatch,
 } from "openclaw/plugin-sdk/gateway-runtime";
 
-type TelegramPollingStatusSink = (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
+type TelegramStatusSink = (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 
-export function createTelegramPollingStatusPublisher(setStatus?: TelegramPollingStatusSink) {
+export function createTelegramStatusPublisher(
+  mode: "polling" | "webhook",
+  setStatus?: TelegramStatusSink,
+) {
   return {
-    notePollingStart() {
+    noteStart() {
       setStatus?.({
-        mode: "polling",
+        mode,
         connected: false,
         lastConnectedAt: null,
         lastEventAt: null,
         lastTransportActivityAt: null,
       });
     },
-    notePollSuccess(at = Date.now()) {
+    noteReady(at = Date.now()) {
       setStatus?.(
         channelReadyPatch({
           lastConnectedAt: at,
           lastEventAt: at,
           // A successful getUpdates call proves the Telegram HTTP long-poll is alive
           // even when the response has no user-visible updates.
-          ...createTransportActivityStatusPatch(at),
-          mode: "polling",
+          ...(mode === "polling" ? createTransportActivityStatusPatch(at) : {}),
+          mode,
         }),
       );
     },
-    notePollingRecovery() {
+    noteRecovery() {
       setStatus?.({ lifecycle: "recovering" });
     },
-    notePollingError(error: string, lifecycle?: "recovering" | "blocked") {
+    noteError(error: string, lifecycle?: "recovering" | "blocked") {
       setStatus?.({
-        mode: "polling",
+        mode,
         connected: false,
         ...(lifecycle ? { lifecycle } : {}),
         ...(lifecycle === "blocked" ? { terminalDisconnect: true } : {}),
         lastError: error,
       });
     },
-    notePollingStop() {
+    noteStop() {
       setStatus?.({
-        mode: "polling",
+        mode,
         connected: false,
       });
     },
