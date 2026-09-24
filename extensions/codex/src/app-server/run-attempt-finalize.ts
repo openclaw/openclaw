@@ -501,10 +501,19 @@ export async function finalizeCodexAttempt(
       (result.currentAttemptAssistant?.stopReason === "toolUse" ||
         !finalizationAssistantText ||
         isSilentReplyText(finalizationAssistantText));
+    // A lost connection cannot erase completed tool evidence. The host may use
+    // it for a tools-disabled explanation, never to replay the interrupted work.
+    const explainToolFailureAfterDisconnect =
+      toolFailureWithoutFinalAnswer &&
+      codexAppServerFailure?.kind === "client_closed_before_turn_completed" &&
+      !finalAborted &&
+      !effectiveTimedOut;
     const shouldCaptureSettledTurnFinalizationContext =
       (result.assistantTexts.every((text) => !text.trim()) || toolFailureWithoutFinalAnswer) &&
       result.messagesSnapshot.some((message) => message.role === "toolResult") &&
-      (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed);
+      (!finalPromptError ||
+        activeProjector.settledTurnFailureFinalizationAllowed ||
+        explainToolFailureAfterDisconnect);
     // Supervised auth belongs to its native connection, which has no generic stock
     // tool-free summary operation. Retain fallback eligibility instead of selecting host auth.
     const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext

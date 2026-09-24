@@ -5625,6 +5625,102 @@ describe("runCodexAppServerAttempt", () => {
       }
     },
   );
+  it.each([
+    { verboseLevel: "off" as const, unfinishedTool: undefined },
+    { verboseLevel: "full" as const, unfinishedTool: undefined },
+    { verboseLevel: "off" as const, unfinishedTool: "before" },
+    { verboseLevel: "off" as const, unfinishedTool: "after" },
+  ])(
+    "retains the actual MCP failure after disconnect (verbose: $verboseLevel, unfinished: $unfinishedTool)",
+    async ({ verboseLevel, unfinishedTool }) => {
+      const storePath = path.join(tempDir, "disconnected-tool-failure.sqlite");
+      const sessionId = "session-disconnected-tool-failure";
+      const params = createParams(
+        `agent:main:${sessionId}`,
+        path.join(tempDir, "workspace-disconnected-tool-failure"),
+      );
+      await attachSqliteSessionTarget(params, storePath, sessionId);
+      params.prompt = "Read the Slack thread and summarize the discussion.";
+      params.verboseLevel = verboseLevel;
+      const harness = createStartedThreadHarness();
+      const run = runCodexAppServerAttempt(params);
+      await Promise.race([
+        harness.waitForMethod("turn/start", 5_000),
+        run.then(() => {
+          throw new Error("Attempt ended before starting its turn");
+        }),
+      ]);
+      const commentary = {
+        type: "agentMessage",
+        id: "slack-read-progress",
+        phase: "commentary",
+        text: "I will read the thread now.",
+      };
+      await harness.notify(itemNotification("item/started", commentary));
+      await harness.notify(itemNotification("item/completed", commentary));
+      const tool = {
+        type: "mcpToolCall",
+        id: "slack-rate-limited",
+        server: "slack",
+        tool: "read_thread",
+        arguments: { channel_id: "C_TEST", message_ts: "1.0" },
+      };
+      const errorText = "McpServerError: Client error '429 Too Many Requests'";
+      const toolResult = {
+        content: [{ type: "text", text: errorText }],
+        structuredContent: {
+          error: errorText,
+          error_code: "RATE_LIMITED",
+          retry_after_seconds: 1,
+        },
+        isError: true,
+      };
+      const startUnfinishedTool = () =>
+        harness.notify(
+          itemNotification("item/started", {
+            type: "commandExecution",
+            id: "unfinished-command",
+            command: "sleep 60",
+            cwd: params.workspaceDir,
+            status: "inProgress",
+          }),
+        );
+      if (unfinishedTool === "before") {
+        await startUnfinishedTool();
+      }
+      await harness.notify(itemNotification("item/started", { ...tool, status: "inProgress" }));
+      await harness.notify(
+        itemNotification("item/completed", { ...tool, status: "failed", result: toolResult }),
+      );
+      if (unfinishedTool === "after") {
+        await startUnfinishedTool();
+      }
+      harness.close(new Error("synthetic connection lost after tool completion"));
+
+      const result = await run;
+
+      expect(result.terminal).toMatchObject({ kind: "failed" });
+      expect(result.codexAppServerFailure).toMatchObject({
+        kind: "client_closed_before_turn_completed",
+      });
+      expect(result.lastToolError).toMatchObject({ error: expect.stringContaining(errorText) });
+      expect(result.itemLifecycle).toMatchObject({
+        startedCount: unfinishedTool ? 3 : 2,
+        completedCount: 2,
+        activeCount: unfinishedTool ? 1 : 0,
+      });
+      const context = result.settledTurnFinalizationContext;
+      expect(context).toBeInstanceOf(settledTurnContext.CodexSettledTurnContext);
+      if (!(context instanceof settledTurnContext.CodexSettledTurnContext)) {
+        throw new Error("Missing tool failure explanation context");
+      }
+      expect(context.data).toContainEqual({
+        type: "function_call_output",
+        call_id: tool.id,
+        output: expect.stringContaining(JSON.stringify(toolResult, null, 2)),
+      });
+    },
+  );
   it("captures settled tool evidence when an active native compaction fails terminally", async () => {
     const storePath = path.join(tempDir, "settled-compaction-failure.sqlite");
     const sessionId = "session-settled-compaction-failure";

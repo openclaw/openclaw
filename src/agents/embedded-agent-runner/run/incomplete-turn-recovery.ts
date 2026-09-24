@@ -47,6 +47,10 @@ export function resolveToolFailureExplanationInstruction(params: {
   attempt: IncompleteTurnAttempt;
 }): string | null {
   const { attempt } = params;
+  const interruptedToolRun =
+    attempt.terminal.kind === "failed" &&
+    attempt.codexAppServerFailure?.kind === "client_closed_before_turn_completed" &&
+    attempt.settledTurnFinalizationContext?.source === "harness";
   if (
     params.aborted ||
     params.timedOut ||
@@ -54,8 +58,9 @@ export function resolveToolFailureExplanationInstruction(params: {
     !attempt.lastToolError ||
     attempt.toolMetas.length === 0 ||
     attempt.itemLifecycle.startedCount === 0 ||
-    attempt.itemLifecycle.completedCount !== attempt.itemLifecycle.startedCount ||
-    attempt.itemLifecycle.activeCount !== 0 ||
+    (!interruptedToolRun &&
+      (attempt.itemLifecycle.completedCount !== attempt.itemLifecycle.startedCount ||
+        attempt.itemLifecycle.activeCount !== 0)) ||
     hasAsyncActivity(attempt.toolMetas) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     attempt.clientToolCalls ||
@@ -68,6 +73,9 @@ export function resolveToolFailureExplanationInstruction(params: {
     "A tool failure would otherwise produce only a generic warning. Explain the outcome to the user in concise, ordinary language, without emoji or a tool-status heading. " +
     "Use the settled transcript to explain what failed, whether a later action recovered, what remains incomplete, and whether the user needs to act. " +
     "Base the explanation on the actual error details in the tool results, including the service's stated reason and any retry guidance. Translate those details into plain English instead of quoting raw errors, tool identifiers, or stack traces. If the evidence does not establish a cause, say so rather than guessing. " +
+    (interruptedToolRun
+      ? "The connection was lost before the turn finished. Explain the recorded tool failure separately from that interruption. Missing tool results mean those actions have unknown outcomes, not that they succeeded or failed. Do not suggest repeating an action whose outcome is unknown. "
+      : "") +
     "Do not claim recovery or completion unless the evidence supports it. Do not expose private heartbeat notes or configuration. " +
     "Produce the explanation even if the earlier turn chose NO_REPLY or notify=false; this replaces an error notification that would already be sent. " +
     "Tools are unavailable in this step: reply with plain text, do not call tools, repeat completed actions, or restart the work."

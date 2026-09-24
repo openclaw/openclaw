@@ -217,6 +217,12 @@ describe("runCodexSettledTurnFinalization", () => {
       projectSettledCodexMessages(messages),
       { model: "synthetic-summary-model", authProfileId: "openai:captured" },
     );
+    settledAttempt.terminal = {
+      kind: "failed",
+      source: "prompt",
+      error: new Error("codex app-server client closed before turn completed"),
+    };
+
     await runCodexSettledTurnFinalization({ attempt, settledAttempt }, { pluginConfig: {} });
 
     expect(mocks.runBounded).toHaveBeenCalledWith(
