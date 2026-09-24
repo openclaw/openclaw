@@ -119,6 +119,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
         expectedVersion: expectedVersion ?? undefined,
         expectedBuildId: expectedBuildId ?? undefined,
         timeoutMs,
+        probeTimeoutMs: 5_000,
         deadlineMs: deadline.deadlineMs,
         requireRunningService: true,
         settle: { probes: 1 },
@@ -131,10 +132,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
         progress(health.waitOutcome, lastReason, true);
         return false;
       }
-      progress(
-        "installation",
-        "checking the managed service command still owns the previous installation",
-      );
+      progress("installation", "checking service command ownership of the previous installation");
       const servesPreviousPackage = await gatewayServiceCommandUsesRoot({ root: params.root, env });
       assertCurrent();
       return Boolean(
@@ -171,7 +169,6 @@ export function captureUpdateGatewayReadinessOwner(params: {
   };
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
-    params.assertCurrent?.();
     if (
       params.opts.run !== originalRun ||
       originalRun?.executorFence !== originalExecutor ||
@@ -187,6 +184,7 @@ export function captureUpdateGatewayReadinessOwner(params: {
         "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
       );
     }
+    params.assertCurrent?.();
   };
   return { proofOptions, assertCurrent };
 }
@@ -195,6 +193,7 @@ export type UpdateGatewayReadinessParams = {
   serviceEnv: NodeJS.ProcessEnv;
   gatewayPort: number;
   timeoutMs?: number;
+  probeTimeoutMs?: number;
   deadlineMs?: number;
   onProgress?: (stage: string, reason: string) => void;
   observedStartupMs?: number;
@@ -253,9 +252,9 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
         performance.now(),
     );
   const probeTimeoutMs = () =>
-    waitForStartup && params.deadlineMs === undefined
+    waitForStartup && params.probeTimeoutMs === undefined
       ? remainingMs()
-      : Math.min(remainingMs(), GATEWAY_RESTART_PROBE_TIMEOUT_MS);
+      : Math.min(remainingMs(), params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS);
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
@@ -291,7 +290,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       // The restart owner adds settling itself; reserve it once in the shared deadline.
       timeoutMs: Math.max(1, remainingMs() - settleDurationMs),
       deadlineMs: params.deadlineMs,
-      probeTimeoutMs: params.deadlineMs !== undefined ? 5_000 : undefined,
+      probeTimeoutMs: params.probeTimeoutMs,
       onObservation: (snapshot) =>
         params.onProgress?.(
           "readiness",
