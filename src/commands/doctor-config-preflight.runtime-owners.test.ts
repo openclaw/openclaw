@@ -10,7 +10,9 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { readDoctorConfigPreflightSnapshot } from "./doctor-config-preflight-plugin-index.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
-import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+
+const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
 
 const runtimeId = "fixture-cli";
 const pluginId = "runtime-owner";

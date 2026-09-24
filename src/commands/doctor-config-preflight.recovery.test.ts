@@ -14,7 +14,9 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
-import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+
+const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
 
 afterEach(() => {
   vi.useRealTimers();
