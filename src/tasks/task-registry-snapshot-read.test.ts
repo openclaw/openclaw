@@ -1,27 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as workerStore from "../state/openclaw-state-worker-store.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { getTaskRegistryStore } from "./task-registry.store.js";
 import { upsertTaskWithDeliveryStateInDatabase } from "./task-registry.store.kernel.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const tempDirs = useStateDatabaseTempDirs();
 
 function fixture() {
   const root = tempDirs.make("task-snapshot-reader-");
@@ -56,14 +49,8 @@ it("reads full and scoped task snapshots without host SQL or writable broker adm
   const broker = vi.spyOn(workerStore, "executeOpenClawStateWorker").mockImplementation(() => {
     throw new Error("A task snapshot entered writable broker admission");
   });
-  const { DatabaseSync, StatementSync } = requireNodeSqlite();
-  const sql = [
-    vi.spyOn(DatabaseSync.prototype, "prepare"),
-    vi.spyOn(DatabaseSync.prototype, "exec"),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    ),
-  ];
+  requireNodeSqlite();
+  const sql = observeMainThreadSql();
   const store = getTaskRegistryStore();
   for (const [scope, expected] of [
     [undefined, tasks],
@@ -78,7 +65,7 @@ it("reads full and scoped task snapshots without host SQL or writable broker adm
     );
   }
   expect(broker).not.toHaveBeenCalled();
-  expect(sql.reduce((count, spy) => count + spy.mock.calls.length, 0)).toBe(0);
+  sql.expectIdle();
 });
 
 it("rejects a retired task read admission after the same database reopens", async () => {

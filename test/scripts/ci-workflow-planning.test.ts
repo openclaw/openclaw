@@ -2143,7 +2143,11 @@ describe("ci workflow guards", () => {
       ({ eventName, ref, windows, admitted }) => {
         const manifest = manifestWithHostedNodeRows(0, {
           eventName,
-          changedPaths: ["src/infra/example.ts"],
+          changedPaths: ["src/commands/doctor-config-preflight.plugin-persistence.test.ts"],
+          changedCoreTestSupport: true,
+          changedPlannerDependencies: [
+            "src/commands/doctor-config-preflight.plugin-persistence.test.ts",
+          ],
           nodeTestShards: [
             {
               checkName: "native-tail",
@@ -2165,6 +2169,16 @@ describe("ci workflow guards", () => {
         expect(manifest.outputs.run_check).toBe("true");
         expect(manifest.outputs.run_checks_windows).toBe(String(windows));
         expect(manifest.outputs.hybrid_hosted_checks).toBe(String(admitted));
+        if (eventName === "pull_request") {
+          expect(manifest.outputs.changed_core_test_paths_json).toBe(
+            '["src/commands/doctor-config-preflight.plugin-persistence.test.ts"]',
+          );
+        }
+        const hosted = emittedHostedRows(manifest.outputs, { eventName, ref });
+        expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(hosted.length);
+        expect(hosted.filter((name) => name === "check-test-types-hosted-core-shard")).toHaveLength(
+          admitted ? 5 : 0,
+        );
         expect(manifest.outputs.hybrid_hosted_main_checks).toBe(
           String(admitted && eventName === "push"),
         );
@@ -4947,9 +4961,7 @@ describe("ci workflow guards", () => {
       `,
     });
     expect(manifest.status, manifest.output).toBe(0);
-    expect(manifest.outputs.changed_core_test_paths_json).toBe(
-      targeted ? JSON.stringify(compilerPaths) : "",
-    );
+    expect(manifest.outputs.changed_core_test_paths_json).toBe(JSON.stringify(compilerPaths));
     expect(manifest.output).toContain("dedicated-core-types:true");
     const result = runCheckShardFixture({
       frozenTarget: false,
@@ -4973,7 +4985,7 @@ describe("ci workflow guards", () => {
       ...stripes.map((stripe) => ({
         row: `core-${stripe}`,
         localCheck: null,
-        command: `node --stripe ${stripe}/5 --concurrency 2`,
+        command: `node --stripe ${stripe}/5 --concurrency 2 --changed-paths-json ${JSON.stringify(compilerPaths)}`,
       })),
       ...(targeted
         ? [
@@ -4996,10 +5008,20 @@ describe("ci workflow guards", () => {
         .map((call) => call.command)
         .toSorted(),
     ).toEqual(
-      BOUNDARY_CHECKS.filter((check) => !targeted || check.label !== "lint:tmp:tsgo-core-boundary")
+      BOUNDARY_CHECKS.filter((check) => check.label !== "lint:tmp:tsgo-core-boundary")
         .map((check) => [check.command, ...check.args].join(" "))
         .toSorted(),
     );
+    const workflow = readCiWorkflow();
+    expect(
+      evaluateWorkflowExpression(workflow.jobs["check-test-types-hosted-core-shard"].if, {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerProfile: profile,
+        preflightOutputs: manifest.outputs,
+      }),
+    ).toBe(!targeted);
   });
 
   it.each([
@@ -5111,20 +5133,30 @@ describe("ci workflow guards", () => {
   });
 
   it.each([
-    ["hybrid", "pull_request", false, true, true, true],
-    ["github", "workflow_dispatch", false, true, true, true],
-    ["blacksmith", "push", false, true, true, false],
-    ["hybrid", "workflow_dispatch", true, false, true, false],
-    ["hybrid", "workflow_dispatch", true, true, false, false],
-    ["hybrid", "workflow_dispatch", true, true, true, true],
+    ["hybrid", "pull_request", false, true, true, true, false],
+    ["github", "workflow_dispatch", false, true, true, true, false],
+    ["blacksmith", "push", false, true, true, false, false],
+    ["blacksmith", "pull_request", false, true, true, false, true],
+    ["hybrid", "pull_request", false, true, false, false, true],
+    ["hybrid", "workflow_dispatch", true, false, true, false, false],
+    ["hybrid", "workflow_dispatch", true, true, false, false, false],
+    ["hybrid", "workflow_dispatch", true, true, true, true, false],
   ] as const)(
     "preserves type workload for %s %s frozen=%s hosted-contract=%s stripe-support=%s",
-    (profile, eventName, frozenTarget, hostedContract, stripeSupport, striped) => {
+    (profile, eventName, frozenTarget, hostedContract, stripeSupport, striped, changed) => {
+      const changedPathsJson = changed ? '["src/agents/example.test.ts"]' : "";
       const result = runCheckShardFixture({
         task: "test-types",
         scripts: ["tsgo:scripts", "tsgo:test:root"],
         frozenTarget,
-        types: { compose: true, profile, eventName, hostedContract, stripeSupport },
+        types: {
+          compose: true,
+          profile,
+          eventName,
+          hostedContract,
+          stripeSupport,
+          changedPathsJson,
+        },
       });
       expect(result.status, result.output).toBe(0);
       const stripes = result.typeCalls.filter((call) => call.command.startsWith("node "));
@@ -5149,6 +5181,13 @@ describe("ci workflow guards", () => {
           expect(call.localCheck).toBeNull();
         }
         expect(result.calls).toEqual(["tsgo:extensions:test", "tsgo:scripts", "tsgo:test:root"]);
+      } else if (changed) {
+        expect(result.rows).toHaveLength(profile === "blacksmith" ? 1 : 6);
+        expect(stripes.map((call) => call.command)).toEqual([
+          `node --changed-paths-json ${changedPathsJson} --concurrency 2`,
+        ]);
+        expect(stripes[0]?.localCheck).toBeNull();
+        expect(result.calls).toEqual(["tsgo:extensions:test", "tsgo:scripts", "tsgo:test:root"]);
       } else {
         expect(stripes).toEqual([]);
         expect(result.calls).toEqual(["check:test-types", "tsgo:scripts"]);
@@ -5164,11 +5203,12 @@ describe("ci workflow guards", () => {
   ])(
     "halts only the type row whose first stripe $failStripe fails (frozen=$frozenTarget)",
     ({ failStripe, frozenTarget }) => {
+      const changedPathsJson = frozenTarget ? "" : '["src/agents/example.test.ts"]';
       const result = runCheckShardFixture({
         task: "test-types",
         scripts: ["tsgo:scripts", "tsgo:test:root"],
         frozenTarget,
-        types: { compose: true, failStripe },
+        types: { compose: true, failStripe, changedPathsJson },
       });
       expect(result.status, result.output).toBe(17);
       expect(
@@ -5179,7 +5219,11 @@ describe("ci workflow guards", () => {
       expect(result.rows.filter((row) => row.status === 0)).toHaveLength(frozenTarget ? 2 : 5);
       expect(
         result.typeCalls.filter((call) => call.row === failed[0]!.name).map((call) => call.command),
-      ).toEqual([`node --stripe ${failStripe} --concurrency 2`]);
+      ).toEqual([
+        `node --stripe ${failStripe} --concurrency 2${
+          changedPathsJson ? ` --changed-paths-json ${changedPathsJson}` : ""
+        }`,
+      ]);
       expect(result.calls).toEqual(
         frozenTarget && failStripe === "5/5"
           ? []
@@ -9073,7 +9117,7 @@ describe("ci workflow guards", () => {
         "check-additional-shard": true,
         "check-lint-hosted-core-shard": true,
         "check-lint-hosted-extension-shard": true,
-        "check-test-types-hosted-core-shard": false,
+        "check-test-types-hosted-core-shard": true,
       },
     },
     {
@@ -9252,11 +9296,13 @@ describe("ci workflow guards", () => {
       }
     }
     if (context.preflightOutputs?.changed_core_test_paths_json) {
-      for (const terminal of ["failure", "skipped"]) {
-        const missingOwner = runCiGateFixture(
-          renderCiGateEnvironment(context, { ...results, "check-shard": terminal }),
-        );
-        expect(missingOwner.status).not.toBe(0);
+      for (const owner of ["check-shard", "check-test-types-hosted-core-shard"]) {
+        for (const terminal of ["failure", "skipped"]) {
+          const missingOwner = runCiGateFixture(
+            renderCiGateEnvironment(context, { ...results, [owner]: terminal }),
+          );
+          expect(missingOwner.status, `${owner}: ${terminal}`).not.toBe(0);
+        }
       }
     }
   });
