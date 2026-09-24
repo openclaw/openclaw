@@ -223,26 +223,31 @@ next step. An agent profile overrides the global profile. For example,
 `tools.profile` is `"full"`. Command approval settings do not grant tool access.
 Intentionally restrictive profiles are valid configuration.
 
-- `--agent <id>` selects the local agent to inspect. With a single configured
+- `--agent <id>` selects the agent to inspect. Without `--session`, the agent
+  must be configured locally. With a single configured
   agent, selection is automatic. With multiple agents, an untargeted report
   asks you to select an agent or an agent-qualified session key before inspecting
   tool availability. With no configured agents, it explains how to add one.
-  Both cases still succeed; `--verbose` shows all local command approval scopes.
+  Both cases still show a compact summary of all local command approval scopes.
 - `--session <key>` fetches a read-only tool preview for an **existing** session
   from its saved settings through the Gateway. Use the full session key; for a
-  shared key such as `global`, select its agent with `--agent` when needed.
-  Conflicting agent and session targets are rejected.
+  shared key such as `global`, the Gateway resolves its agent; pass `--agent`
+  when the Gateway needs an explicit selection. The agent need not exist in the
+  CLI machine's configuration. Conflicting agent and session targets are rejected.
 - `--verbose` adds policy sources and the complete requested/host/effective
   approval tables for all scopes.
 - `--json` preserves all approval fields and scopes. With a selected agent, it
   adds `toolAccess`, separating `local` findings from the optional `live` result.
+  `local` is omitted when the agent is not configured on the CLI machine. If a
+  failed session inspection could not resolve an agent, `agentId` is also omitted.
   An untargeted multi-agent or empty-roster report instead adds
   `toolAccessSelectionRequired` with `agentIds` and a `hint`; it makes no tool
   availability claim.
 
 The session preview supports the shared Gateway connection options (`--url`,
 `--port`, `--token`, `--password`, `--timeout`). If the Gateway or session cannot
-be inspected, the report says **UNVERIFIED** and retains local findings. An
+be inspected, the report says **UNVERIFIED** and retains any available local
+findings. Missing local tool policy is labeled unavailable, never allowed. An
 unavailable inspection is not evidence that tools are allowed or denied.
 
 A successful fetch reports **PREVIEW** unless the checked policies establish

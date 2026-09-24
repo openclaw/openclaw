@@ -59,23 +59,8 @@ function readFirstReplaceConfigArg(): Record<string, unknown> {
 const mocks = vi.hoisted(() => {
   const runtimeErrors: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-  let configState: OpenClawConfig = {
-    tools: {
-      exec: {
-        host: "auto",
-        mode: "ask",
-      },
-    },
-  };
-  let approvalsState: ExecApprovalsFile = {
-    version: 1,
-    defaults: {
-      security: "allowlist",
-      ask: "on-miss",
-      askFallback: "deny",
-    },
-    agents: {},
-  };
+  let configState: OpenClawConfig = {};
+  let approvalsState: ExecApprovalsFile = { version: 1 };
   let approvalsHash = "approvals-hash";
   const defaultRuntime = {
     log: vi.fn(),
@@ -104,19 +89,6 @@ const mocks = vi.hoisted(() => {
     defaultRuntime,
     runtimeErrors,
     callGateway: vi.fn(),
-    mutateConfigFile: vi.fn(async ({ mutate }: { mutate: (draft: OpenClawConfig) => void }) => {
-      const draft = structuredClone(configState);
-      mutate(draft);
-      configState = draft;
-      return {
-        path: "/tmp/openclaw.json",
-        previousHash: "hash-1",
-        persistedHash: "hash-1",
-        snapshot: { path: "/tmp/openclaw.json" },
-        nextConfig: draft,
-        result: undefined,
-      };
-    }),
     replaceConfigFile: vi.fn(
       async ({ nextConfig }: { nextConfig: OpenClawConfig; baseHash?: string }) => {
         configState = structuredClone(nextConfig);
@@ -212,15 +184,10 @@ vi.mock("./gateway-rpc.js", async () => {
 });
 
 describe("exec-policy CLI", () => {
-  const createProgram = () => {
+  const runExecPolicyCommand = async (args: string[]) => {
     const program = new Command();
     program.exitOverride();
     registerExecPolicyCli(program);
-    return program;
-  };
-
-  const runExecPolicyCommand = async (args: string[]) => {
-    const program = createProgram();
     await program.parseAsync(args, { from: "user" });
   };
 
@@ -253,22 +220,6 @@ describe("exec-policy CLI", () => {
     mocks.defaultRuntime.error.mockClear();
     mocks.defaultRuntime.writeJson.mockClear();
     mocks.defaultRuntime.exit.mockClear();
-    mocks.mutateConfigFile.mockReset();
-    mocks.mutateConfigFile.mockImplementation(
-      async ({ mutate }: { mutate: (draft: OpenClawConfig) => void }) => {
-        const draft = structuredClone(mocks.getConfig());
-        mutate(draft);
-        mocks.setConfig(draft);
-        return {
-          path: "/tmp/openclaw.json",
-          previousHash: "hash-1",
-          persistedHash: "hash-1",
-          snapshot: { path: "/tmp/openclaw.json" },
-          nextConfig: draft,
-          result: undefined,
-        };
-      },
-    );
     mocks.replaceConfigFile.mockReset();
     mocks.replaceConfigFile.mockImplementation(
       async ({ nextConfig }: { nextConfig: OpenClawConfig; baseHash?: string }) => {
@@ -387,6 +338,100 @@ describe("exec-policy CLI", () => {
     expect(output).toContain("agents.entries.main.tools.profile");
     expect(output).not.toContain("If terminal access is intended, append");
     expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, Record<string, AgentEntryConfig>, string, boolean]>([
+    ["qualified session absent locally", { main: {} }, "agent:remote:main", true],
+    ["qualified session without local agents", {}, "agent:remote:main", false],
+    ["shared session with multiple local agents", { main: {}, work: {} }, "global", true],
+  ])("inspects a %s through the target Gateway", async (_name, entries, sessionKey, json) => {
+    mocks.setConfig({ agents: { ownership: "explicit", entries } });
+    mocks.callGateway.mockResolvedValueOnce({
+      agentId: "remote",
+      profile: "full",
+      groups: [],
+      toolAccess: {
+        checked: "live-session",
+        profiles: [{ profile: "full", source: "tools.profile", active: true }],
+        tools: ["exec", "process"].map((id) => ({ id, status: "available", reasons: [] })),
+      },
+    });
+
+    await runExecPolicyCommand([
+      "exec-policy",
+      "show",
+      "--session",
+      sessionKey,
+      "--url",
+      "ws://127.0.0.1:18790",
+      ...(json ? ["--json"] : []),
+    ]);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      "tools.effective",
+      expect.objectContaining({ url: "ws://127.0.0.1:18790" }),
+      expect.objectContaining({ sessionKey }),
+      expect.objectContaining({ sharedStateMode: "read-only" }),
+    );
+    if (json) {
+      const payload = readLastJsonWrite();
+      expect(payload.toolAccess).toMatchObject({
+        agentId: "remote",
+        live: {
+          status: "verified",
+          diagnostics: {
+            tools: [
+              { id: "exec", status: "available" },
+              { id: "process", status: "available" },
+            ],
+          },
+        },
+      });
+      expect(payload.toolAccess).not.toHaveProperty("local");
+    } else {
+      const output = stripAnsi(mocks.defaultRuntime.log.mock.calls.flat().join("\n"));
+      expect(output).toContain("TERMINAL ACCESS · remote — PREVIEW");
+      expect(output).toContain("exec: Included in session preview");
+      expect(output).toContain("Local tool policy: unavailable");
+      expect(output).not.toContain("Allowed by configuration");
+    }
+    expect(mocks.updateExecApprovals).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("does not fabricate local allowances when a remote-only session preview fails", async () => {
+    mocks.setConfig({ agents: { ownership: "explicit", entries: { main: {} } } });
+    mocks.callGateway.mockRejectedValueOnce(new Error("Gateway unreachable"));
+
+    await runExecPolicyCommand([
+      "exec-policy",
+      "show",
+      "--session",
+      "agent:remote:main",
+      "--url",
+      "ws://127.0.0.1:18790",
+    ]);
+
+    const output = stripAnsi(mocks.defaultRuntime.log.mock.calls.flat().join("\n"));
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+    expect(output).toContain("UNVERIFIED");
+    expect(output).toContain("Gateway unreachable");
+    expect(output).toContain("Local tool policy: unavailable");
+    expect(output).not.toMatch(/Local configuration allows|Allowed by configuration/);
+  });
+
+  it("rejects a preview returned for a different explicit session agent", async () => {
+    mocks.setConfig({ agents: { entries: { main: {} } } });
+    mocks.callGateway.mockResolvedValueOnce({ agentId: "other", profile: "full", groups: [] });
+
+    await runExecPolicyCommand(["exec-policy", "show", "--session", "agent:main:main", "--json"]);
+
+    expect(readLastJsonWrite()).toMatchObject({
+      toolAccess: {
+        agentId: "main",
+        live: { status: "unverified", error: expect.stringContaining("different agent") },
+      },
+    });
   });
 
   it.each([false, true])(
@@ -531,19 +576,62 @@ describe("exec-policy CLI", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
-  it("asks for an agent without failing an untargeted human report", async () => {
-    mocks.setConfig({ agents: { entries: { main: {}, work: {} } } });
+  it.each<{
+    name: string;
+    entries: Record<string, AgentEntryConfig>;
+    status: string;
+    hint: string;
+    scopes: Array<{ label: string; facts: string[] }>;
+  }>([
+    {
+      name: "multiple agents",
+      entries: {
+        main: { tools: { exec: { mode: "deny" } } },
+        work: { tools: { exec: { host: "node", mode: "full" } } },
+      },
+      status: "SELECT AGENT",
+      hint: "Pass --agent <id>",
+      scopes: [
+        { label: "tools.exec", facts: ["gateway", "allowlist", "ask on miss", "fallback deny"] },
+        { label: "agent:main", facts: ["gateway", "deny", "ask on miss", "fallback deny"] },
+        { label: "agent:work", facts: ["node", "unknown", "fallback unknown"] },
+      ],
+    },
+    {
+      name: "no configured agents",
+      entries: {},
+      status: "NO AGENT CONFIGURED",
+      hint: "openclaw agents add",
+      scopes: [
+        { label: "tools.exec", facts: ["gateway", "allowlist", "ask on miss", "fallback deny"] },
+      ],
+    },
+  ])(
+    "keeps compact approval facts in an untargeted report with $name",
+    async ({ entries, status, hint, scopes }) => {
+      mocks.setConfig({
+        tools: { exec: { host: "gateway", mode: "ask" } },
+        agents: { ownership: "explicit", entries },
+      });
 
-    await runExecPolicyCommand(["exec-policy", "show"]);
+      await runExecPolicyCommand(["exec-policy", "show"]);
 
-    const output = stripAnsi(mocks.defaultRuntime.log.mock.calls.flat().join("\n"));
-    expect(output).toContain("TERMINAL ACCESS — SELECT AGENT");
-    expect(output).toContain("main, work");
-    expect(output).toContain("Pass --agent <id>");
-    expect(output).toContain("--verbose");
-    expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
+      const output = stripAnsi(mocks.defaultRuntime.log.mock.calls.flat().join("\n"));
+      expect(output).toContain(`TERMINAL ACCESS — ${status}`);
+      expect(output).toContain(hint);
+      expect(output).toContain("COMMAND APPROVALS (LOCAL)");
+      for (const scope of scopes) {
+        const line = output.split("\n").find((candidate) => candidate.includes(scope.label));
+        for (const fact of scope.facts) {
+          expect(line, scope.label).toContain(fact);
+        }
+      }
+      expect(output).not.toMatch(/Requested|Effective Policy/);
+      expect(output).toContain("--verbose");
+      expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { args: ["--agent", "missing"], error: "Unknown agent id" },

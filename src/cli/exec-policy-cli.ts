@@ -35,6 +35,7 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import {
   buildExecPolicyToolAccess,
+  formatExecPolicyCommandApprovals,
   renderExecPolicyToolAccess,
   type ExecPolicyToolAccess,
   type ExecPolicyShowOptions,
@@ -515,12 +516,25 @@ export function registerExecPolicyCli(program: Command) {
           );
         }
         defaultRuntime.log("");
+        const approvalsTitle = "── COMMAND APPROVALS (LOCAL) ──────────────────";
+        defaultRuntime.log(isRich() ? theme.heading(approvalsTitle) : approvalsTitle);
+        defaultRuntime.log("");
+        defaultRuntime.log(
+          formatExecPolicyCommandApprovals({
+            scopes: payload.effectivePolicy.scopes,
+            approvalsExists: payload.approvalsExists,
+            showScopeLabels: true,
+          }).join("\n"),
+        );
+        defaultRuntime.log("");
         const nextStep = "── NEXT STEP ─────────────────────────────────";
         defaultRuntime.log(isRich() ? theme.heading(nextStep) : nextStep);
         defaultRuntime.log("");
         defaultRuntime.log(sanitizeExecPolicyTableCell(hint));
         if (!opts.verbose) {
-          defaultRuntime.log("Use --verbose to inspect all local command approval scopes.");
+          defaultRuntime.log(
+            "Use --verbose for policy sources and detailed command approval scopes.",
+          );
         }
       }
       if (opts.verbose) {

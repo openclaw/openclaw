@@ -1,7 +1,11 @@
 import type { ToolsEffectiveResult } from "../../packages/gateway-protocol/src/schema/tools-catalog.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { resolveConfiguredAgentId, resolveSoleAgentId } from "../agents/agent-scope-config.js";
+import {
+  listAgentIds,
+  resolveConfiguredAgentId,
+  resolveSoleAgentId,
+} from "../agents/agent-scope-config.js";
 import {
   resolveConfiguredToolAccess,
   type ToolAccessDiagnostics,
@@ -22,9 +26,9 @@ export type ExecPolicyShowOptions = GatewayRpcOpts & {
 };
 
 export type ExecPolicyToolAccess = {
-  agentId: string;
+  agentId?: string;
   sessionKey?: string;
-  local: ToolAccessDiagnostics;
+  local?: ToolAccessDiagnostics;
   // "verified" means the Gateway preview was retrieved, not that execution was proven.
   live?:
     | { status: "verified"; diagnostics: ToolAccessDiagnostics }
@@ -48,42 +52,49 @@ export async function buildExecPolicyToolAccess(
   if (explicitAgent && sessionAgent && explicitAgent !== sessionAgent) {
     throw new Error(`Agent "${explicitAgent}" does not match session agent "${sessionAgent}".`);
   }
-  const agentId = resolveConfiguredAgentId(
-    config,
-    explicitAgent ??
-      sessionAgent ??
-      resolveSoleAgentId(config, {
-        surface: "exec-policy show",
-        hint: "Pass --agent <id> or --session <agent session key>.",
-      }),
-  );
+  const agentId = sessionKey
+    ? (explicitAgent ?? sessionAgent)
+    : resolveConfiguredAgentId(
+        config,
+        explicitAgent ??
+          resolveSoleAgentId(config, {
+            surface: "exec-policy show",
+            hint: "Pass --agent <id> or --session <agent session key>.",
+          }),
+      );
   const access: ExecPolicyToolAccess = {
-    agentId,
+    ...(agentId ? { agentId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
-    local: resolveConfiguredToolAccess({ config, agentId, toolNames: TERMINAL_TOOLS }),
   };
-  if (!sessionKey) {
-    return access;
-  }
-  try {
-    const result = await callGatewayFromCliWithTransport<ToolsEffectiveResult>(
-      "tools.effective",
-      options,
-      { agentId, sessionKey },
-      { progress: false, sharedStateMode: "read-only" },
-    );
-    if (result.agentId !== agentId) {
-      throw new Error("The Gateway returned tool access for a different agent.");
+  if (sessionKey) {
+    try {
+      const result = await callGatewayFromCliWithTransport<ToolsEffectiveResult>(
+        "tools.effective",
+        options,
+        { ...(agentId ? { agentId } : {}), sessionKey },
+        { progress: false, sharedStateMode: "read-only" },
+      );
+      if (agentId && result.agentId !== agentId) {
+        throw new Error("The Gateway returned tool access for a different agent.");
+      }
+      access.agentId = result.agentId;
+      access.live = {
+        status: "verified",
+        diagnostics: result.toolAccess ?? describeLegacySessionPreview(result),
+      };
+    } catch (error) {
+      access.live = {
+        status: "unverified",
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
-    access.live = {
-      status: "verified",
-      diagnostics: result.toolAccess ?? describeLegacySessionPreview(result),
-    };
-  } catch (error) {
-    access.live = {
-      status: "unverified",
-      error: error instanceof Error ? error.message : String(error),
-    };
+  }
+  if (access.agentId && listAgentIds(config).includes(access.agentId)) {
+    access.local = resolveConfiguredToolAccess({
+      config,
+      agentId: access.agentId,
+      toolNames: TERMINAL_TOOLS,
+    });
   }
   return access;
 }
@@ -120,14 +131,43 @@ function isExcluded(tool: ToolAccessDiagnostics["tools"][number]): boolean {
   return tool.status === "excluded";
 }
 
+type CommandApprovalSummary = {
+  scopeLabel?: string;
+  host: { requested: string };
+  security: { effective: string };
+  ask: { effective: string };
+  askFallback: { effective: string };
+};
+
+export function formatExecPolicyCommandApprovals(params: {
+  scopes: readonly CommandApprovalSummary[];
+  approvalsExists: boolean;
+  showScopeLabels?: boolean;
+}): string[] {
+  const lines = params.scopes.map((approval) => {
+    const ask =
+      approval.ask.effective === "on-miss"
+        ? "ask on miss"
+        : approval.ask.effective === "always"
+          ? "always ask"
+          : approval.ask.effective === "off"
+            ? "no approval prompts"
+            : "approval mode unknown";
+    const label = params.showScopeLabels && approval.scopeLabel ? `${approval.scopeLabel}: ` : "";
+    return display(
+      `${label}${approval.host.requested} · ${approval.security.effective} · ${ask} · fallback ${approval.askFallback.effective}`,
+    );
+  });
+  if (!params.approvalsExists) {
+    lines.push("Approvals State: defaults (no stored overrides)");
+  }
+  lines.push("Command approvals do not grant tool access.", SESSION_EXEC_OVERRIDES_NOTE);
+  return lines;
+}
+
 export function renderExecPolicyToolAccess(params: {
   access: ExecPolicyToolAccess;
-  approvals?: {
-    host: { requested: string };
-    security: { effective: string };
-    ask: { effective: string };
-    askFallback: { effective: string };
-  };
+  approvals?: CommandApprovalSummary;
   approvalsExists: boolean;
   verbose?: boolean;
 }): void {
@@ -136,7 +176,7 @@ export function renderExecPolicyToolAccess(params: {
   const heading = (value: string) => (rich ? theme.heading(value) : value);
   const preview = access.live?.status === "verified" ? access.live.diagnostics : undefined;
   const diagnostics = preview ?? access.local;
-  const tools = terminalTools(diagnostics);
+  const tools = diagnostics ? terminalTools(diagnostics) : [];
   const excluded = tools.filter(isExcluded);
   const missingFromPreview = tools.some((tool) => tool.status === "unavailable");
   const status =
@@ -151,14 +191,16 @@ export function renderExecPolicyToolAccess(params: {
           : preview
             ? "PREVIEW"
             : "UNVERIFIED";
-  const lines = [heading(`TERMINAL ACCESS · ${display(access.agentId)} — ${status}`)];
+  const lines = [
+    heading(`TERMINAL ACCESS · ${display(access.agentId ?? "unknown agent")} — ${status}`),
+  ];
   if (access.sessionKey) {
     lines.push(`Session: ${display(access.sessionKey)}`);
   }
   const section = (title: string) => {
     lines.push("", heading(`── ${title} ${"─".repeat(Math.max(1, 43 - title.length))}`), "");
   };
-  if (diagnostics.profiles.length > 0) {
+  if (diagnostics && diagnostics.profiles.length > 0) {
     section(preview ? "PROFILE (GATEWAY CONFIGURATION)" : "PROFILE");
     const global = diagnostics.profiles.find((profile) => profile.source === "tools.profile");
     const agent = diagnostics.profiles.find(
@@ -180,14 +222,19 @@ export function renderExecPolicyToolAccess(params: {
     }
   }
   section("CHECK RESULTS");
+  if (!access.local) {
+    lines.push("Local tool policy: unavailable — no matching local agent.");
+  }
   if (access.live?.status === "unverified") {
-    const localExcluded = terminalTools(access.local).filter(isExcluded);
-    lines.push(
-      localExcluded.length > 0
-        ? `Local configuration excludes: ${localExcluded.map((tool) => tool.id).join(", ")}`
-        : "Local configuration allows terminal tools; execution unverified",
-      `Session preview: could not retrieve — ${display(access.live.error)}`,
-    );
+    if (access.local) {
+      const localExcluded = terminalTools(access.local).filter(isExcluded);
+      lines.push(
+        localExcluded.length > 0
+          ? `Local configuration excludes: ${localExcluded.map((tool) => tool.id).join(", ")}`
+          : "Local configuration allows terminal tools; execution unverified",
+      );
+    }
+    lines.push(`Session preview: could not retrieve — ${display(access.live.error)}`);
   }
   for (const tool of tools) {
     const label =
@@ -205,32 +252,22 @@ export function renderExecPolicyToolAccess(params: {
       );
     }
   }
-  lines.push(
-    "",
-    `Based on: ${preview ? "session preview (saved settings)" : "local configuration"}`,
-  );
+  if (diagnostics) {
+    lines.push(
+      "",
+      `Based on: ${preview ? "session preview (saved settings)" : "local configuration"}`,
+    );
+  }
   if (preview) {
     lines.push("Session preview uses saved settings; active runs may differ.");
   }
   section("COMMAND APPROVALS (LOCAL)");
-  if (params.approvals) {
-    const approval = params.approvals;
-    const ask =
-      approval.ask.effective === "on-miss"
-        ? "ask on miss"
-        : approval.ask.effective === "always"
-          ? "always ask"
-          : approval.ask.effective === "off"
-            ? "no approval prompts"
-            : "approval mode unknown";
-    lines.push(
-      `${approval.host.requested} · ${approval.security.effective} · ${ask} · fallback ${approval.askFallback.effective}`,
-    );
-  }
-  if (!params.approvalsExists) {
-    lines.push("Approvals State: defaults (no stored overrides)");
-  }
-  lines.push("Command approvals do not grant tool access.", SESSION_EXEC_OVERRIDES_NOTE);
+  lines.push(
+    ...formatExecPolicyCommandApprovals({
+      scopes: params.approvals ? [params.approvals] : [],
+      approvalsExists: params.approvalsExists,
+    }),
+  );
   section("NEXT STEP");
   if (access.live?.status === "unverified") {
     lines.push("Check the Gateway connection and session key, then retry.");
@@ -271,7 +308,7 @@ export function renderExecPolicyToolAccess(params: {
   }
   if (params.verbose) {
     section("TOOL POLICY SOURCES");
-    for (const profile of diagnostics.profiles) {
+    for (const profile of diagnostics?.profiles ?? []) {
       lines.push(`${display(profile.source)} = ${display(profile.profile)}`);
     }
   } else {
