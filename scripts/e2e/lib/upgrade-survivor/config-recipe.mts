@@ -167,7 +167,7 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
         id: "logging-file",
         intent: "logging",
         // Raw debug output stays in the isolated home, outside uploaded artifact roots.
-        argv: ["config", "set", "logging.file", "~/openclaw-upgrade-survivor-integrity.jsonl"],
+        argv: ["config", "set", "logging.file", "~/openclaw-upgrade-survivor/gateway.jsonl"],
       },
       {
         id: "logging-level",

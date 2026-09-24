@@ -1367,7 +1367,7 @@ function capturePackageIntegrity(observationRoot) {
   try {
     const raw = readOwned(
       process.env.HOME,
-      "openclaw-upgrade-survivor-integrity.jsonl",
+      path.join("openclaw-upgrade-survivor", "gateway.jsonl"),
       "package integrity",
     );
     if (raw === null) {

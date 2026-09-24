@@ -27,6 +27,7 @@ function fixture() {
   const artifacts = path.join(root, "artifacts");
   const state = path.join(root, "state");
   fs.mkdirSync(artifacts);
+  fs.mkdirSync(path.join(root, "openclaw-upgrade-survivor"));
   fs.mkdirSync(path.join(state, "state"), { recursive: true });
   return {
     root,
@@ -112,7 +113,7 @@ it.each(["failed", "passed"] as const)(
 
 function integrityLog(f: ReturnType<typeof fixture>, telemetry: Record<string, unknown>) {
   fs.writeFileSync(
-    path.join(f.root, "openclaw-upgrade-survivor-integrity.jsonl"),
+    path.join(f.root, "openclaw-upgrade-survivor", "gateway.jsonl"),
     JSON.stringify({
       0: JSON.stringify({ subsystem: "update/package-integrity" }),
       1: telemetry,
@@ -148,7 +149,7 @@ const records = [facts,
   1: {...identity, ...event}, 2: event.event, message: event.event,
   _meta: {logLevelName: "DEBUG", path: ${JSON.stringify(privateBody)}}})));
 records.push({0: "{ordinary non-JSON log argument"});
-fs.writeFileSync(${JSON.stringify(path.join(f.root, "openclaw-upgrade-survivor-integrity.jsonl"))},
+fs.writeFileSync(${JSON.stringify(path.join(f.root, "openclaw-upgrade-survivor", "gateway.jsonl"))},
   records.map(record => JSON.stringify(record)).join("\\n") + "\\n");
 process.exit(1);`,
   );
@@ -233,7 +234,7 @@ it.each([
   expect(report.omissions["package integrity"]).toBeTruthy();
 });
 
-it.each(["input", "output", "entries", "symlink", "malformed"] as const)(
+it.each(["input", "output", "entries", "symlink", "directory-symlink", "malformed"] as const)(
   "omits the whole integrity diagnostic at the %s boundary",
   (boundary) => {
     const f = fixture();
@@ -255,11 +256,15 @@ it.each(["input", "output", "entries", "symlink", "malformed"] as const)(
       outcome: "timed-out",
       pendingIo: 1,
     });
-    const log = path.join(f.root, "openclaw-upgrade-survivor-integrity.jsonl");
+    const log = path.join(f.root, "openclaw-upgrade-survivor", "gateway.jsonl");
     const line = fs.readFileSync(log, "utf8");
     if (boundary === "symlink") {
       fs.renameSync(log, path.join(f.root, "outside.jsonl"));
       fs.symlinkSync(path.join(f.root, "outside.jsonl"), log);
+    } else if (boundary === "directory-symlink") {
+      const directory = path.dirname(log);
+      fs.renameSync(directory, path.join(f.root, "outside-logs"));
+      fs.symlinkSync(path.join(f.root, "outside-logs"), directory, "dir");
     } else {
       fs.writeFileSync(
         log,
