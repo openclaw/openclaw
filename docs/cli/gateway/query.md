@@ -415,4 +415,6 @@ openclaw gateway resume <suspensionId> --port 18999 --json
 ```
 
 An already expired or resumed lease is a successful no-op. A different active
-suspension ID is rejected.
+suspension ID is rejected. Once shutdown commits, resume is refused even for the
+original owner; `gateway.suspend.status` reports that owner's shutdown progress
+until server teardown closes RPC access.

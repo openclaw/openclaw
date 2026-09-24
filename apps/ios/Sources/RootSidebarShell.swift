@@ -1,6 +1,6 @@
 import SwiftUI
 
-private enum RootSidebarDrawerMetric {
+private enum RootSidebarShellMetric {
     static let edgeGestureWidth: CGFloat = 44
     static let topGestureExclusion: CGFloat = 44
     static let settleTranslation: CGFloat = 80
@@ -9,7 +9,7 @@ private enum RootSidebarDrawerMetric {
     static let cornerRadius: CGFloat = 28
 }
 
-struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
+struct RootSidebarShell<Sidebar: View, Detail: View>: View {
     enum DragDisposition: Equatable {
         case opening
         case closing
@@ -25,7 +25,10 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
         var disposition: DragDisposition?
     }
 
+    @Environment(\.displayScale) private var displayScale
+
     let sidebarWidth: CGFloat
+    let isDrawerLayout: Bool
     let isPresented: Bool
     let canOpenFromEdge: Bool
     let reduceMotion: Bool
@@ -42,12 +45,13 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
     var body: some View {
         ZStack(alignment: .leading) {
             self.sidebarLayer
-                .opacity(self.reduceMotion && !self.isPresented ? 0 : 1)
+                .opacity(!self.isPresented && (!self.isDrawerLayout || self.reduceMotion) ? 0 : 1)
                 .accessibilityHidden(!self.isPresented)
+                .allowsHitTesting(self.isPresented)
 
             self.contentCard
-                .opacity(self.reduceMotion && self.isPresented ? 0 : 1)
-                .accessibilityHidden(self.isPresented)
+                .opacity(self.isDrawerLayout && self.reduceMotion && self.isPresented ? 0 : 1)
+                .accessibilityHidden(self.isDrawerLayout && self.isPresented)
                 .zIndex(1)
 
             self.dismissalLayer
@@ -59,7 +63,8 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
             self.drawerGesture,
             // Keep the recognizer attached while pushed content owns the edge.
             // It rejects that touch once, so the same back-swipe cannot open the drawer after popping.
-            isEnabled: !self.reduceMotion)
+            isEnabled: self.isDrawerLayout && !self.reduceMotion)
+        .background(OpenClawProBackground())
         .animation(self.animation, value: self.isPresented)
     }
 
@@ -68,7 +73,13 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
             .frame(width: self.sidebarWidth, alignment: .topLeading)
             .frame(maxHeight: .infinity, alignment: .topLeading)
             .background(OpenClawSidebarPalette.background)
-            .ignoresSafeArea(.container, edges: .vertical)
+            .overlay(alignment: .trailing) {
+                Rectangle()
+                    .fill(OpenClawSidebarPalette.hairline)
+                    .frame(width: 1 / self.displayScale)
+                    .opacity(self.isDrawerLayout ? 0 : 1)
+            }
+            .ignoresSafeArea(.container, edges: self.isDrawerLayout ? .vertical : [])
     }
 
     private var contentCard: some View {
@@ -81,8 +92,8 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
             // that stack paints destination backgrounds through the rounded safe
             // areas while navigation chrome keeps destination content inset.
             .background(OpenClawProBackground())
-            .ignoresSafeArea(.container, edges: .vertical)
-            .allowsHitTesting(!self.isPresented)
+            .ignoresSafeArea(.container, edges: self.isDrawerLayout ? .vertical : [])
+            .allowsHitTesting(!self.isDrawerLayout || !self.isPresented)
             .clipShape(shape)
             .overlay {
                 shape.strokeBorder(
@@ -90,11 +101,14 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
                     lineWidth: 1)
             }
             .offset(x: offset)
+            // Change only geometry, never the detail's structural identity, when
+            // crossing the breakpoint or toggling a persistent sidebar.
+            .padding(.leading, !self.isDrawerLayout && self.isPresented ? self.sidebarWidth : 0)
     }
 
     @ViewBuilder
     private var dismissalLayer: some View {
-        if self.isPresented {
+        if self.isDrawerLayout, self.isPresented {
             HStack(spacing: 0) {
                 Color.clear
                     .frame(width: self.sidebarWidth)
@@ -108,7 +122,8 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
     }
 
     private var contentOffset: CGFloat {
-        RootTabs.sidebarContentOffset(
+        guard self.isDrawerLayout else { return 0 }
+        return RootTabs.sidebarContentOffset(
             sidebarWidth: self.sidebarWidth,
             isVisible: self.isPresented,
             dragOffset: self.dragState.translationWidth,
@@ -116,6 +131,7 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
     }
 
     private var drawerGesture: some Gesture {
+        let isDrawerLayout = self.isDrawerLayout
         let sidebarWidth = self.sidebarWidth
         let isPresented = self.isPresented
         let canOpenFromEdge = self.canOpenFromEdge
@@ -124,6 +140,7 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
         let dragSession = self.dragSession
         return DragGesture(minimumDistance: 8)
             .updating(self.$dragState) { value, state, _ in
+                guard isDrawerLayout else { return }
                 let disposition = Self.dragDisposition(
                     startLocation: value.startLocation,
                     translation: value.translation,
@@ -144,6 +161,7 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
             .onEnded { value in
                 let disposition = dragSession.disposition
                 dragSession.disposition = nil
+                guard isDrawerLayout else { return }
                 switch disposition {
                 case .opening:
                     if Self.shouldSettle(
@@ -176,8 +194,8 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
         if !isPresented {
             // Opening is an edge gesture; closing may start anywhere on the content card.
             guard canOpenFromEdge,
-                  startLocation.x <= RootSidebarDrawerMetric.edgeGestureWidth,
-                  startLocation.y > RootSidebarDrawerMetric.topGestureExclusion
+                  startLocation.x <= RootSidebarShellMetric.edgeGestureWidth,
+                  startLocation.y > RootSidebarShellMetric.topGestureExclusion
             else { return .rejected }
         }
         let horizontal = isPresented ? -translation.width : translation.width
@@ -193,16 +211,16 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
         translation: CGFloat,
         predictedTranslation: CGFloat) -> Bool
     {
-        translation > RootSidebarDrawerMetric.settleTranslation ||
-            predictedTranslation > RootSidebarDrawerMetric.settlePredictedTranslation
+        translation > RootSidebarShellMetric.settleTranslation ||
+            predictedTranslation > RootSidebarShellMetric.settlePredictedTranslation
     }
 
     private static func contentShape(progress: CGFloat) -> UnevenRoundedRectangle {
         UnevenRoundedRectangle(
-            topLeadingRadius: RootSidebarDrawerMetric.topLeadingRadius * progress,
-            bottomLeadingRadius: RootSidebarDrawerMetric.cornerRadius * progress,
-            bottomTrailingRadius: RootSidebarDrawerMetric.cornerRadius * progress,
-            topTrailingRadius: RootSidebarDrawerMetric.cornerRadius * progress,
+            topLeadingRadius: RootSidebarShellMetric.topLeadingRadius * progress,
+            bottomLeadingRadius: RootSidebarShellMetric.cornerRadius * progress,
+            bottomTrailingRadius: RootSidebarShellMetric.cornerRadius * progress,
+            topTrailingRadius: RootSidebarShellMetric.cornerRadius * progress,
             style: .continuous)
     }
 }

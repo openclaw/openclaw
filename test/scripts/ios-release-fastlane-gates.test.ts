@@ -1068,6 +1068,10 @@ def sh(*arguments, **options)
   raise "rebooted simulator" if command.include?("simctl")
   raise "missing test selection" unless command.include?("-only-testing:OpenClawUITests/OpenClawSnapshotUITests/fixture-test")
   raise "not using built products" unless command.include?("test-without-building")
+  parts = Shellwords.split(command)
+  log_path = parts.fetch(parts.index("run_apple_command_logged") + 1)
+  FileUtils.mkdir_p(File.dirname(log_path))
+  File.write(log_path, "native capture log")
   FileUtils.mkdir_p(@result_path)
   File.write(File.join(@result_path, "result"), "capture #{@calls}")
   raise "synthetic capture failure" if @scenario == "capture" && @calls == 1
@@ -1082,6 +1086,7 @@ rows = %w[capture result success].map do |scenario|
     @scenario, @calls, @checks, @uninstalls = scenario, 0, 0, 0
     @result_path = File.join(root, "current.xcresult")
     archive = File.join(root, "archive")
+    logs = File.join(root, "logs")
     FileUtils.mkdir_p(archive)
     FileUtils.mkdir_p(File.join(root, "en-US"))
     FileUtils.mkdir_p(File.join(root, "screenshots"))
@@ -1094,6 +1099,7 @@ rows = %w[capture result success].map do |scenario|
         screenshot: { test: "fixture-test", name: "fixture-screen" },
         output_directory: root, result_bundle_path: @result_path,
         result_bundle_archive_directory: archive, capture_attempts: [],
+        log_directory: logs,
         capture_attempts_path: ledger, derived_data_path: root,
         device_udid: "fixture-udid", snapshot_cache_directory: root
       )
@@ -1102,6 +1108,8 @@ rows = %w[capture result success].map do |scenario|
     end
     { scenario: scenario, calls: @calls, checks: @checks, uninstalls: @uninstalls, error: error,
       attempts: JSON.parse(File.read(ledger)).fetch("attempts"),
+      evidenceEntries: Dir.children(archive).sort,
+      log: File.read(File.join(logs, "fixture-device-fixture-screen.log")),
       archived: File.read(File.join(archive, "fixture-device-fixture-screen-attempt-1.xcresult", "result")) }
   end
 end
@@ -1117,6 +1125,8 @@ puts JSON.generate(rows)
       error: string | null;
       attempts: { attempt: number; captureOutcome: string }[];
       archived: string;
+      evidenceEntries: string[];
+      log: string;
     }[];
     expect(
       rows.map(({ scenario, calls, checks, error }) => ({ scenario, calls, checks, error })),
@@ -1134,6 +1144,11 @@ puts JSON.generate(rows)
         }),
       ]);
       expect(row.archived).toBe("capture 1");
+      expect(row.evidenceEntries).toEqual([
+        "capture-attempts.json",
+        "fixture-device-fixture-screen-attempt-1.xcresult",
+      ]);
+      expect(row.log).toBe("native capture log");
     }
   });
 
@@ -1260,6 +1275,8 @@ module Open3
 end
 def run_screenshot_xcodebuild!(arguments, log_path:)
   raise "not building test products" unless arguments.last == "build-for-testing"
+  FileUtils.mkdir_p(File.dirname(log_path))
+  File.write(log_path, "native build log")
   @builds << "snapshot"
   raise "snapshot build failed" if @scenario == "build-failure"
   make_product(arguments.fetch(arguments.index("-derivedDataPath") + 1))
@@ -1296,6 +1313,9 @@ results = %w[combined iphone standalone standalone-build-failure missing invalid
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
     ENV["HOME"] = root
+    logs = File.join(ios_root, "build", "SnapshotLogs")
+    FileUtils.mkdir_p(logs)
+    File.write(File.join(logs, "stale.log"), "previous invocation")
     %w[SnapshotDerivedData WatchScreenshotDerivedData].each do |directory|
       app = File.join(ios_root, "build", directory, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
       FileUtils.mkdir_p(app)
@@ -1319,6 +1339,8 @@ results = %w[combined iphone standalone standalone-build-failure missing invalid
       pngs: Dir[File.join(ios_root, "fastlane", "screenshots", "en-US", "*.png")].length,
       xcresults: Dir[File.join(ios_root, "build", "SnapshotTestResults", "*.xcresult")].length,
       attempts: File.exist?(File.join(ios_root, "build", "SnapshotTestResults", "capture-attempts.json")),
+      evidenceEntries: Dir.glob(File.join(ios_root, "build", "SnapshotTestResults", "*")).map { |entry| File.basename(entry) }.sort,
+      logs: Dir.children(logs).sort,
       versions: @commands.select { |args| args.any? { |arg| arg.end_with?("/ios-write-version-xcconfig.sh") } }
         .map { |args| args.drop(2) }
     }
@@ -1336,6 +1358,8 @@ puts JSON.generate(results)
       pngs: number;
       xcresults: number;
       attempts: boolean;
+      evidenceEntries: string[];
+      logs: string[];
       versions: string[][];
     }[];
     const row = (scenario: string) => rows.find((entry) => entry.scenario === scenario)!;
@@ -1348,6 +1372,14 @@ puts JSON.generate(results)
       pngs: 5,
       xcresults: 4,
       attempts: true,
+      evidenceEntries: [
+        "01-control-connected.xcresult",
+        "02-chat-connected.xcresult",
+        "03-agent-connected.xcresult",
+        "04-settings-connected.xcresult",
+        "capture-attempts.json",
+      ],
+      logs: ["build.log"],
       versions: [versionArgs],
     });
     expect(row("iphone")).toMatchObject({

@@ -22,11 +22,19 @@ backup.
 For installations older than June 2026, upgrade to **`2026.9.5` first**, run its
 Doctor migrations, and then upgrade to `latest`. The bridge release still
 imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
-`plugin-state/state.sqlite` databases, repairs retired pre-June agent config keys,
-and includes the old runtime aliases.
-Current releases leave those retired database files untouched.
+`plugin-state/state.sqlite` databases, imports pre-June plugin JSON state and
+`credentials/oauth.json`, repairs retired agent and channel config keys, and
+includes the old runtime aliases. The retired plugin imports cover Telegram,
+iMessage, Active Memory, Nostr, and Microsoft Teams; see
+[legacy state migration](/cli/doctor/state-migrations). Current releases leave
+those retired state files untouched.
 If you already installed the latest version, Doctor stops before rewriting config
-that still contains these retired agent keys and directs you through the same bridge.
+that still contains these retired keys and directs you through the same bridge.
+
+If a newer release has already upgraded your SQLite databases, use a compatible
+pre-update backup for the bridge. Older releases cannot open newer database
+schemas; follow [downgrade recovery](/reference/database-schemas/integrity-and-recovery#downgrade-recovery)
+before running `2026.9.5` against that state.
 
 Back up the state first and use a [supported Node version](/install/node):
 Node 24.16+ on the 24.x line, or Node 26.1+. Keep the same owning account,
@@ -43,8 +51,12 @@ openclaw gateway stop &&
 ```
 
 Confirm that the version output is `2026.9.5` and that Doctor imported the old
-task, flow, and plugin stores you need. Resolve any failed or conflicting
-imports before continuing. Then install the current release and restart:
+task, flow, plugin, and channel state you need. Resolve any failed or conflicting
+imports before continuing. Doctor imports channel state only for enabled channels
+and accounts. If needed, temporarily enable those channels while the Gateway is
+stopped, rerun the bridge Doctor, then restore their previous enabled settings.
+Ensure the affected plugins are installed before running their migrations.
+Then install the current release and restart:
 
 ```bash
 npm install -g openclaw@latest --allow-scripts=openclaw &&
@@ -224,7 +236,9 @@ That older updater still caps the entire validation sequence at five minutes;
 its `--timeout` option cannot increase this cap.
 
 Plugin rehearsal copies are temporary and rebuilt after interruption. Copying
-them avoids a disk flush for every file; canonical state and recovery backups
+uses up to four concurrent file copies and avoids a disk flush for every file.
+If a copy fails, active copies finish before cleanup; link publication and
+verification run only after all file copies succeed. Canonical state and recovery backups
 retain their existing durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 

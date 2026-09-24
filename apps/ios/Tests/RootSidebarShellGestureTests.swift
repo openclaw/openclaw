@@ -3,8 +3,8 @@ import Testing
 @testable import OpenClaw
 
 @MainActor
-struct RootSidebarDrawerGestureTests {
-    private typealias Drawer = RootSidebarDrawer<EmptyView, EmptyView>
+struct RootSidebarShellGestureTests {
+    private typealias Drawer = RootSidebarShell<EmptyView, EmptyView>
 
     @Test(arguments: [false, true])
     func `only clearly horizontal drags commit`(isPresented: Bool) {

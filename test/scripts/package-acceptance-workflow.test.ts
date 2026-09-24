@@ -10044,10 +10044,22 @@ describe("package artifact reuse", () => {
         "steps.selection.outputs.run == 'true'",
       );
     }
-    expect(workflowStep(nativeLiveJob, "Setup trusted release harness")).toMatchObject({
-      uses: "./.release-harness/.github/actions/setup-release-harness",
-      with: { "node-version": "${{ env.NODE_VERSION }}" },
-    });
+    for (const job of [
+      nativeLiveJob,
+      workflowJob(LIVE_E2E_WORKFLOW, "validate_live_media_provider_suites"),
+    ]) {
+      const setup = workflowStep(job, "Setup trusted release harness");
+      expect(setup).toMatchObject({
+        uses: "./.release-harness/.github/actions/setup-release-harness",
+        if: workflowStep(job, "Run ${{ matrix.label }}").if,
+        with: { "node-version": "${{ env.NODE_VERSION }}" },
+      });
+      const names = job.steps?.map((step) => step.name) ?? [];
+      expect(names.indexOf(setup.name)).toBeGreaterThan(names.indexOf("Setup Node environment"));
+      expect(names.indexOf(setup.name)).toBeLessThan(
+        names.indexOf("Hydrate live auth/profile inputs"),
+      );
+    }
     expect(
       workflowMatrixEntry(
         LIVE_E2E_WORKFLOW,

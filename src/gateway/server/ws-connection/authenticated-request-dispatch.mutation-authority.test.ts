@@ -156,6 +156,8 @@ describe("authenticated request mutation custody", () => {
             originatingChannel: "webchat",
           });
           run.operatorAuthority = operatorAuthority;
+          run.run.provider = modelA.provider;
+          run.run.model = modelA.model;
           return run;
         });
         const fingerprints = runs.map((run) => resolveFollowupRunToolAuthorityFingerprint(run));

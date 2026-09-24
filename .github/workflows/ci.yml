@@ -30,6 +30,12 @@ on:
         required: false
         default: false
         type: boolean
+      validation_tier:
+        description: Full release coverage, or complete main coverage without release-only proofs.
+        required: false
+        default: full
+        type: choice
+        options: [full, main]
       release_scope:
         description: Release qualification scope; npm-beta and npm-stable defer native apps for a validated exact release target.
         required: false
@@ -137,6 +143,7 @@ jobs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       release_scope: ${{ steps.manifest.outputs.release_scope }}
+      validation_tier: ${{ steps.manifest.outputs.validation_tier }}
       run_node: ${{ steps.manifest.outputs.run_node }}
       # docker-seed-e2e-contract-v1: frozen targets without this marker skip the lane.
       run_docker_seed_e2e: ${{ steps.manifest.outputs.run_docker_seed_e2e }}
@@ -1396,6 +1403,7 @@ jobs:
           OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
           OPENCLAW_CI_RELEASE_SCOPE: ${{ inputs.release_scope || 'full' }}
+          OPENCLAW_CI_VALIDATION_TIER: ${{ inputs.validation_tier || 'full' }}
           OPENCLAW_CI_PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
           OPENCLAW_CI_TARGET_REF: ${{ inputs.target_ref }}
           OPENCLAW_CI_TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
@@ -1555,9 +1563,21 @@ jobs:
           // is Full Release Validation's owner for the complete process proofs.
           const runProofTier = eventName !== "pull_request" && !releaseGate;
           const releaseScope = process.env.OPENCLAW_CI_RELEASE_SCOPE ?? "full";
+          const validationTier = process.env.OPENCLAW_CI_VALIDATION_TIER ?? "full";
+          const mainValidation = validationTier === "main";
+          if (validationTier !== "full" && !mainValidation) {
+            throw new Error("validation_tier must be full or main");
+          }
+          if (mainValidation && (
+            workflowEventName !== "workflow_dispatch" || !isCanonicalRepository ||
+            frozenTarget || compatibilityTarget || ciQualification || releaseGate ||
+            releaseScope !== "full" || process.env.OPENCLAW_CI_PULL_REQUEST_NUMBER
+          )) {
+            throw new Error("The main validation tier requires an ordinary canonical same-revision dispatch with full scope");
+          }
           const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-stable";
           const fullNativeValidation =
-            eventName === "workflow_dispatch" && !releaseGate && releaseScope === "full";
+            eventName === "workflow_dispatch" && !mainValidation && !releaseGate && releaseScope === "full";
           if (releaseScope !== "full" && !npmQualification) {
             throw new Error("release_scope must be full, npm-beta, or npm-stable");
           }
@@ -1608,10 +1628,12 @@ jobs:
           const runCheck = runNodeFull || (!docsOnly && nodeDataOnly && (
             changedPaths === null || changedPaths.some((path) => /\.[cm]?tsx?$/u.test(path))
           ));
-          // Plain PR leaves share the local consumer selector. Empty means the
-          // existing full owners stay scheduled, including unsupported targets.
+          const runnerProfile = process.env.OPENCLAW_CI_RUNNER_PROFILE ?? "blacksmith";
+          // Hosted profiles retain stripes: eligible paths can consume every
+          // core graph and exceed the central row's budget.
           let changedCoreTestPaths;
-          if (eventName === "pull_request" && runCheck && !frozenTarget && changedPaths &&
+          if (runnerProfile === "blacksmith" && eventName === "pull_request" &&
+            runCheck && !frozenTarget && changedPaths &&
             existsSync("scripts/changed-lanes.mts") &&
             [
               ["scripts/run-tsgo-core-test-shards.mts", "--changed-paths-json"],
@@ -1620,7 +1642,7 @@ jobs:
             const lanes = await import("./scripts/changed-lanes.mts");
             if (typeof lanes.getChangedCoreTestPaths === "function") {
               const coreTestPaths = lanes.getChangedCoreTestPaths(lanes.detectChangedLanes(changedPaths));
-              // Deleted leaves need the full plan before hosted stripes are scheduled.
+              // Deleted leaves need the full plan.
               if (coreTestPaths?.length && coreTestPaths.every((path) => existsSync(path))) {
                 changedCoreTestPaths = coreTestPaths;
               }
@@ -1673,7 +1695,6 @@ jobs:
             typeof changedNodeTestPlan.hasUiE2eAffectingChange !== "function" ||
             changedNodeTestPlan.hasUiE2eAffectingChange(changedPaths)
           );
-          const runnerProfile = process.env.OPENCLAW_CI_RUNNER_PROFILE ?? "blacksmith";
           const nodeRunnerBackend = process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND || runnerProfile;
           const usesHostedRunnerProfile =
             runnerProfile === "github" || runnerProfile === "hybrid";
@@ -1682,8 +1703,8 @@ jobs:
             readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8")
               .includes("ui-e2e-projects-contract-v1");
           const includeReleaseOnlyUiTests =
-            (eventName === "workflow_dispatch" && !releaseGate) ||
-            !isCanonicalRepository || compatibilityTarget || changedPaths === null;
+            !mainValidation && ((eventName === "workflow_dispatch" && !releaseGate) ||
+            !isCanonicalRepository || compatibilityTarget || changedPaths === null);
           // Ordinary CI shares eight 16-class browser jobs; full inventories retain
           // twelve. Private source-server projects keep their own one-worker limit.
           const compactUiE2e = supportsUiE2eProjects && !includeReleaseOnlyUiTests;
@@ -1694,7 +1715,7 @@ jobs:
           // four-part plan only for normal hybrid first attempts on Blacksmith.
           const compactHybridQaSmoke = runnerProfile === "hybrid" &&
             isCanonicalRepository &&
-            (eventName === "push" || eventName === "pull_request") &&
+            (eventName === "push" || eventName === "pull_request" || mainValidation) &&
             process.env.GITHUB_RUN_ATTEMPT === "1";
           const qaSmokeCiPartCount = usesHostedRunnerProfile && !compactHybridQaSmoke ? 6 : 4;
           const supportsNativeI18n =
@@ -1778,7 +1799,7 @@ jobs:
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
           const runtimePullRequest = isCanonicalRepository && (compactPullRequest || releaseGate);
           const includeReleaseOnlyRuntimeTests =
-            !isCanonicalRepository || (!runtimePullRequest && eventName !== "push");
+            !mainValidation && (!isCanonicalRepository || (!runtimePullRequest && eventName !== "push"));
           const startupCorpusTestFiles =
             typeof nodeTestPlan.resolveStartupCorpusTestFiles === "function"
               ? nodeTestPlan.resolveStartupCorpusTestFiles({
@@ -1793,7 +1814,7 @@ jobs:
             supportsDockerSeedE2e &&
             (ownerPathEvent || eventName === "workflow_dispatch")
               ? typeof dockerSeedPlan.resolveDockerSeedLanes === "function"
-                ? dockerSeedPlan.resolveDockerSeedLanes({ includeReleaseOnly: eventName === "workflow_dispatch" })
+                ? dockerSeedPlan.resolveDockerSeedLanes({ includeReleaseOnly: eventName === "workflow_dispatch" && !mainValidation })
                 : ["published-upgrade-survivor"]
               : [];
           // Canonical pushes also use compact bins: 80+ single-group jobs
@@ -1804,7 +1825,7 @@ jobs:
             ? undefined
             : eventName === "pull_request"
               ? "pull-request"
-              : eventName === "push"
+              : eventName === "push" || mainValidation
                 ? "push"
                 : undefined;
           let changedNodeTestShards = null;
@@ -1894,7 +1915,7 @@ jobs:
                   ...createNodeTestPlan({
                     includeProofTests: runProofTier,
                     includeReleaseOnlyPluginShards: false,
-                    includeReleaseOnlyToolingShards: eventName === "workflow_dispatch" || !isCanonicalRepository,
+                    includeReleaseOnlyToolingShards: !mainValidation && (eventName === "workflow_dispatch" || !isCanonicalRepository),
                     includeReleaseOnlyRuntimeTests,
                     ...(runtimePullRequest && changedPaths ? { changedPaths } : {}),
                     // Keep the legacy boolean for historical target planners;
@@ -1965,7 +1986,7 @@ jobs:
           const testRuntimeMode = testRuntimePolicy
             ? eventName === "pull_request" || releaseGate
               ? "bun-compatible"
-              : eventName === "workflow_dispatch"
+              : eventName === "workflow_dispatch" && !mainValidation
                 ? "dual"
                 : "node"
             : "node";
@@ -2104,6 +2125,7 @@ jobs:
 
           const manifest = {
             release_scope: releaseScope,
+            validation_tier: validationTier,
             docs_only: docsOnly,
             docs_changed: docsChanged,
             run_node: runNode,
@@ -4039,7 +4061,7 @@ jobs:
       contents: read
     name: checks-node-compat-node24
     needs: [preflight]
-    if: needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'workflow_dispatch' && (needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true')
+    if: needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && (needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true')
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')))) || (((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     timeout-minutes: 60
     steps:
@@ -5482,13 +5504,13 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests","packages"]' || '["tests","packages"]') }}
+        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests","packages"]' || '["tests","packages"]') }}
     # Keep hosted admission and the existing budget while validating Xcode 27.
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('xcode-27'))) || ('xcode-27') }}
     timeout-minutes: 30
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
-      MACOS_PRIMARY_PHASE: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
+      MACOS_PRIMARY_PHASE: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
       OPENCLAWKIT_TEST_EXECUTION: ${{ ((github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || github.run_attempt > 1) && 'serial' || 'parallel' }}
     steps:
       # Start before checkout/setup so their time counts against optional cache work.
@@ -5832,7 +5854,7 @@ jobs:
 
       - name: Render isolated macOS health fixtures
         id: health-render
-        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
         run: bash scripts/test-macos-health-render.sh
 
       - name: Upload macOS health component renders
@@ -5913,7 +5935,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && (needs.preflight.outputs.compatibility_target == 'true' && '["tests"]' || '["release","tests"]') || '["smoke"]') }}
+        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && (needs.preflight.outputs.compatibility_target == 'true' && '["tests"]' || '["release","tests"]') || '["smoke"]') }}
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('xcode-27'))) || ('xcode-27') }}
     timeout-minutes: 150
     env:
@@ -6223,7 +6245,7 @@ jobs:
     # Full manual validation requires both build and screenshot evidence.
     needs: [preflight]
     # PRs and their exact-head release-gate substitutes retain only the build smoke.
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
     # Keep capture on the same verified hosted image as the iOS build phases.
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('xcode-27'))) || ('xcode-27') }}
     timeout-minutes: 90
@@ -6334,7 +6356,7 @@ jobs:
             apps/ios/fastlane/screenshots/en-US/*.png
             apps/ios/build/SnapshotTestResults/capture-attempts.json
             apps/ios/build/SnapshotTestResults/*.xcresult
-            apps/ios/build/SnapshotTestResults/*.log
+            apps/ios/build/SnapshotLogs/*.log
           if-no-files-found: warn
           retention-days: 14
 
@@ -6343,7 +6365,7 @@ jobs:
       contents: read
     name: "ios-screenshot-evidence"
     needs: [preflight, ios-screenshot-shard]
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 10
     steps:
@@ -6708,7 +6730,7 @@ jobs:
       # The main update tripwire needs the complete runtime and public SDK types.
       # Manual/release validation retains the full declaration-complete package.
       - name: Prepare main Docker smoke package
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main')
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main') || needs.preflight.outputs.validation_tier == 'main'
         run: |
           set -euo pipefail
           pnpm clean:dist
@@ -6817,7 +6839,7 @@ jobs:
             qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}|${{ needs.preflight.outputs.run_qa_smoke_ci }}
             checks-fast-plugin-contracts-shard=${{ needs.checks-fast-plugin-contracts-shard.result }}|${{ needs.preflight.outputs.run_plugin_contracts_shards }}
             checks-fast-channel-contracts-shard=${{ needs.checks-fast-channel-contracts-shard.result }}|${{ needs.preflight.outputs.run_channel_contracts_shards }}
-            checks-node-compat=${{ needs.checks-node-compat.result }}|${{ needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'workflow_dispatch' && (needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') }}
+            checks-node-compat=${{ needs.checks-node-compat.result }}|${{ needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && (needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') }}
             checks-node-core-test-nondist-shard=${{ needs.checks-node-core-test-nondist-shard.result }}|${{ needs.preflight.outputs.run_checks_node_core_nondist }}
             check-shard=${{ needs.check-shard.result }}|${{ needs.preflight.outputs.run_check }}
             check-lint-hosted-core-shard=${{ needs.check-lint-hosted-core-shard.result }}|${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
@@ -6830,8 +6852,8 @@ jobs:
             macos-node=${{ needs.macos-node.result }}|${{ needs.preflight.outputs.run_macos_node }}
             macos-swift=${{ needs.macos-swift.result }}|${{ needs.preflight.outputs.run_macos_swift }}
             ios-build=${{ needs.ios-build.result }}|${{ needs.preflight.outputs.run_ios_build }}
-            ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
-            ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
+            ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
+            ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
             android=${{ needs.android.result }}|${{ needs.preflight.outputs.run_android_job }}
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
         run: |
