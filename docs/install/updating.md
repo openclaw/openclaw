@@ -216,6 +216,11 @@ them avoids a disk flush for every file; canonical state and recovery backups
 retain their existing durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
+Database rehearsal also avoids a second full backup of each private snapshot.
+It acquires a fresh consistent copy, then checks, compacts, and publishes that
+copy for validation. Source databases and recovery backups retain their existing
+protection; the faster preparation takes effect when the newer updater runs.
+
 Package updates also check npm availability for enabled configured plugins before
 stopping the serving Gateway or replacing the installed core. Registry targets
 are checked early; explicit package artifacts are checked using the privately

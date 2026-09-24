@@ -16,6 +16,35 @@ const execFileMock = vi.hoisted(() =>
 );
 const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
+const observedArgv = vi.hoisted(() => new Map<number, string[]>());
+
+vi.mock("node:fs", async () => {
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:fs")>("node:fs"),
+    (actual) => ({
+      readFileSync: new Proxy(actual.readFileSync, {
+        apply(target, receiver, args) {
+          const pid = Number(/^\/proc\/(\d+)\/cmdline$/.exec(String(args[0]))?.[1]);
+          const argv = observedArgv.get(pid);
+          if (!argv) {
+            return Reflect.apply(target, receiver, args);
+          }
+          const bytes = Buffer.from(argv.join("\0"));
+          const encoding = typeof args[1] === "string" ? args[1] : args[1]?.encoding;
+          return encoding ? bytes.toString(encoding) : bytes;
+        },
+      }),
+    }),
+    { mirrorToDefault: true },
+  );
+});
+vi.mock("../process/supervisor/darwin-process-command.js", () => ({
+  readDarwinProcessCommand: (pid: number) => {
+    const argv = observedArgv.get(pid);
+    return argv ? { argv } : undefined;
+  },
+}));
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -52,6 +81,7 @@ const {
 const envSnapshot = captureFullEnv();
 
 beforeEach(() => {
+  observedArgv.clear();
   execFileMock.mockReset();
   spawnSyncMock.mockReset();
   resolveLsofCommandSyncMock.mockReset();
@@ -76,9 +106,13 @@ function requireFirstSpawnSyncCall(): [unknown, unknown, unknown] {
 
 describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => {
   it("parses lsof output and filters non-openclaw/current processes", () => {
+    mockProcessPlatform("linux");
     const gatewayPidA = process.pid + 1000;
     const gatewayPidB = process.pid + 2000;
     const foreignPid = process.pid + 3000;
+    observedArgv.set(gatewayPidA, ["openclaw-gateway"]);
+    observedArgv.set(gatewayPidB, ["openclaw", "gateway"]);
+    observedArgv.set(foreignPid, ["python", "server.py"]);
     spawnSyncMock.mockReturnValue({
       error: undefined,
       status: 0,
@@ -128,6 +162,8 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
   it("kills stale gateway pids discovered on the gateway port", () => {
     const stalePidA = process.pid + 1000;
     const stalePidB = process.pid + 2000;
+    observedArgv.set(stalePidA, ["openclaw-gateway"]);
+    observedArgv.set(stalePidB, ["openclaw", "gateway"]);
     spawnSyncMock
       .mockReturnValueOnce({
         error: undefined,
@@ -153,6 +189,7 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
 
   it("uses explicit port override when provided", () => {
     const stalePid = process.pid + 1000;
+    observedArgv.set(stalePid, ["openclaw-gateway"]);
     spawnSyncMock
       .mockReturnValueOnce({
         error: undefined,

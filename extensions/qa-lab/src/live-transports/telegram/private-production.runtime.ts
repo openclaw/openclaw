@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { root as openRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -190,8 +191,9 @@ export async function requestTelegramPrivateAppTurn(params: {
   const token = randomUUID();
   const requestPath = path.join(root, `${token}.request.json`);
   const acknowledgementPath = path.join(root, `${token}.ack.json`);
-  await fsp.writeFile(
-    requestPath,
+  const proofFiles = await openRoot(root);
+  await proofFiles.create(
+    `${token}.request.json`,
     `${JSON.stringify(
       {
         schemaVersion: 1,
@@ -206,7 +208,7 @@ export async function requestTelegramPrivateAppTurn(params: {
       null,
       2,
     )}\n`,
-    { flag: "wx", mode: 0o600 },
+    { atomic: true, mode: 0o600, durable: false },
   );
   process.stdout.write(`TELEGRAM_PRIVATE_APP_SEND_REQUIRED ${token}\n`);
   try {

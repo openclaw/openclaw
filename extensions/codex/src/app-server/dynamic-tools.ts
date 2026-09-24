@@ -421,7 +421,9 @@ export function createCodexDynamicToolBridge(params: {
         toolName === "automations" ? resolveAutomationsToolsAllow(call.arguments) : call.arguments;
       const args = asNonArrayRecord(rawArguments);
       const invocationStartedAt = Date.now();
-      const signal = composeAbortSignals(params.signal, options?.signal);
+      const signal = options?.signal
+        ? AbortSignal.any([params.signal, options.signal])
+        : params.signal;
       let preparedMessageMedia:
         | Awaited<ReturnType<typeof prepareCodexRemoteWorkspaceMessageMedia>>
         | undefined;
@@ -922,16 +924,6 @@ function toToolResultHookContext(
   };
 }
 
-function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
-  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
-  if (activeSignals.length === 0) {
-    return new AbortController().signal;
-  }
-  if (activeSignals.length === 1) {
-    return expectDefined(activeSignals[0], "single active Codex abort signal");
-  }
-  return AbortSignal.any(activeSignals);
-}
 function isToolResultYield(result: AgentToolResult<unknown>): boolean {
   const details = result.details;
   if (!isRecord(details) || typeof details.status !== "string") {

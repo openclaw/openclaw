@@ -358,7 +358,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["desktop.observe", "environments.list"],
         methodResponses: {
-          "sessions.list": sessionsList("active"),
+          "sessions.list": sessionsList("local"),
           "environments.list": { environments: [] },
           "desktop.observe": {
             transport: "rfb",
@@ -376,6 +376,11 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("environments.status")).length)
         .toBe(inventoryCount + 1);
+      await page
+        .locator("openclaw-desktop-panel")
+        .getByRole("status", { name: "Connecting to desktop…", exact: true })
+        .waitFor();
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
       await page.evaluate(() => {
         window.dispatchEvent(
           new CustomEvent("openclaw:desktop-toggle", { detail: { open: false } }),

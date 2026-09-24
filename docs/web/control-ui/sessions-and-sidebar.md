@@ -371,7 +371,9 @@ the checkbox restores your usual choices immediately and leaves the prompt
 intact. One-off choices are not remembered for the next palette session.
 
 Accepted creation closes the palette and offers **Open session** without changing
-the foreground view or its draft. A failed submission retains the prompt, selected mentions, images, and
+the foreground view or its draft. Creation and completion notices can open a session
+only while the original Gateway and account remain selected; reconnecting to the
+same account keeps the action available. A failed submission retains the prompt, selected mentions, images, and
 choices with an error. These settings do not affect sessions opened from search,
 and the existing conversation composer keeps its own send and steer/queue
 shortcuts. Long prompts remain intact for session creation and are never sent as
