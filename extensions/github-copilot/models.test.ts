@@ -85,6 +85,7 @@ describe("resolveCopilotForwardCompatModel", () => {
 
   it("uses curated static metadata for gpt-5.4 when not in registry", () => {
     const result = requireResolvedModel(createMockCtx("gpt-5.4"));
+    expect(result.contextWindowSource).toBeUndefined();
     expect(result).toEqual({
       id: "gpt-5.4",
       name: "GPT-5.4",
@@ -137,6 +138,8 @@ describe("resolveCopilotForwardCompatModel", () => {
     const result = requireResolvedModel(ctx);
     expect(result.id).toBe("future-model");
     expect(result.name).toBe("future-model");
+    expect(result.contextWindow).toBe(128_000);
+    expect(result.contextWindowSource).toBe("synthetic");
     expect((result as unknown as Record<string, unknown>).api).toBe("openai-responses");
     expect((result as unknown as Record<string, unknown>).input).toEqual(["text", "image"]);
   });

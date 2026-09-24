@@ -16,6 +16,7 @@ import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { normalizeCatalogRouteBaseUrl } from "./model-catalog-metadata.js";
 import { compareModelCatalogEntries } from "./model-catalog-order.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import {
   copyPreparedModelFullCatalogAuth,
@@ -418,10 +419,28 @@ export function materializePreparedModelCatalog(
   snapshot: ModelCatalogSnapshot,
   runtimeCapabilityModels: readonly PreparedRuntimeCapabilityModel[],
   configuredStaticEntries: ModelCatalogSnapshot["staticEntries"] = [],
+  acceptedDiscoveryProviders: ReadonlySet<string> = new Set(),
 ): ModelCatalogSnapshot {
   // Preserve inventory reads before capability preparation when the snapshot has accessors.
   const materialized = { ...snapshot };
   const sourceEntries = snapshot.entries;
+  // The inventory owner has already validated source, account and generation. Only a
+  // provider-marked unknown-model estimate may yield to that accepted inventory;
+  // curated static metadata and authored caps keep their existing minimum semantics.
+  const superseded = (entry: ModelCatalogSnapshot["entries"][number]) =>
+    acceptedDiscoveryProviders.has(normalizeProviderId(entry.provider)) &&
+    entry.contextWindowSource === "synthetic" &&
+    sourceEntries.some(
+      (accepted) =>
+        accepted.contextWindowSource !== "synthetic" &&
+        !accepted.nativeRuntime &&
+        accepted.provider === entry.provider &&
+        accepted.id === entry.id &&
+        Boolean(accepted.api) &&
+        accepted.api === entry.api &&
+        modelTransportRoutesMatch(accepted, entry) &&
+        (accepted.contextTokens ?? accepted.contextWindow ?? 0) > 0,
+    );
   const identityKey = createModelCatalogIdentityKeyResolver();
   const runtimeByKey = new Map(
     runtimeCapabilityModels.map(({ provider, modelId, model }) => [
@@ -455,7 +474,12 @@ export function materializePreparedModelCatalog(
   materialized.routeVariants = project(snapshot.routeVariants);
   if (snapshot.staticEntries || configuredStaticEntries.length > 0) {
     materialized.staticEntries = project(
-      dedupeByKey([...configuredStaticEntries, ...(snapshot.staticEntries ?? [])], identityKey),
+      dedupeByKey(
+        [...configuredStaticEntries, ...(snapshot.staticEntries ?? [])].filter(
+          (entry) => !superseded(entry),
+        ),
+        identityKey,
+      ),
     );
   }
   if (isPreparedModelCatalogFull(snapshot)) {

@@ -1,10 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveContextTokens } from "../auto-reply/reply/model-selection-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as providerPolicy from "../plugins/provider-policy-surface.js";
+import { buildStatusMessageParts, statusModelRefs } from "../status/status-message.test-support.js";
+import { prepareContextWindowCaches } from "./context-cache-projection.js";
+import { replaceContextWindowCaches } from "./context-cache.js";
+import { resetContextWindowCacheForTest } from "./context-runtime-state.js";
+import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
+import {
+  materializePreparedModelCatalog,
+  prepareModelCatalogPublication,
+} from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
@@ -324,4 +334,177 @@ describe("configured catalog registry composition", () => {
       expect(policy.configuredCatalog[0]).toEqual(expectedEntry);
     },
   );
+});
+
+describe("synthetic configured context publication", () => {
+  afterEach(resetContextWindowCacheForTest);
+  const fallback = {
+    provider: "fixture",
+    id: "new-model",
+    name: "New model",
+    api: "openai-responses" as const,
+    contextWindow: 128_000,
+    // Only the provider's unknown-model fallback opts into replacement.
+    contextWindowSource: "synthetic" as const,
+  };
+  const discovered = {
+    provider: "fixture",
+    id: "new-model",
+    name: "New model",
+    api: "openai-responses" as const,
+    baseUrl: "https://account.example/v1",
+    contextWindow: 1_000_000,
+    contextTokens: 872_000,
+  };
+  const auth = (account: string) => ({
+    authStore: { version: 1 as const, profiles: {} },
+    authModes: {},
+    providerAuthLabels: new Map(),
+    credentials: { fixture: { type: "api_key" as const, key: account } },
+  });
+  async function budget(
+    entries = [discovered],
+    staticEntry: ModelCatalogEntry = fallback,
+    config: OpenClawConfig = {},
+  ) {
+    const publication = prepareModelCatalogPublication(
+      {
+        entries,
+        routeVariants: entries,
+        providerOutcomes: [{ provider: "fixture", status: "ready" }],
+      },
+      new Map(),
+      undefined,
+      auth("account-a"),
+      (provider) => provider,
+    );
+    const catalog = materializePreparedModelCatalog(
+      publication.catalog,
+      [],
+      [staticEntry],
+      new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
+    );
+    replaceContextWindowCaches(await prepareContextWindowCaches({ config, modelCatalog: catalog }));
+    return resolveContextTokens({
+      cfg: config,
+      provider: "fixture",
+      model: "new-model",
+      modelContextTokens: entries[0]?.contextTokens,
+      modelContextWindow: entries[0]?.contextWindow,
+    });
+  }
+  it("preserves provider synthetic provenance through the catalog row projection", () => {
+    expect(modelCatalogRowToEntry(fallback)).toHaveProperty("contextWindowSource", "synthetic");
+  });
+  it("uses accepted account prompt limits instead of the superseded synthetic window", async () => {
+    expect(await budget()).toBe(872_000);
+    expect(await budget()).toBe(872_000);
+    const status = buildStatusMessageParts({
+      config: {},
+      agent: {},
+      includeTranscriptUsage: false,
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+      resolvedHarness: "openclaw",
+      modelRefs: statusModelRefs({ provider: "fixture", model: "new-model" }),
+      selectedContextWindow: 1_000_000,
+      selectedContextTokens: 872_000,
+      thinkingCatalog: [discovered],
+    });
+    expect(status.text).toContain("/872k");
+  });
+  it.each([
+    ["curated static", { ...fallback, contextWindowSource: undefined }],
+    ["other API", { ...fallback, api: "openai-completions" as const }],
+    ["other endpoint", { ...fallback, baseUrl: "https://other.example/v1" }],
+  ])("preserves %s limits", async (_name, row) => {
+    expect(await budget([discovered], row)).toBe(128_000);
+  });
+  it("preserves explicit authored prompt and native-window caps", async () => {
+    for (const limits of [{ contextTokens: 64_000 }, { contextWindow: 64_000 }]) {
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            fixture: {
+              baseUrl: discovered.baseUrl,
+              models: [{ id: "new-model", ...limits } as never],
+            },
+          },
+        },
+      };
+      expect(await budget([discovered], fallback, config)).toBe(64_000);
+    }
+  });
+  it("keeps fallback for empty discovery and a same-id different provider", async () => {
+    expect(await budget([])).toBe(128_000);
+    expect(await budget([{ ...discovered, provider: "other" }])).toBe(128_000);
+  });
+  it("does not promote a static starter after first-load discovery failure", async () => {
+    const publication = prepareModelCatalogPublication(
+      {
+        entries: [],
+        routeVariants: [],
+        staticEntries: [discovered],
+        providerOutcomes: [{ provider: "fixture", status: "unavailable" }],
+      },
+      new Map(),
+      undefined,
+      auth("account-a"),
+      (provider) => provider,
+    );
+    const catalog = materializePreparedModelCatalog(
+      publication.catalog,
+      [],
+      [fallback],
+      new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
+    );
+    replaceContextWindowCaches(
+      await prepareContextWindowCaches({ config: {}, modelCatalog: catalog }),
+    );
+    expect(resolveContextTokens({ cfg: {}, provider: "fixture", model: "new-model" })).toBe(
+      128_000,
+    );
+  });
+
+  it("retains only same-account inventory after failure", async () => {
+    const accepted = prepareModelCatalogPublication(
+      {
+        entries: [discovered],
+        routeVariants: [],
+        providerOutcomes: [{ provider: "fixture", status: "ready", profileId: "a" }],
+      },
+      new Map(),
+      undefined,
+      auth("account-a"),
+      (provider) => provider,
+    );
+    for (const [account, expected] of [
+      ["account-a", 872_000],
+      ["account-b", 128_000],
+    ] as const) {
+      const failed = prepareModelCatalogPublication(
+        {
+          entries: [],
+          routeVariants: [],
+          providerOutcomes: [{ provider: "fixture", status: "unavailable", profileId: "a" }],
+        },
+        new Map(),
+        accepted,
+        auth(account),
+        (provider) => provider,
+      );
+      const catalog = materializePreparedModelCatalog(
+        failed.catalog,
+        [],
+        [fallback],
+        new Set(failed.discoveryOrigins.map(({ provider }) => provider)),
+      );
+      replaceContextWindowCaches(
+        await prepareContextWindowCaches({ config: {}, modelCatalog: catalog }),
+      );
+      expect(resolveContextTokens({ cfg: {}, provider: "fixture", model: "new-model" })).toBe(
+        expected,
+      );
+    }
+  });
 });

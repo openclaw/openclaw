@@ -35,6 +35,12 @@ const contextTestState = vi.hoisted(() => {
       ):
         | {
             config: OpenClawConfig;
+            readPublishedModelCatalog?: () => {
+              entries: DiscoveredModel[];
+              routeVariants: never[];
+              staticEntries: DiscoveredModel[];
+            };
+            isCurrent: () => boolean;
             modelCatalog: {
               entries: DiscoveredModel[];
               routeVariants: never[];
@@ -42,6 +48,7 @@ const contextTestState = vi.hoisted(() => {
             };
           }
         | undefined => ({
+        isCurrent: () => true,
         config: state.loadConfigImpl() as OpenClawConfig,
         modelCatalog: {
           entries: state.discoveredModels,
@@ -181,6 +188,7 @@ describe("lookupContextTokens", () => {
     }));
     contextTestState.getPublishedModelCatalogOwnerSnapshot.mockClear();
     contextTestState.getPublishedModelCatalogOwnerSnapshot.mockImplementation(() => ({
+      isCurrent: () => true,
       config: contextTestState.loadConfigImpl() as OpenClawConfig,
       modelCatalog: {
         entries: contextTestState.discoveredModels,
@@ -441,6 +449,7 @@ describe("lookupContextTokens", () => {
     } satisfies OpenClawConfig;
     const publishedConfig = createContextOverrideConfig("synthetic", "current-model", 222_000);
     contextTestState.getPublishedModelCatalogOwnerSnapshot.mockReturnValueOnce({
+      isCurrent: () => true,
       config: publishedConfig,
       modelCatalog: {
         entries: [{ id: "discovered-model", provider: "synthetic", contextWindow: 64_000 }],
@@ -476,6 +485,76 @@ describe("lookupContextTokens", () => {
         skipRuntimeConfigLoad: true,
       }),
     ).toBeUndefined();
+  });
+
+  it("prewarms accepted publications passively and rejects retired account owners", async () => {
+    let current = true;
+    const publishedCatalog = {
+      entries: [{ provider: "fixture", id: "new-model", contextTokens: 872_000 }],
+      routeVariants: [] as never[],
+      staticEntries: [],
+    };
+    const readPublishedModelCatalog = vi.fn(() => publishedCatalog);
+    const owner = {
+      config: {},
+      isCurrent: () => current,
+      readPublishedModelCatalog,
+      modelCatalog: {
+        entries: [{ provider: "fixture", id: "new-model", contextWindow: 128_000 }],
+        routeVariants: [] as never[],
+        staticEntries: [],
+      },
+    };
+    contextTestState.getPublishedModelCatalogOwnerSnapshot.mockReturnValue(owner);
+    await contextModule.prewarmContextWindowCacheAfterReady({ config: {} });
+    expect(
+      contextModule.resolveContextTokensForModel({
+        cfg: {},
+        provider: "fixture",
+        model: "new-model",
+      }),
+    ).toBe(872_000);
+    expect(readPublishedModelCatalog).toHaveBeenCalled();
+    expect(contextTestState.loadModelCatalogOwnerSnapshot).not.toHaveBeenCalled();
+    current = false;
+    contextModule.resetContextWindowCacheForTest();
+    await contextModule.prewarmContextWindowCacheAfterReady({ config: {} });
+    expect(
+      contextModule.lookupContextTokens("new-model", { skipRuntimeConfigLoad: true }),
+    ).toBeUndefined();
+  });
+
+  it("rejects a projection when the accepted catalog changes during its cooperative yield", async () => {
+    const catalog = (tokens: number) => ({
+      entries: Array.from({ length: 600 }, (_, index) => ({
+        provider: "fixture",
+        id: `m-${index}`,
+        contextTokens: tokens,
+      })),
+      routeVariants: [] as never[],
+      staticEntries: [],
+    });
+    let accepted = catalog(128_000);
+    let reads = 0;
+    contextTestState.getPublishedModelCatalogOwnerSnapshot.mockReturnValue({
+      config: {},
+      isCurrent: () => true,
+      modelCatalog: catalog(128_000),
+      readPublishedModelCatalog: () => {
+        reads += 1;
+        // First read captures; second checks before projection; third follows its yield.
+        if (reads === 3) {
+          accepted = catalog(872_000);
+        }
+        return accepted;
+      },
+    });
+    await contextModule.prewarmContextWindowCacheAfterReady({ config: {} });
+    expect(
+      contextModule.lookupContextTokens("m-0", { skipRuntimeConfigLoad: true }),
+    ).toBeUndefined();
+    await contextModule.prewarmContextWindowCacheAfterReady({ config: {} });
+    expect(contextModule.lookupContextTokens("m-0", { skipRuntimeConfigLoad: true })).toBe(872_000);
   });
 
   it("retires a failed published-owner load so exact request-time loading can recover", async () => {

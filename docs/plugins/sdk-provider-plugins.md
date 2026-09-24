@@ -383,6 +383,12 @@ a saved policy is not proof that the running Gateway applied it.
     });
     ```
 
+    For an unknown-model estimate only, set `contextWindowSource: "synthetic"`.
+    Accepted account discovery can then replace that estimate for the same provider,
+    exact model ID, and transport API (and endpoint, when the fallback binds one).
+    Do not mark curated static limits or authored caps as synthetic. Failed discovery
+    keeps the estimate unless the catalog owner can retain the same account's inventory.
+
     If resolving requires a network call, return the requested model directly
     from `prepareDynamicModel`. OpenClaw applies the same configured overrides
     and normalization as synchronous dynamic resolution. Existing hooks that
