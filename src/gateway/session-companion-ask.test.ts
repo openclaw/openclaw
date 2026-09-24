@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { resolveBundledStaticCatalogModel } from "../agents/embedded-agent-runner/model.static-catalog.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
@@ -18,6 +19,13 @@ const runEmbeddedAgent = vi.hoisted(() =>
 );
 
 const resolveModelAsync = vi.hoisted(() => vi.fn());
+const resolveSelection = vi.hoisted(() =>
+  vi.fn(() => ({ provider: "test", modelId: "model-a" }) as { provider: string; modelId: string }),
+);
+const { prepareCliRunContext, executePreparedCliRun } = vi.hoisted(() => ({
+  prepareCliRunContext: vi.fn(async (params: unknown) => ({ params, preparedBackend: {} })),
+  executePreparedCliRun: vi.fn(async () => ({ text: "The session is fixing a bug." })),
+}));
 
 const { appendMessage, admitWrite, loadEntry, removeSession } = vi.hoisted(() => ({
   appendMessage: vi.fn<(message: unknown) => void>(),
@@ -64,8 +72,10 @@ vi.mock("../agents/sessions/index.js", () => ({
   },
 }));
 vi.mock("../agents/simple-completion-runtime.js", () => ({
-  resolveSimpleCompletionSelectionForAgent: () => ({ provider: "test", modelId: "model-a" }),
+  resolveSimpleCompletionSelectionForAgent: resolveSelection,
 }));
+vi.mock("../agents/cli-runner/prepare.runtime.js", () => ({ prepareCliRunContext }));
+vi.mock("../agents/cli-runner/execute.runtime.js", () => ({ executePreparedCliRun }));
 
 function createCompanion(cfg: OpenClawConfig = {}) {
   return createSessionCompanion({
@@ -295,6 +305,56 @@ describe("session companion embedded invocation", () => {
         surface.cleanup();
       }
     } finally {
+      companion.dispose();
+    }
+  });
+
+  it("answers through the primary model's CLI runtime when no provider API key exists", async () => {
+    // Subscription-only install: the primary runs on claude-cli and the
+    // automatic utility model is derived from the same provider.
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: "/tmp/companion-test",
+          model: "anthropic/claude-opus-4-6",
+          models: { "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } } },
+        },
+      },
+    };
+    resolveSelection.mockReturnValueOnce({ provider: "anthropic", modelId: "claude-haiku-4-5" });
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
+    const companion = createCompanion(cfg);
+    try {
+      await expect(companion.ask(question)).resolves.toMatchObject({
+        answer: "The session is fixing a bug.",
+      });
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(appendMessage).not.toHaveBeenCalled();
+      expect(prepareCliRunContext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "claude-cli",
+          model: "claude-haiku-4-5",
+          executionMode: "side-question",
+          disableTools: true,
+          sessionKey: preparedTarget.sessionKey,
+          prompt: expect.stringContaining("What is it doing?"),
+          extraSystemPrompt: expect.stringContaining("read-only Side chat assistant"),
+        }),
+      );
+      expect(executePreparedCliRun).toHaveBeenCalledOnce();
+      expect(removeSession).toHaveBeenCalledWith(preparedTarget, undefined);
+    } finally {
+      cliBackendsTesting.resetDepsForTest();
       companion.dispose();
     }
   });
