@@ -135,6 +135,17 @@ export type SessionSqliteTargetWorkerInput = {
   registeredDatabases: readonly Pick<OpenClawRegisteredAgentDatabase, "agentId" | "path">[];
 };
 
+export type SessionResetRecallWorkerInput = {
+  kind: "session-reset-recall";
+  scope: {
+    agentId: string;
+    sessionId: string;
+    sessionKey?: string;
+    storePath: string;
+  };
+  admission?: UserTurnTranscriptAdmissionReceipt;
+};
+
 export type SessionEntryWorkerInput = {
   kind: "session-entry";
   absPath: string;
@@ -422,6 +433,7 @@ export type SessionTranscriptWorkerInput =
   | SessionHistoryWorkerInput
   | SessionModelContextWorkerInput
   | SessionEntryWorkerInput
+  | SessionResetRecallWorkerInput
   | SessionBranchSummaryWorkerInput;
 
 type SessionHistoryDatabaseWorkerInput = Extract<SessionHistoryWorkerInput, { database: unknown }>;
@@ -467,6 +479,9 @@ export type SessionTranscriptWorkerValues = {
   "session-identity-evidence": SessionIdentityEvidenceWorkerResult;
   "usage-cache": SessionCostUsageCacheReadResult;
   "model-context": ReturnType<typeof readSessionTranscriptModelContext>;
+  "session-reset-recall": {
+    cutoff: import("../../../packages/memory-host-sdk/src/host/session-reset-recall.js").SessionResetRecallCutoff;
+  };
   "session-entry": {
     entry: SessionFileEntry | null;
     resetRecallCutoff: ReturnType<typeof readSessionEntryResetRecallCutoff>;

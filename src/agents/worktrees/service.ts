@@ -43,7 +43,11 @@ import {
   unlockWorktree,
 } from "./git-lock.js";
 import { commandError, worktreePathExists, runGit } from "./git.js";
-import { canonicalPathKey, shouldPreserveOrphanCandidate } from "./orphan-paths.js";
+import {
+  canonicalPathKey,
+  resolveManagedWorktreePathKeys,
+  shouldPreserveOrphanCandidate,
+} from "./orphan-paths.js";
 import { worktreeOwnerMatches } from "./owner.js";
 import { provisionIncludedFiles } from "./provisioned-files.js";
 import { readRegistryWorktrees, readWorktreeCleanupState } from "./registry-read.js";
@@ -1487,15 +1491,9 @@ export class ManagedWorktreeService {
     records: ManagedWorktreeRecord[],
     guard: WorktreeMutationGuard,
   ): Promise<number> {
-    const managedPaths = new Set<string>();
-    for (const record of records) {
-      try {
-        managedPaths.add(await canonicalPathKey(record.path));
-      } catch (error) {
-        if (!isMissingPathError(error)) {
-          throw error;
-        }
-      }
+    const managedPaths = await resolveManagedWorktreePathKeys(records);
+    if (!managedPaths) {
+      return 0;
     }
     // Only the default state-owned area grants orphan cleanup authority. A custom
     // root can contain unrelated directories; its cleanup is registry-bound above.
