@@ -2452,7 +2452,7 @@ struct GatewayNodeSessionTests {
         } catch {
             let problem = GatewayConnectionProblemMapper.map(error: error)
             #expect(problem?.kind == .externalAuthorizationRequired)
-            #expect(problem?.actionLabel == "Sign in")
+            #expect(problem?.actionLabel == "Retry")
             #expect(problem?.pauseReconnect == true)
             #expect(problem?.retryable == true)
         }
@@ -2480,7 +2480,7 @@ struct GatewayNodeSessionTests {
             #expect(error is GatewayExternalAuthorizationError)
             let problem = GatewayConnectionProblemMapper.map(error: error)
             #expect(problem?.kind == .externalAuthorizationRequired)
-            #expect(problem?.actionLabel == "Sign in")
+            #expect(problem?.actionLabel == "Retry")
             #expect(problem?.pauseReconnect == true)
             #expect(problem?.retryable == true)
         }
