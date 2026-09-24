@@ -433,11 +433,15 @@ cancel native clipboard writes that the browser has already accepted.
 
 ### Markdown tables
 
-Markdown tables wrap headings and cell text to fit the conversation. On wide panes,
-top-level assistant tables can use extra space without widening the surrounding prose.
-Dense tables still scroll horizontally; ordinary inline tables grow with the conversation
-instead of adding a vertical scrollbar. **Copy table** copies tab-separated cells, and
-**Expand table** above the table opens a larger view with a sticky header. If copying fails, the button clears any earlier success checkmark. In Chat, workspace
+Markdown tables wrap headings and cell text to fit the conversation. On wide desktop
+panes, top-level assistant tables stay at the reading width when their content fits
+and use extra space only as needed, without widening the surrounding prose. Long
+cells wrap within the pane limit; genuinely dense tables still scroll horizontally.
+Wide desktop tables use compact icon-only controls above the header. Mobile and
+phone-landscape views retain larger touch controls and a visible **Expand table** label.
+Ordinary inline tables grow vertically instead of adding a vertical scrollbar.
+**Copy table** copies tab-separated cells, and **Expand table** opens a larger view
+with a sticky header. If copying fails, the button clears any earlier success checkmark. In Chat, workspace
 file and session links work in either view, including Enter and Space keyboard
 activation. Following a link closes the expanded view so you can use its destination.
 
