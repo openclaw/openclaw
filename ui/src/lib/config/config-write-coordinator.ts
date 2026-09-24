@@ -16,6 +16,7 @@ import {
   submitConfigDraft,
   type ConfigSubmissionObserver,
   type ConfigWriteCoordinator,
+  type ConfigMethod,
   type ConfigWriteCoordinatorContext,
   type RuntimeConfigExternalMutationOptions,
   type RuntimeConfigExternalMutationResult,
