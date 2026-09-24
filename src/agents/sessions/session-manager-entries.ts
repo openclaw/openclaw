@@ -468,9 +468,10 @@ export class SessionManagerEntries extends SessionManagerSuffixPersistence {
         const anchor = this.persistenceTarget
           ? readActiveTranscriptEntryAnchor({ ...this.persistenceTarget, entryId: current.id })
           : undefined;
-        if (this.persistenceTarget && !anchor) {
-          throw new Error(`Session transcript anchor was not returned: ${current.id}`);
-        }
+        // A dirty projection (e.g. a side append awaiting reconcile) refuses the
+        // anchor read. That is not a failed dedup: the entry is still the current
+        // turn. Degrade like readOmittedCustomMessage and the pre-persisted user
+        // turn path instead of throwing, so the caller can re-resolve on demand.
         return {
           entryId: current.id,
           message: current.message,
