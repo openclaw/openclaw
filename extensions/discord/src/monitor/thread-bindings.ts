@@ -33,14 +33,15 @@ export {
   listThreadBindingsForAccount,
   reconcileAcpThreadBindingsOnStartup,
   setThreadBindingIdleTimeoutBySessionKey,
+  setThreadBindingIdleTimeoutBySessionKeyAsync,
   setThreadBindingMaxAgeBySessionKey,
+  setThreadBindingMaxAgeBySessionKeyAsync,
   unbindThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKeyAsync,
 } from "./thread-bindings.lifecycle.js";
 
 export type { AcpThreadBindingReconciliationResult } from "./thread-bindings.lifecycle.js";
 
-export {
-  createNoopThreadBindingManager,
-  createThreadBindingManager,
-  getThreadBindingManager,
-} from "./thread-bindings.manager.js";
+export { createThreadBindingManager, getThreadBindingManager } from "./thread-bindings.manager.js";
+
+export { createNoopThreadBindingManager } from "./thread-bindings.session-adapter.js";

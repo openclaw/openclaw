@@ -11,6 +11,7 @@ import {
 import { NODE_RELEASE_VERSION_CASES } from "../../../test/helpers/node-version-cases.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
+import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../shared/worker-bundle-hash.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { bootstrapWorker as bootstrapWorkerCore } from "./bootstrap.js";
 import { createWorkerBundleProducer, type WorkerInstallationArtifact } from "./bundle.js";
@@ -248,7 +249,7 @@ describe("bootstrapWorker", () => {
     expect(runner.calls[2]?.options.input).toContain('ln -s "$lock_identity" "$lock"');
     expect(runner.calls[2]?.options.input).toContain("worker bundle archive digest mismatch");
     expect(runner.calls[2]?.options.input).toContain(
-      'const artifactPaths = ["github-exec-launcher.mjs","image-processor.worker.mjs","service-child-group-anchor.mjs","service-child-relay.mjs","worker.mjs","workspace-rsync-receiver.mjs"]',
+      'const artifactPaths = ["github-exec-launcher.mjs","image-processor.worker.mjs","service-child-group-anchor.mjs","service-child-relay.mjs","sqlite-store.worker.mjs","worker.mjs","workspace-rsync-receiver.mjs"]',
     );
     expect(runner.calls[2]?.options.input).not.toContain('npm install --prefix "$staging"');
     expect(runner.calls[2]?.options.input).toContain("worker install content does not match");
@@ -503,6 +504,9 @@ describe("bootstrapWorker", () => {
       "package/dist/worker/service-child-relay.mjs",
     );
     expect(npmRunner.calls[1]?.options.input).toContain(
+      "package/dist/worker/sqlite-store.worker.mjs",
+    );
+    expect(npmRunner.calls[1]?.options.input).toContain(
       "package/dist/worker/workspace-rsync-receiver.mjs",
     );
     expect(npmRunner.calls[1]?.options.input).not.toContain("node_modules");
@@ -696,14 +700,7 @@ describe("bootstrapWorker", () => {
           path.join(packageRoot, "package.json"),
           `${JSON.stringify({ name: "openclaw", version: VERSION, files: ["dist/"] })}\n`,
         );
-        for (const artifact of [
-          "github-exec-launcher.mjs",
-          "image-processor.worker.mjs",
-          "service-child-group-anchor.mjs",
-          "service-child-relay.mjs",
-          "worker.mjs",
-          "workspace-rsync-receiver.mjs",
-        ]) {
+        for (const artifact of WORKER_BUNDLE_ARTIFACT_PATHS) {
           await fs.writeFile(path.join(packageRoot, "dist/worker", artifact), "export {};\n", {
             mode: 0o755,
           });
@@ -952,14 +949,7 @@ describe("bootstrapWorker", () => {
           path.join(packageRoot, "package.json"),
           `${JSON.stringify({ name: "openclaw", version: VERSION, files: ["dist/"] })}\n`,
         );
-        const artifacts = [
-          "github-exec-launcher.mjs",
-          "image-processor.worker.mjs",
-          "service-child-group-anchor.mjs",
-          "service-child-relay.mjs",
-          "worker.mjs",
-          "workspace-rsync-receiver.mjs",
-        ];
+        const artifacts = WORKER_BUNDLE_ARTIFACT_PATHS;
         for (const artifact of artifacts) {
           await fs.writeFile(
             path.join(packageRoot, "dist/worker", artifact),
@@ -1053,6 +1043,7 @@ describe("bootstrapWorker", () => {
           "image-processor.worker.mjs",
           "service-child-group-anchor.mjs",
           "service-child-relay.mjs",
+          "sqlite-store.worker.mjs",
           "worker.mjs",
           "workspace-rsync-receiver.mjs",
         ]);

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -10,6 +10,7 @@ import {
   patchSessionEntryCore as patchInternalSessionEntry,
   replaceSessionEntry as replaceInternalSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { observeSessionMaintenanceCompletion } from "../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
 import type * as ConfigSessionTypes from "../config/sessions/types.js";
 import {
   cleanupSessionLifecycleArtifacts,
@@ -829,6 +830,7 @@ describe("session-store-runtime compatibility surface", () => {
       await seedSessionEntry(activeSessionKey, { sessionId: "session-active", updatedAt: now });
       assignOwner(staleSessionKey);
 
+      const done = observeSessionMaintenanceCompletion(path.join(tempDir, "openclaw-agent.sqlite"));
       await patchSessionEntry({
         sessionKey: activeSessionKey,
         storePath,
@@ -844,11 +846,10 @@ describe("session-store-runtime compatibility surface", () => {
         update: () => ({ model: "gpt-5.5" }),
       });
 
-      const readStaleEntry = () => getSessionEntry({ sessionKey: staleSessionKey, storePath });
-      await vi.waitFor(() => expect(readStaleEntry()?.archivedAt).toEqual(archivedAt), {
-        timeout: 5_000,
-      });
-      expect(readStaleEntry()).toMatchObject(staleEntry);
+      await done;
+      const retainedEntry = getSessionEntry({ sessionKey: staleSessionKey, storePath });
+      expect(retainedEntry?.archivedAt).toEqual(archivedAt);
+      expect(retainedEntry).toMatchObject(staleEntry);
       const activeEntry = getSessionEntry({ sessionKey: activeSessionKey, storePath });
       expect(activeEntry).toMatchObject({ sessionId: "session-active", model: "gpt-5.5" });
       expect(activeEntry?.archivedAt).toBeUndefined();

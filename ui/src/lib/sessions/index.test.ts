@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 // @vitest-environment node
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -32,88 +32,76 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
   };
 }
 
+afterEach(() => vi.useRealTimers());
+
 describe("createSessionCapability", () => {
-  it.each(["direct", "subscription"] as const)(
-    "shares confirmed archive visibility after %s reconciliation",
-    async (path) => {
-      const key = "agent:main:archive-from-agent";
-      const row = { key, kind: "direct" as const, sessionId: "archive-session", updatedAt: 1 };
-      const request = vi.fn(async () => sessionsResult([row], 1));
-      const { emitEvent, gateway } = createGatewayHarness({
-        request,
-      } as unknown as GatewayBrowserClient);
-      const sessions = createTestSessionCapability(gateway);
-      const reconcile = (archived: boolean, updatedAt: number) => {
-        const payload = { ...row, sessionKey: key, reason: "patch", archived, updatedAt };
-        if (path === "direct") {
-          sessions.reconcileChanged(payload);
-        } else {
-          emitEvent({ type: "event", event: "sessions.changed", payload });
-        }
-      };
-      try {
-        await sessions.refresh({ agentId: "main", force: true });
-        reconcile(true, 2);
-        expect(sessions.archiveVisibility(key)).toBe("archived");
-        await sessions.refresh({ agentId: "main", force: true });
-        expect(sessions.archiveVisibility(key)).toBe("archived");
-        reconcile(false, 3);
-        expect(sessions.archiveVisibility(key)).toBeUndefined();
-      } finally {
-        sessions.dispose();
-      }
-    },
-  );
-
-  it.each(["direct", "subscription"] as const)(
-    "ignores stale archive state after a newer unarchive via %s reconciliation",
-    async (path) => {
-      const key = "agent:main:main";
-      const request = vi.fn(async (method: string) => {
-        if (method !== "sessions.list") {
-          throw new Error(`Unexpected request: ${method}`);
-        }
-        return sessionsResult(
-          [
-            {
-              key,
-              kind: "direct",
-              sessionId: "main-session",
-              updatedAt: 30,
-              archived: false,
-            },
-          ],
-          30,
-        );
-      });
-      const client = { request } as unknown as GatewayBrowserClient;
-      const { emitEvent, gateway } = createGatewayHarness(client);
-      const sessions = createTestSessionCapability(gateway);
+  it("shares confirmed archive visibility after Gateway events", async () => {
+    const key = "agent:main:archive-from-agent";
+    const row = { key, kind: "direct" as const, sessionId: "archive-session", updatedAt: 1 };
+    const request = vi.fn(async () => sessionsResult([row], 1));
+    const { emitEvent, gateway } = createGatewayHarness({
+      request,
+    } as unknown as GatewayBrowserClient);
+    const sessions = createTestSessionCapability(gateway);
+    const reconcile = (archived: boolean, updatedAt: number) => {
+      const payload = { ...row, sessionKey: key, reason: "patch", archived, updatedAt };
+      emitEvent({ type: "event", event: "sessions.changed", payload });
+    };
+    try {
       await sessions.refresh({ agentId: "main", force: true });
-      const staleArchive = {
-        sessionKey: key,
-        key,
-        kind: "direct" as const,
-        sessionId: "main-session",
-        updatedAt: 20,
-        archived: true,
-        archivedAt: 20,
-        reason: "update",
-      };
-
-      if (path === "direct") {
-        sessions.reconcileChanged(staleArchive);
-      } else {
-        emitEvent({ type: "event", event: "sessions.changed", payload: staleArchive });
-      }
-
-      expect(sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject({
-        archived: false,
-        updatedAt: 30,
-      });
+      reconcile(true, 2);
+      expect(sessions.archiveVisibility(key)).toBe("archived");
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.archiveVisibility(key)).toBe("archived");
+      reconcile(false, 3);
+      expect(sessions.archiveVisibility(key)).toBeUndefined();
+    } finally {
       sessions.dispose();
-    },
-  );
+    }
+  });
+
+  it("ignores stale archive state after a newer unarchive via Gateway events", async () => {
+    const key = "agent:main:main";
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return sessionsResult(
+        [
+          {
+            key,
+            kind: "direct",
+            sessionId: "main-session",
+            updatedAt: 30,
+            archived: false,
+          },
+        ],
+        30,
+      );
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { emitEvent, gateway } = createGatewayHarness(client);
+    const sessions = createTestSessionCapability(gateway);
+    await sessions.refresh({ agentId: "main", force: true });
+    const staleArchive = {
+      sessionKey: key,
+      key,
+      kind: "direct" as const,
+      sessionId: "main-session",
+      updatedAt: 20,
+      archived: true,
+      archivedAt: 20,
+      reason: "update",
+    };
+
+    emitEvent({ type: "event", event: "sessions.changed", payload: staleArchive });
+
+    expect(sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject({
+      archived: false,
+      updatedAt: 30,
+    });
+    sessions.dispose();
+  });
 
   it("allows an advertised group catalog load to be retried after failure", async () => {
     let groupsCalls = 0;
@@ -915,6 +903,7 @@ describe("createSessionCapability", () => {
   });
 
   it("refreshes instead of inserting hidden sessions after configured-only lists", async () => {
+    vi.useFakeTimers();
     const visibleKey = "agent:main:main";
     const hiddenKey = "agent:local:hidden";
     const refreshed = createDeferred<SessionsListResult>();
@@ -953,15 +942,18 @@ describe("createSessionCapability", () => {
 
     emitEvent(sessionChangedEvent(hiddenKey));
 
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
     expect(publishedKeys.some((keys) => keys.includes(hiddenKey))).toBe(false);
     refreshed.resolve(sessionsResult([{ key: visibleKey, kind: "direct", updatedAt: 1 }], 2));
-    await waitForFast(() => expect(sessions.state.loading).toBe(false));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sessions.state.loading).toBe(false);
     sessions.dispose();
   });
 
   it("publishes remote deletion before refreshing the canonical list", async () => {
+    vi.useFakeTimers();
     const visibleKey = "agent:main:main";
     const refreshed = createDeferred<SessionsListResult>();
     let listCalls = 0;
@@ -992,14 +984,17 @@ describe("createSessionCapability", () => {
       payload: { sessionKey: visibleKey, sessionId: "deleted-generation", reason: "delete" },
     });
 
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(deletedSnapshots.some((keys) => keys.includes(visibleKey))).toBe(true);
     refreshed.resolve(sessionsResult([], 2));
-    await waitForFast(() => expect(sessions.state.loading).toBe(false));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sessions.state.loading).toBe(false);
     sessions.dispose();
   });
 
   it("refreshes broad lists when the client omits the server-side window limit", async () => {
+    vi.useFakeTimers();
     const visibleKey = "agent:main:main";
     const hiddenKey = "agent:local:hidden";
     const request = vi.fn(async (method: string, _params?: unknown) => {
@@ -1025,12 +1020,14 @@ describe("createSessionCapability", () => {
 
     emitEvent(sessionChangedEvent(hiddenKey));
 
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(sessions.state.result?.sessions.map((row) => row.key)).not.toContain(hiddenKey);
     sessions.dispose();
   });
 
   it("refreshes stale active rows after a terminal session message", async () => {
+    vi.useFakeTimers();
     const key = "agent:main:main";
     const request = vi
       .fn()
@@ -1071,13 +1068,12 @@ describe("createSessionCapability", () => {
       payload: { sessionKey: key, updatedAt: 1, status: "done" },
     });
 
-    await waitForFast(() =>
-      expect(sessions.state.result?.sessions[0]).toMatchObject({
-        key,
-        hasActiveRun: false,
-        status: "done",
-      }),
-    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(sessions.state.result?.sessions[0]).toMatchObject({
+      key,
+      hasActiveRun: false,
+      status: "done",
+    });
     expect(request).toHaveBeenCalledTimes(2);
     sessions.dispose();
   });

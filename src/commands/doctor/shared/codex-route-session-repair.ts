@@ -22,7 +22,10 @@ import {
   scanDoctorSessionEntriesStrict,
   scanDoctorSessionEntriesTolerant,
 } from "../../../config/sessions/session-accessor.js";
-import { resolveAllAgentSessionStoreTargetsSync } from "../../../config/sessions/targets.js";
+import {
+  resolveAllAgentSessionStoreTargetsSync,
+  resolveConfiguredAgentDatabaseTargets,
+} from "../../../config/sessions/targets.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadJsonFileThroughSymlink } from "../../../infra/json-file.js";
@@ -31,6 +34,7 @@ import {
   updateLegacySessionStore,
 } from "../../../infra/state-migrations.legacy-session-store.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../../../sessions/agent-harness-session-key.js";
+import { createRetainedAgentDatabaseMatcher } from "../../../state/agent-deletion-discovery.js";
 import { resolveLegacyAuthProfilesPath } from "../../doctor-auth-legacy-paths.js";
 import {
   isOpenAICodexAuthProfileRef,
@@ -52,18 +56,9 @@ import {
   migrateLegacyRuntimeModelRef,
   resolveLegacyRuntimeModelProviderAlias,
 } from "./legacy-runtime-model-providers.js";
-import {
-  createRetiredModelRefRepairResolver,
-  type ModelRefRepairResolver,
-} from "./retired-model-ref-repair.js";
+import type { SessionModelRetirement } from "./retired-model-ref-repair.js";
+import { createRetiredModelRefRepairResolver } from "./retired-model-ref-repair.js";
 import { repairRetiredSessionModelRef } from "./retired-session-model-repair.js";
-
-type SessionModelRetirement = {
-  agentId: string;
-  resolve: ModelRefRepairResolver;
-  defaultModelRef?: string;
-  warnings: string[];
-};
 
 function rewriteSessionModelPair(params: {
   entry: SessionEntry;
@@ -197,13 +192,12 @@ function clearStaleCodexFallbackNotice(
 }
 
 function clearRepairedCodexSessionHarness(entry: SessionEntry): boolean {
-  const harnessRuntime = normalizeRuntimeString(entry.agentHarnessId);
-  let changed = false;
-  if (entry.agentHarnessId !== undefined && harnessRuntime !== "openclaw") {
-    delete entry.agentHarnessId;
-    changed = true;
+  const harnessId = entry.agentHarnessId;
+  if (harnessId === undefined || normalizeRuntimeString(harnessId) === "openclaw") {
+    return false;
   }
-  return changed;
+  delete entry.agentHarnessId;
+  return true;
 }
 
 function repairProviderlessCodexSessionOverride(
@@ -536,7 +530,12 @@ export async function maybeRepairCodexSessionRoutes(params: {
   const authProfileOnly = !params.shouldRepair && params.authProfileOnly === true;
   const shouldRepair = params.shouldRepair || authProfileOnly;
   const warnings: string[] = [];
-  const sessionTargets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env });
+  const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
+    resolveConfiguredAgentDatabaseTargets(params.cfg, { env }),
+  );
+  const sessionTargets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env }).filter(
+    (target) => !isRetained(target.storePath, target.agentId),
+  );
   const resolveRetired = authProfileOnly
     ? undefined
     : createRetiredModelRefRepairResolver({

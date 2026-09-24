@@ -6,6 +6,17 @@ import type { Mock } from "vitest";
 import { createChatRunState, type ChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestHandler, RespondFn } from "./types.js";
 
+type TestChatRunRecord =
+  ReturnType<typeof createChatRunState>["runs"] extends Map<string, infer Record> ? Record : never;
+
+export function createAbortTestRunState(entries: Array<[string, Partial<TestChatRunRecord>]>) {
+  const state = createChatRunState();
+  for (const [runId, record] of entries) {
+    Object.assign(state.getOrCreate(runId), record);
+  }
+  return state;
+}
+
 export function createActiveRun(
   sessionKey: string,
   params: {

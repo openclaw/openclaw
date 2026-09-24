@@ -1,5 +1,6 @@
 // Elevenlabs plugin module implements tts behavior.
 import {
+  MAX_AUDIO_BYTES,
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
@@ -163,7 +164,6 @@ export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): P
     ...params,
     stream: true,
   });
-  const { MAX_AUDIO_BYTES } = await import("openclaw/plugin-sdk/media-runtime");
   const { createBoundedProviderBinaryStream } =
     await import("openclaw/plugin-sdk/provider-binary-stream");
   const { assertOkOrThrowProviderError, assertProviderBinaryResponseContent } =

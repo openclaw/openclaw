@@ -26,7 +26,7 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { VERSION } from "../../version.js";
@@ -690,7 +690,7 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.jsonOutput[0]).toMatchObject({ status: "error" });
     expect(value.retainedExists).toBe(true);
     expect(JSON.stringify(value.jsonOutput)).toContain(value.expectedRetained);
-    // Hard failures use the canonical bounded summary; JSON above retains the full path.
+    // The recovery location survives separately from the bounded failure cause.
     expect(JSON.stringify(value.history)).toContain(path.basename(value.expectedRetained));
     expect(value.report).toContain(path.basename(value.expectedRetained));
     expect(

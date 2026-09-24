@@ -6,7 +6,11 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import {
+  readSessionMethodAccess,
+  sessionAccessRowForBatch,
+  type SessionMethodAccessRequest,
+} from "../lib/session-method-access.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import { requestSessionInvolvement } from "../lib/sessions/session-requests.ts";
 import type {
@@ -19,7 +23,15 @@ import { formatBatchSessionRemovalError } from "./session-workspace-recovery.run
 
 export type SessionActionRow = Pick<
   SidebarRecentSession,
-  "key" | "agentId" | "sessionId" | "label" | "pinned" | "archived" | "active" | "category"
+  | "key"
+  | "agentId"
+  | "sessionId"
+  | "label"
+  | "pinned"
+  | "archived"
+  | "active"
+  | "category"
+  | "sharingRole"
 > & { gatewayHasActiveRun?: boolean; hasActiveRun?: boolean };
 
 export type SessionActionHost = Pick<
@@ -40,11 +52,7 @@ export type SessionActionHost = Pick<
 export function requireSessionMutationAccess(
   host: SessionActionHost,
   scope: SidebarSessionMutationScope,
-  request: {
-    method: string;
-    params?: unknown;
-    requiredScope?: "operator.write" | "operator.admin";
-  },
+  request: SessionMethodAccessRequest,
 ): boolean {
   const access = readSessionMethodAccess(scope.gateway.snapshot, request);
   if (access.allowed) {
@@ -109,6 +117,7 @@ export async function patchSessionRows(
   scope: SidebarSessionMutationScope,
   options: {
     deferListRefresh?: boolean;
+    sessionScope?: boolean;
   } = {},
 ): Promise<SessionActionRow[] | null> {
   if (typeof patch.archived === "boolean" && rows.some((row) => !row.sessionId?.trim())) {
@@ -139,6 +148,8 @@ export async function patchSessionRows(
     const access = readSessionMethodAccess(scope.gateway.snapshot, {
       method: "sessions.patchMany",
       params,
+      sessionScope: options.sessionScope,
+      session: sessionAccessRowForBatch(chunkRows),
     });
     if (!access.allowed) {
       terminalError = access.reason;
@@ -228,7 +239,14 @@ export async function setSessionInvolvement(
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
-    scope.sessions.patchRowLocal(session.key, { hiddenFromInvolvingMe: hidden });
+    scope.sessions.patchRowLocal(
+      session.key,
+      { hiddenFromInvolvingMe: hidden },
+      {
+        agentId,
+        sessionId: session.sessionId,
+      },
+    );
     await host.sessionData.refreshSidebarSessions(agentId);
   } catch (error) {
     if (host.sessionData.isSessionMutationScopeCurrent(scope)) {

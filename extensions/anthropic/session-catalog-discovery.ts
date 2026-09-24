@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   type DesktopOverlay,
-  desktopPullRequestSummary,
   emptyDesktopOverlay,
   MAX_STRING_LENGTH,
   readDesktopOverlay,
@@ -459,10 +458,9 @@ async function mergeClaudeSessions(
     if (!filePath) {
       continue;
     }
-    const createdAt = parseClaudeCatalogTimestampMs(metadata.createdAt) ?? existing?.createdAt;
-    const updatedAt = parseClaudeCatalogTimestampMs(metadata.lastActivityAt) ?? existing?.updatedAt;
-    const customGroup = readBoundedString(metadata.customGroup, 500);
-    const pullRequest = desktopPullRequestSummary(metadata);
+    const createdAt = metadata.createdAt ?? existing?.createdAt;
+    const updatedAt = metadata.lastActivityAt ?? existing?.updatedAt;
+    const { customGroup, pullRequest } = metadata;
     records.set(sessionId, {
       ...(existing ?? {
         threadId: sessionId,
@@ -470,11 +468,8 @@ async function mergeClaudeSessions(
         modelProvider: "anthropic" as const,
         archived: false as const,
       }),
-      name: readBoundedString(metadata.title, 500) ?? existing?.name ?? null,
-      cwd:
-        readBoundedString(metadata.cwd, MAX_STRING_LENGTH) ??
-        readBoundedString(metadata.originCwd, MAX_STRING_LENGTH) ??
-        existing?.cwd,
+      name: metadata.title ?? existing?.name ?? null,
+      cwd: metadata.cwd ?? existing?.cwd,
       ...(createdAt !== undefined ? { createdAt } : {}),
       ...(updatedAt !== undefined ? { updatedAt, recencyAt: updatedAt } : {}),
       ...(customGroup ? { customGroup } : {}),

@@ -22,7 +22,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";

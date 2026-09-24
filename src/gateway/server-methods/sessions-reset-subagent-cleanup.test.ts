@@ -7,7 +7,6 @@ import {
   registerAgentHarness,
 } from "../../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../../agents/harness/registry.test-support.js";
-import { subagentRegistryDeps } from "../../agents/subagents/registry/subagent-registry-deps.js";
 import * as completionOwner from "../../agents/subagents/registry/subagent-registry-lifecycle-completion.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
@@ -53,10 +52,17 @@ import { getTaskRegistryStore } from "../../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.test-support.js";
 import { findTaskByRunIdForStatus } from "../../tasks/task-status-access.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import type { callGateway } from "../call.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
 import { sessionDeleteHandlers } from "./sessions-delete.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+
+const registryGateway = vi.hoisted(() => vi.fn<typeof callGateway>());
+vi.mock("../server-recovery-runtime-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-recovery-runtime-context.js")>()),
+  bindGatewayLifecycleRequest: () => registryGateway,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let stateDir: string;
@@ -101,14 +107,12 @@ beforeEach(async () => {
   resetTaskRegistryForTests({ persist: false });
   attempts = 0;
   harnesses = listRegisteredAgentHarnesses();
-  testing.setDepsForTest({
-    callGateway: async <T>(options: { method: string; params?: unknown }) => {
-      expect(options.method).toBe("sessions.delete");
-      if (++attempts === 1) {
-        throw new Error("first delete transport unavailable");
-      }
-      return (await request("sessions.delete", options.params as Record<string, unknown>)) as T;
-    },
+  registryGateway.mockReset().mockImplementation(async (options) => {
+    expect(options.method).toBe("sessions.delete");
+    if (++attempts === 1) {
+      throw new Error("first delete transport unavailable");
+    }
+    return await request("sessions.delete", options.params as Record<string, unknown>);
   });
   replaceSessionEntrySync(
     { sessionKey: key, agentId: "main" },
@@ -158,13 +162,13 @@ afterEach(async () => {
   await cleanupSubagentRegistryPersistenceTest({
     stateDir,
     resetRegistry: () => resetSubagentRegistryForTests({ persist: false }),
-    resetDeps: () => testing.setDepsForTest(),
     closeDatabases: () => {
       resetTaskRegistryForTests({ persist: false });
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
     },
   });
+  registryGateway.mockReset();
   clearRuntimeConfigSnapshot();
   env.restore();
 });
@@ -540,23 +544,21 @@ test("reset cannot publish while a terminal completion owns an awaited capture",
   const completion = vi.spyOn(completionOwner, "completeSubagentRunAttempt");
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  const capture = subagentRegistryDeps.captureSubagentCompletionReply;
-  const callGateway = subagentRegistryDeps.callGateway;
+  const announce = await import("../../agents/subagents/announce/subagent-announce.js");
+  const capture = announce.captureSubagentCompletionReply;
+  const callGateway = expectDefined(registryGateway.getMockImplementation(), "cleanup transport");
   const deletionStarted = createDeferredCore<{ completion: Promise<unknown> }>();
-  testing.setDepsForTest({
-    ...subagentRegistryDeps,
-    callGateway: <T>(options: Parameters<typeof callGateway>[0]) => {
-      const deletionPromise = callGateway<T>(options);
-      if (options.method === "sessions.delete") {
-        deletionStarted.resolve({ completion: deletionPromise });
-      }
-      return deletionPromise;
-    },
-    captureSubagentCompletionReply: async (...args) => {
-      entered.resolve();
-      await release.promise;
-      return await capture(...args);
-    },
+  registryGateway.mockImplementation((options) => {
+    const deletionPromise = callGateway(options);
+    if (options.method === "sessions.delete") {
+      deletionStarted.resolve({ completion: deletionPromise });
+    }
+    return deletionPromise;
+  });
+  vi.spyOn(announce, "captureSubagentCompletionReply").mockImplementation(async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return await capture(...args);
   });
   const id = "completing-owner";
   await startCollector(id);

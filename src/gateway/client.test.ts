@@ -19,9 +19,10 @@ import {
   signDevicePayload as signDevicePayloadWithKey,
   type DeviceIdentity,
 } from "../infra/device-identity.js";
+import { stopMockedProxylineHandles } from "../infra/net/proxy/proxyline.test-support.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { GatewayClientOptions } from "./client.js";
-import { firstMockArg, waitForFast } from "./client.test-support.js";
+import { createAuthFailureMessage, firstMockArg, waitForFast } from "./client.test-support.js";
 
 type MockLoggingConfig = {
   redactPatterns?: string[];
@@ -292,14 +293,12 @@ describe("GatewayClient security checks", () => {
     "no_proxy",
   ]);
 
-  beforeEach(async () => {
+  beforeEach(() => {
     envSnapshot.restore();
     delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
     delete process.env.OPENCLAW_PROXY_ACTIVE;
     delete process.env.OPENCLAW_PROXY_LOOPBACK_MODE;
     delete process.env.HTTP_PROXY;
-    const { resetProxyLifecycleForTests } = await import("../infra/net/proxy/proxy-lifecycle.js");
-    resetProxyLifecycleForTests();
     installGlobalProxyMock.mockClear();
     proxylineStopMock.mockClear();
     wsInstances.length = 0;
@@ -312,8 +311,9 @@ describe("GatewayClient security checks", () => {
     delete process.env.OPENCLAW_PROXY_ACTIVE;
     delete process.env.OPENCLAW_PROXY_LOOPBACK_MODE;
     delete process.env.HTTP_PROXY;
-    const { resetProxyLifecycleForTests } = await import("../infra/net/proxy/proxy-lifecycle.js");
-    resetProxyLifecycleForTests();
+    stopMockedProxylineHandles(installGlobalProxyMock.mock.results);
+    const { getActiveManagedProxyUrl } = await import("../infra/net/proxy/active-proxy-state.js");
+    expect(getActiveManagedProxyUrl()).toBeUndefined();
     wsConstructorObservers.length = 0;
   });
 
@@ -2497,12 +2497,7 @@ describe("GatewayClient connect auth payload", () => {
     });
 
     const { ws, connect } = await startClientAndConnect({ client });
-    emitConnectFailure(
-      ws,
-      connect.id,
-      { code: "AUTH_UNAUTHORIZED" },
-      "Authorization: Bearer sk-testsecret1234567890abcd wss://user:pass@gateway.example/ws?token=secret-token", // pragma: allowlist secret
-    );
+    emitConnectFailure(ws, connect.id, { code: "AUTH_UNAUTHORIZED" }, createAuthFailureMessage());
 
     await waitForFast(() => {
       expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));

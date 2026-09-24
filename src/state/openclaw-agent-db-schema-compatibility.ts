@@ -2,6 +2,7 @@ import { MEMORY_INDEX_CHUNK_PROVENANCE_TABLE } from "../../packages/memory-host-
 import { MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-recall.js";
 import {
   MEMORY_INDEX_SOURCES_TABLE,
+  MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS,
   MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import type { SqliteSchemaCompatibility } from "../infra/sqlite-schema-contract.js";
@@ -59,6 +60,10 @@ export const AGENT_SCHEMA_COMPATIBILITY = {
     "idx_agent_session_nodes_entry_not_valid",
   ],
   optionalCanonicalTriggerGroups: [
+    {
+      tableName: "memory_index_chunks",
+      triggers: MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS,
+    },
     {
       tableName: MEMORY_INDEX_SOURCES_TABLE,
       triggers: MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,

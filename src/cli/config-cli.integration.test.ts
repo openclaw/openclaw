@@ -70,7 +70,7 @@ describe("config cli integration", () => {
                 code: 1,
               });
               expect(registeredRuntimeErrors.at(-1)).toContain(
-                'Plugin "sample" state migration is pending',
+                'Plugin "sample" data/settings upgrade is unfinished',
               );
               expect(registeredRuntimeErrors.at(-1)).toContain(
                 "openclaw plugins install @example/sample",

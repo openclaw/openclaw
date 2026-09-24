@@ -5,7 +5,7 @@ import { prepareUpdateFailureReport } from "../../infra/update-failure-report-pr
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { UPDATE_RUN_HEARTBEAT_MS } from "../../infra/update-run-timeouts.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliJsonFailure } from "../failure-output.js";
 import { createUpdateProgress, printResult } from "./progress.js";
@@ -201,8 +201,11 @@ describe("update progress", () => {
         .mockReturnValueOnce(present ? captured : undefined)
         .mockReturnValue(later);
       try {
-        await printResult(result, { run: context });
+        const nextAction = "Update is not finished. Check progress: openclaw update status";
+        await printResult(result, { run: context }, { nextAction });
         const lines = log.mock.calls.flat();
+        expect(lines.at(-1)).toBe(nextAction);
+        expect(lines.join("\n").match(/openclaw update status/g)).toHaveLength(1);
         expect(
           lines.filter((line) => typeof line === "string" && line.startsWith("Phase:")),
         ).toEqual(present ? ["Phase: requested", "Phase: verifying"] : ["Phase: requested"]);
@@ -351,6 +354,7 @@ describe("update progress", () => {
       },
       {},
     );
+    expect(log.mock.calls.flat().join("\n")).toContain(`Distinct detail ${"y".repeat(40)}`);
     expect(log.mock.calls.flat().join("\n")).toContain("deadline exceeded");
     log.mockClear();
     presentation.progress.onStepComplete?.({
@@ -396,6 +400,25 @@ describe("update progress", () => {
     expect(lines.filter((line) => line === "Phase: verifying")).toHaveLength(1);
     expect(lines.filter((line) => line === "Phase: finished")).toHaveLength(1);
     expect(lines.join("\n")).toContain("service running; version verified");
+  });
+
+  it("omits private capture receipts from final JSON without mutating retained history", async () => {
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    run.origin.updateRecoveryCapture = {
+      manifestSha256: "a".repeat(64),
+      status: "pending",
+      error: "private recovery detail",
+      configWrites: [],
+    };
+    const retained = structuredClone(run);
+    await printResult(result, { json: true, run: context });
+    expect(writeJson).toHaveBeenCalledExactlyOnceWith({
+      ...result,
+      run: { ...run, origin: {} },
+      reportPath,
+    });
+    expect(JSON.stringify(writeJson.mock.calls)).not.toContain("private recovery detail");
+    expect(run).toEqual(retained);
   });
 
   it("keeps JSON stdout silent until one result containing the durable row", async () => {

@@ -1016,6 +1016,18 @@
   margin-top: 4px;
 }
 
+.chat-tool-card__input > summary {
+  margin-inline: 12px;
+  padding-block: 6px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  cursor: default;
+}
+
+.chat-tool-card--flush > .chat-tool-card__raw {
+  margin-inline: 12px;
+}
+
 /* ── Activity group (a turn's run of tool rows) ── */
 .chat-activity-group {
   width: 100%;
@@ -1125,12 +1137,6 @@
 
 .chat-work-group .chat-activity-group__label {
   color: inherit;
-}
-
-.chat-activity-group__duration {
-  flex: none;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
 }
 
 .chat-group--activity .chat-activity-group__label {

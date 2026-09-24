@@ -108,24 +108,17 @@ it.each([
         throw new Error("attachment preparation failed");
       }
       const source = prepared.value.offloadedRefs[0]!.path;
+      const media = prepared.value.mediaPathOffloads[0]!;
       expect(await fs.readFile(source, "utf8")).toBe("original upload");
       if (canTransfer) {
-        expect(prepared.value.mediaPathOffloadPaths).toEqual([source]);
+        expect(media).toMatchObject({ path: source, fileName: "input.txt" });
         expect(sandboxSpy).not.toHaveBeenCalled();
       } else {
         expect(sandboxSpy).toHaveBeenCalled();
-        expect(prepared.value.mediaPathOffloadWorkspaceDir?.startsWith(state.path("sandbox"))).toBe(
-          true,
+        expect(media.workspaceDir?.startsWith(state.path("sandbox"))).toBe(true);
+        expect(await fs.readFile(path.join(media.workspaceDir!, media.path!), "utf8")).toBe(
+          "original upload",
         );
-        expect(
-          await fs.readFile(
-            path.join(
-              prepared.value.mediaPathOffloadWorkspaceDir!,
-              prepared.value.mediaPathOffloadPaths[0]!,
-            ),
-            "utf8",
-          ),
-        ).toBe("original upload");
       }
     } finally {
       release();
@@ -352,7 +345,14 @@ it.each([
         if (!result.ok) {
           throw new Error("ordinary managed-PDF fallback failed");
         }
-        expect(result.value.mediaPathOffloadPaths).toEqual([inboundPath]);
+        expect(result.value.mediaPathOffloads).toEqual([
+          {
+            path: inboundPath,
+            contentType: "application/pdf",
+            fileName: "notes.pdf",
+            workspaceDir: path.dirname(inboundPath),
+          },
+        ]);
         expect((await fs.readFile(inboundPath)).equals(bytes)).toBe(true);
         expect(discardSpy).not.toHaveBeenCalled();
         expect(respond).not.toHaveBeenCalled();

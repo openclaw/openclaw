@@ -59,6 +59,7 @@ export function isDuplicateRestartRecoverySource(
 }
 
 export async function retireTerminalRestartRecoverySourceClaim(params: {
+  agentId: string;
   sessionId: string;
   sessionKey: string;
   sourceTurnId: string;
@@ -66,7 +67,7 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
 }): Promise<SessionEntry | undefined> {
   let didRetire = false;
   const retired = await updateSessionEntry(
-    { storePath: params.storePath, sessionKey: params.sessionKey },
+    { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey },
     (current) => {
       if (
         current.sessionId !== params.sessionId ||
@@ -92,6 +93,7 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
 }
 
 export function createReplyRestartRecoveryClaimController(params: {
+  agentId: string;
   admissionRunId?: unknown;
   lifecycleGeneration: string | undefined;
   getEntry: () => SessionEntry | undefined;
@@ -144,7 +146,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       return result.sessionEntry as SessionEntry;
     }
     const persisted = await updateSessionEntry(
-      { storePath: options.storePath, sessionKey: options.sessionKey },
+      { agentId: params.agentId, storePath: options.storePath, sessionKey: options.sessionKey },
       (current) =>
         sessionMatchesExpectedTranscriptTurn(
           { entry: current },
@@ -193,6 +195,7 @@ export function createReplyRestartRecoveryClaimController(params: {
     const sessionId = params.getSessionId();
     const entry =
       loadSessionEntry({
+        agentId: params.agentId,
         storePath: params.storePath,
         sessionKey: params.sessionKey,
         clone: false,
@@ -212,6 +215,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       if (!isExactRecoveryClaim && hasRestartRecoverySourceClaim(entry, sourceTurnId)) {
         if (entry.status !== "running") {
           const retired = await retireTerminalRestartRecoverySourceClaim({
+            agentId: params.agentId,
             sessionId,
             sessionKey: params.sessionKey,
             sourceTurnId,
@@ -350,7 +354,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       }
       const updatedAt = Date.now();
       const persisted = await updateSessionEntry(
-        { storePath: params.storePath, sessionKey: params.sessionKey },
+        { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey },
         (current) =>
           current.sessionId === params.getSessionId() &&
           current.restartRecoveryDeliveryRunId === recoveryRunId &&
@@ -398,7 +402,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       // finished unhandled hook clears it so recovery can re-enter normally.
       const updatedAt = Date.now();
       const persisted = await updateSessionEntry(
-        { storePath: params.storePath, sessionKey: params.sessionKey },
+        { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey },
         (persistedCurrent) =>
           persistedCurrent.sessionId === params.getSessionId() &&
           persistedCurrent.restartRecoveryDeliveryRunId === recoveryRunId &&
@@ -427,7 +431,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       return;
     }
     const persisted = await patchSessionEntryCore(
-      { storePath: params.storePath, sessionKey: params.sessionKey },
+      { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey },
       (current) => {
         if (
           (current.abortedLastRun === true && current.mainRestartRecovery !== undefined) ||
@@ -439,37 +443,20 @@ export function createReplyRestartRecoveryClaimController(params: {
         // Unknown provider outcome is terminal for this live run. Retire its source without
         // replay so later distinct turns can proceed; a crash before this point leaves the
         // active receipt for restart-safe model reconciliation.
-        if (current.restartRecoveryDeliveryReceiptState === "terminal-pending") {
-          const endedAt = Date.now();
-          return {
-            ...buildRestartRecoveryClaimCleanupPatch({
-              entry: current,
-              recordTerminalSource: true,
-              terminalSourceRunId: recoverySourceRunId,
-            }),
-            abortedLastRun: true,
-            endedAt,
-            lifecycleRunId: undefined,
-            pendingFinalDelivery: undefined,
-            runtimeMs:
-              typeof current.startedAt === "number"
-                ? Math.max(0, endedAt - current.startedAt)
-                : undefined,
-            status: "failed" as const,
-            updatedAt: endedAt,
-          };
-        }
-        const preservesPendingFinal = current.pendingFinalDelivery !== undefined;
+        const terminalPending = current.restartRecoveryDeliveryReceiptState === "terminal-pending";
+        const preservesPendingFinal =
+          !terminalPending && current.pendingFinalDelivery !== undefined;
         const completesHandledSilent =
           current.restartRecoveryBeforeAgentReplyState === "handled-silent" &&
           !preservesPendingFinal;
-        const endedAt = completesHandledSilent ? Date.now() : undefined;
+        const endedAt = terminalPending || completesHandledSilent ? Date.now() : undefined;
         return {
           ...buildRestartRecoveryClaimCleanupPatch({
             entry: current,
             recordTerminalSource: true,
             terminalSourceRunId: recoverySourceRunId,
           }),
+          ...(terminalPending ? { pendingFinalDelivery: undefined } : {}),
           // Transport settlement owns this final checkpoint. Keep enough provenance for a
           // restart to enforce hook safety until that exact pending intent is resolved.
           ...(preservesPendingFinal
@@ -481,14 +468,14 @@ export function createReplyRestartRecoveryClaimController(params: {
             : {}),
           ...(endedAt !== undefined
             ? {
-                abortedLastRun: false,
+                abortedLastRun: terminalPending,
                 endedAt,
                 lifecycleRunId: undefined,
                 runtimeMs:
                   typeof current.startedAt === "number"
                     ? Math.max(0, endedAt - current.startedAt)
                     : undefined,
-                status: "done" as const,
+                status: terminalPending ? ("failed" as const) : ("done" as const),
               }
             : {}),
           updatedAt: endedAt ?? Date.now(),
@@ -515,6 +502,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       return false;
     }
     const persisted = loadSessionEntry({
+      agentId: params.agentId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
       clone: false,

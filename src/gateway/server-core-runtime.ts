@@ -5,7 +5,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { adoptPluginHttpRouteHandoffs } from "../plugins/http-registry.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
 import { restartRunningChannelAccounts, type ThawRestartTarget } from "./channel-thaw-restart.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { revokeAttachGrantsForSession } from "./mcp-grant-store.js";
@@ -234,6 +234,7 @@ export async function startGatewayCoreRuntime(input: {
     sessionCompanion,
     sessionObserver,
     sessionActivitySummaries,
+    channelAdmissionAudit,
     ...runtimeSubscriptionUnsubs
   } = await startupTrace.measure("runtime.subscriptions", () =>
     startGatewayEventSubscriptions({
@@ -285,8 +286,7 @@ export async function startGatewayCoreRuntime(input: {
     getLiveManager: (kind) => approvalManagersForReplay.get(kind),
     isCurrent: () => !runtime.connectionWork.signal.aborted,
   });
-  // One validator owns both request-time and manager-time checks. Worker claims
-  // are always read from the authoritative operational placement store.
+  // Request and manager checks retain the placement owner's prepared claim authority.
   const validateAgentRuntimeApprovalAuthority = createAgentRuntimeApprovalAuthorityValidator(
     workerEnvironmentStartup?.placementStore,
   );
@@ -376,9 +376,13 @@ export async function startGatewayCoreRuntime(input: {
     // expired/no-route terminals).
     const fenceResolver = { kind: "system", id: "worker-dispatch" } as const;
     for (const manager of [execApprovalManager, pluginApprovalManager]) {
-      for (const record of manager.listPendingRecords()) {
+      for (const record of manager.listLocalPendingRecords()) {
         if (approvalRequestTargetsSession(record.request, keys, sessionId)) {
-          manager.forceDenyDetailed(record.id, "run-aborted", fenceResolver, "cancelled");
+          void manager
+            .forceDenyDetailed(record.id, "run-aborted", fenceResolver, "cancelled")
+            .catch((error: unknown) => {
+              log.error(`approval dispatch-fence settlement failed: ${String(error)}`);
+            });
         }
       }
     }
@@ -524,6 +528,7 @@ export async function startGatewayCoreRuntime(input: {
     sessionCompanion,
     sessionObserver,
     sessionActivitySummaries,
+    channelAdmissionAudit,
     approvalSessionEvents,
     execApprovalManager,
     questionManager,

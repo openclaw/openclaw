@@ -29,6 +29,15 @@ export type CronAttentionJob = Pick<
   >;
 };
 
+export function cronOverdueAt(job: CronAttentionJob, schedulerEnabled: boolean | null): number {
+  return schedulerEnabled !== false &&
+    job.enabled &&
+    !isCronJobRunning(job) &&
+    job.state?.nextRunAtMs != null
+    ? job.state.nextRunAtMs + CRON_OVERDUE_GRACE_MS
+    : Infinity;
+}
+
 export function compareSidebarAttentionEntries(
   left: SidebarAttentionItem,
   right: SidebarAttentionItem,
@@ -106,14 +115,7 @@ export function buildSidebarAttentionEntries(params: {
     );
   }
   const overdueCron = params.cronJobs
-    .filter(
-      (job) =>
-        params.cronSchedulerEnabled !== false &&
-        job.enabled &&
-        !isCronJobRunning(job) &&
-        job.state?.nextRunAtMs != null &&
-        params.now - job.state.nextRunAtMs > CRON_OVERDUE_GRACE_MS,
-    )
+    .filter((job) => params.now > cronOverdueAt(job, params.cronSchedulerEnabled))
     .toSorted(
       (left, right) =>
         (right.state?.nextRunAtMs ?? right.updatedAtMs) -

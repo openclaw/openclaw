@@ -58,7 +58,20 @@ suite.define(() => {
             cases: [
               {
                 match: { taskId: oldTask.id, cursor: "older" },
-                response: { messages: [{ role: "user", content: "Original automation request" }] },
+                response: {
+                  messages: [
+                    { role: "user", content: "Original automation request" },
+                    {
+                      role: "assistant",
+                      senderSession: {
+                        sessionKey: oldTask.childSessionKey,
+                        agentId: "main",
+                        label: "Earlier automation",
+                      },
+                      content: "Forwarded automation input",
+                    },
+                  ],
+                },
               },
               {
                 match: { taskId: oldTask.id },
@@ -98,8 +111,19 @@ suite.define(() => {
       expect(headingBounds.y + headingBounds.height).toBeLessThanOrEqual(900);
       await transcript.getByRole("button", { name: "Show earlier" }).click();
       await transcript.getByText("Original automation request", { exact: true }).waitFor();
+      const attribution = transcript.locator(".chat-reply-attribution--forwarded");
+      expect(await attribution.textContent()).toContain("Earlier automation");
+      expect(await attribution.locator("a, [role=link], [tabindex]").count()).toBe(0);
+      expect(await transcript.locator(".sr-only").allTextContents()).toEqual([
+        "User: ",
+        "Assistant: ",
+      ]);
+      expect(await attribution.evaluate((element) => getComputedStyle(element).display)).toBe(
+        "inline-flex",
+      );
       expect(await oldRow.getByRole("link", { name: "Open session" }).count()).toBe(1);
       await transcript.getByRole("button", { name: "Close", exact: true }).click();
+      expect(await oldButton.evaluate((element) => element === document.activeElement)).toBe(true);
       await gateway.deferNext("tasks.history", { taskId: oldTask.id, limit: 100 });
       await oldButton.click();
       await expect.poll(async () => (await gateway.getRequests("tasks.history")).length).toBe(3);

@@ -1,10 +1,8 @@
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
@@ -55,8 +53,13 @@ import { loadChatBranches } from "./chat-history-branches.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
-import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
+import {
+  findRequestPayload,
+  makeChatHost,
+  makeRequestMock,
+  requestCalls,
+  requireRecord,
+} from "./chat-host.test-support.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
@@ -113,7 +116,6 @@ import {
   cancelQueuedMessageEdit,
   updateQueuedMessageEdit,
 } from "./queued-message-edit.ts";
-import { handleAbortChat, hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { handleChatScrollTakeover } from "./scroll.ts";
 import {
   cacheChatSessionSnapshot,
@@ -253,29 +255,6 @@ function createJsonResponse(body: unknown, options: { ok?: boolean } = {}): Resp
   return response;
 }
 
-type MockCallSource<Call extends ReadonlyArray<unknown> = ReadonlyArray<unknown>> = {
-  mock: {
-    calls: ArrayLike<Call>;
-  };
-};
-
-function requestCalls<Call extends ReadonlyArray<unknown>>(
-  source: MockCallSource<Call>,
-  method: string,
-): Call[] {
-  return Array.from(source.mock.calls).filter(([calledMethod]) => calledMethod === method);
-}
-
-const requireRecord = createRequireRecord("object", "expected-label");
-
-function findRequestPayload(source: MockCallSource, method: string, label: string) {
-  const call = Array.from(source.mock.calls).find((candidate) => candidate[0] === method);
-  if (!call) {
-    throw new Error(`expected request call: ${label}`);
-  }
-  return requireRecord(call[1], label);
-}
-
 function eventPayloads(host: TestChatHost, event: string): Array<Record<string, unknown>> {
   return (host.eventLogBuffer ?? [])
     .filter((entry): entry is { event: string; payload: Record<string, unknown> } => {
@@ -303,13 +282,7 @@ function admitHostQueueItems(host: TestChatHost): void {
 }
 
 function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
-  return {
-    ts: 0,
-    path: "",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
+  return { ...sessionListFixture(sessions, 0), path: "" };
 }
 
 function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
@@ -518,74 +491,6 @@ describe("refreshChat", () => {
       expect(requestCalls(host.request, "models.list")).toHaveLength(1);
     },
   );
-
-  it("keeps current models interactive while the direct catalog revalidates", async () => {
-    const startup = createDeferred<unknown>();
-    const catalog = createDeferred<unknown>();
-    const host = makeChatHost({
-      chatModelSwitchPromises: {},
-      hello: gatewayHelloForMethods(["chat.metadata", "chat.startup"], []),
-      requestHandlers: {
-        "chat.startup": () => startup.promise,
-        "models.list": () => catalog.promise,
-      },
-    });
-    const cachedModel = {
-      available: true,
-      id: "cached-model",
-      name: "Cached Model",
-      provider: "openai",
-    };
-    const client = expectDefined(host.client, "chat host client");
-    const scope = { agentId: "main", sessionKey: host.sessionKey };
-    const release = subscribeChatMetadata(client, scope, () => {});
-    beginChatMetadataPublication(client, scope).publish({
-      commands: [],
-      models: [cachedModel],
-    });
-
-    host.chatModelCatalog = [cachedModel];
-    const refresh = refreshPageChat(asChatPageHost(host), {
-      awaitHistory: true,
-      deferBranches: true,
-      startup: true,
-    });
-    release();
-
-    expect(host.chatModelCatalog).toEqual([cachedModel]);
-    expect(asChatPageHost(host).chatModelsLoading).toBe(false);
-    const container = document.createElement("div");
-    const controls = renderChatPaneComposerControls({
-      state: asChatPageHost(host),
-      selectedSession: undefined,
-      agentDefaultModel: undefined,
-      modelAccess: { allowed: true, requiredScope: "operator.write" },
-      effortAccess: { allowed: true, requiredScope: "operator.write" },
-      contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },
-      permissionAccess: { allowed: true, requiredScope: "operator.write" },
-      canSelectFull: true,
-      onModelSetup: vi.fn(),
-    });
-    render(controls.composerControls, container);
-    expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
-    expect(container.textContent).toContain("Cached Model");
-    expect(container.textContent).not.toContain("Loading models…");
-
-    startup.resolve({
-      messages: [],
-      metadata: {
-        commands: [],
-        models: [{ ...cachedModel, id: "fresh-model", name: "Fresh Model" }],
-      },
-    });
-    catalog.resolve({ models: [{ ...cachedModel, id: "fresh-model", name: "Fresh Model" }] });
-    await expect(refresh).resolves.toBeUndefined();
-    await waitForFast(() =>
-      expect(host.chatModelCatalog).toEqual([
-        { ...cachedModel, id: "fresh-model", name: "Fresh Model" },
-      ]),
-    );
-  });
 
   it("does not let late startup metadata replace a repaired retained session", async () => {
     const startup = createDeferred<unknown>();
@@ -989,12 +894,8 @@ describe("refreshChat", () => {
         hasActiveRun: true,
         status: "running",
       });
-      const host = makeChatHost({
-        sessionKey: "agent:work:main",
-        agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
-        sessionsResult: createSessionsResult([row("agent:main:main")]),
-        sessionsResultAgentId: "main",
-        requestHandlers: {
+      const client = clientWithRequest(
+        makeRequestMock({
           "sessions.list": createSessionsResult([current]),
           "chat.history": {
             messages: [],
@@ -1007,20 +908,30 @@ describe("refreshChat", () => {
               totalTokens: 90_000,
             },
           },
-        },
+        }),
+      );
+      const { gateway, emitEvent } = createGatewayHarness(client);
+      const host = makeChatHost({
+        client,
+        sessions: createTestSessionCapability(gateway),
+        sessionKey: "agent:work:main",
+        agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
+        sessionsResult: createSessionsResult([row("agent:main:main")]),
+        sessionsResultAgentId: "main",
       });
       host.sessions.reconcile(row("agent:main:main"), undefined, { resultAgentId: "main" });
       await host.sessions.list({ agentId: "work" });
       if (generation === "deleted") {
-        host.sessions.reconcileChanged(
-          {
+        emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: {
             sessionKey: "global",
             agentId: "work",
             sessionId: current.sessionId,
             reason: "delete",
           },
-          { resultAgentId: "main" },
-        );
+        });
       }
       const primary = host.sessions.state.result;
       const pane = host.sessionsResult;
@@ -1120,12 +1031,14 @@ describe("refreshChat", () => {
       expectedSend: { message: "after stale error" },
     },
   ])("$name", async ({ history, overrides, message, expectedSend }) => {
+    const sendRequested = createDeferred();
     const host = makeChatHost({
       ...overrides,
       requestHandlers: {
         "chat.history": history,
         "chat.send": (params: unknown) => {
           const payload = requireRecord(params, "restored send payload");
+          sendRequested.resolve();
           return { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
         },
       },
@@ -1142,9 +1055,10 @@ describe("refreshChat", () => {
     admitHostQueueItems(host);
 
     await refreshPageChat(asChatPageHost(host), { scheduleScroll: false });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await sendRequested.promise;
+    await resumeStoredChatOutboxes(host);
+    expect(host.request).toHaveBeenCalledWith("chat.send", expect.objectContaining(expectedSend));
+    expect(host.chatQueue).toEqual([]);
 
     if (expectedSend.sessionKey === "global") {
       expect(host.sessions.state.result).toBe(primaryResult);
@@ -1161,8 +1075,6 @@ describe("refreshChat", () => {
     } else {
       expect(host.sessionsResult).toBe(host.sessions.state.result);
     }
-    expect(host.request).toHaveBeenCalledWith("chat.send", expect.objectContaining(expectedSend));
-    expect(host.chatQueue).toEqual([]);
   });
 
   it("keeps a timed-out startup settled through an outbox wake until explicit history retry", async () => {
@@ -10159,276 +10071,4 @@ describe("handleSendChat", () => {
   });
 });
 
-describe("handleAbortChat", () => {
-  it("preserves the draft for connected toolbar aborts", async () => {
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.abort": { aborted: true },
-      },
-      chatRunId: "run-main",
-      chatMessage: "next prompt",
-      sessionKey: "agent:main",
-    });
-
-    await handleAbortChat(host, { preserveDraft: true });
-
-    expect(host.request).toHaveBeenCalledWith("chat.abort", {
-      runId: "run-main",
-      sessionKey: "agent:main",
-    });
-    expect(host.chatMessage).toBe("next prompt");
-    expect(host.chatRunId).toBe("run-main");
-  });
-
-  it("aborts the exact selected session when no browser run id exists", async () => {
-    const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
-    const sessionKey = "agent:main:openclaw-weixin:direct:wechat-user";
-    const host = makeChatHost({
-      client: clientWithRequest(request),
-      chatRunId: null,
-      chatMessage: "/stop",
-      sessionKey,
-      sessionsResult: createSessionsResult([
-        row(sessionKey, { hasActiveRun: true, status: "running" }),
-      ]),
-    });
-
-    await handleAbortChat(host);
-
-    expect(request).toHaveBeenCalledWith("sessions.abort", {
-      key: sessionKey,
-      clearQueued: true,
-    });
-    expect(request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
-    expect(host.chatMessage).toBe("");
-  });
-
-  it("keeps selected global aborts on the compatible key-only request", async () => {
-    const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
-    const host = makeChatHost({
-      client: clientWithRequest(request),
-      chatRunId: null,
-      chatMessage: "/stop",
-      sessionKey: "global",
-      assistantAgentId: "work",
-      agentsList: { defaultId: "main" },
-      sessionsResult: createSessionsResult([
-        row("global", { hasActiveRun: true, agentId: "work" } as Partial<GatewaySessionRow>),
-      ]),
-    });
-
-    await handleAbortChat(host);
-
-    expect(request).toHaveBeenCalledWith("sessions.abort", {
-      key: "global",
-      agentId: "work",
-    });
-  });
-
-  it.each([
-    {
-      name: "clears queues for a per-sender agent main session",
-      scope: "per-sender",
-      expected: {
-        key: "agent:work:main",
-        clearQueued: true,
-      },
-    },
-    {
-      name: "keeps a global-scope agent main alias on the compatible request",
-      scope: "global",
-      expected: {
-        key: "agent:work:main",
-        agentId: "work",
-      },
-    },
-  ] as const)("$name", async ({ scope, expected }) => {
-    const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
-    const sessionKey = "agent:work:main";
-    const host = makeChatHost({
-      client: clientWithRequest(request),
-      chatRunId: null,
-      sessionKey,
-      agentsList: { defaultId: "main", mainKey: "main", scope },
-      sessionsResult: createSessionsResult([
-        row(sessionKey, { hasActiveRun: true, status: "running" }),
-      ]),
-    });
-
-    await handleAbortChat(host);
-
-    expect(request).toHaveBeenCalledWith("sessions.abort", expected);
-  });
-
-  it.each(["/stop", "stop", "esc", "abort", "wait", "exit"])(
-    "clears the typed stop command %s after aborting the active run",
-    async (message) => {
-      const host = makeChatHost({
-        requestHandlers: {
-          "chat.abort": { aborted: true },
-        },
-        chatRunId: "run-main",
-        chatMessage: message,
-        sessionKey: "agent:main",
-      });
-
-      await handleSendChat(host);
-
-      expect(host.request).toHaveBeenCalledWith("chat.abort", {
-        runId: "run-main",
-        sessionKey: "agent:main",
-      });
-      expect(host.chatMessage).toBe("");
-    },
-  );
-
-  it("blocks a typed stop before aborting when the operator lacks write scope", async () => {
-    const host = makeChatHost({
-      requestHandlers: {},
-      chatRunId: "run-main",
-      chatMessage: "/stop",
-      hello: gatewayHelloForMethods(["chat.abort"], ["operator.read"]),
-      sessionKey: "agent:main",
-      chatRunError: { summary: "Previous run failed" },
-    });
-
-    await handleSendChat(host);
-
-    expect(host.request).not.toHaveBeenCalled();
-    expect(host.lastError).toBeTruthy();
-    expect(host.chatError).toBe(host.lastError);
-    expect(host.chatMessage).toBe("/stop");
-    expect(host.chatRunError).toEqual({ summary: "Previous run failed" });
-  });
-
-  it("queues a typed exact-run stop while disconnected", async () => {
-    const request = vi.fn();
-    const client = clientWithRequest(request);
-    const host = makeChatHost({
-      client,
-      connected: false,
-      chatRunId: "run-main",
-      chatMessage: "/stop",
-      sessionKey: "agent:main",
-    });
-
-    await handleSendChat(host);
-
-    expect(host.pendingAbort).toEqual({
-      sourceClient: client,
-      runId: "run-main",
-      sessionKey: "agent:main",
-    });
-    expect(host.chatMessage).toBe("");
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { name: "queues the active run abort while disconnected", preserveDraft: false },
-    {
-      name: "preserves the draft when queueing a toolbar abort while disconnected",
-      preserveDraft: true,
-    },
-  ])("$name", async ({ preserveDraft }) => {
-    const client = clientWithRequest(vi.fn());
-    const host = makeChatHost({
-      client,
-      connected: false,
-      chatRunId: "run-main",
-      chatMessage: "draft",
-      sessionKey: "agent:main",
-    });
-
-    await handleAbortChat(host, preserveDraft ? { preserveDraft } : undefined);
-
-    expect(host.pendingAbort).toEqual({
-      sourceClient: client,
-      runId: "run-main",
-      sessionKey: "agent:main",
-    });
-    expect(host.chatMessage).toBe(preserveDraft ? "draft" : "");
-    expect(host.chatRunId).toBe("run-main");
-  });
-
-  it("does not queue an unversioned session stop while disconnected", async () => {
-    const request = vi.fn();
-    const client = clientWithRequest(request);
-    const sessionKey = "agent:main:telegram:direct:queued-user";
-    const host = makeChatHost({
-      client,
-      connected: false,
-      chatRunId: null,
-      chatMessage: "draft",
-      sessionKey,
-      sessionsResult: createSessionsResult([
-        row(sessionKey, { hasActiveRun: true }),
-        row("agent:other", { hasActiveRun: true }),
-      ]),
-    });
-
-    await handleAbortChat(host);
-
-    expect(host.pendingAbort).toBeUndefined();
-    expect(host.chatMessage).toBe("draft");
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("does not queue an unversioned global stop while disconnected", async () => {
-    const request = vi.fn();
-    const client = clientWithRequest(request);
-    const host = makeChatHost({
-      client,
-      connected: false,
-      chatRunId: null,
-      chatMessage: "draft",
-      sessionKey: "global",
-      assistantAgentId: "work",
-      agentsList: { defaultId: "main" },
-      sessionsResult: createSessionsResult([
-        row("global", { hasActiveRun: true, agentId: "work" } as Partial<GatewaySessionRow>),
-      ]),
-    });
-
-    await handleAbortChat(host);
-
-    expect(host.pendingAbort).toBeUndefined();
-    expect(host.chatMessage).toBe("draft");
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      name: "ignores stale active-run flags once the current session is terminal",
-      selected: { hasActiveRun: true, status: "done" as const },
-    },
-    {
-      name: "ignores stale running status once the gateway reports no active run",
-      selected: { hasActiveRun: false, status: "running" as const },
-    },
-  ])("$name", ({ selected }) => {
-    const host = makeChatHost({
-      chatRunId: null,
-      sessionKey: "agent:main",
-      sessionsResult: createSessionsResult([
-        row("agent:main", selected),
-        row("agent:other", { hasActiveRun: true, status: "running" }),
-      ]),
-    });
-
-    expect(hasAbortableSessionRun(host)).toBe(false);
-  });
-
-  it("keeps the draft when disconnected without an active run", async () => {
-    const host = makeChatHost({
-      connected: false,
-      chatRunId: null,
-      chatMessage: "draft",
-    });
-
-    await handleAbortChat(host);
-
-    expect(host.pendingAbort).toBeUndefined();
-    expect(host.chatMessage).toBe("draft");
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

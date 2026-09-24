@@ -27,6 +27,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import { attachGatewayWsConnectionHandler } from "./server/ws-connection.js";
 import {
@@ -38,7 +39,6 @@ import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
   GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
   type GatewayIngressWebSocket,
-  type GatewayWsClient,
 } from "./server/ws-types.js";
 import {
   classifyGatewayStaleInstall,
@@ -135,7 +135,7 @@ async function expectIdlePreauthSocketClose() {
 
 describe("gateway pre-auth hardening", () => {
   it("reserves the public worker path before plugin upgrade routing", async () => {
-    const clients = new Set<GatewayWsClient>();
+    const clients = new GatewayClientRegistry();
     const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
     const httpServer = createGatewayHttpServer({
       clients,
@@ -191,7 +191,7 @@ describe("gateway pre-auth hardening", () => {
   });
 
   it("rejects unattributable proxy traffic on the public worker path", async () => {
-    const clients = new Set<GatewayWsClient>();
+    const clients = new GatewayClientRegistry();
     const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
     const httpServer = createGatewayHttpServer({
       clients,
@@ -237,7 +237,7 @@ describe("gateway pre-auth hardening", () => {
   });
 
   it("admits the production worker client over the public path without a gateway challenge", async () => {
-    const clients = new Set<GatewayWsClient>();
+    const clients = new GatewayClientRegistry();
     const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
     const httpServer = createGatewayHttpServer({
       clients,
@@ -365,7 +365,7 @@ describe("gateway pre-auth hardening", () => {
   });
 
   it("rejects the reserved worker path when worker admission is unavailable", async () => {
-    const clients = new Set<GatewayWsClient>();
+    const clients = new GatewayClientRegistry();
     const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
     const httpServer = createGatewayHttpServer({
       clients,
@@ -407,7 +407,7 @@ describe("gateway pre-auth hardening", () => {
   it.each(["draining", "prepared"] as const)(
     "rejects public worker websocket upgrades while suspension is %s",
     async (phase) => {
-      const clients = new Set<GatewayWsClient>();
+      const clients = new GatewayClientRegistry();
       const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
       const httpServer = createGatewayHttpServer({
         clients,
@@ -453,7 +453,7 @@ describe("gateway pre-auth hardening", () => {
   );
 
   it("rejects upgrades before websocket handlers attach (pre-auth budget enforced, then released)", async () => {
-    const clients = new Set<GatewayWsClient>();
+    const clients = new GatewayClientRegistry();
     const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
     const httpServer = createGatewayHttpServer({
       clients,
@@ -562,7 +562,7 @@ describe("gateway pre-auth hardening", () => {
   );
 
   it("opens only the startup generation core preauth transport during restart drain", async () => {
-    const clients = new Set<GatewayWsClient>();
+    const clients = new GatewayClientRegistry();
     const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
     const httpServer = createGatewayHttpServer({
       clients,

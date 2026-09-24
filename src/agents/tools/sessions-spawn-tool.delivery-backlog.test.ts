@@ -24,8 +24,8 @@ vi.mock("../subagents/spawn/subagent-spawn.js", () => ({
 vi.mock("../subagents/spawn/acp-spawn.js", () => ({
   spawnAcpDirect: mocks.spawnAcpDirect,
 }));
-vi.mock("../subagents/spawn/subagent-spawn-deps.js", () => ({
-  getSubagentSpawnDeps: () => ({ prepareModelChoice: supportedSpawnModelChoice }),
+vi.mock("../subagents/spawn/subagent-spawn.runtime.js", () => ({
+  prepareModelChoice: supportedSpawnModelChoice,
 }));
 
 describe("sessions_spawn with retained completion deliveries", () => {

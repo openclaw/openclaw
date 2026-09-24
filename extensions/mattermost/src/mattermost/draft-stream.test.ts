@@ -1,7 +1,11 @@
 // Mattermost tests cover draft stream plugin behavior.
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
-import { createChannelProgressDraftCompositor } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createChannelProgressDraftCompositor,
+  createLivePreviewLifecycle,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
 import {
@@ -90,7 +94,7 @@ function createProviderPostFixture(
       posts.set(id, message);
       return { id, message } as T;
     }
-    const id = path.slice("/posts/".length);
+    const id = path.slice("/posts/".length).replace(/\/patch$/, "");
     if (init?.method === "DELETE") {
       await options.beforeDelete?.(id);
       posts.delete(id);
@@ -291,9 +295,10 @@ describe("createMattermostDraftStream", () => {
           info: { kind: "final" },
           kind: "direct",
           client,
-          draftStream: stream,
+          previewLifecycle: createLivePreviewLifecycle<ReplyPayload, string>({
+            draft: { ...stream, id: stream.postId },
+          }),
           resolvePreviewFinalText: (text) => ({ editText: text, alreadyDelivered: false }),
-          previewState: { finalizedViaPreviewPost: false },
           logVerboseMessage: vi.fn(),
           deliverPayload,
         });
@@ -391,7 +396,7 @@ describe("createMattermostDraftStream", () => {
 
     expect(calls).toHaveLength(2);
     expect(calls[0]?.path).toBe("/posts");
-    expect(calls[1]?.path).toBe("/posts/post-1");
+    expect(calls[1]?.path).toBe("/posts/post-1/patch");
     expect(parseRequestJson(calls[1]?.init)).toEqual({
       id: "post-1",
       message: "Stale partial",
@@ -480,7 +485,7 @@ describe("createMattermostDraftStream", () => {
       if (path === "/posts") {
         return { id: "post-1" } as T;
       }
-      if (path === "/posts/post-1") {
+      if (path === "/posts/post-1/patch") {
         if (failNextPatch) {
           failNextPatch = false;
           throw new Error("patch failed");
@@ -500,7 +505,7 @@ describe("createMattermostDraftStream", () => {
     expect(warn).toHaveBeenCalledWith("mattermost stream preview failed: patch failed");
     expect(calls).toHaveLength(2);
     expect(calls[0]?.path).toBe("/posts");
-    expect(calls[1]?.path).toBe("/posts/post-1");
+    expect(calls[1]?.path).toBe("/posts/post-1/patch");
   });
 });
 
@@ -614,7 +619,12 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     configuredStream.update("tool");
     await configuredStream.flush();
 
-    expect(calls.map((call) => call.path)).toEqual(["/posts", "/posts/post-1", "/posts", "/posts"]);
+    expect(calls.map((call) => call.path)).toEqual([
+      "/posts",
+      "/posts/post-1/patch",
+      "/posts",
+      "/posts",
+    ]);
     expect(calls.map((call) => call.init?.method)).toEqual(["POST", "PUT", "POST", "POST"]);
     const finalizedChunks = [
       parseRequestJson(calls[1]?.init)?.message,
@@ -676,16 +686,16 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     releaseFirstCreate?.();
 
     await vi.waitFor(() => {
-      expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1"]);
+      expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1/patch"]);
     });
     releaseBoundaryPatch?.();
     await vi.waitFor(() => {
-      expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1", "/posts"]);
+      expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1/patch", "/posts"]);
     });
     releaseSecondCreate?.();
     await Promise.all([firstBoundary, secondBoundary, flush]);
 
-    expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1", "/posts", "/posts"]);
+    expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1/patch", "/posts", "/posts"]);
     expect(parseRequestJson(calls[0]?.init)?.message).toBe("tool start");
     expect(parseRequestJson(calls[1]?.init)?.message).toBe("tool complete");
     expect(parseRequestJson(calls[2]?.init)?.message).toBe("assistant progress");
@@ -726,7 +736,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     releaseFirstCreate?.();
     await boundary;
 
-    expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1"]);
+    expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1/patch"]);
     expect(parseRequestJson(calls[0]?.init)?.message).toBe("Looking into the logs");
     expect(parseRequestJson(calls[1]?.init)?.message).toBe("Looking into the logs now");
     expect(stream.postId()).toBeUndefined();
@@ -922,7 +932,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
       })),
     ).toEqual([
       { path: "/posts", method: "POST", message: "First Second Third" },
-      { path: "/posts/post-1", method: "PUT", message: "First" },
+      { path: "/posts/post-1/patch", method: "PUT", message: "First" },
       { path: "/posts", method: "POST", message: "Second" },
       { path: "/posts", method: "POST", message: "Third" },
     ]);
@@ -972,7 +982,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
       })),
     ).toEqual([
       { path: "/posts", method: "POST", message: "First Second Third" },
-      { path: "/posts/post-1", method: "PUT", message: "First" },
+      { path: "/posts/post-1/patch", method: "PUT", message: "First" },
       { path: "/posts", method: "POST", message: "Second" },
       { path: "/posts", method: "POST", message: "Third" },
     ]);

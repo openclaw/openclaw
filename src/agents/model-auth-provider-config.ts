@@ -1,6 +1,7 @@
 /**
  * Provider-entry configuration and stored-profile binding for model auth.
  */
+import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveMergedModelProviderEntry } from "../config/model-provider-config.js";
 import {
@@ -96,12 +97,16 @@ export function resolveProviderConfig(
 }
 
 function resolveProviderSourceConfig(cfg: OpenClawConfig | undefined, provider: string) {
+  const source = getRuntimeConfigSourceSnapshot();
+  if (cfg === source) {
+    return cfg;
+  }
   return providerConfigMatchesRuntimeSnapshot({
     inputConfig: cfg,
     runtimeConfig: getRuntimeConfigSnapshot(),
     provider,
   })
-    ? (getRuntimeConfigSourceSnapshot() ?? cfg)
+    ? (source ?? cfg)
     : cfg;
 }
 
@@ -472,7 +477,9 @@ export async function resolveProviderEntryApiKeyBinding(params: {
   store: AuthProfileStore;
   agentDir?: string;
   secretSentinels?: boolean;
+  signal?: AbortSignal;
 }): Promise<ProviderEntryApiKeyBindingResolution> {
+  params.signal?.throwIfAborted();
   const reference = resolveProviderEntryApiKeyProfileReference(params);
   if (reference.kind === "none" || reference.kind === "marker") {
     return { kind: "none" };
@@ -487,7 +494,9 @@ export async function resolveProviderEntryApiKeyBinding(params: {
       store: params.store,
       profileId: reference.profileId,
       agentDir: params.agentDir,
+      signal: params.signal,
     });
+    params.signal?.throwIfAborted();
     if (!resolved) {
       return { kind: "profile-unresolved", profileId: reference.profileId };
     }
@@ -504,6 +513,7 @@ export async function resolveProviderEntryApiKeyBinding(params: {
       }),
     };
   } catch (err) {
+    params.signal?.throwIfAborted();
     if (err instanceof SecretSurfaceUnavailableError) {
       throw err;
     }
@@ -636,6 +646,7 @@ export function providerConfigMatchesRuntimeSnapshot(params: {
   return inputProvider && runtimeProvider
     ? params.inputConfig === params.runtimeConfig ||
         inputProvider === runtimeProvider ||
+        isDeepStrictEqual(inputProvider, runtimeProvider) ||
         hashRuntimeConfigValue(toComparableConfig(inputProvider)) ===
           hashRuntimeConfigValue(toComparableConfig(runtimeProvider))
     : false;

@@ -1,6 +1,6 @@
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
-import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import {
   createSubsystemLogger,
@@ -103,11 +103,8 @@ export function resolveTelegramMessageTurnSettings(params: {
       params.telegramCfg.groupAllowFrom ??
       params.telegramCfg.allowFrom ??
       allowFrom,
-    historyLimit: Math.max(
-      0,
-      params.telegramCfg.historyLimit ??
-        params.cfg.messages?.groupChat?.historyLimit ??
-        DEFAULT_GROUP_HISTORY_LIMIT,
+    historyLimit: resolvePromptHistoryLimit(
+      params.telegramCfg.historyLimit ?? params.cfg.messages?.groupChat?.historyLimit,
     ),
     replyToMode: params.opts.replyToMode ?? params.telegramCfg.replyToMode ?? "off",
     streamMode: resolveTelegramStreamMode(params.telegramCfg),

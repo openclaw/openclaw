@@ -187,3 +187,71 @@ it("retains the snapshot until a signalled joined waiter acquires its lease", as
   }
   expect(exists).toBe(false);
 });
+
+it("cancels queued snapshot allocation when its only waiter aborts", async () => {
+  const controller = new AbortController();
+  const reason = new Error("cancelled before snapshot allocation");
+  let allocated = false;
+  const pending = prepareSingleFlightSqliteSnapshot(
+    "cancelled-queued-source.sqlite",
+    "test",
+    async (signal) => {
+      signal.throwIfAborted();
+      allocated = true;
+      return {
+        location: "unused-snapshot.sqlite",
+        cleanup: () => true,
+        cleanupAsync: async () => true,
+      };
+    },
+    controller.signal,
+  );
+  controller.abort(reason);
+  await expect(pending).rejects.toBe(reason);
+  expect(allocated).toBe(false);
+});
+
+it("keeps queued production for a surviving waiter after the first aborts", async () => {
+  const controller = new AbortController();
+  const reason = new Error("first waiter stopped");
+  const produced = createDeferred();
+  const entered = createDeferred();
+  let cleaned = false;
+  const producer = async (signal: AbortSignal) => {
+    signal.throwIfAborted();
+    entered.resolve();
+    await produced.promise;
+    signal.throwIfAborted();
+    return {
+      location: "surviving-snapshot.sqlite",
+      cleanup: () => true,
+      cleanupAsync: async () => {
+        cleaned = true;
+        return true;
+      },
+    };
+  };
+  const first = prepareSingleFlightSqliteSnapshot(
+    "surviving-queued-source.sqlite",
+    "test",
+    producer,
+    controller.signal,
+  );
+  const second = prepareSingleFlightSqliteSnapshot(
+    "surviving-queued-source.sqlite",
+    "test",
+    producer,
+  );
+  controller.abort(reason);
+  try {
+    await expect(first).rejects.toBe(reason);
+    await entered.promise;
+    expect(cleaned).toBe(false);
+  } finally {
+    produced.resolve();
+    const snapshot = await second;
+    expect(snapshot.location).toBe("surviving-snapshot.sqlite");
+    expect(await snapshot.cleanupAsync()).toBe(true);
+  }
+  expect(cleaned).toBe(true);
+});

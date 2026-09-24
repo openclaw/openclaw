@@ -65,7 +65,16 @@ type FailedPlacement = Extract<Placement, { state: "failed" }>;
 
 export function isFailedWorkerPlacementEnvironmentGone(params: {
   environmentService:
-    | Pick<NonNullable<SessionWorkerPlacementContext["workerEnvironmentService"]>, "get">
+    | {
+        get(
+          environmentId: string,
+        ):
+          | Pick<
+              NonNullable<ReturnType<WorkerEnvironmentServiceContract["get"]>>,
+              "state" | "leaseId"
+            >
+          | undefined;
+      }
     | undefined;
   placement: FailedPlacement;
 }): boolean {

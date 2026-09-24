@@ -47,16 +47,16 @@ vi.mock("../../../logger.js", () => ({
 }));
 
 import { logInfo, logWarn } from "../../../logger.js";
-import { getActiveManagedProxyTlsOptions } from "./active-proxy-state.js";
+import { getActiveManagedProxyTlsOptions, getActiveManagedProxyUrl } from "./active-proxy-state.js";
 import {
   ensureInheritedManagedProxyRoutingActive,
-  resetProxyLifecycleForTests,
   registerManagedProxyBrowserCdpBypass,
   registerManagedProxyGatewayLoopbackBypass,
   startProxy as startProxyRuntime,
   stopProxy,
   type ProxyHandle,
 } from "./proxy-lifecycle.js";
+import { stopMockedProxylineHandles } from "./proxyline.test-support.js";
 
 const mockLogInfo = vi.mocked(logInfo);
 const mockLogWarn = vi.mocked(logWarn);
@@ -105,7 +105,6 @@ describe("startProxy", () => {
     }
     mockLogInfo.mockReset();
     mockLogWarn.mockReset();
-    resetProxyLifecycleForTests();
     installGlobalProxyMock.mockClear();
     proxylineRegisterBypassMock.mockClear();
     proxylineStopMock.mockClear();
@@ -117,7 +116,7 @@ describe("startProxy", () => {
     for (const handle of activeProxyHandles.splice(0).toReversed()) {
       await stopProxy(handle);
     }
-    resetProxyLifecycleForTests();
+    stopMockedProxylineHandles(installGlobalProxyMock.mock.results);
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -128,6 +127,7 @@ describe("startProxy", () => {
         process.env[key] = savedEnv[key];
       }
     }
+    expect(getActiveManagedProxyUrl()).toBeUndefined();
   });
 
   function writeTempCa(contents = "proxy-ca"): string {
@@ -156,8 +156,6 @@ describe("startProxy", () => {
   });
 
   it("exposes the active managed proxy URL", async () => {
-    const { getActiveManagedProxyUrl } = await import("./active-proxy-state.js");
-
     expect(getActiveManagedProxyUrl()).toBeUndefined();
 
     const handle = await startProxy({
@@ -311,9 +309,10 @@ describe("startProxy", () => {
   });
 
   it("redacts proxy credentials before logging the active proxy URL", async () => {
-    await startProxy({
-      proxyUrl: "http://user:pass@127.0.0.1:3128",
-    });
+    const proxyUrl = new URL("http://127.0.0.1:3128");
+    proxyUrl.username = "user";
+    proxyUrl.password = "pass";
+    await startProxy({ proxyUrl: proxyUrl.href });
 
     expect(mockLogInfo).toHaveBeenCalledWith(
       "proxy: routing process HTTP traffic through external proxy http://127.0.0.1:3128",

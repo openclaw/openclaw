@@ -1,5 +1,5 @@
 import { resolveStateDir } from "../config/paths.js";
-import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
+import { loadDeviceIdentityIfPresentAsync } from "../infra/device-identity-async.js";
 
 const localNodeIdByStateDir = new Map<string, string>();
 
@@ -13,7 +13,7 @@ export async function resolveLocalNodeId(
   if (cached) {
     return cached;
   }
-  const nodeId = loadDeviceIdentityIfPresent({ env })?.deviceId ?? null;
+  const nodeId = (await loadDeviceIdentityIfPresentAsync({ env }))?.deviceId ?? null;
   if (nodeId) {
     localNodeIdByStateDir.set(stateDir, nodeId);
   }

@@ -11,6 +11,7 @@ import {
 import { getRuntimeConfig } from "../config/io.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -29,6 +30,7 @@ import {
   resolveSessionEventAgentScope,
   type SessionEventAgentScope,
 } from "./session-request-agent.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
   resolveSessionSubscriptionKey,
@@ -42,6 +44,18 @@ import {
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
+
+async function withPreparedEventRow(
+  projection: SessionRowProjection | undefined,
+  query: { key: string; agentId: string; storePath?: string } | undefined,
+  publish: () => void,
+) {
+  if (!projection || !query) {
+    publish();
+    return;
+  }
+  await withReadySessionRows(projection, () => [query], publish, { includeAncestors: true });
+}
 
 function readTranscriptUpdateLifecycleOwner(
   update: InternalSessionTranscriptUpdate,
@@ -122,11 +136,6 @@ export function createTranscriptUpdateBroadcastHandler(params: {
     // messages requires an async read from the session file.
     const tail = broadcastQueues.get(laneKey) ?? Promise.resolve();
     const task = tail.then(async () => {
-      if (projection) {
-        do {
-          await projection.ensureMaterialized();
-        } while (projection.needsMaterialization);
-      }
       return handleTranscriptUpdateBroadcast(params, queuedUpdate, agentScope, projection);
     });
     const settled = task.then(
@@ -281,7 +290,10 @@ async function handleTranscriptUpdateBroadcast(
         asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.transcriptPosition,
       );
     } catch (error) {
-      if (!isSessionTranscriptProjectionUnavailableError(error)) {
+      if (
+        !isSessionTranscriptProjectionUnavailableError(error) &&
+        !(error instanceof WorkerTaskError && error.code === "overloaded")
+      ) {
         throw error;
       }
       message = undefined;
@@ -301,108 +313,121 @@ async function handleTranscriptUpdateBroadcast(
       normalizeOptionalString(update.target?.sessionId) ??
       entry?.sessionId;
     const storePath = updateStorePath ?? fallbackTarget?.storeTarget.storePath;
-    messageSeq = messageSessionId
-      ? asPositiveSafeInteger(
-          await readSessionMessageCountAsync({
-            agentId: update.target?.agentId ?? routingAgentId,
-            sessionEntry: entry,
-            sessionId: messageSessionId,
-            sessionKey,
-            storePath,
-          }),
-        )
-      : undefined;
-  }
-  if (projection) {
-    do {
-      await projection.ensureMaterialized();
-    } while (projection.needsMaterialization);
-  }
-  if (lifecycleRevision) {
-    // A reset can retain sessionId, so validate the captured owner after every
-    // awaited transcript read before projecting the current session snapshot.
-    const currentLifecycleOwner = readTranscriptUpdateLifecycleOwner(update, projection);
-    if (
-      !currentLifecycleOwner ||
-      (currentLifecycleOwner.lifecycleRevision &&
-        currentLifecycleOwner.lifecycleRevision !== lifecycleRevision)
-    ) {
-      return;
+    try {
+      messageSeq = messageSessionId
+        ? asPositiveSafeInteger(
+            await readSessionMessageCountAsync({
+              agentId: update.target?.agentId ?? routingAgentId,
+              sessionEntry: entry,
+              sessionId: messageSessionId,
+              sessionKey,
+              storePath,
+            }),
+          )
+        : undefined;
+    } catch (error) {
+      if (!(error instanceof WorkerTaskError && error.code === "overloaded")) {
+        throw error;
+      }
+      message = undefined;
     }
   }
-  const sessionRow = routingAgentId
-    ? projection?.snapshot({ key: sessionKey, agentId: routingAgentId, storePath: targetStorePath })
-        .row
-    : null;
-  const activeRunState =
-    sessionRow &&
-    (sessionRow.key !== "global" || routingAgentId !== undefined || compatibilityOwnerAgentId)
-      ? resolveVisibleActiveSessionRunState({
-          context: params,
-          requestedKey: sessionKey,
-          canonicalKey: sessionRow.key,
-          sessionId: sessionRow.sessionId,
-          ...(routingAgentId ? { agentId: routingAgentId } : {}),
-          defaultAgentId: compatibilityOwnerAgentId,
-          projectedAgentRunIndex: projection?.state.rowContext.projectedAgentRuns,
-        })
-      : null;
-  const sessionSnapshot = buildGatewaySessionSnapshot({
-    sessionRow,
-    agentId: eventAgentId,
-    includeSession: true,
-    activeRunState,
-  });
-  if (message === undefined) {
-    // A committed batch or unavailable selected row must invalidate
-    // both session-list and targeted transcript subscribers exactly once.
-    params.broadcastToConnIds(
-      "sessions.changed",
-      {
+  await withPreparedEventRow(
+    projection,
+    routingAgentId
+      ? { key: sessionKey, agentId: routingAgentId, storePath: targetStorePath }
+      : undefined,
+    () => {
+      if (lifecycleRevision) {
+        // A reset can retain sessionId, so validate the captured owner after every
+        // awaited transcript read before projecting the current session snapshot.
+        const currentLifecycleOwner = readTranscriptUpdateLifecycleOwner(update, projection);
+        if (
+          !currentLifecycleOwner ||
+          (currentLifecycleOwner.lifecycleRevision &&
+            currentLifecycleOwner.lifecycleRevision !== lifecycleRevision)
+        ) {
+          return;
+        }
+      }
+      const sessionRow = routingAgentId
+        ? projection?.snapshot({
+            key: sessionKey,
+            agentId: routingAgentId,
+            storePath: targetStorePath,
+          }).row
+        : null;
+      const activeRunState =
+        sessionRow &&
+        (sessionRow.key !== "global" || routingAgentId !== undefined || compatibilityOwnerAgentId)
+          ? resolveVisibleActiveSessionRunState({
+              context: params,
+              requestedKey: sessionKey,
+              canonicalKey: sessionRow.key,
+              sessionId: sessionRow.sessionId,
+              ...(routingAgentId ? { agentId: routingAgentId } : {}),
+              defaultAgentId: compatibilityOwnerAgentId,
+              projectedAgentRunIndex: projection?.state.rowContext.projectedAgentRuns,
+            })
+          : null;
+      const sessionSnapshot = buildGatewaySessionSnapshot({
+        sessionRow,
+        agentId: eventAgentId,
+        includeSession: true,
+        activeRunState,
+      });
+      if (message === undefined) {
+        // A committed batch or unavailable selected row must invalidate
+        // both session-list and targeted transcript subscribers exactly once.
+        params.broadcastToConnIds(
+          "sessions.changed",
+          {
+            sessionKey,
+            ...(eventAgentId ? { agentId: eventAgentId } : {}),
+            phase: "message",
+            ts: Date.now(),
+            ...sessionSnapshot,
+          },
+          connIds,
+        );
+        return;
+      }
+      const projected = projectSessionMessagePayload({
         sessionKey,
         ...(eventAgentId ? { agentId: eventAgentId } : {}),
-        phase: "message",
-        ts: Date.now(),
-        ...sessionSnapshot,
-      },
-      connIds,
-    );
-    return;
-  }
-  const projected = projectSessionMessagePayload({
-    sessionKey,
-    ...(eventAgentId ? { agentId: eventAgentId } : {}),
-    message,
-    transcriptPosition,
-    ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-    ...(messageSeq !== undefined ? { messageSeq } : {}),
-    ...(update.runId ? { runId: update.runId } : {}),
-    sessionSnapshot,
-  });
-  if (projected.payload) {
-    params.broadcastToConnIds("session.message", projected.payload, connIds);
-    return;
-  }
+        message,
+        transcriptPosition,
+        ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+        ...(messageSeq !== undefined ? { messageSeq } : {}),
+        ...(update.runId ? { runId: update.runId } : {}),
+        sessionSnapshot,
+      });
+      if (projected.payload) {
+        params.broadcastToConnIds("session.message", projected.payload, connIds);
+        return;
+      }
 
-  // Messages suppressed from display can still change transcript state, so
-  // notify broad session listeners even when no session.message is emitted.
-  const sessionEventConnIds = params.sessionEventSubscribers.getAll();
-  if (!hasSessionChangeReceivers(sessionEventConnIds)) {
-    return;
-  }
-  params.broadcastToConnIds(
-    "sessions.changed",
-    {
-      sessionKey,
-      ...(eventAgentId ? { agentId: eventAgentId } : {}),
-      phase: "message",
-      ts: Date.now(),
-      ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-      ...(messageSeq !== undefined ? { messageSeq } : {}),
-      ...sessionSnapshot,
+      // Messages suppressed from display can still change transcript state, so
+      // notify broad session listeners even when no session.message is emitted.
+      const sessionEventConnIds = params.sessionEventSubscribers.getAll();
+      if (!hasSessionChangeReceivers(sessionEventConnIds)) {
+        return;
+      }
+      params.broadcastToConnIds(
+        "sessions.changed",
+        {
+          sessionKey,
+          ...(eventAgentId ? { agentId: eventAgentId } : {}),
+          phase: "message",
+          ts: Date.now(),
+          ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+          ...(messageSeq !== undefined ? { messageSeq } : {}),
+          ...sessionSnapshot,
+        },
+        sessionEventConnIds,
+        { dropIfSlow: true },
+      );
     },
-    sessionEventConnIds,
-    { dropIfSlow: true },
   );
 }
 
@@ -478,46 +503,43 @@ export function createLifecycleEventBroadcastHandler(params: {
             sessionId: captured?.entry?.sessionId,
           })
         : undefined;
-    if (projection) {
-      do {
-        await projection.ensureMaterialized();
-      } while (projection.needsMaterialization);
-    }
-    if (projection && (!captured || !projection.isCurrent(captured))) {
-      return;
-    }
-    const sessionRow = projection?.snapshot(query).row;
-    const activeRunState = capacityState ?? (sessionRow ? readActiveState(sessionRow) : null);
-    params.broadcastToConnIds(
-      "sessions.changed",
-      {
-        sessionKey: event.sessionKey,
-        ...(eventAgentId ? { agentId: eventAgentId } : {}),
-        reason: event.reason,
-        ...(event.catalogChanged ? { catalogChanged: true } : {}),
-        parentSessionKey: event.parentSessionKey,
-        label: event.label,
-        displayName: event.displayName,
-        ts: Date.now(),
-        ...buildGatewaySessionSnapshot({
-          sessionRow,
-          includeSession: true,
-          agentId: eventAgentId,
+    await withPreparedEventRow(projection, query, () => {
+      if (projection && (!captured || !projection.isCurrent(captured))) {
+        return;
+      }
+      const sessionRow = projection?.snapshot(query).row;
+      const activeRunState = capacityState ?? (sessionRow ? readActiveState(sessionRow) : null);
+      params.broadcastToConnIds(
+        "sessions.changed",
+        {
+          sessionKey: event.sessionKey,
+          ...(eventAgentId ? { agentId: eventAgentId } : {}),
+          reason: event.reason,
+          ...(event.catalogChanged ? { catalogChanged: true } : {}),
+          parentSessionKey: event.parentSessionKey,
           label: event.label,
           displayName: event.displayName,
-          parentSessionKey: event.parentSessionKey,
-          activeRunState,
-        }),
-        ...(event.swarmGroupId
-          ? {
-              swarmGroupId: event.swarmGroupId,
-              kind: event.kind,
-              text: event.text,
-            }
-          : {}),
-      },
-      connIds,
-      { dropIfSlow: true },
-    );
+          ts: Date.now(),
+          ...buildGatewaySessionSnapshot({
+            sessionRow,
+            includeSession: true,
+            agentId: eventAgentId,
+            label: event.label,
+            displayName: event.displayName,
+            parentSessionKey: event.parentSessionKey,
+            activeRunState,
+          }),
+          ...(event.swarmGroupId
+            ? {
+                swarmGroupId: event.swarmGroupId,
+                kind: event.kind,
+                text: event.text,
+              }
+            : {}),
+        },
+        connIds,
+        { dropIfSlow: true },
+      );
+    });
   };
 }

@@ -24,6 +24,22 @@ export type QueuedChatTurnEntry = {
 
 export type QueuedChatTurnMap = Map<string, QueuedChatTurnEntry>;
 
+export function isQueuedChatTurnForSession(
+  turns: QueuedChatTurnMap | undefined,
+  runId: string,
+  scope: Pick<QueuedChatTurnEntry, "sessionId" | "sessionKey" | "agentId">,
+): boolean {
+  const queued = turns?.get(runId);
+  return Boolean(
+    queued &&
+    queued.sessionId === scope.sessionId &&
+    queued.sessionKey === scope.sessionKey &&
+    queued.agentId === scope.agentId &&
+    queued.abortable !== false &&
+    !queued.controller.signal.aborted,
+  );
+}
+
 type RegisterQueuedChatTurnParams = {
   chatQueuedTurns: QueuedChatTurnMap;
   runId: string;
@@ -192,6 +208,8 @@ export function listQueuedChatTurnsForSession(params: {
   chatQueuedTurns: QueuedChatTurnMap;
   sessionKeys: Iterable<string>;
   sessionIds?: Iterable<string | undefined>;
+  /** A narrow caller needs both the key and the originally admitted incarnation. */
+  requiredSessionId?: string;
   agentId?: string;
   defaultAgentId?: string;
 }): QueuedChatTurnMatch[] {
@@ -213,6 +231,12 @@ export function listQueuedChatTurnsForSession(params: {
       continue;
     }
     if (!sessionKeys.has(entry.sessionKey) && !sessionIds.has(entry.sessionId)) {
+      continue;
+    }
+    if (
+      params.requiredSessionId !== undefined &&
+      (!sessionKeys.has(entry.sessionKey) || entry.sessionId !== params.requiredSessionId)
+    ) {
       continue;
     }
     if (

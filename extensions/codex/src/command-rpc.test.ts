@@ -149,6 +149,59 @@ describe("Codex command RPC helpers", () => {
     >[0];
   }
 
+  it.each(["before-write", "after-write"] as const)(
+    "checks owner before dispatch and preserves accepted settlement after revocation at %s",
+    async (revokeAt) => {
+      let ownerCurrent = true;
+      let writes = 0;
+      let settled = false;
+      requestCodexAppServerJsonMock.mockImplementationOnce(
+        async (request: { assertCurrent?: () => void }) => {
+          request.assertCurrent?.();
+          writes += 1;
+          ownerCurrent = false;
+          return resumeResponse;
+        },
+      );
+      const result = codexControlRequest(
+        {},
+        "thread/fork",
+        { threadId: "source-thread", excludeTurns: true },
+        {
+          startOptions: {
+            transport: "stdio",
+            homeScope: "user",
+            command: "codex",
+            args: ["app-server"],
+            headers: {},
+          },
+          authProfileId: null,
+          assertOwnerCurrent: () => {
+            if (!ownerCurrent) {
+              throw new Error("Command owner was revoked");
+            }
+          },
+          beforeRequest: async () => {
+            if (revokeAt === "before-write") {
+              ownerCurrent = false;
+            }
+          },
+          onResponse: async (_response, _client, authority) => {
+            authority.assertCurrent();
+            settled = true;
+          },
+        },
+      );
+      if (revokeAt === "before-write") {
+        await expect(result).rejects.toThrow("Command owner was revoked");
+        expect({ writes, settled }).toEqual({ writes: 0, settled: false });
+      } else {
+        await expect(result).resolves.toEqual(resumeResponse);
+        expect({ writes, settled }).toEqual({ writes: 1, settled: true });
+      }
+    },
+  );
+
   it("keeps plugin reads without an admitted session on the selected auth partition", async () => {
     const options = { config, authProfileId: "openai:selected" };
     const startOptions = { transport: "stdio" as const, command: "codex", args: [], headers: {} };

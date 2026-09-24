@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { readConfigFileSnapshot } from "../../../config/config.js";
 import { createConfigIoContext } from "../../../config/io.context.js";
 import { createConfigIO } from "../../../config/io.factory.js";
 import { readConfigFileSnapshotFromContext } from "../../../config/io.snapshot.js";
@@ -12,13 +14,17 @@ import {
   getResolvedConfigEnvSecretRef,
   setConfigResolutionFacts,
 } from "../../../config/resolution-facts.js";
+import { writeOpenClawConfig } from "../../../config/test-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import { validateConfigObjectWithPlugins } from "../../../config/validation.js";
+import { isPathInside } from "../../../infra/path-guards.js";
+import * as pluginModuleLoader from "../../../plugins/plugin-module-loader-cache.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../../version.js";
 import { withDoctorConfigPreflightHome } from "../../doctor-config-preflight.test-support.js";
 import {
+  commitAutomaticConfigRepair,
   isStartupConfigRepairResult,
   planAutomaticConfigRepair,
   resolveStartupConfigSnapshot,
@@ -48,6 +54,17 @@ function invalidSnapshot(params: {
 
 describe("automatic startup config repair", () => {
   it("preserves a resolved legacy channel owner in the same repair as the explicit roster", async () => {
+    const coreSourceRoot = fileURLToPath(new URL("../../../", import.meta.url));
+    const loadModule = pluginModuleLoader.getCachedPluginModuleLoader;
+    const nativeRepair = vi
+      .spyOn(pluginModuleLoader, "getCachedPluginModuleLoader")
+      .mockImplementation((options) => {
+        if (isPathInside(coreSourceRoot, options.modulePath)) {
+          throw new Error("Host core must retain its native module graph during binding repair");
+        }
+        return loadModule(options);
+      });
+    onTestFinished(() => nativeRepair.mockRestore());
     await withOpenClawTestState({ prefix: "openclaw-channel-owner-repair-" }, async (state) => {
       await state.writeConfig({
         agents: { list: [{ id: "${LEGACY_CHANNEL_AGENT}" }, { id: "main" }] },
@@ -186,6 +203,84 @@ describe("automatic startup config repair", () => {
       expect(await fs.readFile(configPath, "utf8")).toBe(raw);
     });
   });
+
+  it("preserves the admitted reference values when the environment rotates before commit", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync(
+        { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", BROWSER_BIN: "/opt/example/browser-planning" },
+        async () => {
+          const configPath = await writeOpenClawConfig(home, {
+            browser: { executablePath: "${BROWSER_BIN}" },
+            session: { idleMinutes: 45 },
+            gateway: { mode: "local" },
+            plugins: { enabled: false },
+          });
+          const originalBytes = await fs.readFile(configPath, "utf8");
+          const snapshot = await readConfigFileSnapshot();
+          expect(snapshot.valid).toBe(false);
+          const plan = planAutomaticConfigRepair(snapshot);
+          if (!plan) {
+            throw new Error("expected a repairable session config");
+          }
+          await withEnvAsync({ BROWSER_BIN: "/opt/example/browser-current" }, async () => {
+            await commitAutomaticConfigRepair(plan, snapshot);
+            const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+            expect(saved.browser).toEqual({ executablePath: "${BROWSER_BIN}" });
+            const reloaded = await readConfigFileSnapshot();
+            expect(reloaded.valid).toBe(true);
+            expect(reloaded.sourceConfig.browser?.executablePath).toBe(
+              "/opt/example/browser-current",
+            );
+            expect(planAutomaticConfigRepair(reloaded)).toBeNull();
+          });
+          await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(originalBytes);
+        },
+      );
+    });
+  });
+
+  it.each(["${STARTUP_MEMORY_KEY}", "$${STARTUP_MEMORY_KEY}"])(
+    "accepts the committed startup repair with a moved %s reference",
+    async (apiKey) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync(
+          { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", STARTUP_MEMORY_KEY: "fixture-memory-key" },
+          async () => {
+            const configPath = await writeOpenClawConfig(home, {
+              agents: { defaults: { memorySearch: { remote: { apiKey } } } },
+              gateway: { mode: "local" },
+              plugins: { enabled: false },
+            });
+            const originalBytes = await fs.readFile(configPath, "utf8");
+            const snapshot = await readConfigFileSnapshot();
+            expect(snapshot.valid).toBe(false);
+            expect(resolveStartupConfigSnapshot(snapshot)?.valid).toBe(true);
+            const plan = planAutomaticConfigRepair(snapshot);
+            if (!plan) {
+              throw new Error("expected a repairable memory config");
+            }
+            await commitAutomaticConfigRepair(plan, snapshot);
+            const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+            expect(saved.memory.search.remote.apiKey).toBe(apiKey);
+            const reloaded = await readConfigFileSnapshot();
+            expect(reloaded.valid).toBe(true);
+            expect(reloaded.sourceConfig.memory?.search?.remote?.apiKey).toBe(
+              apiKey.startsWith("$$") ? "${STARTUP_MEMORY_KEY}" : "fixture-memory-key",
+            );
+            expect(isStartupConfigRepairResult(snapshot, reloaded)).toBe(true);
+            expect(resolveStartupConfigSnapshot(reloaded)).toBe(reloaded);
+            expect(
+              isStartupConfigRepairResult(snapshot, {
+                ...reloaded,
+                sourceConfig: { ...reloaded.sourceConfig, gateway: { mode: "remote" } },
+              }),
+            ).toBe(false);
+            await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(originalBytes);
+          },
+        );
+      });
+    },
+  );
 
   it("plans a deterministic, fully valid migration of retired session keys", () => {
     const snapshot = invalidSnapshot({

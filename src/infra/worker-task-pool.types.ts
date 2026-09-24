@@ -37,7 +37,7 @@ export type WorkerTaskResponse = {
   onConsumed?: () => void;
 };
 
-export type WorkerTaskRequestContext = {
+type WorkerTaskRequestContext = {
   /** Task lifetime: closes on completion/checkpoint as well as cancellation. */
   signal: AbortSignal;
   /** Queue pressure requests a checkpoint; it does not cancel underlying host work. */

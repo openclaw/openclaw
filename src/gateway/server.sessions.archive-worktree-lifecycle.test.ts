@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, onTestFinished, test, vi } from "vitest";
 import {
   ErrorCodes,
@@ -25,11 +26,10 @@ import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
   patchSessionEntryCore,
-  recordSessionParticipant,
 } from "../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { worktreesHandlers } from "./server-methods/worktrees.js";
@@ -582,26 +582,33 @@ test.each([
 );
 
 test.each(["sessions.patch", "sessions.patchMany"] as const)(
-  "%s preserves the checkout when the archive metadata write fails",
+  "%s preserves the checkout when the archive commit is refused",
   async (method) => {
     const fixture = await createArchiveWorktreeFixture();
     const { key, sessionId, storePath, worktree } = fixture;
     const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
     await fs.writeFile(path.join(worktree.path, "README.md"), "uncommitted edit\n");
     await fs.writeFile(path.join(worktree.path, "draft.txt"), "untracked draft\n");
-    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
-      agentId: "main",
-    }).path;
-    const { db } = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-    // Fail the real write after async projection, when premature cleanup has already run.
-    db.exec(`
-      CREATE TEMP TRIGGER reject_archive_metadata
-      BEFORE UPDATE OF entry_json ON session_nodes
-      WHEN json_extract(NEW.entry_json, '$.archivedAt') IS NOT NULL
-      BEGIN
-        SELECT RAISE(ABORT, 'injected archive metadata failure');
-      END;
-    `);
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    let rejectedCommit = false;
+    const admission = vi
+      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (
+            request.stage === "commit" &&
+            isRecord(request.facts) &&
+            isRecord(request.facts.publication) &&
+            request.facts.publication.kind === "session-entry-replacements" &&
+            Array.isArray(request.facts.publication.changedKeys) &&
+            request.facts.publication.changedKeys.includes(key)
+          ) {
+            rejectedCommit = true;
+            throw new Error("injected archive commit failure");
+          }
+          admit(request, grant);
+        }, attachment),
+      );
     try {
       const outcome =
         method === "sessions.patch"
@@ -616,6 +623,7 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
         ok: false,
         error: { code: "UNAVAILABLE", retryable: true },
       });
+      expect(rejectedCommit).toBe(true);
       expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
       expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
       await expect(fs.readFile(path.join(worktree.path, "README.md"), "utf8")).resolves.toBe(
@@ -628,7 +636,7 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
         transcript,
       );
     } finally {
-      db.exec("DROP TRIGGER reject_archive_metadata");
+      admission.mockRestore();
     }
   },
 );

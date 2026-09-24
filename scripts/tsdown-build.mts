@@ -897,12 +897,26 @@ export function resolveTsdownBuildInvocation(
   const forwardedArgs = wrapperOwnsTsdownCleanup(args)
     ? args.filter((arg) => arg !== "--clean" && !arg.startsWith("--clean="))
     : args;
+  const explicitConcurrency = args.some(
+    (arg) => arg === "--concurrency" || arg.startsWith("--concurrency="),
+  );
+  const filters = readForwardedOptions(args, ["--filter", "-F"]);
+  const runtimeOnly =
+    !args.includes("--dts") &&
+    (!args.some(isConfigArg) || selectsMainConfig(args)) &&
+    filters.length > 0 &&
+    filters.every((filter) => filter === TSDOWN_UNIFIED_CONFIG_GROUP);
   const tsdownArgs = [
     "--config-loader",
     "unrun",
     "--logLevel",
     logLevel,
     "--no-clean",
+    // Native declaration children retain entire compiler graphs. Let tsdown own
+    // config admission so preparation and trace drainage cannot overlap unboundedly.
+    ...(!explicitConcurrency && !runtimeOnly && tsdownDeclarationsEnabled(args, env)
+      ? ["--concurrency", "1"]
+      : []),
     ...forwardedArgs,
   ];
   // A package-manager bin shim can select a different runtime from PATH.
@@ -917,6 +931,11 @@ export function resolveTsdownBuildInvocation(
       env,
     },
   };
+}
+
+function tsdownDeclarationsEnabled(args: string[], env: NodeJS.ProcessEnv) {
+  const dtsArg = args.findLast((arg) => arg === "--dts" || arg === "--no-dts");
+  return dtsArg ? dtsArg === "--dts" : env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
 }
 
 function selectsMainConfig(args: string[]) {
@@ -967,10 +986,7 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
     const previous = forwardedArgs[index - 1];
     return !isFilterArg(arg) && !isFilterFlag(previous);
   });
-  const dtsArg = aiArgs.findLast((arg) => arg === "--dts" || arg === "--no-dts");
-  const declarationsEnabled = dtsArg
-    ? dtsArg === "--dts"
-    : env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
+  const declarationsEnabled = tsdownDeclarationsEnabled(aiArgs, env);
   const hasForwardedConfig = aiArgs.some(isConfigArg);
 
   const declarationEnv =

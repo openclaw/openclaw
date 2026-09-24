@@ -4,6 +4,7 @@ import {
   assertAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
 } from "../agents/admitted-run-context.js";
+import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -422,41 +423,68 @@ describe("typed in-process agent authorization", () => {
     },
   );
 
-  it("rejects a session commit after its composed caller authority closes", async () => {
-    const admitted = createContext();
-    let current = true;
-    const assertCallerCurrent = () => {
-      if (!current) {
-        throw new Error("caller authority closed");
-      }
-    };
-    admitted.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry([
-        {
-          name: "sessions.create",
-          scope: "operator.write",
-          owner: { kind: "core", area: "sessions" },
-          handler: ({ respond, sessionMutationCommitGuard }: GatewayRequestHandlerOptions) => {
-            current = false;
-            sessionMutationCommitGuard?.();
-            respond(true, { key: "agent:main:dashboard:child" });
+  it.each(["explicit", "operator-tool", "system-tool"])(
+    "rejects a session commit after its %s authority closes",
+    async (source) => {
+      const admitted = createContext();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let current = true;
+      const assertCallerCurrent = () => {
+        if (!current) {
+          throw new Error("caller authority closed");
+        }
+      };
+      admitted.getGatewayMethodRegistry = () =>
+        createGatewayMethodRegistry([
+          {
+            name: "sessions.create",
+            scope: "operator.write",
+            owner: { kind: "core", area: "sessions" },
+            handler: async ({
+              respond,
+              sessionMutationCommitGuard,
+            }: GatewayRequestHandlerOptions) => {
+              entered.resolve();
+              await release.promise;
+              sessionMutationCommitGuard?.();
+              respond(true, { key: "agent:main:dashboard:child" });
+            },
           },
-        },
-      ]);
+        ]);
 
-    await expect(
-      dispatchGatewayMethodInProcess(
-        "sessions.create",
-        { agentId: "main" },
-        {
-          forceSyntheticClient: true,
-          resolveGatewayContext: () => admitted,
-          sessionMutationCommitGuard: assertCallerCurrent,
-          syntheticScopes: ["operator.write"],
-        },
-      ),
-    ).rejects.toThrow("caller authority closed");
-  });
+      const dispatch = () =>
+        dispatchGatewayMethodInProcess(
+          "sessions.create",
+          { agentId: "main" },
+          {
+            forceSyntheticClient: true,
+            resolveGatewayContext: () => admitted,
+            sessionMutationCommitGuard: source === "explicit" ? assertCallerCurrent : undefined,
+            syntheticScopes: ["operator.write"],
+          },
+        );
+      const owner = createOperatorClient({ profileId: "tool-owner", scopes: ["operator.write"] });
+      const pending =
+        source === "explicit"
+          ? dispatch()
+          : withOperatorToolGatewayAuthority(
+              {
+                authenticatedUserProfile:
+                  source === "operator-tool" ? owner.authenticatedUserProfile : undefined,
+                operatorRoleActor: source === "system-tool" ? { kind: "system" } : undefined,
+                scopes: ["operator.write"],
+                assertCurrent: assertCallerCurrent,
+              },
+              dispatch,
+            );
+      const rejected = expect(pending).rejects.toThrow("caller authority closed");
+      await entered.promise;
+      current = false;
+      release.resolve();
+      await rejected;
+    },
+  );
 
   it("preserves the scoped operator identity across synthetic model-initiated session creation", async () => {
     const owner = createOperatorClient({
@@ -620,6 +648,49 @@ describe("typed in-process agent authorization", () => {
       },
     );
   });
+
+  it.each(["operator.write", "operator.sessions.write"] as const)(
+    "retains inherited System %s when a native agent launch has a broader ambient client",
+    async (sourceScope) => {
+      const owner = createOperatorClient({
+        profileId: "system-launch",
+        scopes: ["operator.admin"],
+      });
+      owner.internal = { operatorRoleActor: { kind: "system" } };
+      const context = createContext();
+      const result = { runId: "system-source-ceiling", status: "accepted" };
+      startTurn.mockImplementation(async ({ principal, io }) => {
+        expect(principal.authenticatedUserProfile).toBeUndefined();
+        expect(principal.internal.operatorRoleActor).toEqual({ kind: "system" });
+        expect(principal.connect.scopes).toEqual(["operator.write"]);
+        io.emitAcceptance([true, result, undefined]);
+      });
+      const launch = withPluginRuntimeGatewayRequestScope(
+        { client: owner, context, isWebchatConnect: () => false },
+        () =>
+          withOperatorToolGatewayAuthority(
+            {
+              authenticatedUserProfile: owner.authenticatedUserProfile!,
+              operatorRoleActor: { kind: "system" },
+              scopes: [sourceScope],
+            },
+            () =>
+              callAgentToolGatewayRequest({
+                method: "agent",
+                agentRunTracking: "native_subagent",
+                params: { message: "run child", idempotencyKey: result.runId },
+              }),
+          ),
+      );
+      if (sourceScope === "operator.write") {
+        await expect(launch).resolves.toEqual(result);
+        expect(startTurn).toHaveBeenCalledOnce();
+      } else {
+        await expect(launch).rejects.toThrow("missing scope: operator.write");
+        expect(startTurn).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("rejects tracked agent launches when a scoped operator identity was dropped", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

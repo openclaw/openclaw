@@ -29,10 +29,11 @@ import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citati
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { assertOutboundHandoffCurrent, OutboundHandoffRejectedError } from "./deliver-handoff.js";
-import type {
-  MessageActionGateway,
-  MessageActionResult,
-  ResolvedActionContext,
+import {
+  createChannelActionContext,
+  type MessageActionGateway,
+  type MessageActionResult,
+  type ResolvedActionContext,
 } from "./message-action-contracts.js";
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import { resolveAndApplyOutboundThreadId } from "./message-action-threading.js";
@@ -556,21 +557,23 @@ export async function executeMessagePlugin(
     mediaAccess,
     accountId,
     dryRun,
-    gateway,
     input,
     abortSignal,
-    agentId,
   } = ctx;
   throwIfAborted(abortSignal);
   const action = input.action as Exclude<ChannelMessageActionName, "send" | "poll" | "broadcast">;
+  const actionResult = {
+    kind: "action" as const,
+    channel,
+    action,
+    ...(ctx.resolvedTarget ? { to: ctx.resolvedTarget.to } : {}),
+    dryRun,
+  };
   if (dryRun) {
     return {
-      kind: "action",
-      channel,
-      action,
+      ...actionResult,
       handledBy: "dry-run",
       payload: { ok: true, dryRun: true, channel, action },
-      dryRun: true,
     };
   }
 
@@ -609,12 +612,9 @@ export async function executeMessagePlugin(
   const gatewayPluginAction = await executeGatewayAction(ctx, {
     action,
     result: (payload) => ({
-      kind: "action",
-      channel,
-      action,
+      ...actionResult,
       handledBy: "plugin",
       payload,
-      dryRun,
     }),
   });
   const replyToIsExplicit = Boolean(readToolStringParam(params, "replyTo"));
@@ -627,15 +627,8 @@ export async function executeMessagePlugin(
   let handled;
   try {
     handled = await dispatchChannelMessageAction({
-      channel,
-      action,
-      cfg,
-      params,
+      ...createChannelActionContext({ ctx, action, mediaAccess }),
       progressSnapshot: input.progressSnapshot,
-      mediaAccess,
-      mediaLocalRoots: mediaAccess.localRoots,
-      mediaReadFile: mediaAccess.readFile,
-      accountId: accountId ?? undefined,
       requesterAccountId:
         authorization !== undefined
           ? authorization.requesterAccountId
@@ -644,22 +637,10 @@ export async function executeMessagePlugin(
         authorization !== undefined
           ? authorization.requesterSenderId
           : (input.requesterSenderId ?? undefined),
-      senderIsOwner: input.senderIsOwner,
-      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
-        input.conversationReadOrigin,
-      ),
-      sessionKey: input.sessionKey,
-      sessionId: input.sessionId,
-      inboundEventKind: input.inboundEventKind,
-      agentId,
-      gateway,
       toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
       messageActionAuthorization: authorization,
       deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
-      assertDirectAdapterHandoff: input.assertDirectAdapterHandoff,
-      onPlatformSendDispatch: input.onPlatformSendDispatch,
       skipQueue: input.skipQueue,
-      dryRun,
     });
   } catch (error) {
     const partialDelivery = input.messageActionAuthorization?.scheduled
@@ -668,12 +649,9 @@ export async function executeMessagePlugin(
     if (partialDelivery) {
       return await annotateSourceDelivery(
         {
-          kind: "action",
-          channel,
-          action,
+          ...actionResult,
           handledBy: "plugin",
           payload: partialDelivery,
-          dryRun,
         },
         ctx,
         replyToIsExplicit,
@@ -686,13 +664,10 @@ export async function executeMessagePlugin(
   }
   return await annotateSourceDelivery(
     {
-      kind: "action",
-      channel,
-      action,
+      ...actionResult,
       handledBy: "plugin",
       payload: extractToolPayload(handled),
       toolResult: handled,
-      dryRun,
     },
     ctx,
     replyToIsExplicit,

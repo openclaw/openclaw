@@ -4,13 +4,13 @@ import { readPackageVersion } from "../../infra/package-json.js";
 import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { getUpdateRun, recordUpdateRunDiagnostics } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   readManagedGatewayServiceForUpdate,
   resolveUpdatedGatewayRestartPort,
@@ -28,6 +28,7 @@ export async function verifyUpdateFailureRecovery(params: {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   serviceStopped?: boolean;
+  waitForStartup?: boolean;
   assertCurrent?: () => void;
 }): Promise<UpdateRunResult> {
   params.assertCurrent?.();
@@ -115,6 +116,7 @@ export async function verifyUpdateFailureRecovery(params: {
         expectedVersion: version,
         expectedBuildId: buildId ?? undefined,
         timeoutMs: params.timeoutMs,
+        waitForStartup: params.waitForStartup,
         assertCurrent: params.assertCurrent,
       });
       params.assertCurrent?.();

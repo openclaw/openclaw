@@ -29,6 +29,7 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
+import { restoreEmptyV21StorageForHistoricalFixture } from "../state/openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -45,6 +46,16 @@ import {
 const tempDirs = createFixtureLifetime();
 afterAll(() => tempDirs.cleanup());
 const DOCTOR_CHILD_TIMEOUT_MS = 60_000;
+let unmanagedRollbackRuntimeRoot: string | undefined;
+
+function createRollbackRuntime(root: string): string {
+  const runtimeRoot = createBuiltRuntime(root, undefined, { copyDirectories: true });
+  // Rehearsal clears environment overrides, so this core-only fixture owns an empty plugin tree.
+  const extensionsDir = path.join(runtimeRoot, "dist", "extensions");
+  fs.rmSync(extensionsDir, { recursive: true, force: true });
+  fs.mkdirSync(extensionsDir);
+  return runtimeRoot;
+}
 
 describe("Doctor CLI migration refusal", () => {
   it.each(["index.js", "entry.js"])(
@@ -428,6 +439,7 @@ it.each([
         closeOpenClawStateDatabaseForTest();
         const legacy = new DatabaseSync(agentPath);
         try {
+          restoreEmptyV21StorageForHistoricalFixture(legacy);
           removeCanonicalValidationFromHistoricalAgentFixture(legacy);
           legacy.exec(`DROP TABLE session_transcript_cold_archives;
           PRAGMA user_version = 19;
@@ -450,10 +462,22 @@ it.each([
         }
         const originals = [agentPath, sharedPath, state.configPath];
         const bytes = originals.map((file) => fs.readFileSync(file));
-        let runtimeRoot = createBuiltRuntime(state.root, undefined, { copyDirectories: true });
-        let managedRoot = runtimeRoot;
         const malformedHandoff = mode.startsWith("managed pnpm ");
-        if (mode === "valid managed pnpm" || malformedHandoff) {
+        const managed =
+          mode === "valid managed v1" ||
+          mode === "valid managed pnpm" ||
+          malformedHandoff ||
+          mode === "managed handoff mismatch" ||
+          mode === "managed handoff missing";
+        const relocatesRuntime = mode === "valid managed pnpm" || malformedHandoff;
+        // Managed handoff authority includes the install path, so keep those packages private.
+        let runtimeRoot = managed
+          ? createRollbackRuntime(state.root)
+          : (unmanagedRollbackRuntimeRoot ??= createRollbackRuntime(
+              fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-rollback-runtime-")),
+            ));
+        let managedRoot = runtimeRoot;
+        if (relocatesRuntime) {
           const project = state.path("pnpm", "global", "5");
           const previous = path.join(
             project,
@@ -493,44 +517,52 @@ it.each([
           );
           managedRoot = fs.realpathSync(previous);
         }
-        const resultPath = createUpdatePostInstallDoctorResultPath();
-        // The shipped updater disables compile caching before both child handoffs.
-        const result = await runBuiltRuntime(
-          runtimeRoot,
-          disableUpdatedPackageCompileCacheEnv({
-            ...process.env,
-            OPENCLAW_DEBUG_PROXY_ENABLED: "1",
-            [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: resultPath,
-            NODE_ENV: undefined,
-            VITEST: undefined,
-            VITEST_POOL_ID: undefined,
-            VITEST_WORKER_ID: undefined,
-          }),
-          ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
-          DOCTOR_CHILD_TIMEOUT_MS,
-        );
-        const output = `${result.stdout}\n${result.stderr}`;
-        const receipt = await consumeUpdatePostInstallDoctorResult(resultPath);
-        expect(result.signal, output).toBeNull();
-        expect(
-          originals.map((file) => fs.readFileSync(file)),
-          output,
-        ).toEqual(bytes);
-        if (mode === "failed schema publication") {
-          expect(result.code, output).toBe(1);
-          expect(output).toContain("Private Doctor schema validation failed");
-          expect(output).toContain("Failing check media-persistence (step-refused)");
-          expect(output).not.toContain("Repair is deferred");
-          return;
+        // Rehearsal preserves these exact bytes. Exercise both package layouts once;
+        // the remaining variants differ only at the post-core boundary below.
+        if (
+          mode === "valid" ||
+          mode === "valid managed pnpm" ||
+          mode === "failed schema publication"
+        ) {
+          const resultPath = createUpdatePostInstallDoctorResultPath();
+          // The shipped updater disables compile caching before both child handoffs.
+          const result = await runBuiltRuntime(
+            runtimeRoot,
+            disableUpdatedPackageCompileCacheEnv({
+              ...process.env,
+              OPENCLAW_DEBUG_PROXY_ENABLED: "1",
+              [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: resultPath,
+              NODE_ENV: undefined,
+              VITEST: undefined,
+              VITEST_POOL_ID: undefined,
+              VITEST_WORKER_ID: undefined,
+            }),
+            ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
+            DOCTOR_CHILD_TIMEOUT_MS,
+          );
+          const output = `${result.stdout}\n${result.stderr}`;
+          const receipt = await consumeUpdatePostInstallDoctorResult(resultPath);
+          expect(result.signal, output).toBeNull();
+          expect(
+            originals.map((file) => fs.readFileSync(file)),
+            output,
+          ).toEqual(bytes);
+          if (mode === "failed schema publication") {
+            expect(result.code, output).toBe(1);
+            expect(output).toContain("Private Doctor schema validation failed");
+            expect(output).toContain("Failing check media-persistence (step-refused)");
+            expect(output).not.toContain("Repair is deferred");
+            return;
+          }
+          expect(result.code, output).toBe(0);
+          expect(receipt).toMatchObject({
+            status: "ok",
+            configHash: "unchanged",
+            warnings: [expect.stringContaining("live agent databases are unchanged")],
+          });
+          expect(output).toContain("live agent databases are unchanged");
+          expect(output).not.toContain("Doctor complete.");
         }
-        expect(result.code, output).toBe(0);
-        expect(receipt).toMatchObject({
-          status: "ok",
-          configHash: "unchanged",
-          warnings: [expect.stringContaining("live agent databases are unchanged")],
-        });
-        expect(output).toContain("live agent databases are unchanged");
-        expect(output).not.toContain("Doctor complete.");
         // The published driver has now discarded package rollback and recorded its
         // fresh post-core boundary. Only the native child can carry live authority.
         recordUpdateRunStep(run.runId, { step: "openclaw doctor", status: "completed" });
@@ -539,12 +571,6 @@ it.each([
           finishUpdateRun(run.runId, { status: "failed", reason: "fixture-parent-stopped" });
         }
         const beforeResume = getUpdateRun(run.runId);
-        const managed =
-          mode === "valid managed v1" ||
-          mode === "valid managed pnpm" ||
-          malformedHandoff ||
-          mode === "managed handoff mismatch" ||
-          mode === "managed handoff missing";
         const success =
           mode === "valid" || mode === "valid managed v1" || mode === "valid managed pnpm";
         const metaPath = state.path("handoff-meta.json");

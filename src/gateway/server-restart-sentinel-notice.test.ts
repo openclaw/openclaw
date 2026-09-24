@@ -215,9 +215,9 @@ describe("restart sentinel notice recovery", () => {
         target: { version: "2026.9.2" },
         origin: destination === "control-ui" ? {} : { sessionKey },
       });
-      const target = resolveUpdateRunNoticeTarget({ cfg, sessionKey: run.origin.sessionKey });
+      const target = await resolveUpdateRunNoticeTarget({ cfg, sessionKey: run.origin.sessionKey });
       expect.soft(target.kind).toBe(destination === "owner" ? "route" : "none");
-      const notify = createUpdateRunNotifier(run, () => cfg, {});
+      const notify = await createUpdateRunNotifier(run, () => cfg, {});
       await notify(run, "ack");
       await notify(run, "ack");
       for (const phase of ["staging", "validating", "activating"] as const) {
@@ -227,7 +227,7 @@ describe("restart sentinel notice recovery", () => {
       await notify(run, "activating");
       run = recordUpdateRunPhase(run.runId, "verifying");
       run = recordUpdateRunVerification(run.runId, { booted: true, runningVersion: "2026.9.2" });
-      const successor = createUpdateRunNotifier(run, () => cfg, {});
+      const successor = await createUpdateRunNotifier(run, () => cfg, {});
       await successor(run, "verifying");
       await successor(run, "verifying");
       run = finishUpdateRun(run.runId, { status: "succeeded", after: { version: "2026.9.2" } });
@@ -249,7 +249,7 @@ describe("restart sentinel notice recovery", () => {
       if (destination !== "owner") {
         for (const kind of ["ack", "activating", "verifying", "finished"]) {
           expect(
-            deliveryQueueStorage.findDeliveryIntentOwner(`update-run-${kind}:${run.runId}`),
+            await deliveryQueueStorage.findDeliveryIntentOwner(`update-run-${kind}:${run.runId}`),
           ).toBeNull();
         }
       }
@@ -536,7 +536,7 @@ describe("restart sentinel notice recovery", () => {
       await expect(pending).resolves.toBe(true);
       expect(sendText).toHaveBeenCalledOnce();
       expect(
-        deliveryQueueStorage.findDeliveryIntentOwner(queueId, undefined, context),
+        await deliveryQueueStorage.findDeliveryIntentOwner(queueId, undefined, context),
       ).toMatchObject({ status: "completed" });
       expect(await loadPendingDelivery(queueId, replacement)).toBeNull();
     },
@@ -592,7 +592,7 @@ describe("restart sentinel notice recovery", () => {
       ).resolves.toBe(false);
       expect(sendText).toHaveBeenCalledTimes(outcome === "retry recovery" ? 2 : 1);
       expect(
-        deliveryQueueStorage.findDeliveryIntentOwner(queued.id, undefined, context),
+        await deliveryQueueStorage.findDeliveryIntentOwner(queued.id, undefined, context),
       ).toMatchObject({ status: outcome === "retry recovery" ? "completed" : "failed" });
       expect(await loadPendingDelivery(queued.id, replacement)).toBeNull();
     },
@@ -600,13 +600,13 @@ describe("restart sentinel notice recovery", () => {
 
   it("serializes stable notice preparation before modifiers can run twice", async () => {
     mocks.hookRunner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
-    let releaseModifier: (() => void) | undefined;
-    mocks.hookRunner.runMessageSending.mockImplementationOnce(
-      async () =>
-        await new Promise<undefined>((resolve) => {
-          releaseModifier = () => resolve(undefined);
-        }),
-    );
+    const modifierEntered = createDeferredCore();
+    const releaseModifier = createDeferredCore();
+    mocks.hookRunner.runMessageSending.mockImplementationOnce(async () => {
+      modifierEntered.resolve();
+      await releaseModifier.promise;
+      return undefined;
+    });
     const request = {
       cfg: {},
       channel: "whatsapp",
@@ -617,25 +617,33 @@ describe("restart sentinel notice recovery", () => {
     };
 
     const first = enqueueRestartSentinelNotice(request);
-    await vi.waitFor(() => expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce());
-    let secondSettled = false;
-    const second = enqueueRestartSentinelNotice(request).finally(() => {
-      secondSettled = true;
-    });
-    await Promise.resolve();
-    expect(secondSettled).toBe(false);
-    expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
-    releaseModifier?.();
-    await expect(first).resolves.toEqual({
-      id: "restart-sentinel-notice:agent:main:main:123",
-      created: true,
-    });
-    await expect(second).resolves.toEqual({
-      id: "restart-sentinel-notice:agent:main:main:123",
-      created: false,
-    });
-    await expect(enqueueRestartSentinelNotice(request)).resolves.toEqual(await second);
-    expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
+    const pending = [first];
+    try {
+      await Promise.race([modifierEntered.promise, first]);
+      expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
+      let secondSettled = false;
+      const second = enqueueRestartSentinelNotice(request).finally(() => {
+        secondSettled = true;
+      });
+      pending.push(second);
+      await Promise.resolve();
+      expect(secondSettled).toBe(false);
+      expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
+      releaseModifier.resolve();
+      await expect(first).resolves.toEqual({
+        id: "restart-sentinel-notice:agent:main:main:123",
+        created: true,
+      });
+      await expect(second).resolves.toEqual({
+        id: "restart-sentinel-notice:agent:main:main:123",
+        created: false,
+      });
+      await expect(enqueueRestartSentinelNotice(request)).resolves.toEqual(await second);
+      expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
+    } finally {
+      releaseModifier.resolve();
+      await Promise.allSettled(pending);
+    }
   });
 
   it("emits message_sent only after the durable notice terminal is committed", async () => {

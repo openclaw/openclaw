@@ -102,6 +102,7 @@ describe("incomplete-turn error recovery", () => {
       stopReason: "error",
       provider: "ollama",
       model: "glm-5.1:cloud",
+      content: [{ type: "text", text: "" }],
       usage: { input: 100, output: 12, totalTokens: 112 },
     });
     expect(

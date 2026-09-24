@@ -200,12 +200,11 @@ test.each([
   { name: "missing environment", ownerEpoch: undefined, expectedIdentity: false },
   { name: "mismatched owner epoch", ownerEpoch: 13, expectedIdentity: false },
 ])(
-  "sessions.list retains durable worker placement per resident row: $name",
+  "sessions.list retains durable worker placement for resident rows: $name",
   async ({ ownerEpoch, expectedIdentity }) => {
     await seedSessionRows();
     const placement = activePlacementRecord();
     const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>((sessionIds) => {
-      expect(sessionIds).toHaveLength(1);
       return new Map(
         sessionIds.includes(placement.sessionId) ? [[placement.sessionId, placement]] : [],
       );
@@ -370,17 +369,14 @@ test("sessions.list projects durable placement move progress", async () => {
   });
   expect(main?.placementMove).not.toHaveProperty("operationId");
   expect(
-    getPlacementMoves.mock.calls
-      .map(([ids]) => ids)
-      .toSorted((a, b) => a.join("\0").localeCompare(b.join("\0"))),
-  ).toEqual([["sess-main"], ["sess-other"]]);
+    getPlacementMoves.mock.calls.flatMap(([ids]) => ids).toSorted((a, b) => a.localeCompare(b)),
+  ).toEqual(["sess-main", "sess-other"]);
 });
 
 test("sessions.describe projects durable worker placement", async () => {
   await seedSessionRows();
   const placement = activePlacementRecord();
   const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>((sessionIds) => {
-    expect(sessionIds).toHaveLength(1);
     return new Map(
       sessionIds.includes(placement.sessionId) ? [[placement.sessionId, placement]] : [],
     );

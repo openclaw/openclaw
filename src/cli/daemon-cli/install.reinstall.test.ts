@@ -23,6 +23,20 @@ const {
 
 describe("runDaemonInstall reinstall", () => {
   setupInstallTests();
+  it.each([undefined, "node"] as const)(
+    "keeps the recorded Node on force reinstall unless runtime selection is explicit (%s)",
+    async (runtime) => {
+      const recordedNode = "/opt/homebrew/opt/node@24/bin/node";
+      service.readCommand.mockResolvedValue({
+        programArguments: [recordedNode, "/opt/openclaw/dist/index.js", "gateway"],
+      });
+      await runDaemonInstall({ json: true, force: true, runtime });
+      expect(actionState.failed).toEqual([]);
+      expect(readFirstInstallPlanArg().runtimePath).toBe(runtime ? undefined : recordedNode);
+      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each(["preserve", "replace", "reset"] as const)(
     "handles a runtime pin during %s reinstall",
     async (mode) => {

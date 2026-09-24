@@ -269,6 +269,36 @@ read_pr_view_json() {
   return 1
 }
 
+read_pr_observation() {
+  read_pr_view_json "$1" "number,url,title,state,isDraft,author,baseRefName,baseRefOid,baseRepository,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository"
+}
+
+use_pr_observation() {
+  local pr="$1" observation="$2" repository_url
+  repository_url=$(printf '%s\n' "$observation" | jq -er --argjson pr "$pr" '
+    .baseRepository as $repo |
+    select(.number == $pr and
+      ($repo.id | type == "string" and length > 0) and
+      ($repo.databaseId | type == "number" and . > 0 and floor == .) and
+      ($repo.nameWithOwner | type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
+      ($repo.url | type == "string" and test("^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") and endswith("/" + $repo.nameWithOwner)) and
+      .url == ($repo.url + "/pull/" + ($pr | tostring))) |
+    $repo.url') || {
+      echo "Invalid base repository identity for PR #$pr." >&2
+      return 1
+    }
+  PR_OBSERVATION="$observation"
+  PR_REPOSITORY_URL="$repository_url"
+  PR_REPOSITORY_SELECTOR="${GH_REPO:-}"
+  PR_REPOSITORY_HOST="${GH_HOST:-}"
+}
+
+pr_observe() {
+  local observation
+  observation=$(read_pr_observation "$1") || return 1
+  use_pr_observation "$1" "$observation"
+}
+
 pr_view_string_field() {
   local json="$1" field="$2" pr="$3" remedy="${4:-Retry the command.}" label value
   case "$field" in
@@ -293,7 +323,8 @@ wait_for_pr_head_sha() {
   local attempt
   for attempt in $(seq 1 "$max_attempts"); do
     local observed_sha
-    observed_sha=$(pr_gh pr view "$pr" --json headRefOid --jq .headRefOid) || return 1
+    pr_observe "$pr" || return 1
+    observed_sha=$(pr_view_string_field "$PR_OBSERVATION" headRefOid "$pr") || return 1
     if [ "$observed_sha" = "$expected_sha" ]; then
       return 0
     fi

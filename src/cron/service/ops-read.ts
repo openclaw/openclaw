@@ -75,7 +75,7 @@ export async function readJob(state: CronServiceState, id: string) {
 /** Reads one job's private scratch state after proving the job exists in this store. */
 export async function readScratch(state: CronServiceState, id: string) {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     findJobOrThrow(state, id);
     // Scratch intentionally opens the process-global state DB, matching every
     // other cron store write in this service (see saveCronJobsStore); threading
@@ -97,7 +97,7 @@ export async function writeScratch(
   },
 ) {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     findJobOrThrow(state, id);
     params.commitGuard?.();
     return writeCronJobScratch({
@@ -120,7 +120,7 @@ export async function recordExternalFailure(
   source?: { scheduleKey: string; identity: string },
 ) {
   await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     const job = findJobOrThrow(state, id);
     if (source && !ownsStreamSource(job, source.scheduleKey, source.identity)) {
       return;
@@ -187,7 +187,7 @@ export async function updateExternalState(
   statePatch: Partial<CronJob["state"]>,
 ): Promise<boolean> {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     assertCronJobStateTimestamps(statePatch);
     const committedJob = commitCronRuntimeRows({
       state,
@@ -219,7 +219,7 @@ export async function retireExternalStreamSource(
   streamSourceIdentity: string,
 ): Promise<string | undefined> {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     const nextIdentity = createCronStreamSourceIdentity();
     const committedJob = commitCronRuntimeRows({
       state,
@@ -249,7 +249,7 @@ export async function updateExternalCounters(
   counters: Pick<CronJob["state"], "streamDroppedBatches" | "streamCoalescedBatches">,
 ): Promise<void> {
   await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     const committedJob = commitCronRuntimeRows({
       state,
       jobIds: [id],

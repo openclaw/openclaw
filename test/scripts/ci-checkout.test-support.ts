@@ -63,6 +63,7 @@ export function renderGitTestClock(
   options: {
     realClock?: boolean;
     realDrain?: boolean;
+    virtualBackoff?: boolean;
     readyFetchClockAdvanceSeconds?: number;
   } = {},
 ): string {
@@ -81,12 +82,38 @@ export function renderGitTestClock(
     (options.realDrain ?? options.realClock)
       ? source
       : source.replace("kill_at = deadline - cleanup_seconds / 2", "kill_at = time.monotonic()");
+  // Keep the owner's cancellation checkpoints and requested backoff duration,
+  // but advance its policy clock without sleeping. Cancellation proofs opt out.
+  const backoffSource =
+    (options.virtualBackoff ?? !options.realClock)
+      ? clockSource.replace(
+          /def backoff\(seconds\):\n[\s\S]*?(?=\n\ndef |$)/u,
+          (body) =>
+            body
+              .replace(
+                "def backoff(seconds):",
+                `def backoff(seconds):
+    class FixtureBackoffClock:
+        now = 0
+        def monotonic(self):
+            return self.now
+        def sleep(self, seconds):
+            self.now += seconds
+    fixture_clock = FixtureBackoffClock()
+    print(f"fixture backoff: {seconds}", flush=True)`,
+              )
+              .replaceAll("time.monotonic()", "fixture_clock.monotonic()")
+              .replaceAll("time.sleep(", "fixture_clock.sleep(")
+              .trimEnd() +
+            '\n    print(f"fixture backoff advanced: {fixture_clock.now:.6f}", flush=True)\n',
+        )
+      : clockSource;
   if (options.realClock && options.readyFetchClockAdvanceSeconds === undefined) {
-    return clockSource;
+    return backoffSource;
   }
   // Only a ready, deliberately stalled tree advances the fetch clock. Real
   // process startup and teardown retain their independent wall-clock watchdogs.
-  const fetchClockSource = clockSource
+  const fetchClockSource = backoffSource
     .replace(
       "def run_git(",
       `def fetch_clock(timeout=None):
@@ -106,7 +133,7 @@ def run_git(`,
       "deadline is not None and time.monotonic() >= deadline",
       "deadline is not None and fetch_clock() >= deadline",
     );
-  // Deadline-policy proofs retain their actual timeout arguments, backoff and drain.
+  // Deadline-policy proofs retain their actual timeout arguments and drain.
   if (options.realClock) {
     return fetchClockSource;
   }
@@ -114,10 +141,6 @@ def run_git(`,
     fetchClockSource
       .replace(/fetch_timeout_seconds = [^\n]+/u, "fetch_timeout_seconds = 2")
       .replace(/\btimeout=(?:30|60|120)(?=[,)])/gu, "timeout=2")
-      .replace(
-        /retry_at = time\.monotonic\(\) \+ [^\n]+/u,
-        'print(f"fixture backoff: {seconds}", flush=True)\n    retry_at = time.monotonic() + 0.05',
-      )
       .replace(/--((?:checkout-)?git) 120\b/gu, "--$1 2")
       // Keep pre-fix standalone shell bodies executable for red/green proof.
       .replaceAll("120s git", "2s git")

@@ -5,7 +5,6 @@ import {
   validateChatMessageGetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { readSessionPendingInput } from "../../config/sessions/session-accessor.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import {
@@ -26,7 +25,6 @@ import {
 } from "../session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
-import { validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { projectPendingInputMessage } from "./chat-pending-inputs.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -87,41 +85,34 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
 }
 
 export const chatMessageGetHandlers: GatewayRequestHandlers = {
-  "chat.message.get": async ({ params, respond, context, client }) => {
+  "chat.message.get": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateChatMessageGetParams, "chat.message.get", respond)) {
       return;
     }
     const { sessionKey, messageId, maxChars } = params;
     const agentIdOverride = normalizeOptionalText(params.agentId);
-    const requestedAgent = resolveRequestedSessionAgentId(
-      context.getRuntimeConfig(),
-      sessionKey,
-      agentIdOverride,
-    );
+    const cfg = context.getRuntimeConfig();
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const session = loadGatewaySessionEntryReadOnly(sessionKey, {
-      agentId: requestedAgentId,
-    });
-    const { cfg, storePath, entry, canonicalKey } = session;
-    const selectedAgent = validateChatSelectedAgent({
-      cfg,
-      requestedSessionKey: sessionKey,
-      explicitAgentId: agentIdOverride,
-    });
-    if (!selectedAgent.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
-      return;
-    }
+    const session = loadGatewaySessionEntryReadOnly(sessionKey, { agentId: requestedAgentId }, cfg);
+    const { agentId: sessionAgentId, storePath, entry, canonicalKey } = session;
     const sessionId = entry?.sessionId;
     if (!sessionId) {
       respond(true, { ok: false, unavailableReason: "not_found" });
       return;
     }
     const canReadSession = (current: typeof session): boolean => {
+      sessionMutationAuthorization?.assertCurrent();
       if (
         !current.entry ||
         current.agentId !== session.agentId ||
@@ -141,7 +132,10 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         );
         return false;
       }
-      const entryFilter = createSessionListEntryFilter({ client, cfg: current.cfg });
+      const entryFilter = createSessionListEntryFilter({
+        client,
+        cfg: context.getCommittedRuntimeConfig?.() ?? current.cfg,
+      });
       if (entryFilter?.(current.canonicalKey, current.entry) === false) {
         respond(false, undefined, hiddenSessionNotFound(canonicalKey));
         return false;
@@ -152,11 +146,6 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const sessionAgentId = resolveSessionAgentId({
-      sessionKey,
-      config: cfg,
-      agentId: selectedAgent.agentId,
-    });
     const effectiveMaxChars =
       typeof maxChars === "number" ? maxChars : Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
     if (messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) {

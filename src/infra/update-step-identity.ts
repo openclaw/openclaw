@@ -151,6 +151,7 @@ for (const operation of [
   "lint",
   "update clean check",
   "update source check",
+  "runtime stage",
 ]) {
   stepIds.set(
     `preflight ${operation}`,

@@ -15,6 +15,7 @@ import type { CodexAppServerExtensionFactory } from "./codex-app-server-extensio
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationSource } from "./config-activation-shared.js";
 import type { EmbeddingProviderAdapter } from "./embedding-provider-types.js";
+import type { PluginGatewayAccessPolicy } from "./gateway-access-policy.types.js";
 import type {
   PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
@@ -251,6 +252,10 @@ type PluginNodeInvokePolicyRegistration = PluginRegistrationOwner & {
   pluginConfig?: Record<string, unknown>;
 };
 
+type PluginGatewayAccessPolicyRegistration = PluginRegistrationOwner & {
+  policy: PluginGatewayAccessPolicy;
+};
+
 export type PluginWidgetPresenterRegistration = PluginRegistrationOwner & {
   presenter: import("./plugin-registration.types.js").WidgetPresenter;
 };
@@ -448,6 +453,7 @@ export type PluginRegistry = {
   reloads: PluginReloadRegistration[];
   nodeHostCommands: PluginNodeHostCommandRegistration[];
   nodeInvokePolicies: PluginNodeInvokePolicyRegistration[];
+  gatewayAccessPolicies: PluginGatewayAccessPolicyRegistration[];
   securityAuditCollectors: PluginSecurityAuditCollectorRegistration[];
   services: PluginServiceRegistration[];
   gatewayDiscoveryServices: PluginGatewayDiscoveryServiceRegistration[];

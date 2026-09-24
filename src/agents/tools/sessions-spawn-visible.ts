@@ -14,6 +14,7 @@ import {
 } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -64,6 +65,7 @@ import {
   type InProcessGatewayCaller,
 } from "./in-process-gateway.js";
 import { startVisibleCloudSession } from "./sessions-spawn-cloud.js";
+import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
 
 const SessionsSpawnPlacementSchema = Type.Union([
   Type.Object({ kind: Type.Literal("local") }, { additionalProperties: false }),
@@ -447,7 +449,7 @@ export async function maybeSpawnVisibleSession(params: {
     let response: {
       key?: string;
       sessionId?: string;
-      entry?: { lifecycleRevision?: string };
+      entry?: Pick<SessionEntry, "createdActor" | "lifecycleRevision" | "owner">;
       runStarted?: boolean;
       runId?: string;
       runError?: unknown;
@@ -684,11 +686,15 @@ export async function maybeSpawnVisibleSession(params: {
       cleanup: "keep",
       ...(response.placement ? { placement: response.placement } : {}),
       ...(sessionUrl ? { sessionUrl } : {}),
-      owner: {
-        type: "agent",
-        id: requesterAgentId,
-        ...(ownerLabel ? { label: ownerLabel } : {}),
-      },
+      owner: resolveVisibleSessionOwner(
+        response.entry,
+        {
+          type: "agent",
+          id: requesterAgentId,
+          ...(ownerLabel ? { label: ownerLabel } : {}),
+        },
+        cfg,
+      ),
     };
   } finally {
     reservation.release();

@@ -6,6 +6,7 @@ import {
   verifyAndRepairCanonicalSqliteIndexes,
 } from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity, assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
+import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cache.js";
 import { assertSqliteSchemaTablesPresent } from "../infra/sqlite-schema-contract.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
@@ -15,6 +16,7 @@ import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js"
 import { clearOpenClawStateDatabaseOpenFailure } from "./openclaw-state-db-cache.js";
 import {
   LAZY_ADDITIVE_STATE_TABLES,
+  DOCTOR_OWNED_STATE_TABLES,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
@@ -77,7 +79,12 @@ export function repairStateSchema(
   try {
     setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
     if (scope === "automatic") {
-      return { changes: ensureOpenClawStateRuntimeSchema(db, pathname, env), warnings: [] };
+      return {
+        changes: ensureOpenClawStateRuntimeSchema(db, pathname, env, {
+          kind: "existing",
+        }),
+        warnings: [],
+      };
     }
     const repairAdmittedSchema = prepareStateDatabaseSchemaRepair(db, pathname, env);
     if (scope === "readability") {
@@ -124,7 +131,7 @@ export function repairStateSchema(
           // Current-schema doctor repair may normalize recognized columns or
           // table options, but it must never recreate a missing table empty.
           assertSqliteSchemaTablesPresent(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
-            allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
+            allowedMissingTables: [...LAZY_ADDITIVE_STATE_TABLES, ...DOCTOR_OWNED_STATE_TABLES],
           });
         } else {
           openClawStateMigrationAssertions.get(previousVersion)?.(db, { pathname });
@@ -180,6 +187,7 @@ export function repairStateSchema(
             db,
             getOpenClawStateRuntimeSchema({
               includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
+              includeAgentDeletionJournal: tableExists(db, "agent_deletion_journal"),
             }),
             { databaseLabel: pathname },
           );
@@ -212,6 +220,7 @@ export function repairStateSchema(
       },
       () => {
         applied.push(...repairAdmittedSchema());
+        configureSqliteMaintenanceCache(db);
       },
     );
     const quarantineCleared = clearOpenClawDatabaseQuarantine(pathname, { env });

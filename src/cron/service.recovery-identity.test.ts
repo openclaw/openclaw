@@ -8,7 +8,10 @@ import {
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { waitForActiveCronTaskRuns } from "./service/active-run-cancellation.js";
-import { proposeCronRunRecovery, recoverCronRunProposal } from "./service/run-recovery.js";
+import {
+  observeCronRecoveryForTest,
+  recoverCronRunForTest,
+} from "./service/run-recovery.test-support.js";
 import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
 import { findCronTaskRunRecoveryInDatabase } from "./service/task-runs.js";
 import { loadCronStore } from "./store.js";
@@ -110,7 +113,7 @@ describe("cron recovery run identity", () => {
       if (!first) {
         throw new Error("predecessor was not admitted");
       }
-      const predecessorProposal = await proposeCronRunRecovery(
+      const predecessorProposal = await observeCronRecoveryForTest(
         recoveryState,
         job.id,
         undefined,
@@ -168,7 +171,7 @@ describe("cron recovery run identity", () => {
 
       if (staleProposal) {
         const before = await readJob();
-        expect(recoverCronRunProposal(recoveryState, predecessorProposal, "startup")).toEqual({
+        expect(await recoverCronRunForTest(recoveryState, predecessorProposal, "startup")).toEqual({
           kind: "superseded",
         });
         expect(await readJob()).toEqual(before);

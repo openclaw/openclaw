@@ -54,10 +54,6 @@ function parseTimestamp(value?: string): number | null {
   return parseDateStringTimestampMs(value) ?? null;
 }
 
-function clampDaysSinceTouch(daysSinceTouch: number): number {
-  return Math.max(0, daysSinceTouch);
-}
-
 function normalizeClaimTextKey(text: string): string {
   return normalizeLowercaseStringOrEmpty(text.replace(/\s+/g, " "));
 }
@@ -77,7 +73,7 @@ function buildFreshnessFromTimestamp(params: { timestamp?: string; now?: Date })
       reason: "missing updatedAt",
     };
   }
-  const daysSinceTouch = clampDaysSinceTouch(Math.floor((now.getTime() - timestampMs) / DAY_MS));
+  const daysSinceTouch = Math.max(0, Math.floor((now.getTime() - timestampMs) / DAY_MS));
   const level =
     daysSinceTouch >= WIKI_STALE_DAYS
       ? "stale"

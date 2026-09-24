@@ -228,16 +228,16 @@ describe("renderUsage", () => {
 
   it("keeps pending sessions on their selected local or UTC activity day", () => {
     const localOffsetMs = -7 * 60 * 60 * 1000;
-    const localYear = vi
-      .spyOn(Date.prototype, "getFullYear")
-      .mockImplementation(function (this: Date) {
-        return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
-      });
-    const localMonth = vi
-      .spyOn(Date.prototype, "getMonth")
-      .mockImplementation(function (this: Date) {
-        return new Date(this.getTime() + localOffsetMs).getUTCMonth();
-      });
+    const localYear = vi.spyOn(Date.prototype, "getFullYear").mockImplementation(function (
+      this: Date,
+    ) {
+      return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
+    });
+    const localMonth = vi.spyOn(Date.prototype, "getMonth").mockImplementation(function (
+      this: Date,
+    ) {
+      return new Date(this.getTime() + localOffsetMs).getUTCMonth();
+    });
     const localDay = vi.spyOn(Date.prototype, "getDate").mockImplementation(function (this: Date) {
       return new Date(this.getTime() + localOffsetMs).getUTCDate();
     });
@@ -537,8 +537,14 @@ describe("renderUsage", () => {
         )!
         .querySelectorAll<HTMLElement & { checked: boolean }>(".usage-filter-option");
     const values = () => [...providerOptions()].map((option) => option.textContent?.trim());
+    const chartModeButton = (label: string) =>
+      [...container.querySelectorAll<HTMLButtonElement>(".usage-view-options button")].find(
+        (button) => button.textContent?.trim() === label,
+      );
 
     render(renderUsage(props), container);
+    expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("true");
+    expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("false");
     expect(values()).toEqual(["first", "second"]);
     expect([...providerOptions()].find((option) => option.checked)?.textContent?.trim()).toBe(
       "second",
@@ -549,6 +555,8 @@ describe("renderUsage", () => {
 
     props.display.chartMode = "cost";
     render(renderUsage(props), container);
+    expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("false");
+    expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("true");
     expect(values()).toEqual(["second", "first"]);
     props.filters.agentId = "main";
     // The replacement report is already scoped by the Gateway.

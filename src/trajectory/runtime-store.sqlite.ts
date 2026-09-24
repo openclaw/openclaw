@@ -41,6 +41,7 @@ export type SqliteTrajectoryRuntimeScope = {
   maxRuntimeBytes?: number;
   sessionId: string;
   storePath: string;
+  assertCommitAllowed?: () => void;
 };
 
 type SqliteTrajectoryRuntimeReadScope = Omit<
@@ -89,6 +90,7 @@ export function appendSqliteTrajectoryRuntimeEvents(
   const sweepAt = Date.now();
   let sweptDatabase: OpenClawAgentDatabase | undefined;
   runOpenClawAgentWriteTransaction((database) => {
+    scope.assertCommitAllowed?.();
     const db = getTrajectoryKysely(database.db);
     let seq = readNextTrajectorySeq(database, scope.sessionId);
     // Bound both native bindings and serialized payloads while keeping the full
@@ -123,6 +125,7 @@ export function appendSqliteTrajectoryRuntimeEvents(
       );
       sweptDatabase = database;
     }
+    scope.assertCommitAllowed?.();
   }, options);
   if (sweptDatabase) {
     lastGlobalSweepAtByDatabase.set(sweptDatabase, sweepAt);

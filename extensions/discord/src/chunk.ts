@@ -2,7 +2,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { chunkByParagraph, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { chunkTextForOutbound, findCodeRegions } from "openclaw/plugin-sdk/text-chunking";
-import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-utility-runtime";
+import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
 
 type ChunkDiscordTextOpts = {
   /** Max characters per Discord message. Default: 2000. */

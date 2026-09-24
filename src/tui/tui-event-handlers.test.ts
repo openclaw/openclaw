@@ -1660,8 +1660,13 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.updateAssistant).not.toHaveBeenCalled();
   });
 
-  it("ignores selected-global chat events from other agents", () => {
-    const { chatLog, handleChatEvent } = createHandlersHarness({
+  it.each([
+    { sessionKey: "global", agentId: "main" },
+    { sessionKey: "global", agentId: undefined },
+    { sessionKey: "agent:main:global", agentId: undefined },
+    { sessionKey: "agent:work:global", agentId: "main" },
+  ])("ignores foreign global events $sessionKey/$agentId", (event) => {
+    const { chatLog, btw, handleChatEvent, handleBtwEvent } = createHandlersHarness({
       state: {
         agentDefaultId: "main",
         currentAgentId: "work",
@@ -1671,37 +1676,30 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     handleChatEvent({
-      runId: "run-main-global",
-      agentId: "main",
+      ...event,
+      runId: "run-foreign-global",
       message: { content: "wrong agent" },
     });
-    handleChatEvent({
-      runId: "run-legacy-default-global",
-      message: { content: "legacy default" },
-    });
-
-    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
-  });
-
-  it("ignores selected-global BTW events from other agents", () => {
-    const { btw, handleBtwEvent } = createHandlersHarness({
-      state: {
-        agentDefaultId: "main",
-        currentAgentId: "work",
-        currentSessionKey: "global",
-      },
-    });
-
     handleBtwEvent({
+      ...event,
       kind: "btw",
-      runId: "btw-main-global",
-      sessionKey: "global",
-      agentId: "main",
+      runId: "btw-foreign-global",
       question: "status?",
       text: "wrong agent",
     });
 
+    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
     expect(btw.showResult).not.toHaveBeenCalled();
+
+    handleChatEvent({
+      runId: "run-selected-global",
+      sessionKey: "AGENT:WORK:GLOBAL",
+      message: { content: "selected agent" },
+    });
+    expect(chatLog.updateAssistant).toHaveBeenCalledExactlyOnceWith(
+      "selected agent",
+      "run-selected-global",
+    );
   });
 
   it("clears run mapping when the session changes", () => {

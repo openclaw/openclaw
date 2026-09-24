@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.test-support.js";
+import type { GatewaySuspendPrepareResult } from "../../packages/gateway-protocol/src/schema/gateway-suspend.js";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
@@ -9,6 +10,10 @@ import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { writeConfigFile } from "../config/config.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { withTimeout } from "../infra/fs-safe.js";
+import {
+  getGatewaySuspendStatus,
+  resetGatewaySuspendCoordinatorForLifecycleRestart,
+} from "../infra/gateway-suspend-coordinator.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import { markGatewayRestartDraining } from "../process/gateway-work-admission.js";
@@ -85,6 +90,7 @@ test.for(["direct", "restart"] as const)(
     const { port, server } = started;
     let node: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     let operator: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    let controller: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     let closing: Promise<void> | undefined;
     let ordinaryRequest: Promise<unknown> | undefined;
     const stopped = createDeferredCore<unknown>();
@@ -185,8 +191,8 @@ test.for(["direct", "restart"] as const)(
             entries: { [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId) },
           });
           const environmentId = "environment-node-shutdown";
-          const environments = createWorkerEnvironmentStore();
-          environments.createIntent({
+          const environments = await createWorkerEnvironmentStore();
+          await environments.createIntent({
             environmentId,
             providerId: DEVICE_WORKER_PROVIDER_ID,
             profileId: `device:${pairedNode.identity.deviceId}`,
@@ -196,8 +202,8 @@ test.for(["direct", "restart"] as const)(
             },
             provisionOperationId: "provision-node-shutdown",
           });
-          environments.transition({ environmentId, from: "requested", to: "provisioning" });
-          environments.transition({
+          await environments.transition({ environmentId, from: "requested", to: "provisioning" });
+          await environments.transition({
             environmentId,
             from: "provisioning",
             to: "ready",
@@ -222,7 +228,7 @@ test.for(["direct", "restart"] as const)(
               },
             },
           });
-          const attached = environments.transition({
+          const attached = await environments.transition({
             environmentId,
             from: "ready",
             to: "attached",
@@ -267,12 +273,62 @@ test.for(["direct", "restart"] as const)(
 
           // Cleanup has no request root. The unanswered invoke must not block the owner
           // that needs this node to acknowledge physical worker shutdown first.
+          let suspensionId: string | undefined;
           if (mode === "restart") {
+            const suspension = await operator.request<GatewaySuspendPrepareResult>(
+              "gateway.suspend.prepare",
+              { requestId: "node-shutdown", drain: true },
+            );
+            if (suspension.status === "busy") {
+              throw new Error("expected an owned suspension before restart");
+            }
+            suspensionId = suspension.suspensionId;
             markGatewayRestartDraining();
+            controller = await connectGatewayClient({
+              url: `ws://127.0.0.1:${port}`,
+              token: "secret",
+              role: "operator",
+              clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+              mode: GATEWAY_CLIENT_MODES.BACKEND,
+              scopes: ["operator.admin"],
+            });
+            await expect(
+              controller.request("gateway.suspend.status", {
+                suspensionId,
+                includeLifecycle: true,
+              }),
+            ).resolves.toMatchObject({
+              status: "draining",
+              ownerId: "node-shutdown",
+              phase: "interrupting",
+            });
+            await expect(
+              controller.request("gateway.suspend.status", { suspensionId: "foreign" }),
+            ).rejects.toThrow("a different gateway suspension is prepared");
+            await expect(controller.request("sessions.list", {})).rejects.toThrow(
+              "unavailable during gateway restart",
+            );
+            await expect(
+              connectGatewayClient({
+                url: `ws://127.0.0.1:${port}`,
+                token: "secret",
+                role: "node",
+                clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+                mode: GATEWAY_CLIENT_MODES.NODE,
+                deviceIdentity: pairedNode.identity,
+              }),
+            ).rejects.toThrow("connect unavailable during gateway restart");
           }
           closing = server.close({ reason: "gateway stopping" });
           void closing.then(closeSettled, closeSettled);
           await withTimeout(stopRequested.promise, 5_000, "worker stop dispatch");
+          if (suspensionId) {
+            expect(getGatewaySuspendStatus(suspensionId, true)).toMatchObject({
+              status: "draining",
+              ownerId: "node-shutdown",
+              phase: "exiting",
+            });
+          }
           const reconnect = connectGatewayClient({
             url: `ws://127.0.0.1:${port}`,
             token: "secret",
@@ -325,11 +381,13 @@ test.for(["direct", "restart"] as const)(
         },
         () => node?.stopAndWait({ timeoutMs: 1_000 }),
         () => operator?.stopAndWait({ timeoutMs: 1_000 }),
+        () => controller?.stopAndWait({ timeoutMs: 1_000 }),
         async () => {
           await ordinaryRequest;
         },
       );
     } finally {
+      resetGatewaySuspendCoordinatorForLifecycleRestart();
       factory.mockRestore();
       vi.restoreAllMocks();
       signal.removeEventListener("abort", unblock);

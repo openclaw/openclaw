@@ -190,6 +190,12 @@ export function createControlUiSessionFixtures(
       );
       set("pinned", next.pinnedAt !== undefined);
     }
+    // Advance the fixture's synthetic timeline without making its later events stale.
+    const latestUpdatedAt = Math.max(
+      0,
+      ...[...records.values()].map(({ row }) => row.updatedAt ?? 0),
+    );
+    set("updatedAt", latestUpdatedAt + 1);
     value.row = next;
     for (const field of changed) {
       value.changed.add(field);
@@ -270,11 +276,18 @@ export function createControlUiSessionFixtures(
       value.changed.add(field);
     }
   };
-  const abortRuns = (inputKey: string, runId?: string, confirmedRunIds?: string[]) => {
+  const abortRuns = (
+    inputKey: string,
+    runId: string | undefined,
+    response: Record<string, unknown>,
+  ) => {
+    const confirmedRunIds = Array.isArray(response.runIds)
+      ? response.runIds.filter((id): id is string => typeof id === "string")
+      : undefined;
     const key = canonicalKey(inputKey);
     const value = confirmedRunIds?.length ? record(inputKey) : records.get(key);
     if (!value) {
-      return { aborted: false, runIds: [] as string[] };
+      return { ...response, aborted: false, runIds: [] as string[] };
     }
     const activeRunIds = Array.isArray(value.row.activeRunIds)
       ? value.row.activeRunIds.filter((id): id is string => typeof id === "string")
@@ -284,7 +297,7 @@ export function createControlUiSessionFixtures(
     const runIds = runId ? candidates.filter((id) => id === runId) : candidates;
     const aborted = runIds.length > 0 || (!runId && value.row.hasActiveRun === true);
     if (!aborted) {
-      return { aborted: false, runIds };
+      return { ...response, aborted: false, runIds };
     }
     const sequence = ++runEventSequence;
     for (const id of runIds) {
@@ -305,7 +318,7 @@ export function createControlUiSessionFixtures(
     for (const field of Object.keys(fields)) {
       value.changed.add(field);
     }
-    return { aborted, runIds };
+    return { ...response, aborted, runIds };
   };
   const materialize = (key: string, fields: Partial<ControlUiSessionFixture>) => {
     const value = record(key);

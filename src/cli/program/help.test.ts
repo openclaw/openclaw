@@ -35,14 +35,6 @@ vi.mock("../../infra/git-commit.js", () => ({
   resolveCommitHash: resolveCommitHashMock,
 }));
 
-vi.mock("./command-registry.js", () => ({
-  getCoreCliCommandsWithSubcommands: () => ["models", "message"],
-}));
-
-vi.mock("./register.subclis.js", () => ({
-  getSubCliCommandsWithSubcommands: () => ["gateway"],
-}));
-
 const testProgramContext = { programVersion: "9.9.9-test" };
 
 describe("configureProgramHelp", () => {
