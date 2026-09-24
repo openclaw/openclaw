@@ -203,6 +203,7 @@ jobs:
       run_ios_build: ${{ steps.manifest.outputs.run_ios_build }}
       run_ios_screenshots: ${{ steps.changed_scope.outputs.run_ios_screenshots }}
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
+      run_android_access_native: ${{ steps.manifest.outputs.run_android_access_native }}
       use_compatible_android_ci: ${{ steps.manifest.outputs.use_compatible_android_ci }}
       run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
@@ -1678,6 +1679,12 @@ jobs:
           const runAndroid =
             parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !npmQualification &&
             !docsOnly && isCanonicalRepository;
+          // Frozen targets may predate this class; current source must still fail
+          // native validation if the required test disappears.
+          const runAndroidAccessNative = runAndroid && !compatibilityTarget &&
+            (!frozenTarget || existsSync(
+              "apps/android/app/src/androidTest/java/ai/openclaw/app/gateway/CloudflareAccessNativeTest.kt",
+            ));
           const runWindows =
             parseBoolean(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
             !docsOnly &&
@@ -2237,6 +2244,7 @@ jobs:
             run_openclawkit_tests: runMacos && !npmQualification && supportsOpenClawKitTests,
             run_ios_build: runIosBuild,
             run_android_job: runAndroid,
+            run_android_access_native: runAndroidAccessNative,
             use_compatible_android_ci: useCompatibleAndroidCi,
             run_protocol_event_coverage: runProtocolEventCoverage,
             android_matrix: createMatrix(
@@ -2325,6 +2333,7 @@ jobs:
               "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
               "macos-swift": count(manifest.run_macos_swift, 2),
               "ios-build": count(manifest.run_ios_build),
+              "android-access-native": count(manifest.run_android_access_native, 2),
               "docker-seed-e2e": count(manifest.run_docker_seed_e2e && eventName === "pull_request" &&
                 process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY),
             }).reduce((total, rows) => total + rows, 0);
@@ -2701,6 +2710,7 @@ jobs:
         # unavailable historical coverage, never a successful native-host test.
         if: ${{ needs.preflight.outputs.run_proof_tier == 'true' && (needs.preflight.outputs.frozen_target != 'true' || hashFiles('extensions/browser/src/browser/extension-install.native-host.e2e.test.ts') != '') }}
         env:
+          FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
           OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
           OPENCLAW_VITEST_MAX_WORKERS: "1"
         run: |
@@ -2717,7 +2727,7 @@ jobs:
 
           const report = JSON.parse(readFileSync(path.join(process.env.RUNNER_TEMP, "browser-native-host.json"), "utf8"));
           assert.equal(report.success, true);
-          const expectedNames = [
+          const currentNames = [
             "does not inspect or migrate configuration before rejecting a malformed native request",
             "rejects an unauthorized bootstrap caller before config, keys or database creation",
             "rejects an unauthorized ensure_relay caller before config, keys or database creation",
@@ -2726,13 +2736,24 @@ jobs:
             ...["launcher", "cli"].map((entry) =>
               `launches ${entry} with the exact custom installation context when Chrome has no selectors`),
           ].map((name) => `native host registration ${name}`).sort();
+          const frozenNames = [
+            "native host registration launches with the exact custom installation context when Chrome has no selectors",
+          ];
+          const file = report.testResults[0];
+          const observedNames = file?.assertionResults?.map((entry) => entry.fullName).sort() ?? [];
+          const frozenInventories = [frozenNames, currentNames];
+          const expectedNames = process.env.FROZEN_TARGET === "true"
+            ? frozenInventories.find((inventory) =>
+                inventory.length === observedNames.length &&
+                inventory.every((name, index) => name === observedNames[index]))
+            : currentNames;
+          assert.ok(expectedNames, "native-host proof used an unknown frozen test inventory");
           assert.equal(report.numTotalTests, expectedNames.length);
           assert.equal(report.numPassedTests, expectedNames.length);
           for (const key of ["numFailedTestSuites", "numPendingTestSuites", "numFailedTests", "numPendingTests", "numTodoTests"]) {
             assert.equal(report[key], 0, key);
           }
           assert.equal(report.testResults.length, 1);
-          const file = report.testResults[0];
           assert.equal(file.name, path.resolve("extensions/browser/src/browser/extension-install.native-host.e2e.test.ts"));
           assert.equal(file.status, "passed");
           assert.deepEqual(file.assertionResults.map((entry) => entry.fullName).sort(), expectedNames);
@@ -4389,6 +4410,59 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-${{ matrix.task }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-${{ matrix.task }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
+            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-${{ matrix.task }}-
+
+      # Full runs publish core state in five stripe caches. The changed-graph
+      # queue needs that same state even when it runs inside the central row.
+      - name: Restore changed core test-type stripe 1
+        if: matrix.task == 'test-types' && needs.preflight.outputs.changed_core_test_paths_json != '' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/tsgo-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-1-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-1-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
+            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-1-
+
+      - name: Restore changed core test-type stripe 2
+        if: matrix.task == 'test-types' && needs.preflight.outputs.changed_core_test_paths_json != '' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/tsgo-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-2-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-2-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
+            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-2-
+
+      - name: Restore changed core test-type stripe 3
+        if: matrix.task == 'test-types' && needs.preflight.outputs.changed_core_test_paths_json != '' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/tsgo-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-3-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-3-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
+            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-3-
+
+      - name: Restore changed core test-type stripe 4
+        if: matrix.task == 'test-types' && needs.preflight.outputs.changed_core_test_paths_json != '' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/tsgo-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-4-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-4-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
+            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-4-
+
+      - name: Restore changed core test-type stripe 5
+        if: matrix.task == 'test-types' && needs.preflight.outputs.changed_core_test_paths_json != '' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/tsgo-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-5-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-5-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
+            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-5-
 
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
@@ -4923,6 +4997,7 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-${{ matrix.stripe }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-${{ matrix.stripe }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
+            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-${{ matrix.stripe }}-
 
       - name: Run hosted core test-types stripe
         env:
@@ -5192,7 +5267,8 @@ jobs:
                 run_check "test:extensions:package-boundary:canary" pnpm run test:extensions:package-boundary:canary
                 ;;
               runtime-topology-architecture)
-                run_check "check:architecture" pnpm check:architecture
+                GOGC="${GOGC:-30}" GOMEMLIMIT="${GOMEMLIMIT:-3GiB}" \
+                  run_check "check:architecture" pnpm check:architecture
                 ;;
               *)
                 echo "Unsupported additional check group: $ADDITIONAL_CHECK_GROUP" >&2
@@ -6121,16 +6197,38 @@ jobs:
             -only-testing:OpenClawTests/OpenClawTypographyTests \
             test
 
-      # App compilation and screenshots do not execute approval or notification
-      # lifecycles. Exercise both owners on the already provisioned simulator.
+      # Compile-only smoke cannot verify native Access crypto or session ownership.
+      # Full validation also exercises the existing app and notification lifecycles.
       - name: Run focused iOS lifecycle simulator tests
         id: ios_lifecycle_tests
-        if: matrix.phase == 'tests' && needs.preflight.outputs.compatibility_target != 'true'
+        if: (matrix.phase == 'smoke' || matrix.phase == 'tests') && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
           result_bundle="apps/ios/build/LifecycleTestResults/OpenClawLifecycleTests.xcresult"
           mkdir -p "apps/ios/build/LifecycleTestResults"
+          test_args=(
+            -only-testing:OpenClawTests/CloudflareAccessClientTests
+            -only-testing:OpenClawTests/CloudflareAccessTransferTests
+            -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
+          )
+          if [[ "$IOS_CI_PHASE" == "tests" ]]; then
+            test_args+=(
+              -only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests
+              -only-testing:OpenClawTests/DelayedActionGateTests
+              -only-testing:OpenClawTests/IOSGatewayChatTransportTests
+              -only-testing:OpenClawTests/LocationServiceCallbackTests
+              -only-testing:OpenClawTests/LocationServiceOrderingTests
+              -only-testing:OpenClawTests/NodeAppModelInvokeTests
+              -only-testing:OpenClawTests/OpenClawAppDelegateTests
+              -only-testing:OpenClawTests/WatchMessagingInboundTransportTests
+              -only-testing:OpenClawTests/WatchSessionActivationGateTests
+              -only-testing:OpenClawTests/OpenClawTypographyTests
+              -only-testing:OpenClawTests/NotificationServingPreferenceTests
+              -only-testing:OpenClawTests/RootTabsSourceGuardTests
+              -only-testing:OpenClawTests/TraceHeadingVisualProofTests
+            )
+          fi
           run_apple_command_logged "${result_bundle%.xcresult}.log" xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClaw \
@@ -6138,29 +6236,19 @@ jobs:
             -destination "platform=iOS Simulator,id=${IOS_SIMULATOR_ID:?}" \
             -resultBundlePath "$result_bundle" \
             -parallel-testing-enabled NO \
-            -only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests \
-            -only-testing:OpenClawTests/DelayedActionGateTests \
-            -only-testing:OpenClawTests/IOSGatewayChatTransportTests \
-            -only-testing:OpenClawTests/LocationServiceCallbackTests \
-            -only-testing:OpenClawTests/LocationServiceOrderingTests \
-            -only-testing:OpenClawTests/NodeAppModelInvokeTests \
-            -only-testing:OpenClawTests/OpenClawAppDelegateTests \
-            -only-testing:OpenClawTests/WatchMessagingInboundTransportTests \
-            -only-testing:OpenClawTests/WatchSessionActivationGateTests \
-            -only-testing:OpenClawTests/OpenClawTypographyTests \
-            -only-testing:OpenClawTests/NotificationServingPreferenceTests \
-            -only-testing:OpenClawTests/RootTabsSourceGuardTests \
-            -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
+            "${test_args[@]}" \
             test
-          run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.log xcodebuild \
-            -project apps/ios/OpenClaw.xcodeproj \
-            -scheme OpenClawUITests \
-            -configuration Debug \
-            -destination "platform=iOS Simulator,id=${IOS_SIMULATOR_ID:?}" \
-            -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.xcresult \
-            -parallel-testing-enabled NO \
-            -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings \
-            test
+          if [[ "$IOS_CI_PHASE" == "tests" ]]; then
+            run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.log xcodebuild \
+              -project apps/ios/OpenClaw.xcodeproj \
+              -scheme OpenClawUITests \
+              -configuration Debug \
+              -destination "platform=iOS Simulator,id=${IOS_SIMULATOR_ID:?}" \
+              -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.xcresult \
+              -parallel-testing-enabled NO \
+              -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings \
+              test
+          fi
 
       - name: Run focused Apple Watch operation simulator tests
         if: matrix.phase == 'tests' && needs.preflight.outputs.compatibility_target != 'true'
@@ -6692,6 +6780,123 @@ jobs:
           path: /var/tmp/openclaw-robolectric-m2
           key: ${{ steps.robolectric-cache.outputs.cache-primary-key }}
 
+  android-access-native:
+    permissions:
+      contents: read
+    needs: [preflight]
+    if: needs.preflight.outputs.run_android_access_native == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - page-size: 4096
+            image: google_apis
+          - page-size: 16384
+            image: google_apis_ps16k
+    steps:
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_KIND: android
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+        run: *owned_checkout_run
+
+      - name: Checkout CI Android toolchain action
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-harness
+          sparse-checkout: .github/actions
+          persist-credentials: false
+
+      - name: Setup Android toolchain
+        uses: ./.ci-harness/.github/actions/setup-android-toolchain
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+
+      - name: Setup Node environment for native resources
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+          install-bun: "false"
+
+      - name: Run packaged Access crypto on Android
+        shell: bash
+        env:
+          EXPECTED_PAGE_SIZE: ${{ matrix.page-size }}
+          SYSTEM_IMAGE: system-images;android-36;${{ matrix.image }};x86_64
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS/$RUNNER_ARCH" = Linux/X64
+          test -c /dev/kvm
+          /usr/bin/sudo /usr/bin/setfacl -m "u:$(id -un):rw" /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --install emulator "$SYSTEM_IMAGE"
+          acceleration="$(/usr/bin/timeout --signal=TERM --kill-after=2s 15s emulator -accel-check 2>&1)"
+          printf '%s\n' "$acceleration"
+          grep -Eiq '\bKVM\b.*\b(available|usable)\b' <<<"$acceleration"
+          printf 'no\n' | avdmanager create avd --name openclaw-access --package "$SYSTEM_IMAGE" --device pixel_6
+          emulator -avd openclaw-access -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
+          emulator_pid=$!
+          trap 'adb -s emulator-5554 emu kill >/dev/null 2>&1 || true; wait "$emulator_pid" || true' EXIT
+          /usr/bin/timeout --signal=TERM --kill-after=2s 180s bash -c '
+            adb -s emulator-5554 wait-for-device
+            until [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d "\r")" == 1 ]]; do sleep 2; done
+          '
+          test "$(adb -s emulator-5554 shell getconf PAGE_SIZE | tr -d '\r')" = "$EXPECTED_PAGE_SIZE"
+          if [[ "$EXPECTED_PAGE_SIZE" == 16384 ]]; then
+            # The ps16k image simulates 16 KiB on x86_64; compatibility mode must not hide loader failures.
+            adb -s emulator-5554 shell setprop bionic.linker.16kb.app_compat.enabled false
+            adb -s emulator-5554 shell setprop pm.16kb.app_compat.disabled true
+            test "$(adb -s emulator-5554 shell getprop bionic.linker.16kb.app_compat.enabled | tr -d '\r')" = false
+            test "$(adb -s emulator-5554 shell getprop pm.16kb.app_compat.disabled | tr -d '\r')" = true
+          fi
+          node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
+            :app:connectedPlayDebugAndroidTest \
+            -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE" \
+            -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest \
+            -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          apk="$(python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import xml.etree.ElementTree as ET
+          import zipfile
+          reports = Path('apps/android/app/build/outputs/androidTest-results/connected').rglob('*.xml')
+          cases = [case for report in reports for case in ET.parse(report).getroot().iter('testcase')
+                   if case.get('classname') == 'ai.openclaw.app.gateway.CloudflareAccessNativeTest']
+          assert len(cases) == 1, 'The packaged native test must execute exactly once'
+          assert all(case.find(tag) is None for case in cases for tag in ('failure', 'error', 'skipped')), 'The packaged native test failed or skipped'
+          directory = Path('apps/android/app/build/outputs/apk/play/debug')
+          metadata = json.loads((directory / 'output-metadata.json').read_text())
+          assert metadata['variantName'] == 'playDebug' and metadata['artifactType']['type'] == 'APK'
+          assert len(metadata['elements']) == 1, 'Expected one universal playDebug APK'
+          element = metadata['elements'][0]
+          filename = element['outputFile']
+          assert not element['filters'] and Path(filename).name == filename and filename.endswith('.apk')
+          selected = directory / filename
+          with zipfile.ZipFile(selected) as archive:
+              libraries = {name for name in archive.namelist() if name.endswith('/libsodium.so')}
+          assert libraries == {f'lib/{abi}/libsodium.so' for abi in ('armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64')}
+          print(selected)
+          PY
+          )"
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/zipalign" -c -P 16 -v 4 "$apk"
+
+      - name: Upload Access native test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-access-native-${{ matrix.page-size }}-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
+          path: |
+            apps/android/app/build/outputs/androidTest-results/connected/**
+            apps/android/app/build/reports/androidTests/connected/**
+          if-no-files-found: error
+          retention-days: 14
+
   docker-seed-e2e:
     permissions:
       contents: read
@@ -6746,7 +6951,7 @@ jobs:
           OPENCLAW_DOCKER_ALL_LANES: ${{ needs.preflight.outputs.docker_seed_lanes }}
           OPENCLAW_DOCKER_ALL_LIVE_MODE: skip
           OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "1"
-          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: legacy-operator-state
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ needs.preflight.outputs.frozen_target == 'true' && 'base' || 'legacy-operator-state' }}
           OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: auto-auth
           OPENCLAW_DOCKER_ALL_PARALLELISM: ${{ (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
           OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: ${{ (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
@@ -6811,6 +7016,7 @@ jobs:
       - ios-screenshot-shard
       - ios-screenshot-evidence
       - android
+      - android-access-native
       - docker-seed-e2e
     # Report failed prerequisites, but let superseded runs release their slot
     # without waiting for an aggregate runner after workflow cancellation.
@@ -6855,6 +7061,7 @@ jobs:
             ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
             ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
             android=${{ needs.android.result }}|${{ needs.preflight.outputs.run_android_job }}
+            android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_access_native }}
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
         run: |
           set -euo pipefail

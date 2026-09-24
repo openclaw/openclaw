@@ -20,8 +20,6 @@ import {
   loadSubagentSessionListRunsFromSqlite,
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
-import { ExecutionDecisionCursorError } from "../audit/execution-decision-receipts.js";
-import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identity-context.js";
 import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
 import {
   readGitHubPublicationRequest,
@@ -78,6 +76,7 @@ import {
 } from "./openclaw-state-db-read-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
+import { readStateDiagnosticCommand } from "./openclaw-state-read-diagnostics.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
 import { isReadRequest } from "./openclaw-state-read.validation.js";
@@ -335,6 +334,12 @@ serveOwnedWorkerTasks(
                     }),
                   };
                 }
+                if (
+                  command.type === "config.snapshot.read" ||
+                  command.type === "audit.run.inspect"
+                ) {
+                  return readStateDiagnosticCommand(db, command);
+                }
                 if (command.type === "pluginBlob.entries") {
                   return {
                     ok: true,
@@ -434,29 +439,6 @@ serveOwnedWorkerTasks(
                     sourceAdmitted,
                     record: readOnboardingRecommendationsInDatabase(db, command.configKey),
                   };
-                }
-                if (command.type === "audit.run.inspect") {
-                  try {
-                    return {
-                      ok: true,
-                      type: command.type,
-                      sourceAdmitted,
-                      result: {
-                        status: "inspected",
-                        inspection: inspectExecutionIdentityRunInDatabase(db, command.input),
-                      },
-                    };
-                  } catch (error) {
-                    if (!(error instanceof ExecutionDecisionCursorError)) {
-                      throw error;
-                    }
-                    return {
-                      ok: true,
-                      type: command.type,
-                      sourceAdmitted,
-                      result: { status: "invalid-cursor", message: error.message },
-                    };
-                  }
                 }
                 if (command.type === "nodeHost.config") {
                   return {

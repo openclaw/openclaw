@@ -1,16 +1,21 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, realpathSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { WorkerTranscriptCommitParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
-import { listRunningSessions, waitForExecScope } from "../agents/bash-process-registry.js";
+import {
+  deleteSession,
+  listRunningSessions,
+  markBackgrounded,
+  waitForExecScope,
+} from "../agents/bash-process-registry.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { NodeWorkerJournalWorker } from "../node-host/node-worker-journal-worker.js";
 import type { NodeWorkerLaunchReceipt } from "../node-host/node-worker-launch-store.js";
@@ -402,4 +407,93 @@ export function registerWorkerBackgroundExecLifecycleTests({
       }
     }
   });
+}
+
+export function registerWorkerExecEnvironmentFinalizationTests({
+  runExecProcess,
+  createWorkerRuntimeEnvironment,
+}: {
+  runExecProcess: typeof import("../agents/bash-tools.exec-runtime.js").runExecProcess;
+  createWorkerRuntimeEnvironment: typeof import("./worker.runtime.js").createWorkerRuntimeEnvironment;
+}) {
+  it.each(["foreground", "hidden-background"] as const)(
+    "keeps environment state until %s exec finalization and task settlement finish",
+    async (visibility) => {
+      const sessionId = `worker-finalizer-${visibility}`;
+      const scopeKey = `worker:${sessionId}`;
+      const environment = await createWorkerRuntimeEnvironment(sessionId);
+      const finalizing = createDeferred();
+      const releaseFinalizer = createDeferred();
+      const settling = createDeferred();
+      const releaseSettlement = createDeferred();
+      const settledStateDirs: Array<string | undefined> = [];
+      const closeSettled = vi.fn();
+      let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
+      try {
+        run = await runExecProcess({
+          command: "worker-finalizer-fixture",
+          workdir: environment.stateDir,
+          env: {},
+          sandbox: {
+            containerName: "worker-finalizer-fixture",
+            workspaceDir: environment.stateDir,
+            containerWorkdir: environment.stateDir,
+            buildExecSpec: async () => ({
+              argv: [process.execPath, "-e", "process.stdout.write('worker-finalizer-output')"],
+              env: {},
+              stdinMode: "pipe-closed",
+            }),
+            finalizeExec: async () => {
+              finalizing.resolve();
+              await releaseFinalizer.promise;
+            },
+          },
+          usePty: false,
+          warnings: [],
+          maxOutput: 1000,
+          pendingMaxOutput: 1000,
+          notifyOnExit: false,
+          scopeKey,
+          timeoutSec: null,
+          onSettledBeforeNotify: async () => {
+            settling.resolve();
+            await releaseSettlement.promise;
+            settledStateDirs.push(process.env.OPENCLAW_STATE_DIR);
+          },
+        });
+        if (visibility === "hidden-background") {
+          markBackgrounded(run.session);
+          deleteSession(run.session.id);
+        }
+        await finalizing.promise;
+        const closing = environment.close();
+        void closing.then(closeSettled, closeSettled);
+        await Promise.resolve();
+
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(environment.stateDir);
+        await expect(stat(environment.stateDir)).resolves.toBeDefined();
+        releaseFinalizer.resolve();
+        await settling.promise;
+        expect(run.session.finalizing).toBe(true);
+        expect(run.session.exited).toBe(false);
+        expect(closeSettled).not.toHaveBeenCalled();
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(environment.stateDir);
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBe(
+          path.join(environment.stateDir, "openclaw.json"),
+        );
+        await expect(stat(environment.stateDir)).resolves.toBeDefined();
+        releaseSettlement.resolve();
+        await run.promise;
+        await closing;
+        expect(closeSettled).toHaveBeenCalledOnce();
+        expect(settledStateDirs).toEqual([environment.stateDir]);
+        await expect(stat(environment.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        releaseFinalizer.resolve();
+        releaseSettlement.resolve();
+        await run?.promise;
+        await environment.close();
+      }
+    },
+  );
 }

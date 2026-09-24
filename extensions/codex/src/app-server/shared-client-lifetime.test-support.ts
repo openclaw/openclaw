@@ -111,11 +111,16 @@ export function registerSharedClientLifetimeTests(
         });
         await vi.advanceTimersByTimeAsync(0);
         if (mode === "validation") {
+          const closeStarted = new Promise<void>((resolve) => {
+            harness.client.addCloseHandler(() => resolve());
+          });
           const initialize = JSON.parse(harness.writes[0]!);
           harness.send({
             id: initialize.id,
             result: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` },
           });
+          // Catalog identity resolves through real I/O before auth can reject startup.
+          await closeStarted;
         } else if (mode === "abort") {
           controller.abort();
         }
