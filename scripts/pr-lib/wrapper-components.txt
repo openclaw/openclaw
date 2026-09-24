@@ -1243,6 +1243,7 @@ src/state/openclaw-state-db-audit-migration.ts
 src/state/openclaw-state-db-borrow.ts
 src/state/openclaw-state-db-cache.idle.ts
 src/state/openclaw-state-db-cache.ts
+src/state/openclaw-state-db-cache.wal.ts
 src/state/openclaw-state-db-contract.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts

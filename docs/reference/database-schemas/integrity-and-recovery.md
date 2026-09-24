@@ -383,7 +383,11 @@ checkpoint clears the warning; a large WAL alone does not mean a checkpoint is
 blocked. File-size observation failures are recorded and logged separately from
 SQLite's completion result; they do not turn a completed checkpoint into a failure.
 
-Shared-state maintenance waits up to 350 ms for lifecycle coordination. A refused
+Shared-state maintenance waits up to 350 ms for lifecycle coordination. Periodic
+maintenance yields between acquisition attempts so the Gateway event loop can
+continue. It rechecks the same database owner and physical file before proceeding;
+retirement cancels and joins pending admission. Explicit synchronous checkpoint
+and close operations retain their existing contract. A refused
 periodic attempt retries once after one second, then waits for the next interval.
 Contention is recorded as blocked. Status and Doctor warn after two consecutive
 refusals; maintenance logs once per five. A completed checkpoint resets that count and clears the history
