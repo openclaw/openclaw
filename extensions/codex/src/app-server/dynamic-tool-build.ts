@@ -274,6 +274,7 @@ export async function buildDynamicTools(
       : {}),
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
+    runtimePluginToolGrant: params.runtimePluginToolGrant,
     allowGatewaySubagentBinding:
       params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
     sessionKey: input.sandboxSessionKey,

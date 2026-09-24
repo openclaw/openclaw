@@ -66,6 +66,8 @@ export {
   resolveWebSearchProviderContractEntriesForPluginId,
 } from "../plugins/contracts/registry.js";
 export { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
+export { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+export { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 export {
   emitDiagnosticEventWithTrustedTraceContext,
   emitInternalDiagnosticEvent as emitInternalDiagnosticEventForTest,
