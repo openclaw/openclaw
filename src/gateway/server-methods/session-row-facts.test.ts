@@ -12,7 +12,7 @@ import * as agentDatabaseReadOnly from "../../state/openclaw-agent-db-readonly.j
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as activitySummary from "../session-activity-summary-state.js";
 import { beginSessionPermissionChange } from "../session-permission-change.js";

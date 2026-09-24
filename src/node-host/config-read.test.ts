@@ -12,7 +12,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import type { OpenClawStateReadReply } from "../state/openclaw-state-read.types.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { configureNodeHost, loadNodeHostConfig, loadNodeHostConfigReadOnly } from "./config.js";
 

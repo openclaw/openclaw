@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,

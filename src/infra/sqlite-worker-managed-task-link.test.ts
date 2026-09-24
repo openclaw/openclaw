@@ -27,7 +27,7 @@ import {
 import { upsertTaskWithDeliveryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
 import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.types.js";
 import { setDetachedTaskLifecycleRuntime } from "../tasks/task-runtime.test-helpers.js";
-import { forbidMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { forbidMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { emitAgentEvent } from "./agent-events.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 import { interceptTaskWorkerCommands } from "./sqlite-worker-task.test-support.js";

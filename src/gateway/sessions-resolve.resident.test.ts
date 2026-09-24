@@ -9,7 +9,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { createSessionRowProjection } from "./session-row-projection.js";

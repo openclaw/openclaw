@@ -9,7 +9,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readStatusSessionStores } from "../../status/session-stores.js";
-import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import {

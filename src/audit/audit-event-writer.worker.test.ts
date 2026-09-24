@@ -6,7 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { listAuditEvents } from "./audit-event-store.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
 import { input, messageEvent, decisionReceipt } from "./audit-event-writer.test-support.js";

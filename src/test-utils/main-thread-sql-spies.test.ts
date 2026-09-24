@@ -4,7 +4,7 @@ import {
   forbidMainThreadSql,
   observeMainThreadReads,
   observeMainThreadSql,
-} from "./main-thread-sql-spies.js";
+} from "./main-thread-sql-spies.test-support.js";
 
 it("observes every native SQL method and restores observation and refusal scopes", () => {
   const { DatabaseSync } = requireNodeSqlite();

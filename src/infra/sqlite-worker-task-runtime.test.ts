@@ -35,7 +35,10 @@ import {
 } from "../tasks/task-flow-runtime-internal.js";
 import { getTaskById } from "../tasks/task-registry.js";
 import { upsertTaskWithDeliveryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
-import { forbidMainThreadSql, observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import {
+  forbidMainThreadSql,
+  observeMainThreadSql,
+} from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { SqliteSchemaVersionError } from "./sqlite-user-version.js";
 import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";

@@ -13,7 +13,7 @@ import {
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setActiveNodeContext } from "../../infra/active-node-context.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   completeWorkerLaunchDescriptor,
   type WorkerLaunchPlan,

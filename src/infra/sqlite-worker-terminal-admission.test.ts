@@ -15,7 +15,7 @@ import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as fileDescriptor from "./file-descriptor.js";
 import { readStableSqliteFileGeneration } from "./sqlite-file-generation.js";
 import type { SqliteWorkerReply } from "./sqlite-worker-contract.js";

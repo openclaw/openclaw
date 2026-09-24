@@ -15,7 +15,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js";
 import { loadMcpToolGrants } from "./exec-approvals-mcp.js";
 import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";

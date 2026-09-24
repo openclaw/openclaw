@@ -10,7 +10,7 @@ import {
   setUserProfileRole,
   syncGitHubIdentity,
 } from "../../state/user-profiles.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { usersHandlers } from "./users.js";
 

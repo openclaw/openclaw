@@ -4,7 +4,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import * as historyWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import * as sqlite from "../../infra/kysely-sync.js";
-import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import * as sessionUtils from "../session-utils.js";

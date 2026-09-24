@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   advanceSessionDeliveryAgentRun,
