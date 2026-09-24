@@ -41,6 +41,7 @@ import {
   createAttachmentSidebarHarness,
   getAttachmentMenuOption,
   renderAttachmentHarness,
+  renderSettledPastedTextAttachment,
   requireAttachmentInput,
   selectAttachmentMenuOption,
   selectFile,
@@ -5031,7 +5032,7 @@ describe("chat attachment picker", () => {
     const onAttachmentsChange = vi.fn();
     const onDraftChange = vi.fn();
     const sidebar = createAttachmentSidebarHarness();
-    const remounted = renderChatView({
+    const remounted = await renderSettledPastedTextAttachment({
       onOpenSidebar: sidebar.open,
       attachments,
       getAttachments: () => attachments,
@@ -5040,12 +5041,9 @@ describe("chat attachment picker", () => {
       onAttachmentsChange,
       onDraftChange,
     });
-    document.body.append(remounted);
-    await waitForFast(() => {
-      expect(remounted.querySelector(".chat-attachment-file__open")?.textContent).toContain(
-        "First words from a remounted p…",
-      );
-    });
+    expect(remounted.querySelector(".chat-attachment-file__open")?.textContent).toContain(
+      "First words from a remounted p…",
+    );
     expect(attachments[0]?.origin).toBe("paste");
     requireElement(remounted, ".chat-attachment-file__open", "pasted text excerpt").dispatchEvent(
       new MouseEvent("click", { bubbles: true }),

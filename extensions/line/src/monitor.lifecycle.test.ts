@@ -240,26 +240,52 @@ describe("monitorLineProvider lifecycle", () => {
     );
   });
 
-  it("registers an account target without replacing existing route ownership", async () => {
-    const monitor = await monitorLineProvider({
-      channelAccessToken: "token",
-      channelSecret: "secret", // pragma: allowlist secret
-      accountId: "work",
-      config: {} as OpenClawConfig,
-      runtime: {} as RuntimeEnv,
-    });
+  it.each([
+    { name: "default", webhookPath: undefined, expectedPath: "/line/webhook" },
+    { name: "empty", webhookPath: "", expectedPath: "/line/webhook" },
+    { name: "no leading slash", webhookPath: "hooks/line", expectedPath: "/hooks/line" },
+    { name: "trailing slash", webhookPath: "/hooks/line/", expectedPath: "/hooks/line" },
+    { name: "whitespace", webhookPath: "  /hooks/line  ", expectedPath: "/hooks/line" },
+  ])(
+    "registers the $name path without replacing route ownership",
+    async ({ webhookPath, expectedPath }) => {
+      const monitor = await monitorLineProvider({
+        channelAccessToken: "token",
+        channelSecret: "secret", // pragma: allowlist secret
+        accountId: "work",
+        config: {} as OpenClawConfig,
+        runtime: {} as RuntimeEnv,
+        webhookPath,
+      });
 
-    const registration = requireWebhookRegistration();
-    expect(registration.target.accountId).toBe("work");
-    expect(registration.target.path).toBe("/line/webhook");
-    expect(registration.route.accountId).toBe("work");
-    expect(registration.route.auth).toBe("plugin");
-    expect(registration.route.pluginId).toBe("line");
-    expect(registration.route.source).toBe("line-webhook");
-    expect(registration.route.throwOnFailure).toBe(true);
-    expect(registration.route).not.toHaveProperty("path");
-    expect(registration.route).not.toHaveProperty("replaceExisting");
-    await monitor.stop();
+      try {
+        const registration = requireWebhookRegistration();
+        expect(registration.target.accountId).toBe("work");
+        expect(registration.target.path).toBe(expectedPath);
+        expect(registration.route.accountId).toBe("work");
+        expect(registration.route.auth).toBe("plugin");
+        expect(registration.route.pluginId).toBe("line");
+        expect(registration.route.source).toBe("line-webhook");
+        expect(registration.route.throwOnFailure).toBe(true);
+        expect(registration.route).not.toHaveProperty("path");
+        expect(registration.route).not.toHaveProperty("replaceExisting");
+      } finally {
+        await monitor.stop();
+      }
+    },
+  );
+
+  it("rejects a blank channel secret before creating a bot or registering a route", async () => {
+    await expect(
+      monitorLineProvider({
+        channelAccessToken: "token",
+        channelSecret: "  ",
+        config: {} as OpenClawConfig,
+        runtime: {} as RuntimeEnv,
+      }),
+    ).rejects.toThrow(/non-empty channel secret/);
+    expect(createLineBotMock).not.toHaveBeenCalled();
+    expect(registerWebhookTargetWithPluginRouteMock).not.toHaveBeenCalled();
   });
 
   it("stops immediately when signal is already aborted", async () => {
