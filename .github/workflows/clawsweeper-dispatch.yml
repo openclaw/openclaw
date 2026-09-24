@@ -17,15 +17,15 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}', github.repository, github.event.issue.number || github.event.pull_request.number || github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'push' || github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
-
 jobs:
   dispatch:
     runs-on: ubuntu-latest
+    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
     if: >-
-      ${{
+      ${{ (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (
+        (github.event.action != 'edited' ||
+          (github.event_name != 'issues' && github.event_name != 'pull_request_target') ||
+          !github.event.changes || toJSON(github.event.changes) != '{}') &&
         (github.event_name != 'issue_comment' ||
           (github.actor != 'clawsweeper[bot]' && github.actor != 'openclaw-clawsweeper[bot]')) &&
         !(
@@ -39,7 +39,12 @@ jobs:
             (github.actor_id == '257215752' || github.actor_id == '264559031')
           )
         )
-      }}
+      ) }}
+    # Admission runs before job concurrency, so an empty metadata edit cannot
+    # cancel a useful dispatch. Other changes retain the receiver's policy.
+    concurrency:
+      group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}', github.repository, github.event.issue.number || github.event.pull_request.number || github.run_id) }}
+      cancel-in-progress: ${{ github.event_name == 'push' || github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
     env:
       HAS_CLAWSWEEPER_APP_PRIVATE_KEY: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY != '' }}
       CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093

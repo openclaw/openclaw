@@ -328,15 +328,19 @@ describe("Activity recap lifecycle with the canonical session store", () => {
         totalMessages: 1,
       });
 
+      const published = createDeferred<ReturnType<typeof view>>();
+      changed.mockImplementationOnce(() => published.resolve(view()));
       completion.resolve(result("Completed the first turn."));
-      await vi.waitFor(async () => {
-        expect(await describeSession()).toMatchObject({
-          session: {
-            key: target.key,
-            sessionId: scope.sessionId,
-            activitySummary: { state: "current", text: "Completed the first turn." },
-          },
-        });
+      expect(await published.promise).toMatchObject({
+        state: "current",
+        text: "Completed the first turn.",
+      });
+      expect(await describeSession()).toMatchObject({
+        session: {
+          key: target.key,
+          sessionId: scope.sessionId,
+          activitySummary: { state: "current", text: "Completed the first turn." },
+        },
       });
       expect(read()?.activitySummary).toMatchObject({
         ...latestWatermark,

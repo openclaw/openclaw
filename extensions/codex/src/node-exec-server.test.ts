@@ -30,8 +30,8 @@ function createManagedWorkspaceInvocation(cwd: string, homeDir?: string) {
     sessionKey: "agent:main:paired-session",
   };
   const release = vi.fn();
-  const acquireManagedWorkspace = vi.fn(
-    (request: {
+  const acquireManagedWorkspaceAsync = vi.fn(
+    async (request: {
       workspaceDir: string;
       environmentId: string;
       sessionId: string;
@@ -53,10 +53,10 @@ function createManagedWorkspaceInvocation(cwd: string, homeDir?: string) {
   const context = {
     sessionKey: placement.sessionKey,
     sendNodeEvent: async () => undefined,
-    acquireManagedWorkspace,
+    acquireManagedWorkspaceAsync,
     prepareExecAuthorization: () => () => {},
   } satisfies NonNullable<Parameters<OpenClawPluginNodeHostCommand["handle"]>[2]>;
-  return { placement, context, acquireManagedWorkspace, release };
+  return { placement, context, acquireManagedWorkspaceAsync, release };
 }
 
 function createNodeFrames(testSignal?: AbortSignal) {
@@ -422,7 +422,7 @@ describe("Codex node exec-server", () => {
         sessionKey: "agent:main:different-session",
       }),
     ).rejects.toThrow("active managed placement authority");
-    expect(workspace.acquireManagedWorkspace).not.toHaveBeenCalled();
+    expect(workspace.acquireManagedWorkspaceAsync).not.toHaveBeenCalled();
     for (const replacement of [
       { cwd: path.parse(process.cwd()).root },
       { environmentId: "other-environment" },

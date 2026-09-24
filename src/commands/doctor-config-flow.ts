@@ -138,6 +138,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const referenceSource = prepareDoctorConfigReferenceSource(snapshot);
   const pluginMetadataSnapshotState: DoctorPluginMetadataSnapshotState = {
     current: preflight.pluginMetadataSnapshot,
+    inventoryChanged: pluginInstallConfigImport?.pluginInventoryChanged,
   };
   const { createDoctorPluginMetadataSnapshotScope } =
     await import("./doctor/shared/plugin-metadata-snapshot-scope.js");
@@ -687,6 +688,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const migrationResult = await finalizeMigrationResult({
     cfg,
     shouldWriteConfig,
+    pluginInventoryChanged: pluginMetadataSnapshotState.inventoryChanged,
     metadataSnapshot: pluginMetadataSnapshotState.current,
     runWithCurrentPluginMetadata,
   });

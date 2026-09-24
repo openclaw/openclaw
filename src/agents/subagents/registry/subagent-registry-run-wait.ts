@@ -244,6 +244,7 @@ export class SubagentWaitManager {
   ): Promise<void> => {
     // A current Gateway may observe historical execution; the wait itself owns this generation.
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    let waitedEntry: SubagentRunRecord | undefined;
     let completionForRetry: Parameters<typeof this.options.completeSubagentRun>[0] | undefined;
     let waitExpiryForRetry: Parameters<typeof this.options.reportSubagentWaitExpiry>[0] | undefined;
     const scheduleWaitRetry = (entry: SubagentRunRecord, reason: string, error?: string) => {
@@ -272,6 +273,7 @@ export class SubagentWaitManager {
       if (!entryBeforeWait || (expectedEntry && entryBeforeWait !== expectedEntry)) {
         return;
       }
+      waitedEntry = entryBeforeWait;
       const waitStartedAt = Date.now();
       const timeoutMs = capWaitToStoredDeadline
         ? resolveWaitTimeoutMsForRun(entryBeforeWait, waitTimeoutMs, waitStartedAt)
@@ -286,7 +288,7 @@ export class SubagentWaitManager {
         return;
       }
       const entry = this.options.runs.get(runId);
-      if (!entry || (expectedEntry && entry !== expectedEntry)) {
+      if (!entry || entry !== waitedEntry) {
         return;
       }
       if (wait.status === "pending") {
@@ -320,6 +322,7 @@ export class SubagentWaitManager {
         // freezes the collector completion the waiter reads.
         completionForRetry = {
           runId,
+          expectedEntry: entry,
           endedAt: typeof wait.endedAt === "number" ? wait.endedAt : Date.now(),
           outcome: { status: "ok" },
           reason: SUBAGENT_ENDED_REASON_COMPLETE,
@@ -360,6 +363,7 @@ export class SubagentWaitManager {
       const completeAsRunTimeout = async (endedAt?: number, startedAt?: number) => {
         const timeoutCompletion: Parameters<typeof this.options.completeSubagentRun>[0] = {
           runId,
+          expectedEntry: entry,
           outcome: { status: "timeout", disposition: "exited" },
           reason: SUBAGENT_ENDED_REASON_COMPLETE,
           sendFarewell: true,
@@ -406,6 +410,7 @@ export class SubagentWaitManager {
           }
           completionForRetry = {
             runId,
+            expectedEntry: entry,
             endedAt: completion.endedAt,
             outcome: completion.outcome,
             reason: completion.reason,
@@ -488,6 +493,7 @@ export class SubagentWaitManager {
       });
       completionForRetry = {
         runId,
+        expectedEntry: entry,
         endedAt,
         outcome,
         reason: waitAborted
@@ -507,14 +513,14 @@ export class SubagentWaitManager {
         return;
       }
       const current = this.options.runs.get(runId);
-      log.warn("failed to complete subagent run; retrying completion", {
-        runId,
-        childSessionKey: current?.childSessionKey ?? expectedEntry?.childSessionKey,
-        error,
-      });
-      if (!current) {
+      if (!current || current !== waitedEntry) {
         return;
       }
+      log.warn("failed to complete subagent run; retrying completion", {
+        runId,
+        childSessionKey: current.childSessionKey,
+        error,
+      });
       if (completionForRetry) {
         try {
           await this.options.completeSubagentRun(completionForRetry);
@@ -527,7 +533,10 @@ export class SubagentWaitManager {
           });
         }
       }
-      if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
+      if (
+        !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
+        this.options.runs.get(runId) !== current
+      ) {
         return;
       }
       if (waitExpiryForRetry && typeof current.execution.endedAt !== "number") {

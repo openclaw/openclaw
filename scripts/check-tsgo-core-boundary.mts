@@ -2,13 +2,14 @@
 
 // Enforces core tsgo project boundaries and sparse-checkout safety.
 import path from "node:path";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
+  findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
-  TSGO_CORE_TEST_MAX_ROOTS,
   TSGO_CORE_GRAPHS,
   TSGO_CORE_TEST_SHARDS,
 } from "./lib/tsgo-core-test-shards.mts";
@@ -113,14 +114,22 @@ export async function checkCoreTsgoGraphBoundary(): Promise<CoreTsgoGraph[]> {
   for (const shard of TSGO_CORE_TEST_SHARDS) {
     shardConfigs.push({ ...shard, expanded: await readGraphConfig(shard.config) });
   }
+  const shardRoots = shardConfigs.map((shard) => ({
+    name: shard.name,
+    roots: (shard.expanded.files ?? [])
+      .map(normalizeFilePath)
+      .filter((file) => testRootPattern.test(file)),
+  }));
+  const oversized = reportLimitViolations(
+    findOversizedTsgoCoreTestShards({ shards: shardRoots }).map((message) => ({
+      file: canonicalCoreTestConfig,
+      title: "Core test shard root budget",
+      message,
+    })),
+  );
   const shardViolations = findTsgoCoreTestShardViolations({
     canonicalRoots,
-    shards: shardConfigs.map((shard) => ({
-      name: shard.name,
-      roots: (shard.expanded.files ?? [])
-        .map(normalizeFilePath)
-        .filter((file) => testRootPattern.test(file)),
-    })),
+    shards: shardRoots,
   });
 
   const buildInfoOwners = new Map<string, string[]>();
@@ -141,13 +150,14 @@ export async function checkCoreTsgoGraphBoundary(): Promise<CoreTsgoGraph[]> {
   }
 
   if (shardViolations.length > 0) {
-    console.error(
-      `Core test shards must cover every canonical test root exactly once and stay at or below ${TSGO_CORE_TEST_MAX_ROOTS} roots:`,
-    );
+    console.error("Core test shards must cover every canonical test root exactly once:");
     for (const violation of shardViolations) {
       console.error(`- ${violation}`);
     }
     throw new Error("Core test graph ownership validation failed");
+  }
+  if (oversized) {
+    throw new Error("Core test shard root budget exceeded");
   }
 
   const violations: string[] = [];

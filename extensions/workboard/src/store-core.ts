@@ -224,10 +224,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
     options: WorkboardUpdateCardOptions = {},
   ): Promise<{ card: WorkboardCard; updated: boolean }> {
     for (let attempt = 0; ; attempt += 1) {
-      const current = await this.get(id);
-      if (!current) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const current = await this.requireCard(id);
       if (
         options.expectedUpdatedAt !== undefined &&
         current.updatedAt !== options.expectedUpdatedAt
@@ -421,6 +418,14 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
   async get(id: string): Promise<WorkboardCard | undefined> {
     const entry = await this.store.lookup(id.trim());
     return entry?.version === 1 ? entry.card : undefined;
+  }
+
+  protected async requireCard(id: string): Promise<WorkboardCard> {
+    const card = await this.get(id);
+    if (!card) {
+      throw new Error(`card not found: ${id}`);
+    }
+    return card;
   }
 
   private async removeReferencesToCard(
@@ -679,10 +684,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
     patch: WorkboardCardPatch,
     options: WorkboardUpdateCardOptions = {},
   ): Promise<WorkboardCard> {
-    const existing = await this.get(id);
-    if (!existing) {
-      throw new Error(`card not found: ${id}`);
-    }
+    const existing = await this.requireCard(id);
     if (
       options.expectedUpdatedAt !== undefined &&
       existing.updatedAt !== options.expectedUpdatedAt
@@ -1092,26 +1094,13 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       (await this.store.listCardStatuses(parentIds)).map((parent) => [parent.id, parent]),
     );
     const parentsDone = parentIds.every((id) => parentCards.get(id)?.status === "done");
-    if (
-      !parentsDone &&
-      scheduledAt &&
-      scheduledAt > now &&
-      isDependencyPromotableStatus(card.status)
-    ) {
+    if (!isDependencyPromotableStatus(card.status)) {
+      return card.status;
+    }
+    if (scheduledAt && scheduledAt > now) {
       return "scheduled";
     }
-    if (!parentsDone && isDependencyPromotableStatus(card.status)) {
-      return "todo";
-    }
-    if (
-      parentsDone &&
-      scheduledAt &&
-      scheduledAt > now &&
-      isDependencyPromotableStatus(card.status)
-    ) {
-      return "scheduled";
-    }
-    return parentsDone && isDependencyPromotableStatus(card.status) ? "ready" : card.status;
+    return parentsDone ? "ready" : "todo";
   }
 
   private async dependsOn(cardId: string, targetParentId: string): Promise<boolean> {
@@ -1159,10 +1148,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
   }
 
   protected async promoteDependencyReady(id: string, now = Date.now()): Promise<WorkboardCard> {
-    const card = await this.get(id);
-    if (!card) {
-      throw new Error(`card not found: ${id}`);
-    }
+    const card = await this.requireCard(id);
     if (card.metadata?.archivedAt) {
       return card;
     }

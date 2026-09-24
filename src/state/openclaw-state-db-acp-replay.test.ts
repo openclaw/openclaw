@@ -8,7 +8,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
+  prepareOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 
 function seedLegacyReplay(db: DatabaseSync) {
@@ -127,7 +127,7 @@ describe("ACP replay accounting repair", () => {
         closeOpenClawStateDatabaseForTest();
 
         if (entrance === "automatic") {
-          expect(repairOpenClawStateDatabaseSchemaIfNeeded(options).warnings).toEqual([]);
+          expect((await prepareOpenClawStateDatabaseSchema(options)).warnings).toEqual([]);
         }
         const upgraded = openOpenClawStateDatabase(options).db;
         expectAcpReplayUtf8Accounting(upgraded);
@@ -187,8 +187,10 @@ describe("ACP replay accounting repair", () => {
         closeOpenClawStateDatabaseForTest();
         if (entrance === "automatic") {
           expect(
-            withoutHistoricalPayloadReads(options.path, () =>
-              repairOpenClawStateDatabaseSchemaIfNeeded(options),
+            (
+              await withoutHistoricalPayloadReads(options.path, () =>
+                prepareOpenClawStateDatabaseSchema(options),
+              )
             ).warnings,
           ).toEqual([]);
         } else {

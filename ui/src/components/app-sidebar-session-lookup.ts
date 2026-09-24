@@ -51,15 +51,29 @@ export function findActiveSidebarLineageRow(
 export function findSidebarHovercardRow(
   source: SidebarSessionLookupSource,
   sessionKey: string,
+  projectedRows: readonly SidebarRecentSession[],
 ): SidebarSessionHovercardRow | undefined {
+  // The rendered tree owns folded descendant attention; a flat row loses it.
+  const pending = [...projectedRows];
+  let projected: SidebarRecentSession | undefined;
+  while (pending.length > 0) {
+    const row = pending.pop()!;
+    if (row.key === sessionKey) {
+      projected = row;
+      break;
+    }
+    pending.push(...row.children);
+  }
   const navigationState = source.getSessionNavigationState();
   const child = findActiveSidebarLineageRow(source.sessionData, sessionKey);
   const liveRow =
+    projected ??
     findProjectedSidebarSession({
       sessionKey,
       navigationState,
       sessionResultsByAgent: source.sessionData.sessionResultsByAgent,
-    }) ?? (child ? navigationState.toSidebarSession(child, true) : undefined);
+    }) ??
+    (child ? navigationState.toSidebarSession(child, true) : undefined);
   return findCatalogSessionHovercardRow({
     catalogs: source.visibleSessionCatalogs(),
     sessionKey,

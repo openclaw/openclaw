@@ -118,6 +118,50 @@ describe("restoreEnvVarRefs", () => {
     expect(result).toEqual({ value: "${API_TOKEN}:${OPTIONAL_SUFFIX}" });
   });
 
+  it("restores a ${VAR:-default} template that resolved from its fallback", () => {
+    // Without this, an authored fallback is inlined into openclaw.json on the next write
+    // and the operator's template is lost: the value resolves to "60", the writer sees a
+    // plain string, and nothing links it back to what was authored.
+    const incoming = { env: { NAUTOBOT_TIMEOUT: "60" } };
+    const parsed = { env: { NAUTOBOT_TIMEOUT: "${NAUTOBOT_TIMEOUT:-60}" } };
+
+    const result = restoreEnvVarRefs(incoming, parsed, {});
+
+    expect(result).toEqual({ env: { NAUTOBOT_TIMEOUT: "${NAUTOBOT_TIMEOUT:-60}" } });
+  });
+
+  it("restores a ${VAR:-default} template that resolved from the environment", () => {
+    const incoming = { timeout: "90" };
+    const parsed = { timeout: "${NAUTOBOT_TIMEOUT:-60}" };
+
+    const result = restoreEnvVarRefs(incoming, parsed, { NAUTOBOT_TIMEOUT: "90" });
+
+    expect(result).toEqual({ timeout: "${NAUTOBOT_TIMEOUT:-60}" });
+  });
+
+  it("keeps a deliberate edit over a ${VAR:-default} template", () => {
+    const incoming = { timeout: "120" };
+    const parsed = { timeout: "${NAUTOBOT_TIMEOUT:-60}" };
+
+    const result = restoreEnvVarRefs(incoming, parsed, {});
+
+    expect(result).toEqual({ timeout: "120" });
+  });
+
+  it("restores composite and escaped ${VAR:-default} templates", () => {
+    expect(
+      restoreEnvVarRefs(
+        { url: "https://api.example.com/v1" },
+        { url: "https://${API_HOST:-api.example.com}/v1" },
+        {},
+      ),
+    ).toEqual({ url: "https://${API_HOST:-api.example.com}/v1" });
+
+    expect(restoreEnvVarRefs({ literal: "${VAR:-x}" }, { literal: "$${VAR:-x}" }, {})).toEqual({
+      literal: "$${VAR:-x}",
+    });
+  });
+
   it("rejects structural changes to arrays containing environment references", () => {
     const duplicateEnv = {
       PLUGIN_A: "same-plugin",
@@ -127,6 +171,25 @@ describe("restoreEnvVarRefs", () => {
     expect(() =>
       restoreEnvVarRefs(["same-plugin"], ["${PLUGIN_A}", "${PLUGIN_B}"], duplicateEnv),
     ).toThrow("Config write would reorder or modify an array containing environment references");
+  });
+
+  it("rejects activating an escaped literal as a ${VAR:-default} reference", () => {
+    // Rewriting an entry the operator deliberately escaped into a live env read must fail
+    // closed. Write-back accounting keys refs by bare variable name so ${VAR:-x} is caught
+    // here; keying on the authored text would let this through.
+    expectEnvRefArrayMutationError(() =>
+      restoreEnvVarRefs([{ v: "${VAR:-x}" }, { v: "other" }], [{ v: "$${VAR}" }, { v: "other" }], {
+        VAR: "from-env",
+      }),
+    );
+
+    // The unchanged round trip is not an activation: the incoming value is exactly what the
+    // escape resolves to, so the authored escape is restored rather than rejected.
+    expect(
+      restoreEnvVarRefs([{ v: "${VAR}" }, { v: "other" }], [{ v: "$${VAR}" }, { v: "other" }], {
+        VAR: "from-env",
+      }),
+    ).toEqual([{ v: "$${VAR}" }, { v: "other" }]);
   });
 
   it("allows array edits when placeholders are escaped literals", () => {

@@ -177,6 +177,10 @@ describe("OCM npm workspace dependency adapter", () => {
       );
       mkdirSync(join(scriptsDir, "lib"), { recursive: true });
       writeFileSync(
+        join(scriptsDir, "lib", "check-limits.mts"),
+        readFileSync(new URL("../../scripts/lib/check-limits.mts", import.meta.url)),
+      );
+      writeFileSync(
         join(scriptsDir, "lib", "release-changelog.mjs"),
         readFileSync(new URL("../../scripts/lib/release-changelog.mjs", import.meta.url)),
       );

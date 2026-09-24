@@ -49,10 +49,7 @@ export {
   CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES,
   CODEX_INTERACTIVE_THREAD_SOURCE_KINDS,
 } from "./protocol-session-source.js";
-export type {
-  CodexSessionSource,
-  CodexSubAgentThreadSpawnSource,
-} from "./protocol-session-source.js";
+export type { CodexSessionSource } from "./protocol-session-source.js";
 export { isRpcResponse } from "./protocol-json.js";
 export type {
   JsonObject,
@@ -486,15 +483,6 @@ export type CodexThreadStatus =
   | { type: "systemError" }
   | { type: "active"; activeFlags?: string[] };
 
-export type CodexThreadStartedNotification = {
-  thread: CodexThread;
-};
-
-export type CodexThreadStatusChangedNotification = {
-  threadId: string;
-  status: CodexThreadStatus;
-};
-
 export type CodexThreadItem = {
   id: string;
   type: string;
@@ -600,7 +588,7 @@ export type CodexModel = {
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;
 };
 
-export type CodexReasoningEffortOption = {
+type CodexReasoningEffortOption = {
   reasoningEffort?: string | null;
 };
 
@@ -704,7 +692,7 @@ type CodexAppServerRequestParamsOverride = {
 };
 
 type CodexAppServerRequestResultMap = {
-  "thread/backgroundTerminals/list": { data: { processId: string }[] };
+  "thread/backgroundTerminals/list": { data: { itemId: string; processId: string }[] };
   "thread/backgroundTerminals/terminate": { terminated: boolean };
   initialize: CodexInitializeResponse;
   "account/rateLimits/read": JsonValue;

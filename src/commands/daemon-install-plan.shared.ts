@@ -8,10 +8,6 @@ import {
 } from "../daemon/runtime-paths.js";
 import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import {
-  emitNodeRuntimeWarning,
-  type DaemonInstallWarnFn,
-} from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export type GatewayInstallPlan = {
@@ -56,23 +52,6 @@ export async function resolveDaemonInstallRuntimeInputs(params: {
       ? await resolvePreferredBunPath({ env: params.env, runtime: params.runtime })
       : await resolvePreferredNodePath({ env: params.env, runtime: params.runtime }));
   return { devMode, runtimePath };
-}
-
-/** Emit runtime warnings for daemon install command arguments. */
-export async function emitDaemonInstallRuntimeWarning(params: {
-  env: Record<string, string | undefined>;
-  runtime: GatewayDaemonRuntime;
-  programArguments: string[];
-  warn?: DaemonInstallWarnFn;
-  title: string;
-}): Promise<void> {
-  await emitNodeRuntimeWarning({
-    env: params.env,
-    runtime: params.runtime,
-    nodeProgram: params.programArguments[0],
-    warn: params.warn,
-    title: params.title,
-  });
 }
 
 /** Return the runtime binary directory that should be added to daemon PATH. */

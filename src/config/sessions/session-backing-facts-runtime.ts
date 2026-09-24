@@ -2,7 +2,7 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { SessionBackingFacts, SessionBackingFactsScope } from "./session-backing-facts.js";
 import { readSessionEntriesFromStoreInWorker } from "./session-entry-read-runtime.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 
 /** A publication during a batch makes its prepared backing evidence unknown. */
 export async function readSessionBackingFactsInWorker(

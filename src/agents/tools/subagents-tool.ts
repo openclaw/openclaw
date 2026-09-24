@@ -65,7 +65,13 @@ const SubagentsToolSchema = Type.Object({
   recentMinutes: optionalPositiveIntegerSchema(),
   taskId: Type.Optional(Type.String({ description: "Task id" })),
   taskIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 32 })),
-  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0, maximum: 60 })),
+  timeoutSeconds: Type.Optional(
+    Type.Integer({
+      minimum: 0,
+      maximum: 60,
+      description: "Wait duration in integer seconds, 0–60 (default: 30). Use 0 for a snapshot.",
+    }),
+  ),
 });
 
 const STATUS_MAP: Record<TaskStatus, string> = {

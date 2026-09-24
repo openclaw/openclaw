@@ -449,6 +449,20 @@ describe("coalesceAgentRunFrames", () => {
       ],
       outcome: { kind: "completed", actionOwner: { key: "final" } },
     },
+    {
+      name: "mixed-phase answer followed by work",
+      parts: [
+        group("assistant", "mixed-final", "run-1", {
+          content: ["commentary", "final_answer"].map((phase) => ({
+            type: "text",
+            text: phase === "commentary" ? "Checking" : "Finished.",
+            textSignature: JSON.stringify({ v: 1, id: phase, phase }),
+          })),
+        }),
+        group("tool", "trailing-tool", "run-1"),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "mixed-final" } },
+    },
   ])("records $name without deriving completion from the last part", ({ parts, outcome }) => {
     const frame = requireFrame(coalesceAgentRunFrames([userBoundary(), ...parts])[1]);
 

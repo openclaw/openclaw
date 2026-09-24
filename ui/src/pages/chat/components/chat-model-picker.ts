@@ -548,6 +548,13 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                 </div>`
               : nothing
           }
+          ${
+            params.modelCatalogState?.modelSelectionPolicy?.restricted
+              ? html`<div class="chat-controls__model-catalog-state" data-chat-model-policy>
+                  ${t("chat.modelControls.restrictedModelsHelp")}
+                </div>`
+              : nothing
+          }
         </div>
       </wa-popup>
     </details>

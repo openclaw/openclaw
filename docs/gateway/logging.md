@@ -310,6 +310,14 @@ its result and elapsed diagnostics are preserved. Existing activation and the
 one-second warning threshold are unchanged, so missing slow records do not account
 for CPU consumed by faster requests.
 
+Catalog lists additionally expose fixed request-stage observations through the
+existing diagnostic event stream and [Prometheus exporter](/gateway/prometheus#catalog-list-stages).
+These include initial/final projection readiness, provider or coalesced waits,
+and synchronous planning/final-delivery thread CPU. Unlike slow logs, these
+observations include requests below one second when an interested trusted
+consumer is active. They do not change warning thresholds, startup-phase history,
+request behavior or diagnostic collection settings.
+
 ### WS log style
 
 `openclaw gateway` supports a per-gateway style switch:

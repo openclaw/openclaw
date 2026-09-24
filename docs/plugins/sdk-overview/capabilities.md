@@ -246,3 +246,10 @@ with `provider`, `id`, and `name`. Each provider must be owned by
 through a separate `models.list.decisionModels` projection; no provider runtime
 or credential probe runs to populate the picker. These entries never enter the
 chat, primary, fallback, or utility model catalogs.
+
+Optional model `capabilities` describe supported question types, input limits and
+their accounting scope, Boolean criteria requirements, and confidence semantics.
+The core `decision_evaluate` tool uses these same manifest facts for guidance;
+provider readiness does not change its definition. See the
+[manifest reference](/plugins/manifest/capabilities#decision-models-reference)
+for the bounded descriptor fields.

@@ -103,7 +103,8 @@ export function resolveMessageActionDetails(
   const expandedMarkdown = expansion?.status === "loaded" ? expansion.markdown : previewMarkdown;
   const visibleMarkdown =
     role === "assistant" ? stripThinkingTags(expandedMarkdown) : expandedMarkdown;
-  const markdown = role === "assistant" || pendingInput ? visibleMarkdown : undefined;
+  const markdown =
+    role === "assistant" || role === "user" || pendingInput ? visibleMarkdown : undefined;
   const copyMarkdown = resolveMessageReplyText(message, normalizedMessage, visibleMarkdown);
   const replyText = onReply && !pendingInput ? truncateUtf16Safe(copyMarkdown, 500) : "";
   if (!copyMarkdown && !markdown && !replyText && !fullMessage) {

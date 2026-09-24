@@ -12,8 +12,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { formatFastModeCurrentStatus, resolveFastModeState } from "../../agents/fast-mode.js";
 import {
-  setChannelConversationBindingIdleTimeoutBySessionKey,
-  setChannelConversationBindingMaxAgeBySessionKey,
+  setChannelConversationBindingIdleTimeoutBySessionKeyAsync,
+  setChannelConversationBindingMaxAgeBySessionKeyAsync,
 } from "../../channels/plugins/conversation-bindings.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
@@ -254,36 +254,22 @@ export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
 
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
 
-    if (isReset) {
-      if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-        delete targetSessionEntry.responseUsage;
-        params.sessionStore[params.sessionKey] = targetSessionEntry;
-        if (
-          !(await persistCommandSession({
-            ...params,
-            sessionEntry: targetSessionEntry,
-            touchedFields: ["responseUsage"],
-          }))
-        ) {
-          return sessionEntryPersistenceConflictReply();
-        }
-      }
-      return sessionCommandReply("⚙️ Usage footer: reset to default.");
+    let next: ReturnType<typeof normalizeUsageDisplay>;
+    if (!isReset) {
+      const current = resolveEffectiveResponseUsage(
+        targetSessionEntry?.responseUsage,
+        params.cfg.messages?.responseUsage,
+        params.command.channel,
+      );
+      next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
     }
 
-    const replyChannel = params.command.channel;
-    const currentRaw = targetSessionEntry?.responseUsage;
-    const current = resolveEffectiveResponseUsage(
-      currentRaw,
-      params.cfg.messages?.responseUsage,
-      replyChannel,
-    );
-    const next =
-      requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
-
     if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-      targetSessionEntry.responseUsage = next;
-      params.sessionStore[params.sessionKey] = targetSessionEntry;
+      if (isReset) {
+        delete targetSessionEntry.responseUsage;
+      } else {
+        targetSessionEntry.responseUsage = next;
+      }
       if (
         !(await persistCommandSession({
           ...params,
@@ -295,7 +281,9 @@ export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
       }
     }
 
-    return sessionCommandReply(`⚙️ Usage footer: ${next}.`);
+    return sessionCommandReply(
+      isReset ? "⚙️ Usage footer: reset to default." : `⚙️ Usage footer: ${next}.`,
+    );
   },
 );
 
@@ -393,8 +381,10 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     const conversationBindings = getChannelPlugin(bindingContext.channel)?.conversationBindings;
     const supportsLifecycleUpdate =
       action === SESSION_ACTION_IDLE
-        ? typeof conversationBindings?.setIdleTimeoutBySessionKey === "function"
-        : typeof conversationBindings?.setMaxAgeBySessionKey === "function";
+        ? typeof conversationBindings?.setIdleTimeoutBySessionKeyAsync === "function" ||
+          typeof conversationBindings?.setIdleTimeoutBySessionKey === "function"
+        : typeof conversationBindings?.setMaxAgeBySessionKeyAsync === "function" ||
+          typeof conversationBindings?.setMaxAgeBySessionKey === "function";
     if (!conversationBindings?.supportsCurrentConversationBinding || !supportsLifecycleUpdate) {
       return sessionCommandReply(
         "⚠️ /session idle and /session max-age are currently available only on channels that support conversation binding lifecycle updates.",
@@ -404,7 +394,8 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
 
   const sessionBindingService = getSessionBindingService();
 
-  const activeBinding = sessionBindingService.resolveByConversation(bindingContext);
+  const activeBinding = await sessionBindingService.resolveByConversationAsync(bindingContext);
+  params.opts?.abortSignal?.throwIfAborted();
   if (!activeBinding) {
     return sessionCommandReply("ℹ️ This conversation is not currently bound.");
   }
@@ -477,13 +468,13 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
 
   const updatedBindings =
     action === SESSION_ACTION_IDLE
-      ? setChannelConversationBindingIdleTimeoutBySessionKey({
+      ? await setChannelConversationBindingIdleTimeoutBySessionKeyAsync({
           channelId: bindingContext.channel,
           targetSessionKey: activeBinding.targetSessionKey,
           accountId: bindingContext.accountId,
           idleTimeoutMs: durationMs,
         })
-      : setChannelConversationBindingMaxAgeBySessionKey({
+      : await setChannelConversationBindingMaxAgeBySessionKeyAsync({
           channelId: bindingContext.channel,
           targetSessionKey: activeBinding.targetSessionKey,
           accountId: bindingContext.accountId,

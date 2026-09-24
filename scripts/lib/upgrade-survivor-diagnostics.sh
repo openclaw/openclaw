@@ -3,7 +3,7 @@
 prepare_diagnostics_capture() {
   # A previous attempt must never be published as this container's evidence.
   if [ -L "$ARTIFACT_DIR" ] || [ -L "$ARTIFACT_DIR/diagnostics" ] || [ -L "$ARTIFACT_DIR/missing-load-path" ] ||
-    ! rm -f "$ARTIFACT_DIR/diagnostics/raw.json" "$ARTIFACT_DIR/diagnostics/post-core.json" "$ARTIFACT_DIR/diagnostics/last-rpc" "$ARTIFACT_DIR/summary.json" \
+    ! rm -f "$ARTIFACT_DIR/diagnostics/raw.json" "$ARTIFACT_DIR/diagnostics/post-core.json" "$ARTIFACT_DIR/summary.json" \
       "$ARTIFACT_DIR/update.json" "$ARTIFACT_DIR/repair.json" "$ARTIFACT_DIR/recovery-update.json" \
       "$ARTIFACT_DIR/candidate-cohort.json" \
       "$ARTIFACT_DIR"/legacy-operator-baseline-turn.{out,err} \

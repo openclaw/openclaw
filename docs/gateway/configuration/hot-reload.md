@@ -1,5 +1,5 @@
 ---
-summary: "How the Gateway watches openclaw.json, which changes hot-apply, and which need a restart"
+summary: "How the Gateway applies config snapshots, which changes hot-apply, and which need a restart"
 title: "Config hot reload"
 sidebarTitle: "Config hot reload"
 read_when:
@@ -10,13 +10,32 @@ read_when:
 
 ## Config hot reload
 
-The Gateway watches `~/.openclaw/openclaw.json` and applies changes automatically - no manual restart needed for most settings.
+The Gateway applies revisioned config snapshots automatically. Most settings do
+not need a manual restart. `~/.openclaw/openclaw.json` remains the config source,
+including JSON5, `$include`, and environment substitutions.
 
-Direct file edits are treated as untrusted until they validate. The watcher waits
+Writes made through the running Gateway publish their committed snapshot
+directly to the reload owner. They do not wait for a file-watcher event or its
+debounce window. Runtime consumers keep reading the last successfully applied
+snapshot until the replacement transaction commits. The log records the
+accepted source revision and whether it came from a Gateway write or a file edit.
+Later hot-reloadable writes do not erase a committed restart requirement while
+its application is pending.
+
+Direct file edits are treated as untrusted until they validate. The source's file adapter waits
 for editor temp-write/rename churn to settle, reads the final file, and rejects
 invalid external edits without rewriting `openclaw.json`. OpenClaw-owned config
 writes use the same schema gate before writing (see [Strict validation](/gateway/configuration#strict-validation)
 for the clobber/rollback rules that apply to every write).
+
+The adapter also watches included files and follows editor rename-replace writes.
+All reload consumers share the snapshot for each observation; a filesystem echo
+of a Gateway write keeps that write's application receipt and restart intent.
+A write publication also reconciles file edits already observed during its
+finalization, so it cannot discard a pending external change.
+Invalid edits leave the last good runtime active. Restart reads the same config
+files through the normal startup validation and recovery path; source revision
+numbers are local to the running Gateway.
 
 If you see `config reload skipped (invalid config)` or startup reports `Invalid
 config`, inspect the config, run `openclaw config validate`, then run `openclaw

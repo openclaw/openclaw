@@ -2405,7 +2405,7 @@ describe("tui command handlers", () => {
       },
     });
     await codex.handleCommand("/think");
-    expect(codex.addSystem).toHaveBeenCalledWith(expect.not.stringContaining("ultra"));
+    expect(codex.addSystem).toHaveBeenCalledWith(expect.stringContaining("ultra"));
 
     const openclaw = createTuiCommandHandlersHarness({
       sessionInfo: {

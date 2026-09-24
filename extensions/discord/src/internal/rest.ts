@@ -67,16 +67,6 @@ export type RequestData = {
   headers?: Record<string, string>;
 };
 
-type QueuedRequest = {
-  method: string;
-  path: string;
-  data?: RequestData;
-  query?: RequestQuery;
-  resolve: (value?: unknown) => void;
-  reject: (reason?: unknown) => void;
-  routeKey: string;
-};
-
 type RequestDispatchData = {
   data?: RequestData;
   assertCurrent?: () => void;
@@ -207,30 +197,30 @@ export class RequestClient {
     );
   }
 
-  async get(path: string, query?: QueuedRequest["query"]): Promise<unknown> {
+  async get(path: string, query?: RequestQuery): Promise<unknown> {
     return await this.request("GET", path, { query });
   }
 
-  async post(path: string, data?: RequestData, query?: QueuedRequest["query"]): Promise<unknown> {
+  async post(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
     return await this.request("POST", path, { data, query });
   }
 
-  async patch(path: string, data?: RequestData, query?: QueuedRequest["query"]): Promise<unknown> {
+  async patch(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
     return await this.request("PATCH", path, { data, query });
   }
 
-  async put(path: string, data?: RequestData, query?: QueuedRequest["query"]): Promise<unknown> {
+  async put(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
     return await this.request("PUT", path, { data, query });
   }
 
-  async delete(path: string, data?: RequestData, query?: QueuedRequest["query"]): Promise<unknown> {
+  async delete(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
     return await this.request("DELETE", path, { data, query });
   }
 
   protected async request(
     method: string,
     path: string,
-    params: { data?: RequestData; query?: QueuedRequest["query"] },
+    params: { data?: RequestData; query?: RequestQuery },
   ): Promise<unknown> {
     const routeKey = createRouteKey(method, path);
     // A shared scheduler can drain under another caller's async context. Capture
@@ -259,7 +249,7 @@ export class RequestClient {
   protected async executeRequest(
     method: string,
     path: string,
-    params: { data?: RequestData; query?: QueuedRequest["query"] },
+    params: { data?: RequestData; query?: RequestQuery },
     routeKey = createRouteKey(method, path),
     assertCurrent?: () => void,
   ): Promise<unknown> {

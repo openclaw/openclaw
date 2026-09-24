@@ -76,11 +76,14 @@ suite.define(() => {
             expect(await page.locator('[data-chat-model-select="true"]').textContent()).toContain(
               "Models unavailable",
             );
+            // A saved explicit choice needs a receipt; empty automatic drafts remain Gateway-owned.
             expect(
               await page
                 .getByRole("button", { name: "Start session", exact: true })
                 .getAttribute("aria-disabled"),
-            ).toBe("false");
+            ).toBe("true");
+            await composer.press("Enter");
+            expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
           }
 
           await gateway.resolveDeferred(method);
@@ -94,6 +97,12 @@ suite.define(() => {
             expect(await page.locator('[data-chat-model-select="true"]').textContent()).toContain(
               "Models unavailable",
             );
+            expect(
+              await page
+                .getByRole("button", { name: "Start session", exact: true })
+                .getAttribute("aria-disabled"),
+            ).toBe("true");
+            expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
             await page.locator('[data-chat-model-select="true"]').click();
           }
           await page.clock.runFor(100);
@@ -109,9 +118,17 @@ suite.define(() => {
             expect(await gateway.getRequests("chat.send")).toHaveLength(1);
             expect(await page.locator(".chat-send-btn--send").isEnabled()).toBe(true);
           } else {
+            await page
+              .locator('[data-chat-model-option="openai/gpt-5.5"]')
+              .waitFor({ state: "attached" });
             expect(
               await page.locator('[data-chat-model-select="true"]').textContent(),
             ).not.toContain("Models unavailable");
+            expect(
+              await page
+                .getByRole("button", { name: "Start session", exact: true })
+                .getAttribute("aria-disabled"),
+            ).toBe("false");
           }
           expect(await composer.inputValue()).toBe(draft);
         },

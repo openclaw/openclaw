@@ -319,6 +319,6 @@ export const discordOutbound: ChannelOutboundAdapter = {
     if (!manager?.getByThreadId(threadId)) {
       return;
     }
-    manager.touchThread({ threadId });
+    await manager.touchThread({ threadId });
   },
 };
