@@ -106,26 +106,28 @@ export class AgentsApiMessageProjection {
     const usage = emptyUsage();
     let observed = false;
     let reasoningTokens: number | undefined;
-    // Canonical turn usage replaces SSE usage; a missing snapshot retains
-    // terminal-event usage for that same scoped turn, without adding it twice.
-    this.canonicalUsageRecorded = true;
+    // Canonical usage replaces observed usage by admitted turn identity. A failed
+    // or partial REST read cannot discard terminal-event usage for omitted turns.
+    const contributions = new Map(this.usageByTurn);
     for (const turn of new Map(turns.map((record) => [record.id, record])).values()) {
-      const normalized = turn.usage ? normalizeUsage(turn.usage) : this.usageByTurn.get(turn.id);
-      if (!normalized) {
-        continue;
+      const normalized = normalizeUsage(turn.usage);
+      if (normalized) {
+        contributions.set(turn.id, normalized);
       }
+    }
+    this.canonicalUsageRecorded = true;
+    for (const normalized of contributions.values()) {
       observed = true;
       usage.input += normalized.input ?? 0;
       usage.output += normalized.output ?? 0;
       usage.cacheRead += normalized.cacheRead ?? 0;
+      usage.cacheWrite += normalized.cacheWrite ?? 0;
       usage.totalTokens +=
         normalized.total ??
-        (turn.usage
-          ? turn.usage.input_tokens + turn.usage.output_tokens
-          : (normalized.input ?? 0) +
-            (normalized.output ?? 0) +
-            (normalized.cacheRead ?? 0) +
-            (normalized.cacheWrite ?? 0));
+        (normalized.input ?? 0) +
+          (normalized.output ?? 0) +
+          (normalized.cacheRead ?? 0) +
+          (normalized.cacheWrite ?? 0);
       if (normalized.reasoningTokens !== undefined) {
         reasoningTokens = (reasoningTokens ?? 0) + normalized.reasoningTokens;
       }
