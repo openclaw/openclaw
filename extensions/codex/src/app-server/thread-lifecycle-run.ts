@@ -101,6 +101,7 @@ export async function startOrResumeThread(
       ringZeroConfigFingerprint,
       restrictedToolSurface,
       restrictedToolSurfaceInheritedMcpServerNames,
+      deniedInheritedMcpServerNames,
       userMcpServersConfigPatch,
       userMcpServersFingerprint,
       webSearchThreadConfigFingerprint,
@@ -187,6 +188,7 @@ export async function startOrResumeThread(
           hostSystemAgentActive,
           restrictedToolSurface,
           restrictedToolSurfaceInheritedMcpServerNames,
+          deniedInheritedMcpServerNames,
           shellEnvironment: params.shellEnvironment,
           disableLoginShell: params.disableLoginShell,
           environmentSelection: params.environmentSelection,
@@ -581,9 +583,7 @@ export async function startOrResumeThread(
       if (pluginBindingStale) {
         embeddedAgentLog.debug(
           "codex app-server plugin app config changed; starting a new thread",
-          {
-            threadId: binding.threadId,
-          },
+          { threadId: binding.threadId },
         );
         await clearCurrentBinding("rotating a stale thread binding");
         binding = undefined;

@@ -5,6 +5,15 @@
 import crypto from "node:crypto";
 import { codexAppIdentityKey } from "./app-identity.js";
 import { defaultCodexAppInventoryCache, CodexAppInventoryCache } from "./app-inventory-cache.js";
+import {
+  buildCodexAppDenyUnenforceableDiagnostic,
+  buildCodexAppDenyUnmanagedDiagnostic,
+  buildCodexAppDenyUnmatchedDiagnostic,
+  createCodexAppDenyGate,
+  normalizeCodexDeniedAppPatterns,
+  readCodexAppModelToolsForDenies,
+  type CodexAppDenyDiagnostic,
+} from "./app-policy-deny.js";
 import { stringifyCodexPolicy } from "./config-policy-json.js";
 import {
   resolveCodexPluginsPolicy,
@@ -76,6 +85,7 @@ export type PluginAppPolicyContext = {
 /** Diagnostic emitted while building app config for a native Codex thread. */
 type CodexPluginThreadConfigDiagnostic =
   | CodexPluginInventoryDiagnostic
+  | CodexAppDenyDiagnostic
   | CodexPluginThreadAppAdmissionDiagnostic
   | {
       code:
@@ -110,11 +120,19 @@ type BuildCodexPluginThreadConfigParams = {
   appCacheKey: string;
   metadataCache?: CodexPluginMetadataCache;
   nowMs?: number;
+  /** Host-certified `mcp__codex_apps__<literal>*` denies for this run's tool policy. */
+  deniedAppPatterns?: readonly string[];
 };
 
 // Admission changes must rebuild existing bindings too, or older bindings can
 // bypass updated app approval checks after the gateway has been upgraded.
 const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 13;
+// Runs with app denies fingerprint the deny set under a newer version. Runs
+// without denies keep the version-13 shape byte-for-byte, so an unchanged
+// conversation bound before this field existed stays current after upgrade.
+// Native-owned and supervised bindings cannot be rotated, so a gratuitous
+// fingerprint change would refuse their next turn instead of rebuilding.
+const CODEX_PLUGIN_THREAD_CONFIG_DENY_INPUT_FINGERPRINT_VERSION = 14;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
 /** Returns true when plugin config exists and thread config may need app patches. */
@@ -126,12 +144,19 @@ export function shouldBuildCodexPluginThreadConfig(pluginConfig?: unknown): bool
 export function buildCodexPluginThreadConfigInputFingerprint(params: {
   pluginConfig?: unknown;
   appCacheKey?: string;
+  deniedAppPatterns?: readonly string[];
 }): string {
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
+  const deniedAppPatterns = normalizeCodexDeniedAppPatterns(params.deniedAppPatterns);
+  const denied = deniedAppPatterns.length > 0;
+  // Per-agent app denies change the admitted set, so bound threads must rebuild.
   return fingerprintJson({
-    version: CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION,
+    version: denied
+      ? CODEX_PLUGIN_THREAD_CONFIG_DENY_INPUT_FINGERPRINT_VERSION
+      : CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION,
     policy: policyFingerprint(policy),
     appCacheKey: params.appCacheKey ?? null,
+    ...(denied ? { deniedAppPatterns } : {}),
   });
 }
 
@@ -139,6 +164,7 @@ export function buildCodexPluginThreadConfigInputFingerprint(params: {
 export function buildCodexPluginThreadConfigTimeoutFallback(params: {
   pluginConfig?: unknown;
   appCacheKey: string;
+  deniedAppPatterns?: readonly string[];
   message: string;
 }): CodexPluginThreadConfig {
   const inputFingerprint = buildCodexPluginThreadConfigInputFingerprint(params);
@@ -168,17 +194,22 @@ export async function buildCodexPluginThreadConfig(
         ? { ...requestParams, threadId: params.threadId }
         : requestParams,
     );
-  let inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-    pluginConfig: params.pluginConfig,
-    appCacheKey: params.appCacheKey,
-  });
+  const deniedAppPatterns = normalizeCodexDeniedAppPatterns(params.deniedAppPatterns);
+  const fingerprintInputs = () =>
+    buildCodexPluginThreadConfigInputFingerprint({ ...params, deniedAppPatterns });
+  let inputFingerprint = fingerprintInputs();
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
   if (!policy.enabled) {
-    return emptyPluginThreadConfig({
+    const disabled = emptyPluginThreadConfig({
       enabled: false,
       inputFingerprint,
       configPatch: buildDisabledAppsConfigPatch(),
     });
+    // OpenClaw is not managing apps, so a policy deny can only be honored by
+    // keeping every app off the thread.
+    return deniedAppPatterns.length > 0
+      ? { ...disabled, diagnostics: [buildCodexAppDenyUnmanagedDiagnostic(deniedAppPatterns)] }
+      : disabled;
   }
 
   const readInventory = (suppressAppInventoryRefresh?: true) =>
@@ -204,10 +235,7 @@ export async function buildCodexPluginThreadConfig(
       targetAppIds: collectCodexPluginOwnedAppIds(inventory),
     });
     inventory = await readInventory();
-    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: params.pluginConfig,
-      appCacheKey: params.appCacheKey,
-    });
+    inputFingerprint = fingerprintInputs();
   };
   const appInventoryRefreshDeferredForActivation =
     inventory.records.some((record) => record.activationRequired) &&
@@ -273,6 +301,13 @@ export async function buildCodexPluginThreadConfig(
     policy.allowAllPlugins
       ? await readCodexThreadAdmissibleAccountApps(params, appCache)
       : { apps: [], installedApps: [] };
+  // Denies are matched against the real model-facing tool names per connector;
+  // an unreadable inventory leaves every gated app unenforceable (fail closed).
+  const modelToolsByApp = await readCodexAppModelToolsForDenies({
+    request: threadRequest,
+    threadId: params.threadId,
+    patterns: deniedAppPatterns,
+  });
   // A deny-all thread needs no native settings; read them only before admitting an app.
   let appAdmissionConfig: Promise<CodexPluginThreadAppAdmissionConfig> | undefined;
   const getAdmissionConfig = () => (appAdmissionConfig ??= readCodexConfigForAppAdmission(params));
@@ -282,6 +317,27 @@ export async function buildCodexPluginThreadConfig(
     ...activationDiagnostics,
     ...(accountAppsResult.diagnostic ? [accountAppsResult.diagnostic] : []),
   ];
+  // Denies that cannot be applied exactly fail closed: every app stays off the
+  // thread rather than exposing tools the policy meant to remove.
+  const appsDisabledByPolicy = (diagnostic: CodexAppDenyDiagnostic): CodexPluginThreadConfig => ({
+    ...emptyPluginThreadConfig({
+      enabled: true,
+      inputFingerprint,
+      configPatch: buildDisabledAppsConfigPatch(),
+    }),
+    diagnostics: [...diagnostics, diagnostic],
+  });
+  // A deny matching no known app tool cannot be proven satisfied (misspelled
+  // namespace, or Codex changed its tool naming).
+  const appDenies = createCodexAppDenyGate<CodexPluginThreadConfig>({
+    modelToolsByApp,
+    patterns: deniedAppPatterns,
+    onDenied: (diagnostic) => diagnostics.push(diagnostic),
+    failClosed: (appId) => appsDisabledByPolicy(buildCodexAppDenyUnenforceableDiagnostic(appId)),
+  });
+  if (appDenies.unmatched.length > 0) {
+    return appsDisabledByPolicy(buildCodexAppDenyUnmatchedDiagnostic(appDenies.unmatched));
+  }
   const provisionalAppIds = new Set<string>();
   const { apps } = buildDisabledAppsConfigPatch();
   const policyApps: Record<string, CodexAppPolicyContextEntry> = {};
@@ -338,6 +394,13 @@ export async function buildCodexPluginThreadConfig(
     }
     pluginAppIds[record.policy.configKey] = [...record.ownedAppIds].toSorted();
     for (const app of resolveCodexThreadConfigAppsForRecord({ record, inventory })) {
+      const denied = appDenies.apply(app.id, record.policy);
+      if (denied === true) {
+        continue;
+      }
+      if (denied) {
+        return denied;
+      }
       const admission = resolveCodexPluginAppThreadAdmission(app, inventory);
       const admissionConfig = admission === "blocked" ? undefined : await getAdmissionConfig();
       if (
@@ -376,6 +439,13 @@ export async function buildCodexPluginThreadConfig(
     // account policy cannot re-admit an app that the explicit path excluded.
     if (pluginOwnedAppIds.has(codexAppIdentityKey(app.id))) {
       continue;
+    }
+    const denied = appDenies.apply(app.id);
+    if (denied === true) {
+      continue;
+    }
+    if (denied) {
+      return denied;
     }
     const admissionConfig = await getAdmissionConfig();
     if (resolveCodexExplicitAppEnablement(admissionConfig.layers, app.id) === false) {
