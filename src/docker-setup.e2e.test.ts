@@ -168,6 +168,31 @@ describe("scripts/docker/setup.sh", () => {
     expect(log).not.toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
   });
 
+  it.each([undefined, "[]"])(
+    "keeps inherited origins out of Docker setup writes (%j)",
+    async (allowedOrigins) => {
+      const activeSandbox = requireSandbox(sandbox);
+      await resetDockerLog(activeSandbox);
+      const result = runDockerSetup(activeSandbox, {
+        DOCKER_STUB_CONTROL_UI_ORIGINS: allowedOrigins,
+        DOCKER_STUB_PUBLIC_ORIGIN: "https://team.example.com",
+      });
+      expect(result.status).toBe(0);
+      const writes = (await readDockerLogLines(activeSandbox)).filter((line) =>
+        line.includes("config set --batch-json"),
+      );
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).not.toContain("https://team.example.com");
+      if (allowedOrigins === undefined) {
+        expect(writes[0]).not.toContain("gateway.controlUi.allowedOrigins");
+      } else {
+        expect(writes[0]).toContain(
+          '"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]',
+        );
+      }
+    },
+  );
+
   it("allows ordinary spaces in host persistence paths and quotes generated mounts", async () => {
     const activeSandbox = requireSandbox(sandbox);
     await resetDockerLog(activeSandbox);

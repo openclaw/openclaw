@@ -95,9 +95,6 @@ models, and channels:
     bind: "loopback",
     publicOrigin: "https://team.example.com",
     trustedProxies: ["127.0.0.1", "::1"],
-    controlUi: {
-      allowedOrigins: ["https://team.example.com"],
-    },
     auth: {
       mode: "trusted-proxy",
       password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
@@ -156,10 +153,19 @@ private origin. Do not run hostile workloads with access to this listener. See
 [Trusted-proxy auth](/gateway/trusted-proxy-auth) for header and client-address
 requirements.
 
-### Set both URL settings
+<a id="set-both-url-settings" />
 
-`allowedOrigins` permits browser connections. `publicOrigin` tells OpenClaw which
-external URL to advertise. One does not substitute for the other.
+### Set the public URL once
+
+`publicOrigin` tells OpenClaw which external URL to advertise and supplies the
+default browser-origin allowlist. For a Control UI served from that same origin,
+leave `gateway.controlUi.allowedOrigins` unset.
+
+Set an explicit `allowedOrigins` list only when you need a different browser
+policy, such as a separately hosted Control UI. An explicit list replaces the
+public-origin default; include the public origin too if both should connect.
+An explicit empty list does not inherit `publicOrigin`. Existing local and
+private-network origin rules still apply.
 
 Without `gateway.publicOrigin`, the browser can work while an agent's session
 lookup has no link-building rule and its runtime context has no session URL.
@@ -173,10 +179,18 @@ openclaw config set gateway.publicOrigin https://team.example.com --expect-curre
 ```
 
 This conditional write refuses to overwrite an existing value. With live config
-reload enabled, the public origin applies without a Gateway restart. Newly
+reload enabled, the public origin applies without a Gateway restart. When the
+allowlist is inherited, browsers using the old origin must reconnect from an
+accepted origin. An explicit allowlist remains unchanged. Newly
 prepared tool contexts receive the link rule; an already-running turn can retain
 its earlier context. Set `https://release.example.com` on the second server,
 rather than copying the first server's URL.
+
+Existing installations retain their explicit allowlists, including values saved
+by earlier setup or Doctor runs. After upgrading to a version with this default,
+remove the list with `openclaw config unset gateway.controlUi.allowedOrigins` if
+you want it to follow `publicOrigin`; check that no additional UI origin is needed
+first. Startup and Doctor leave the inherited default out of saved config.
 
 ## 3. Bootstrap administrators and assign roles
 

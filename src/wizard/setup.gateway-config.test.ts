@@ -356,6 +356,28 @@ describe("configureGatewayForSetup", () => {
     ]);
   });
 
+  it.each([{ allowedOrigins: undefined }, { allowedOrigins: [] }])(
+    "preserves effective origins when adding Tailscale (%j)",
+    async ({ allowedOrigins }) => {
+      mocks.getTailnetHostname.mockResolvedValue("test-tailnet.ts.net");
+      const result = await runGatewayConfig({
+        tailscaleChoice: "serve",
+        nextConfig: {
+          gateway: {
+            publicOrigin: "https://team.example.com",
+            controlUi: { allowedOrigins },
+          },
+        },
+      });
+
+      expect(result.nextConfig.gateway?.controlUi?.allowedOrigins).toEqual(
+        allowedOrigins === undefined
+          ? ["https://team.example.com", "https://test-tailnet.ts.net"]
+          : ["https://test-tailnet.ts.net"],
+      );
+    },
+  );
+
   it.each([false, true])(
     "honors secretInputMode=ref for gateway password prompts (existing: %s)",
     async (existing) => {
