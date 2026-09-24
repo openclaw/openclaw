@@ -57,18 +57,22 @@ unknown or absent; they never change task behavior and are never copied into
 ## Run identity inspection
 
 Execution identity recording is off by default, including on fresh installs
-and upgrades. Enable it explicitly, then restart the Gateway:
+and upgrades. Enable it explicitly for newly admitted runs:
 
 ```bash
 openclaw config set logging.audit.executionIdentity true
-openclaw gateway restart
 ```
 
 Collection requires both `logging.audit.enabled` and
 `logging.audit.executionIdentity` to be true. Setting either to `false`
-stops new contexts after restart; no environment-variable alias or silent
+stops new contexts immediately; no environment-variable alias or silent
 migration enables the feature. Retained contexts remain inspectable until
 their 30-day expiry.
+
+Audit settings apply without restarting the Gateway. Changes affect subsequent
+events and admissions; accepted writes still drain through the same queue, and
+previously admitted identity contexts remain immutable. Enabling collection
+does not backfill earlier activity or add identity to an already admitted run.
 
 After session work admission succeeds, OpenClaw validates and freezes
 one bounded identity envelope, immediately offers it to the existing audit
@@ -354,8 +358,8 @@ See [Audit records](/cli/audit) for the full field reference and query filters.
 ## Message lifecycle events
 
 Choose message audit metadata in **Settings → Advanced → Logging**, or set
-[`logging.audit.messages`](/gateway/config-observability#audit), then restart
-the Gateway:
+[`logging.audit.messages`](/gateway/config-observability#audit). Changes apply
+to subsequent message lifecycle events:
 
 - `off` (default): no message records.
 - `direct`: only messages in direct conversations.

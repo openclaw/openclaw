@@ -12,6 +12,19 @@ import { workerTransformProbe } from "./vitest-worker-artifacts.transforms.test-
 
 const root = process.cwd();
 const it = createWorkerArtifactTest();
+
+function readCompilerEvidence(filename: string) {
+  try {
+    return {
+      contents: fs
+        .readFileSync(filename, "utf8")
+        .replaceAll(JSON.stringify(root).slice(1, -1), "<checkout>"),
+    };
+  } catch (error) {
+    return { readError: (error as NodeJS.ErrnoException).code ?? "unreadable" };
+  }
+}
+
 // Each sequence owns its cache and two generations; keep their observations ordered.
 // Full SQLite/archive/TUI/setup/KNN execution stays in worker-artifacts source/borrower tests.
 describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
@@ -105,6 +118,40 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
                   root,
                   controlled.env,
                 );
+            if (result.code !== 0) {
+              // Read the fixture's existing evidence before its assertion unwinds cleanup.
+              // The inner owner may already have removed a joined compiler's generation.
+              const manifests = (() => {
+                try {
+                  return controlled.read().map(({ directory: generation, ...receipt }) => ({
+                    ...receipt,
+                    generation: path.basename(generation),
+                    manifest:
+                      path.dirname(generation) === path.join(root, ".artifacts", "vitest-workers")
+                        ? readCompilerEvidence(path.join(generation, "manifest.json"))
+                        : { readError: "outside-worker-root" },
+                  }));
+                } catch (error) {
+                  return { readError: (error as NodeJS.ErrnoException).code ?? "invalid-receipt" };
+                }
+              })();
+              console.error(
+                "Controlled compiler failure context",
+                JSON.stringify({
+                  layout,
+                  mode,
+                  reuse,
+                  code: result.code,
+                  runtime: {
+                    executable: path.basename(process.execPath),
+                    version: process.version,
+                    uv: process.versions.uv,
+                  },
+                  receipts: readCompilerEvidence(path.join(directory, "fixture-compilers.jsonl")),
+                  manifests,
+                }),
+              );
+            }
             expect(result.code, result.stderr + result.stdout).toBe(0);
             const generation: string = JSON.parse(readLines("generations.jsonl").at(-1)!);
             const observed = JSON.parse(readLines("observations.jsonl").at(-1)!);

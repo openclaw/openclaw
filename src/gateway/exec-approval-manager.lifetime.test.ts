@@ -59,6 +59,58 @@ function createPersistentManager() {
 }
 
 describe("ExecApprovalManager lifetime", () => {
+  it.for(["authority", "signal", "retirement"] as const)(
+    "refuses insertion when %s closes during audience preparation",
+    async (closed, testContext) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const controller = new AbortController();
+      let active = true;
+      const onLifecycle = vi.fn();
+      const manager = createTestApprovalManager(testContext, {
+        resolveAudienceSessionKeys: async (source) => {
+          entered.resolve();
+          await release.promise;
+          return [source];
+        },
+        onLifecycle,
+      });
+      const record = manager.create(
+        { command: "printf prepared", sessionKey: "agent:main:child" },
+        60_000,
+        "approval-preparation-authority",
+      );
+      record.approvalAuthority = () => active;
+      record.approvalSignals = [controller.signal];
+      const insert = vi.spyOn(operatorApprovalStore, "insertOperatorApproval");
+      const pending = manager.register(record, 60_000);
+      const rejected = expect(pending).rejects.toThrow(
+        closed === "retirement"
+          ? "Gateway approval observer closed"
+          : "approval authority is no longer active",
+      );
+      try {
+        await entered.promise;
+        if (closed === "authority") {
+          active = false;
+        } else if (closed === "signal") {
+          controller.abort();
+        } else {
+          manager.retire();
+        }
+        release.resolve();
+        await rejected;
+        expect(insert).not.toHaveBeenCalled();
+        expect(onLifecycle).not.toHaveBeenCalled();
+        expect(manager.getLiveSnapshot(record.id)).toBeNull();
+      } finally {
+        release.resolve();
+        await Promise.allSettled([pending, rejected]);
+        insert.mockRestore();
+      }
+    },
+  );
+
   it("does not reuse a resolved exact id as a prefix for another pending approval", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
     const resolvedRecord = manager.create({ command: "echo old", host: "gateway" }, 2_000, "abc");

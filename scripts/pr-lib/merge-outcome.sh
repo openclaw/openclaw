@@ -31,6 +31,10 @@ merge_outcome_stop() {
     echo "Confirmed pre-dispatch abort: no merge request was sent by this attempt. Next: lock-recover, then rerun merge-run (use the exact lock-recover command after verifying no child tools remain)." >&2
   else
     echo 'Next: investigate; see scripts/AGENTS.md merge-outcome doctrine and `scripts/pr merge-recover`. No automatic merge retry.' >&2
+    if [ -n "${MERGE_OUTCOME_OID:-}" ] && printf '%s\n' "${MERGE_OUTCOME_RECORD:-null}" |
+      jq -e '.phase == "intent" and .route == "auto"' >/dev/null; then
+      echo "After investigation, retire the auto request: scripts/pr merge-recover ${MERGE_OUTCOME_REF##*/} $MERGE_OUTCOME_OID --confirmed-operator-recovery --cancel-auto" >&2
+    fi
   fi
   return 1
 }
@@ -153,9 +157,10 @@ merge_outcome_load_local() {
       def recovery:
         if has("recovery") then . as $record | .recovery |
           type == "object" and
-          ((keys == ["actor","attempt","outcome","reason"]) or
-           (keys == ["actor","attempt","outcome","reason","replacementHead"] and
+          (((keys - ["preDispatchRefusal"]) == ["actor","attempt","outcome","reason"]) or
+           ((keys - ["preDispatchRefusal"]) == ["actor","attempt","outcome","reason","replacementHead"] and
             (.replacementHead | oid) and .replacementHead == $record.head)) and
+          (if has("preDispatchRefusal") then (.preDispatchRefusal | type == "object") else true end) and
           (.outcome | oid) and (.attempt | attempt) and
           (.actor | type == "string" and length > 0) and .reason == "explicit-operator-recovery"
         else true end;
@@ -163,7 +168,7 @@ merge_outcome_load_local() {
         (.prId | type == "string" and length > 0) and (.head | oid) and (.main | oid) and
         (if has("localHead") then (.localHead | oid) else true end) and
         (.attempt | attempt) and recovery and
-        (if has("cancellation") then .accepted == true and .route == "auto" and
+        (if has("cancellation") then .route == "auto" and
           (.cancellation | keys == ["actor","outcome","state"] and (.outcome | oid) and
             (.actor | type == "string" and length > 0) and (.state | IN("requested","confirmed")))
          else true end) and
@@ -210,8 +215,9 @@ merge_outcome_load_local() {
       if ! GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$retained" "$MERGE_OUTCOME_OID" ||
         ! GIT_NO_LAZY_FETCH=1 pr_git show "$retained:outcome.json" | jq -e --argjson next "$MERGE_OUTCOME_RECORD" '
           .phase == "intent" and
-          ((.accepted == false and .route == "immediate") or
-           (.accepted == true and .route == "auto" and .cancellation.state == "confirmed")) and
+          ((.accepted == false and (.route == "immediate" or
+             (.route == "auto" and $next.recovery.preDispatchRefusal != null))) or
+           (.route == "auto" and .cancellation.state == "confirmed")) and
           .repo == $next.repo and .pr == $next.pr and .prId == $next.prId and
           .base == $next.base and .method == $next.method and .attempt == $next.recovery.attempt and
           $next.route == "immediate" and (.head == $next.head or $next.recovery.replacementHead == $next.head)
@@ -219,11 +225,21 @@ merge_outcome_load_local() {
         merge_outcome_stop "invalid or unretained operator recovery provenance"; return 1
       fi
     fi
+    if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '.recovery.preDispatchRefusal != null' >/dev/null; then
+      local qualified_refusal original
+      retained=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .recovery.outcome)
+      original=$(GIT_NO_LAZY_FETCH=1 pr_git show "$retained:outcome.json") || return 1
+      qualified_refusal=$(node "${BASH_SOURCE[0]%/*}/merge-pre-dispatch-refusal.mjs" "git:$MERGE_OUTCOME_OID" "$retained" "$original") || return 1
+      [ "$qualified_refusal" = "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.recovery.preDispatchRefusal')" ] || {
+        merge_outcome_stop "invalid retained pre-dispatch qualification"; return 1;
+      }
+    fi
     if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("cancellation")' >/dev/null; then
       retained=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .cancellation.outcome)
       if ! GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$retained" "$MERGE_OUTCOME_OID" ||
         ! GIT_NO_LAZY_FETCH=1 pr_git show "$retained:outcome.json" | jq -e --argjson next "$MERGE_OUTCOME_RECORD" '
-          .phase == "intent" and .accepted == true and .route == "auto" and (has("cancellation") | not) and
+          .phase == "intent" and .route == "auto" and (has("cancellation") | not) and
+          .accepted == $next.accepted and
           .repo == $next.repo and .pr == $next.pr and .prId == $next.prId and
           .base == $next.base and .head == $next.head and .main == $next.main and
           .method == $next.method and .attempt == $next.attempt
@@ -269,6 +285,23 @@ merge_outcome_write() {
     entries+=$'\n'"$(printf '040000 tree %s\tlegacy-refusal' "$legacy_tree")"
   elif [ -n "$capture_entries" ]; then
     entries+=$'\n'"${capture_entries%$'\n'}"
+  fi
+  if printf '%s\n' "$record" | jq -e '.recovery.preDispatchRefusal != null' >/dev/null; then
+    local refusal_tree refusal_entries="" refusal_name refusal_blob expected_blob
+    if [ -n "$MERGE_OUTCOME_OID" ] && GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$MERGE_OUTCOME_OID:pre-dispatch-refusal" 2>/dev/null; then
+      refusal_tree=$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse "$MERGE_OUTCOME_OID:pre-dispatch-refusal") || return 1
+    else
+      [ -n "${MERGE_REFUSAL_DIRECTORY:-}" ] || { merge_outcome_stop "missing qualified refusal evidence"; return 1; }
+      while IFS=$'\t' read -r refusal_name expected_blob; do
+        capture="$MERGE_REFUSAL_DIRECTORY/$refusal_name"
+        [ -f "$capture" ] && [ ! -L "$capture" ] || return 1
+        refusal_blob=$(pr_git hash-object -w --no-filters -- "$capture") || return 1
+        [ "$refusal_blob" = "$expected_blob" ] || { merge_outcome_stop "refusal evidence changed before retention"; return 1; }
+        refusal_entries+="$(printf '100644 blob %s\t%s' "$refusal_blob" "$refusal_name")"$'\n'
+      done < <(printf '%s\n' "$record" | jq -r '.recovery.preDispatchRefusal.files | to_entries[] | [.key,.value] | @tsv')
+      refusal_tree=$(printf '%s' "$refusal_entries" | pr_git mktree) || return 1
+    fi
+    entries+=$'\n'"$(printf '040000 tree %s\tpre-dispatch-refusal' "$refusal_tree")"
   fi
   tree=$(printf '%s\n' "$entries" | pr_git mktree) || return 1
   next=$(printf 'Native PR merge outcome\n' | pr_git -c commit.gpgsign=false commit-tree "$tree" "${parents[@]}") || return 1
@@ -341,7 +374,7 @@ merge_read() {
           query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){id databaseId url nameWithOwner ref(qualifiedName:"refs/heads/main"){target{oid}} pullRequest(number:$number){id number url state headRefOid baseRefName isDraft mergeCommit{oid} autoMergeRequest{mergeMethod} isInMergeQueue isMergeQueueEnabled mergeable mergeStateStatus}}}'
           ;;
         preview)
-          query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid author{login __typename} isMergeQueueEnabled viewerMergeBodyText(mergeType:SQUASH)}}}'
+          query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid author{login __typename} isMergeQueueEnabled viewerMergeBodyText(mergeType:SQUASH) viewerMergeHeadlineText(mergeType:SQUASH)}}}'
           ;;
         *) return 2 ;;
       esac
@@ -468,6 +501,16 @@ merge_outcome_reconcile() {
   fi
   landed=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.mergeCommit.oid)
   pr_git merge-base --is-ancestor "$landed" "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" || {
+    local observed_main main_local=false landed_local=false
+    observed_main=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main) || return 1
+    if GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$observed_main^{commit}" 2>/dev/null; then
+      main_local=true
+    fi
+    if GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$landed^{commit}" 2>/dev/null; then
+      landed_local=true
+    fi
+    printf 'Merge receipt objects: main=%s main_local=%s landed=%s landed_local=%s\n' \
+      "$observed_main" "$main_local" "$landed" "$landed_local" >&2
     merge_outcome_stop "reported landed commit is unavailable or not reachable from authoritative main"; return 1;
   }
   method=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .method)
@@ -511,9 +554,9 @@ merge_outcome_cancel_auto() {
   local pr="$1" expected_oid="$2" actor root capture
   if [ "$expected_oid" != "$MERGE_OUTCOME_OID" ] ||
     ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '
-      .phase == "intent" and .accepted == true and .route == "auto"
+      .phase == "intent" and .route == "auto"
     ' >/dev/null; then
-    merge_outcome_stop "auto cancellation requires the exact retained accepted auto intent"; return 1
+    merge_outcome_stop "auto cancellation requires the exact retained auto intent"; return 1
   fi
   merge_outcome_observe "$pr" || return 1
   if [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.state)" = MERGED ]; then
@@ -523,8 +566,8 @@ merge_outcome_cancel_auto() {
   if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson record "$MERGE_OUTCOME_RECORD" '
     .pr.id == $record.prId and .pr.headRefOid == $record.head and .pr.baseRefName == $record.base and
     .pr.state == "OPEN" and .pr.isInMergeQueue == false and .pr.isMergeQueueEnabled == false and
-    (if $record | has("cancellation") then true else
-       .pr.autoMergeRequest.mergeMethod == ($record.method | ascii_upcase) end)
+    (.pr.autoMergeRequest == null or
+     .pr.autoMergeRequest.mergeMethod == ($record.method | ascii_upcase))
   ' >/dev/null; then
     merge_outcome_stop "auto cancellation requires the original open PR/head/base and matching non-queue request"; return 1
   fi
@@ -539,17 +582,20 @@ merge_outcome_cancel_auto() {
       captures+=("$capture")
     done
     merge_outcome_stable "$pr" || return 1
-    # Retain cancellation before dispatch. A lost reply is observation-only on retry.
+    # Retain retirement intent without rewriting the original acknowledgment.
+    # A lost cancellation reply remains observation-only on retry.
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c --arg actor "$actor" --arg outcome "$expected_oid" \
       '.cancellation={actor:$actor,outcome:$outcome,state:"requested"}')" ${captures[@]+"${captures[@]}"} || return 1
-    pr_gh_plain api graphql --hostname "$MERGE_REPO_HOST" \
-      -f "id=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .prId)" \
-      -f 'query=mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequestId:$id}){pullRequest{id}}}' ||
-      echo "Auto cancellation response uncertain; reconciling without another cancellation request." >&2
-    merge_outcome_observe "$pr" || return 1
-    if [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.state)" = MERGED ]; then
-      merge_outcome_resume "$pr"
-      return
+    if printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.autoMergeRequest != null' >/dev/null; then
+      pr_gh_plain api graphql --hostname "$MERGE_REPO_HOST" \
+        -f "id=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .prId)" \
+        -f 'query=mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequestId:$id}){pullRequest{id}}}' ||
+        echo "Auto cancellation response uncertain; reconciling without another cancellation request." >&2
+      merge_outcome_observe "$pr" || return 1
+      if [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.state)" = MERGED ]; then
+        merge_outcome_resume "$pr"
+        return
+      fi
     fi
   fi
   if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson record "$MERGE_OUTCOME_RECORD" '
@@ -563,7 +609,7 @@ merge_outcome_cancel_auto() {
   if [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .cancellation.state)" != confirmed ]; then
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.cancellation.state="confirmed"')" || return 1
   fi
-  echo "Auto cancellation confirmed for PR #$pr; no merge requested. Retained outcome: $MERGE_OUTCOME_OID"
+  echo "Auto request retirement confirmed for PR #$pr; no merge requested. Retained outcome: $MERGE_OUTCOME_OID"
   echo "Repair, review, and prepare the intended head before explicit merge-recover with this outcome OID."
 }
 

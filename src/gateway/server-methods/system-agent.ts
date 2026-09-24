@@ -81,7 +81,8 @@ export type { SystemAgentChatSession };
 const MAX_SYSTEM_AGENT_SESSIONS = 8;
 const SYSTEM_AGENT_SEED_HISTORY_LIMIT = 30;
 const DEFAULT_SYSTEM_AGENT_HISTORY_LIMIT = 100;
-const ACTIVATION_SESSION_TIMEOUT_MS = 8 * 60 * 1000;
+// Covers a provider's 15-minute device-code window plus the post-login probe. Activation of a
+// detected route shares it: without a saved profile or key, activation hosts the same sign-in.
 const PROVIDER_AUTH_SESSION_TIMEOUT_MS = 25 * 60 * 1000;
 const PROVIDER_PREPARE_SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 function acknowledgeDeliveredSystemAgentWelcome(session: SystemAgentChatSession): void {
@@ -227,7 +228,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     await startSetupActivationWizard({
       sessionId,
       activation,
-      timeoutMs: ACTIVATION_SESSION_TIMEOUT_MS,
+      timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS,
       context,
       respond,
     });
@@ -535,6 +536,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         session = {
           engine,
           welcome,
+          optionalWelcome: params.welcomeVariant === undefined && !persistWelcome,
           ...(params.welcomeVariant === "new-agent" ? { newAgentWelcome: welcome } : {}),
           ...(welcomeQuestion ? { welcomeQuestion } : {}),
           ...(greetingAuditSequence !== undefined
@@ -550,6 +552,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             {
               sessionId,
               reply: session.welcome,
+              optionalWelcome: session.optionalWelcome,
               action: "none",
               ...(session.welcomeQuestion ? { question: session.welcomeQuestion } : {}),
             },
@@ -577,7 +580,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             !session.engine.getPendingOperatorProposal()
           ) {
             session.newAgentWelcome ??= await buildNewAgentWelcome({ engine: session.engine });
-            respond(true, { sessionId, reply: session.newAgentWelcome, action: "none" }, undefined);
+            respond(
+              true,
+              { sessionId, reply: session.newAgentWelcome, optionalWelcome: false, action: "none" },
+              undefined,
+            );
             // The caretaker warning was not displayed; its delivery cursor stays pending.
             return undefined;
           }
@@ -587,6 +594,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           buildSystemAgentRejoinResult({
             sessionId,
             welcome: session.welcome,
+            optionalWelcome: session.optionalWelcome,
             ...(session.welcomeQuestion ? { welcomeQuestion: session.welcomeQuestion } : {}),
             engine: session.engine,
           }),

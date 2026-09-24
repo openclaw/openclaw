@@ -118,6 +118,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "sessions-groups": () =>
     import("./sessions-groups.js").then((module) => module.sessionGroupHandlers),
   "sessions-goal": () => import("./sessions-goal.js").then((module) => module.sessionGoalHandlers),
+  "sessions-provider-review": () =>
+    import("./sessions-provider-review.js").then((module) => module.sessionProviderReviewHandlers),
   "sessions-messaging": () =>
     import("./sessions-messaging.js").then((module) => module.sessionMessagingHandlers),
   "sessions-mutations": () =>

@@ -1,4 +1,7 @@
+import { threadId } from "node:worker_threads";
 import type { Result } from "@openclaw/normalization-core/result";
+import { VERSION } from "../version.js";
+import { capturePluginStateErrorCause } from "./plugin-state-error-cause.js";
 
 // Public plugin-state store contracts. Stores are keyed by plugin id and
 // namespace, persist JSON-compatible values, and enforce per-namespace limits.
@@ -46,7 +49,11 @@ type PluginStateKeyedStoreBase<T> = {
     comparison: string,
     intent: PluginStateCompareIntent<T>,
   ) => Promise<PluginStateCompareResult<T>>;
-  register(key: string, value: T, opts?: { ttlMs?: number }): Promise<void>;
+  register(
+    key: string,
+    value: T,
+    opts?: { ttlMs?: number; assertCurrent?: () => void },
+  ): Promise<void>;
   registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): Promise<boolean>;
   /**
    * The updater runs synchronously in the transaction; undefined leaves the entry unchanged.
@@ -72,7 +79,7 @@ type PluginStateKeyedStoreBase<T> = {
     keys: readonly string[],
   ) => Promise<Array<Result<T | undefined, PluginStateStoreError>>>;
   consume(key: string): Promise<T | undefined>;
-  delete(key: string): Promise<boolean>;
+  delete(key: string, opts?: { assertCurrent?: () => void }): Promise<boolean>;
   entries(): Promise<PluginStateEntry<T>[]>;
   /** Reads a lexical key range with ordering and limit applied by storage. */
   entriesInKeyRange?: (range: PluginStateKeyRange) => Promise<PluginStateEntry<T>[]>;
@@ -174,6 +181,7 @@ type PluginStateStoreErrorOptions = {
   operation: PluginStateStoreOperation;
   path?: string;
   cause?: unknown;
+  owner?: { pid: number; threadId: number; version: string };
 };
 
 /** Typed error thrown for plugin-state validation and sqlite failures. */
@@ -181,14 +189,28 @@ export class PluginStateStoreError extends Error {
   readonly code: PluginStateStoreErrorCode;
   readonly operation: PluginStateStoreOperation;
   readonly path?: string;
+  readonly owner: { pid: number; threadId: number; version: string };
 
   constructor(message: string, options: PluginStateStoreErrorOptions) {
     super(message, { cause: options.cause });
     this.name = "PluginStateStoreError";
     this.code = options.code;
     this.operation = options.operation;
+    this.owner = options.owner ?? { pid: process.pid, threadId, version: VERSION };
     if (options.path) {
       this.path = options.path;
     }
+  }
+
+  toJSON(): Record<string, unknown> {
+    return {
+      name: this.name,
+      message: this.message,
+      code: this.code,
+      operation: this.operation,
+      path: this.path,
+      owner: this.owner,
+      cause: capturePluginStateErrorCause(this.cause),
+    };
   }
 }

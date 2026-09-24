@@ -147,6 +147,13 @@ private data class TalkStatus(
   val awaitingAgent: Boolean = false,
   val owner: TalkStatusOwner = TalkStatusOwner(),
   val route: TalkModeRoute? = null,
+  val failureAcknowledged: Boolean = false,
+)
+
+/** Identity is the failure's status owner, retained across its relay close event. */
+internal data class TalkFailureNotice(
+  val text: String,
+  val owner: Any,
 )
 
 private data class TalkConfigCache(
@@ -274,9 +281,13 @@ class TalkModeManager internal constructor(
     }
   val awaitingAgent: StateFlow<Boolean> = LocaleResolvingStateFlow(status) { it.awaitingAgent }
 
-  /** Why Talk last failed, until Talk starts again; relay failures end Talk without any other visible trace. */
-  val failureText: StateFlow<String?> =
-    LocaleResolvingStateFlow(status) { if (it.state == TalkStatusState.TalkFailure) it.text.resolveNativeText() else null }
+  /** The current unacknowledged failure; dismissal leaves the diagnostic status intact. */
+  internal val failureNotice: StateFlow<TalkFailureNotice?> =
+    LocaleResolvingStateFlow(status) { status ->
+      status
+        .takeIf { it.state == TalkStatusState.TalkFailure && !it.failureAcknowledged }
+        ?.let { TalkFailureNotice(it.text.resolveNativeText(), it.owner) }
+    }
 
   private fun setStatus(
     text: NativeText,
@@ -293,6 +304,19 @@ class TalkModeManager internal constructor(
 
   private fun setTalkFailure(text: NativeText) {
     setStatus(text, state = TalkStatusState.TalkFailure)
+  }
+
+  /** Dismisses this failure across Chat recreation while retaining its terminal status. */
+  internal fun acknowledgeFailure(notice: TalkFailureNotice) {
+    synchronized(realtimeCapturePauseLock) {
+      status.update { current ->
+        if (current.state == TalkStatusState.TalkFailure && current.owner === notice.owner) {
+          current.copy(failureAcknowledged = true)
+        } else {
+          current
+        }
+      }
+    }
   }
 
   private val _conversation = MutableStateFlow<List<VoiceConversationEntry>>(emptyList())

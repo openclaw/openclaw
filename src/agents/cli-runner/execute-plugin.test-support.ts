@@ -4,6 +4,7 @@ import type {
   CliBackendExecuteContext,
 } from "../../plugins/cli-backend.types.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { resetAdjustedParamsByToolCallIdForTests } from "../agent-tools.before-tool-call.state.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
@@ -131,6 +132,7 @@ export function closePluginTestAdmissions(): void {
   for (const admission of activeAdmissions.splice(0)) {
     admission.close();
   }
+  resetAdjustedParamsByToolCallIdForTests();
 }
 
 export function waitUntilAborted(execution: CliBackendExecuteContext): Promise<void> {

@@ -5,8 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../infra/errors.js";
-import { readFileHandleBounded } from "../../infra/fs-safe-advanced.js";
-import { FsSafeError, openLocalFileSafely } from "../../infra/fs-safe.js";
+import { FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../security/scan-paths.js";
 import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-evidence.js";
@@ -235,25 +234,6 @@ const SOURCE_RULES: SourceRule[] = [
 
 const SKILL_CONTENT_RULES: SourceRule[] = [
   LITERAL_SECRET_SKILL_CONTENT_RULE,
-  {
-    ruleId: "prompt-injection-ignore-instructions",
-    severity: "critical",
-    message: "Prompt-injection wording attempts to override higher-priority instructions",
-    pattern: /\bignore\s+(?:(?:all|any)\s+)?(?:previous|above|prior|all|any)\s+instructions\b/i,
-  },
-  {
-    ruleId: "prompt-injection-system",
-    severity: "critical",
-    message: "Skill text references hidden prompt layers",
-    pattern: /\b(?:system\s+prompt|developer\s+message|hidden\s+instructions)\b/i,
-  },
-  {
-    ruleId: "prompt-injection-tool",
-    severity: "critical",
-    message: "Skill text encourages bypassing tool approval",
-    pattern:
-      /\b(run|execute|invoke|call)\b[\s\S]{0,50}\btool\b[\s\S]{0,50}\bwithout\b[\s\S]{0,30}\b(permission|approval)/i,
-  },
   {
     ruleId: "shell-pipe-to-shell",
     severity: "critical",
@@ -989,24 +969,18 @@ async function scanFileWithCache(params: {
 
   try {
     // Explicitly included entrypoints may be symlinked outside the scan directory.
-    const opened = await openLocalFileSafely({ filePath: await fs.realpath(filePath) });
-    try {
-      const content = await readFileHandleBounded(opened.handle, maxFileBytes);
-      const after = await opened.handle.stat();
-      if (!sameFileScanIdentity(opened.stat, after) || content.byteLength !== after.size) {
-        throw new Error(`File changed while scanning: ${filePath}`);
-      }
-      const findings = scanSource(content.toString("utf8"), filePath);
-      setCachedFileScanResult(filePath, {
-        identity: fileScanIdentity(after),
-        maxFileBytes,
-        scanned: true,
-        findings,
-      });
-      return { scanned: true, findings };
-    } finally {
-      await opened.handle.close();
-    }
+    const { buffer, stat } = await readLocalFileSafely({
+      filePath: await fs.realpath(filePath),
+      maxBytes: maxFileBytes,
+    });
+    const findings = scanSource(buffer.toString("utf8"), filePath);
+    setCachedFileScanResult(filePath, {
+      identity: fileScanIdentity(stat),
+      maxFileBytes,
+      scanned: true,
+      findings,
+    });
+    return { scanned: true, findings };
   } catch (err) {
     if (
       hasErrnoCode(err, "ENOENT") ||

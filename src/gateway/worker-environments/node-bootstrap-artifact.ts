@@ -22,6 +22,7 @@ import {
 import { validateBundledPackageDependencyAlignment } from "../../../scripts/package-source-dependencies.mjs";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { sha256File } from "../../infra/directory-durability.js";
+import { readFileHandleBounded } from "../../infra/fs-safe-advanced.js";
 import { walkDirectory } from "../../infra/fs-safe.js";
 import {
   collectPackageDistInventory,
@@ -60,6 +61,7 @@ const BOOTSTRAP_LAUNCHER_FILES = [
   "gateway-run-argv.mjs",
   "gateway-shutdown-budget.mjs",
   "node-host-launcher.mjs",
+  "node-compile-cache.mjs",
 ];
 const READ_CONCURRENCY = 16;
 const IGNORED_PLUGIN_DIRECTORIES = new Set(["node_modules", "src", "test", "tests"]);
@@ -307,14 +309,10 @@ async function prepareNodeBootstrapArtifact(
         throw new Error(`Invalid node distribution file: ${relative}`);
       }
       reserveFile(destination, before.size);
-      const contents = await handle.readFile();
-      const after = await handle.stat();
+      const contents = await readFileHandleBounded(handle, before.size);
       const current = await fs.lstat(source);
       if (
         contents.byteLength !== before.size ||
-        before.size !== after.size ||
-        before.mtimeMs !== after.mtimeMs ||
-        before.ctimeMs !== after.ctimeMs ||
         current.isSymbolicLink() ||
         current.dev !== before.dev ||
         current.ino !== before.ino ||

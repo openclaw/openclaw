@@ -84,7 +84,7 @@ describe("conversation position rail", () => {
         message: message(`message-${index}`, "user", `Checkpoint ${index}`, index + 1),
       }));
       render(
-        transcript.renderSession("rail-publication", "agent:main:rail-publication", (session) => {
+        transcript.renderSession("agent:main:rail-publication", (session) => {
           vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
           return html`<div class="chat-thread" tabindex="0">
             <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
@@ -163,16 +163,19 @@ describe("conversation position rail", () => {
     "resize",
     "resize-jump",
     "composer-resize-reversal",
+    "composer-resize-reversal-current",
     "end",
     "focus",
     "focus-resize",
     "pointer",
     "reader",
+    "composer-resize-reversal-navigation",
   ] as const;
 
   it.each(railUpdateScenarios)(
     "keeps the reader's rail position through %s updates",
     (scenario) => {
+      const navigatesBeforeResize = scenario === "composer-resize-reversal-navigation";
       const flushFrame = stubAnimationFrames();
       const publishVisibility = stubRailVisibility();
       const transcript = createTestTranscript();
@@ -195,17 +198,13 @@ describe("conversation position rail", () => {
         ),
       };
       render(
-        transcript.renderSession(
-          "rail-scroll-policy",
-          "agent:main:rail-scroll-policy",
-          (session) => {
-            vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
-            return html`<div class="chat-thread" tabindex="0">
-              <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
-              ${renderChatPositionRail({ positions, transcript: session, requestUpdate: () => {} })}
-            </div>`;
-          },
-        ),
+        transcript.renderSession("agent:main:rail-scroll-policy", (session) => {
+          vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
+          return html`<div class="chat-thread" tabindex="0">
+            <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
+            ${renderChatPositionRail({ positions, transcript: session, requestUpdate: () => {} })}
+          </div>`;
+        }),
         container,
       );
       const root = container.querySelector<HTMLElement>(".chat-thread")!;
@@ -284,7 +283,7 @@ describe("conversation position rail", () => {
           expect(Number.parseFloat(marker(79).style.top) + 12).toBeLessThanOrEqual(
             marks.scrollTop + marks.clientHeight,
           );
-        } else if (scenario === "composer-resize-reversal") {
+        } else if (scenario.startsWith("composer-resize-reversal")) {
           publishVisibility(root.querySelector(".chat-bubble")!);
           flush();
           height = 512;
@@ -314,12 +313,26 @@ describe("conversation position rail", () => {
               },
             },
           });
+          if (navigatesBeforeResize) {
+            root.scrollTop = 0;
+            activeMessage.mockReturnValue("message-0");
+          }
           adjustTextareaHeight(textarea);
-          expect(root.scrollTop).toBe(8315);
+          expect(root.scrollTop).toBe(navigatesBeforeResize ? 0 : 8315);
           // The goal header regrows the composer before any observer or frame runs.
           height = 576;
           marksHeight = 262;
+          if (scenario === "composer-resize-reversal-current") {
+            activeMessage.mockReturnValue("message-76");
+          }
           publishVisibility(root.querySelector(".chat-bubble")!);
+          flush();
+          if (navigatesBeforeResize) {
+            expect(marks.scrollTop).toBe(0);
+            return;
+          }
+          expect(marks.scrollTop).toBe(677);
+          root.scrollTop = scrollHeight - height;
           flush();
           expect(marks.scrollTop).toBe(677);
         } else if (scenario === "resize") {
@@ -527,12 +540,15 @@ describe("conversation position rail", () => {
   it("publishes consecutive reader offsets even when the virtual row range is unchanged", async () => {
     transcriptDomState.measuredRowHeight = 120;
     const requestUpdate = vi.fn();
-    const transcript = new ChatTranscriptController({
-      addController: () => undefined,
-      removeController: () => undefined,
-      requestUpdate,
-      updateComplete: Promise.resolve(true),
-    });
+    const transcript = new ChatTranscriptController(
+      {
+        addController: () => undefined,
+        removeController: () => undefined,
+        requestUpdate,
+        updateComplete: Promise.resolve(true),
+      },
+      () => "rail-notification",
+    );
     const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
       kind: "content",
       key: `row-${index}`,

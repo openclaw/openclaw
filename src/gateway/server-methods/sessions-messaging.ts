@@ -20,24 +20,16 @@ import {
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { isFreshChatSendStarted } from "./session-create-initial-turn.js";
+import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { isAgentMainSessionKey, requireSessionKey } from "./sessions-shared.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  GatewayRequestHandlerOptions,
-  GatewayRequestHandlers,
-  RespondFn,
-} from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-async function createAgentMainSessionForSend(params: {
-  req: GatewayRequestHandlerOptions["req"];
-  canonicalKey: string;
-  context: GatewayRequestContext;
-  client: GatewayClient | null;
-  isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
-}): Promise<
+async function createAgentMainSessionForSend(
+  options: GatewayRequestHandlerOptions,
+  canonicalKey: string,
+): Promise<
   | {
       ok: true;
       entry: SessionEntry;
@@ -45,37 +37,40 @@ async function createAgentMainSessionForSend(params: {
     }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
-  const agentId = parseAgentSessionKey(params.canonicalKey)?.agentId;
+  const agentId = parseAgentSessionKey(canonicalKey)?.agentId;
   if (!agentId) {
     return {
       ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${params.canonicalKey}`),
+      error: errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${canonicalKey}`),
     };
   }
 
   let createResult:
     | { ok: boolean; payload?: { key?: string }; error?: ReturnType<typeof errorShape> }
     | undefined;
+  const createOptions = bindGatewayRequestHandlerMutationAuthority(
+    options,
+    {
+      ...options,
+      params: {
+        key: canonicalKey,
+        agentId,
+      },
+      respond: (ok, payload, error) => {
+        createResult = {
+          ok,
+          payload:
+            payload && typeof payload === "object" ? (payload as { key?: string }) : undefined,
+          error,
+        };
+      },
+    },
+    undefined,
+  );
   await expectDefined(
     sessionCreateHandlers["sessions.create"],
     "sessions.create handler",
-  )({
-    req: params.req,
-    params: {
-      key: params.canonicalKey,
-      agentId,
-    },
-    respond: (ok, payload, error) => {
-      createResult = {
-        ok,
-        payload: payload && typeof payload === "object" ? (payload as { key?: string }) : undefined,
-        error,
-      };
-    },
-    context: params.context,
-    client: params.client,
-    isWebchatConnect: params.isWebchatConnect,
-  });
+  )(createOptions);
 
   if (!createResult) {
     return {
@@ -90,7 +85,7 @@ async function createAgentMainSessionForSend(params: {
     };
   }
 
-  const createdKey = normalizeOptionalString(createResult.payload?.key) ?? params.canonicalKey;
+  const createdKey = normalizeOptionalString(createResult.payload?.key) ?? canonicalKey;
   const loaded = loadGatewaySessionEntryReadOnly(createdKey, { agentId });
   if (!loaded.entry?.sessionId) {
     return {
@@ -105,34 +100,27 @@ async function createAgentMainSessionForSend(params: {
   };
 }
 
-async function handleSessionSend(params: {
-  method: "sessions.send" | "sessions.steer";
-  req: GatewayRequestHandlerOptions["req"];
-  params: Record<string, unknown>;
-  respond: RespondFn;
-  context: GatewayRequestContext;
-  client: GatewayClient | null;
-  isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
-  queueMode?: "interrupt";
-}) {
-  if (
-    !assertValidParams(params.params, validateSessionsSendParams, params.method, params.respond)
-  ) {
+async function handleSessionSend(
+  method: "sessions.send" | "sessions.steer",
+  options: GatewayRequestHandlerOptions,
+) {
+  const queueMode = method === "sessions.steer" ? "interrupt" : undefined;
+  if (!assertValidParams(options.params, validateSessionsSendParams, method, options.respond)) {
     return;
   }
-  const p = params.params;
-  const key = requireSessionKey((p as { key?: unknown }).key, params.respond);
+  const p = options.params;
+  const key = requireSessionKey((p as { key?: unknown }).key, options.respond);
   if (!key) {
     return;
   }
-  const cfg = params.context.getRuntimeConfig();
+  const cfg = options.context.getRuntimeConfig();
   const requestedAgent = resolveRequestedGlobalAgentId(
     cfg,
     key,
     (p as { agentId?: string }).agentId,
   );
   if (!requestedAgent.ok) {
-    params.respond(false, undefined, requestedAgent.error);
+    options.respond(false, undefined, requestedAgent.error);
     return;
   }
   const requestedAgentId = requestedAgent.agentId;
@@ -144,7 +132,7 @@ async function handleSessionSend(params: {
     acpMetadataSessionKey: legacyKey ?? canonicalKey,
   });
   if (deletedAgentId !== null) {
-    params.respond(
+    options.respond(
       false,
       undefined,
       errorShape(
@@ -160,27 +148,28 @@ async function handleSessionSend(params: {
       ? rawIdempotencyKey.trim()
       : undefined;
   const idempotencyKey = explicitIdempotencyKey ?? randomUUID();
-  const respond = params.respond;
+  const respond = options.respond;
   const dispatchChatSend = async (dispatchRespond: RespondFn) => {
-    const options: GatewayRequestHandlerOptions = {
-      req: params.req,
-      params: {
-        sessionKey: canonicalKey,
-        ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-        message: (p as { message: string }).message,
-        ...(p.mentions ? { mentions: p.mentions } : {}),
-        thinking: (p as { thinking?: string }).thinking,
-        attachments: (p as { attachments?: unknown[] }).attachments,
-        timeoutMs: (p as { timeoutMs?: number }).timeoutMs,
-        idempotencyKey,
-        ...(params.queueMode ? { queueMode: params.queueMode } : {}),
+    const forwarded = bindGatewayRequestHandlerMutationAuthority(
+      options,
+      {
+        ...options,
+        params: {
+          sessionKey: canonicalKey,
+          ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+          message: (p as { message: string }).message,
+          ...(p.mentions ? { mentions: p.mentions } : {}),
+          thinking: (p as { thinking?: string }).thinking,
+          attachments: (p as { attachments?: unknown[] }).attachments,
+          timeoutMs: (p as { timeoutMs?: number }).timeoutMs,
+          idempotencyKey,
+          ...(queueMode ? { queueMode } : {}),
+        },
+        respond: dispatchRespond,
       },
-      respond: dispatchRespond,
-      context: params.context,
-      client: params.client,
-      isWebchatConnect: params.isWebchatConnect,
-    };
-    await handleDirectExternalChatSend(options);
+      undefined,
+    );
+    await handleDirectExternalChatSend(forwarded);
   };
   const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry, {
     allowPendingWorkspace: true,
@@ -195,19 +184,9 @@ async function handleSessionSend(params: {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
     return;
   }
-  if (
-    !entry?.sessionId &&
-    params.queueMode !== "interrupt" &&
-    isAgentMainSessionKey(cfg, canonicalKey)
-  ) {
+  if (!entry?.sessionId && queueMode !== "interrupt" && isAgentMainSessionKey(cfg, canonicalKey)) {
     // Sending to an empty agent main session should create it; steering still requires an active row.
-    const created = await createAgentMainSessionForSend({
-      req: params.req,
-      canonicalKey,
-      context: params.context,
-      client: params.client,
-      isWebchatConnect: params.isWebchatConnect,
-    });
+    const created = await createAgentMainSessionForSend(options, canonicalKey);
     if (!created.ok) {
       respond(false, undefined, created.error);
       return;
@@ -249,7 +228,7 @@ async function handleSessionSend(params: {
           sessionKey: canonicalKey,
           runId: startedRunId,
           task: (p as { message: string }).message,
-          gatewayContextResolver: params.context.resolveGatewayContext,
+          gatewayContextResolver: options.context.resolveGatewayContext,
         });
       } catch (error) {
         if (startedRunId) {
@@ -262,7 +241,7 @@ async function handleSessionSend(params: {
         throw error;
       }
     }
-    emitSessionsChanged(params.context, {
+    emitSessionsChanged(options.context, {
       sessionKey: canonicalKey,
       ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
       reason: interruptedActiveRun ? "steer" : "send",
@@ -271,27 +250,10 @@ async function handleSessionSend(params: {
 }
 
 export const sessionMessagingHandlers: GatewayRequestHandlers = {
-  "sessions.send": async ({ req, params, respond, context, client, isWebchatConnect }) => {
-    await handleSessionSend({
-      method: "sessions.send",
-      req,
-      params,
-      respond,
-      context,
-      client,
-      isWebchatConnect,
-    });
+  "sessions.send": async (options) => {
+    await handleSessionSend("sessions.send", options);
   },
-  "sessions.steer": async ({ req, params, respond, context, client, isWebchatConnect }) => {
-    await handleSessionSend({
-      method: "sessions.steer",
-      req,
-      params,
-      respond,
-      context,
-      client,
-      isWebchatConnect,
-      queueMode: "interrupt",
-    });
+  "sessions.steer": async (options) => {
+    await handleSessionSend("sessions.steer", options);
   },
 };

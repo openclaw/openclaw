@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
 import { beforeEach, expect, test, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
 import {
@@ -264,22 +265,12 @@ test("registered projects.list reads recents and observed session rows off the c
     );
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
-    const observers = [
-      vi.spyOn(prototype, "all"),
-      vi.spyOn(prototype, "get"),
-      vi.spyOn(prototype, "iterate"),
-    ];
-    const rowQueries = () =>
-      observers
-        .flatMap((observer) => observer.mock.contexts)
-        .map((statement) => (statement as StatementSync).sourceSQL)
-        .filter((sql) => /session_nodes/i.test(sql));
+    const observer = observeSqliteReadSql(prototype);
+    const rowQueries = () => observer.queries.filter((sql) => /session_nodes/i.test(sql));
     try {
       loadCombinedSessionStoreForGatewayCore(cfg);
       expect(rowQueries().length).toBeGreaterThan(0);
-      for (const observer of observers) {
-        observer.mockClear();
-      }
+      observer.queries.length = 0;
       for (let round = 0; round < 2; round++) {
         expect(
           await invokeProjectMethod(
@@ -302,9 +293,7 @@ test("registered projects.list reads recents and observed session rows off the c
       }
       expect(rowQueries()).toEqual([]);
     } finally {
-      for (const observer of observers) {
-        observer.mockRestore();
-      }
+      observer.restore();
     }
   } finally {
     await state.cleanup();

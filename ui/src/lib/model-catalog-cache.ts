@@ -1,6 +1,7 @@
 import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
 import {
   hasUiSessionDefaults,
@@ -19,6 +20,25 @@ export type ModelCatalogCacheUpdate =
   | { type: "invalidated"; matches: (scope: ModelsListParams, key: string) => boolean };
 
 export type ModelCatalogClient = Pick<GatewayBrowserClient, "request">;
+export type ModelCatalogInvalidation = "clear" | "refresh";
+
+export function modelCatalogEventInvalidation(
+  event: Pick<GatewayEventFrame, "event" | "payload">,
+): ModelCatalogInvalidation | undefined {
+  if (event.event === "config.changed") {
+    return "clear";
+  }
+  if (event.event === "chat.metadata.changed") {
+    const payload = asNullableRecord(event.payload);
+    return payload?.modelSelectionChanged === true
+      ? "clear"
+      : payload?.modelCatalogChanged === false
+        ? undefined
+        : "refresh";
+  }
+  return undefined;
+}
+
 export type ModelCatalogRequest = {
   refresh: boolean;
   controller: AbortController;
@@ -40,6 +60,7 @@ export type ModelCatalogRequestLane = {
 
 type ModelCatalogCache = {
   entries: Map<string, ModelCatalogEntry>;
+  requiresSnapshot?: boolean;
   reads: Set<ModelCatalogRead>;
   nextRead: number;
   requests: Map<string, Map<GatewayProtocolRequestOptions["timeoutMs"], ModelCatalogRequestLane>>;
@@ -204,6 +225,7 @@ export function publishModelCatalogResult(
     : undefined;
   cache.entries.delete(key);
   cache.entries.set(key, entry);
+  cache.requiresSnapshot = result.modelSelectionPolicy?.restricted === true;
   for (const lane of cache.requests.get(key)?.values() ?? []) {
     for (const pending of [lane.active, lane.queued]) {
       if (pending && discoverySucceeded && (params.refresh || !pending.refresh)) {
@@ -240,15 +262,43 @@ export function invalidateModelCatalogEntry(
 }
 
 /** A connection boundary retires even the last accepted display snapshot. */
-export function clearModelCatalogCache(client: ModelCatalogClient): void {
+export function clearModelCatalogCache(
+  client: ModelCatalogClient,
+  options?: { requireSnapshot?: boolean },
+): void {
   const cache = modelCatalogCache.get(client);
   modelCatalogCache.delete(client);
+  getModelCatalogCache(client).requiresSnapshot =
+    options?.requireSnapshot === true ||
+    cache?.requiresSnapshot === true ||
+    (cache?.entries.size ?? 0) > 0;
   for (const budgets of cache?.requests.values() ?? []) {
     for (const lane of budgets.values()) {
+      lane.active?.reject(new DOMException("Model catalog connection retired", "AbortError"));
       lane.queued?.reject(new DOMException("Model catalog connection retired", "AbortError"));
     }
   }
   notifyModelCatalogCache(client, { type: "invalidated", matches: () => true });
+}
+
+/** Configuration and identity changes retire display facts until this scope is published again. */
+export function isModelCatalogRetired(
+  client: ModelCatalogClient,
+  scope: ModelsListParams,
+): boolean {
+  const cache = modelCatalogCache.get(client);
+  return (
+    cache?.requiresSnapshot === true &&
+    !cache.entries.get(modelCatalogKey(modelCatalogParams(scope)))?.result
+  );
+}
+
+/** An accepted unrestricted receipt also covers another cold view on this connection. */
+export function hasUnrestrictedModelCatalogSnapshot(
+  client: ModelCatalogClient | null | undefined,
+): boolean {
+  const cache = client && modelCatalogCache.get(client);
+  return Boolean(cache?.entries.size && cache.requiresSnapshot === false);
 }
 
 /** Retire read eligibility while preserving the last accepted, scoped display snapshot. */

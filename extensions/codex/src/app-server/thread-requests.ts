@@ -11,6 +11,7 @@ import {
   readCodexEffectiveConfig,
 } from "./config-layer-policy.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import {
   isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
@@ -169,6 +170,7 @@ type CodexThreadConfigurationOptions = {
   dynamicTools?: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  skillsInstructions?: string;
   config?: JsonObject;
   nativeCodeModeEnabled?: boolean;
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
@@ -212,9 +214,14 @@ export function buildCodexThreadConfiguration(
       shellEnvironment: options.shellEnvironment,
       disableLoginShell: options.disableLoginShell,
     }),
-    developerInstructions:
+    // Catalog-owned collaboration messages replace caller collaboration instructions
+    // (codex-rs/core/src/context/world_state/collaboration_mode.rs), so the skill
+    // catalog rides the thread developer carrier after the immutable generic policy.
+    developerInstructions: joinPresentSections(
       options.developerInstructions ??
-      buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
+        buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
+      options.skillsInstructions,
+    ),
   };
 }
 
@@ -223,6 +230,7 @@ export function buildThreadStartParams(
   options: CodexThreadConfigurationOptions & { cwd: string; dynamicTools: CodexDynamicToolSpec[] },
 ): CodexThreadStartParams {
   const resolvedModelProvider = resolveCodexAppServerModelProvider({
+    homeScope: options.appServer.start.homeScope,
     provider: params.provider,
     authProfileId: params.authProfileId,
     authProfileStore: params.authProfileStore,
@@ -230,6 +238,7 @@ export function buildThreadStartParams(
     config: params.config,
   });
   const modelSelection = resolveCodexAppServerRequestModelSelection({
+    homeScope: options.appServer.start.homeScope,
     model: options.model ?? params.modelId,
     modelProvider: options.modelProvider ?? resolvedModelProvider,
     authProfileId: params.authProfileId,
@@ -270,10 +279,12 @@ export function buildThreadResumeParams(
   const modelSelection = options.preserveNativeModel
     ? undefined
     : resolveCodexAppServerRequestModelSelection({
+        homeScope: options.appServer.start.homeScope,
         model: options.model ?? params.modelId,
         modelProvider:
           options.modelProvider ??
           resolveCodexAppServerModelProvider({
+            homeScope: options.appServer.start.homeScope,
             provider: params.provider,
             authProfileId: options.authProfileId ?? params.authProfileId,
             authProfileStore: params.authProfileStore,
@@ -336,27 +347,17 @@ export function buildCodexRuntimeThreadConfig(
     delete disabledConfig["features.apply_patch_streaming_events"];
     return disabledConfig;
   }
-  if (options.nativeCodeModeOnlyEnabled === true) {
-    const merged = expectDefined(
-      mergeCodexThreadConfigs(
-        codeModeConfig,
-        configured,
-        CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
-        CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
-        { "features.code_mode_only": true },
-      ),
-      "Codex code mode only config",
-    );
-    return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
-  }
   const merged = expectDefined(
     mergeCodexThreadConfigs(
       codeModeConfig,
       configured,
       CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
       CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
+      options.nativeCodeModeOnlyEnabled === true ? { "features.code_mode_only": true } : undefined,
     ),
-    "Codex code mode config",
+    options.nativeCodeModeOnlyEnabled === true
+      ? "Codex code mode only config"
+      : "Codex code mode config",
   );
   return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
 }

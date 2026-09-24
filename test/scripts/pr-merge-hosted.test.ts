@@ -143,7 +143,7 @@ describePosix("native hosted merge handoff", () => {
       );
       const before = f.events().length;
       const result = f.shell(
-        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null}' || exit 1`,
+        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false}' || exit 1`,
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
       const events = f.events().slice(before);
@@ -251,6 +251,7 @@ describePosix("native pending GitHub merge handoff", () => {
       replacementHead: fault === "replacement recovery" ? f.head : "",
       autoMergeRequested: fault !== "missing auto request",
       observation: null,
+      qualifiedRefusal: false,
     };
     let command = `merge_verify 42 '${JSON.stringify(verification)}'`;
     if (fault === "different gate head") {
@@ -307,7 +308,7 @@ describePosix("native pending GitHub merge handoff", () => {
         ],
       });
       const result = f.shell(
-        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":true,"observation":null}' || exit 1`,
+        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":true,"observation":null,"qualifiedRefusal":false}' || exit 1`,
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
     },
@@ -377,6 +378,8 @@ describePosix("native pending GitHub merge handoff", () => {
       f.head,
       "--body-file",
       expect.any(String),
+      "--subject",
+      "Fixture merge headline",
     ]);
     expect(events.filter((event) => event.kind === "required-checks")).toHaveLength(1);
     expect(

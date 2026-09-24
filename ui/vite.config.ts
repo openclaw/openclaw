@@ -605,6 +605,21 @@ export default function controlUiViteConfig(
     options.command === "serve"
       ? createControlUiDevGateway(process.env.OPENCLAW_UI_DEV_GATEWAY_URL)
       : undefined;
+  const staticImports = new Map<string, readonly string[]>();
+  const resolveModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
+    filename,
+    deps,
+    context,
+  ) => {
+    const pending = resolveControlUiModulePreloadDependencies(filename, deps, context);
+    if (context.hostType !== "js") {
+      return pending;
+    }
+    // The executing importer has already loaded its direct static JS imports.
+    // Keep the lazy target, its other dependencies, and Vite's CSS preloads.
+    const loaded = staticImports.get(context.hostId);
+    return loaded ? pending.filter((dep) => !loaded.includes(dep)) : pending;
+  };
   return {
     base,
     define: {
@@ -643,7 +658,7 @@ export default function controlUiViteConfig(
       sourcemap: buildInfo.release ? "hidden" : true,
       modulePreload: {
         polyfill: true,
-        resolveDependencies: resolveControlUiModulePreloadDependencies,
+        resolveDependencies: resolveModulePreloadDependencies,
       },
       rolldownOptions: {
         // Explicit groups do not absorb each other's dependencies. These settings
@@ -664,6 +679,17 @@ export default function controlUiViteConfig(
       ...(devGateway ? { proxy: devGateway.proxy } : {}),
     },
     plugins: [
+      {
+        name: "control-ui-static-import-preloads",
+        generateBundle(_options, bundle) {
+          staticImports.clear();
+          for (const chunk of Object.values(bundle)) {
+            if (chunk.type === "chunk") {
+              staticImports.set(chunk.fileName, chunk.imports);
+            }
+          }
+        },
+      },
       controlUiSocialCardPlugin(),
       controlUiLocaleModulesPlugin(),
       controlUiBrowserOnlySharedModuleAliases(),

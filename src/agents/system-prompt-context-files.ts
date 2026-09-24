@@ -73,9 +73,9 @@ export function buildProjectContextSection(files: ReturnType<typeof prepareConte
       "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
     );
   }
-  if (files.some((file) => /(?:^|\/)users\/[^/]+\/USER\.md$/.test(file.path))) {
+  if (files.some(({ file }) => file.personalUser)) {
     lines.push(
-      "The personal users/<profile-id>/USER.md applies only to the current requester and overrides conflicting shared USER.md preferences, not higher-priority rules.",
+      "The personal users/<profile-id>/USER.md belongs to this session's selected person (assigned human owner, otherwise human creator). It supplements shared USER.md and overrides conflicting shared preferences, not higher-priority rules. Other participants do not change this personal context.",
     );
   }
   lines.push("");

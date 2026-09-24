@@ -33,6 +33,10 @@ engine unchanged, and tries that engine again on the next logical turn.
 ## Memory embedding adapters
 
 - `registerMemoryCapability` is the exclusive memory-plugin API.
+- A selected memory plugin may omit `capability.runtime`, including when it
+  handles memory through its own hooks. The Memory settings page reports absent
+  host search support neutrally; this does not assess other memory integrations.
+  Plugin loading and search-runtime failures remain errors.
 - `registerMemoryCapability` may also expose `publicArtifacts.listArtifacts(...)`
   for host-managed exports. Companion plugins that enumerate those declared
   artifacts still use `listActiveMemoryPublicArtifacts(...)` from the retained

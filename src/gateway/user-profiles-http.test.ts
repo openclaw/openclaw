@@ -10,6 +10,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { repairMergedGatewayOwnerProfile } from "../state/user-profiles-owner-migration.js";
 import { UserProfileNotFoundError } from "../state/user-profiles-schema.js";
+import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
 const authorizeControlUiReadRequestOrReply = vi.hoisted(() => vi.fn());
@@ -81,13 +82,19 @@ describe("profile avatar HTTP endpoint", () => {
     getUserProfileListItem.mockReset();
     getRuntimeConfig.mockReset();
     resolveHostAccountAvatar.mockReset().mockResolvedValue(null);
-    authorizeControlUiReadRequestOrReply.mockResolvedValue({});
+    authorizeControlUiReadRequestOrReply.mockImplementation(({ res }: { res: ServerResponse }) =>
+      bindHttpResponseAuthority({}, res, () => true),
+    );
     getRuntimeConfig.mockReturnValue({
       gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
     });
   });
 
-  it("answers allowed credentialed cross-origin preflights without avatar auth", async () => {
+  it.each([
+    { controlUi: { allowedOrigins: ["https://control.example"] } },
+    { publicOrigin: "https://control.example" },
+  ])("answers credentialed avatar preflights with origin policy %j", async (gateway) => {
+    getRuntimeConfig.mockReturnValue({ gateway });
     const res = response();
     const req = {
       method: "OPTIONS",

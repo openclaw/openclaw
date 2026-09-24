@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "allow": ["discord", "feishu", "memory", "telegram", "whatsapp"],
+  "allow": ["anthropic", "google", "openai", "discord", "feishu", "memory", "telegram", "whatsapp"],
   "entries": {
     "discord": {
       "enabled": true

@@ -9,6 +9,7 @@ import {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -546,6 +547,7 @@ describe("staged worker placement result recovery", () => {
         expect(originalHarness.environments.destroy).toHaveBeenCalledOnce();
       }
 
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
       const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });

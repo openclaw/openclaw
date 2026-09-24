@@ -247,6 +247,11 @@ invocation, node connection, pairing generation, and owning lifecycle. This
 lets cleanup finish without waiting for a command timeout. It does not reopen
 admission for new requests.
 
+Operators can also inspect and answer pending questions or resolve approvals
+while the Gateway drains. These requests must belong to still-pending work
+admitted before shutdown; normal authorization checks still apply. New question
+and approval requests remain fenced.
+
 Only work that cannot finish inside the drain budget (or any run interrupted
 by a forced restart or a crash) is aborted — and before that happens, each
 affected session is marked for recovery.
@@ -479,6 +484,11 @@ state before admission, so a rejected send cannot trap the conversation in a
 "conversation changed" retry loop. Both paths preserve the session key and
 transcript. A live run or cloud worker still prevents this repair. Tombstoned
 sessions retain their separate recovery path into a new session.
+
+If recovery fails during preparation before the agent starts, the Gateway restores
+the interrupted state and releases that attempt's delivery claim. The next recovery
+attempt uses a fresh run ID while retaining the original interrupted turn and retry
+budget, so a rejected pending input cannot leave the conversation permanently busy.
 
 ## Automatic resume
 

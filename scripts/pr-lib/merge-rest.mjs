@@ -151,9 +151,14 @@ function readPolicy(repo) {
 }
 
 function readPullRequest(repo, authority, pr) {
-  const record = read(repo, `/pulls/${pr}`);
+  // Mergeability depends on the writer; pooled readers can see a different policy projection.
+  const response = parseGithubResponse(
+    execPrGh(apiArgs(repo, `/pulls/${pr}`, ["--include"]), { encoding: "utf8" }, "plain"),
+  );
+  const record = response.body;
   requireEvidence(
-    record?.number === pr &&
+    response.status === "200" &&
+      record?.number === pr &&
       nonemptyString(record.node_id) &&
       nonemptyString(record.title) &&
       record.html_url === `${repo.url}/pull/${pr}` &&
@@ -559,12 +564,6 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
   const observing = mode === "observe" || mode === "observe-admission";
   const body = mode === "merge" ? mergeBody(bodySnapshot) : undefined;
   const snapshot = beginRead(repo, pr, observing);
-  if (observing && snapshot.record.state === "open") {
-    requireRestSupport(
-      ["clean", "unknown"].includes(snapshot.record.mergeable_state),
-      "merge projection requires GraphQL admission",
-    );
-  }
   const checks =
     mode === "checks" || ((observing || mode === "merge") && snapshot.record.state === "open")
       ? requiredChecks(repo, snapshot)
@@ -577,6 +576,14 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
     snapshot.policy.requiredChecks = checks;
   }
   const current = finishRead(repo, pr, snapshot, mode === "observe");
+  if (observing && current.state === "open") {
+    // REST can still be calculating after GraphQL is ready. Select the alternate
+    // reader before retaining intent; mutation dispatch never changes transports.
+    requireRestSupport(
+      current.mergeable === true && current.mergeable_state === "clean",
+      "merge projection requires GraphQL admission",
+    );
+  }
   let result;
   if (mode === "checks") {
     result = checks;

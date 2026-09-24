@@ -1,6 +1,6 @@
 import { Value } from "typebox/value";
-import ts from "typescript";
 import { afterEach, expect, it, vi } from "vitest";
+import { typeCheckSources } from "../../test/helpers/typescript.js";
 import { addSession, appendOutput, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -15,8 +15,8 @@ import {
 } from "./code-mode.test-support.js";
 import { createLazyProcessTool } from "./lazy-process-tool.js";
 
-afterEach(() => {
-  resetCodeModeTestState();
+afterEach(async () => {
+  await resetCodeModeTestState();
   resetProcessRegistryForTests();
 });
 
@@ -90,11 +90,10 @@ it("composes lazy process actions through generated declarations and JavaScript"
   expect(declaration).toMatchObject({ status: "completed" });
   const file = declaration.value as { content: string };
   const fileName = "/process-consumer.ts";
-  const source = ts.createSourceFile(
-    fileName,
+  const source =
     file.content +
-      composition +
-      `
+    composition +
+    `
 async function checkContracts(action: "list" | "poll", input: Parameters<typeof process>[0]) {
   const poll = await process({ action: "poll", sessionId: "typed-process" });
   if (!("error" in poll)) {
@@ -130,20 +129,8 @@ async function checkContracts(action: "list" | "poll", input: Parameters<typeof 
   // @ts-expect-error Broad inputs preserve all possible output branches.
   dynamic.aggregated.toUpperCase();
 }
-`,
-    ts.ScriptTarget.ESNext,
-    true,
-  );
-  const options = { noEmit: true, strict: true, types: [], target: ts.ScriptTarget.ESNext };
-  const host = ts.createCompilerHost(options);
-  const original = host.getSourceFile.bind(host);
-  host.getSourceFile = (name, ...args) => (name === fileName ? source : original(name, ...args));
-  const program = ts.createProgram([fileName], options, host);
-  expect(
-    ts
-      .getPreEmitDiagnostics(program)
-      .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
-  ).toEqual([]);
+`;
+  expect(typeCheckSources({ [fileName]: source })).toEqual([]);
   const result = await waitUntilCompleted({
     details: resultDetails(
       await h.tools[0]!.execute("typed-process", {

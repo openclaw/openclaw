@@ -184,18 +184,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       );
       return jsonResult({ ok: true });
     }
-    case "pinMessage": {
-      if (!ctx.isActionEnabled("pins")) {
-        throw new Error("Discord pins are disabled.");
-      }
-      const channelId = ctx.resolveChannelId();
-      const messageId = readStringParam(ctx.params, "messageId", {
-        required: true,
-      });
-      await ctx.assertReadTargetAllowed({ channelId });
-      await discordMessagingActionRuntime.pinMessageDiscord(channelId, messageId, ctx.withOpts());
-      return jsonResult({ ok: true });
-    }
+    case "pinMessage":
     case "unpinMessage": {
       if (!ctx.isActionEnabled("pins")) {
         throw new Error("Discord pins are disabled.");
@@ -205,7 +194,11 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
         required: true,
       });
       await ctx.assertReadTargetAllowed({ channelId });
-      await discordMessagingActionRuntime.unpinMessageDiscord(channelId, messageId, ctx.withOpts());
+      const mutate =
+        ctx.action === "pinMessage"
+          ? discordMessagingActionRuntime.pinMessageDiscord
+          : discordMessagingActionRuntime.unpinMessageDiscord;
+      await mutate(channelId, messageId, ctx.withOpts());
       return jsonResult({ ok: true });
     }
     case "listPins": {

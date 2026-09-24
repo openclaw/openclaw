@@ -4,6 +4,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -285,9 +289,11 @@ function assertSeededAgents(snapshot) {
           );
           if (file.kind === "transcript") {
             const events = database
-              .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
+              .prepare(
+                `SELECT ${sqliteTranscriptPayloadColumns(database)} FROM transcript_events WHERE session_id = ? ORDER BY seq`,
+              )
               .all(file.sessionId)
-              .map((row) => transcriptIdentity(JSON.parse(row.event_json)));
+              .map((row) => transcriptIdentity(JSON.parse(readSqliteTranscriptPayload(row))));
             for (const expected of file.events) {
               assert.deepEqual(
                 events.find((event) => event.id === expected.id && event.type === expected.type),

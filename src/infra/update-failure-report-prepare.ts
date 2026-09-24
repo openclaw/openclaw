@@ -1,5 +1,4 @@
 /** Sanitizes and prepares one explicitly reviewed update-failure report. */
-import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import path from "node:path";
 import { valid as validSemver } from "semver";
@@ -10,11 +9,16 @@ import {
   redactSupportDiagnosticLine,
   redactSupportString,
 } from "../logging/diagnostic-support-redaction.js";
-import { classifyUpdateOutcome } from "../shared/update-outcome.js";
+import {
+  classifyUpdateOutcome,
+  UPDATE_FOREIGN_DESTINATION_REASON,
+} from "../shared/update-outcome.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { VERSION } from "../version.js";
+import { sha256Hex } from "./crypto-digest.js";
 import { prepareGithubIssue, type PreparedGithubIssue } from "./github-issue.js";
 import { normalizeUpdateChannel } from "./update-channels.js";
+import { UPDATE_DESTINATION_RECOVERY } from "./update-destination-failure.js";
 import { normalizeUpdateDoctorLintFindings } from "./update-doctor-lint.js";
 import {
   formatUpdateFailureFact,
@@ -25,6 +29,7 @@ import {
   isPublicUpdateFailureCode,
   projectPublicUpdateFailureIdentifiers,
 } from "./update-failure-public-identifiers.js";
+import { formatNpmFailureFacts } from "./update-npm-failure.js";
 import { updatePreflightDetailMessage } from "./update-preflight-details.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
@@ -39,7 +44,7 @@ import {
   updateRunReportInputFromResult,
 } from "./update-run-report.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
-import { isFailedUpdateStep } from "./update-run-step.js";
+import { isFailedUpdateStep, updateRunWarningMessages } from "./update-run-step.js";
 import type { UpdateRunResult, UpdateStepResult } from "./update-runner-types.js";
 import { resolvePublicUpdateStepId } from "./update-step-identity.js";
 
@@ -253,6 +258,9 @@ async function renderBoundedDiagnostics(
   if (input.result.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON) {
     diagnostics.push(`Advisory: ${LEGACY_UPDATE_RUN_ADVISORY}`);
   }
+  if (input.result.reason === UPDATE_FOREIGN_DESTINATION_REASON) {
+    diagnostics.push(`Next step: ${UPDATE_DESTINATION_RECOVERY}`);
+  }
   for (const finding of normalizeUpdateDoctorLintFindings(
     input.result.steps.flatMap((step) => step.doctorLintFindings ?? []),
     context.env,
@@ -300,24 +308,28 @@ async function renderBoundedDiagnostics(
           ? diagnostic
           : `${exit} (${diagnostic})`;
     diagnostics.push(`Failed phase ${phase}: ${detail}${termination}`);
+    diagnostics.push(...formatNpmFailureFacts(step.failureFacts ?? [], context));
     diagnostics.push(
       ...(await Promise.all(
-        normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env).map(async (fact) =>
-          formatUpdateFailureFact({
-            ...(await projectPublicUpdateFailureIdentifiers(fact)),
-            ...(fact.location ? { location: fact.location } : {}),
-            ...(fact.affectedKey ? { affectedKey: sanitizeFactConfigKey(fact.affectedKey) } : {}),
-            ...(fact.message
-              ? {
-                  message:
-                    updatePreflightDetailMessage(fact.code) ??
-                    (fact.errorName
-                      ? redactSupportDiagnosticLine(fact.message, context)
-                      : redactPublicSupportDiagnosticLine(fact.message, context)),
-                }
-              : {}),
-          }),
-        ),
+        normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env)
+          .filter((fact) => fact.check !== "npm")
+          .map(async (fact) =>
+            formatUpdateFailureFact({
+              ...(await projectPublicUpdateFailureIdentifiers(fact)),
+              ...(fact.location ? { location: fact.location } : {}),
+              ...(fact.destination ? { destination: fact.destination } : {}),
+              ...(fact.affectedKey ? { affectedKey: sanitizeFactConfigKey(fact.affectedKey) } : {}),
+              ...(fact.message
+                ? {
+                    message:
+                      updatePreflightDetailMessage(fact.code) ??
+                      (fact.errorName
+                        ? redactSupportDiagnosticLine(fact.message, context)
+                        : redactPublicSupportDiagnosticLine(fact.message, context)),
+                  }
+                : {}),
+            }),
+          ),
       )),
     );
   }
@@ -369,6 +381,30 @@ export async function prepareUpdateFailureReport(
   const currentHealth = verification
     ? await readUpdateRunReportHealth(verification, { env })
     : undefined;
+  const warnings = [
+    ...new Set([
+      ...(await Promise.all(
+        (input.result.postUpdate?.plugins?.warnings ?? []).slice(-3).map(async (warning) => {
+          const { code, pluginId } = await projectPublicUpdateFailureIdentifiers({
+            check: "plugin-convergence",
+            code: warning.reason,
+            pluginId: warning.pluginId,
+          });
+          const diagnostic = redactPublicSupportDiagnosticLine(
+            [warning.errorCode, warning.message].filter(Boolean).join("\n"),
+            context,
+          );
+          return `Plugin convergence (${code})${pluginId ? `; plugin ${pluginId}` : ""}: ${diagnostic}`;
+        }),
+      )),
+      ...updateRunWarningMessages([
+        ...(recordedRun?.steps ?? []),
+        ...updateRunReportInputFromResult(input.result).steps,
+      ])
+        .slice(-3)
+        .map((message) => redactPublicSupportDiagnosticLine(message, context)),
+    ]),
+  ];
   const bodyWithoutMarker = [
     "# OpenClaw update failure report",
     "",
@@ -405,15 +441,14 @@ export async function prepareUpdateFailureReport(
           "- Recovery and verification above describe the update attempt, not a current instruction to stop or restart the Gateway.",
         ]
       : []),
+    ...(warnings.length ? ["", "## Warnings", "", ...warnings.map((line) => `- ${line}`)] : []),
     "",
     "## Bounded diagnostics",
     "",
     ...(await renderBoundedDiagnostics(input, context, steps)).map((line) => `- ${line}`),
     "",
   ].join("\n");
-  const reconciliationMarker = `openclaw-update-report:${createHash("sha256")
-    .update(`${input.attemptId}\0${bodyWithoutMarker}`)
-    .digest("hex")}`;
+  const reconciliationMarker = `openclaw-update-report:${sha256Hex(`${input.attemptId}\0${bodyWithoutMarker}`)}`;
   const body = truncateUtf8Prefix(
     bodyWithoutMarker.replace(
       "This report was explicitly reviewed and confirmed in OpenClaw.\n",
@@ -429,12 +464,8 @@ export async function prepareUpdateFailureReport(
   return {
     ...issue,
     attemptId: input.attemptId,
-    previewDigest: createHash("sha256").update(issue.body).digest("hex"),
-    savedReportPath: path.join(
-      stateDir,
-      "update-reports",
-      `${createHash("sha256").update(input.attemptId).digest("hex")}.md`,
-    ),
+    previewDigest: sha256Hex(issue.body),
+    savedReportPath: path.join(stateDir, "update-reports", `${sha256Hex(input.attemptId)}.md`),
     ...(issue.browserFallback.status === "available" ? { url: issue.browserFallback.url } : {}),
   };
 }

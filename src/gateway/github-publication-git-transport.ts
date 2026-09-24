@@ -7,6 +7,7 @@ import { gitNullConfigPath } from "../infra/git-exec.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-network-retry.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { githubPublicationUnsafeConfigArgs } from "./github-publication-base.js";
+import { isGitHubPublicationWorkflowPath } from "./github-publication-workflows.js";
 
 type GitCommandOptions = {
   cwd?: string;
@@ -83,6 +84,34 @@ export function createGitHubPublicationCommandRunner(assertCurrent?: () => void)
 // bound the attribute scan dies as an output-limit "verification" failure on
 // any real repository.
 const TREE_LISTING_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
+
+export async function hasGitHubPublicationWorkflowChanges(params: {
+  cwd: string;
+  comparisonCommit: string;
+  workspaceTree: string;
+  run: typeof runPublicationCommand;
+}): Promise<boolean> {
+  const changed = await params.run(
+    [
+      "git",
+      "diff-tree",
+      "--no-commit-id",
+      "--name-only",
+      "-r",
+      "-z",
+      "--no-renames",
+      params.comparisonCommit,
+      params.workspaceTree,
+      "--",
+      ".github/workflows",
+    ],
+    { cwd: params.cwd, maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES },
+  );
+  if (changed.code !== 0) {
+    throw new Error("GitHub publication workspace workflow changes could not be verified.");
+  }
+  return changed.stdout.toString("latin1").split("\0").some(isGitHubPublicationWorkflowPath);
+}
 
 export async function assertSafeGitPublicationWorkspace(
   cwd: string,
@@ -358,10 +387,47 @@ const GITHUB_CREDENTIAL_ARGS = [
   "credential.helper=!gh auth git-credential",
 ] as const;
 
+export async function readGitHubPublicationCoauthorTrailers(params: {
+  cwd: string;
+  headCommit: string;
+  command: typeof requirePublicationCommand;
+}): Promise<string[]> {
+  const output = await params.command(
+    [
+      "git",
+      "-c",
+      "trailer.separators=:",
+      "-c",
+      "trailer.co-authored-by.key=Co-authored-by",
+      "show",
+      "-s",
+      "--format=%(trailers:key=Co-authored-by,only,unfold)",
+      params.headCommit,
+    ],
+    { cwd: params.cwd },
+  );
+  return output.split(/\r?\n/u);
+}
+
 export function appendGitHubPublicationMessage(base: string, lines: readonly string[]): string {
-  const present = new Set(base.split(/\r?\n/u).map((line) => line.trim()));
-  const missing = lines.filter((line) => !present.has(line));
-  return missing.length > 0 ? `${base.trimEnd()}\n\n${missing.join("\n")}` : base.trimEnd();
+  const footer = [...new Set(lines)].join("\n");
+  return footer ? `${base.trimEnd()}\n\n${footer}` : base.trimEnd();
+}
+
+/** Prepared commits use our terminal credit footer, never matching prose elsewhere in the message. */
+export function hasGitHubPublicationMessageFooter(
+  message: string,
+  coauthorTrailers: readonly string[],
+  publicationMarker: string,
+): boolean {
+  const lines = message.replace(/[\r\n]+$/u, "").split(/\r?\n/u);
+  const separator = lines.lastIndexOf("");
+  if (separator < 1 || lines.at(-1) !== publicationMarker) {
+    return false;
+  }
+  const actual = lines.slice(separator + 1, -1);
+  const expected = new Set(coauthorTrailers);
+  return actual.length === expected.size && [...expected].every((line) => actual.includes(line));
 }
 
 export async function assertGitHubPublicationBranchRef(
@@ -381,6 +447,7 @@ export function githubPublicationPushArgs(
   remote: string,
   headCommit: string,
   branch: string,
+  expectedRemoteHead: string,
 ): string[] {
   return [
     ...GITHUB_CREDENTIAL_ARGS,
@@ -388,6 +455,9 @@ export function githubPublicationPushArgs(
     `core.hooksPath=${os.devNull}`,
     "push",
     "--porcelain",
+    // The executor proves ancestry first. Pin that proof to this exact remote
+    // value (or absence); the lease never substitutes for the fast-forward check.
+    `--force-with-lease=refs/heads/${branch}:${expectedRemoteHead}`,
     "--no-follow-tags",
     "--recurse-submodules=no",
     "--",

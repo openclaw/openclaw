@@ -5,6 +5,7 @@ import {
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { startCodexAttemptThread } from "./attempt-startup.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
 import {
@@ -12,7 +13,6 @@ import {
   withCodexAppServerFastModeServiceTier,
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
-import { joinPresentSections } from "./run-attempt-state.js";
 import { CodexThreadPolicyHandoffError } from "./thread-policy.js";
 
 export async function startCodexAttemptRuntime(resources: CodexAttemptResources) {
@@ -112,10 +112,15 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
+      skillsInstructions: context.skillsInstructions,
       agentWorkspaceDeveloperInstructions: context.agentWorkspaceDeveloperInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
+      nativeModelAdmission: resources.nativeModelAdmission,
       nativeHookRelayRequired:
-        Boolean(resources.nativeProcessAuthority && nativeToolSurfaceEnabled) ||
+        (nativeToolSurfaceEnabled &&
+          params.pluginHarnessToolPolicyRestricted !== true &&
+          (resources.nativeProcessAuthority !== undefined ||
+            resources.nativeModelAdmission === "required")) ||
         (connection.options.nativeHookRelay?.enabled !== false &&
           params.pluginHarnessToolPolicyRestricted !== true &&
           connection.nativeHookRelayEvents.includes("pre_tool_use") &&

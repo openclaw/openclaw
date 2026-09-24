@@ -6,6 +6,8 @@ export {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
   cosineSimilarity,
+  encodeMemoryEmbedding,
+  decodeMemoryEmbedding,
   extractProjectKeysFromCuratedEntry,
   ensureDir,
   hashText,

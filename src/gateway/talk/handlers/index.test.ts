@@ -111,7 +111,7 @@ const mocks = vi.hoisted(() => ({
     async (): Promise<string | undefined> => undefined,
   ),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-agent-workspace"),
-  readSessionPreviewItemsFromTranscript: vi.fn(() => [
+  readSessionPreviewItemsFromTranscriptAsync: vi.fn(() => [
     { role: "user", text: "Earlier question" },
     { role: "assistant", text: "Earlier answer" },
     { role: "tool", text: "internal tool output" },
@@ -216,7 +216,7 @@ vi.mock("../../../agents/agent-scope.js", async (importOriginal) => {
 });
 
 vi.mock("../../session-transcript-preview.js", () => ({
-  readSessionPreviewItemsFromTranscript: mocks.readSessionPreviewItemsFromTranscript,
+  readSessionPreviewItemsFromTranscriptAsync: mocks.readSessionPreviewItemsFromTranscriptAsync,
 }));
 
 vi.mock("../../../talk/client-voice-session.js", async (importOriginal) => {
@@ -3529,7 +3529,7 @@ describe("talk.client.create handler", () => {
 
   it("uses talk.realtime provider, model, voice, and instructions without reading speech provider config", async () => {
     mocks.resolveRealtimeBootstrapContextInstructions.mockResolvedValue("Bounded profile context.");
-    mocks.readSessionPreviewItemsFromTranscript.mockReturnValueOnce([
+    mocks.readSessionPreviewItemsFromTranscriptAsync.mockReturnValueOnce([
       { role: "user", text: "0:old small item" },
       { role: "assistant", text: `1:${"🙂".repeat(799)}` },
       { role: "tool", text: "internal tool output" },
@@ -3648,7 +3648,7 @@ describe("talk.client.create handler", () => {
         assertCommitAllowed: expect.any(Function),
       }),
     );
-    expect(mocks.readSessionPreviewItemsFromTranscript).toHaveBeenCalledWith(
+    expect(mocks.readSessionPreviewItemsFromTranscriptAsync).toHaveBeenCalledWith(
       {
         agentId: "main",
         sessionId: "session-main",

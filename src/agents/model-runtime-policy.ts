@@ -18,7 +18,7 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
-import { resolveAgentEntry } from "./agent-scope-config.js";
+import { resolveAgentEntry, resolveNativeModelPrimary } from "./agent-scope-config.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { resolveProviderModelRouteAuthRequirement } from "./provider-model-route-auth.js";
@@ -319,10 +319,9 @@ export function resolveModelRouteIntent(
     return undefined;
   }
   const agentId = resolveAgentRuntimePolicyAgentId(params);
-  const agentEntry = agentId ? resolveAgentEntry(params.config, agentId) : undefined;
-  const primary =
-    resolveAgentModelPrimaryValue(agentEntry?.model) ??
-    resolveAgentModelPrimaryValue(params.config.agents?.defaults?.model);
+  const primary = agentId
+    ? resolveNativeModelPrimary(params.config, agentId)
+    : resolveAgentModelPrimaryValue(params.config.agents?.defaults?.model);
   const primarySelection = primary ? splitTrailingAuthProfile(primary) : undefined;
   const primaryRef = params.primaryModel
     ? {

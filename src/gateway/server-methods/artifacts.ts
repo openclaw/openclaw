@@ -24,6 +24,7 @@ import {
   ASSISTANT_DISPLAY_CONTENT_FIELD,
   readAssistantDisplayContent,
 } from "../../shared/assistant-display-content.js";
+import { createArtifactDownload } from "../artifact-downloads.js";
 import {
   parseManagedOutgoingArtifactId,
   resolveManagedOutgoingMediaArtifactDownload,
@@ -44,6 +45,7 @@ import {
 import { readArtifactImagePage } from "./artifacts-image-page.js";
 import {
   ArtifactSessionResolutionError,
+  artifactResponseIsCurrent,
   type ArtifactQuery,
   prepareArtifactSessionResolution,
 } from "./artifacts-session-resolution.js";
@@ -297,6 +299,7 @@ async function loadArtifacts(
   sessionKey?: string;
   nextCursor?: string;
   omittedOversized?: boolean;
+  assertCurrent?: () => void;
 }> {
   const resolveSession = await prepareArtifactSessionResolution(query);
   const resolved = resolveSession(getRuntimeConfig(), client);
@@ -312,6 +315,31 @@ async function loadArtifacts(
   if (!sessionId || !storePath) {
     return { sessionKey, artifacts: [] };
   }
+  const lifecycleRevision = entry.lifecycleRevision;
+  const assertCurrent = () => {
+    const authorized = resolveSession(getRuntimeConfig(), client);
+    const current = loadGatewaySessionEntryReadOnly(
+      sessionKey,
+      unscopedAgentId ? { agentId: unscopedAgentId } : {},
+    );
+    if (
+      authorized?.sessionKey !== sessionKey ||
+      authorized.agentId !== resolved.agentId ||
+      current.storePath !== storePath ||
+      current.entry?.sessionId !== sessionId ||
+      current.entry.lifecycleRevision !== lifecycleRevision
+    ) {
+      throw new ArtifactSessionResolutionError(
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "session changed while reading artifact; reload the conversation",
+          {
+            retryable: true,
+          },
+        ),
+      );
+    }
+  };
   const artifacts: ArtifactRecord[] = [];
   const collection = { artifacts, count: 0 };
   const scope = {
@@ -353,7 +381,8 @@ async function loadArtifacts(
           .toReversed();
       },
     });
-    return { ...page, sessionKey };
+    assertCurrent();
+    return { ...page, sessionKey, assertCurrent };
   }
   const downloadIds = opts.downloadArtifactId ? new Set([opts.downloadArtifactId]) : undefined;
   const queuedKey =
@@ -373,7 +402,9 @@ async function loadArtifacts(
   const queued = queuedKey ? queuedArtifactDownloads.get(queuedKey) : undefined;
   if (queued && opts.downloadArtifactId) {
     queued.ids.add(opts.downloadArtifactId);
-    return queued.result;
+    const loaded = await queued.result;
+    assertCurrent();
+    return { ...loaded, assertCurrent };
   }
   const collect = async () => {
     // Close before target resolution or snapshot acquisition, including empty/error reads.
@@ -396,12 +427,14 @@ async function loadArtifacts(
     });
     return { sessionKey, artifacts };
   };
-  if (!queuedKey || !downloadIds) {
-    return collect();
+  const result = queuedKey && downloadIds ? Promise.resolve().then(collect) : collect();
+  if (queuedKey && downloadIds) {
+    queuedArtifactDownloads.set(queuedKey, { ids: downloadIds, result });
   }
-  const result = Promise.resolve().then(collect);
-  queuedArtifactDownloads.set(queuedKey, { ids: downloadIds, result });
-  return result;
+  // Queued scans share data; each caller retains its own disclosure authority.
+  const loaded = await result;
+  assertCurrent();
+  return { ...loaded, assertCurrent };
 }
 
 function requireQueryable(params: ArtifactQuery, respond: RespondFn): boolean {
@@ -466,25 +499,13 @@ async function findArtifact(
   return {
     sessionKey: loaded.sessionKey,
     artifact: loaded.artifacts.find((artifact) => artifact.id === params.artifactId),
+    assertCurrent: loaded.assertCurrent,
   };
 }
 
 function toSummary(artifact: ArtifactRecord): ArtifactSummary {
   const { data: _dataValue, url: _url, ...summary } = artifact;
   return summary;
-}
-
-function artifactResponseIsCurrent(found: ArtifactLookup, respond: RespondFn): boolean {
-  try {
-    found.assertCurrent?.();
-    return true;
-  } catch (error) {
-    if (!(error instanceof ArtifactSessionResolutionError)) {
-      throw error;
-    }
-    respond(false, undefined, error.shape);
-    return false;
-  }
 }
 
 async function respondManagedArtifactDownload(
@@ -649,6 +670,34 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         }),
       );
       return;
+    }
+    if (query.transport === "http") {
+      const assertArtifactCurrent = found.value.assertCurrent;
+      const download = createArtifactDownload({
+        client,
+        artifact,
+        assertCurrent: () => {
+          assertCurrent();
+          assertArtifactCurrent?.();
+        },
+        read: async () => {
+          const current = await findArtifact(
+            query,
+            getRuntimeConfig,
+            { downloadArtifactId: query.artifactId },
+            client,
+          );
+          current.assertCurrent?.();
+          return current.artifact;
+        },
+      });
+      if (download) {
+        respond(true, {
+          artifact: { ...toSummary(artifact), download: { mode: "url" as const } },
+          ...download,
+        });
+        return;
+      }
     }
     const managedUrl =
       artifact.download.mode === "url" && artifact.url && artifact.sessionKey

@@ -333,8 +333,15 @@ function modelArrayIds(value: unknown): Set<string> | null {
   return ids;
 }
 
-function mergeModelArrays(existing: unknown[], patch: unknown[]): unknown[] {
+type ConfigMergeResult = { value: unknown; suppliedPaths: PathSegment[][] };
+
+function mergeModelArrays(
+  existing: unknown[],
+  patch: unknown[],
+  path: PathSegment[],
+): ConfigMergeResult {
   const merged = [...existing];
+  const suppliedPaths: PathSegment[][] = [];
   const indexById = new Map<string, number>();
   for (const [index, entry] of merged.entries()) {
     if (isPlainRecord(entry) && typeof entry.id === "string" && entry.id.trim()) {
@@ -343,6 +350,7 @@ function mergeModelArrays(existing: unknown[], patch: unknown[]): unknown[] {
   }
   for (const entry of patch) {
     if (!isPlainRecord(entry) || typeof entry.id !== "string" || !entry.id.trim()) {
+      suppliedPaths.push([...path, String(merged.length)]);
       merged.push(entry);
       continue;
     }
@@ -350,13 +358,17 @@ function mergeModelArrays(existing: unknown[], patch: unknown[]): unknown[] {
     const existingIndex = indexById.get(id);
     if (existingIndex === undefined) {
       indexById.set(id, merged.length);
+      suppliedPaths.push([...path, String(merged.length)]);
       merged.push(entry);
       continue;
     }
     const existingEntry = merged[existingIndex];
     merged[existingIndex] = isPlainRecord(existingEntry) ? { ...existingEntry, ...entry } : entry;
+    for (const key of Object.keys(entry)) {
+      suppliedPaths.push([...path, String(existingIndex), key]);
+    }
   }
-  return merged;
+  return { value: merged, suppliedPaths };
 }
 
 function isProviderModelListPath(path: PathSegment[]): boolean {
@@ -382,6 +394,14 @@ function toMergePath(path: PathSegment[]): MergePath | undefined {
   return current;
 }
 
+function mergePathSegments(path: MergePath): PathSegment[] {
+  const segments: PathSegment[] = [];
+  for (let current: MergePath | undefined = path; current; current = current.parent) {
+    segments.push(current.segment);
+  }
+  return segments.toReversed();
+}
+
 function isProviderModelListMergePath(path: MergePath): boolean {
   const provider = path.parent;
   const providers = provider?.parent;
@@ -394,12 +414,17 @@ function isProviderModelListMergePath(path: MergePath): boolean {
   );
 }
 
-function mergeConfigValue(existing: unknown, patch: unknown, path: PathSegment[]): unknown {
+function mergeConfigValue(
+  existing: unknown,
+  patch: unknown,
+  path: PathSegment[],
+): ConfigMergeResult {
   if (isProviderModelListPath(path) && Array.isArray(existing) && Array.isArray(patch)) {
-    return mergeModelArrays(existing, patch);
+    return mergeModelArrays(existing, patch, path);
   }
   if (isPlainRecord(existing) && isPlainRecord(patch)) {
     const next: Record<string, unknown> = { ...existing };
+    const suppliedPaths: PathSegment[][] = [];
     // Linked paths keep deep merges linear while preserving descendant-specific merge policy.
     const pending = [{ target: next, patch, path: toMergePath(path) }];
     while (pending.length > 0) {
@@ -413,7 +438,9 @@ function mergeConfigValue(existing: unknown, patch: unknown, path: PathSegment[]
           Array.isArray(current) &&
           Array.isArray(value)
         ) {
-          frame.target[key] = mergeModelArrays(current, value);
+          const merged = mergeModelArrays(current, value, mergePathSegments(childPath));
+          frame.target[key] = merged.value;
+          suppliedPaths.push(...merged.suppliedPaths);
         } else if (
           hasOwnPathKey(frame.target, key) &&
           isPlainRecord(current) &&
@@ -424,10 +451,11 @@ function mergeConfigValue(existing: unknown, patch: unknown, path: PathSegment[]
           pending.push({ target: child, patch: value, path: childPath });
         } else {
           frame.target[key] = value;
+          suppliedPaths.push(mergePathSegments(childPath));
         }
       }
     }
-    return next;
+    return { value: next, suppliedPaths };
   }
   throw new Error(`Cannot merge ${toDotPath(path)}; use --replace to replace intentionally.`);
 }
@@ -437,14 +465,13 @@ export function mergeAtPath(
   path: PathSegment[],
   value: unknown,
   options?: SetAtPathOptions,
-): void {
+): PathSegment[][] {
   const existing = getAtPath(root, path);
-  setAtPath(
-    root,
-    path,
-    existing.found ? mergeConfigValue(existing.value, value, path) : value,
-    options,
-  );
+  const merged = existing.found
+    ? mergeConfigValue(existing.value, value, path)
+    : { value, suppliedPaths: [path] };
+  setAtPath(root, path, merged.value, options);
+  return merged.suppliedPaths;
 }
 
 function isProtectedMapReplacementPath(path: PathSegment[]): boolean {

@@ -12,6 +12,7 @@ import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createPrivateHandoffStoreFixture } from "./pr-private-handoff.test-support.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -24,8 +25,10 @@ function shellQuote(value: string): string {
 function createFixtureGit(root: string) {
   const home = join(root, "home");
   mkdirSync(home);
+  const handoff = createPrivateHandoffStoreFixture(home);
   const env: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH,
+    ...handoff.env,
+    PATH: handoff.env.PATH,
     HOME: home,
     TMPDIR: root,
     GIT_CONFIG_GLOBAL: "/dev/null",
@@ -45,7 +48,7 @@ function createFixtureGit(root: string) {
     }
     return result.stdout.trim();
   }
-  return { env, realGit, git };
+  return { env, realGit, git, handoff };
 }
 
 function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean) {
@@ -102,7 +105,11 @@ function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean
 // transport faults, and GitHub responses are synthetic.
 export function createMainRefreshFixture(
   directory: string,
-  options: { perWorktreeConfig?: boolean; partialCloneFilter?: string } = {},
+  options: {
+    perWorktreeConfig?: boolean;
+    partialCloneFilter?: string;
+    precreateWorktree?: boolean;
+  } = {},
 ) {
   // Existing regression fixtures retain worktreeConfig; acceleration starts with
   // a distinct pristine fixture, never a shared-config reset after sparse use.
@@ -121,7 +128,8 @@ export function createMainRefreshFixture(
   const worktree = join(canonical, ".worktrees", "pr-42");
   const bin = join(root, "bin");
   mkdirSync(bin);
-  const { env, realGit, git } = createFixtureGit(root);
+  const { env, realGit, git, handoff } = createFixtureGit(root);
+  const privateNodeOptions = env.NODE_OPTIONS;
   const { main, head, sameTreeHead, movedMain, gateMain } = template;
   const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
   cpSync(template.origin, origin, copyOptions);
@@ -154,10 +162,8 @@ export function createMainRefreshFixture(
     `url.${origin}.insteadOf`,
     "https://github.com/fixture/repo.git",
   );
-  git(canonical, "worktree", "add", "--detach", worktree, head);
   linkPrWrapperDependencies(canonical);
   const local = join(worktree, ".local");
-  mkdirSync(local);
   const metadata = {
     id: "fixture-pr",
     number: 42,
@@ -190,50 +196,55 @@ export function createMainRefreshFixture(
     deletions: 1,
     files: [{ path: "src/subject.ts", additions: 1, deletions: 1, changeType: "MODIFIED" }],
   };
-  writeFileSync(join(local, "pr-meta.json"), JSON.stringify(metadata));
-  writeFileSync(
-    join(local, "pr-meta.env"),
-    `PR_NUMBER=42\nPR_URL=https://example.invalid/pr/42\nPR_AUTHOR=fixture\nPR_BASE=main\nPR_HEAD=topic\nPR_HEAD_SHA=${head}\nPR_HEAD_REPO_URL=${origin}\n`,
-  );
-  writeFileSync(join(local, "review-mode.env"), "REVIEW_MODE=pr\n");
-  writeFileSync(
-    join(local, "review.md"),
-    [
-      `Review artifact for PR #42 at ${head}`,
-      ..."ABCDEFGHIJ".split("").map((letter) => `${letter}) Synthetic evidence.`),
-    ].join("\n"),
-  );
-  writeFileSync(
-    join(local, "review.json"),
-    JSON.stringify({
-      pr: { number: 42, headSha: head },
-      recommendation: "READY FOR /prepare-pr",
-      findings: [],
-      nitSweep: { performed: true, status: "none", summary: "No optional nits." },
-      behavioralSweep: {
-        performed: true,
-        status: "pass",
-        summary: "Synthetic tooling fixture.",
-        silentDropRisk: "none",
-        branches: [
-          {
-            path: "src/subject.ts",
-            decision: "synthetic change",
-            outcome: "reviewed fixture value",
-          },
-        ],
-      },
-      issueValidation: {
-        performed: true,
-        source: "pr_body",
-        status: "valid",
-        summary: "Synthetic fixture.",
-      },
-      tests: { ran: ["synthetic local proof"], gaps: [], result: "pass" },
-      docs: "not_applicable",
-      changelog: "not_required",
-    }),
-  );
+  mkdirSync(join(canonical, ".worktrees"), { recursive: true });
+  if (options.precreateWorktree !== false) {
+    git(canonical, "worktree", "add", "--detach", worktree, head);
+    mkdirSync(local);
+    writeFileSync(join(local, "pr-meta.json"), JSON.stringify(metadata));
+    writeFileSync(
+      join(local, "pr-meta.env"),
+      `PR_NUMBER=42\nPR_URL=https://example.invalid/pr/42\nPR_AUTHOR=fixture\nPR_BASE=main\nPR_HEAD=topic\nPR_HEAD_SHA=${head}\nPR_HEAD_REPO_URL=${origin}\n`,
+    );
+    writeFileSync(join(local, "review-mode.env"), "REVIEW_MODE=pr\n");
+    writeFileSync(
+      join(local, "review.md"),
+      [
+        `Review artifact for PR #42 at ${head}`,
+        ..."ABCDEFGHIJ".split("").map((letter) => `${letter}) Synthetic evidence.`),
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(local, "review.json"),
+      JSON.stringify({
+        pr: { number: 42, headSha: head },
+        recommendation: "READY FOR /prepare-pr",
+        findings: [],
+        nitSweep: { performed: true, status: "none", summary: "No optional nits." },
+        behavioralSweep: {
+          performed: true,
+          status: "pass",
+          summary: "Synthetic tooling fixture.",
+          silentDropRisk: "none",
+          branches: [
+            {
+              path: "src/subject.ts",
+              decision: "synthetic change",
+              outcome: "reviewed fixture value",
+            },
+          ],
+        },
+        issueValidation: {
+          performed: true,
+          source: "pr_body",
+          status: "valid",
+          summary: "Synthetic fixture.",
+        },
+        tests: { ran: ["synthetic local proof"], gaps: [], result: "pass" },
+        docs: "not_applicable",
+        changelog: "not_required",
+      }),
+    );
+  }
   const controlFile = join(root, "control.json");
   const eventsFile = join(root, "events.jsonl");
   const control = {
@@ -521,6 +532,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
         headRefOid: control.metadata.headRefOid,
         author: { ...control.metadata.author, __typename: 'User' },
         isMergeQueueEnabled: control.metadata.isMergeQueueEnabled,
+        viewerMergeHeadlineText: 'Fixture merge headline',
         viewerMergeBodyText: 'Reviewed fixture body',
       } } } };
     } else if (args.some(arg => arg.includes('ref(qualifiedName:'))) {
@@ -740,6 +752,7 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
     gateMain,
     env,
     git,
+    assertPrivateHandoffVerified: () => handoff.assertProvisionersInjected(),
     metadata,
     seedPreparedMerge() {
       // Merge-only cases need prepared inputs, not another prepare/gates/push run.
@@ -762,11 +775,10 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
     },
     configure(update: Partial<typeof control>) {
       Object.assign(control, update);
-      if (control.hostedCi === "scheduled") {
-        delete env.NODE_OPTIONS;
-      } else {
-        env.NODE_OPTIONS = `--import=${clock}`;
-      }
+      env.NODE_OPTIONS =
+        control.hostedCi === "scheduled"
+          ? privateNodeOptions
+          : `${privateNodeOptions} --import=${pathToFileURL(clock).href}`;
       writeFileSync(controlFile, JSON.stringify(control));
     },
     events() {

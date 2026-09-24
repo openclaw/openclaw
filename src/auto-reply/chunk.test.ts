@@ -230,6 +230,13 @@ describe("chunkText", () => {
   ]);
 });
 
+describe("chunkByParagraph code boundaries", () => {
+  it("leaves oversized indented code intact for a render-aware chunker", () => {
+    const text = `    ${"A".repeat(128)}\n\n    ${"B".repeat(128)}`;
+    expect(chunkByParagraph(text, 256, { splitLongParagraphs: false })).toEqual([text]);
+  });
+});
+
 describe("chunkByParagraph Unicode line/paragraph separators", () => {
   it.each([
     {

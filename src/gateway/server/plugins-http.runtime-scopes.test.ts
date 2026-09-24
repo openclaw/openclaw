@@ -18,7 +18,10 @@ import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../../stat
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setControlUiPluginAuthCookie } from "../control-ui-plugin-auth-cookie.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
-import { authorizeControlUiPluginCookieRequest } from "../http-auth-plugin-cookie.js";
+import {
+  authorizeControlUiPluginCookieRequest,
+  resolveControlUiPluginAuthCookieGeneration,
+} from "../http-auth-plugin-cookie.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "../method-scopes.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
@@ -217,6 +220,69 @@ describe("plugin HTTP route runtime scopes", () => {
     expect(res.statusCode).toBe(200);
     expect(log.warn).not.toHaveBeenCalled();
   });
+
+  it.each(["unchanged", "request policy", "visitor grant"] as const)(
+    "rechecks both authorities before the next matched route after %s changes",
+    async (changed) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const grant = new AbortController();
+      let current = true;
+      const nextRoute = vi.fn(() => true);
+      const handler = createPluginRequestHandler({
+        routes: [
+          createRoute({
+            path: SECURE_HOOK_PATH,
+            auth: "gateway",
+            handler: async () => {
+              expect(getPluginRuntimeGatewayRequestScope()?.signal).toBe(grant.signal);
+              entered.resolve();
+              await release.promise;
+              return false;
+            },
+          }),
+          createRoute({
+            path: SECURE_HOOK_PATH,
+            match: "prefix",
+            auth: "gateway",
+            handler: nextRoute,
+          }),
+        ],
+      });
+      const pending = dispatchPluginRequest(handler, {
+        path: SECURE_HOOK_PATH,
+        authContext: {
+          gatewayAuthSatisfied: true,
+          gatewayRequestOperatorScopes: ["operator.write"],
+          gatewayRequestAuth: {
+            trustDeclaredOperatorScopes: true,
+            hasCurrentClientAuthority: () => current,
+            operatorAccessAuthority: {
+              signal: grant.signal,
+              assertCurrent: () => grant.signal.throwIfAborted(),
+            },
+          },
+        },
+      });
+      try {
+        await Promise.race([
+          entered.promise,
+          pending.then(() => {
+            throw new Error("request ended before the first route prepared");
+          }),
+        ]);
+        if (changed === "request policy") {
+          current = false;
+        } else if (changed === "visitor grant") {
+          grant.abort();
+        }
+      } finally {
+        release.resolve();
+      }
+      expect((await pending).handled).toBe(true);
+      expect(nextRoute).toHaveBeenCalledTimes(changed === "unchanged" ? 1 : 0);
+    },
+  );
 
   it("threads plugin route identity and gateway dispatch entitlement into runtime scope", async () => {
     let observed:
@@ -686,6 +752,13 @@ async function withCookieSessionReader(
     readerId: string;
     ownerEmail: string;
     dispatch: (method: SessionReadMethod, key?: string) => ReturnType<typeof dispatchGatewayMethod>;
+    dispatchHttp: (
+      method: SessionReadMethod,
+      key?: string,
+    ) => Promise<{
+      statusCode: number;
+      result: Awaited<ReturnType<typeof dispatchGatewayMethod>> | undefined;
+    }>;
     blockCatalog: () => { entered: Promise<void>; release: () => void };
   }) => Promise<void>,
 ) {
@@ -753,25 +826,22 @@ async function withCookieSessionReader(
         });
         bindSessionRowProjection(context, () => projection);
         const cookieResponse = makeMockHttpResponse();
-        setControlUiPluginAuthCookie(
-          cookieResponse.res,
-          [
-            {
-              pluginId: "route",
-              path: SECURE_HOOK_PATH,
-              match: "exact",
-              scopes: ["operator.read"],
-            },
-          ],
-          { generation: "http-generation", profileId: reader.id },
-        );
-        const header = cookieResponse.setHeader.mock.calls.at(-1)?.[1];
-        const value = Array.isArray(header) ? header[0] : header;
+        const grant = {
+          pluginId: "route",
+          path: SECURE_HOOK_PATH,
+          match: "exact" as const,
+          scopes: ["operator.read" as const],
+        };
+        setControlUiPluginAuthCookie(cookieResponse.res, [grant], {
+          generation: resolveControlUiPluginAuthCookieGeneration("http-generation", config),
+          profileId: reader.id,
+        });
+        const value = cookieResponse.setHeader.mock.calls.at(-1)?.[1]?.[0];
         if (typeof value !== "string") {
           throw new Error("expected signed HTTP plugin cookie");
         }
         const cookie = value.split(";", 1)[0]!;
-        const dispatch = async (method: SessionReadMethod, key = "agent:main:shared") => {
+        const dispatchHttp = async (method: SessionReadMethod, key = "agent:main:shared") => {
           let result: Awaited<ReturnType<typeof dispatchGatewayMethod>> | undefined;
           const handler = createPluginRequestHandler({
             getGatewayRequestContext: () => context,
@@ -808,7 +878,11 @@ async function withCookieSessionReader(
               gatewayRequestOperatorScopes: authorized!.operatorScopes,
             }),
           ).toBe(true);
-          expect(response.res.statusCode).toBe(200);
+          return { statusCode: response.res.statusCode, result };
+        };
+        const dispatch = async (method: SessionReadMethod, key?: string) => {
+          const { statusCode, result } = await dispatchHttp(method, key);
+          expect(statusCode).toBe(200);
           if (!result) {
             throw new Error("plugin handler did not dispatch the session read");
           }
@@ -820,6 +894,7 @@ async function withCookieSessionReader(
             readerId: reader.id,
             ownerEmail,
             dispatch,
+            dispatchHttp,
             blockCatalog: () => {
               catalogGate = createDeferred();
               catalogEntered = createDeferred();
@@ -959,24 +1034,28 @@ describe("plugin HTTP authenticated session reads", () => {
   );
 
   it("withdraws foreign-session access during HTTP projection readiness", async () => {
-    await withCookieSessionReader(true, async ({ readerId, dispatch, blockCatalog }) => {
-      expectSessionKeys(await dispatch("sessions.list"), [
-        "agent:main:own-draft",
-        "agent:main:shared",
-      ]);
-      const gate = blockCatalog();
-      const pending = dispatch("sessions.list");
-      try {
-        await gate.entered;
-        setUserProfileRole(readerId, "blocked");
-        invalidateOperatorRolePolicy(readerId);
-        gate.release();
-        expectSessionKeys(await pending, ["agent:main:own-draft"]);
-        expect(await dispatch("sessions.describe")).toMatchObject({ ok: false });
-      } finally {
-        gate.release();
-        await pending;
-      }
-    });
+    await withCookieSessionReader(
+      true,
+      async ({ readerId, dispatch, dispatchHttp, blockCatalog }) => {
+        expectSessionKeys(await dispatch("sessions.list"), [
+          "agent:main:own-draft",
+          "agent:main:shared",
+        ]);
+        const gate = blockCatalog();
+        const pending = dispatchHttp("sessions.list");
+        try {
+          await gate.entered;
+          setUserProfileRole(readerId, "blocked");
+          invalidateOperatorRolePolicy(readerId);
+          gate.release();
+          expect(await pending).toEqual({ statusCode: 500, result: undefined });
+          expectSessionKeys(await dispatch("sessions.list"), ["agent:main:own-draft"]);
+          expect(await dispatch("sessions.describe")).toMatchObject({ ok: false });
+        } finally {
+          gate.release();
+          await pending;
+        }
+      },
+    );
   });
 });

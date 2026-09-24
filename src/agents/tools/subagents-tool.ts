@@ -3,6 +3,7 @@
  *
  * Lists and cancels background work in the caller's session tree.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Type } from "typebox";
 import { resolveAcpSessionControlOwner } from "../../acp/runtime/session-control-owner.js";
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
@@ -32,13 +33,20 @@ import {
 } from "../subagents/registry/subagent-control-scope.js";
 import {
   DEFAULT_RECENT_MINUTES,
-  listControlledSubagentRuns,
+  buildControlledSubagentRunsReadContext,
   MAX_RECENT_MINUTES,
   resolveSubagentController,
 } from "../subagents/registry/subagent-control.js";
-import { buildSubagentList } from "../subagents/registry/subagent-list.js";
-import { buildLatestSubagentRunReadIndex } from "../subagents/registry/subagent-registry-read.js";
-import { onSubagentRegistryPersisted } from "../subagents/registry/subagent-registry-state.js";
+import {
+  buildSubagentList,
+  readSubagentListSessionEntries,
+} from "../subagents/registry/subagent-list.js";
+import { buildLatestSubagentSessionListReadIndex } from "../subagents/registry/subagent-registry-read.js";
+import {
+  getSubagentSessionListReadSnapshotIdentity,
+  onSubagentRegistryPersisted,
+  prepareSubagentSessionListReadCache,
+} from "../subagents/registry/subagent-registry-state.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
@@ -57,7 +65,13 @@ const SubagentsToolSchema = Type.Object({
   recentMinutes: optionalPositiveIntegerSchema(),
   taskId: Type.Optional(Type.String({ description: "Task id" })),
   taskIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 32 })),
-  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0, maximum: 60 })),
+  timeoutSeconds: Type.Optional(
+    Type.Integer({
+      minimum: 0,
+      maximum: 60,
+      description: "Wait duration in integer seconds, 0–60 (default: 30). Use 0 for a snapshot.",
+    }),
+  ),
 });
 
 const STATUS_MAP: Record<TaskStatus, string> = {
@@ -120,7 +134,7 @@ function readTaskTree(
   const subagentReadIndex =
     subagentOwnership === "retained"
       ? undefined
-      : buildLatestSubagentRunReadIndex(
+      : buildLatestSubagentSessionListReadIndex(
           tasks.flatMap((task) =>
             task.runtime === "subagent" && task.childSessionKey ? [task.childSessionKey] : [],
           ),
@@ -234,6 +248,8 @@ function waitForSelectedTasks(params: {
   timeoutMs: number;
   signal?: AbortSignal;
 }) {
+  // A publisher's temporary scope must not own preparation started by its wake.
+  const inWaitContext = AsyncLocalStorage.snapshot();
   const read = () => {
     const visible = new Map(params.readTasks().map((task) => [task.taskId, task]));
     const tasks = params.taskIds.flatMap((taskId) => {
@@ -266,39 +282,60 @@ function waitForSelectedTasks(params: {
   };
   return new Promise<ReturnType<typeof read>>((resolve, reject) => {
     let settled = false;
+    let preparation: Promise<void> | undefined;
+    let timedOut = params.timeoutMs === 0;
+    let abortError: Error | undefined;
     let unsubscribe = () => {};
-    const finish = (error?: Error, timeout = false) => {
-      if (settled) {
-        return;
-      }
-      try {
-        const state = error ? undefined : read();
-        if (!error && !timeout && !state?.reason) {
+    const cleanup = () => {
+      unsubscribe();
+      clearTimeout(timer);
+      params.signal?.removeEventListener("abort", onAbort);
+    };
+    const fail = (error: unknown) => {
+      settled = true;
+      cleanup();
+      reject(error instanceof Error ? error : new Error(String(error), { cause: error }));
+    };
+    const finish = () =>
+      inWaitContext(() => {
+        if (settled || preparation) {
           return;
         }
-        settled = true;
-        unsubscribe();
-        clearTimeout(timer);
-        params.signal?.removeEventListener("abort", onAbort);
-        if (error) {
-          reject(error);
-        } else if (state) {
+        try {
+          if (abortError) {
+            fail(abortError);
+            return;
+          }
+          if (!getSubagentSessionListReadSnapshotIdentity()) {
+            preparation = prepareSubagentSessionListReadCache();
+            void preparation.then(
+              () => {
+                preparation = undefined;
+                finish();
+              },
+              (error: unknown) => {
+                preparation = undefined;
+                fail(error);
+              },
+            );
+            return;
+          }
+          const state = read();
+          if (!timedOut && !state.reason) {
+            return;
+          }
+          settled = true;
+          cleanup();
           resolve({ ...state, reason: state.reason ?? "timeout" });
+        } catch (error) {
+          fail(error);
         }
-      } catch (readError) {
-        settled = true;
-        unsubscribe();
-        clearTimeout(timer);
-        params.signal?.removeEventListener("abort", onAbort);
-        reject(
-          readError instanceof Error
-            ? readError
-            : new Error(String(readError), { cause: readError }),
-        );
-      }
+      });
+    const onAbort = () => {
+      abortError = createAbortError("subagents wait aborted; tasks continue running.");
+      // Accepted preparation keeps custody until both the read and cleanup settle.
+      finish();
     };
-    const onAbort = () =>
-      finish(createAbortError("subagents wait aborted; tasks continue running."));
     let wakeQueued = false;
     const wake = () => {
       if (wakeQueued || settled) {
@@ -326,12 +363,15 @@ function waitForSelectedTasks(params: {
       unsubscribeSubagents();
     };
     params.signal?.addEventListener("abort", onAbort, { once: true });
-    const timer = setTimeout(() => finish(undefined, true), params.timeoutMs);
+    const timer = setTimeout(() => {
+      timedOut = true;
+      finish();
+    }, params.timeoutMs);
     if (params.signal?.aborted) {
       onAbort();
     } else {
       // Subscribe before reading so completion cannot be lost between those operations.
-      finish(undefined, params.timeoutMs === 0);
+      finish();
     }
   });
 }
@@ -399,6 +439,9 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         recentMinutesRaw === undefined
           ? DEFAULT_RECENT_MINUTES
           : Math.min(MAX_RECENT_MINUTES, recentMinutesRaw);
+      while (!getSubagentSessionListReadSnapshotIdentity()) {
+        await prepareSubagentSessionListReadCache();
+      }
       const prepared =
         !opts.listTasks && (action === "list" || action === "wait")
           ? await prepareTaskRegistryRead()
@@ -487,15 +530,15 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
       ).tasks;
 
       if (action === "list") {
-        const runs = listControlledSubagentRuns(
+        const readContext = await buildControlledSubagentRunsReadContext(
           controller.controllerSessionKey,
           controllerAgentId,
           cfg,
+          recentMinutes,
         );
         const list = buildSubagentList({
-          cfg,
-          runs,
-          recentMinutes,
+          context: readContext.list,
+          sessionEntries: readSubagentListSessionEntries(cfg, readContext.list),
         });
         const cutoff = Date.now() - recentMinutes * 60_000;
         const tasks = treeTasks
@@ -542,7 +585,13 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         const result = await withTaskCancellationContext(
           assertCancellationControl,
           () => (opts.cancelTask ?? cancelDetachedTaskRunById)({ cfg, taskId }),
-          target,
+          {
+            selectedTask: target,
+            prepareRead: () =>
+              getSubagentSessionListReadSnapshotIdentity()
+                ? undefined
+                : prepareSubagentSessionListReadCache(),
+          },
         );
         return jsonResult({
           status: result.cancelled ? "cancelled" : "error",

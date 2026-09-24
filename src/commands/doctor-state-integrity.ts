@@ -42,7 +42,11 @@ import {
   scanDoctorSessionEntriesStrict,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { resolveSessionStoreTargets, type SessionStoreTarget } from "../config/sessions/targets.js";
+import {
+  resolveConfiguredAgentDatabaseTargets,
+  resolveSessionStoreTargets,
+  type SessionStoreTarget,
+} from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
@@ -57,6 +61,7 @@ import {
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
@@ -70,7 +75,7 @@ import {
   createPluginSessionStateDoctorScanner,
   runPluginSessionStateDoctorRepairs,
 } from "./doctor-session-state-providers.js";
-import { countLabel } from "./doctor-state-integrity-format.js";
+import { countLabel, type OrphanAgentDir } from "./doctor-state-integrity-format.js";
 import { collectRetainedUnconfiguredAgentDatabaseWarnings } from "./doctor-unconfigured-agent-databases.js";
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
@@ -99,11 +104,6 @@ function existsFile(filePath: string): boolean {
     return false;
   }
 }
-
-type OrphanAgentDir = {
-  dirName: string;
-  agentId: string;
-};
 
 type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
 
@@ -186,22 +186,7 @@ function isReachableConfiguredAgentDir(params: {
   }
   const rawDir = path.join(params.agentsRoot, params.dirName, "agent");
   const normalizedDir = path.join(params.agentsRoot, params.agentId, "agent");
-  const rawRealPath = tryResolveNativeRealPath(rawDir);
-  const normalizedRealPath = tryResolveNativeRealPath(normalizedDir);
-  return rawRealPath !== null && rawRealPath === normalizedRealPath;
-}
-
-function formatOrphanAgentDirLabel(entry: OrphanAgentDir): string {
-  return entry.dirName === entry.agentId ? entry.agentId : `${entry.dirName} (id ${entry.agentId})`;
-}
-
-function formatOrphanAgentDirPreview(entries: OrphanAgentDir[], limit = 3): string {
-  const labels = entries.slice(0, limit).map(formatOrphanAgentDirLabel);
-  const remaining = entries.length - labels.length;
-  if (remaining > 0) {
-    return `${labels.join(", ")}, and ${remaining} more`;
-  }
-  return labels.join(", ");
+  return areComparablePathsEqual(rawDir, normalizedDir);
 }
 
 function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgentDir[] {
@@ -296,6 +281,15 @@ function dirPermissionHint(dir: string): string | null {
   return null;
 }
 
+function readGroupOrWorldAccessibleMode(targetPath: string): number | null {
+  const linkStat = fs.lstatSync(targetPath);
+  const isSymlink = linkStat.isSymbolicLink();
+  // Symlink permissions describe the link, not the target. Immutable stores cannot be repaired.
+  const stat = isSymlink ? fs.statSync(targetPath) : linkStat;
+  const resolvedPath = isSymlink ? fs.realpathSync(targetPath) : targetPath;
+  return !resolvedPath.startsWith("/nix/store/") && (stat.mode & 0o077) !== 0 ? stat.mode : null;
+}
+
 function addUserRwx(mode: number): number {
   const perms = mode & 0o777;
   return perms | 0o700;
@@ -340,8 +334,6 @@ function countJsonlLines(filePath: string): number {
 function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
   return isPathUnderRootWithPathOps(targetPath, rootPath, path);
 }
-
-const tryResolveRealPath = safeRealpathSync;
 
 function resolvePathThroughExistingAncestor(
   targetPath: string,
@@ -498,7 +490,7 @@ function resolveLinuxStateMount(
   },
 ): LinuxSdBackedStateDir | null {
   const linuxPath = path.posix;
-  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  const resolveRealPath = deps?.resolveRealPath ?? safeRealpathSync;
   const resolvedStatePath =
     resolvePathThroughExistingAncestor(stateDir, resolveRealPath, linuxPath) ??
     linuxPath.resolve(stateDir);
@@ -538,9 +530,7 @@ export function detectLinuxSdBackedStateDir(
 
   const sourceCandidates = [stateMount.source];
   if (stateMount.source.startsWith("/dev/")) {
-    const resolvedDevicePath = (deps?.resolveDeviceRealPath ?? tryResolveRealPath)(
-      stateMount.source,
-    );
+    const resolvedDevicePath = (deps?.resolveDeviceRealPath ?? safeRealpathSync)(stateMount.source);
     if (resolvedDevicePath) {
       sourceCandidates.push(linuxPath.resolve(resolvedDevicePath));
     }
@@ -644,7 +634,7 @@ export function detectMacCloudSyncedStateDir(
       root: path.join(homedir, "Library", "CloudStorage"),
     },
   ];
-  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  const resolveRealPath = deps?.resolveRealPath ?? safeRealpathSync;
   // Missing state leaves must still follow existing symlink ancestors, like the Linux detectors.
   const resolvedStatePath =
     resolvePathThroughExistingAncestor(stateDir, resolveRealPath, path) ?? path.resolve(stateDir);
@@ -692,7 +682,7 @@ export function detectWindowsCloudSyncedStateDir(
     return null;
   }
 
-  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  const resolveRealPath = deps?.resolveRealPath ?? safeRealpathSync;
   // A state dir that does not exist yet cannot be resolved directly, and
   // falling back to the lexical path misreads a not-yet-created leaf beneath a
   // OneDrive-named junction that actually resolves to local storage. Resolve
@@ -875,12 +865,9 @@ export function detectStateIntegrityHealthIssues(
 
   if (stateDirExists && process.platform !== "win32") {
     try {
-      const dirLstat = fs.lstatSync(stateDir);
-      const isDirSymlink = dirLstat.isSymbolicLink();
-      const stat = isDirSymlink ? fs.statSync(stateDir) : dirLstat;
-      const resolvedDir = isDirSymlink ? fs.realpathSync(stateDir) : stateDir;
-      if (!resolvedDir.startsWith("/nix/store/") && (stat.mode & 0o077) !== 0) {
-        issues.push({ kind: "state-dir-too-open", path: stateDir, mode: stat.mode });
+      const mode = readGroupOrWorldAccessibleMode(stateDir);
+      if (mode !== null) {
+        issues.push({ kind: "state-dir-too-open", path: stateDir, mode });
       }
     } catch {
       // Legacy noteStateIntegrity reports stat failures. Structured findings
@@ -890,12 +877,9 @@ export function detectStateIntegrityHealthIssues(
 
   if (params?.configPath && existsFile(params.configPath) && process.platform !== "win32") {
     try {
-      const configLstat = fs.lstatSync(params.configPath);
-      const isSymlink = configLstat.isSymbolicLink();
-      const stat = isSymlink ? fs.statSync(params.configPath) : configLstat;
-      const resolvedConfig = isSymlink ? fs.realpathSync(params.configPath) : params.configPath;
-      if (!resolvedConfig.startsWith("/nix/store/") && (stat.mode & 0o077) !== 0) {
-        issues.push({ kind: "config-file-too-open", path: params.configPath, mode: stat.mode });
+      const mode = readGroupOrWorldAccessibleMode(params.configPath);
+      if (mode !== null) {
+        issues.push({ kind: "config-file-too-open", path: params.configPath, mode });
       }
     } catch {
       // See state-dir stat handling above.
@@ -1201,15 +1185,7 @@ export async function noteStateIntegrity(
   }
   if (stateDirExists && process.platform !== "win32") {
     try {
-      const dirLstat = fs.lstatSync(stateDir);
-      const isDirSymlink = dirLstat.isSymbolicLink();
-      // For symlinks, check the resolved target permissions instead of the
-      // symlink itself (which always reports 777). Skip the warning only when
-      // the target lives in a known immutable store (e.g. /nix/store/).
-      const stat = isDirSymlink ? fs.statSync(stateDir) : dirLstat;
-      const resolvedDir = isDirSymlink ? fs.realpathSync(stateDir) : stateDir;
-      const isImmutableStore = resolvedDir.startsWith("/nix/store/");
-      if (!isImmutableStore && (stat.mode & 0o077) !== 0) {
+      if (readGroupOrWorldAccessibleMode(stateDir) !== null) {
         warnings.push(
           `- State directory permissions are too open (${displayStateDir}). Recommend chmod 700.`,
         );
@@ -1229,14 +1205,7 @@ export async function noteStateIntegrity(
 
   if (configPath && existsFile(configPath) && process.platform !== "win32") {
     try {
-      const configLstat = fs.lstatSync(configPath);
-      const isSymlink = configLstat.isSymbolicLink();
-      // For symlinks, check the resolved target permissions. Skip the warning
-      // only when the target lives in an immutable store (e.g. /nix/store/).
-      const stat = isSymlink ? fs.statSync(configPath) : configLstat;
-      const resolvedConfig = isSymlink ? fs.realpathSync(configPath) : configPath;
-      const isImmutableConfig = resolvedConfig.startsWith("/nix/store/");
-      if (!isImmutableConfig && (stat.mode & 0o077) !== 0) {
+      if (readGroupOrWorldAccessibleMode(configPath) !== null) {
         warnings.push(
           `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
         );
@@ -1329,13 +1298,19 @@ export async function noteStateIntegrity(
 
   const orphanAgentDirs = listOrphanAgentDirs(cfg, stateDir);
   if (orphanAgentDirs.length > 0) {
+    const labels = orphanAgentDirs
+      .slice(0, 3)
+      .map(({ dirName, agentId }) =>
+        dirName === agentId ? agentId : `${dirName} (id ${agentId})`,
+      );
+    const remaining = orphanAgentDirs.length - labels.length;
     const authoredAgentRosterPath =
       readAgentRosterProperty(cfg)?.kind === "list" ? "agents.list" : "agents.entries";
     warnings.push(
       [
         `- Found ${countLabel(orphanAgentDirs.length, "agent directory", "agent directories")} on disk without a matching ${authoredAgentRosterPath} entry.`,
         "  These agents can still have sessions/auth state on disk, but config-driven routing, identity, and model selection will ignore them.",
-        `  Examples: ${formatOrphanAgentDirPreview(orphanAgentDirs)}`,
+        `  Examples: ${labels.join(", ")}${remaining > 0 ? `, and ${remaining} more` : ""}`,
         `  Restore the missing ${authoredAgentRosterPath} entries or remove stale dirs after confirming they are no longer needed: ${shortenHomePath(path.join(stateDir, "agents"))}`,
       ].join("\n"),
     );
@@ -1345,6 +1320,9 @@ export async function noteStateIntegrity(
   }
 
   const compatibilityAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
+  const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
+    resolveConfiguredAgentDatabaseTargets(cfg, { env }),
+  );
   const sessionTargets = resolveSessionStoreTargets(cfg, { allAgents: true }, { env }).toSorted(
     (left, right) =>
       left.agentId === compatibilityAgentId ? -1 : right.agentId === compatibilityAgentId ? 1 : 0,
@@ -1362,6 +1340,9 @@ export async function noteStateIntegrity(
       defaultAgentId: compatibilityAgentId,
       env,
     }).path;
+    if (isRetained(sqliteStorePath, agentId)) {
+      return;
+    }
     // A successful SQLite import archives sessions.json. Its continued presence
     // is therefore the explicit signal that pre-import rows still need inspection.
     const legacyStore =
@@ -1561,7 +1542,10 @@ export async function noteStateIntegrity(
   // Scan that file once under the compatibility owner so full-store work is not repeated.
   const inspectedLegacyStores = new Set<string>();
   for (const target of sessionTargets) {
-    if (readAgentDatabaseAdmissionRefusal(target.agentId, { env })) {
+    if (
+      isRetained(target.storePath, target.agentId) ||
+      readAgentDatabaseAdmissionRefusal(target.agentId, { env })
+    ) {
       continue;
     }
     const legacyStorePath = path.resolve(target.storePath);
@@ -1570,7 +1554,7 @@ export async function noteStateIntegrity(
     await inspectAgentSessionIntegrity(target, inspectLegacyStore);
     inspectedLegacyStores.add(legacyStorePath);
   }
-  for (const warning of describeHeartbeatSessionTargetIssues(cfg)) {
+  for (const warning of await describeHeartbeatSessionTargetIssues(cfg)) {
     warnings.push(warning);
   }
 

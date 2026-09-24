@@ -11,6 +11,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as visibility from "../shared/session-list-visibility.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
@@ -296,6 +297,7 @@ test("preserves viewer pages across publications while bounding shared predicate
     const entry = (sessionId: string, owner: number, updatedAt: number): SessionEntry => ({
       sessionId,
       updatedAt,
+      lastInteractionAt: 20 - updatedAt,
       createdActor: {
         type: "human",
         source: "profile",
@@ -317,14 +319,24 @@ test("preserves viewer pages across publications while bounding shared predicate
     const opts = { limit: 2, ownerFirst: true, excludeSystem: true };
     const golden = [
       [
-        { ids: ["b", "a", "c"], order: ["b", "c", "f", "a"], total: 4 },
-        { ids: ["c", "f"], order: ["c", "f", "a"], total: 3 },
-        { ids: ["f", "b", "c"], order: ["b", "c", "f", "a"], total: 4 },
+        {
+          ids: ["b", "a", "c"],
+          order: ["b", "c", "f", "a"],
+          activityOrder: ["a", "f", "c", "b"],
+          total: 4,
+        },
+        { ids: ["c", "f"], order: ["c", "f", "a"], activityOrder: ["a", "f", "c"], total: 3 },
+        {
+          ids: ["f", "b", "c"],
+          order: ["b", "c", "f", "a"],
+          activityOrder: ["a", "f", "c", "b"],
+          total: 4,
+        },
       ],
       [
-        { ids: ["b", "d"], order: ["d", "b"], total: 2 },
-        { ids: ["d", "b"], order: ["d", "b"], total: 2 },
-        { ids: ["f", "d"], order: ["f", "d", "b"], total: 3 },
+        { ids: ["b", "d"], order: ["d", "b"], activityOrder: ["b", "d"], total: 2 },
+        { ids: ["d", "b"], order: ["d", "b"], activityOrder: ["b", "d"], total: 2 },
+        { ids: ["f", "d"], order: ["f", "d", "b"], activityOrder: ["b", "d", "f"], total: 3 },
       ],
     ];
     try {
@@ -334,8 +346,15 @@ test("preserves viewer pages across publications while bounding shared predicate
         predicate.mockClear();
         selectEntries.mockClear();
         for (const [index, client] of clients.entries()) {
-          const result = await listProjectedSessions({ projection, client, opts });
           const expected = golden[revision]![index]!;
+          const projectOwner = vi.spyOn(projection.state.rowContext.identityProjection!, "owner");
+          let result: Awaited<ReturnType<typeof listProjectedSessions>>;
+          try {
+            result = await listProjectedSessions({ projection, client, opts });
+            expect(projectOwner.mock.calls.length).toBeLessThanOrEqual(expected.total);
+          } finally {
+            projectOwner.mockRestore();
+          }
           expect({
             ids: result.sessions.map((row) => row.sessionId),
             total: result.totalCount,
@@ -367,6 +386,27 @@ test("preserves viewer pages across publications while bounding shared predicate
             );
             expect(next.totalCount).toBe(expected.total);
           }
+          const activity = await listProjectedSessions({
+            projection,
+            client,
+            opts: { ...opts, ownerFirst: false, sortBy: "activity", includeActivitySummary: false },
+          });
+          expect(activity.sessions.map((row) => row.sessionId)).toEqual(
+            expected.activityOrder.slice(0, opts.limit),
+          );
+          expect(activity.totalCount).toBe(expected.total);
+          const people = await listProjectedSessions({
+            projection,
+            client,
+            opts: { ...opts, ownerFirst: false, sortBy: "updatedAt", includePeople: true },
+          });
+          expect(people.sessions.map((row) => row.sessionId)).toEqual(
+            expected.order.slice(0, opts.limit),
+          );
+          expect(people.peopleSessionCount).toBe(expected.total);
+          expect(people.people?.reduce((count, person) => count + person.sessionCount, 0)).toBe(
+            expected.total,
+          );
         }
         expect.soft(predicate.mock.calls.length).toBe(0);
         expect.soft(selectEntries.mock.calls.length).toBe(0);
@@ -391,6 +431,19 @@ test("preserves viewer pages across publications while bounding shared predicate
           clock.mockRestore();
         }
         expect(selectEntries.mock.calls.length).toBe(0);
+        expect(predicate).not.toHaveBeenCalled();
+        const archived = await listProjectedSessions({
+          projection,
+          client: clients[0],
+          opts: { ...opts, ownerFirst: false, archived: true },
+        });
+        expect(archived.sessions.map((row) => row.sessionId)).toEqual([revision === 0 ? "d" : "a"]);
+        expect(archived.totalCount).toBe(1);
+        expect(predicate).toHaveBeenCalled();
+        predicate.mockClear();
+        const unarchived = await listProjectedSessions({ projection, client: clients[0], opts });
+        expect(unarchived.sessions.map((row) => row.sessionId)).toEqual(golden[revision]![0]!.ids);
+        expect(predicate).toHaveBeenCalled();
         if (revision === 0) {
           replaceSessionEntrySync(
             { agentId: "main", sessionKey: "agent:main:a" },
@@ -482,7 +535,6 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
         opts: { archived: true, activeMinutes: 1 },
       });
       await entered.promise;
-      expect(selected).not.toHaveBeenCalled();
       alice.connect.scopes = ["operator.read"];
       clock.mockReturnValue(initialNow + 60_001);
       replaceSessionEntrySync(
@@ -494,11 +546,28 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
       const result = await pending;
       expect(result.sessions.map((row) => row.sessionId)).toEqual(["stable"]);
       expect(result.sessions[0]?.sharingRole).toBe("viewer");
+      // The publication can leave unselected archives dirty; warm its completed revision.
+      await listProjectedSessions({
+        projection,
+        client: alice,
+        opts: { archived: true, activeMinutes: 1 },
+      });
+      selected.mockClear();
+      readProjection.mockClear();
+      const warm = await listProjectedSessions({
+        projection,
+        client: alice,
+        opts: { archived: true, activeMinutes: 1 },
+      });
+      expect(warm.sessions.map((row) => row.sessionId)).toEqual(["stable"]);
+      expect(selected).not.toHaveBeenCalled();
+      expect(readProjection).not.toHaveBeenCalled();
 
       alice.connect.scopes = ["operator.admin"];
       entered = createDeferredCore();
       paused = createDeferredCore<WorkerSessionPlacementProjection>();
       hold = true;
+      sessionChanges.emit({ all: true, scope: "worker-placements" });
       const onResult = vi.fn();
       pending = listProjectedSessions({
         projection,

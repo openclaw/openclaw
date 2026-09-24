@@ -1,6 +1,9 @@
 import path from "node:path";
 import { isRootFileMissingFailure } from "../infra/boundary-file-read.js";
-import { readUserProfileIdentity } from "../state/user-profile-list.js";
+import {
+  hasMultipleSessionSharingIdentities,
+  readUserProfileIdentity,
+} from "../state/user-profile-list.js";
 import { resolveUserPath } from "../utils.js";
 import {
   readWorkspaceFileWithGuards,
@@ -8,13 +11,13 @@ import {
 } from "./workspace-file-read.js";
 import { DEFAULT_USER_FILENAME, type WorkspaceBootstrapFile } from "./workspace.js";
 
-/** Optional personal overlay; the caller supplies only the admitted ingress profile. */
+/** Optional personal overlay; the caller supplies the session-selected human profile. */
 export async function loadPersonalUserBootstrapFile(
   dir: string,
   profileId?: string,
   warn?: (message: string) => void,
 ): Promise<WorkspaceBootstrapFile | undefined> {
-  if (!profileId) {
+  if (!profileId || !hasMultipleSessionSharingIdentities()) {
     return undefined;
   }
   const canonicalId = readUserProfileIdentity(profileId)?.profileId;
@@ -32,7 +35,10 @@ export async function loadPersonalUserBootstrapFile(
     return undefined;
   }
   // A merge while the file was being read must not inject a retired profile's overlay.
-  if (readUserProfileIdentity(profileId)?.profileId !== canonicalId) {
+  if (
+    !hasMultipleSessionSharingIdentities() ||
+    readUserProfileIdentity(profileId)?.profileId !== canonicalId
+  ) {
     return undefined;
   }
   const file: WorkspaceBootstrapFile = {
@@ -40,6 +46,7 @@ export async function loadPersonalUserBootstrapFile(
     path: filePath,
     content: loaded.content,
     missing: false,
+    personalUser: true,
   };
   setWorkspaceFileSourceIdentity(file, loaded.sourceIdentity);
   return file;

@@ -8,8 +8,9 @@ import type {
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import { resolveIsConfigReadOnly } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isDefaultClawHubBaseUrl, resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
+import { resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { fetchClawHubPluginVersionCategories } from "../infra/clawhub-plugin-catalog.js";
+import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import { resolvePendingPluginCapabilityReview } from "./capability-consent.js";
 import {
   buildPluginCapabilitySummary,
@@ -36,7 +37,9 @@ import { readInstalledPluginOverview } from "./installed-plugin-overview.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
   type ManagedPluginIconSource,
+  resolveInstalledPluginClawHubIconSource,
   resolvePluginIconSource,
+  resolvePluginIconSources,
   resolvePluginActivityIconSource,
   type ManagedPluginCatalogEntry,
   type ManagedPluginCatalog,
@@ -166,16 +169,12 @@ export function refreshManagedPluginMetadata(params: {
   return snapshot;
 }
 
-/** Resolve the current package-local icon without accepting caller-provided input. */
-export const resolveManagedPluginIconSource = withManagedPluginCache(
-  async (params: {
-    config: OpenClawConfig;
-    pluginId: string;
-    env?: NodeJS.ProcessEnv;
-  }): Promise<ManagedPluginIconSource | undefined> => {
+/** Resolve ordered branding sources from package bytes and exact installed provenance. */
+export const resolveManagedPluginIconSources = withManagedPluginCache(
+  async (params: { config: OpenClawConfig; pluginId: string; env?: NodeJS.ProcessEnv }) => {
     const env = params.env ?? process.env;
     const metadata = resolveManagedPluginMetadata(params.config, env);
-    return resolvePluginIconSource({ metadata, pluginId: params.pluginId });
+    return resolvePluginIconSources({ metadata, pluginId: params.pluginId, env });
   },
 );
 
@@ -239,6 +238,9 @@ export const listManagedPlugins = withManagedPluginCache(
     officialCatalog?: OfficialCatalogResult;
     metadata?: PluginMetadataSnapshot;
   }): Promise<ManagedPluginCatalog> => {
+    // Manifest schemas describe authored SecretRefs, not resolved runtime strings.
+    // Retain the paired source before hosted catalog I/O can publish another generation.
+    const sourceConfig = resolvePluginActivationSourceConfig({ config: params.config });
     const env = params.env ?? process.env;
     const workspace = resolvePluginControlPlaneWorkspace({ config: params.config, env });
     const metadata = params.metadata ?? resolveManagedPluginMetadata(params.config, env);
@@ -249,10 +251,9 @@ export const listManagedPlugins = withManagedPluginCache(
     const bundledOfficialEntries = prepareCatalogEntries(
       listOfficialExternalPluginCatalogEntries(),
     );
-    const installedIconsById = new Map<string, ManagedPluginIconSource | undefined>();
+    const installedIconsById = new Map<string, boolean>();
     const installedClawHubPackages = new Set<string>();
     const discoveryRegistry = resolveClawHubBaseUrl();
-    const publicDiscoveryRegistry = isDefaultClawHubBaseUrl(discoveryRegistry);
     const categoryTargetsByRegistry = new Map<
       string,
       Map<
@@ -305,7 +306,7 @@ export const listManagedPlugins = withManagedPluginCache(
             ? { ...localCatalog, ...officialCatalogMetadata }
             : localCatalog;
       const setup = resolvePluginConfigEnablement({
-        config: params.config,
+        config: sourceConfig,
         pluginId: record.pluginId,
         manifest,
       });
@@ -343,15 +344,10 @@ export const listManagedPlugins = withManagedPluginCache(
       if (record.packageName) {
         plugin.packageName = record.packageName;
       }
-      const recordedClawHubPackage =
-        installRecord?.source === "clawhub" &&
-        normalizeOptionalString(installRecord.clawhubUrl) &&
-        resolveClawHubBaseUrl(installRecord.clawhubUrl) === discoveryRegistry
-          ? normalizeOptionalString(installRecord.clawhubPackage)
-          : undefined;
+      const remoteIcon = resolveInstalledPluginClawHubIconSource({ installRecord, clawhubPackage });
       // Discovery names are registry-scoped; trusted official/npm counterparts belong to the public catalog.
       const discoveryClawHubPackage =
-        (publicDiscoveryRegistry ? clawhubPackage : undefined) ?? recordedClawHubPackage;
+        remoteIcon?.baseUrl === discoveryRegistry ? remoteIcon.packageName : undefined;
       if (discoveryClawHubPackage) {
         plugin.clawhubPackage = discoveryClawHubPackage;
       }
@@ -381,7 +377,7 @@ export const listManagedPlugins = withManagedPluginCache(
       if (!installedIconsById.has(normalizedPluginId)) {
         installedIconsById.set(
           normalizedPluginId,
-          resolvePluginIconSource({ metadata, pluginId: record.pluginId }),
+          Boolean(resolvePluginIconSource({ metadata, pluginId: record.pluginId }) || remoteIcon),
         );
       }
       if (installedIconsById.get(normalizedPluginId)) {
@@ -644,7 +640,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
         declared,
         components: projectInstalledPluginComponents({ manifest, declared }),
         overview: readInstalledPluginOverview(manifest),
-        credentials: manifest ? resolvePluginCredentialDescriptors(params.config, manifest) : [],
+        credentials: manifest ? resolvePluginCredentialDescriptors(manifest) : [],
         reviewToken: computeDeclaredSurfaceHash(declared),
         ...(trust ? { trust } : {}),
       };

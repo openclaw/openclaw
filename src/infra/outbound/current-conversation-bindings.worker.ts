@@ -3,18 +3,36 @@ import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db-contract.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type { SqliteWorkerCommand } from "../sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-admission.js";
+import { getSqliteWorkerStateContext } from "../sqlite-worker-state-context.js";
 import {
+  readCurrentConversationBindingListInDatabase,
+  pruneCurrentConversationBindingListInTransaction,
   readCurrentConversationBindingResolutionInDatabase,
+  readCurrentConversationBindingSelectionInDatabase,
   updateCurrentConversationBindingRecordInDatabase,
 } from "./current-conversation-bindings.kernel.js";
 import type {
   CurrentConversationBindingWorkerOperations,
   CurrentConversationBindingTouch,
 } from "./current-conversation-bindings.worker-contract.js";
-import type { SessionBindingRecord } from "./session-binding.types.js";
+import type { ConversationRef, SessionBindingRecord } from "./session-binding.types.js";
+
+/** Worker-local reads cannot inherit the host's retained discovery snapshot. */
+export function readSelection(
+  conversations: readonly ConversationRef[],
+  databasePath: string,
+): ReadonlyArray<SessionBindingRecord | null> {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => readCurrentConversationBindingSelectionInDatabase(db, conversations),
+      { path: databasePath, env: getSqliteWorkerStateContext().environment },
+    ) ?? conversations.map(() => null)
+  );
+}
 
 /** The caller holds the shared-state write transaction and current host admission. */
 function touchCurrentConversationBindingInDatabase(
@@ -58,10 +76,28 @@ function touchCurrentConversationBindingInDatabase(
   }).current;
 }
 
-export function executeCurrentConversationBindingCommand(
-  command: SqliteWorkerCommand<CurrentConversationBindingWorkerOperations>,
+type CurrentConversationBindingWriteCommand = Exclude<
+  SqliteWorkerCommand<CurrentConversationBindingWorkerOperations>,
+  { type: "conversationBindings.readSelection" }
+>;
+
+export function isWriteCommand(command: {
+  type: string;
+}): command is CurrentConversationBindingWriteCommand {
+  return (
+    command.type === "conversationBindings.listBySession" ||
+    command.type === "conversationBindings.resolve" ||
+    command.type === "conversationBindings.touch"
+  );
+}
+
+export function executeCommand(
+  command: CurrentConversationBindingWriteCommand,
   options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
-): SessionBindingRecord | null {
+): SessionBindingRecord | SessionBindingRecord[] | null {
+  if (command.type === "conversationBindings.listBySession") {
+    return listCurrentConversationBindingsInWorker(command.input, options);
+  }
   if (command.type === "conversationBindings.resolve") {
     const result = readCurrentConversationBindingResolutionInDatabase(
       options.database.db,
@@ -80,5 +116,30 @@ export function executeCurrentConversationBindingCommand(
         : touchCurrentConversationBindingInDatabase(db, command.input);
     requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
     return result;
+  }, options);
+}
+
+/** List and expiry repair stay at the same shared-state owner and physical worker context. */
+function listCurrentConversationBindingsInWorker(
+  input: CurrentConversationBindingWorkerOperations["conversationBindings.listBySession"]["input"],
+  options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
+): SessionBindingRecord[] {
+  const prepared = readCurrentConversationBindingListInDatabase(
+    options.database.db,
+    input.targetSessionKey,
+    input.scope,
+  );
+  if (!prepared.requiresPrune) {
+    return prepared.records;
+  }
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+    const records = pruneCurrentConversationBindingListInTransaction(
+      db,
+      input.targetSessionKey,
+      input.scope,
+    );
+    requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+    return records;
   }, options);
 }

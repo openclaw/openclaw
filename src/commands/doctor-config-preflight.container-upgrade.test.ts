@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -8,14 +9,18 @@ import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
+import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
@@ -45,31 +50,41 @@ async function withContainerState(run: (stateDir: string, workspace: string) => 
 }
 
 function seedSchema19Agent(stateDir: string, unsafe = false): string {
-  const opened = openOpenClawAgentDatabase({
-    agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
-  const databasePath = opened.path;
-  opened.db
-    .prepare(`INSERT INTO session_nodes
-      (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)`)
-    .run("agent:main:upgrade", "upgrade", JSON.stringify({ sessionId: "upgrade", updatedAt: 1 }));
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+  const schema = fs.readFileSync(
+    new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v19.sql", import.meta.url),
+    "utf8",
+  );
+  expect(createHash("sha256").update(schema).digest("hex")).toBe(
+    "fe93217454642e911608f81afc53c9fb3bb7c20cc32bc73f8f6eeaaf232b91b8",
+  );
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  // The released installation has shared history before this immutable agent snapshot.
+  openOpenClawStateDatabase({ env });
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const database = new DatabaseSync(databasePath);
   try {
-    removeCanonicalValidationFromHistoricalAgentFixture(database);
+    database.exec(schema);
     database.exec(`
-      DROP TABLE session_transcript_cold_archives;
       PRAGMA user_version = 19;
-      UPDATE schema_meta SET schema_version = 19 WHERE meta_key = 'primary';
+      INSERT INTO schema_meta
+        (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+        VALUES ('primary', 'agent', 19, 'main', '2026.9.4', 1, 1);
     `);
+    database
+      .prepare(`INSERT INTO session_nodes
+        (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)`)
+      .run("agent:main:upgrade", "upgrade", JSON.stringify({ sessionId: "upgrade", updatedAt: 1 }));
     if (unsafe) {
       database.exec("UPDATE schema_meta SET schema_version = 18 WHERE meta_key = 'primary'");
     }
   } finally {
     database.close();
   }
+  registerOpenClawAgentDatabase({ agentId: "main", path: databasePath, env, schemaVersion: 19 });
+  closeOpenClawStateDatabaseForTest();
   return databasePath;
 }
 

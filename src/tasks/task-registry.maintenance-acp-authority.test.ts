@@ -7,8 +7,9 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import { loadTaskAcpSessionCloser, type CloseAcpSession } from "./task-registry-acp-cleanup.js";
+import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
 import {
-  resetTaskRegistryMaintenanceRuntimeForTests,
+  configureTaskRegistryMaintenance,
   runTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import { createAcpSessionStoreEntry } from "./task-registry.maintenance.test-support.js";
@@ -41,7 +42,7 @@ async function withAcpCleanupState(
     async () => {
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
-      resetTaskRegistryMaintenanceRuntimeForTests();
+      configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
       try {
         await run(createCleanupEffects());
       } finally {
@@ -57,7 +58,7 @@ afterEach(async () => {
   vi.mocked(loadTaskAcpSessionCloser).mockReset();
   vi.mocked(listAcpSessionEntries).mockReset();
   vi.mocked(readAcpSessionEntry).mockReset();
-  resetTaskRegistryMaintenanceRuntimeForTests();
+  configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   await drainGlobalSingletonLifecycleState("close");
@@ -119,6 +120,7 @@ describe("task maintenance ACP cleanup authority", () => {
         mode: "oneshot",
       });
       vi.mocked(readAcpSessionEntry).mockReturnValue(entry);
+      using deliveries = captureTaskDeliveryWork();
       createTaskFixture("acp", {
         ownerKey: parentSessionKey,
         requesterSessionKey: parentSessionKey,
@@ -129,6 +131,7 @@ describe("task maintenance ACP cleanup authority", () => {
         cleanupAfter: Date.now() + 86_400_000,
         notifyPolicy: "silent",
       });
+      await deliveries.settle();
       close.mockImplementationOnce(async () => {
         await Promise.resolve();
         configureTaskRegistryRuntime({ store: createInMemoryTaskRegistryStore() });

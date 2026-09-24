@@ -462,7 +462,15 @@ def checkout_harness(sha):
     action = ".github/actions/setup-node-env/action.yml"
     node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
     evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
+    platform_scripts = ("scripts/lib/swift-toolchain.sh",)
     upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
+    npm_lock_scripts = (
+        "scripts/ci-npm-lock-admission.mjs",
+        "scripts/generate-npm-package-lock.mjs",
+        "scripts/generate-npm-package-lock.mts",
+        "scripts/changed-lanes.mts",
+        "scripts/lib/merge-head-diff-base.mjs",
+    )
     if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
         raise GitFailure(1)
     harness = os.path.join(workspace, ".ci-harness")
@@ -483,8 +491,10 @@ def checkout_harness(sha):
             pathspecs += evidence_scripts
         elif kind == "preflight":
             pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
+        if kind == "platform":
+            pathspecs += platform_scripts
         if kind == "linux-node":
-            pathspecs += upgrade_scripts
+            pathspecs += (*upgrade_scripts, *npm_lock_scripts)
         paths = git_output(workspace, "ls-files", "-z", "--", *pathspecs).split("\0")[:-1]
         run_git(workspace, "checkout-index", "--force", f"--prefix={harness}/", "--", *paths)
     else:
@@ -493,8 +503,10 @@ def checkout_harness(sha):
         sparse_paths = ["/.github/actions/", *(f"/{path}" for path in node_setup_scripts)]
         if kind in ("platform", "linux-node"):
             sparse_paths += [f"/{path}" for path in evidence_scripts]
+        if kind == "platform":
+            sparse_paths += [f"/{path}" for path in platform_scripts]
         if kind == "linux-node":
-            sparse_paths += [f"/{path}" for path in upgrade_scripts]
+            sparse_paths += [f"/{path}" for path in (*upgrade_scripts, *npm_lock_scripts)]
         # Rooted non-cone patterns keep the kind-owned workflow files exact.
         # Sparse first, then blob-less avoids downloading a second repository snapshot.
         run_git(harness, "sparse-checkout", "set", "--no-cone", *sparse_paths)
@@ -610,7 +622,7 @@ def main():
                 check_cancelled()
                 if not reset:
                     raise SystemExit(124 if isinstance(error, FetchTimeout) else error.code)
-                print(f"{label} attempt {attempt}/5 failed", flush=True)
+                print(f"::warning::{label} attempt {attempt}/5 failed", flush=True)
                 backoff(attempt * 5)
         print(f"{label} failed after 5 attempts", file=sys.stderr)
         raise SystemExit(1)

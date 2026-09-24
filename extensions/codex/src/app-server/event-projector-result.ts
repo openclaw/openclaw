@@ -50,6 +50,7 @@ export abstract class CodexTurnProjection {
   protected readonly assistantProjection: CodexAssistantProjection;
   protected readonly reasoningProjection: CodexReasoningProjection;
   readonly settlement: CodexProjectionSettlement;
+  protected readonly observedItemIds = new Set<string>();
   protected readonly activeItemIds = new Set<string>();
   protected readonly completedItemIds = new Set<string>();
   protected readonly activeCompactionItemIds = new Set<string>();
@@ -148,7 +149,11 @@ export abstract class CodexTurnProjection {
 
   buildResult(
     toolTelemetry: CodexAppServerToolTelemetry,
-    options?: { yieldDetected?: boolean; steeringMessages?: readonly AgentMessage[] },
+    options?: {
+      yieldDetected?: boolean;
+      steeringMessages?: readonly AgentMessage[];
+      readRetainedNativeCommands?: () => ReadonlyMap<string, string>;
+    },
   ): EmbeddedRunAttemptResult & { terminalTurnId: string } {
     this.eventProjection.flushPendingGuardianWarning();
     // Finalizing native tools may invoke callbacks; retain this result's terminal snapshot.
@@ -169,13 +174,29 @@ export abstract class CodexTurnProjection {
     } = this.terminalFailure;
     const upstreamUserText = this.options.upstreamUserText;
     const turnTainted = this.settlement.turnTainted;
+    const observedItemCount = new Set([...this.observedItemIds, ...this.completedItemIds]).size;
     const activeItemCount = this.activeItemIds.size;
     const completedItemCount = this.completedItemIds.size;
     const guardianReviewCount = this.eventProjection.guardianReviewCount;
     const yieldDetected = options?.yieldDetected;
-    // Result construction runs after the notification queue drains. Close any
-    // tool lacking a terminal item so audit consumers never retain an open action.
-    this.nativeToolLifecycleProjector.finalizeActive();
+    const retainedCommands = new Map<string, string>();
+    if (
+      !aborted &&
+      !this.options.runAbortSignal?.aborted &&
+      completedTurn?.status === "completed" &&
+      !initialPromptError
+    ) {
+      const pending = this.nativeToolLifecycleProjector.pendingCommands();
+      for (const [id, processId] of options?.readRetainedNativeCommands?.() ?? []) {
+        // A queued native completion wins over the earlier inventory snapshot.
+        if (pending.has(id) && (pending.get(id) === null || pending.get(id) === processId)) {
+          retainedCommands.set(id, processId);
+        }
+      }
+    }
+    // Close this turn's audit scope without inventing process completion. The
+    // existing unknown-outcome diagnostic remains distinct from execution failure.
+    this.nativeToolLifecycleProjector.finalizeActive(undefined, retainedCommands);
     const assistantTexts = this.assistantProjection.collectAssistantTexts();
     const asyncMessages = this.assistantProjection.collectAsyncMessages();
     const commentaryMessages = this.assistantProjection.collectCommentaryMessages();
@@ -195,6 +216,7 @@ export abstract class CodexTurnProjection {
     const synthesizedMissingToolResultError =
       this.toolTranscriptProjection.synthesizeMissingToolResults({
         synthesize: legacyFailClosed,
+        retainedCommands,
         // Preserve audit synthesis on every path, but completed answers must not
         // promote bookkeeping gaps into user-visible terminal failure evidence.
         terminalDisposition: aborted
@@ -322,7 +344,7 @@ export abstract class CodexTurnProjection {
         replaySafe: !hadPotentialSideEffects,
       },
       itemLifecycle: {
-        startedCount: activeItemCount + completedItemCount,
+        startedCount: observedItemCount,
         completedCount: completedItemCount,
         activeCount: activeItemCount,
       },

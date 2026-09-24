@@ -107,7 +107,7 @@ async function handleBroadcastAction(
     throw new Error("Broadcast requires at least one target in --targets.");
   }
   const channelHint = readToolStringParam(params, "channel");
-  const explicitAccountId = validateExplicitMessageAccountSelection({
+  const explicitAccountId = await validateExplicitMessageAccountSelection({
     cfg: input.cfg,
     accountId: readToolStringParam(params, "accountId"),
     checkResolvedAccount: false,
@@ -196,7 +196,7 @@ async function handleBroadcastAction(
         continue;
       }
       try {
-        const targetAccountId = validateExplicitMessageAccountSelection({
+        const targetAccountId = await validateExplicitMessageAccountSelection({
           cfg: input.cfg,
           channel: targetChannel,
           accountId: explicitAccountId,

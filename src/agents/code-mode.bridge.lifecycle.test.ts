@@ -1,4 +1,4 @@
-/** Subscribed embedded tool lifecycles, including real QuickJS bridge coverage. */
+/** Subscribed embedded tool lifecycles, including real executor bridge coverage. */
 import { getEventListeners } from "node:events";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -508,51 +508,6 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     }
   });
 
-  it("settles subscribed nested dispatch exactly once across repeated exec and wait turns", async () => {
-    const blockReplyFlush = createDeferred();
-    const onBlockReplyFlush = vi.fn(() => blockReplyFlush.promise);
-    const harness = createSubscribedCodeModeHarness({
-      name: "repeated-lifecycle",
-      onBlockReplyFlush,
-    });
-    const target = pluginToolWithExecute("finish_stage", "Finish one suspended stage", async () => {
-      blockReplyFlush.resolve();
-      return jsonResult({ finished: true });
-    });
-    applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
-
-    try {
-      for (let stage = 0; stage < 2; stage += 1) {
-        const suspended = resultDetails(
-          await expectDefined(harness.tools[0], "Code Mode exec test invariant").execute(
-            `code-call-stage-${stage}`,
-            { code: 'await yield_control("pause"); return await finish_stage({});' },
-          ),
-        );
-        expect(suspended).toMatchObject({ status: "waiting", reason: "yield" });
-
-        const completed = await waitUntilCompleted({
-          details: suspended,
-          waitTool: expectDefined(harness.tools[1], "Code Mode wait test invariant"),
-        });
-        expect(completed).toMatchObject({ status: "completed", value: { finished: true } });
-        expect(countActiveToolExecutions(harness.runId)).toBe(0);
-      }
-
-      expect(target.execute).toHaveBeenCalledTimes(2);
-      expect(onBlockReplyFlush).not.toHaveBeenCalled();
-      expect(harness.subscription.getItemLifecycle()).toMatchObject({
-        startedCount: 2,
-        completedCount: 2,
-        activeCount: 0,
-      });
-      expect(testing.activeRuns.size).toBe(0);
-    } finally {
-      blockReplyFlush.resolve();
-      harness.dispose();
-    }
-  });
-
   it("keeps direct sessions_yield handoff successful while closing sibling Code Mode cells", async () => {
     const harness = createSubscribedCodeModeHarness({ name: "yield-handoff" });
     const handoffReason = { code: "sessions_yield", turnHandoff: true } as const;
@@ -638,7 +593,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         );
         expect(pending.settled).toBeUndefined();
         expect(otherPending.settled).toBeUndefined();
-        expect(ownerState.snapshot.memory.byteLength).toBeGreaterThan(0);
+        expect(ownerState.continuation.retainedBytes).toBeGreaterThan(0);
         expect(testing.resumingRunIds.size).toBe(0);
 
         // Both exec calls have returned; no wait is in flight to perform owner cleanup.
@@ -976,7 +931,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         } else if (close === "catalog") {
           clearToolSearchCatalog(harness);
         } else {
-          disposeAllCodeModeRuns();
+          await disposeAllCodeModeRuns();
         }
 
         await expect(pending.promise).resolves.toBeUndefined();

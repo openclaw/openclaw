@@ -867,7 +867,7 @@ private func pressOnboardingEntryButton(_ title: String, in root: NSView) async 
     var visited = Set<ObjectIdentifier>()
     func visit(_ element: AnyObject) {
         guard visited.insert(ObjectIdentifier(element)).inserted else { return }
-        let text = [element.accessibilityLabel?(), element.accessibilityTitle?()]
+        let text = [element.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: element)]
             .compactMap(\.self)
         if element.accessibilityRole?() == .button,
            element.isAccessibilityEnabled?() == true,
@@ -919,7 +919,7 @@ private func inspectAISetupAccessibility(_ root: NSView) async throws
         let value: Any? = element.accessibilityValue?()
         let text = [
             element.accessibilityLabel?(),
-            element.accessibilityTitle?(),
+            AppKitTestSupport.accessibilityTitle(of: element),
             value as? String,
         ].compactMap(\.self)
         labels.append(contentsOf: text)
@@ -3241,13 +3241,11 @@ struct OnboardingAISetupTests {
         try #require(!AppProfile.current.isActive, "Run this fixture in an unprofiled disposable test process")
         let root = try makeTempDirForTests().resolvingSymlinksInPath()
         defer { try? FileManager.default.removeItem(at: root) }
-        try await TestIsolation.withIsolatedState(env: [
-            "HOME": root.path,
-            "CFFIXED_USER_HOME": root.path,
+        try await TestIsolation.withIsolatedState(launchAgentHomeDirectory: root, env: [
             "OPENCLAW_STATE_DIR": root.appendingPathComponent("state").path,
             "OPENCLAW_CONFIG_PATH": root.appendingPathComponent("openclaw.json").path,
         ]) {
-            try #require(FileManager.default.homeDirectoryForCurrentUser.resolvingSymlinksInPath() == root)
+            try #require(LaunchAgentPlist.homeDirectoryURL.resolvingSymlinksInPath() == root)
             let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingEntry"))
             let oldGatewayID = GatewayDiscoveryPreferences.preferredStableID()
             let oldRouteBinding = GatewayDiscoveryPreferences.preferredRouteBinding()

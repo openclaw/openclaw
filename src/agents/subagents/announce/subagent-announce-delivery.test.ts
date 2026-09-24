@@ -5893,7 +5893,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       { name: "SessionTranscriptWriterClaimReboundError" },
     );
 
-    expect(testing.isWriterClaimReboundAnnounceError(err)).toBe(true);
     expect(testing.hasAnnounceSendEvidence(err)).toBe(true);
   });
 
@@ -5903,7 +5902,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       { name: "SessionTranscriptWriterClaimReboundError" },
     );
 
-    expect(testing.isWriterClaimReboundAnnounceError(err)).toBe(true);
     expect(testing.hasAnnounceSendEvidence(err)).toBe(false);
   });
 

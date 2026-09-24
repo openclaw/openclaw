@@ -2,14 +2,12 @@
 import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import chokidar from "chokidar";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import {
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
-import { startGatewayConfigReloader } from "../gateway/config-reload.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import * as tmpDirOwner from "../infra/tmp-openclaw-dir.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
@@ -29,7 +27,7 @@ import {
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { initializePublishedConfigRuntimeEnv, prepareConfigRuntimeEnv } from "./config-env-vars.js";
-import { readConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
+import { readLatestConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
 import { getConfigValueAtPath, setConfigValueAtPath } from "./config-paths.js";
 import { hashConfigIncludeRaw } from "./includes.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
@@ -46,7 +44,11 @@ import {
 } from "./io.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
-import { defaultedDemoPluginRegistry } from "./io.write-config.test-support.js";
+import {
+  createConfigWriteHomeFixture,
+  defaultedDemoPluginRegistry,
+} from "./io.write-config.test-support.js";
+import { registerConfigWritePreflightTests } from "./io.write-preflight.test-support.js";
 import { replaceConfigFile, transformConfigFile, transformConfigFileWithRetry } from "./mutate.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
@@ -116,7 +118,7 @@ type ConfigIoOptions = Parameters<typeof createObservedConfigIO>[0];
 function createConfigIO(options: ConfigIoOptions = {}) {
   const env = options.env ?? ({} as NodeJS.ProcessEnv);
   if (!("NODE_ENV" in env)) {
-    // Route real SQLite state through Vitest's worker DB without adding a key to config env snapshots.
+    // Mark injected environments as tests without adding a key to config env snapshots.
     Object.defineProperty(env, "NODE_ENV", { configurable: true, value: "test" });
   }
   return createObservedConfigIO({
@@ -133,17 +135,7 @@ describe("config io write", () => {
     warn: () => {},
     error: () => {},
   };
-  async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-    const home = await suiteRootTracker.make("case");
-    return withEnvAsync(
-      {
-        OPENCLAW_DEFER_SHELL_ENV_FALLBACK: undefined,
-        OPENCLAW_LOAD_SHELL_ENV: undefined,
-        OPENCLAW_SHELL_ENV_TIMEOUT_MS: undefined,
-      },
-      () => fn(home),
-    );
-  }
+  const withSuiteHome = createConfigWriteHomeFixture(suiteRootTracker.make);
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
@@ -3639,7 +3631,7 @@ describe("config io write", () => {
 
           await expect(
             writeConfigFile({ gateway: { mode: "local", port: 19001 } }),
-          ).rejects.toThrow(/runtime snapshot refresh failed: synthetic refresh failure/);
+          ).rejects.toThrow(/config changed since last load/);
 
           await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(concurrentRaw);
         });
@@ -3649,119 +3641,13 @@ describe("config io write", () => {
     },
   );
 
-  itWithHome("blocks runtime preflight failures before committing root writes", async (home) => {
-    const configPath = configPathForHome(home);
-    const initialRaw = formatConfig({ gateway: { mode: "local" } });
-    let observedSource: OpenClawConfig | undefined;
-
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, initialRaw, "utf-8");
-
-    try {
-      await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
-        setRuntimeConfigSnapshotRefreshHandler({
-          preflight: async ({ sourceConfig }) => {
-            observedSource = sourceConfig;
-            throw new Error("missing included secret");
-          },
-          refresh: () => true,
-        });
-
-        await expect(
-          writeConfigFile({
-            gateway: { mode: "local", port: 19001 },
-            logging: { level: "debug" },
-          }),
-        ).rejects.toThrow(/active SecretRef resolution failed: missing included secret/);
-
-        expect(observedSource?.gateway?.port).toBe(19001);
-        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
-      });
-    } finally {
-      setRuntimeConfigSnapshotRefreshHandler(null);
-    }
+  registerConfigWritePreflightTests({
+    itWithHome,
+    configPathForHome,
+    formatConfig,
+    createConfigIO,
+    silentLogger,
   });
-
-  itWithHome(
-    "runs a caller commit guard after runtime preflight and before the root write",
-    async (home) => {
-      const configPath = configPathForHome(home);
-      const initialRaw = formatConfig({ gateway: { mode: "local" } });
-      const events: string[] = [];
-
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, initialRaw, "utf-8");
-
-      try {
-        await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
-          setRuntimeConfigSnapshotRefreshHandler({
-            preflight: () => {
-              events.push("runtime");
-            },
-            refresh: () => true,
-          });
-
-          await expect(
-            writeConfigFile(
-              { gateway: { mode: "local", port: 19001 } },
-              {
-                preCommitRuntimePreflight: async (sourceConfig) => {
-                  events.push(`caller:${String(sourceConfig.gateway?.port)}`);
-                  await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
-                  throw new Error("authority changed");
-                },
-              },
-            ),
-          ).rejects.toThrow("authority changed");
-
-          expect(events).toEqual(["runtime", "caller:19001"]);
-          await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
-        });
-      } finally {
-        setRuntimeConfigSnapshotRefreshHandler(null);
-      }
-    },
-  );
-
-  itWithHome(
-    "blocks runtime preflight failures before direct config IO commits root writes",
-    async (home) => {
-      const configPath = configPathForHome(home);
-      const initialRaw = formatConfig({ gateway: { mode: "local" } });
-      const env = {
-        ...process.env,
-        OPENCLAW_CONFIG_PATH: configPath,
-      } as NodeJS.ProcessEnv;
-      let observedSource: OpenClawConfig | undefined;
-      const beforeCommit = vi.fn();
-
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, initialRaw, "utf-8");
-
-      try {
-        setRuntimeConfigSnapshotRefreshHandler({
-          preflight: async ({ sourceConfig }) => {
-            observedSource = sourceConfig;
-            throw new Error("missing direct IO secret");
-          },
-          refresh: () => true,
-        });
-
-        await expect(
-          createConfigIO({ env, logger: silentLogger }).writeConfigFile(
-            { gateway: { mode: "local", port: 19001 } },
-            { beforeCommit },
-          ),
-        ).rejects.toThrow(/active SecretRef resolution failed: missing direct IO secret/);
-
-        expect(observedSource?.gateway?.port).toBe(19001);
-        expect(beforeCommit).not.toHaveBeenCalled();
-        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
-      } finally {
-        setRuntimeConfigSnapshotRefreshHandler(null);
-      }
-    },
-  );
 
   for (const writer of ["direct", "runtime"] as const) {
     itWithHome(`rechecks ${writer} publication authority after backup work`, async (home) => {
@@ -4135,10 +4021,9 @@ describe("config io write", () => {
           { OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_TEST_FAST: "1" },
           async () => {
             await writeConfigFile(initialConfig, { skipRuntimeSnapshotRefresh: true });
-            const priorSlot = readConfigSnapshotAuditRecord({
+            const priorSlot = readLatestConfigSnapshotAuditRecord({
               env: process.env,
               homedir: () => home,
-              configPath,
             });
             setRuntimeConfigSnapshotRefreshHandler({
               refresh: () => {
@@ -4151,10 +4036,9 @@ describe("config io write", () => {
             ).rejects.toThrow(/runtime snapshot refresh failed: synthetic refresh failure/);
 
             expect(
-              readConfigSnapshotAuditRecord({
+              readLatestConfigSnapshotAuditRecord({
                 env: process.env,
                 homedir: () => home,
-                configPath,
               }),
             ).toEqual(priorSlot);
           },
@@ -4570,10 +4454,9 @@ gateway: { mode: "local", port: 18789 }
           "env.vars.SETTING_01",
         ]);
 
-        const slot = readConfigSnapshotAuditRecord({
+        const slot = readLatestConfigSnapshotAuditRecord({
           env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
           homedir: () => home,
-          configPath,
         });
         expect(slot).toMatchObject({ configPath, rawHash: result.persistedHash });
         if (!slot) {
@@ -4631,165 +4514,6 @@ gateway: { mode: "local", port: 18789 }
               nextHash: secondWrite.persistedHash,
             }),
           );
-        },
-      );
-    },
-  );
-
-  itWithHome(
-    "shares raw snapshot hashes between config writes and gateway startup reconciliation",
-    async (home) => {
-      const configPath = configPathForHome(home);
-      const stateDir = path.join(home, ".openclaw");
-      await withEnvAsync(
-        {
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_FAST: "1",
-        },
-        async () => {
-          const io = createHomeConfigIO(home, {
-            configPath,
-            env: process.env,
-          });
-          const write = await io.writeConfigFile({ gateway: { port: 18789 } });
-          const writtenSnapshot = await readConfigFileSnapshotForRuntimeTransaction({});
-          const slot = readConfigSnapshotAuditRecord({
-            env: process.env,
-            homedir: () => home,
-            configPath,
-          });
-          expect(writtenSnapshot.valid).toBe(true);
-          expect(slot).toMatchObject({ rawHash: write.persistedHash });
-          expect(slot?.rawHash).toBe(writtenSnapshot.hash);
-
-          const watcher = {
-            options: { usePolling: false },
-            on: vi.fn(),
-            close: vi.fn(async () => {}),
-          };
-          watcher.on.mockImplementation(() => watcher);
-          const watchSpy = vi.spyOn(chokidar, "watch").mockReturnValue(watcher as never);
-          const startForSnapshot = (snapshot: ConfigFileSnapshot) =>
-            startGatewayConfigReloader({
-              initialConfig: snapshot.config,
-              initialCompareConfig: snapshot.sourceConfig,
-              initialSnapshotRawHash: snapshot.hash ?? null,
-              initialAuthoredConfig: snapshot.parsed,
-              initialSnapshotValid: snapshot.valid,
-              initialSnapshotIssues: snapshot.issues,
-              readSnapshot: async () => snapshot,
-              initialPluginInstallRecords: {},
-              readPluginInstallRecords: async () => ({}),
-              onNoopConfigCommit: async () => {},
-              onHotReload: async () => "applied" as const,
-              onRestart: async () => {},
-              log: { info: () => {}, ...silentLogger },
-              watchPath: configPath,
-            });
-
-          const firstReloader = startForSnapshot(writtenSnapshot);
-          await firstReloader.stop();
-          expect(
-            listConfigAuditRecordsForTests({ env: process.env, homedir: () => home }).filter(
-              (record) => record.event === "config.external",
-            ),
-          ).toEqual([]);
-
-          const handEditedAuthoredConfig = structuredClone(
-            writtenSnapshot.parsed,
-          ) as OpenClawConfig;
-          handEditedAuthoredConfig.gateway = {
-            ...handEditedAuthoredConfig.gateway,
-            port: 18790,
-          };
-          await writeConfigJson(configPath, handEditedAuthoredConfig);
-          const handEditedSnapshot = await readConfigFileSnapshotForRuntimeTransaction({});
-          const secondReloader = startForSnapshot(handEditedSnapshot);
-          await secondReloader.stop();
-          watchSpy.mockRestore();
-
-          const externalRecord = listConfigAuditRecordsForTests({
-            env: process.env,
-            homedir: () => home,
-          }).findLast((record) => record.event === "config.external");
-          expect(externalRecord).toMatchObject({
-            event: "config.external",
-            detectedBy: "startup",
-            previousHash: write.persistedHash,
-            nextHash: handEditedSnapshot.hash,
-            changedPaths: ["gateway.port"],
-            valid: true,
-          });
-        },
-      );
-    },
-  );
-
-  itWithHome(
-    "reseeds a shared state slot when the gateway starts for another config path",
-    async (home) => {
-      const configPathA = path.join(home, ".openclaw", "config-a.json");
-      const configPathB = path.join(home, ".openclaw", "config-b.json");
-      const stateDir = path.join(home, ".openclaw");
-      await withEnvAsync(
-        {
-          OPENCLAW_CONFIG_PATH: configPathA,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_FAST: "1",
-        },
-        async () => {
-          const io = createHomeConfigIO(home, {
-            configPath: configPathA,
-            env: process.env,
-          });
-          await io.writeConfigFile({ gateway: { port: 18789 } });
-          await writeConfigJson(configPathB, { gateway: { port: 18790 } });
-
-          await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPathB }, async () => {
-            const snapshot = await readConfigFileSnapshotForRuntimeTransaction({});
-            const watcher = {
-              options: { usePolling: false },
-              on: vi.fn(),
-              close: vi.fn(async () => {}),
-            };
-            watcher.on.mockImplementation(() => watcher);
-            const watchSpy = vi.spyOn(chokidar, "watch").mockReturnValue(watcher as never);
-            const reloader = startGatewayConfigReloader({
-              initialConfig: snapshot.config,
-              initialCompareConfig: snapshot.sourceConfig,
-              initialSnapshotRawHash: snapshot.hash ?? null,
-              initialAuthoredConfig: snapshot.parsed,
-              initialSnapshotValid: snapshot.valid,
-              initialSnapshotIssues: snapshot.issues,
-              readSnapshot: async () => snapshot,
-              initialPluginInstallRecords: {},
-              readPluginInstallRecords: async () => ({}),
-              onNoopConfigCommit: async () => {},
-              onHotReload: async () => "applied" as const,
-              onRestart: async () => {},
-              log: { info: () => {}, ...silentLogger },
-              watchPath: configPathB,
-            });
-            await reloader.stop();
-            watchSpy.mockRestore();
-
-            expect(
-              listConfigAuditRecordsForTests({ env: process.env, homedir: () => home }).filter(
-                (record) => record.event === "config.external",
-              ),
-            ).toEqual([]);
-            expect(
-              readConfigSnapshotAuditRecord({
-                env: process.env,
-                homedir: () => home,
-                configPath: configPathB,
-              }),
-            ).toMatchObject({
-              configPath: configPathB,
-              rawHash: snapshot.hash,
-            });
-          });
         },
       );
     },

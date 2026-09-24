@@ -62,14 +62,9 @@ function normalizeInworldProviderConfig(rawConfig: Record<string, unknown>): Inw
 }
 
 function readInworldProviderConfig(config: SpeechProviderConfig): InworldProviderConfig {
-  const defaults = normalizeInworldProviderConfig({});
-  return {
-    apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
-    baseUrl: normalizeInworldBaseUrl(trimToUndefined(config.baseUrl) ?? defaults.baseUrl),
-    voiceId: trimToUndefined(config.voiceId) ?? defaults.voiceId,
-    modelId: trimToUndefined(config.modelId) ?? defaults.modelId,
-    temperature: normalizeInworldTemperature(config.temperature) ?? defaults.temperature,
-  };
+  return normalizeInworldProviderConfig({
+    inworld: { ...config, apiKey: trimToUndefined(config.apiKey) },
+  });
 }
 
 function resolveInworldApiKey(primary?: string, fallback?: string): string | undefined {

@@ -12,10 +12,12 @@ import {
   countPendingQueueItems,
   shouldSkipQueueItem,
 } from "../../../utils/queue-helpers.js";
-import { resolveFollowupDeliveryContextKey } from "./delivery-context.js";
+import {
+  createOverflowSummaryRetrySource,
+  resolveFollowupDeliveryContextKey,
+} from "./delivery-context.js";
 import {
   clearFollowupDrainCallback,
-  createOverflowSummaryRetrySource,
   dropAbortedFollowups,
   kickFollowupDrainIfIdle,
   rememberFollowupDrainCallback,
@@ -159,30 +161,16 @@ export function enqueueFollowupRun(
   if (shouldSkipQueueItem({ item: run, items: queue.items, dedupe })) {
     return false;
   }
-  if (options.steerCandidate) {
+  // Preserve later prompts while an older steer decides between same-turn
+  // delivery and fallback; overflow resumes when the gate resolves.
+  if (options.steerCandidate || queue.items.some((item) => item.steerPending)) {
     if (!markFollowupRunEnqueued(run)) {
       return false;
     }
-    const { promise: acceptance, resolve: settle } = createDeferredCore<boolean>();
-    run.steerPending = { phase: "waiting", predecessor: queue.steerAcceptanceTail, settle };
-    queue.steerAcceptanceTail = acceptance;
-    appendQueueItem({
-      key,
-      queue,
-      run,
-      recentMessageIdKey,
-      runFollowup,
-      restartIfIdle,
-      front: options.position === "front",
-    });
-    return true;
-  }
-  // A later normal/interrupt prompt cannot be dropped while an older steer is
-  // deciding between same-turn delivery and fallback. Append it behind the
-  // anchor; ordinary overflow policy resumes as soon as the gate resolves.
-  if (queue.items.some((item) => item.steerPending)) {
-    if (!markFollowupRunEnqueued(run)) {
-      return false;
+    if (options.steerCandidate) {
+      const { promise: acceptance, resolve: settle } = createDeferredCore<boolean>();
+      run.steerPending = { phase: "waiting", predecessor: queue.steerAcceptanceTail, settle };
+      queue.steerAcceptanceTail = acceptance;
     }
     appendQueueItem({
       key,
@@ -191,19 +179,14 @@ export function enqueueFollowupRun(
       recentMessageIdKey,
       runFollowup,
       restartIfIdle,
-      front: false,
+      front: options.steerCandidate === true && options.position === "front",
     });
     return true;
   }
   // drop:new rejects this source without mutating the existing queue. Do not
   // publish an external queued identity for work that will never be admitted.
   const pendingCount = countPendingQueueItems(queue.items, queue.inFlight);
-  if (
-    !options.steerCandidate &&
-    queue.dropPolicy === "new" &&
-    queue.cap > 0 &&
-    pendingCount >= queue.cap
-  ) {
+  if (queue.dropPolicy === "new" && queue.cap > 0 && pendingCount >= queue.cap) {
     run.onQueueDisposition?.("queue-cap-new");
     completeFollowupRunLifecycle(run);
     return false;
@@ -250,17 +233,13 @@ export function enqueueFollowupRun(
         }
         const contextKey = resolveFollowupDeliveryContextKey(item);
         const lastElision = queue.summaryElisions.at(-1);
+        const compactSource = createOverflowSummaryRetrySource(item);
         if (lastElision?.contextKey === contextKey) {
-          const compactSource = createOverflowSummaryRetrySource(item);
           lastElision.count += 1;
           lastElision.sources.push(compactSource);
           lastElision.summaryLines.push(summaryLine);
           lastElision.sourceRefs.set(item, compactSource);
-          if (queue.activeSummarySources.has(item)) {
-            queue.activeSummarySources.add(compactSource);
-          }
         } else {
-          const compactSource = createOverflowSummaryRetrySource(item);
           queue.summaryElisions.push({
             contextKey,
             count: 1,
@@ -268,9 +247,9 @@ export function enqueueFollowupRun(
             summaryLines: [summaryLine],
             sourceRefs: new WeakMap([[item, compactSource]]),
           });
-          if (queue.activeSummarySources.has(item)) {
-            queue.activeSummarySources.add(compactSource);
-          }
+        }
+        if (queue.activeSummarySources.has(item)) {
+          queue.activeSummarySources.add(compactSource);
         }
         trimSummaryElisionsToCap(queue);
       }

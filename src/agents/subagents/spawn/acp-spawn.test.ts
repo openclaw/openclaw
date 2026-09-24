@@ -97,73 +97,6 @@ const hoisted = vi.hoisted(() => {
   const getSubagentRunByChildSessionKeyMock = vi.fn();
   const listTasksForOwnerKeyMock = vi.fn();
   const upsertSessionEntryMock = vi.fn();
-  const createSessionAccessorMock = () => {
-    const resolveMockStorePath = (scope: {
-      agentId?: string;
-      env?: NodeJS.ProcessEnv;
-      storePath?: string;
-    }): string =>
-      scope.storePath ??
-      resolveStorePathMock(undefined, {
-        agentId: scope.agentId,
-        env: scope.env,
-      });
-    const loadMockEntry = (scope: {
-      agentId?: string;
-      env?: NodeJS.ProcessEnv;
-      sessionKey: string;
-      storePath?: string;
-    }): SessionEntry | undefined => {
-      const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
-        string,
-        SessionEntry
-      >;
-      return store[scope.sessionKey];
-    };
-    const listMockEntries = (
-      scope: {
-        agentId?: string;
-        env?: NodeJS.ProcessEnv;
-        storePath?: string;
-      } = {},
-    ) => {
-      const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
-        string,
-        SessionEntry
-      >;
-      return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
-    };
-    return {
-      listSessionEntriesCore: listMockEntries,
-      listSessionEntriesReadOnly: listMockEntries,
-      loadSessionEntry: loadMockEntry,
-      loadSessionEntryReadOnly: loadMockEntry,
-      upsertSessionEntryCore: async (scope: unknown, patch: SessionEntry) =>
-        await upsertSessionEntryMock(scope, patch),
-      resolveSessionTranscriptRuntimeTarget: async (scope: {
-        agentId: string;
-        sessionId: string;
-        sessionKey: string;
-        storePath?: string;
-        threadId?: string | number;
-      }) => {
-        const store = scope.storePath
-          ? (loadSessionStoreMock(scope.storePath) as Record<string, SessionEntry>)
-          : undefined;
-        const resolved = await resolveSessionTranscriptFileMock({
-          ...scope,
-          ...(store ? { sessionStore: store } : {}),
-          sessionEntry: loadMockEntry(scope),
-        });
-        return {
-          agentId: scope.agentId,
-          sessionFile: resolved.sessionFile,
-          sessionId: scope.sessionId,
-          sessionKey: scope.sessionKey,
-        };
-      },
-    };
-  };
   const state = {
     cfg: createDefaultSpawnConfig(),
   };
@@ -190,7 +123,6 @@ const hoisted = vi.hoisted(() => {
     getSubagentRunByChildSessionKeyMock,
     listTasksForOwnerKeyMock,
     upsertSessionEntryMock,
-    createSessionAccessorMock,
     state,
   };
 });
@@ -223,7 +155,15 @@ vi.mock("../../../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: hoisted.resolveStorePathMock,
 }));
 
-vi.mock("../../../config/sessions/session-accessor.js", () => hoisted.createSessionAccessorMock());
+vi.mock("../../../config/sessions/session-accessor.js", async () => {
+  const { createAcpSpawnStoreMocks } = await import("./acp-spawn-store.test-support.js");
+  return createAcpSpawnStoreMocks(hoisted).accessor;
+});
+
+vi.mock("../../../config/sessions/session-entry-read-runtime.js", async () => {
+  const { createAcpSpawnStoreMocks } = await import("./acp-spawn-store.test-support.js");
+  return createAcpSpawnStoreMocks(hoisted).readRuntime;
+});
 
 vi.mock("../../../config/sessions.js", async () => {
   const { isConfiguredSessionStoreAgentId, isPerAgentSessionStoreConfig } =
@@ -1352,70 +1292,48 @@ describe("spawnAcpDirect", () => {
     });
   });
 
-  it("uses configured runtime=acp agent defaults before launching the external ACP agent", async () => {
-    replaceSpawnConfig({
-      ...createDefaultSpawnConfig(),
-      agents: {
-        list: [
-          {
-            id: "codex-acp",
-            runtime: {
-              type: "acp",
-              acp: { agent: "codex" },
-            },
-            subagents: {
-              model: "openai/gpt-5.5",
-              thinking: "low",
-            },
-          },
-        ],
-        defaults: {
-          subagents: {
-            allowAgents: ["codex"],
-            maxSpawnDepth: 2,
-          },
-        },
-      },
-    });
-
-    const result = await spawnAcpDirect(
-      {
-        task: "Investigate flaky tests",
-        agentId: "codex-acp",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-      },
-    );
-
-    expectAcceptedSpawn(result);
-    expectInitializeSessionFields({
-      agent: "codex",
-      runtimeOptions: {
-        model: "openai/gpt-5.5",
-        thinking: "low",
-      },
-    });
-  });
-
   it.each<{
     scenario: string;
     model?: string;
+    subagentModel?: string;
+    modelAliases?: Record<string, { alias: string }>;
     ownerThinking?: ThinkLevel;
     globalThinking?: ThinkLevel;
     modelThinking?: ThinkLevel;
     subagentThinking?: ThinkLevel;
     globalSubagentThinking?: ThinkLevel;
     thinking?: ThinkLevel;
+    expectedModel?: string;
     expectedThinking?: ThinkLevel;
     expectedThinkingExplicit?: boolean;
     backend?: string;
   }>([
     {
+      scenario: "qualified subagent model",
+      model: "anthropic/claude-sonnet-4-6",
+      subagentModel: "openai/gpt-5.5",
+      subagentThinking: "low",
+      expectedModel: "openai/gpt-5.5",
+      expectedThinking: "low",
+    },
+    {
+      scenario: "bare subagent alias with the ACP agent's provider",
+      model: "anthropic/claude-sonnet-4-6",
+      subagentModel: "opus",
+      modelAliases: { "claude-opus-4-6": { alias: "opus" } },
+      subagentThinking: "low",
+      expectedModel: "anthropic/claude-opus-4-6",
+      expectedThinking: "low",
+    },
+    {
       scenario: "configured primary model with global thinking default",
       model: "anthropic/claude-sonnet-4-6",
       globalThinking: "off",
       expectedThinking: "off",
+    },
+    {
+      scenario: "opaque harness primary without a native provider prefix",
+      model: "harness-only[context=272k,reasoning=medium,fast=false]",
     },
     {
       scenario: "owner default before model and global defaults",
@@ -1480,12 +1398,15 @@ describe("spawnAcpDirect", () => {
     "resolves configured ACP spawn model and thinking ($scenario)",
     async ({
       model,
+      subagentModel,
+      modelAliases,
       ownerThinking,
       globalThinking,
       modelThinking,
       subagentThinking,
       globalSubagentThinking,
       thinking,
+      expectedModel = model,
       expectedThinking,
       expectedThinkingExplicit,
       backend,
@@ -1502,14 +1423,18 @@ describe("spawnAcpDirect", () => {
               },
               model,
               thinkingDefault: ownerThinking,
-              subagents: { thinking: subagentThinking },
+              subagents: { model: subagentModel, thinking: subagentThinking },
             },
           ],
           defaults: {
+            model: "openai/gpt-5.4",
             thinkingDefault: globalThinking,
-            ...(model && modelThinking
-              ? { models: { [model]: { params: { thinking: modelThinking } } } }
-              : {}),
+            models: {
+              ...modelAliases,
+              ...(model && modelThinking
+                ? { [model]: { params: { thinking: modelThinking } } }
+                : {}),
+            },
             subagents: {
               allowAgents: ["codex"],
               maxSpawnDepth: 2,
@@ -1532,9 +1457,9 @@ describe("spawnAcpDirect", () => {
           ? { thinkingExplicit: expectedThinkingExplicit }
           : {}),
         runtimeOptions:
-          model || expectedThinking
+          expectedModel || expectedThinking
             ? {
-                ...(model ? { model } : {}),
+                ...(expectedModel ? { model: expectedModel } : {}),
                 ...(expectedThinking ? { thinking: expectedThinking } : {}),
               }
             : undefined,
