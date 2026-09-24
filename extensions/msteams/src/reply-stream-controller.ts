@@ -51,13 +51,19 @@ function isStreamCancelledError(err: unknown): boolean {
 // Teams shows informative stream updates as a one-line status next to the
 // progress bar and drops newlines, so multi-row progress drafts (label,
 // commentary, tool bullets, plan steps) would run together. Join the rows with
-// a visible separator instead.
-function flattenInformativeStatus(text: string): string {
-  return text
+// a visible separator instead, keeping the newest rows within Teams' 1000-char
+// informative limit.
+const INFORMATIVE_MAX_CHARS = 1000;
+
+export function flattenInformativeStatus(text: string): string {
+  const joined = text
     .split("\n")
     .map((line) => line.trim().replace(/^[•-]\s+/u, ""))
     .filter(Boolean)
     .join(" · ");
+  return joined.length > INFORMATIVE_MAX_CHARS
+    ? `…${joined.slice(joined.length - INFORMATIVE_MAX_CHARS + 1)}`
+    : joined;
 }
 
 /**
