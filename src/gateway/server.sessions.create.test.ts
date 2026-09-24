@@ -783,38 +783,42 @@ test.each([
 
 test("sessions.create does not donate a personal default to an unpinned adoption or fork", async () => {
   await withOpenClawTestState({ layout: "state-only" }, async () => {
-    const { storePath, client, context } = await createPersonalAccountSessionFixture();
-    const key = "agent:main:dashboard:unpinned-existing";
-    const sessionId = "unpinned-existing-session";
-    await writeSessionStore({
-      entries: {
-        [key]: sessionStoreEntry(sessionId, {
+    try {
+      const { storePath, client, context } = await createPersonalAccountSessionFixture();
+      const key = "agent:main:dashboard:unpinned-existing";
+      const sessionId = "unpinned-existing-session";
+      await writeSessionStore({
+        entries: {
+          [key]: sessionStoreEntry(sessionId, {
+            providerOverride: "openai",
+            modelOverride: "gpt-5.6-sol",
+          }),
+        },
+      });
+      await seedSessionTranscript({
+        sessionId,
+        sessionKey: key,
+        storePath,
+        messages: [{ role: "user", content: "An existing shared-auth conversation" }],
+      });
+      for (const fork of [false, true]) {
+        const target = fork ? `${key}-fork` : key;
+        const result = await directSessionReq(
+          "sessions.create",
+          { key: target, ...(fork ? { parentSessionKey: key, fork: true } : {}) },
+          { client, context },
+        );
+        expect(result.ok, JSON.stringify(result.error)).toBe(true);
+        expect(loadSessionEntry({ sessionKey: target, storePath })).toMatchObject({
           providerOverride: "openai",
           modelOverride: "gpt-5.6-sol",
-        }),
-      },
-    });
-    await seedSessionTranscript({
-      sessionId,
-      sessionKey: key,
-      storePath,
-      messages: [{ role: "user", content: "An existing shared-auth conversation" }],
-    });
-    for (const fork of [false, true]) {
-      const target = fork ? `${key}-fork` : key;
-      const result = await directSessionReq(
-        "sessions.create",
-        { key: target, ...(fork ? { parentSessionKey: key, fork: true } : {}) },
-        { client, context },
-      );
-      expect(result.ok, JSON.stringify(result.error)).toBe(true);
-      expect(loadSessionEntry({ sessionKey: target, storePath })).toMatchObject({
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-      });
-      expect(
-        loadSessionEntry({ sessionKey: target, storePath })?.authProfileOverride,
-      ).toBeUndefined();
+        });
+        expect(
+          loadSessionEntry({ sessionKey: target, storePath })?.authProfileOverride,
+        ).toBeUndefined();
+      }
+    } finally {
+      await disposeSessionReadContexts();
     }
   });
 });
