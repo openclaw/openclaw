@@ -174,7 +174,6 @@ describe("qa suite provider selection", () => {
         primaryModel: "openai/gpt-5.6-luna",
         alternateModel: "openai/gpt-5.6-terra",
       });
-      expect(summary.run.primaryModel).not.toBe(summary.run.alternateModel);
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }

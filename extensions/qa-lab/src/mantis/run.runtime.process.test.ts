@@ -503,18 +503,7 @@ process.exit(result.status ?? 1);
       const parentPidPath = path.join(repoRoot, "qa-parent.pid");
       const descendantPidPath = path.join(repoRoot, "qa-descendant.pid");
       const pnpmShimPath = path.join(binDir, "pnpm");
-      await runGit(repoRoot, ["init"]);
-      await fs.writeFile(path.join(repoRoot, "seed.txt"), "seed\n", "utf8");
-      await runGit(repoRoot, ["add", "seed.txt"]);
-      await runGit(repoRoot, [
-        "-c",
-        "user.name=Mantis Test",
-        "-c",
-        "user.email=mantis@example.test",
-        "commit",
-        "-m",
-        "seed",
-      ]);
+      await initializeGitRepo(repoRoot);
       await fs.mkdir(binDir, { recursive: true });
       await writeCommandShim(
         pnpmShimPath,
@@ -568,11 +557,7 @@ process.exit(result.status ?? 1);
           );
         }
         await Promise.all([waitForDead(parentPid, 2_000), waitForDead(descendantPid, 2_000)]);
-        const worktreeList = await runGit(repoRoot, ["worktree", "list", "--porcelain"]);
-        const worktreeEntries = worktreeList.stdout
-          .split(/\r?\n/u)
-          .filter((entry) => entry.startsWith("worktree "))
-          .map((entry) => entry.slice("worktree ".length));
+        const worktreeEntries = await listGitWorktreePaths(repoRoot);
         await expect(fs.realpath(worktreeEntries[0] ?? "")).resolves.toBe(
           await fs.realpath(repoRoot),
         );

@@ -15,6 +15,9 @@ describe("QA Lab conversation selection", () => {
         conversationSelectionKey({ accountId: "account-b", id: "shared", kind: "channel" }),
       ),
     ).toEqual({ accountId: "account-b", id: "shared", kind: "channel" });
+    expect(findConversationBySelectionKey(conversations, '["account-a","direct","shared"]')).toBe(
+      conversations[2],
+    );
     expect(findConversationBySelectionKey(conversations, null)).toBeUndefined();
   });
 });

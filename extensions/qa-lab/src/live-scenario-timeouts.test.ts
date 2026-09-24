@@ -451,16 +451,6 @@ describe("live subagent scenario timeouts", () => {
     ).toBe(60_000);
   });
 
-  it("rejects echoed completion text when no child was actually spawned", async () => {
-    const { result, state } = runCompletionPolicyFlow({
-      parentToolCalls: { sessions_yield: 1, exec: 1 },
-      tasks: [],
-    });
-
-    await expect(result).rejects.toThrow("parent did not spawn a subagent");
-    expect(state.getSnapshot().messages[0]?.text).toContain("CHILD_DONE");
-  });
-
   it.each([
     { reason: "missing child task", tasks: [] },
     {

@@ -4,6 +4,7 @@ import { createServer, request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { DebugProxyCaptureStore } from "openclaw/plugin-sdk/proxy-capture";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveUiAssetVersion } from "./lab-server-ui.js";
 import { startQaLabServer, type QaLabServerStartParams } from "./lab-server.js";
@@ -43,126 +44,30 @@ vi.mock("openclaw/plugin-sdk/qa-channel", () => ({
 }));
 
 const captureMock = vi.hoisted(() => {
-  const sessions: Array<Record<string, unknown>> = [];
-  const events: Array<Record<string, unknown>> = [];
-
-  const readMeta = (event: Record<string, unknown>) => {
-    try {
-      return typeof event.metaJson === "string"
-        ? (JSON.parse(event.metaJson) as Record<string, unknown>)
-        : {};
-    } catch {
-      return {};
-    }
-  };
-  const countValues = (values: Array<string | undefined>) =>
-    Object.entries(
-      values.reduce<Record<string, number>>((acc, value) => {
-        if (value) {
-          acc[value] = (acc[value] ?? 0) + 1;
-        }
-        return acc;
-      }, {}),
-    ).map(([value, count]) => ({ value, count }));
-  const countMatching = <T>(values: T[], predicate: (value: T) => boolean) => {
-    let count = 0;
-    for (const value of values) {
-      if (predicate(value)) {
-        count += 1;
-      }
-    }
-    return count;
-  };
-
   const store = {
-    upsertSession(session: Record<string, unknown>) {
-      sessions.push({ ...session });
-    },
-    recordEvent(event: Record<string, unknown>) {
-      events.push({ ...event });
-    },
-    listSessions(limit: number) {
-      return sessions.slice(0, limit).map((session) =>
-        Object.assign({}, session, {
-          eventCount: countMatching(events, (event) => event.sessionId === session.id),
-        }),
-      );
-    },
-    getSessionEvents(sessionId: string, limit: number) {
-      return events.filter((event) => event.sessionId === sessionId).slice(0, limit);
-    },
-    summarizeSessionCoverage(sessionId: string) {
-      const selected = events.filter((event) => event.sessionId === sessionId);
-      const metas = selected.map(readMeta);
-      return {
-        sessionId,
-        totalEvents: selected.length,
-        unlabeledEventCount: countMatching(metas, (meta) => !meta.provider && !meta.model),
-        providers: countValues(metas.map((meta) => meta.provider as string | undefined)),
-        apis: countValues(metas.map((meta) => meta.api as string | undefined)),
-        models: countValues(metas.map((meta) => meta.model as string | undefined)),
-        hosts: countValues(selected.map((event) => event.host as string | undefined)),
-        localPeers: countValues(
-          selected
-            .map((event) => event.host as string | undefined)
-            .filter((host) => host?.startsWith("127.0.0.1:")),
-        ),
-      };
-    },
-    queryPreset(preset: string, sessionId?: string) {
-      if (preset !== "double-sends") {
-        return [];
-      }
-      const selected = events.filter((event) => !sessionId || event.sessionId === sessionId);
-      const counts = selected.reduce<Record<string, number>>((acc, event) => {
-        const host = typeof event.host === "string" ? event.host : "";
-        if (host) {
-          acc[host] = (acc[host] ?? 0) + 1;
-        }
-        return acc;
-      }, {});
-      return Object.entries(counts)
-        .filter(([, duplicateCount]) => duplicateCount > 1)
-        .map(([host, duplicateCount]) => ({ host, duplicateCount }));
-    },
-    readBlob() {
-      return null;
-    },
-    close: vi.fn(),
-    deleteSessions(sessionIds: string[]) {
-      const ids = new Set(sessionIds);
-      for (let index = sessions.length - 1; index >= 0; index -= 1) {
-        if (ids.has(String(sessions[index]?.id))) {
-          sessions.splice(index, 1);
-        }
-      }
-      return { deleted: sessionIds.length };
-    },
-    purgeAll() {
-      sessions.splice(0);
-      events.splice(0);
-      return { deletedSessions: 0, deletedEvents: 0 };
-    },
+    listSessions: vi.fn<DebugProxyCaptureStore["listSessions"]>(() => []),
+    getSessionEvents: vi.fn<DebugProxyCaptureStore["getSessionEvents"]>(() => []),
+    summarizeSessionCoverage: vi.fn<DebugProxyCaptureStore["summarizeSessionCoverage"]>(),
+    queryPreset: vi.fn<DebugProxyCaptureStore["queryPreset"]>(() => []),
   };
+  const release = vi.fn();
 
   return {
-    acquire: vi.fn(() => ({
-      store,
-      release: store.close,
-    })),
+    acquire: vi.fn(() => ({ store, release })),
+    release,
     store,
     reset() {
-      sessions.splice(0);
-      events.splice(0);
+      for (const method of Object.values(store)) {
+        method.mockReset();
+      }
       captureMock.acquire.mockClear();
-      store.close.mockClear();
+      release.mockClear();
     },
   };
 });
 
 vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
   acquireDebugProxyCaptureStore: captureMock.acquire,
-  getDebugProxyCaptureStore: () => captureMock.store,
   resolveDebugProxySettings: () => ({
     proxyUrl: process.env.OPENCLAW_DEBUG_PROXY_URL ?? "",
     sessionId: "qa-lab-test",
@@ -958,7 +863,7 @@ describe("qa-lab server", () => {
     ).rejects.toThrow("embedded setup failed");
 
     expect(captureMock.acquire).not.toHaveBeenCalled();
-    expect(captureMock.store.close).not.toHaveBeenCalled();
+    expect(captureMock.release).not.toHaveBeenCalled();
   });
 
   it("closes the server and acquired capture state when embedded gateway stop fails", async () => {
@@ -987,7 +892,7 @@ describe("qa-lab server", () => {
     await expect(lab.stop()).rejects.toThrow("gateway stop failed");
 
     expect(captureMock.acquire).toHaveBeenCalledTimes(1);
-    expect(captureMock.store.close).toHaveBeenCalledTimes(1);
+    expect(captureMock.release).toHaveBeenCalledTimes(1);
     await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
   });
 
@@ -1834,78 +1739,100 @@ describe("qa-lab server", () => {
   });
 
   it("serves proxy capture sessions, events, and query rows", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-capture-"));
-    cleanups.push(async () => {
-      await rm(tempDir, { recursive: true, force: true });
-    });
     const store = captureMock.store;
-    store.upsertSession({
-      id: "qa-capture-session",
-      startedAt: Date.now(),
-      mode: "proxy-run",
-      sourceScope: "openclaw",
-      sourceProcess: "openclaw",
-    });
-    store.recordEvent({
+    store.listSessions.mockReturnValue([
+      {
+        id: "qa-capture-session",
+        startedAt: 1,
+        mode: "proxy-run",
+        sourceProcess: "openclaw",
+        eventCount: 3,
+      },
+    ]);
+    store.getSessionEvents.mockReturnValue([
+      {
+        sessionId: "qa-capture-session",
+        ts: 1,
+        sourceScope: "openclaw",
+        sourceProcess: "openclaw",
+        protocol: "https",
+        direction: "outbound",
+        kind: "request",
+        flowId: "flow-1",
+        method: "POST",
+        host: "api.example.com",
+        path: "/v1/send",
+        dataText: '{"hello":"world"}',
+        dataSha256: "abc",
+        metaJson: JSON.stringify({
+          provider: "openai",
+          api: "responses",
+          model: "gpt-5.6-luna",
+          captureOrigin: "shared-fetch",
+        }),
+      },
+      {
+        sessionId: "qa-capture-session",
+        ts: 2,
+        sourceScope: "openclaw",
+        sourceProcess: "openclaw",
+        protocol: "https",
+        direction: "outbound",
+        kind: "request",
+        flowId: "flow-2",
+        method: "POST",
+        host: "api.example.com",
+        path: "/v1/send",
+        dataText: '{"hello":"world"}',
+        dataSha256: "abc",
+        metaJson: JSON.stringify({
+          provider: "openai",
+          api: "responses",
+          model: "gpt-5.6-luna",
+          captureOrigin: "shared-fetch",
+        }),
+      },
+      {
+        sessionId: "qa-capture-session",
+        ts: 3,
+        sourceScope: "openclaw",
+        sourceProcess: "openclaw",
+        protocol: "https",
+        direction: "outbound",
+        kind: "request",
+        flowId: "flow-3",
+        method: "POST",
+        host: "127.0.0.1:11434",
+        path: "/api/chat",
+        metaJson: JSON.stringify({
+          provider: "ollama",
+          model: "kimi-k2.5:cloud",
+          captureOrigin: "shared-fetch",
+        }),
+      },
+    ]);
+    store.summarizeSessionCoverage.mockReturnValue({
       sessionId: "qa-capture-session",
-      ts: Date.now(),
-      sourceScope: "openclaw",
-      sourceProcess: "openclaw",
-      protocol: "https",
-      direction: "outbound",
-      kind: "request",
-      flowId: "flow-1",
-      method: "POST",
-      host: "api.example.com",
-      path: "/v1/send",
-      dataText: '{"hello":"world"}',
-      dataSha256: "abc",
-      metaJson: JSON.stringify({
-        provider: "openai",
-        api: "responses",
-        model: "gpt-5.6-luna",
-        captureOrigin: "shared-fetch",
-      }),
+      totalEvents: 3,
+      unlabeledEventCount: 0,
+      providers: [
+        { value: "openai", count: 2 },
+        { value: "ollama", count: 1 },
+      ],
+      apis: [{ value: "responses", count: 2 }],
+      models: [
+        { value: "gpt-5.6-luna", count: 2 },
+        { value: "kimi-k2.5:cloud", count: 1 },
+      ],
+      hosts: [
+        { value: "api.example.com", count: 2 },
+        { value: "127.0.0.1:11434", count: 1 },
+      ],
+      localPeers: [{ value: "127.0.0.1:11434", count: 1 }],
     });
-    store.recordEvent({
-      sessionId: "qa-capture-session",
-      ts: Date.now() + 1,
-      sourceScope: "openclaw",
-      sourceProcess: "openclaw",
-      protocol: "https",
-      direction: "outbound",
-      kind: "request",
-      flowId: "flow-2",
-      method: "POST",
-      host: "api.example.com",
-      path: "/v1/send",
-      dataText: '{"hello":"world"}',
-      dataSha256: "abc",
-      metaJson: JSON.stringify({
-        provider: "openai",
-        api: "responses",
-        model: "gpt-5.6-luna",
-        captureOrigin: "shared-fetch",
-      }),
-    });
-    store.recordEvent({
-      sessionId: "qa-capture-session",
-      ts: Date.now() + 2,
-      sourceScope: "openclaw",
-      sourceProcess: "openclaw",
-      protocol: "https",
-      direction: "outbound",
-      kind: "request",
-      flowId: "flow-3",
-      method: "POST",
-      host: "127.0.0.1:11434",
-      path: "/api/chat",
-      metaJson: JSON.stringify({
-        provider: "ollama",
-        model: "kimi-k2.5:cloud",
-        captureOrigin: "shared-fetch",
-      }),
-    });
+    store.queryPreset.mockReturnValue([
+      { host: "api.example.com", path: "/v1/send", method: "POST", duplicateCount: 2 },
+    ]);
 
     const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
@@ -1978,11 +1905,15 @@ describe("qa-lab server", () => {
     expect(query.rows).toHaveLength(1);
     expect(query.rows[0]?.host).toBe("api.example.com");
     expect(query.rows[0]?.duplicateCount).toBe(2);
+    expect(store.listSessions.mock.calls).toEqual([[50]]);
+    expect(store.getSessionEvents.mock.calls).toEqual([["qa-capture-session", 200]]);
+    expect(store.summarizeSessionCoverage.mock.calls).toEqual([["qa-capture-session"]]);
+    expect(store.queryPreset.mock.calls).toEqual([["double-sends", "qa-capture-session"]]);
     expect(captureMock.acquire).toHaveBeenCalledTimes(1);
 
     await lab.stop();
     stopped = true;
-    expect(captureMock.store.close).toHaveBeenCalledTimes(1);
+    expect(captureMock.release).toHaveBeenCalledTimes(1);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

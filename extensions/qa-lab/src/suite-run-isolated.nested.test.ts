@@ -169,6 +169,8 @@ describe("isolated QA suite nested publication", () => {
   });
 
   it("preserves nested publication ownership through concurrent worker runtime preparation", async () => {
+    // Earlier continuation rows install a different artifact writer.
+    mocks.writeQaSuiteArtifacts.mockReset();
     vi.stubEnv("OPENCLAW_QA_SUITE_PROGRESS", "1");
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const lab = createCleanupTestLab();
@@ -238,46 +240,51 @@ describe("isolated QA suite nested publication", () => {
       }
     });
 
-    const result = await runQaFlowSuiteIsolated(
-      {
-        channelDriver: "crabline",
-        channelId: "telegram",
-        lab,
-        startLab: async () => createCleanupTestLab(),
-      },
-      context,
-      runChild,
-    );
+    try {
+      const result = await runQaFlowSuiteIsolated(
+        {
+          channelDriver: "crabline",
+          channelId: "telegram",
+          lab,
+          startLab: async () => createCleanupTestLab(),
+        },
+        context,
+        runChild,
+      );
 
-    expect(maxActiveWorkers).toBe(2);
-    expect(result.scenarios).toEqual([
-      expect.objectContaining({ name: "first-crabline-scenario", status: "pass" }),
-      expect.objectContaining({ name: "second-crabline-scenario", status: "pass" }),
-    ]);
-    expect(runScenario).toHaveBeenCalledTimes(2);
-    expect(
-      stderrWrite.mock.calls
-        .flat()
-        .join("")
-        .split("\n")
-        .filter((line) => line.startsWith("[qa-suite] run complete")),
-    ).toEqual(["[qa-suite] run complete"]);
-    expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledTimes(5);
-    for (const [nonFinalArtifacts] of mocks.writeQaSuiteArtifacts.mock.calls.slice(0, -1)) {
-      expect(nonFinalArtifacts).toMatchObject({ channel: "telegram", channelDriver: "crabline" });
-      expect(nonFinalArtifacts.transportArtifacts).toBeUndefined();
+      expect(maxActiveWorkers).toBe(2);
+      expect(result.scenarios).toEqual([
+        expect.objectContaining({ name: "first-crabline-scenario", status: "pass" }),
+        expect.objectContaining({ name: "second-crabline-scenario", status: "pass" }),
+      ]);
+      expect(runScenario).toHaveBeenCalledTimes(2);
+      expect(
+        stderrWrite.mock.calls
+          .flat()
+          .join("")
+          .split("\n")
+          .filter((line) => line.startsWith("[qa-suite] run complete")),
+      ).toEqual(["[qa-suite] run complete"]);
+      expect(mocks.captureTransportArtifacts).toHaveBeenCalledOnce();
+      expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledTimes(5);
+      for (const [nonFinalArtifacts] of mocks.writeQaSuiteArtifacts.mock.calls.slice(0, -1)) {
+        expect(nonFinalArtifacts).toMatchObject({ channel: "telegram", channelDriver: "crabline" });
+        expect(nonFinalArtifacts.transportArtifacts).toBeUndefined();
+      }
+      const finalArtifacts = mocks.writeQaSuiteArtifacts.mock.calls.at(-1)?.[0];
+      expect(finalArtifacts).toMatchObject({
+        channel: "telegram",
+        channelDriver: "crabline",
+        transportArtifacts: {
+          artifacts: [
+            { kind: "channel-capability-matrix", path: "capabilities.json" },
+            { kind: "channel-driver-smoke", path: "readiness.json" },
+          ],
+        },
+      });
+    } finally {
+      stderrWrite.mockRestore();
     }
-    const finalArtifacts = mocks.writeQaSuiteArtifacts.mock.calls.at(-1)?.[0];
-    expect(finalArtifacts).toMatchObject({
-      channel: "telegram",
-      channelDriver: "crabline",
-      transportArtifacts: {
-        artifacts: [
-          { kind: "channel-capability-matrix", path: "capabilities.json" },
-          { kind: "channel-driver-smoke", path: "readiness.json" },
-        ],
-      },
-    });
   });
 
   it.each(["pass", "skip", "failed step", "failure details"] as const)(

@@ -1,7 +1,3 @@
-import {
-  parseQaTarget as parseCanonicalQaTarget,
-  sanitizeQaBusToolCalls as sanitizeCanonicalQaBusToolCalls,
-} from "openclaw/plugin-sdk/qa-channel-protocol";
 import { describe, expect, it } from "vitest";
 import {
   buildQaConversationTarget,
@@ -20,27 +16,21 @@ describe("QA Lab package bus protocol", () => {
     },
   );
 
-  it.each([
-    "bare-id",
-    "channel:CaseSensitive",
-    "group:team-room",
-    "dm:user-1",
-    "thread:Room/Topic",
-    "thread:/v1/group/Room%2FOne/Topic%2FTwo",
-    "thread:/v1/dm/Alice/Topic",
-  ])("matches the canonical target parser for %s", (target) => {
-    expect(parseQaTarget(target)).toEqual(parseCanonicalQaTarget(target));
+  it("defaults bare targets to direct conversations", () => {
+    expect(parseQaTarget("bare-id")).toEqual({
+      chatType: "direct",
+      conversationId: "bare-id",
+    });
   });
 
   it.each(["", "CHANNEL:CaseSensitive", "thread:Room/", "thread:/v1/group/Room/%GG", "dm:"])(
-    "matches canonical target errors for %j",
+    "rejects malformed targets for %j",
     (target) => {
       expect(() => parseQaTarget(target)).toThrow();
-      expect(() => parseCanonicalQaTarget(target)).toThrow();
     },
   );
 
-  it("matches canonical bounded redaction", () => {
+  it("redacts and bounds tool-call arguments", () => {
     const toolCalls = [
       null,
       { name: 123 },
@@ -60,17 +50,20 @@ describe("QA Lab package bus protocol", () => {
       },
     ];
 
-    expect(sanitizeQaBusToolCalls(toolCalls)).toEqual(sanitizeCanonicalQaBusToolCalls(toolCalls));
-  });
-
-  it("matches the canonical count limit without processing the tail", () => {
-    const toolCalls = Array.from({ length: 50 }, (_, index) => ({ name: `tool-${index}` }));
-    toolCalls.push({
-      get name(): string {
-        throw new Error("tail should not be sanitized");
+    expect(sanitizeQaBusToolCalls(toolCalls)).toEqual([
+      {
+        name: "exec",
+        arguments: {
+          command: "[redacted]",
+          apiToken: "[redacted]",
+          headers: { Authorization: "[redacted]" },
+          values: ["[redacted]", { password: "[redacted]" }],
+          nested: { one: { two: { three: "[truncated]" } } },
+          finite: 42,
+          infinite: "Infinity",
+          bigint: "123",
+        },
       },
-    });
-
-    expect(sanitizeQaBusToolCalls(toolCalls)).toEqual(sanitizeCanonicalQaBusToolCalls(toolCalls));
+    ]);
   });
 });

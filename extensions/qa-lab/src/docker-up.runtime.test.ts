@@ -268,8 +268,6 @@ describe("runQaDockerUp", () => {
         },
       );
 
-      expect(result.gatewayUrl).not.toBe(`http://127.0.0.1:${gatewayPort}/`);
-      expect(result.qaLabUrl).not.toBe(`http://127.0.0.1:${qaLabPort}`);
       expect(result.gatewayUrl).toBe("http://127.0.0.1:28001/");
       expect(result.qaLabUrl).toBe("http://127.0.0.1:28002");
       expect(resolveHostPort).toHaveBeenCalledWith(gatewayPort, false);

@@ -485,6 +485,8 @@ describe("qa-bus server", () => {
 
   it("keeps oversized numeric poll and search fields bounded", async () => {
     const state = createQaBusState();
+    const poll = vi.spyOn(state, "poll");
+    const searchMessages = vi.spyOn(state, "searchMessages");
     const bus = await startQaBusServer({ state });
     stops.push(bus["stop"]);
 
@@ -502,6 +504,12 @@ describe("qa-bus server", () => {
       timeoutMs: 60_000,
     });
     expect(pollResponse.status).toBe(200);
+    expect(poll).toHaveBeenCalledWith({
+      accountId: "acct-a",
+      cursor: 0,
+      limit: 500,
+      timeoutMs: 30_000,
+    });
     await expect(pollResponse.json()).resolves.toMatchObject({
       events: [{ message: { id: message.id } }],
     });
@@ -512,6 +520,11 @@ describe("qa-bus server", () => {
       query: "bounded",
     });
     expect(searchResponse.status).toBe(200);
+    expect(searchMessages).toHaveBeenLastCalledWith({
+      accountId: "acct-a",
+      limit: 100,
+      query: "bounded",
+    });
     await expect(searchResponse.json()).resolves.toMatchObject({
       messages: [{ id: message.id }],
     });
@@ -522,6 +535,11 @@ describe("qa-bus server", () => {
       `{"accountId":"acct-a","limit":1e309,"query":"bounded"}`,
     );
     expect(extremeSearchResponse.status).toBe(200);
+    expect(searchMessages).toHaveBeenLastCalledWith({
+      accountId: "acct-a",
+      limit: 100,
+      query: "bounded",
+    });
     await expect(extremeSearchResponse.json()).resolves.toMatchObject({
       messages: [{ id: message.id }],
     });

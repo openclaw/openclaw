@@ -2,22 +2,31 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { defaultQaRuntimeModelForMode, resolveQaRuntimeModelPair } = vi.hoisted(() => ({
+const { defaultQaRuntimeModelForMode } = vi.hoisted(() => ({
   defaultQaRuntimeModelForMode:
     vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(),
-  resolveQaRuntimeModelPair: vi.fn(),
 }));
 
-vi.mock("./model-selection.runtime.js", () => ({
-  defaultQaRuntimeModelForMode,
-  resolveQaRuntimeModelPair,
-}));
+vi.mock("./model-selection.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./model-selection.runtime.js")>();
+  return {
+    ...actual,
+    defaultQaRuntimeModelForMode,
+    resolveQaRuntimeModelPair: (params: Parameters<typeof actual.resolveQaRuntimeModelPair>[0]) =>
+      actual.resolveQaRuntimeModelPair({
+        ...params,
+        resolveDefaultModel:
+          params.resolveDefaultModel ??
+          ((mode, alternate) =>
+            defaultQaRuntimeModelForMode(mode, alternate ? { alternate: true } : undefined)),
+      }),
+  };
+});
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
 import {
   resolveQaRunProfileExecutionSelection,
   resolveQaRunProfileMembership,
 } from "./profile-planning.js";
-import { resolveQaLiveFrontierAlternateModel } from "./providers/live-frontier/model-selection.runtime.js";
 import {
   createIdleQaRunnerSnapshot,
   createQaRunOutputDir,
@@ -30,26 +39,6 @@ import {
   readQaScorecardTaxonomyReport,
   type QaScorecardTaxonomyReport,
 } from "./scorecard-taxonomy.js";
-
-function resolveMockQaRuntimeModelPair(params: {
-  providerMode: string;
-  primaryModel?: string;
-  alternateModel?: string;
-  resolveDefaultModel?: (mode: string, alternate?: boolean) => string;
-}) {
-  const resolveDefaultModel =
-    params.resolveDefaultModel ??
-    ((mode: string, alternate = false) =>
-      defaultQaRuntimeModelForMode(mode, alternate ? { alternate: true } : undefined));
-  const primaryModel = params.primaryModel?.trim() || resolveDefaultModel(params.providerMode);
-  const alternateModel =
-    params.alternateModel?.trim() ||
-    (params.providerMode === "live-frontier"
-      ? (resolveQaLiveFrontierAlternateModel(primaryModel) ??
-        resolveDefaultModel(params.providerMode, true))
-      : resolveDefaultModel(params.providerMode, true));
-  return { primaryModel, alternateModel };
-}
 
 const profiles: QaScorecardTaxonomyReport["profiles"] = [
   {
@@ -114,7 +103,6 @@ describe("qa run config", () => {
       (mode: string, options?: { alternate?: boolean }) =>
         defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
-    resolveQaRuntimeModelPair.mockImplementation(resolveMockQaRuntimeModelPair);
   });
 
   it("creates a canonical smoke-profile request without copying profile membership", () => {
@@ -803,10 +791,10 @@ describe("qa run config", () => {
     }
   });
 
-  it("prefers the Codex OAuth default when the runtime resolver says it is available", () => {
+  it("uses the runtime default model for live selection", () => {
     defaultQaRuntimeModelForMode.mockImplementation((mode, options) => {
       if (mode === "live-frontier" && !options?.alternate) {
-        return "openai/gpt-5.6-luna";
+        return "openai/gpt-5.6-sol";
       }
       return defaultQaProviderModelForMode(mode as QaProviderModeInput, options);
     });
@@ -817,8 +805,8 @@ describe("qa run config", () => {
       channelDriver: "live",
       evidenceMode: "full",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-terra",
+      primaryModel: "openai/gpt-5.6-sol",
+      alternateModel: "openai/gpt-5.6-luna",
       fastMode: true,
       runtimePair: null,
       runtimePairLane: null,

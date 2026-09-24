@@ -308,7 +308,6 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models).toBeUndefined();
     expect(cfg.memory?.search?.remote).toBeUndefined();
     expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-lab", "openai", "qa-channel"]);
-    expect(cfg.plugins?.allow).not.toContain("anthropic");
     expect(cfg.plugins?.entries?.openai).toEqual({ enabled: true });
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.6-luna"]).toEqual({
       params: { transport: "sse", openaiWsWarmup: false, fastMode: true },

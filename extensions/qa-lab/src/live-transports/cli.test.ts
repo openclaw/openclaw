@@ -103,24 +103,6 @@ describe("live transport QA contributions", () => {
     expect(adapterRuntimeLoads).toEqual(adapterLoadsBefore);
   });
 
-  it.each(["discord", "slack", "whatsapp"] as const)(
-    "routes the shipped %s command through the shared suite host",
-    async (commandName) => {
-      const registration = listLiveTransportQaCliRegistrations().find(
-        (candidate) => candidate.commandName === commandName,
-      );
-      const qa = new Command();
-      registration?.register(qa);
-
-      await qa.parseAsync(["node", "openclaw", commandName, "--scenario", `${commandName}-canary`]);
-
-      expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith({
-        channelId: commandName,
-        options: expect.objectContaining({ scenarioIds: [`${commandName}-canary`] }),
-      });
-    },
-  );
-
   it("maps the Discord Crabline driver", async () => {
     const qa = new Command();
     requireRegistration("discord").register(qa);

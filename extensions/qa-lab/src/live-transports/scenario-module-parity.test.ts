@@ -6,6 +6,7 @@ import * as whatsappScenarioRuntime from "./whatsapp/scenario-runtime.js";
 
 const LANES = [
   {
+    canaryScenarioId: "discord-canary",
     channel: "discord",
     contextExpression: "discordScenarioContext",
     modulePath: "./live-transports/discord/scenario-runtime.js",
@@ -13,6 +14,7 @@ const LANES = [
     runtime: discordScenarioRuntime,
   },
   {
+    canaryScenarioId: "slack-canary",
     channel: "slack",
     contextExpression: "slackScenarioContext",
     modulePath: "./live-transports/slack/scenario-runtime.js",
@@ -20,6 +22,7 @@ const LANES = [
     runtime: slackScenarioRuntime,
   },
   {
+    canaryScenarioId: "whatsapp-canary",
     channel: "whatsapp",
     contextExpression: "whatsappScenarioContext",
     modulePath: "./live-transports/whatsapp/scenario-runtime.js",
@@ -84,7 +87,7 @@ function readExpression(value: unknown): string | undefined {
 describe("live transport scenario module routing", () => {
   it.each(LANES)(
     "routes every $channel flow through one shared channel runner",
-    ({ channel, contextExpression, modulePath, runnerName, runtime }) => {
+    ({ canaryScenarioId, channel, contextExpression, modulePath, runnerName, runtime }) => {
       expect(Reflect.get(runtime, runnerName)).toBeTypeOf("function");
 
       const bindings = readQaScenarioPack().scenarios.flatMap((scenario) => {
@@ -94,6 +97,9 @@ describe("live transport scenario module routing", () => {
         const call = readScenarioModuleCall(scenario, modulePath);
         return call ? [{ call, scenarioId: scenario.id }] : [];
       });
+
+      // A missing catalog or import must not turn this routing check into an empty loop.
+      expect(bindings.map(({ scenarioId }) => scenarioId)).toContain(canaryScenarioId);
 
       for (const { call, scenarioId } of bindings) {
         expect(call.call, scenarioId).toBe(runnerName);

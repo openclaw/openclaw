@@ -840,17 +840,13 @@ describe("qa cli registration", () => {
   });
 
   it.each([
-    ["suite", ["qa", "suite"]],
-    ["profile", ["qa", "run", "--qa-profile", "smoke-ci"]],
-    ["manual", ["qa", "manual", "--message", "hello"]],
-  ])("preserves omitted --fast intent for %s runs", async (_name, args) => {
+    ["suite", ["qa", "suite"], runQaSuiteCommand],
+    ["profile", ["qa", "run", "--qa-profile", "smoke-ci"], runQaProfileCommand],
+    ["manual", ["qa", "manual", "--message", "hello"], runQaManualLaneCommand],
+  ])("preserves omitted --fast intent for %s runs", async (_name, args, runCommand) => {
     await program.parseAsync(["node", "openclaw", ...args]);
 
-    const call =
-      runQaSuiteCommand.mock.calls[0]?.[0] ??
-      runQaProfileCommand.mock.calls[0]?.[0] ??
-      runQaManualLaneCommand.mock.calls[0]?.[0];
-    expect(call?.fastMode).toBeUndefined();
+    expect(runCommand).toHaveBeenCalledWith(expect.objectContaining({ fastMode: undefined }));
   });
 
   it("forwards --list-scenarios for telegram runs", async () => {

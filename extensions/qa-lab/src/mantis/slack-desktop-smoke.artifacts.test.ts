@@ -120,13 +120,23 @@ describe("Mantis Slack artifact ownership", () => {
         }),
       ),
     );
+    const firstRunSettled = firstRun.then(
+      () => undefined,
+      () => undefined,
+    );
     let secondStatus: string | undefined;
     try {
-      await copied.promise;
+      await Promise.race([
+        copied.promise,
+        firstRun.then(() => {
+          throw new Error("first run finished before copying artifacts");
+        }),
+      ]);
       const second = await runMantisSlackDesktopSmoke(options(createRunner(async () => {})));
       secondStatus = second.status;
     } finally {
       release.resolve();
+      await firstRunSettled;
     }
     expect((await firstRun).status).toBe("pass");
     expect(secondStatus).toBe("fail");

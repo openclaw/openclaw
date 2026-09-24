@@ -13,6 +13,7 @@ function responseWithText(text: string, init?: ResponseInit): Response {
 describe("QA Lab dashboard HTTP", () => {
   it("gives every API request a fresh 30 second deadline", async () => {
     const controllers = [new AbortController(), new AbortController(), new AbortController()];
+    const signals = controllers.map((controller) => controller.signal);
     const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
       expect(timeoutMs).toBe(30_000);
       const controller = controllers.shift();
@@ -34,6 +35,9 @@ describe("QA Lab dashboard HTTP", () => {
     await postJson("/api/runner/start", { scenario: "baseline" });
 
     expect(timeout).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(signals[0]);
+    expect(fetchMock.mock.calls[1]?.[1]?.signal).toBe(signals[1]);
+    expect(fetchMock.mock.calls[2]?.[1]?.signal).toBe(signals[2]);
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/api/bootstrap",

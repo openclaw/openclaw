@@ -6,7 +6,6 @@ const {
   bodyLocator,
   browserClose,
   contextClose,
-  contextNewPage,
   existsSync,
   goto,
   launch,
@@ -27,7 +26,6 @@ const {
   },
   browserClose: vi.fn(async () => undefined),
   contextClose: vi.fn(async () => undefined),
-  contextNewPage: vi.fn(),
   existsSync: vi.fn((_candidate: unknown) => false),
   goto: vi.fn(async () => undefined),
   launch: vi.fn(),
@@ -98,7 +96,6 @@ beforeEach(async () => {
     newContext: vi.fn(async () => context),
     close: browserClose,
   };
-  contextNewPage.mockResolvedValue(page);
   launch.mockResolvedValue(browser);
   vi.clearAllMocks();
   existsSync.mockReturnValue(false);
