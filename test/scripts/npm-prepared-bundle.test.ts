@@ -24,18 +24,27 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 // Only the default root pack reaches pnpm; git and tar fixtures keep the real binaries.
 const pnpmPack = vi.hoisted(() => ({
-  calls: [] as Array<{ args: string[]; env: NodeJS.ProcessEnv }>,
+  calls: [] as Array<{ args: string[]; cwd?: string; env: NodeJS.ProcessEnv }>,
   impl: undefined as ((directory: string, destination: string) => unknown) | undefined,
+  observer: undefined as ((args: string[]) => void) | undefined,
 }));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  const execFileSyncMock = (file: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
+  const execFileSyncMock = (
+    file: string,
+    args: string[],
+    options: { cwd?: string; env?: NodeJS.ProcessEnv },
+  ) => {
     if (file !== "pnpm") {
       return (actual.execFileSync as (...params: unknown[]) => unknown)(file, args, options);
     }
-    pnpmPack.calls.push({ args, env: options.env ?? {} });
+    pnpmPack.calls.push({ args, cwd: options.cwd, env: options.env ?? {} });
+    pnpmPack.observer?.(args);
     const value = (flag: string) => args[args.indexOf(flag) + 1] ?? "";
-    return pnpmPack.impl?.(value("--dir"), value("--pack-destination"));
+    if (args.includes("pack")) {
+      return pnpmPack.impl?.(options.cwd ?? "", value("--pack-destination"));
+    }
+    return undefined;
   };
   return { ...actual, execFileSync: execFileSyncMock };
 });
@@ -120,6 +129,7 @@ function packageSourceFixture(
     npmDistTag: "beta",
     producer: packageProducer(),
     runPack,
+    runRootPack: runPack,
   };
 }
 
@@ -584,27 +594,40 @@ describe("prepared npm bundle", () => {
   );
 
   it("packs bundled dependencies under the hoisted linker with prepack scripts enabled", () => {
-    const { runPack, ...fixture } = packageSourceFixture("2026.9.6");
+    const { runPack, runRootPack: _runRootPack, ...fixture } = packageSourceFixture("2026.9.6");
     pnpmPack.impl = runPack;
     try {
-      expect(prepareNpmPackageBundle(fixture).packageVersion).toBe("2026.9.6");
+      expect(
+        prepareNpmPackageBundle({
+          ...fixture,
+          sanitizeRootDeclarations: vi.fn(),
+          refreshRootDistInventory: vi.fn(),
+        }).packageVersion,
+      ).toBe("2026.9.6");
     } finally {
       pnpmPack.impl = undefined;
     }
-    expect(pnpmPack.calls).toHaveLength(1);
-    expect(pnpmPack.calls[0]?.args).toEqual([
-      "--dir",
-      fixture.sourceDir,
-      "pack",
-      "--config.node-linker=hoisted",
-      "--pack-destination",
-      fixture.outputDir,
+    expect(pnpmPack.calls.map((call) => call.args)).toEqual([
+      ["run", "prepack"],
+      [
+        "pack",
+        "--config.ignore-scripts=true",
+        "--config.node-linker=hoisted",
+        "--pack-destination",
+        fixture.outputDir,
+      ],
+      ["run", "postpack"],
     ]);
-    expect(pnpmPack.calls[0]?.env.OPENCLAW_PREPACK_PREPARED).toBe("1");
+    expect(pnpmPack.calls.map((call) => call.cwd)).toEqual([
+      fixture.sourceDir,
+      fixture.sourceDir,
+      fixture.sourceDir,
+    ]);
+    expect(pnpmPack.calls.every((call) => call.env.OPENCLAW_PREPACK_PREPARED === "1")).toBe(true);
   });
 
-  it("sanitizes built declarations before packing the immutable bundle", () => {
-    const fixture = packageSourceFixture("2026.8.33");
+  it("sanitizes declarations after the frozen root prepack rebuild", () => {
+    const { runRootPack: _runRootPack, runPack, ...fixture } = packageSourceFixture("2026.8.33");
     const distRoot = join(fixture.sourceDir, "dist");
     mkdirSync(distRoot);
     const steps: string[] = [];
@@ -612,15 +635,28 @@ describe("prepared npm bundle", () => {
       expect(root).toBe(distRoot);
       steps.push("sanitize");
     });
-    const runPack = vi.fn((directory: string, destination: string) => {
-      steps.push("pack");
-      return fixture.runPack(directory, destination);
+    const refreshRootDistInventory = vi.fn((root: string) => {
+      expect(root).toBe(fixture.sourceDir);
+      steps.push("inventory");
     });
-
-    prepareNpmPackageBundle({ ...fixture, runPack, sanitizeRootDeclarations });
+    pnpmPack.impl = runPack;
+    pnpmPack.observer = (args) => {
+      steps.push(args.includes("pack") ? "pack" : String(args.at(-1)));
+    };
+    try {
+      prepareNpmPackageBundle({
+        ...fixture,
+        sanitizeRootDeclarations,
+        refreshRootDistInventory,
+      });
+    } finally {
+      pnpmPack.impl = undefined;
+      pnpmPack.observer = undefined;
+    }
 
     expect(sanitizeRootDeclarations).toHaveBeenCalledOnce();
-    expect(steps).toEqual(["sanitize", "pack"]);
+    expect(refreshRootDistInventory).toHaveBeenCalledOnce();
+    expect(steps).toEqual(["prepack", "sanitize", "inventory", "pack", "postpack"]);
   });
 
   it.each([true, false])(
