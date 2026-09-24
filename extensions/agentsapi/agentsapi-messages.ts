@@ -40,7 +40,7 @@ type NativeTextState = {
 };
 
 /** Native identities keep saved-state recovery and live events on the same projection. */
-export class AgentsApiMessageProjection {
+class AgentsApiMessageProjection {
   readonly reply: AgentsApiReply = { assistantUsage: emptyUsage() };
   private readonly items = new Map<string, NativeTextState>();
   private readonly turnByItem = new Map<string, string>();

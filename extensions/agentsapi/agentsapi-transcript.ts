@@ -191,7 +191,7 @@ export function* iterateAgentsApiTranscriptItems(
 }
 
 /** Nonterminal calls require retrieved invocation fields, rather than streamed guesses. */
-export function canRecordAgentsApiNativeToolInvocation(item: AgentsApiItem): boolean {
+function canRecordAgentsApiNativeToolInvocation(item: AgentsApiItem): boolean {
   if (["completed", "failed", "incomplete"].includes(item.status ?? "")) {
     return ["command_execution", "mcp_call", "web_search_call"].includes(item.type);
   }
