@@ -110,6 +110,24 @@ export const rateLimitOverloadCases = [
         message: '429 {"error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}',
       },
     ],
+    // #148236: Bailian documents 429-Throttling.AllocationQuota/insufficient_quota
+    // as a TPS/TPM throttle, not billing.
+    [
+      "patterns-bailian-insufficient-quota",
+      {
+        provider: "qwen-token-plan",
+        message:
+          '429 {"error":{"code":"insufficient_quota","message":"Allocated quota exceeded, please increase your quota limit."}}',
+      },
+    ],
+    [
+      "patterns-bailian-throttling-code",
+      {
+        provider: "qwen-token-plan",
+        message:
+          '429 {"error":{"code":"Throttling.AllocationQuota","message":"Allocated quota exceeded"}}',
+      },
+    ],
   ]),
   {
     id: "structured-unstructured-rate-limit",

@@ -142,6 +142,8 @@ export const failoverRetryExpectations = {
   "billing-chinese-top-up": false,
   "matches-rate-limit": true,
   "matches-zai-1305-429": true,
+  "patterns-bailian-insufficient-quota": false,
+  "patterns-bailian-throttling-code": false,
   "patterns-bedrock-throttling": true,
   "patterns-bedrock-concurrency": false,
   "patterns-concurrency-limit": false,

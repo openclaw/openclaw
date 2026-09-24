@@ -210,7 +210,17 @@ export function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification(classify402Message(message));
   }
   if (status === 429) {
-    if (messageReason === "billing" && !isAmbiguousGeneric429BalanceMessage(message ?? "")) {
+    // Bailian documents 429-Throttling.AllocationQuota/insufficient_quota as a
+    // TPS/TPM throttle, but the generic billing table matches `insufficient_quota`.
+    // A structured Throttling.* code wins over the billing keyword (#148236).
+    if (message && hasStructuredThrottling429Code(message)) {
+      return toReasonClassification("rate_limit");
+    }
+    if (
+      messageReason === "billing" &&
+      !isAmbiguousGeneric429BalanceMessage(message ?? "") &&
+      !isProviderThrottledQuota429(message, provider)
+    ) {
       return toReasonClassification("billing");
     }
     if (message && isBilling429MessageForProvider(message, provider)) {
@@ -380,11 +390,71 @@ function hasBillingApiErrorType(raw: string): boolean {
   }
   return isBillingErrorMessage(type) || isBillingErrorMessage(type.replaceAll("_", " "));
 }
+function hasStructuredThrottling429Code(raw: string): boolean {
+  // Use terminal structured fields (parseApiErrorInfo unwraps the last
+  // ordered proxy attempt) so an earlier Throttling.* attempt cannot override
+  // a terminal billing error like insufficient_balance (#148275).
+  const THROTTLING_DOTTED_RE = /\bThrottling\.[A-Za-z]+\b/;
+  const info = parseApiErrorInfo(raw);
+  if (info && (info.code || info.type || info.message)) {
+    return Boolean(
+      (info.code && THROTTLING_DOTTED_RE.test(info.code)) ||
+      (info.type && THROTTLING_DOTTED_RE.test(info.type)) ||
+      (info.message && THROTTLING_DOTTED_RE.test(info.message)),
+    );
+  }
+  return THROTTLING_DOTTED_RE.test(raw);
+}
+// Bailian (qwen/dashscope/modelstudio family) returns 429+insufficient_quota for
+// TPS/TPM throttles; its real billing errors use PrepaidBillOverdue /
+// PostpaidBillOverdue codes. For this family, insufficient_quota on 429 is a
+// throttle unless a structured billing type says otherwise (#148236).
+function hasProviderThrottlingQuota429Family(provider: string | undefined): boolean {
+  return (
+    isProvider(provider, "qwen") ||
+    isProvider(provider, "dashscope") ||
+    isProvider(provider, "modelstudio") ||
+    isProvider(provider, "bailian")
+  );
+}
+function isProviderThrottledQuota429(
+  message: string | undefined,
+  provider: string | undefined,
+): boolean {
+  if (!message || !hasProviderThrottlingQuota429Family(provider)) {
+    return false;
+  }
+  if (hasNonQuotaStructuredBilling429Signal(message)) {
+    return false;
+  }
+  return /\binsufficient[_ ]quota\b/i.test(message);
+}
+// A structured billing *code or type* other than the throttle marker itself
+// (e.g. real Bailian billing codes like PrepaidBillOverdue, or a terminal
+// insufficient_balance code paired with a generic type) keeps the billing
+// verdict. Both terminal fields are inspected before accepting the quota
+// exception, preserving billing precedence for mixed-field payloads (#148275).
+function hasNonQuotaStructuredBilling429Signal(message: string): boolean {
+  const info = parseApiErrorInfo(message);
+  const candidates = [info?.type, info?.code]
+    .map((value) => normalizeOptionalLowercaseString(value))
+    .filter((value): value is string => Boolean(value));
+  const nonQuota = candidates.filter((value) => !/\binsufficient[_ ]quota\b/i.test(value));
+  if (nonQuota.length === 0) {
+    return false;
+  }
+  return nonQuota.some(
+    (value) => isBillingErrorMessage(value) || isBillingErrorMessage(value.replaceAll("_", " ")),
+  );
+}
 function isAmbiguousGeneric429BalanceMessage(raw: string): boolean {
   return /\binsufficient\s+account\s+balance\b/i.test(raw) && !hasStructuredBilling429Signal(raw);
 }
 function isBilling429MessageForProvider(raw: string, provider: string | undefined): boolean {
   if (!isBillingErrorMessage(raw)) {
+    return false;
+  }
+  if (isProviderThrottledQuota429(raw, provider)) {
     return false;
   }
   return hasProviderBilling429Override(provider) || !isAmbiguousGeneric429BalanceMessage(raw);

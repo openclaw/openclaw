@@ -238,6 +238,9 @@ const ERROR_PATTERNS = {
     ZAI_BILLING_CODE_1311_RE,
     /\bcurrent\s+subscription\s+plan\b.*\b(?:does\s+not|doesn't|not)\b.*\binclude\s+access\b/i,
     /\bmodel\b.*\bnot\s+available\b.*\bcurrent\s+plan\b/i,
+    // Bailian/DashScope documented billing errors vs 429 TPS/TPM throttles
+    // (PrepaidBillOverdue / PostpaidBillOverdue, #148236/#148275).
+    /prepaidbilloverdue|postpaidbilloverdue|bill\s*overdue/i,
   ],
   authPermanent: HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS,
   auth: [
