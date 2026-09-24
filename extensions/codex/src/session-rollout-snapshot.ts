@@ -43,7 +43,9 @@ export async function readCodexRolloutSnapshot(params: {
     throw new Error("Codex rollout root is not a verified local directory");
   }
   const safeRoot = await root(params.sessionsRoot, {
-    hardlinks: "reject",
+    // Native rollouts may carry extra hard links from Codex account switchers;
+    // the header check and the pinned stat below still bind the exact file.
+    hardlinks: "allow",
     symlinks: "reject",
     maxBytes: Number.MAX_SAFE_INTEGER,
   });
@@ -70,7 +72,7 @@ export async function readCodexRolloutSnapshot(params: {
       stat.size === snapshot.size &&
       stat.mtimeMs === snapshot.mtimeMs &&
       stat.ctimeMs === snapshot.ctimeMs &&
-      stat.nlink === 1;
+      stat.nlink === snapshot.nlink;
     if (!snapshot.size) {
       throw new Error("Codex rollout metadata is incomplete");
     }

@@ -101,6 +101,24 @@ describe("Codex catalog provenance", () => {
     ).resolves.toBe(false);
   });
 
+  it("reads a rollout that another Codex home hard-links", async () => {
+    const file = await writeRollout({
+      id: "hardlinked-managed-thread",
+      originator: "openclaw",
+      source: "vscode",
+    });
+    const mirror = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-provenance-mirror-"));
+    temporaryDirectories.push(mirror);
+    await fs.link(file, path.join(mirror, "rollout.jsonl"));
+
+    await expect(
+      isOpenClawManagedCodexThread(
+        { id: "hardlinked-managed-thread", path: file } as CodexThread,
+        path.dirname(file),
+      ),
+    ).resolves.toBe(true);
+  });
+
   it("reads the complete session-meta line when embedded instructions exceed one chunk", async () => {
     const file = await writeRollout({
       id: "large-managed-thread",

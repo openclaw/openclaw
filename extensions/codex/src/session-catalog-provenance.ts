@@ -35,7 +35,10 @@ export async function readCodexSessionMeta(
   let safeRoot: Awaited<ReturnType<typeof openSafeFilesystemRoot>>;
   try {
     safeRoot = await openSafeFilesystemRoot(sessionsRoot, {
-      hardlinks: "reject",
+      // Account switchers (for example Orca) hard-link every native rollout into
+      // their own Codex home. Only a matching session_meta header is accepted, so
+      // an extra link cannot surface unrelated file content.
+      hardlinks: "allow",
       maxBytes: Number.MAX_SAFE_INTEGER,
       symlinks: "reject",
     });
