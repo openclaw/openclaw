@@ -116,6 +116,13 @@ async function resolveThreadFromSlack(params: {
   return readThreadIdentity(replies.messages?.find((entry) => entry.ts === params.messageTs));
 }
 
+/**
+ * Creates a thread-identity resolver with its own cache. Production callers share
+ * the per-client instance from getSlackThreadTsResolver; this factory stays public
+ * for callers that need a custom cache budget (tests, scoped harnesses).
+ *
+ * @public
+ */
 export function createSlackThreadTsResolver(params: {
   client: SlackWebClient;
   cacheTtlMs?: number;
@@ -307,8 +314,10 @@ export function createSlackThreadTsResolver(params: {
         }
         if (isTransientSlackThreadLookupError(error)) {
           if (request.turnAdoptionLifecycle) {
-            // The already-acknowledged durable ingress owner retries without dropping the turn.
-            throw error;
+            // The already-acknowledged durable ingress owner retries without dropping
+            // the turn; the classifier only accepts Error instances, so identity is
+            // preserved for every real transient failure.
+            throw error instanceof Error ? error : new Error(formatSlackError(error));
           }
           return markAmbiguousThreadReply(message);
         }
