@@ -20,7 +20,7 @@ const suite = createControlUiE2eSuite({
   async startServer() {
     const owner = await createOpenClawTestInstance({
       name: "control-ui-agent-avatar",
-      config: { gateway: { controlUi: { enabled: true } } },
+      config: { gateway: { controlUi: { enabled: true, communityInvite: false } } },
     });
     instance = owner;
     try {
@@ -30,10 +30,14 @@ const suite = createControlUiE2eSuite({
         agents: {
           defaults: {
             workspace: owner.state.workspaceDir,
-            model: { primary: "openai/gpt-5.6-luna" },
+            model: { primary: "openai/gpt-4.1" },
           },
           entries: {
-            main: { identity: { name: "Avatar Proof", avatar: "agent-avatar.png" } },
+            main: {
+              workspace: owner.state.workspaceDir,
+              identity: { name: "Avatar Proof", avatar: "agent-avatar.png" },
+            },
+            emoji: { identity: { name: "Emoji Proof", emoji: "🌙" } },
           },
         },
       });
@@ -59,84 +63,153 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("renders the configured workspace avatar beside a persisted assistant reply", async () => {
-    if (!instance) {
-      throw new Error("Gateway fixture is not running");
-    }
-    const owner = instance;
-    const sessionKey = "agent:main:avatar-proof";
-    const created = await owner.cli([
-      "gateway",
-      "call",
-      "sessions.create",
-      "--params",
-      JSON.stringify({ key: sessionKey, agentId: "main", label: "Agent avatar proof" }),
-      "--json",
-    ]);
-    expect(created.code, created.stderr).toBe(0);
-    const session = JSON.parse(created.stdout) as { ok: boolean; sessionId: string };
-    expect(session.ok).toBe(true);
-    const reply = "My configured avatar appears beside this assistant reply.";
-    for (const [role, text] of [
-      ["user", "Show the configured agent identity in this conversation."],
-      ["assistant", reply],
-    ]) {
-      await appendTranscriptMessage(
-        { agentId: "main", sessionKey, sessionId: session.sessionId, env: owner.env },
-        { message: { role, content: [{ type: "text", text }], timestamp: Date.now() } },
+  it.each([
+    { agentId: "main", name: "Avatar Proof", kind: "image" },
+    { agentId: "emoji", name: "Emoji Proof", kind: "emoji" },
+  ])(
+    "keeps the $kind avatar at the start of a persisted assistant reply",
+    async ({ agentId, name, kind }) => {
+      if (!instance) {
+        throw new Error("Gateway fixture is not running");
+      }
+      const owner = instance;
+      const sessionKey = `agent:${agentId}:avatar-proof`;
+      const created = await owner.cli([
+        "gateway",
+        "call",
+        "sessions.create",
+        "--params",
+        JSON.stringify({ key: sessionKey, agentId, label: "Agent avatar proof" }),
+        "--json",
+      ]);
+      expect(created.code, created.stderr).toBe(0);
+      const session = JSON.parse(created.stdout) as { ok: boolean; sessionId: string };
+      expect(session.ok).toBe(true);
+      const reply = [
+        "## A clear plan for the next update",
+        "I will keep the work in one focused change, starting with the existing behavior.",
+        "1. Reproduce the reported layout with a realistic conversation.\n2. Check image and emoji identities using the same message.\n3. Verify that expanding the response does not move its identity marker.",
+        "## What stays consistent",
+        "The avatar identifies the author of the whole reply, not its final paragraph. It should remain beside the beginning while the content grows below it.",
+        "Returning to this conversation should preserve the same alignment.",
+        "Avatar layout proof is complete.",
+      ].join("\n\n");
+      for (const [role, text] of [
+        ["user", "Show the configured agent identity in this conversation."],
+        ["assistant", reply],
+      ]) {
+        await appendTranscriptMessage(
+          { agentId, sessionKey, sessionId: session.sessionId, env: owner.env },
+          { message: { role, content: [{ type: "text", text }], timestamp: Date.now() } },
+        );
+      }
+      const dashboard = await owner.cli(["dashboard", "--json"]);
+      const handoff: { browserUrl: string; reason?: string } = JSON.parse(dashboard.stdout);
+      expect(dashboard.code, handoff.reason ?? dashboard.stderr).toBe(0);
+      const issued = new URL(handoff.browserUrl);
+      const url = new URL(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "chat"));
+      url.hash = issued.hash;
+      await suite.withPage(
+        {
+          locale: "en-US",
+          colorScheme: "dark",
+          viewport: { width: 1440, height: 1000 },
+          serviceWorkers: "block",
+        },
+        async ({ page }) => {
+          expect((await page.goto(url.toString()))?.status()).toBe(200);
+          await waitForControlUiGatewayReady(page);
+          // Inactive panes retain measurable DOM; follow the selected session, not cached replies.
+          const pane = page.locator(".chat-pane-cache__pane--active");
+          await pane.getByText("Avatar layout proof is complete.", { exact: true }).waitFor();
+          const group = pane.locator(".chat-group.assistant");
+          const avatar = group.locator(".chat-avatar.assistant:visible");
+          if (kind === "image") {
+            await expect
+              .poll(() => avatar.evaluate((element) => (element as HTMLImageElement).naturalWidth))
+              .toBeGreaterThan(0);
+            expect(await avatar.getAttribute("src")).toMatch(/^blob:/);
+            expect(await avatar.getAttribute("alt")).toBe(name);
+          } else {
+            expect(await avatar.getAttribute("aria-label")).toBe(name);
+            expect(await avatar.locator("[data-avatar]").getAttribute("data-avatar")).toBe("🌙");
+          }
+          expect(await avatar.isVisible()).toBe(true);
+          const readAlignment = async () =>
+            group.evaluate((element) => {
+              const content = element
+                .querySelector(".chat-group-messages")!
+                .getBoundingClientRect();
+              const visibleAvatar = [...element.querySelectorAll(".chat-avatar.assistant")]
+                .find((candidate) => getComputedStyle(candidate).display !== "none")!
+                .getBoundingClientRect();
+              return { topOffset: visibleAvatar.top - content.top, contentHeight: content.height };
+            });
+          const alignment = await readAlignment();
+          if (captureEnabled) {
+            // Capture the real page before asserting, so the broken baseline is retained.
+            await page.screenshot({
+              path: path.join(suite.artifactDir, `01-${kind}-loaded.png`),
+              animations: "disabled",
+            });
+            await writeFile(
+              path.join(suite.artifactDir, "evidence.json"),
+              JSON.stringify(
+                {
+                  sessionKey,
+                  kind,
+                  assistantAvatarCount: await avatar.count(),
+                  alignment,
+                  visibleBesidePersistedReply: true,
+                  servedScripts: await page
+                    .locator("script[src]")
+                    .evaluateAll((scripts) =>
+                      scripts.map((script) => new URL((script as HTMLScriptElement).src).pathname),
+                    ),
+                  servedStyles: await page
+                    .locator('link[rel="stylesheet"]')
+                    .evaluateAll((links) =>
+                      links.map((link) => new URL((link as HTMLLinkElement).href).pathname),
+                    ),
+                },
+                null,
+                2,
+              ),
+            );
+          }
+          expect(alignment.contentHeight).toBeGreaterThan(150);
+          expect(Math.abs(alignment.topOffset)).toBeLessThanOrEqual(1);
+          const otherSessionKey = `agent:${agentId}:avatar-other`;
+          const other = await owner.cli([
+            "gateway",
+            "call",
+            "sessions.create",
+            "--params",
+            JSON.stringify({ key: otherSessionKey, agentId, label: "Other conversation" }),
+            "--json",
+          ]);
+          expect(other.code, other.stderr).toBe(0);
+          await page
+            .locator(
+              `openclaw-app-sidebar [data-session-key="${otherSessionKey}"] .sidebar-recent-session__link`,
+            )
+            .click();
+          await pane
+            .getByText("Avatar layout proof is complete.", { exact: true })
+            .waitFor({ state: "hidden" });
+          await page
+            .locator(
+              `openclaw-app-sidebar [data-session-key="${sessionKey}"] .sidebar-recent-session__link`,
+            )
+            .click();
+          await pane.getByText("Avatar layout proof is complete.", { exact: true }).waitFor();
+          expect(Math.abs((await readAlignment()).topOffset)).toBeLessThanOrEqual(1);
+          await page.reload();
+          await waitForControlUiGatewayReady(page);
+          await pane.getByText("Avatar layout proof is complete.", { exact: true }).waitFor();
+          expect(Math.abs((await readAlignment()).topOffset)).toBeLessThanOrEqual(1);
+        },
       );
-    }
-    const dashboard = await owner.cli(["dashboard", "--json"]);
-    const handoff: { browserUrl: string; reason?: string } = JSON.parse(dashboard.stdout);
-    expect(dashboard.code, handoff.reason ?? dashboard.stderr).toBe(0);
-    const issued = new URL(handoff.browserUrl);
-    const url = new URL(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "chat"));
-    url.hash = issued.hash;
-    await suite.withPage(
-      { locale: "en-US", viewport: { width: 1440, height: 1000 }, serviceWorkers: "block" },
-      async ({ page }) => {
-        expect((await page.goto(url.toString()))?.status()).toBe(200);
-        await waitForControlUiGatewayReady(page);
-        await page.getByText(reply, { exact: true }).waitFor();
-        const avatar = page.locator("img.chat-avatar.assistant");
-        const decodedWidth = async () =>
-          (await avatar.count()) === 1
-            ? avatar.evaluate((element) => (element as HTMLImageElement).naturalWidth)
-            : 0;
-        // Preserve the missing avatar on the broken revision before the regression assertion.
-        if (captureEnabled) {
-          await page.screenshot({ path: path.join(suite.artifactDir, "01-loaded-transcript.png") });
-        }
-        await expect.poll(decodedWidth).toBeGreaterThan(0);
-        expect(await avatar.getAttribute("src")).toMatch(/^blob:/);
-        expect(await avatar.getAttribute("alt")).toBe("Avatar Proof");
-        expect(await avatar.isVisible()).toBe(true);
-        expect(
-          await avatar.evaluate((element) => element.closest(".chat-group")?.textContent),
-        ).toContain(reply);
-        if (captureEnabled) {
-          await page.screenshot({ path: path.join(suite.artifactDir, "02-avatar-decoded.png") });
-          await writeFile(
-            path.join(suite.artifactDir, "evidence.json"),
-            JSON.stringify(
-              {
-                sessionKey,
-                configuredWorkspaceAvatar: "agent-avatar.png",
-                assistantAvatarCount: await avatar.count(),
-                decodedWidth: await decodedWidth(),
-                visibleBesidePersistedReply: true,
-                servedScripts: await page
-                  .locator("script[src]")
-                  .evaluateAll((scripts) =>
-                    scripts.map((script) => new URL((script as HTMLScriptElement).src).pathname),
-                  ),
-              },
-              null,
-              2,
-            ),
-          );
-        }
-      },
-    );
-  });
+    },
+  );
 });
