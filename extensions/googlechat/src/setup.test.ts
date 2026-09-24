@@ -519,6 +519,43 @@ describe("resolveGoogleChatAccount", () => {
     }
   });
 
+  it("keeps an unavailable configured file ahead of healthy env credentials", () => {
+    const workspace = tempWorkspaceSync({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-googlechat-configured-file-",
+    });
+    tempWorkspaces.push(workspace);
+    const missingFile = path.join(workspace.dir, "missing.json");
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '{"client_email":"bot@example.com"}');
+    try {
+      const resolved = resolveGoogleChatAccount({
+        cfg: {
+          channels: {
+            googlechat: {
+              serviceAccountFile: missingFile,
+            },
+          },
+        },
+        accountId: "default",
+      });
+
+      expect(resolved.credentialSource).toBe("file");
+      expect(resolved.credentialsFile).toBe(missingFile);
+      expect(resolved.tokenStatus).toBe("configured_unavailable");
+      expect(resolved.credentials).toBeUndefined();
+      expect(resolved.credentialDiagnostics).toEqual([
+        {
+          code: "CREDENTIAL_FILE_UNAVAILABLE",
+          path: "channels.googlechat.accounts.default.serviceAccountFile",
+          reason: "not-found",
+        },
+      ]);
+      expect(JSON.stringify(resolved.credentialDiagnostics)).not.toContain(missingFile);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("parses default-account env JSON credentials only when they decode to an object", () => {
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '{"client_email":"bot@example.com"}');
 
