@@ -384,7 +384,9 @@ suite.define(() => {
           await page.getByRole("link", { name: "Notes", exact: true }).click();
           await ready(page);
           expect(await desktopTab(page).count()).toBe(0);
-          await gateway.emitGatewayEvent("presence", []);
+          await gateway.emitGatewayEvent("node.runnerInventory.changed", {
+            nodeId: "worker-desktop",
+          });
           await expectRequestCountStable(gateway, "desktop.observe", observationCount);
           expect(await rfb.events()).not.toContain("closed:1");
           await page.goBack();

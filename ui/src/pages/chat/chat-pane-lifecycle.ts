@@ -452,7 +452,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
             this.handleSessionTypingEvent(event.payload as SessionTypingEvent);
           }
           handlePageGatewayEvent(state, event, () => this.presented);
-          if (event.event === "presence" || event.event === "node.runnerInventory.changed") {
+          if (event.event === "node.runnerInventory.changed") {
             this.activeSessionResources.invalidate();
             this.requestUpdate();
           }
