@@ -19,6 +19,8 @@ Side chat answers questions about the selected session and its project without e
 
 Opening Side chat, reopening its panel, or selecting its tab focuses the question box. If you focus another input or keep typing while Side chat loads or answers, that newer input keeps focus.
 
+Editing a Side chat draft does not interrupt loading its earlier answers. **Clear side chat** removes the earlier content after the Gateway confirms it; drafts, images, and questions added after the click remain.
+
 The Control UI keeps the latest 24 Side chat turns, including failed questions. Sending a follow-up keeps earlier failures in order; **Retry** resends that question in place. Failed questions stay in the current pane through a reconnect, but are not persisted across a page reload.
 
 The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Highlighting text in a chat message offers **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
