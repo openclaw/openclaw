@@ -24,7 +24,11 @@ import { minimatch } from "minimatch";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
-import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
+import {
+  buildChildEnv,
+  resolveShardPlans,
+  runShardPlans,
+} from "../../scripts/ci-run-node-test-shard.mts";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
   createUiRealGatewayTestShards,
@@ -10462,6 +10466,40 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     // Startup memory, artifact writers, and TUI retain explicit barriers;
     // hosted runners also serialize the remaining verifiers inside run_verifier.
     expect(run.match(/wait_checks$/gmu)).toHaveLength(8);
+  });
+
+  it.each([
+    { mode: "private-qa", outcome: "success", expected: "1" },
+    { mode: "runtime", outcome: "success", expected: "" },
+    { mode: "private-qa", outcome: "failure", expected: "" },
+    { mode: "private-qa", outcome: "skipped", expected: "" },
+    { mode: undefined, outcome: "skipped", expected: "" },
+  ] as const)("hands prepared E2E runtime to children only after $mode $outcome", (scenario) => {
+    const steps = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps;
+    const build = steps.find((step: WorkflowStep) => step.name === "Build Node test runtime");
+    const run = steps.find((step: WorkflowStep) => step.name === "Run Node test shard");
+    const prebuilt = evaluateWorkflowExpression(run.env.OPENCLAW_E2E_USE_PREBUILT_DIST, {
+      eventName: "pull_request",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      matrix: { pretest_build_mode: scenario.mode },
+      steps: { [build.id]: { outputs: {}, outcome: scenario.outcome } },
+    });
+    const target = "test/example.e2e.test.ts";
+    const env = {
+      OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify([target]),
+      OPENCLAW_E2E_USE_PREBUILT_DIST: prebuilt,
+    };
+    const plans = resolveShardPlans(env);
+    expect(plans).toHaveLength(1);
+    const childEnv = buildChildEnv(
+      expectDefined(plans[0], "changed target plan"),
+      env,
+      tempDirs.make("openclaw-ci-prebuilt-env-"),
+      0,
+    );
+    expect(childEnv.OPENCLAW_E2E_USE_PREBUILT_DIST).toBe(scenario.expected);
+    expect(steps.indexOf(build)).toBeLessThan(steps.indexOf(run));
   });
 
   it("fails and retries quiet Node test shard stalls quickly", () => {

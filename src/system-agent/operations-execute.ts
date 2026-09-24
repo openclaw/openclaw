@@ -546,12 +546,8 @@ export async function executeSystemAgentOperation(
         },
       });
     case "doctor": {
-      if (opts.deps?.runDoctor) {
-        await opts.deps.runDoctor(runtime, { nonInteractive: true });
-      } else {
-        const { runDoctorProcess } = await import("../commands/doctor.js");
-        await runDoctorProcess(runtime);
-      }
+      const { runDoctorProcess } = await import("../commands/doctor.js");
+      await runDoctorProcess(runtime);
       return { applied: false };
     }
     case "doctor-fix":

@@ -23,7 +23,7 @@ export function createUpdateStateProfileInitializer(
     if (!fs.existsSync(databasePath) && fs.existsSync(preparedStateDatabase)) {
       fs.mkdirSync(path.dirname(databasePath), { recursive: true, mode: 0o700 });
       fs.copyFileSync(preparedStateDatabase, databasePath);
-      fixtureStateDatabases.add(databasePath);
+      fixtureStateDatabases.add(path.resolve(databasePath));
       return;
     }
     const database = openOpenClawStateDatabase({ env });

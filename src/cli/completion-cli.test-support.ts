@@ -5,6 +5,7 @@ import path from "node:path";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { Command } from "commander";
 import { expect, it, type TestAPI } from "vitest";
+import { createBoundedChildOutput } from "../../test/helpers/bounded-child-output.js";
 import { getCompletionScript, registerCompletionCli } from "./completion-cli.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
@@ -375,6 +376,7 @@ export class PowerShellCompletionRunner {
     if (!powerShellPath) {
       return Promise.reject(new Error("PowerShell is unavailable"));
     }
+    const startedAt = performance.now();
     const child = spawn(
       powerShellPath,
       [
@@ -387,23 +389,50 @@ export class PowerShellCompletionRunner {
       { stdio: "pipe" },
     );
     this.child = child;
+    let spawnElapsedMs: number | null = null;
+    child.once("spawn", () => {
+      spawnElapsedMs = Math.round(performance.now() - startedAt);
+    });
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
+    // Readline cannot expose an incomplete READY frame. Retain only a bounded startup tail.
+    let startupStdout: ReturnType<typeof createBoundedChildOutput> | undefined =
+      createBoundedChildOutput(4096);
+    const captureStartupStdout = (chunk: string) => startupStdout?.append(chunk);
+    child.stdout.on("data", captureStartupStdout);
     this.stdoutLines = createInterface({ input: child.stdout });
     this.readyPromise = new Promise<void>((resolve, reject) => {
       const readyTimeout = setTimeout(
-        () => fail(new Error("PowerShell completion runner did not become ready")),
+        () =>
+          fail(
+            new Error(
+              `PowerShell completion runner did not become ready\nStartup: ${JSON.stringify({
+                executable: powerShellPath,
+                elapsedMs: Math.round(performance.now() - startedAt),
+                spawnElapsedMs,
+                pid: child.pid ?? null,
+                exitCode: child.exitCode,
+                signalCode: child.signalCode,
+                killed: child.killed,
+                stdoutTail: startupStdout?.text() ?? "",
+              })}`,
+            ),
+          ),
         POWERSHELL_CASE_TIMEOUT_MS,
       );
       // Before READY there are no pending requests; poisoning alone would strand the queue.
       const fail = (error: Error) => {
         clearTimeout(readyTimeout);
+        child.stdout.removeListener("data", captureStartupStdout);
+        startupStdout = undefined;
         reject(error);
         this.poison(error);
       };
       this.stdoutLines?.on("line", (line) => {
         if (line === `${this.framePrefix}READY`) {
           clearTimeout(readyTimeout);
+          child.stdout.removeListener("data", captureStartupStdout);
+          startupStdout = undefined;
           resolve();
           return;
         }

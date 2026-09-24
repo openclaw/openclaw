@@ -13,10 +13,8 @@ import {
   prepareOptionalSubagentSessionListReadCache,
 } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
-import {
-  listSessionPendingInputReceipts,
-  resolveTranscriptSessionKeyBySessionId,
-} from "../../config/sessions/session-accessor.js";
+import { listSessionPendingInputReceipts } from "../../config/sessions/session-accessor.js";
+import { readSessionHistoryPageInWorker } from "../../config/sessions/session-history-worker-runtime.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
@@ -79,10 +77,14 @@ export async function handleChatHistoryRequest({
   method,
   signal,
   sessionMutationAuthorization,
-  retainedSessionId,
+  retainedTranscript,
 }: GatewayRequestHandlerOptions & {
   method: ChatHistoryMethod;
-  retainedSessionId?: string;
+  retainedTranscript?: {
+    sessionId: string;
+    run?: { id: string; maxBytes: number };
+    requireCurrentSession?: boolean;
+  };
 }) {
   if (!assertValidParams(params, validateChatHistoryParams, method, respond)) {
     return;
@@ -99,6 +101,7 @@ export async function handleChatHistoryRequest({
     pendingBefore,
     inputRunIds,
   } = params;
+  const retainedSessionId = retainedTranscript?.sessionId;
   const requestedSessionId = retainedSessionId ?? wireSessionId;
   let selectorError: string | undefined;
   if (offset !== undefined && messageId !== undefined) {
@@ -135,26 +138,39 @@ export async function handleChatHistoryRequest({
   try {
     const { selectedSession, entry, queries, readCurrentSharing, rowProjection } = selection;
     const { cfg, agentId: sessionAgentId, storePath, canonicalKey } = selectedSession;
-    if (requestedSessionId) {
-      const transcriptSessionKey = resolveTranscriptSessionKeyBySessionId({
-        agentId: sessionAgentId,
-        sessionId: requestedSessionId,
-        storePath,
-      });
-      if (
-        !transcriptSessionKey ||
+    const readTranscriptOwner = async () => {
+      if (!requestedSessionId) {
+        return true;
+      }
+      const transcript = await readSessionHistoryPageInWorker(
+        {
+          kind: "transcript-binding",
+          params: {
+            target: { agentId: sessionAgentId, sessionId: requestedSessionId, storePath },
+            run: retainedTranscript?.run,
+          },
+        },
+        signal,
+      );
+      return Boolean(
+        transcript &&
         scopeLegacySessionKeyToAgent({
-          sessionKey: transcriptSessionKey,
+          sessionKey: transcript.sessionKey,
           agentId: sessionAgentId,
-        }) !== scopeLegacySessionKeyToAgent({ sessionKey: canonicalKey, agentId: sessionAgentId })
-      ) {
+        }) === scopeLegacySessionKeyToAgent({ sessionKey: canonicalKey, agentId: sessionAgentId }),
+      );
+    };
+    if (!(await readTranscriptOwner())) {
+      if (retainedTranscript) {
+        respondChatHistoryUnavailable(method, respond, "task transcript is no longer available");
+      } else {
         respond(
           false,
           undefined,
           errorShape(ErrorCodes.INVALID_REQUEST, "sessionId does not belong to sessionKey"),
         );
-        return;
       }
+      return;
     }
     if (method === "chat.startup") {
       void prepareSessionWorkspaceIcon({ sessionKey, agentId: sessionAgentId }).catch(
@@ -622,6 +638,15 @@ export async function handleChatHistoryRequest({
         ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
         ...(startupMetadata ? { metadata: startupMetadata } : {}),
       };
+      if (retainedTranscript) {
+        return () =>
+          selection.publishRetainedTranscript({
+            verify: readTranscriptOwner,
+            requireCurrentSession: retainedTranscript.requireCurrentSession === true,
+            sharing: currentSharing,
+            publish: () => respond(true, projectOperatorModelRead(modelReadScope, payload)),
+          });
+      }
       respond(true, projectOperatorModelRead(modelReadScope, payload));
       return undefined;
     });

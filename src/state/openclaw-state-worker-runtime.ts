@@ -27,6 +27,7 @@ import { executeAuditWriterCommand } from "../audit/audit-event-writer.worker.js
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
 import { readSqliteDatabaseBloat } from "../commands/doctor-db-bloat.read.js";
 import { readWorkshopMigrationRecordsInDatabase } from "../commands/doctor-skill-workshop-read.kernel.js";
+import { upsertConfigSnapshotAuditRecordInDatabase } from "../config/config-journal-snapshot.kernel.js";
 import {
   patchConfigHealthEntryInDatabase,
   readConfigHealthSnapshotInDatabase,
@@ -624,6 +625,12 @@ export function executeSharedStateCommand(
     return runOpenClawStateWriteTransaction(({ db }) => {
       createSqliteAuditRecordKernel(db, { scope, maxEntries }).register(record);
     }, writeOptions);
+  }
+  if (command.type === "config.snapshot.upsert") {
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => upsertConfigSnapshotAuditRecordInDatabase(db, command.input),
+      writeOptions,
+    );
   }
   throw new Error("Unknown shared-state SQLite command");
 }

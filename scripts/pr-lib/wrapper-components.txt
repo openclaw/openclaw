@@ -353,6 +353,7 @@ src/config/channel-schema-selection.ts
 src/config/cloud-worker-project-profiles.ts
 src/config/codex-plugin-diagnostics.ts
 src/config/config-env-vars.ts
+src/config/config-journal-snapshot.kernel.ts
 src/config/config-journal-snapshot.ts
 src/config/config-path-mutation.ts
 src/config/config-paths.ts
