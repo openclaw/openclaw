@@ -56,11 +56,11 @@ function bind(params: Binding) {
   return { sessionKey, ...(requesterOrigin ? { requesterOrigin } : {}) };
 }
 
-async function readStore(includeTasks: boolean, includeFlows: boolean) {
-  const context = captureOpenClawStateWorkerContext();
-  const loadConfig = captureRuntimeConfigAsyncReader({
-    assertCurrent: context.admission.assertCurrent,
-  });
+async function readStore(
+  includeTasks: boolean,
+  includeFlows: boolean,
+  context = captureOpenClawStateWorkerContext(),
+) {
   if (includeFlows) {
     context.admission.assertCurrent();
     await ensureTaskFlowRegistryReadyAsync(context);
@@ -71,7 +71,16 @@ async function readStore(includeTasks: boolean, includeFlows: boolean) {
   }
   const store = await import("../../state/openclaw-state-worker-store.js");
   context.admission.assertCurrent();
-  return { store, context, loadConfig };
+  return { store, context };
+}
+
+async function readRunStore() {
+  const context = captureOpenClawStateWorkerContext();
+  const loadConfig = captureRuntimeConfigAsyncReader({
+    assertCurrent: context.admission.assertCurrent,
+  });
+  const read = await readStore(true, false, context);
+  return { ...read, loadConfig };
 }
 
 function bindRuns(params: Binding): BoundAsyncTaskRunsRuntime {
@@ -79,7 +88,7 @@ function bindRuns(params: Binding): BoundAsyncTaskRunsRuntime {
   const identity = { callerOwnerKey: binding.sessionKey, callerAgentId: params.agentId };
   const visible = async (
     task: TaskRecord | undefined,
-    read: Awaited<ReturnType<typeof readStore>>,
+    read: Awaited<ReturnType<typeof readRunStore>>,
   ) => {
     if (!task) {
       return undefined;
@@ -89,7 +98,7 @@ function bindRuns(params: Binding): BoundAsyncTaskRunsRuntime {
     return allowed ? task : undefined;
   };
   const list = async () => {
-    const read = await readStore(true, false);
+    const read = await readRunStore();
     const records = await read.store.executeOpenClawStateWorker(read.context, {
       type: "tasks.list",
       input: { ownerKey: binding.sessionKey },
@@ -105,7 +114,7 @@ function bindRuns(params: Binding): BoundAsyncTaskRunsRuntime {
   return {
     ...binding,
     async get(taskId) {
-      const read = await readStore(true, false);
+      const read = await readRunStore();
       const task = await visible(
         await read.store.executeOpenClawStateWorker(read.context, {
           type: "tasks.get",
@@ -121,7 +130,7 @@ function bindRuns(params: Binding): BoundAsyncTaskRunsRuntime {
       return task ? mapTaskRunDetail(task) : undefined;
     },
     async resolve(token) {
-      const read = await readStore(true, false);
+      const read = await readRunStore();
       const records = await read.store.executeOpenClawStateWorker(read.context, {
         type: "tasks.resolve",
         input: { ownerKey: binding.sessionKey, token: token.trim() },

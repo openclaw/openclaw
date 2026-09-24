@@ -9,6 +9,7 @@ import {
   extractErrorCode,
 } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as configRuntime from "../config/io.runtime.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
@@ -148,6 +149,42 @@ describe("registered tasks.async runtime", () => {
       expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
     },
   );
+
+  it("rejects a changed config selector captured before a cold bare-owner read", async () => {
+    await state.writeConfig({ gateway: { mode: "local" }, agents: { entries: { main: {} } } });
+    const replacementConfig = await state.writeJson("replacement.json", {
+      gateway: { mode: "local" },
+      agents: { entries: { ops: {} } },
+    });
+    vi.spyOn(process, "cwd").mockReturnValue(state.workspaceDir);
+    upsertTaskWithDeliveryStateToSqlite({
+      task: task("bare", {
+        ownerKey: "global",
+        requesterSessionKey: "global",
+        requesterAgentId: undefined,
+        parentFlowId: undefined,
+      }),
+    });
+    closeOpenClawStateDatabase();
+    expect(getRuntimeConfigSnapshot()).toBeNull();
+    await withPluginCache(createPluginCache(), async () => {
+      const runs = createPluginRuntime().tasks.async.runs.bindSession({
+        sessionKey: "global",
+        agentId: "ops",
+      });
+      const pending = runs.get("bare");
+      try {
+        vi.stubEnv("OPENCLAW_CONFIG_PATH", replacementConfig);
+        expect(await pending).toBeUndefined();
+        expect(getRuntimeConfigSnapshot()).toBeNull();
+        expect((await runs.get("bare"))?.id).toBe("bare");
+        expect(getRuntimeConfigSnapshot()?.agents?.entries).toHaveProperty("ops");
+      } finally {
+        await pending.catch(() => undefined);
+        vi.unstubAllEnvs();
+      }
+    });
+  });
 
   it.each([4, 8])("keeps reconciliation linear for %s unrelated managed writes", async (count) => {
     const managed = createPluginRuntime().tasks.async.managedFlows.bindSession({
@@ -678,22 +715,30 @@ describe("registered tasks.async runtime", () => {
         throw new Error("Unexpected warmed main-thread SQLite statement execution");
       });
     }
-    const results = await Promise.all([
-      runs.get("task-a"),
-      runs.list(),
-      runs.findLatest(),
-      runs.resolve("run-a"),
-      flows.get("flow-a"),
-      flows.list(),
-      flows.findLatest(),
-      flows.resolve(ownerKey),
-      flows.getTaskSummary("flow-a"),
-      managed.get("flow-a"),
-      managed.list(),
-      managed.findLatest(),
-      managed.resolve(ownerKey),
-      managed.getTaskSummary("flow-a"),
-    ]);
+    const captureConfig = vi.spyOn(configRuntime, "captureRuntimeConfigAsyncReader");
+    let results: unknown[];
+    let configCaptures: number;
+    try {
+      results = await Promise.all([
+        runs.get("task-a"),
+        runs.list(),
+        runs.findLatest(),
+        runs.resolve("run-a"),
+        flows.get("flow-a"),
+        flows.list(),
+        flows.findLatest(),
+        flows.resolve(ownerKey),
+        flows.getTaskSummary("flow-a"),
+        managed.get("flow-a"),
+        managed.list(),
+        managed.findLatest(),
+        managed.resolve(ownerKey),
+        managed.getTaskSummary("flow-a"),
+      ]);
+      configCaptures = captureConfig.mock.calls.length;
+    } finally {
+      captureConfig.mockRestore();
+    }
     expect(results).toEqual([
       expectedRun,
       [expectedRun],
@@ -710,6 +755,7 @@ describe("registered tasks.async runtime", () => {
       expectedManaged,
       summary,
     ]);
+    expect(configCaptures).toBe(4);
     expect(getTaskById("task-a")?.progressSummary).toBe("Persisted progress");
   });
 

@@ -856,43 +856,53 @@ describe("agentCliCommand", () => {
   it("holds one agent-embedded state lock for the run and rejects a concurrent --local run", async () => {
     await withTempStore(async ({ dir }) => {
       const lockOptions = createLocalGatewayLockOptions(dir);
-      let finishFirstRun: ((value: Awaited<ReturnType<typeof AgentCommand>>) => void) | undefined;
-      agentCommand.mockImplementationOnce(
-        async () =>
-          await new Promise<Awaited<ReturnType<typeof AgentCommand>>>((resolve) => {
-            finishFirstRun = resolve;
-          }),
-      );
+      const firstReply = createDeferredCore<Awaited<ReturnType<typeof AgentCommand>>>();
+      agentCommand.mockImplementationOnce(() => firstReply.promise);
 
       const firstRun = agentCliCommand({ message: "first", to: "+1555", local: true }, runtime, {
         localGatewayLockOptions: lockOptions,
       });
-      await waitForAgentCommandCall();
-
+      void firstRun.catch(() => undefined);
       const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
-      const payload = JSON.parse(fs.readFileSync(stateLockPath, "utf8")) as {
-        pid?: number;
-        role?: string;
-      };
-      expect(payload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
+      try {
+        await waitForAgentCommandCall();
+        const payload = JSON.parse(fs.readFileSync(stateLockPath, "utf8")) as {
+          pid?: number;
+          role?: string;
+        };
+        expect(payload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
 
-      await expect(
-        agentCliCommand({ message: "second", to: "+1555", local: true }, runtime, {
-          localGatewayLockOptions: { ...lockOptions, pollIntervalMs: 2, timeoutMs: 15 },
-        }),
-      ).rejects.toThrow(
-        `another embedded OpenClaw state writer is active (pid ${process.pid}); lock timeout after 15ms`,
-      );
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-
-      if (!finishFirstRun) {
-        throw new Error("Expected first embedded run to start");
+        // Keep inspection and contention on the same logical clock.
+        let elapsedMs = 0;
+        const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+        try {
+          await expect(
+            agentCliCommand({ message: "second", to: "+1555", local: true }, runtime, {
+              localGatewayLockOptions: {
+                ...lockOptions,
+                pollIntervalMs: 2,
+                timeoutMs: 15,
+                now: () => elapsedMs,
+                sleep: async (ms) => {
+                  elapsedMs += ms;
+                },
+              },
+            }),
+          ).rejects.toThrow(
+            `another embedded OpenClaw state writer is active (pid ${process.pid}); lock timeout after 15ms`,
+          );
+        } finally {
+          clock.mockRestore();
+        }
+        expect(elapsedMs).toBe(15);
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+      } finally {
+        firstReply.resolve({
+          payloads: [{ text: "done" }],
+          meta: { durationMs: 1 },
+        } as Awaited<ReturnType<typeof AgentCommand>>);
+        await firstRun;
       }
-      finishFirstRun({
-        payloads: [{ text: "done" }],
-        meta: { durationMs: 1 },
-      } as Awaited<ReturnType<typeof AgentCommand>>);
-      await firstRun;
       expect(fs.existsSync(stateLockPath)).toBe(false);
     });
   });
