@@ -74,6 +74,7 @@ export async function registerPluginCliCommands(
               cfg,
               env,
               loaderOptions,
+              primaryCommand: mode === "metadata" ? primary : undefined,
               session: deferred,
             });
             const match = fresh.find(
