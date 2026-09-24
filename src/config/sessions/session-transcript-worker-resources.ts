@@ -1,4 +1,5 @@
 import { channel } from "node:diagnostics_channel";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -25,6 +26,7 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   sessionHistoryCleanupError,
+  decodeSessionTranscriptWorkerReadError,
   unwrapSessionTranscriptWorkerReply,
 } from "./session-history-worker-errors.js";
 import {
@@ -301,6 +303,9 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     readStoreTarget: (
       request: Omit<SessionStoreTargetReadRequest, "candidates">,
     ) => Promise<SessionStoreTargetReadResult>;
+    readStoreTargetResult: (
+      request: Omit<SessionStoreTargetReadRequest, "candidates">,
+    ) => Promise<Result<SessionStoreTargetReadResult, unknown>>;
     readTargetInventory: (
       request: Omit<SessionStoreTargetInventoryRequest, "candidates">,
     ) => Promise<SessionStoreTargetInventoryResult>;
@@ -375,33 +380,43 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
         }
       }
       assertCurrent();
+      const readStoreTargetResult = async (
+        request: Omit<SessionStoreTargetReadRequest, "candidates">,
+      ): Promise<Result<SessionStoreTargetReadResult, unknown>> => {
+        const preparedRequest = { ...request, candidates: capturedCandidates };
+        const reply = await lane.pool.run(
+          () => {
+            assertCurrent();
+            dispatched = true;
+            lane.nativeSequence++;
+            return { kind: "session-store-target", request: preparedRequest };
+          },
+          { inputBytes: JSON.stringify(preparedRequest).length * 2, timeoutMs: 60_000 },
+        );
+        const result = unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
+        if (
+          typeof result === "boolean" ||
+          Array.isArray(result) ||
+          (result.kind !== "session-store-target" &&
+            result.kind !== "session-target-registry-required")
+        ) {
+          throw new Error("Session history worker returned another result instead of store target");
+        }
+        assertCurrent();
+        discoveryFailed ||= "readError" in result;
+        return "readError" in result
+          ? err(decodeSessionTranscriptWorkerReadError(result.readError))
+          : ok(result);
+      };
       const value = await operation({
         assertCurrent,
+        readStoreTargetResult,
         readStoreTarget: async (request) => {
-          const preparedRequest = { ...request, candidates: capturedCandidates };
-          const reply = await lane.pool.run(
-            () => {
-              assertCurrent();
-              dispatched = true;
-              lane.nativeSequence++;
-              return { kind: "session-store-target", request: preparedRequest };
-            },
-            { inputBytes: JSON.stringify(preparedRequest).length * 2, timeoutMs: 60_000 },
-          );
-          const result =
-            unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
-          if (
-            typeof result === "boolean" ||
-            Array.isArray(result) ||
-            (result.kind !== "session-store-target" &&
-              result.kind !== "session-target-registry-required")
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of store target",
-            );
+          const read = await readStoreTargetResult(request);
+          if (!read.ok) {
+            throw read.error;
           }
-          assertCurrent();
-          return result;
+          return read.value;
         },
         readTargetInventory: async (request) => {
           const preparedRequest = { ...request, candidates: capturedCandidates };

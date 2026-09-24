@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   resolveOutboundSendDep,
@@ -20,6 +20,7 @@ import {
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import {
@@ -78,18 +79,6 @@ function createSlackRenderedPresentationProvenance(resolution: SlackReplyBlockRe
     .digest("base64url");
 }
 
-function hasValidSlackRenderedPresentationProvenance(params: {
-  provenance: string;
-  resolution: SlackReplyBlockResolution;
-}): boolean {
-  const expected = createSlackRenderedPresentationProvenance(params.resolution);
-  const actualBuffer = Buffer.from(params.provenance);
-  const expectedBuffer = Buffer.from(expected);
-  return (
-    actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer)
-  );
-}
-
 function readSlackRenderedPresentation(
   slackData: SlackOutboundChannelData | undefined,
 ): SlackReplyBlockResolution | undefined {
@@ -104,7 +93,7 @@ function readSlackRenderedPresentation(
       return undefined;
     }
     const resolution = { authoredTextPlacement, segments };
-    return hasValidSlackRenderedPresentationProvenance({ provenance, resolution })
+    return safeEqualSecret(provenance, createSlackRenderedPresentationProvenance(resolution))
       ? resolution
       : undefined;
   } catch {
@@ -296,12 +285,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
     };
     const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
     const renderedResolution = readSlackRenderedPresentation(slackData);
-    let resolution: SlackReplyBlockResolution;
-    if (renderedResolution) {
-      resolution = renderedResolution;
-    } else {
-      resolution = resolveSlackOutboundBlockResolution(payload);
-    }
+    const resolution = renderedResolution ?? resolveSlackOutboundBlockResolution(payload);
     if (resolution.segments.length === 0) {
       const sendPart = async (part: ChannelOutboundContext) =>
         toSlackOutboundResult(await send(part));

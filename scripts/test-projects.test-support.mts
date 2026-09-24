@@ -93,7 +93,6 @@ import {
   isTestSupportFileTarget,
 } from "./lib/changed-path-facts.mjs";
 import {
-  GIT_LS_FILES_MAX_BUFFER_BYTES,
   createExtensionTestProcessTargetChunks,
   listTrackedTestPlanFiles,
   resolveExtensionTestConfig,
@@ -103,6 +102,7 @@ import {
   createGatewayServerTestTargetChunks,
   splitTestTargetChunks as splitTargetChunks,
 } from "./lib/gateway-server-test-plan.mts";
+import { GIT_LS_FILES_MAX_BUFFER_BYTES } from "./lib/list-test-files.mts";
 import { readTestSelectorSourceFacts } from "./lib/test-selector-source-facts.mts";
 // CI imports planning before dependency installation; execution owners stay outside this closure.
 import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
@@ -599,7 +599,7 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
   [
-    "patches/vitest@5.0.0.patch",
+    "patches/vitest@5.0.1.patch",
     [
       "test/scripts/run-vitest-profile.test.ts",
       "test/scripts/run-vitest-state-cleanup.test.ts",
@@ -944,7 +944,6 @@ const TOOLING_IMPORT_GRAPH_GREP_PATHS = importGraphPathspecs(
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
-const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
 /** Default no-output timeout applied to test-projects Vitest children. */
 const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = String(900_000);
 /** Default heartbeat interval applied to test-projects Vitest children. */
@@ -4810,35 +4809,6 @@ export function applyDefaultVitestNoOutputTimeout<T extends WatchableVitestSpecS
       env: nextEnv,
     };
   });
-}
-
-export function shouldRetryVitestNoOutputTimeout(env = process.env) {
-  const value = env[VITEST_NO_OUTPUT_RETRY_ENV_KEY]?.trim().toLowerCase();
-  if (value === undefined && isCiLikeEnv(env)) {
-    return false;
-  }
-  return !["0", "false", "no", "off"].includes(value ?? "");
-}
-
-// Shards may pin a short no-output window so the known warm-cache stall dies
-// fast (see AGENTS_CORE_RUNTIME_ENV in ci-node-test-plan.mts). A cold Vitest
-// module cache makes those same imports legitimately silent for minutes, so
-// the retry attempt must get the full watchdog window or it re-dies at the
-// short limit and the job fails without ever running a test.
-const RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS = 300_000;
-
-export function withRetryNoOutputTimeout<T extends { env?: NodeJS.ProcessEnv }>(spec: T): T {
-  const current = Number(spec.env?.[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]);
-  if (!Number.isFinite(current) || current <= 0 || current >= RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS) {
-    return spec;
-  }
-  return {
-    ...spec,
-    env: {
-      ...spec.env,
-      [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS),
-    },
-  };
 }
 
 export function createVitestRunSpecs(

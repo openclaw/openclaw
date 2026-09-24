@@ -4,7 +4,10 @@ import path from "node:path";
 import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
+import { readRegistryWorktree } from "./registry-read.js";
 import {
   abortWorktreeRemovalRow,
   admitWorktreeRunLeaseRow,
@@ -16,6 +19,7 @@ import {
   releaseWorktreeRunLeaseRow,
 } from "./registry.js";
 import type { RunLeaseOwnerChecks } from "./run-lease-owner.js";
+import { releaseWorktreeRunLeaseRowAsync } from "./run-lease-store.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
@@ -37,7 +41,7 @@ const heldGitLocks = new Map<string, HeldWorktreeLock>();
 const gitLockTransitionTails = new Map<string, Promise<void>>();
 let ownerChecks: RunLeaseOwnerChecks = {};
 let resolveSelfStartTime = getFileLockProcessStartTime;
-let releaseRunLeaseRow = releaseWorktreeRunLeaseRow;
+let releaseRunLeaseRow = releaseWorktreeRunLeaseRowAsync;
 let unlockWorktreeImpl = unlockWorktree;
 
 // A cleanup that could not finish (persistent state-database delete or git unlock
@@ -45,6 +49,7 @@ let unlockWorktreeImpl = unlockWorktree;
 // next lease acquisition and at exit, instead of stranding the row and git guard.
 type LeaseCleanup = {
   env: NodeJS.ProcessEnv;
+  context: OpenClawStateWorkerContext;
   id: string;
   token: string;
   rowDeleted: boolean;
@@ -121,7 +126,7 @@ async function releaseGitLock(cleanup: LeaseCleanup): Promise<boolean> {
       return true;
     }
     try {
-      const record = getRegistryWorktree(cleanup.env, cleanup.id);
+      const record = await readRegistryWorktree(cleanup.context, cleanup.id);
       if (record) {
         await unlockWorktreeImpl(record);
       }
@@ -183,15 +188,20 @@ export async function resolveWorktreeIdForPath(params: {
   return undefined;
 }
 
-function deleteRunLeaseRowWithRetries(cleanup: LeaseCleanup): boolean {
+async function deleteRunLeaseRowWithRetries(cleanup: LeaseCleanup): Promise<boolean> {
   for (let attempt = 1; attempt <= RELEASE_MAX_ATTEMPTS; attempt += 1) {
     try {
-      releaseRunLeaseRow(cleanup.env, cleanup.id, cleanup.token);
+      await releaseRunLeaseRow(cleanup.env, cleanup.id, cleanup.token, cleanup.context);
       return true;
     } catch (error) {
       log.warn(
         `failed to release worktree run lease for ${cleanup.id} (attempt ${attempt}): ${errorMessage(error)}`,
       );
+      if (attempt < RELEASE_MAX_ATTEMPTS) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 25 * attempt);
+        });
+      }
     }
   }
   return false;
@@ -202,7 +212,7 @@ function deleteRunLeaseRowWithRetries(cleanup: LeaseCleanup): boolean {
 // removal stays correctly blocked while cleanup is still owed.
 async function runLeaseCleanup(cleanup: LeaseCleanup): Promise<boolean> {
   if (!cleanup.rowDeleted) {
-    if (!deleteRunLeaseRowWithRetries(cleanup)) {
+    if (!(await deleteRunLeaseRowWithRetries(cleanup))) {
       return false;
     }
     cleanup.rowDeleted = true;
@@ -229,7 +239,8 @@ function ensureExitCleanupRegistered(): void {
     for (const cleanup of pendingLeaseCleanups) {
       if (!cleanup.rowDeleted) {
         try {
-          releaseRunLeaseRow(cleanup.env, cleanup.id, cleanup.token);
+          cleanup.context.admission.assertCurrent();
+          releaseWorktreeRunLeaseRow(cleanup.context.environment, cleanup.id, cleanup.token);
         } catch {
           // Best effort at exit; the dead pid also lets a later process prune it.
         }
@@ -249,6 +260,7 @@ export async function acquireWorktreeRunLease(
   const token = randomUUID();
   const pid = process.pid;
   const startTime = resolveSelfStartTime(pid);
+  const context = captureOpenClawStateWorkerContext({ env });
   admitWorktreeRunLeaseRow(env, {
     worktreeId: id,
     token,
@@ -260,6 +272,7 @@ export async function acquireWorktreeRunLease(
   });
   const cleanup: LeaseCleanup = {
     env,
+    context,
     id,
     token,
     rowDeleted: false,
@@ -278,19 +291,16 @@ export async function acquireWorktreeRunLease(
     }
     throw error;
   }
-  let released = false;
+  let release: Promise<void> | undefined;
   return {
     id,
     token,
-    release: async () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      if (!(await runLeaseCleanup(cleanup))) {
-        pendingLeaseCleanups.add(cleanup);
-      }
-    },
+    release: () =>
+      (release ??= runLeaseCleanup(cleanup).then((complete) => {
+        if (!complete) {
+          pendingLeaseCleanups.add(cleanup);
+        }
+      })),
   };
 }
 
@@ -338,8 +348,8 @@ const testing = {
   setDeadPidResolverForTest(resolver: ((pid: number) => boolean) | null): void {
     ownerChecks = { ...ownerChecks, isPidDefinitelyDead: resolver ?? undefined };
   },
-  setReleaseRowImplForTest(impl: typeof releaseWorktreeRunLeaseRow | null): void {
-    releaseRunLeaseRow = impl ?? releaseWorktreeRunLeaseRow;
+  setReleaseRowImplForTest(impl: typeof releaseWorktreeRunLeaseRowAsync | null): void {
+    releaseRunLeaseRow = impl ?? releaseWorktreeRunLeaseRowAsync;
   },
   setUnlockImplForTest(impl: typeof unlockWorktree | null): void {
     unlockWorktreeImpl = impl ?? unlockWorktree;
@@ -353,7 +363,7 @@ const testing = {
     pendingLeaseCleanups.clear();
     ownerChecks = {};
     resolveSelfStartTime = getFileLockProcessStartTime;
-    releaseRunLeaseRow = releaseWorktreeRunLeaseRow;
+    releaseRunLeaseRow = releaseWorktreeRunLeaseRowAsync;
     unlockWorktreeImpl = unlockWorktree;
   },
 };

@@ -1,4 +1,4 @@
-import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
+import { chatQueueOrderKey, compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   outboxPayloadMatchesOwner,
@@ -335,18 +335,49 @@ class ChatOutboxGatewayOwner {
     this.syncHost(host);
     return removed;
   }
-  keep(host: Host, { sessionKey, agentId }: Scope, item: ChatQueueItem, retryable = false): void {
+  keep(
+    host: Host,
+    { sessionKey, agentId }: Scope,
+    item: ChatQueueItem,
+    retryable = false,
+  ): ChatQueueItem {
     const scope = { sessionKey, agentId };
     const state = this.state(host);
     const key = storedChatOutboxScopeKey(scope);
-    const queue = (state.byScope.get(key)?.queue ?? []).filter((entry) => entry.id !== item.id);
-    queue.push(applyStoredChatOutboxScope(item, scope));
+    const retained = [
+      ...(this.outbox(host, scope)?.queue ?? []),
+      ...[...this.hosts.values()].flatMap(
+        (projection) =>
+          projection.byScope.get(key)?.queue.filter((entry) => isActiveLocal(projection, entry)) ??
+          [],
+      ),
+    ];
+    const existing = retained.find((entry) => entry.id === item.id);
+    const tail = Math.max(...retained.map(chatQueueOrderKey));
+    // Position belongs to admission, not to clocks, storage timing, or later state updates.
+    const orderKey = existing
+      ? existing.orderKey
+      : (item.orderKey ?? (item.createdAt <= tail ? tail + 1 : undefined));
+    const positioned = applyStoredChatOutboxScope(item, scope);
+    if (orderKey === undefined) {
+      delete positioned.orderKey;
+    } else {
+      positioned.orderKey = orderKey;
+    }
+    const queue = [...(state.byScope.get(key)?.queue ?? [])];
+    const index = queue.findIndex((entry) => entry.id === item.id);
+    if (index < 0) {
+      queue.push(positioned);
+    } else {
+      queue[index] = positioned;
+    }
     queue.sort(compareChatQueueOrder);
     state.byScope.set(key, { scope, queue });
     if (retryable) {
       state.retryable.add(item.id);
     }
     this.syncHost(host);
+    return positioned;
   }
   private local(state: HostProjection, id: string) {
     for (const { scope, queue } of state.byScope.values()) {
@@ -446,8 +477,8 @@ class ChatOutboxGatewayOwner {
     item: ChatQueueItem,
     replaces?: StoredChatQueueReplacement,
   ) {
-    this.keep(host, captured.scope, item);
-    const result = admitStoredChatComposerQueueItemResult(host, captured, item, replaces);
+    const positioned = this.keep(host, captured.scope, item);
+    const result = admitStoredChatComposerQueueItemResult(host, captured, positioned, replaces);
     if (result === "admitted" && item.sendState !== "waiting-model") {
       this.change(host, item.id);
     }

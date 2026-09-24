@@ -166,6 +166,13 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   };
   await withEnvAsync(env, async () => {
     const siblingDir = writePackage("sibling");
+    const bundledDir =
+      settings === "empty" && !cleanupRetry
+        ? writePackage(
+            "bundled-probe",
+            path.join(env.OPENCLAW_BUNDLED_PLUGINS_DIR, "bundled-probe"),
+          )
+        : undefined;
     const healthyDir = cleanupRetry === "mixed-recovery" ? writePackage("healthy") : undefined;
     const secondaryWorkspace = path.join(root, "secondary-workspace");
     const hasWorkspacePlugin = settings === "defaulted";
@@ -186,11 +193,13 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       plugins: {
         allow: [
           "sibling",
+          ...(bundledDir ? ["bundled-probe"] : []),
           ...(healthyDir ? ["healthy"] : []),
           ...(hasWorkspacePlugin ? ["workspace-probe"] : []),
         ],
         entries: {
           sibling: { enabled: true },
+          ...(bundledDir ? { "bundled-probe": { enabled: true } } : {}),
           ...(healthyDir ? { healthy: { enabled: true } } : {}),
           ...(hasWorkspacePlugin ? { "workspace-probe": { enabled: true } } : {}),
         },
@@ -207,6 +216,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     expect(initialMetadata.manifestRegistry.plugins.map((plugin) => plugin.id).toSorted()).toEqual(
       [
         "sibling",
+        ...(bundledDir ? ["bundled-probe"] : []),
         ...(healthyDir ? ["healthy"] : []),
         ...(hasWorkspacePlugin ? ["workspace-probe"] : []),
       ].toSorted(),
@@ -280,7 +290,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       clients: new Set(),
       broadcast: vi.fn(),
     } as unknown as Parameters<typeof reloadGatewayPlugins>[0]["runtime"];
-    const probe = async (id: string) => {
+    const probe = async (id: string, serviceCalls = { starts: 1, stops: 0 }) => {
       const method = `${id}.probe`;
       const respond = vi.fn();
       const handler = runtime.pluginRuntime.registry.gatewayHandlers[method];
@@ -298,8 +308,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         {
           helper: expect.any(String),
           instance: expect.any(String),
-          starts: 1,
-          stops: 0,
+          ...serviceCalls,
           settings: expect.any(Object),
         },
         undefined,
@@ -829,6 +838,24 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     expect(await probe("sibling")).toEqual(sibling);
     if (workspacePlugin) {
       expect(await probe("workspace-probe")).toEqual(workspacePlugin);
+    }
+    if (bundledDir) {
+      expect((await probe("bundled-probe")).helper).toBe("A");
+      const unchangedBundled = await reload(changedSettings, ["bundled-probe"]);
+      expect(unchangedBundled.runtime.restartRequired ?? false).toBe(false);
+      expect((await probe("bundled-probe", { starts: 2, stops: 1 })).helper).toBe("A");
+      fs.writeFileSync(path.join(bundledDir, "dist", "helper.cjs"), 'module.exports = "B";');
+      const bundledReload = await reload(changedSettings, ["bundled-probe"]);
+      expect((await probe("bundled-probe", { starts: 3, stops: 2 })).helper).toBe("A");
+      expect(bundledReload.runtime).toMatchObject({
+        restartRequired: true,
+        pluginIds: ["bundled-probe"],
+        warnings: [expect.stringMatching(/compiled bundled.*restart/i)],
+      });
+      expect(bundledReload.runtime.generation).toBeGreaterThan(configReceipt.runtime.generation);
+      const repeatedBundled = await reload(changedSettings, ["bundled-probe"]);
+      expect(repeatedBundled.runtime.restartRequired).toBe(true);
+      expect((await probe("bundled-probe", { starts: 4, stops: 3 })).helper).toBe("A");
     }
   });
 }

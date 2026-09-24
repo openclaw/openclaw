@@ -30,6 +30,7 @@ import { ensureEmptyWorktreeSource, removeUnusedEmptyWorktreeSource } from "./em
 import { WorktreeRepositoryError } from "./errors.js";
 import { enforceWorktreeCleanupLimits } from "./gc-limits.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
+import { autoRemovalProtectionReason } from "./gc-protection.js";
 import {
   createWorktreeLockPrefilter,
   lockState,
@@ -40,7 +41,7 @@ import { commandError, worktreePathExists, runGit } from "./git.js";
 import { canonicalPathKey, shouldPreserveOrphanCandidate } from "./orphan-paths.js";
 import { worktreeOwnerMatches } from "./owner.js";
 import { provisionIncludedFiles } from "./provisioned-files.js";
-import { readRegistryWorktrees } from "./registry-read.js";
+import { readRegistryWorktrees, readWorktreeCleanupState } from "./registry-read.js";
 import {
   clearRegistryWorktreeProvisionedChunks,
   findLiveRegistryWorktreeByOwner,
@@ -63,6 +64,8 @@ import {
   retireExactWorktree,
   requireManagedWorktreeHead,
 } from "./removal-git.js";
+import { worktreeRunLeaseScope } from "./run-lease-owner.js";
+import { reapWorktreeRunLeases } from "./run-lease-store.js";
 import {
   abortWorktreeRemoval,
   claimWorktreeRemoval,
@@ -1289,7 +1292,21 @@ export class ManagedWorktreeService {
     const isLocked = createWorktreeLockPrefilter();
     const progress = new WorktreeGcProgress();
     const result = progress.result;
-    const records = listRegistryWorktrees(this.env);
+    const { records, leases } = await readWorktreeCleanupState(this.env);
+    const liveLeaseScopes = new Set(leases.liveScopes);
+    const observedIds = new Set(records.map((record) => record.id));
+    const hasLiveLease = (id: string) =>
+      observedIds.has(id)
+        ? liveLeaseScopes.has(worktreeRunLeaseScope(id))
+        : hasLiveWorktreeRunLease(this.env, id);
+    const protect = (record: ManagedWorktreeRecord) =>
+      autoRemovalProtectionReason(
+        record,
+        isLocked,
+        hasLiveLease,
+        { env: this.env, getConfig: this.getConfig ?? getRuntimeConfig },
+        params.shouldProtectOwner,
+      );
     for (const record of records) {
       try {
         if (record.removedAt === undefined && !(await worktreePathExists(record.path))) {
@@ -1310,11 +1327,7 @@ export class ManagedWorktreeService {
           if (!progress.start(record.id)) {
             continue;
           }
-          const protection = await this.autoRemovalProtectionReason(
-            record,
-            isLocked,
-            params.shouldProtectOwner,
-          );
+          const protection = await protect(record);
           if (protection !== undefined) {
             progress.protect("idle", record.id, protection);
             continue;
@@ -1356,8 +1369,7 @@ export class ManagedWorktreeService {
         env: this.env,
         limits: params.limits ?? resolveWorktreeCleanupLimits(),
         progress,
-        protect: (record) =>
-          this.autoRemovalProtectionReason(record, isLocked, params.shouldProtectOwner),
+        protect,
         remove: async (record) => {
           await this.remove({
             id: record.id,
@@ -1369,7 +1381,7 @@ export class ManagedWorktreeService {
     );
     let orphansDeleted = 0;
     let snapshotsPruned = 0;
-    const expired = listRegistryWorktrees(this.env).filter(
+    const expired = records.filter(
       (record) => record.removedAt !== undefined && now - record.removedAt > SNAPSHOT_RETENTION_MS,
     );
     const entries = await fs
@@ -1419,42 +1431,14 @@ export class ManagedWorktreeService {
         log.warn(`worktree cleanup deferred: ${String(error)}`);
       }
     }
+    try {
+      await reapWorktreeRunLeases(this.env, leases.staleScopes);
+    } catch (error) {
+      progress.error("idle", error);
+    }
     result.orphansDeleted = orphansDeleted;
     result.snapshotsPruned = snapshotsPruned;
     return result;
-  }
-
-  private async autoRemovalProtectionReason(
-    record: ManagedWorktreeRecord,
-    isLocked: ReturnType<typeof createWorktreeLockPrefilter>,
-    shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean,
-  ): Promise<string | undefined> {
-    if (
-      record.ownerId !== undefined &&
-      shouldProtectOwner?.(record.ownerKind, record.ownerId) === true
-    ) {
-      return "owner is active";
-    }
-    if (hasLiveWorktreeRunLease(this.env, record.id)) {
-      return "run lease is active";
-    }
-    const provisioned = await inspectManagedWorktreeCheckout(record, "provisioned", {
-      env: this.env,
-      getConfig: this.getConfig ?? getRuntimeConfig,
-    });
-    if (provisioned.retainedReason !== undefined) {
-      return `provisioned checkout state is ${provisioned.retainedReason}`;
-    }
-    if (await isLocked(record)) {
-      return "worktree has a live or foreign lock";
-    }
-    const nested = await inspectManagedWorktreeCheckout(record, "nested-repository", {
-      env: this.env,
-      getConfig: this.getConfig ?? getRuntimeConfig,
-    });
-    return nested.retainedReason === undefined
-      ? undefined
-      : "worktree contains a nested repository";
   }
 
   private assertOwnerAllowsCleanup(

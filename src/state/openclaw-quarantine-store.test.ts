@@ -11,9 +11,9 @@ import {
   readOpenClawAgentIntegrityVerification,
   recordOpenClawAgentIntegrityVerification,
   recordOpenClawDatabaseQuarantine,
-  resolveQuarantineStorePath,
 } from "./openclaw-quarantine-store.js";
 import { readPersistedQuarantineRow } from "./openclaw-quarantine-store.test-support.js";
+import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());

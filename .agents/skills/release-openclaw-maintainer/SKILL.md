@@ -26,6 +26,8 @@ Read only the references needed for the selected phase:
 
 ## Shared release boundaries
 
+Flaky tests never block a release. A lane that fails on a test the candidate did not touch, or that passes on rerun, is a flake: rerun it once, record it, and treat it as advisory (operator lane waiver `OPENCLAW_FRV_LANE_WAIVER`, or the declared flake allowance) rather than holding npm/ClawHub publication. Only install smoke, upgrade-survivor proofs, pack budget, and the artifact children stay required. A release-critical tooling PR blocked solely by a flaky check may be admin-merged once every non-flaky required check is green.
+
 Explicit approval is required for version changes and irreversible publication.
 A request to cut, publish, or complete a named release carries through its
 validated publication and verification; do not ask again unless identity,

@@ -72,7 +72,9 @@ until their own turn starts, without an additional receipt notice. Inputs accept
 Gateway `agent` method use the same display. They are stored separately from the active model transcript. If
 cancellation or a Gateway restart interrupts that wait,
 the message stays readable with its recorded disposition and is never resent
-automatically. Copy it into the composer to start a new attempt. **Show earlier
+automatically. Stopped messages stay at their original time in the conversation,
+before messages sent later; only inputs still waiting to run stay at the live edge.
+Copy a stopped message into the composer to start a new attempt. **Show earlier
 messages** pages through messages that are still waiting or were stopped before
 processing; **Show latest messages** returns to the newest page. Incoming activity
 refreshes the page you are reading without changing your selection. A long message
@@ -85,6 +87,9 @@ custody. Collect mode consumes the accepted sources with their combined
 transcript entry. Acceptance does not imply that a transcript row already
 exists; the accepted input replaces its local pending copy and later becomes
 one canonical message, including its attachments.
+Messages keep their queue position through submission, acceptance, reconnects, and
+storage recovery. Changing delivery status does not reorder them; explicit queue
+reordering and steering retain their normal behavior.
 
 ## Systems workspace
 
@@ -485,6 +490,8 @@ Use the Effort menu to choose Fast Mode before creating a session. New Session p
 Refreshing sessions after an initial `/think` command finishes updates chat's Effort setting.
 
 For agent GitHub CLI identity and Git author setup, see [`tools.github`](/gateway/config-tools#tools-github).
+
+An expired Incognito link shows an expiration notice instead of an ordinary new conversation. **New Incognito session** opens a fresh private conversation and carries over unsent composer text and attachments within the current tab; it does not send them automatically. Previously submitted messages that were not sent remain on the expired conversation for copying or discarding, without a retry action.
 
 On multi-user gateways, only admin-scope connections can create or view incognito threads, and other sessions cannot reach them through agent session tools or transcript search. Incognito protects against storage and other gateway-mediated users, not against the gateway owner or process operator, who can always observe live sessions.
 

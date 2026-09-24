@@ -179,6 +179,7 @@ type GatewaySessionStoreLookupParams = {
   agentId?: string;
   clone?: boolean;
   projection?: SessionEntryListScope["projection"];
+  readConsistency?: SessionEntryListScope["readConsistency"];
   readOnly?: boolean;
   exactRead?: boolean;
   listCandidatesOnly?: boolean;
@@ -215,6 +216,7 @@ function prepareGatewaySessionStoreLookup(
       ...(params.exactRead ? { exactKeys: scanTargets } : {}),
       ...(params.listCandidatesOnly ? { listKeys: scanTargets } : {}),
       ...(params.projection ? { projection: params.projection } : {}),
+      ...(params.readConsistency ? { readConsistency: params.readConsistency } : {}),
       ...(params.storeCache ? { cache: params.storeCache } : {}),
     },
     result:
@@ -275,6 +277,7 @@ function prepareExplicitDeletedLegacyMainStoreTarget(
         ...(params.exactRead ? { exactKeys: lookupSeeds } : {}),
         ...(params.listCandidatesOnly ? { listKeys: lookupSeeds } : {}),
         ...(params.projection ? { projection: params.projection } : {}),
+        ...(params.readConsistency ? { readConsistency: params.readConsistency } : {}),
         ...(params.storeCache ? { cache: params.storeCache } : {}),
       },
     }));
@@ -364,6 +367,7 @@ function prepareGatewaySessionStoreTarget(
         ...(params.exactRead ? { exactKeys: [canonicalKey] } : {}),
         ...(params.listCandidatesOnly ? { listKeys: [canonicalKey] } : {}),
         ...(params.projection ? { projection: params.projection } : {}),
+        ...(params.readConsistency ? { readConsistency: params.readConsistency } : {}),
         ...(params.storeCache ? { cache: params.storeCache } : {}),
       },
     };

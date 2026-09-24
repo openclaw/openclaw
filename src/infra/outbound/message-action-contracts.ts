@@ -4,10 +4,14 @@ import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import type { DurableMessageSendIntent } from "../../channels/message/types.js";
-import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
+import type { DurableMessageSendIntent, OutboundReplyFacts } from "../../channels/message/types.js";
+import {
+  normalizeConversationReadInvocationOrigin,
+  type ConversationReadInvocationOrigin,
+} from "../../channels/plugins/conversation-read-origin.js";
 import type {
   ChannelId,
+  ChannelMessageActionContext,
   ChannelMessageActionName,
   ChannelPlugin,
   ChannelThreadingToolContext,
@@ -283,3 +287,39 @@ export type ResolvedActionContext = {
   resolvedTarget?: ResolvedMessagingTarget;
   abortSignal?: AbortSignal;
 };
+
+export function createChannelActionContext(params: {
+  ctx: Omit<ResolvedActionContext, "mediaAccess"> & { mediaAccess?: OutboundMediaAccess };
+  action: ChannelMessageActionContext["action"];
+  mediaAccess?: OutboundMediaAccess;
+  reply?: OutboundReplyFacts;
+}): ChannelMessageActionContext {
+  const mediaAccess = params.mediaAccess ?? params.ctx.mediaAccess;
+  return {
+    channel: params.ctx.channel,
+    action: params.action,
+    cfg: params.ctx.cfg,
+    params: params.ctx.params,
+    ...(params.reply ? { reply: params.reply } : {}),
+    ...(mediaAccess ? { mediaAccess } : {}),
+    mediaLocalRoots: mediaAccess?.localRoots,
+    mediaReadFile: mediaAccess?.readFile,
+    accountId: params.ctx.accountId ?? undefined,
+    requesterAccountId: params.ctx.input.requesterAccountId ?? undefined,
+    requesterSenderId: params.ctx.input.requesterSenderId ?? undefined,
+    senderIsOwner: params.ctx.input.senderIsOwner,
+    conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+      params.ctx.input.conversationReadOrigin,
+    ),
+    sessionKey: params.ctx.input.sessionKey,
+    sessionId: params.ctx.input.sessionId,
+    inboundEventKind: params.ctx.input.inboundEventKind,
+    agentId: params.ctx.agentId,
+    gateway: params.ctx.gateway,
+    toolContext: params.ctx.input.toolContext,
+    dryRun: params.ctx.dryRun,
+    onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
+    ...(params.action === "send" ? { skipQueue: params.ctx.input.skipQueue } : {}),
+  };
+}

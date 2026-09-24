@@ -143,23 +143,8 @@ on:
         required: false
         default: ""
         type: string
-      advisory:
-        description: Treat acceptance failures as advisory for the caller
-        required: false
-        default: false
-        type: boolean
   workflow_call:
     inputs:
-      advisory:
-        description: Treat acceptance failures as advisory for the caller
-        required: false
-        default: false
-        type: boolean
-      telegram_advisory:
-        description: Treat only Telegram acceptance failures as advisory
-        required: false
-        default: false
-        type: boolean
       workflow_ref:
         description: "Assertion of the called workflow identity: dispatch/call at the desired ref and supply its matching SHA/ref; package_ref independently selects package source"
         required: false
@@ -1334,7 +1319,6 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with: &docker_acceptance_inputs
-      advisory: ${{ inputs.advisory || false }}
       ref: ${{ needs.resolve_package.outputs.package_source_sha }}
       include_repo_e2e: false
       include_release_path_suites: ${{ needs.resolve_package.outputs.include_release_path_suites == 'true' }}
@@ -1439,7 +1423,6 @@ jobs:
     if: needs.resolve_package.outputs.telegram_enabled == 'true'
     uses: ./.github/workflows/npm-telegram-beta-e2e.yml
     with:
-      advisory: ${{ inputs.advisory || inputs.telegram_advisory || false }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions || false }}
       package_spec: ${{ inputs.package_spec }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
@@ -1483,7 +1466,6 @@ jobs:
     steps:
       - name: Verify package acceptance results
         env:
-          ADVISORY: ${{ inputs.advisory }}
           DOCKER_ARTIFACT_RESULT: ${{ needs.docker_acceptance.result }}
           DOCKER_REGISTRY_RESULT: ${{ needs.docker_acceptance_registry.result }}
           PACKAGE_INTEGRITY_RESULT: ${{ needs.package_integrity.result }}
@@ -1492,7 +1474,6 @@ jobs:
           RESOLVE_RESULT: ${{ needs.resolve_package.result }}
           SUITE_PROFILE: ${{ inputs.suite_profile }}
           TELEGRAM_ENABLED: ${{ needs.resolve_package.outputs.telegram_enabled }}
-          TELEGRAM_ADVISORY: ${{ inputs.telegram_advisory }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1540,11 +1521,6 @@ jobs:
               result_failed=true
             fi
             if [[ "$result_failed" == "true" ]]; then
-              if [[ ("$ADVISORY" == "true" && "$name" != "resolve_package") ||
-                    ("$TELEGRAM_ADVISORY" == "true" && "$name" == "package_telegram") ]]; then
-                echo "::warning::${name} ended with ${result}; package acceptance is advisory for this caller."
-                continue
-              fi
               echo "::error::${name} ended with ${result}"
               failed=1
             fi
