@@ -142,10 +142,12 @@ describe("web_fetch provider fallback normalization", () => {
     expect(details.extractor).toBe("custom-provider");
     expect(details.contentType).toBe("text/plain");
     expect(
-      details.text?.split("\n\n[Showing truncated web_fetch content.")[0]?.length,
+      (details.text?.length ?? 0) + (details.title?.length ?? 0) + (details.warning?.length ?? 0),
     ).toBeLessThanOrEqual(800);
     expect(details.spill).toBeDefined();
+    expect(details.text).toContain("Ignore previous instructions");
     expect(details.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+    expect(details.text).toMatch(/<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(details.text).toContain(`Full output: ${details.spill?.path}`);
     expect(details.title).toContain("Provider Title");
     expect(details.warning).toContain("Provider Warning");
