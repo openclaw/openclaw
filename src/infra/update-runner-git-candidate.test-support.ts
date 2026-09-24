@@ -6,6 +6,7 @@ import { resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
 import { pathExists } from "../utils.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
@@ -252,10 +253,85 @@ export function registerGitActivationDoctorOutcomeTests(
     isStopped: () => boolean;
     advanceRemote: () => Promise<string>;
     git: (root: string, ...args: string[]) => Promise<string>;
-    update: (opts: Pick<UpdateRunnerOptions, "runGitDoctor">) => Promise<UpdateRunResult>;
+    update: (
+      opts: Pick<UpdateRunnerOptions, "runGitDoctor" | "onTransaction">,
+    ) => Promise<UpdateRunResult>;
     expectNoRuntimeStagingPaths: () => Promise<void>;
   },
 ) {
+  it.each(["restore", "complete", "cleanup-failed", "source-changed", "runtime-changed"] as const)(
+    "retains the activated Git transaction through finalization: %s",
+    async (outcome) => {
+      const { root, beforeSha, advanceRemote, git, update, expectNoRuntimeStagingPaths } =
+        getFixture();
+      const targetSha = await advanceRemote();
+      let retained: PackageUpdateTransaction | undefined;
+      const result = await update({
+        onTransaction: (transaction) => {
+          retained = transaction;
+        },
+      });
+      expect(result.status).toBe("ok");
+      assert(retained, "Finalization must receive the retained Git runtime transaction");
+      await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
+      expect(result.gitRuntime).toEqual({
+        commit: targetSha,
+        distDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+      });
+      if (outcome === "cleanup-failed") {
+        const remove = fs.rm.bind(fs);
+        const backupRoot = retained.backupRoot;
+        const removal = vi.spyOn(fs, "rm").mockImplementation(async (entry, options) => {
+          if (entry === backupRoot) {
+            throw Object.assign(new Error("backup cleanup denied"), { code: "EACCES" });
+          }
+          return remove(entry, options);
+        });
+        try {
+          const warning = await retained.complete({ activationVerified: true }, () => {});
+          expect(warning).toMatchObject({
+            advisory: {
+              kind: "recoverable-maintenance",
+              message: expect.stringContaining(backupRoot),
+            },
+          });
+          expect(await retained.complete({ activationVerified: true }, () => {})).toBe(warning);
+          await expectRuntime(root, targetSha);
+          await expect(fs.stat(backupRoot)).resolves.toBeDefined();
+        } finally {
+          removal.mockRestore();
+        }
+        return;
+      }
+      if (outcome === "complete") {
+        await retained.complete({ activationVerified: true }, () => {});
+        await expectRuntime(root, targetSha);
+        await expectNoRuntimeStagingPaths();
+        return;
+      }
+      if (outcome === "source-changed") {
+        await fs.writeFile(path.join(root, "operator-edit.txt"), "preserve this edit\n");
+        await expect(retained.rollback(() => {})).rejects.toThrow("changed after activation");
+        await expect(retained.complete({ activationVerified: false }, () => {})).rejects.toThrow(
+          "changed after activation",
+        );
+        expect(await git(root, "rev-parse", "HEAD")).toBe(targetSha);
+        expect(await fs.readFile(path.join(root, "operator-edit.txt"), "utf8")).toBe(
+          "preserve this edit\n",
+        );
+        await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
+        return;
+      } else if (outcome === "runtime-changed") {
+        await fs.writeFile(path.join(root, "dist", "operator-chunk.mjs"), "export {};\n");
+      }
+      const restored = await retained.rollback(() => {});
+      expect(restored.exitCode).toBe(0);
+      await retained.complete({ activationVerified: false }, () => {});
+      expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+      await expectRuntime(root, beforeSha);
+      await expectNoRuntimeStagingPaths();
+    },
+  );
   it.each([
     ["success", undefined],
     ["config-refused", "repair-requires-config-change"],

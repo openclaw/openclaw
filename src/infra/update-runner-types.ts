@@ -4,6 +4,7 @@ import type { CommandOptions } from "../process/exec.js";
 import type { UpdateRecoveryStep } from "../shared/update-outcome.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
 import type {
@@ -13,6 +14,7 @@ import type {
 import type { UpdateDoctorLintFinding } from "./update-doctor-lint-schema.js";
 import type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import type { UpdateFailureFact } from "./update-failure-facts.js";
+import type { GitRuntimeArtifactIdentity } from "./update-git-runtime.js";
 import type { GlobalInstallManager } from "./update-global.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 import type { UpdateRollbackOutcome, UpdateRunRecordSchema } from "./update-run-schema.js";
@@ -58,6 +60,7 @@ export type UpdateRunResult = {
   reason?: string;
   /** The executing owner's terminal failure; steps also retain superseded attempts. */
   failedStep?: UpdateStepResult;
+  gitRuntime?: GitRuntimeArtifactIdentity;
   before?: { sha?: string | null; version?: string | null; buildId?: string | null };
   after?: {
     sha?: string | null;
@@ -164,6 +167,8 @@ export type UpdateRunnerOptions = {
   /** Operator-selected work deadline; omission leaves work unbounded, not probes or cleanup. */
   timeoutMs?: number;
   progress?: UpdateStepProgress;
+  /** The finalizer owns retained source/runtime rollback after successful activation. */
+  onTransaction?: (transaction: PackageUpdateTransaction) => void;
 } & (
   | {
       /** CLI-owned activation Doctor retains its config writer and requester authority. */

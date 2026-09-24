@@ -668,17 +668,19 @@ describe("Git candidate activation", () => {
     { layout: "node_modules/.cache/jiti", localCommit: false },
     { layout: "node_modules/.vite/deps", localCommit: false },
     { layout: "node_modules/.pnpm", localCommit: true },
+    { layout: "node_modules/.pnpm", localCommit: true, remoteCurrent: true },
     { layout: ".pnpm", localCommit: false },
     { layout: "cache/deps", localCommit: false },
     { layout: "../store", localCommit: false },
     { layout: "external", localCommit: false },
     { layout: "symlink", localCommit: false },
   ] as const)(
-    "activates the validated $layout runtime (preserving local commits: $localCommit)",
-    async ({ layout, localCommit }) => {
+    "activates the validated $layout runtime (preserving local commits: $localCommit, remote current: $remoteCurrent)",
+    async ({ layout, localCommit, ...scenario }) => {
       virtualStoreLayout = layout;
       await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), layout);
-      const target = await advanceRemote();
+      const remoteCurrent = "remoteCurrent" in scenario && scenario.remoteCurrent;
+      const target = remoteCurrent ? beforeSha : await advanceRemote();
       if (localCommit) {
         const artifacts = path.join(directory, "external-artifacts");
         await fs.mkdir(artifacts);
@@ -697,8 +699,15 @@ describe("Git candidate activation", () => {
       expect(result.status, JSON.stringify(result)).toBe("ok");
       expect(events).toEqual(["build", "validate", "stop", "migrate"]);
       const current = await git(root, "rev-parse", "HEAD");
+      if (remoteCurrent) {
+        expect(current).toBe(beforeSha);
+      }
       expect(result.before?.buildId).toBe(beforeSha);
       expect(result.after).toMatchObject({ sha: current, buildId: current });
+      expect(result.gitRuntime).toEqual({
+        commit: current,
+        distDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
       expect(await git(root, "merge-base", current, target)).toBe(target);
       expect.soft(await git(root, "rev-parse", "@{upstream}")).toBe(target);
       if (localCommit) {
