@@ -1346,6 +1346,7 @@ export function serializeNativeI18nInventory(entries: readonly NativeI18nEntry[]
 async function syncNativeI18n(options: {
   checkInventory: boolean;
   checkLocales: boolean;
+  reportObsolete?: (message: string) => void;
   write: boolean;
 }): Promise<NativeI18nEntry[]> {
   const currentInventory = await readNativeI18nInventory();
@@ -1358,7 +1359,11 @@ async function syncNativeI18n(options: {
     );
   }
   if (options.checkLocales) {
-    const findings = await checkNativeLocaleArtifacts(entries);
+    const findings = await checkNativeLocaleArtifacts(
+      entries,
+      TRANSLATIONS_DIR,
+      options.reportObsolete,
+    );
     for (const finding of findings) {
       process.stdout.write(`native-app-i18n: advisory=${JSON.stringify(finding)}\n`);
     }
@@ -1490,8 +1495,10 @@ export function validateNativeLocaleArtifact(
   inventory: readonly NativeI18nEntry[],
   artifactValue: unknown,
   glossary: readonly { source: string; target: string }[] = [],
+  reportObsolete?: (message: string) => void,
 ): NativeI18nQualityFinding[] {
   const errors: string[] = [];
+  const obsolete: string[] = [];
   if (!artifactValue || typeof artifactValue !== "object" || Array.isArray(artifactValue)) {
     throw new Error(`invalid native locale artifact ${locale}: expected an object`);
   }
@@ -1521,7 +1528,7 @@ export function validateNativeLocaleArtifact(
   const inventoryById = new Map(inventory.map((entry) => [entry.id, entry]));
   for (const id of Object.keys(translations)) {
     if (!inventoryById.has(id)) {
-      errors.push(`unknown translation id ${JSON.stringify(id)}`);
+      (reportObsolete ? obsolete : errors).push(`unknown translation id ${JSON.stringify(id)}`);
     }
     if (typeof translations[id] !== "string") {
       errors.push(`translation must be a string for ${id}`);
@@ -1540,6 +1547,9 @@ export function validateNativeLocaleArtifact(
   if (errors.length > 0) {
     throw new Error(`invalid native locale artifact ${locale}:\n- ${errors.join("\n- ")}`);
   }
+  if (obsolete.length > 0) {
+    reportObsolete?.(`native locale ${locale}: ${obsolete.join(", ")}`);
+  }
   return collectNativeI18nQualityFindings(
     locale,
     inventory,
@@ -1550,6 +1560,7 @@ export function validateNativeLocaleArtifact(
 export async function checkNativeLocaleArtifacts(
   inventory: readonly NativeI18nEntry[],
   translationsDir = TRANSLATIONS_DIR,
+  reportObsolete?: (message: string) => void,
 ): Promise<NativeI18nQualityFinding[]> {
   const expectedFiles = NATIVE_I18N_LOCALES.map((locale) => `${locale}.json`).toSorted(
     compareCodePoints,
@@ -1571,7 +1582,13 @@ export async function checkNativeLocaleArtifacts(
     try {
       const artifact: unknown = JSON.parse(await readFile(artifactPath, "utf8"));
       findings.push(
-        ...validateNativeLocaleArtifact(locale, inventory, artifact, await loadGlossary(locale)),
+        ...validateNativeLocaleArtifact(
+          locale,
+          inventory,
+          artifact,
+          await loadGlossary(locale),
+          reportObsolete,
+        ),
       );
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
@@ -1795,10 +1812,15 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
 
 async function main() {
   const parsed = parseNativeI18nCommand(process.argv.slice(2));
+  const reportObsolete =
+    parsed.command === "check" && (process.env.CI === "true" || process.env.CI === "1")
+      ? (message: string) => process.stderr.write(`::warning::${message}\n`)
+      : undefined;
   const entries = await syncNativeI18n({
     checkInventory:
       parsed.command === "check" || parsed.command === "verify" || parsed.locale !== undefined,
     checkLocales: parsed.command === "check",
+    reportObsolete,
     write:
       (parsed.command === "baseline" || parsed.command === "sync") &&
       parsed.write &&
@@ -1817,7 +1839,7 @@ async function main() {
       await android.verifyAndroidAppI18n();
       await apple.verifyAppleAppI18n();
     } else {
-      await android.checkAndroidAppI18n();
+      await android.checkAndroidAppI18n({ reportObsolete });
       await apple.checkAppleAppI18n();
     }
   }

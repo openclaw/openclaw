@@ -9,16 +9,21 @@ import type {
   CodeModeWorkerContinuation,
   CodeModeOutputSource,
 } from "openclaw/plugin-sdk/code-mode-executor-runtime";
-import { WorkerTaskPool, type WorkerTaskResponse } from "openclaw/plugin-sdk/process-runtime";
+import {
+  resolveRuntimeWorkerUrl,
+  WorkerTaskPool,
+  type WorkerTaskResponse,
+} from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createQuickJsTestConfig,
   runQuickJsExecutor as runCodeModeWorker,
 } from "./executor.test-support.js";
+import { quickJsWorkerTestEntrypoint } from "./worker-entrypoint.test-support.js";
 
 const config = createQuickJsTestConfig();
 const sleep = "await new Promise(resolve => setTimeout(resolve, 0));";
-const workerUrl = new URL("./code-mode.worker.ts", import.meta.url);
+const workerUrl = resolveRuntimeWorkerUrl(quickJsWorkerTestEntrypoint);
 const pools: WorkerTaskPool<unknown, CodeModeWorkerResult>[] = [];
 const resolveModule = createRequire(import.meta.url).resolve;
 const modules = Promise.all([

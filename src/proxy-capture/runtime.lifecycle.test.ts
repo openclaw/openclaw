@@ -4,11 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
+import { proxyCaptureNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import {
   captureHttpExchange,
   captureWsEvent,
@@ -363,12 +365,14 @@ describe("capture store lifecycle", () => {
     ({ storage, failure }) => {
       const root = stateRoot();
       const settings = captureSettings(root);
-      const runtimeUrl = new URL("./runtime.ts", import.meta.url).href;
-      const storeUrl = new URL("./store.sqlite.ts", import.meta.url).href;
-      const redactionUrl = new URL("../logging/secret-redaction-registry.ts", import.meta.url).href;
+      const runtimeUrl = resolveRuntimeWorkerUrl(proxyCaptureNativeProcessEntrypoints.runtime);
+      const storeUrl = resolveRuntimeWorkerUrl(proxyCaptureNativeProcessEntrypoints.store).href;
+      const redactionUrl = resolveRuntimeWorkerUrl(
+        proxyCaptureNativeProcessEntrypoints.secretRedaction,
+      ).href;
       const script = `
         import assert from "node:assert/strict";
-        import { captureHttpExchange, initializeDebugProxyCapture, finalizeDebugProxyCapture } from ${JSON.stringify(runtimeUrl)};
+        import { captureHttpExchange, initializeDebugProxyCapture, finalizeDebugProxyCapture } from ${JSON.stringify(runtimeUrl.href)};
         import { getDebugProxyCaptureStore } from ${JSON.stringify(storeUrl)};
         import { registerSecretValueForRedaction } from ${JSON.stringify(redactionUrl)};
         const settings = ${JSON.stringify(settings)};
@@ -433,8 +437,7 @@ describe("capture store lifecycle", () => {
         process.execPath,
         [
           "--disable-warning=ExperimentalWarning",
-          "--import",
-          "tsx",
+          ...resolveRuntimeWorkerArgv(runtimeUrl).slice(0, -1),
           "--input-type=module",
           "-e",
           script,
@@ -630,10 +633,10 @@ describe("capture admission generation", () => {
 
   it("releases retired settings, store, and runtime closures while delayed admission stays fenced", () => {
     const root = stateRoot();
-    const runtimeUrl = new URL("./runtime.ts", import.meta.url).href;
+    const runtimeUrl = resolveRuntimeWorkerUrl(proxyCaptureNativeProcessEntrypoints.runtime);
     const script = `
       import assert from "node:assert/strict";
-      import { initializeDebugProxyCapture, finalizeDebugProxyCapture, prepareHttpCapture } from ${JSON.stringify(runtimeUrl)};
+      import { initializeDebugProxyCapture, finalizeDebugProxyCapture, prepareHttpCapture } from ${JSON.stringify(runtimeUrl.href)};
       let store, acquired = 0, recorded = 0, complete;
       const getStore = () => { acquired++; return store; };
       const target = { fetch: () => new Promise(resolve => complete = resolve) };
@@ -672,8 +675,7 @@ describe("capture admission generation", () => {
       [
         "--disable-warning=ExperimentalWarning",
         "--expose-gc",
-        "--import",
-        "tsx",
+        ...resolveRuntimeWorkerArgv(runtimeUrl).slice(0, -1),
         "--input-type=module",
         "-e",
         script,

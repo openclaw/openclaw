@@ -13,6 +13,8 @@ function sanitizedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.OPENCLAW_PR_GATES_REMOTE;
   delete env.OPENCLAW_TESTBOX;
+  delete env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+  delete env.OPENCLAW_VITEST_MAX_WORKERS;
   return { ...env, ...overrides };
 }
 
@@ -34,7 +36,9 @@ function runGatesBash(
         `script_parent_dir='${repoRoot}/scripts'`,
         `source '${repoRoot}/scripts/pr-lib/common.sh'`,
         `source '${repoRoot}/scripts/pr-lib/gates.sh'`,
+        `source '${repoRoot}/scripts/pr-lib/review.sh'`,
         "mark_pr_operation_side_effects_started() { :; }",
+        "require_prepared_review() { :; }",
         ...(options.sourcePush
           ? [
               `source '${repoRoot}/scripts/pr-lib/worktree.sh'`,
@@ -903,7 +907,7 @@ describe("prepare gate changed-file plan", () => {
 });
 
 describe("remote testbox gate delegation", () => {
-  it("runs the full pnpm test through the worktree crabbox wrapper", () => {
+  function runRemoteGate(env: NodeJS.ProcessEnv) {
     const dir = tempDirs.make("openclaw-pr-gates-remote-");
     const stubBin = join(dir, "bin");
     mkdirSync(stubBin);
@@ -911,6 +915,7 @@ describe("remote testbox gate delegation", () => {
       join(stubBin, "node"),
       [
         "#!/bin/sh",
+        `if [ "$1" != scripts/crabbox-wrapper.mjs ]; then exec '${process.execPath}' "$@"; fi`,
         "printf 'ARG:%s\\n' \"$@\"",
         `printf '{"provider":"blacksmith-testbox","leaseId":"tbx_stub","exitCode":0,"runStatus":"passed"}\\n' >&2`,
       ].join("\n"),
@@ -920,31 +925,87 @@ describe("remote testbox gate delegation", () => {
     const workDir = join(dir, "work");
     mkdirSync(workDir);
     const result = runGatesBash(
-      "run_remote_testbox_full_test_gate 'pnpm test (blacksmith-testbox)' .local/gates-test.log pr-424242-gates\n" +
-        "grep '^ARG:' .local/gates-test.log | paste -sd ' ' -",
+      "run_remote_testbox_full_test_gate 'pnpm test (blacksmith-testbox)' .local/gates-test.log pr-424242-gates",
       {
         cwd: workDir,
-        env: { PATH: `${stubBin}:${process.env.PATH ?? ""}` },
+        env: { PATH: `${stubBin}:${process.env.PATH ?? ""}`, ...env },
       },
     );
 
-    expect(result.status).toBe(0);
-    const argLine = result.stdout
+    return { result, workDir, logPath: join(workDir, ".local/gates-test.log") };
+  }
+
+  it.each([
+    { name: "absent controls", env: {}, expected: [] },
+    {
+      name: "explicit controls",
+      env: { OPENCLAW_TEST_PROJECTS_PARALLEL: "2", OPENCLAW_VITEST_MAX_WORKERS: "1" },
+      expected: ["OPENCLAW_TEST_PROJECTS_PARALLEL=2", "OPENCLAW_VITEST_MAX_WORKERS=1"],
+    },
+    {
+      name: "normalized integer controls",
+      env: { OPENCLAW_TEST_PROJECTS_PARALLEL: " 02 ", OPENCLAW_VITEST_MAX_WORKERS: "001" },
+      expected: ["OPENCLAW_TEST_PROJECTS_PARALLEL=2", "OPENCLAW_VITEST_MAX_WORKERS=1"],
+    },
+    {
+      name: "empty controls",
+      env: { OPENCLAW_TEST_PROJECTS_PARALLEL: "", OPENCLAW_VITEST_MAX_WORKERS: " \t " },
+      expected: [],
+    },
+    {
+      name: "only the worker control",
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "3" },
+      expected: ["OPENCLAW_VITEST_MAX_WORKERS=3"],
+    },
+  ])("runs the full worktree Testbox command with $name", ({ env, expected }) => {
+    const { result, logPath } = runRemoteGate(env);
+    expect(result.status, result.stderr).toBe(0);
+    const args = readFileSync(logPath, "utf8")
       .split("\n")
-      .find((line) => line.includes("crabbox-wrapper.mjs"))
-      ?.replaceAll("ARG:", "");
-    expect(argLine).toBe(
-      "scripts/crabbox-wrapper.mjs run " +
-        "--provider blacksmith-testbox " +
-        "--blacksmith-org openclaw " +
-        "--blacksmith-workflow .github/workflows/ci-check-testbox.yml " +
-        "--blacksmith-job check " +
-        "--blacksmith-ref main " +
-        "--idle-timeout 90m --ttl 240m --timing-json " +
-        "--label pr-424242-gates " +
-        "-- env CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 " +
-        "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false corepack pnpm test",
-    );
+      .filter((line) => line.startsWith("ARG:"))
+      .map((line) => line.slice(4));
+    expect(args).toEqual([
+      "scripts/crabbox-wrapper.mjs",
+      "run",
+      "--provider",
+      "blacksmith-testbox",
+      "--blacksmith-org",
+      "openclaw",
+      "--blacksmith-workflow",
+      ".github/workflows/ci-check-testbox.yml",
+      "--blacksmith-job",
+      "check",
+      "--blacksmith-ref",
+      "main",
+      "--idle-timeout",
+      "90m",
+      "--ttl",
+      "240m",
+      "--timing-json",
+      "--label",
+      "pr-424242-gates",
+      "--",
+      "env",
+      "CI=1",
+      "OPENCLAW_TESTBOX_REMOTE_RUN=1",
+      "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false",
+      ...expected,
+      "corepack",
+      "pnpm",
+      "test",
+    ]);
+  });
+
+  it.each(
+    ["OPENCLAW_TEST_PROJECTS_PARALLEL", "OPENCLAW_VITEST_MAX_WORKERS"].flatMap((name) =>
+      ["0", "-1", "1.5", "9007199254740992", "2; touch injected"].map((value) => ({ name, value })),
+    ),
+  )("rejects $name=$value before remote dispatch", ({ name, value }) => {
+    const { result, workDir, logPath } = runRemoteGate({ [name]: value });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(`${name} must be a positive integer`);
+    expect(existsSync(logPath)).toBe(false);
+    expect(existsSync(join(workDir, "injected"))).toBe(false);
   });
 
   it("extracts the last successful blacksmith-testbox timing stamp", () => {

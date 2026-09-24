@@ -1,10 +1,10 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 /**
  * Response-body retrieval for Playwright-backed browser tools.
  */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Response } from "playwright-core";
-import { toErrorObject } from "../infra/errors.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
 import { matchBrowserUrlPattern } from "./url-pattern.js";

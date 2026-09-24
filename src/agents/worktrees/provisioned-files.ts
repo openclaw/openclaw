@@ -353,7 +353,7 @@ export async function restoreProvisionedFiles(
     try {
       await validateDirectoryIdentities(parentIdentities);
       for (let chunkIndex = 0; chunkIndex < state.chunks; chunkIndex += 1) {
-        const chunk = getRegistryWorktreeProvisionedChunk(env, {
+        const chunk = await getRegistryWorktreeProvisionedChunk(env, {
           worktreeId,
           path: state.path,
           chunkIndex,
@@ -361,6 +361,7 @@ export async function restoreProvisionedFiles(
         if (!chunk) {
           throw new Error(`provisioned snapshot chunk missing: ${state.path}:${chunkIndex}`);
         }
+        commitGuard?.();
         await writeFileWindowFully(handle, chunk, null, { assertBeforeMutation: commitGuard });
       }
       commitGuard?.();

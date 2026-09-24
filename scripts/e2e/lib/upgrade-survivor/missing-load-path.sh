@@ -55,14 +55,13 @@ run_missing_load_path_fixture() {
         import { compareReleaseVersions, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
         const release = parseReleaseVersion(process.argv[1]);
         if (!release) throw new Error("Invalid baseline release version");
-        if (compareReleaseVersions(release.version, "2026.5.2-beta.1") !== -1 &&
-            compareReleaseVersions(release.version, "2026.9.1") === -1) {
+        if (compareReleaseVersions(release.version, "2026.9.1") === -1) {
           process.stdout.write(release.correctionNumber === undefined ? release.version : release.baseVersion);
         }
       ' "$baseline_version")" || return "$?"
       if [ -n "$companion_version" ]; then
-        # Before May these plugins were bundled; 2026.9.1 exempts official plugin consent.
-        # Intervening startup repairs need their published cohort; core corrections share it.
+        # Before 2026.9.1 exempted official plugin consent, startup repairs needed
+        # their published companion cohort; core corrections share it.
         for plugin in codex discord whatsapp; do
           phase "missing-load-path-baseline-$plugin" openclaw_prepublish_plugin_registry_run_published \
             openclaw_e2e_fixture_plugin_command openclaw -- \

@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
 import {
   ARTIFACT_CACHE_VERSION,
   portableRelativePath,
   listCacheFiles,
   type ArtifactRecord,
 } from "./build-artifact-cache.mts";
+import { readNativeTypeScriptConfig } from "./native-typescript-config.mts";
 
 type CompilerInputPolicy = {
   toolchainFiles: string[];
@@ -15,10 +15,39 @@ type CompilerInputPolicy = {
   isGeneratorInput?: (file: string) => boolean;
   assertInput?: (file: string) => string;
 };
-type TopologyEntry = { name: string; directory: string; file?: string };
+type TopologyEntry = { id: string; name: string; directory: string; file?: string };
 type NamespaceDirectory = { directory: string; realDirectory: string; installed: boolean };
 const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 const PREPARATION_CONCURRENCY = 16;
+
+function diagnosticJson(value: object) {
+  // JSON escapes C0 controls but leaves terminal controls and bidi formatting literal.
+  return JSON.stringify(value).replace(
+    /[\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/gu,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+function namespaceEntries(
+  entries: TopologyEntry[],
+  outputRoot?: string,
+  producedFiles?: ReadonlySet<string>,
+  previousEntries?: TopologyEntry[],
+) {
+  const previousIds = previousEntries && new Set(previousEntries.map(({ id }) => id));
+  return entries.filter(
+    ({ id, name, directory, file }) =>
+      (!outputRoot ||
+        (directory !== outputRoot && !directory.startsWith(`${outputRoot}${path.sep}`))) &&
+      !(
+        previousIds &&
+        !previousIds.has(id) &&
+        name === id &&
+        file !== undefined &&
+        producedFiles?.has(file)
+      ),
+  );
+}
 
 function skipNamespaceEntry(id: string, name: string, installed: boolean) {
   return (
@@ -171,7 +200,7 @@ export class CompilerInputSnapshot {
   private readonly files = new Map<string, { bytes: Buffer; hash: string; ctimeMs: number }>();
   private readonly configs = new Map<
     string,
-    { files: string[]; roots: string[]; options: ts.CompilerOptions }
+    { files: string[]; roots: string[]; options: Record<string, unknown> }
   >();
   private topology?: TopologyEntry[];
   private readonly namespaceDigests = new Map<string | undefined, string>();
@@ -248,31 +277,20 @@ export class CompilerInputSnapshot {
   private config(file: string) {
     let result = this.configs.get(file);
     if (!result) {
-      const files = new Set<string>();
-      const parsed = ts.getParsedCommandLineOfConfigFile(
-        this.inputPath(file),
-        {},
-        {
-          ...ts.sys,
-          readFile: (name) => {
-            files.add(name);
-            try {
-              return this.read(name).bytes.toString("utf8");
-            } catch {
-              return undefined;
-            }
-          },
-          onUnRecoverableConfigFileDiagnostic: (error) => {
-            throw new Error(ts.flattenDiagnosticMessageText(error.messageText, "\n"));
-          },
-        },
-      );
-      if (!parsed || parsed.errors.length) {
-        throw new Error(
-          `Invalid boundary config ${file}: ${parsed?.errors.map((error) => ts.flattenDiagnosticMessageText(error.messageText, "\n")).join("\n")}`,
-        );
+      try {
+        const parsed = readNativeTypeScriptConfig({
+          cwd: this.rootDir,
+          configFileName: this.inputPath(file),
+          readFile: (name) => this.read(name).bytes.toString("utf8"),
+        });
+        result = {
+          files: parsed.configFiles,
+          roots: parsed.fileNames.toSorted(),
+          options: parsed.options,
+        };
+      } catch (error) {
+        throw new Error(`Invalid boundary config ${file}: ${String(error)}`, { cause: error });
       }
-      result = { files: [...files], roots: parsed.fileNames.toSorted(), options: parsed.options };
       this.configs.set(file, result);
     }
     return result;
@@ -299,8 +317,6 @@ export class CompilerInputSnapshot {
       // Upgrade that traversal once; active ancestors still fence link cycles.
       visited.set(realDirectory, installed);
       active.add(realDirectory);
-      const add = (name: string, file?: string) =>
-        names.push({ name, directory: realDirectory, file });
       const entries = (yield { directory, realDirectory, installed }).toSorted((left, right) =>
         left.name < right.name ? -1 : 1,
       );
@@ -308,6 +324,8 @@ export class CompilerInputSnapshot {
         const file = path.join(directory, entry.name);
         const canonicalFile = path.join(realDirectory, entry.name);
         const id = portableRelativePath(rootDir, file);
+        const add = (name: string, contentFile?: string) =>
+          names.push({ id, name, directory: realDirectory, file: contentFile });
         if (skipNamespaceEntry(id, entry.name, installed)) {
           continue;
         }
@@ -339,6 +357,17 @@ export class CompilerInputSnapshot {
           add(`${id}:target:${target}`);
         }
         if (isDirectory) {
+          // Native declaration module naming can resolve an empty package
+          // directory. Its presence is a dependency lookup fact even without files.
+          if (
+            !entry.isSymbolicLink() &&
+            !entry.name.startsWith(".") &&
+            (path.basename(directory) === "node_modules" ||
+              (path.basename(directory).startsWith("@") &&
+                path.basename(path.dirname(directory)) === "node_modules"))
+          ) {
+            add(`${id}:directory`);
+          }
           // Extend native-canonical parents; resolve only links so Windows aliases
           // share output ownership without rewalking every ancestor.
           yield* visit(file, canonical, installed || entry.name === "node_modules");
@@ -352,6 +381,20 @@ export class CompilerInputSnapshot {
     // the local resolution namespace invalidate conservatively; unrelated byte
     // edits do not. Installed package contents are included, not just lockfiles.
     yield* visit(rootDir, fs.realpathSync.native(rootDir));
+    // An ancestor install can change fallback resolution without a checkout edit.
+    // Capture its existence only; external packages are never snapshot byte inputs.
+    let ancestor = path.dirname(path.resolve(rootDir));
+    while (true) {
+      const install = path.join(ancestor, "node_modules");
+      if (fs.statSync(install, { throwIfNoEntry: false })?.isDirectory()) {
+        names.push({ id: install, name: `${install}:ancestor-install`, directory: ancestor });
+      }
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) {
+        break;
+      }
+      ancestor = parent;
+    }
     return names.toSorted((left, right) => (left.name < right.name ? -1 : 1));
   }
 
@@ -369,12 +412,7 @@ export class CompilerInputSnapshot {
     let signature = this.namespaceDigests.get(outputRoot);
     if (signature === undefined) {
       signature = digest(
-        this.topology
-          .filter(
-            ({ directory }) =>
-              !outputRoot ||
-              (directory !== outputRoot && !directory.startsWith(`${outputRoot}${path.sep}`)),
-          )
+        namespaceEntries(this.topology, outputRoot)
           .map(({ name }) => name)
           .join("\0"),
       );
@@ -396,6 +434,54 @@ export class CompilerInputSnapshot {
       ]),
     ].toSorted();
     return [...this.policy.toolchainFiles, ...this.generatorInputs];
+  }
+
+  private namespaceChanges(
+    before: CompilerInputSnapshot,
+    outputRoot?: string,
+    producedFiles?: ReadonlySet<string>,
+  ) {
+    const identities = (entries: TopologyEntry[]) => {
+      const result = new Map<string, string[]>();
+      for (const { id, name } of entries) {
+        const names = result.get(id) ?? [];
+        names.push(name);
+        result.set(id, names);
+      }
+      return result;
+    };
+    // Compare captured topology only. Decorated names contain link targets;
+    // diagnostics must emit the separately captured logical identity instead.
+    const previous = identities(namespaceEntries(before.topology ?? [], outputRoot));
+    const current = identities(
+      namespaceEntries(this.topology ?? [], outputRoot, producedFiles, before.topology),
+    );
+    const changes: { change: string; path: string }[] = [];
+    let omitted = 0;
+    for (const id of [...new Set([...previous.keys(), ...current.keys()])].toSorted()) {
+      if (JSON.stringify(previous.get(id)) === JSON.stringify(current.get(id))) {
+        continue;
+      }
+      if (
+        changes.length >= 16 ||
+        path.posix.isAbsolute(id) ||
+        path.win32.isAbsolute(id) ||
+        id.split(/[\\/]/u).includes("..")
+      ) {
+        omitted++;
+        continue;
+      }
+      changes.push({
+        change: !previous.has(id) ? "added" : !current.has(id) ? "removed" : "changed",
+        path: id.length > 160 ? `${id.slice(0, 157)}...` : id,
+      });
+      // Leave room for category and omission count even with JSON escaping or UTF-8.
+      if (Buffer.byteLength(diagnosticJson(changes)) > 4000) {
+        changes.pop();
+        omitted++;
+      }
+    }
+    return { changes, omitted };
   }
 
   private toolchain() {
@@ -474,15 +560,39 @@ export class CompilerInputSnapshot {
     before: CompilerInputSnapshot,
     startedAt: number,
     outputRoot?: string,
+    producedFiles?: ReadonlySet<string>,
   ) {
     const signature = this.signature(config, args, inputs, outputRoot);
-    if (
-      before.namespace(outputRoot) !== this.namespace(outputRoot) ||
-      before.toolchain() !== this.toolchain() ||
-      JSON.stringify(before.config(config)) !== JSON.stringify(this.config(config)) ||
-      before.config(config).files.some((file) => before.hash(file) !== this.hash(file))
-    ) {
-      throw new Error("Boundary configuration or resolution topology changed during compilation");
+    const previousNamespace = before.namespace(outputRoot);
+    // A concurrent producer can add its exact declared files. Existing entries,
+    // symlink identities, and every consumed input remain subject to their guards.
+    const currentNamespace = producedFiles?.size
+      ? digest(
+          namespaceEntries(this.topology!, outputRoot, producedFiles, before.topology)
+            .map(({ name }) => name)
+            .join("\0"),
+        )
+      : this.namespace(outputRoot);
+    const category =
+      previousNamespace !== currentNamespace
+        ? "namespace"
+        : before.toolchain() !== this.toolchain()
+          ? "toolchain"
+          : JSON.stringify(before.config(config)) !== JSON.stringify(this.config(config))
+            ? "config"
+            : before.config(config).files.some((file) => before.hash(file) !== this.hash(file))
+              ? "config-bytes"
+              : undefined;
+    if (category) {
+      const diagnostic = {
+        category,
+        ...(category === "namespace"
+          ? this.namespaceChanges(before, outputRoot, producedFiles)
+          : {}),
+      };
+      throw new Error(
+        `Boundary configuration or resolution topology changed during compilation: ${diagnosticJson(diagnostic)}`,
+      );
     }
     for (const file of [...inputs, ...this.config(config).files, ...this.toolInputs()]) {
       const current = this.read(file);

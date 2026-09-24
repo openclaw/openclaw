@@ -206,6 +206,11 @@ function readToolingLog(text: string, samples: Samples) {
       files: Map<string, number>;
       complete: boolean;
       declaredFiles: Set<string>;
+      singletonFile: string | undefined;
+      fileSummaryCount: number;
+      singletonSummary: boolean;
+      durationCount: number;
+      durationSeconds: number | undefined;
     }
   >();
   for (const line of text.split("\n")) {
@@ -225,13 +230,40 @@ function readToolingLog(text: string, samples: Samples) {
           files: new Map(),
           complete: false,
           declaredFiles: new Set(descriptor.includePatterns),
+          singletonFile:
+            !active.has(shard) &&
+            descriptor.configs.length === 1 &&
+            descriptor.configs[0] === "test/vitest/vitest.tooling.config.ts" &&
+            descriptor.includePatterns.length === 1
+              ? descriptor.includePatterns[0]
+              : undefined,
+          fileSummaryCount: 0,
+          singletonSummary: false,
+          durationCount: 0,
+          durationSeconds: undefined,
         });
       } else {
         const invocation = active.get(shard);
         if (event[3] === "0" && invocation?.complete) {
-          // Native file summaries include hooks. Older verbose-only logs supply
-          // case-cost sums, which can exceed wall time for concurrent cases.
-          for (const [file, duration] of new Map([...invocation.cases, ...invocation.files])) {
+          const files = new Map([...invocation.cases, ...invocation.files]);
+          const singletonFile = invocation.singletonFile;
+          if (
+            singletonFile !== undefined &&
+            files.size === 1 &&
+            files.has(singletonFile) &&
+            !invocation.files.has(singletonFile) &&
+            invocation.fileSummaryCount === 1 &&
+            invocation.singletonSummary &&
+            invocation.durationCount === 1 &&
+            invocation.durationSeconds !== undefined &&
+            Number.isFinite(invocation.durationSeconds) &&
+            invocation.durationSeconds > 0
+          ) {
+            // A complete one-file invocation includes startup and suite hooks;
+            // concurrent case sums can overstate its wall. Native file time wins.
+            files.set(singletonFile, invocation.durationSeconds);
+          }
+          for (const [file, duration] of files) {
             // Tooling fixtures print nested reporters. Only this shard's
             // declared inventory can supply measurements for its real files.
             if (invocation.declaredFiles.has(file)) {
@@ -266,8 +298,17 @@ function readToolingLog(text: string, samples: Samples) {
         );
       }
     }
-    if (/^Duration\s+[\d.]+m?s(?:\s|$)/u.test(row[2]!)) {
+    // Nested reporters can print their own summaries inside this shard's output.
+    // Count those too, but only an unwrapped native header qualifies the wall.
+    if (/\bTest Files\b/u.test(row[2]!)) {
+      invocation.fileSummaryCount += 1;
+      invocation.singletonSummary = /^Test Files\s+1 passed\s+\(1\)\s*$/u.test(row[2]!);
+    }
+    invocation.durationCount += row[2]!.match(/\bDuration\b/gu)?.length ?? 0;
+    const duration = /^Duration\s+([\d.]+)(m?s)(?:\s|$)/u.exec(row[2]!);
+    if (duration) {
       invocation.complete = true;
+      invocation.durationSeconds = seconds(duration[1]!, duration[2]!);
     }
   }
 }
@@ -319,10 +360,15 @@ function refitMap(
   contributingRuns = 0,
   observedParents?: Set<string>,
   minimumSamples = 2,
+  retainReleaseCosts = false,
 ) {
   const next = Object.fromEntries(
     Object.entries(previous).filter(
-      ([key]) => contributingRuns < MIN_PRUNE_RUNS || samples.has(key) || observedParents?.has(key),
+      ([key]) =>
+        (retainReleaseCosts && key.startsWith("release-full-")) ||
+        contributingRuns < MIN_PRUNE_RUNS ||
+        samples.has(key) ||
+        observedParents?.has(key),
     ),
   );
   for (const [key, values] of samples) {
@@ -473,6 +519,8 @@ export function refitTestTimings(
         previous?.compactGroupSeconds.github,
         pruningRunCount("github"),
         observedParents.github,
+        2,
+        true,
       ),
     },
     repoE2eFileSeconds: refitMap(

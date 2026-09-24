@@ -90,10 +90,9 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     {
       session_key: z.string().min(1),
       message_id: z.string().min(1),
-      limit: z.number().int().min(1).max(200).optional(),
     },
-    async ({ session_key, message_id, limit }) => {
-      const message = await bridge.readMessage(session_key, message_id, limit ?? 100);
+    async ({ session_key, message_id }) => {
+      const message = await bridge.readMessage(session_key, message_id);
       if (!message) {
         return {
           content: [{ type: "text", text: `message not found: ${message_id}` }],

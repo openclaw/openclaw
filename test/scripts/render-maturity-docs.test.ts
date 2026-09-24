@@ -9,13 +9,11 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
   buildQaOccurrenceEvidenceSummary,
   createQaEvidenceInvocation,
-  validateQaEvidenceSummaryJson,
-  type QaEvidenceOccurrence,
-} from "../../extensions/qa-lab/api.js";
-import {
   qaMaturityTaxonomyIdentity,
   qaProfileEvidencePlan,
   readQaMaturityTaxonomySource,
+  validateQaEvidenceSummaryJson,
+  type QaEvidenceOccurrence,
 } from "../../extensions/qa-lab/test-api.js";
 import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
 import { createTempDirTracker } from "../helpers/temp-dir.js";

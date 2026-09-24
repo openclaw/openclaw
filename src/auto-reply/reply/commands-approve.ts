@@ -92,10 +92,6 @@ function buildResolvedByLabel(params: ApproveCommandParams): string {
   return `${channel}:${sender}`;
 }
 
-function formatApprovalSubmitError(error: unknown): string {
-  return formatErrorMessage(error);
-}
-
 type ApproveCommandBehavior =
   | { kind: "allow" }
   | { kind: "ignore" }
@@ -254,7 +250,7 @@ export async function handleApproveCommandFromContext(
       if (!isApprovalNotFoundError(error)) {
         return {
           shouldContinue: false,
-          reply: { text: `❌ Failed to submit approval: ${formatApprovalSubmitError(error)}` },
+          reply: { text: `❌ Failed to submit approval: ${formatErrorMessage(error)}` },
         };
       }
       if (isLastMethod) {
@@ -264,7 +260,7 @@ export async function handleApproveCommandFromContext(
         }
         return {
           shouldContinue: false,
-          reply: { text: `❌ Failed to submit approval: ${formatApprovalSubmitError(error)}` },
+          reply: { text: `❌ Failed to submit approval: ${formatErrorMessage(error)}` },
         };
       }
     }

@@ -1,11 +1,19 @@
-import type { FSWatcher } from "chokidar";
-import { teardownSkillsPathWatcher } from "./refresh-watch-close.js";
+import type { Result } from "@openclaw/normalization-core/result";
+import { trackSkillsWatcherClose } from "./refresh-watch-close.js";
+import type { SkillsDirectoryWatcher } from "./refresh-watch-types.js";
 
-type ContentWatchGeneration = { watcher: FSWatcher; revision: number; retired: boolean };
+type ContentWatchGeneration = {
+  watcher: SkillsDirectoryWatcher;
+  revision: number;
+  ready: boolean;
+  readyDirectories: ReadonlySet<string>;
+  errored: boolean;
+  retired: boolean;
+};
 
 /** Keep native coverage while a directory rescan establishes its replacement. */
 export function createSkillsContentWatcher(params: {
-  watch(): FSWatcher;
+  watch(): SkillsDirectoryWatcher;
   isCurrent(): boolean;
   isStructuralRaw(event: string, path: unknown, details: unknown): boolean;
   ready(rescan: boolean): void;
@@ -14,9 +22,13 @@ export function createSkillsContentWatcher(params: {
   error(error: unknown, rescan: boolean): void;
 }) {
   let closed = false;
+  let published = false;
   let revision = 0;
   let active: ContentWatchGeneration;
   let pending: ContentWatchGeneration | undefined;
+  let closing: Promise<Result<void, unknown>> | undefined;
+  let retirementFailure: Result<void, unknown> | undefined;
+  const retiring = new Set<Promise<Result<void, unknown>>>();
   const owns = (generation: ContentWatchGeneration) =>
     !closed &&
     !generation.retired &&
@@ -24,22 +36,43 @@ export function createSkillsContentWatcher(params: {
     (active === generation || pending === generation);
   const retire = (generation: ContentWatchGeneration) => {
     generation.retired = true;
-    void teardownSkillsPathWatcher(generation);
+    const retirement = generation.watcher.close();
+    retiring.add(retirement);
+    void retirement.then((result) => {
+      if (!result.ok) {
+        retirementFailure ??= result;
+      }
+      retiring.delete(retirement);
+    });
   };
   const rescan = () => {
-    if (!closed && params.isCurrent() && !pending) {
+    if (!closed && params.isCurrent() && (active.ready || active.errored) && !pending) {
       pending = create();
     }
   };
   const create = (): ContentWatchGeneration => {
-    const generation = { watcher: params.watch(), revision, retired: false };
+    const generation: ContentWatchGeneration = {
+      watcher: params.watch(),
+      revision,
+      ready: false,
+      readyDirectories: new Set(),
+      errored: false,
+      retired: false,
+    };
     const { watcher } = generation;
     watcher.on("ready", () => {
-      if (!owns(generation)) {
+      if (!owns(generation) || generation.ready) {
         return;
       }
+      generation.ready = true;
+      // Later discovery cannot prove a directory was observed before verification.
+      // Identical options make the transport's ready inventory conservative,
+      // including any parent used to observe a logical symlink.
+      generation.readyDirectories = new Set(watcher.directories);
       if (generation === active) {
-        params.ready(false);
+        // Chokidar lists before registering native watches. Verify that first
+        // listing under an observing generation before publishing readiness.
+        rescan();
         return;
       }
       pending = undefined;
@@ -55,11 +88,29 @@ export function createSkillsContentWatcher(params: {
       // Publication can synchronously close every watcher and snapshot the
       // native-close join set. Register retirement before handing control out.
       retire(previous);
-      params.ready(true);
+      if (
+        previous.errored ||
+        Array.from(generation.readyDirectories).some(
+          (directory) => !previous.readyDirectories.has(directory),
+        )
+      ) {
+        // A newly discovered directory has its own list-before-watch gap.
+        // Establish its observer before verifying it, however deep discovery goes.
+        rescan();
+        return;
+      }
+      const isRescan = published;
+      published = true;
+      params.ready(isRescan);
     });
     watcher.on("all", (event, changedPath) => {
       if (owns(generation)) {
         params.changed(event, changedPath);
+      }
+    });
+    watcher.on("dirty", () => {
+      if (owns(generation)) {
+        revision += 1;
       }
     });
     watcher.on("raw", (event, rawPath, details) => {
@@ -77,6 +128,7 @@ export function createSkillsContentWatcher(params: {
       if (!owns(generation)) {
         return;
       }
+      generation.errored = true;
       const isRescan = generation === pending;
       if (isRescan) {
         pending = undefined;
@@ -93,8 +145,8 @@ export function createSkillsContentWatcher(params: {
       revision += 1;
     },
     close() {
-      if (closed) {
-        return;
+      if (closing) {
+        return closing;
       }
       closed = true;
       retire(active);
@@ -102,6 +154,15 @@ export function createSkillsContentWatcher(params: {
         retire(pending);
         pending = undefined;
       }
+      // Earlier generations can still be settling after promotion. Include
+      // them and retain their first failure instead of certifying only pointers.
+      closing = trackSkillsWatcherClose(async () => {
+        await Promise.all(retiring);
+        if (retirementFailure && !retirementFailure.ok) {
+          throw retirementFailure.error;
+        }
+      });
+      return closing;
     },
   };
 }

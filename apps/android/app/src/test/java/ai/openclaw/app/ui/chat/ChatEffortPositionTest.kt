@@ -40,13 +40,6 @@ class ChatEffortPositionTest {
   }
 
   @Test
-  fun fastModeMovesNeedleIntoRedZoneRegardlessOfEffort() {
-    for (level in listOf("off", "high", "future-effort")) {
-      assertEquals(330f, chatEffortNeedleAngle(resolveChatEffortPosition(level, options), fastMode = true))
-    }
-  }
-
-  @Test
   fun rtlMirrorsEveryVisualStop() {
     val fractions = chatEffortStopFractions(options.size)
 

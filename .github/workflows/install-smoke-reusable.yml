@@ -3,6 +3,11 @@ name: Install Smoke (Reusable)
 on:
   workflow_call:
     inputs:
+      runner_group:
+        description: Optional dedicated release runner group; empty retains the current labels
+        required: false
+        default: ""
+        type: string
       allow_frozen_target_scenario_omissions:
         description: Allow trusted compatibility omissions for a canonical frozen release target
         required: false
@@ -43,7 +48,7 @@ env:
 
 jobs:
   preflight:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 15
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
@@ -150,7 +155,7 @@ jobs:
   install-smoke-fast:
     needs: [preflight]
     if: needs.preflight.outputs.run_fast_install_smoke == 'true' && needs.preflight.outputs.run_full_install_smoke != 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 120
     env:
       DOCKER_BUILD_SUMMARY: "false"
@@ -163,6 +168,89 @@ jobs:
           ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
+      - name: Checkout trusted build warning relay
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: main
+          path: .artifacts/build-warning-harness
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            scripts/relay-build-limit-warnings.mts
+            scripts/lib/check-limits.mts
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Restore exact trusted workflow revision
+        id: workflow
+        env:
+          EXPECTED_WORKFLOW_REPOSITORY: ${{ github.repository }}
+          HARNESS_PATH: .artifacts/build-warning-harness
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        shell: bash
+        run: &trusted_workflow_identity_run |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from "node:fs";
+          import { execFileSync } from "node:child_process";
+
+          const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+          const repository = process.env.EXPECTED_WORKFLOW_REPOSITORY ?? "";
+          const harnessPath = process.env.HARNESS_PATH ?? "";
+          if (repository !== "openclaw/openclaw" || job.workflow_repository !== repository) {
+            throw new Error("job.workflow_repository must exactly match github.repository");
+          }
+          if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
+            throw new Error("job.workflow_sha must be a full lowercase commit SHA");
+          }
+          if (harnessPath !== ".release-harness" && harnessPath !== ".artifacts/build-warning-harness") {
+            throw new Error("trusted harness path is invalid");
+          }
+          const git = (...args) =>
+            execFileSync("git", ["-C", harnessPath, ...args], {
+              encoding: "utf8",
+              stdio: ["ignore", "pipe", "inherit"],
+            }).trim();
+          const remote = git("remote", "get-url", "origin").replace(/\.git$/u, "");
+          if (remote !== `https://github.com/${repository}`) {
+            throw new Error("trusted harness remote does not match the workflow repository");
+          }
+          execFileSync(
+            "git",
+            [
+              "-C",
+              harnessPath,
+              "fetch",
+              "--no-tags",
+              "--no-recurse-submodules",
+              "--depth=1",
+              "origin",
+              job.workflow_sha,
+            ],
+            { stdio: "inherit" },
+          );
+          execFileSync("git", ["-C", harnessPath, "checkout", "--detach", job.workflow_sha], {
+            stdio: "inherit",
+          });
+          if (git("rev-parse", "HEAD") !== job.workflow_sha) {
+            throw new Error("trusted harness checkout did not resolve to job.workflow_sha");
+          }
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!outputPath) {
+            throw new Error("GITHUB_OUTPUT is required");
+          }
+          appendFileSync(
+            outputPath,
+            `repository=${repository}\nsha=${job.workflow_sha}\n`,
+          );
+          NODE
+
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
         with:
@@ -173,14 +261,18 @@ jobs:
       # builder stalls; an explicit buildx invocation fails closed instead.
       - name: Build root Dockerfile smoke image
         run: |
+          set -euo pipefail
+          build_log="$(mktemp "${RUNNER_TEMP}/root-build.XXXXXX")"
+          trap 'build_exit=$?; node .artifacts/build-warning-harness/scripts/relay-build-limit-warnings.mts "$build_log"; rm -f "$build_log"; exit "$build_exit"' EXIT
           timeout --kill-after=30s 45m docker buildx build \
             --progress=plain \
             --load \
             --build-arg OPENCLAW_EXTENSIONS=matrix \
+            --build-arg GITHUB_ACTIONS \
             -t openclaw-dockerfile-smoke:local \
             -t openclaw-ext-smoke:local \
             -f ./Dockerfile \
-            .
+            . 2>&1 | tee "$build_log"
 
       - name: Run root Dockerfile CLI smoke
         run: |
@@ -261,7 +353,7 @@ jobs:
   root_dockerfile_image:
     needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -327,62 +419,7 @@ jobs:
           HARNESS_PATH: .release-harness
           JOB_CONTEXT: ${{ toJSON(job) }}
         shell: bash
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import { appendFileSync } from "node:fs";
-          import { execFileSync } from "node:child_process";
-
-          const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
-          const repository = process.env.EXPECTED_WORKFLOW_REPOSITORY ?? "";
-          const harnessPath = process.env.HARNESS_PATH ?? "";
-          if (repository !== "openclaw/openclaw" || job.workflow_repository !== repository) {
-            throw new Error("job.workflow_repository must exactly match github.repository");
-          }
-          if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
-            throw new Error("job.workflow_sha must be a full lowercase commit SHA");
-          }
-          if (harnessPath !== ".release-harness") {
-            throw new Error("trusted harness path is invalid");
-          }
-          const git = (...args) =>
-            execFileSync("git", ["-C", harnessPath, ...args], {
-              encoding: "utf8",
-              stdio: ["ignore", "pipe", "inherit"],
-            }).trim();
-          const remote = git("remote", "get-url", "origin").replace(/\.git$/u, "");
-          if (remote !== `https://github.com/${repository}`) {
-            throw new Error("trusted harness remote does not match the workflow repository");
-          }
-          execFileSync(
-            "git",
-            [
-              "-C",
-              harnessPath,
-              "fetch",
-              "--no-tags",
-              "--no-recurse-submodules",
-              "--depth=1",
-              "origin",
-              job.workflow_sha,
-            ],
-            { stdio: "inherit" },
-          );
-          execFileSync("git", ["-C", harnessPath, "checkout", "--detach", job.workflow_sha], {
-            stdio: "inherit",
-          });
-          if (git("rev-parse", "HEAD") !== job.workflow_sha) {
-            throw new Error("trusted harness checkout did not resolve to job.workflow_sha");
-          }
-          const outputPath = process.env.GITHUB_OUTPUT;
-          if (!outputPath) {
-            throw new Error("GITHUB_OUTPUT is required");
-          }
-          appendFileSync(
-            outputPath,
-            `repository=${repository}\nsha=${job.workflow_sha}\n`,
-          );
-          NODE
+        run: *trusted_workflow_identity_run
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
@@ -394,13 +431,17 @@ jobs:
           CANDIDATE_DIR: ${{ runner.temp }}/root-dockerfile-candidate
           IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
         run: |
+          set -euo pipefail
+          build_log="$(mktemp "${RUNNER_TEMP}/root-build.XXXXXX")"
+          trap 'build_exit=$?; node .release-harness/scripts/relay-build-limit-warnings.mts "$build_log"; rm -f "$build_log"; exit "$build_exit"' EXIT
           timeout --kill-after=30s 45m docker buildx build \
             --progress=plain \
             --load \
             --build-arg OPENCLAW_EXTENSIONS=matrix \
+            --build-arg GITHUB_ACTIONS \
             -t "$IMAGE_REF" \
             -f "$CANDIDATE_DIR/Dockerfile" \
-            "$CANDIDATE_DIR"
+            "$CANDIDATE_DIR" 2>&1 | tee "$build_log"
 
       - name: Pack root Dockerfile image artifact
         id: image_artifact
@@ -459,7 +500,7 @@ jobs:
   root_dockerfile_image_ready:
     needs: [preflight, root_dockerfile_image]
     if: always() && needs.preflight.result == 'success' && needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -477,7 +518,7 @@ jobs:
   qr_package_install_smoke:
     needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 30
     steps:
       - name: Checkout CLI
@@ -494,7 +535,7 @@ jobs:
   root_dockerfile_smokes:
     needs: [preflight, root_dockerfile_image, root_dockerfile_image_ready]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 90
     env:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
@@ -680,7 +721,7 @@ jobs:
   installer_smoke_candidate_payload:
     needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 75
     outputs:
       artifact_digest: ${{ steps.payload_upload.outputs.artifact-digest }}
@@ -755,6 +796,10 @@ jobs:
           package_dir="${RUNNER_TEMP}/candidate-package"
           mkdir -p "$package_dir"
           chmod 0777 "$package_dir"
+          # Bind only a disposable receipt, never the runner's summary file.
+          limit_summary="$(mktemp "${RUNNER_TEMP}/candidate-limits.XXXXXX")"
+          chmod 0666 "$limit_summary"
+          trap 'pack_exit=$?; cat "$limit_summary" >> "$GITHUB_STEP_SUMMARY"; rm -f "$limit_summary"; exit "$pack_exit"' EXIT
           timeout --kill-after=30s 50m docker run --rm \
             --cap-drop ALL \
             --security-opt no-new-privileges \
@@ -763,6 +808,9 @@ jobs:
             --entrypoint /bin/bash \
             -e ALLOW_UNRELEASED_CHANGELOG \
             -e CI=1 \
+            -e GITHUB_ACTIONS \
+            -e GITHUB_STEP_SUMMARY=/tmp/openclaw-limit-summary.md \
+            -v "${limit_summary}:/tmp/openclaw-limit-summary.md" \
             -v "${RUNNER_TEMP}/candidate.tar.gz:/input/candidate.tar.gz:ro" \
             -v "${package_dir}:/output" \
             -v "$PWD/.release-harness:/harness:ro" \
@@ -864,7 +912,7 @@ jobs:
   installer_smoke_update_image:
     needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 45
     outputs:
       archive_sha256: ${{ steps.image_artifact.outputs.archive_sha256 }}
@@ -943,7 +991,7 @@ jobs:
   installer_smoke_nonroot_image:
     needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 45
     outputs:
       archive_sha256: ${{ steps.image_artifact.outputs.archive_sha256 }}
@@ -1022,7 +1070,7 @@ jobs:
   installer_smoke_update:
     needs: [preflight, installer_smoke_candidate_payload, installer_smoke_update_image]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 120
     env:
       DOCKER_BUILD_SUMMARY: "false"
@@ -1250,7 +1298,7 @@ jobs:
   installer_smoke_nonroot:
     needs: [preflight, installer_smoke_candidate_payload, installer_smoke_nonroot_image]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 60
     env:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
@@ -1420,7 +1468,7 @@ jobs:
         installer_smoke_nonroot,
       ]
     if: always() && needs.preflight.result == 'success' && needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     steps:
       - name: Verify installer smoke groups
@@ -1455,7 +1503,7 @@ jobs:
   bun_global_install_smoke:
     needs: [preflight, installer_smoke_candidate_payload]
     if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 60
     steps:
       - *trusted_workflow_subdir_checkout_step
@@ -1515,7 +1563,7 @@ jobs:
   docker-e2e-fast:
     needs: [preflight]
     if: needs.preflight.outputs.run_fast_install_smoke == 'true' || needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 12
     env:
       DOCKER_BUILD_SUMMARY: "false"

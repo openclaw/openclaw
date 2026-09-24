@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, rmdirSync } from "node:fs";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -15,6 +15,7 @@ import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as fileDescriptor from "./file-descriptor.js";
 import { readStableSqliteFileGeneration } from "./sqlite-file-generation.js";
 import type { SqliteWorkerReply } from "./sqlite-worker-contract.js";
@@ -49,24 +50,16 @@ function fixture() {
 }
 
 function observeMainDatabaseWork() {
-  const calls = [
-    vi.spyOn(DatabaseSync.prototype, "prepare"),
-    vi.spyOn(DatabaseSync.prototype, "exec"),
-    vi.spyOn(fileDescriptor, "hashFileDescriptorSync"),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    ),
-  ];
+  const sql = observeMainThreadSql();
+  const hash = vi.spyOn(fileDescriptor, "hashFileDescriptorSync");
   return {
     expectIdle: () => {
-      for (const call of calls) {
-        expect(call).not.toHaveBeenCalled();
-      }
+      sql.expectIdle();
+      expect(hash).not.toHaveBeenCalled();
     },
     restore: () => {
-      for (const call of calls) {
-        call.mockRestore();
-      }
+      sql.restore();
+      hash.mockRestore();
     },
   };
 }

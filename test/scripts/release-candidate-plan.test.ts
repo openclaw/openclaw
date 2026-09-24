@@ -63,7 +63,6 @@ describe("shared release candidate preparation", () => {
       const child = resolveDockerE2ePlan({
         includeOpenWebUI: false,
         liveMode: "all",
-        liveRetries: 1,
         orderLanes: (lanes) => lanes,
         planReleaseAll: false,
         profile: "all",

@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { collectControlUiClassReferences } from "../../scripts/audit-control-ui-dead-css.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 describe("Control UI dead-CSS dynamic stem detection", () => {
   it.each([
@@ -26,6 +30,8 @@ describe("Control UI dead-CSS dynamic stem detection", () => {
       "wizard-step__",
     ],
   ])("recognizes a %s stem", (_label, source, expectedStem) => {
-    expect(collectControlUiClassReferences(source).stems).toContain(expectedStem);
+    expect(
+      collectControlUiClassReferences(parser.parseSourceFile("fixture.ts", source)).stems,
+    ).toContain(expectedStem);
   });
 });

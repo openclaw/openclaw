@@ -15,6 +15,10 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import { measureUpdateStateFiles, withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import {
+  readUpdateCandidatePluginCodeLinks,
+  type UpdateCandidatePluginCodeLink,
+} from "./update-candidate-plugin-code-links.js";
+import {
   collectStateDatabasePaths,
   UpdateCandidateSnapshotInventorySchema,
   UpdateCandidateStateSnapshotSchema,
@@ -233,6 +237,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
 }): Promise<{
   stateDir: string;
   pluginPaths: Record<string, string>;
+  pluginCodeLinks: UpdateCandidatePluginCodeLink[];
   snapshotCapacity: UpdateSnapshotCapacity;
   cleanupDirectories: string[];
 }> {
@@ -324,16 +329,20 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
     capacity = measureSnapshotCapacity(params.stateDir, size, params.env, capacity);
     directory = await allocateSnapshotRoot(capacity, { root: selectedRoot.directory, directory });
     selectedRoot = capacity.selection!;
-    const { pluginPaths } = UpdateCandidateStateSnapshotSchema.parse(
+    const pluginPlanPath = path.join(inventoryDirectory, inventory.pluginPlan);
+    const { pluginPaths, pluginCodeLinks } = UpdateCandidateStateSnapshotSchema.parse(
       await run({
         mode: "snapshot",
-        pluginPlanPath: path.join(inventoryDirectory, inventory.pluginPlan),
+        pluginPlanPath,
         databaseInventory: [...inventory.databases.keys()],
       }),
     );
     return {
       stateDir: directory,
       pluginPaths,
+      pluginCodeLinks: pluginCodeLinks
+        ? await readUpdateCandidatePluginCodeLinks(pluginPlanPath, pluginCodeLinks)
+        : [],
       snapshotCapacity: { ...capacity, selection: { ...selectedRoot, directory } },
       cleanupDirectories: cleanupDirectories(),
     };

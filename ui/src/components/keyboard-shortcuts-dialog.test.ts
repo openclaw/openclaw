@@ -155,7 +155,7 @@ describe("keyboard shortcuts dialog", () => {
         context.gateway.snapshot.hello.auth.scopes = ["operator.read"];
         expect(key({}).defaultPrevented).toBe(false);
         expect(dialog.isOpen).toBe(true);
-        context.gateway.snapshot.hello.auth.scopes = ["operator.write"];
+        context.gateway.snapshot.hello.auth.scopes = ["operator.sessions.write"];
         expect(openNewSession).not.toHaveBeenCalled();
         expect(key({}).defaultPrevented).toBe(true);
         await dialog.updateComplete;

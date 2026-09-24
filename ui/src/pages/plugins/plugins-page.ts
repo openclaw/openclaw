@@ -287,6 +287,9 @@ class PluginsPage extends OpenClawLightDomElement {
       this.busy = {};
     }
     if (shouldRefreshAfterChange) {
+      if (this.surface === "discovery" && !this.activeRoutePluginId) {
+        void this.discovery.ensureCategories();
+      }
       void this.refreshCatalog();
     } else {
       this.ensureInitialData();
@@ -379,6 +382,12 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private ensureInitialData() {
+    // Category navigation needs neither installed inventory nor catalog cards.
+    // Start it as soon as this discovery page has a connection, even while the
+    // route's plugins.list request is pending.
+    if (this.surface === "discovery" && !this.activeRoutePluginId) {
+      void this.discovery.ensureCategories();
+    }
     // The route owns initial loading; a warm page module can render before its data arrives.
     if (!this.routeDataConsumed || !this.gateway.connected || !this.gateway.client) {
       return;

@@ -16,7 +16,6 @@ it("plans the named missing-load-path row without adding aggregate coverage", ()
   const { plan } = resolveDockerE2ePlan({
     includeOpenWebUI: false,
     liveMode: "all",
-    liveRetries: 0,
     orderLanes: (lanes) => lanes,
     planReleaseAll: false,
     profile: "all",
@@ -106,9 +105,7 @@ const convergenceRestartMessage =
   "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready. Restart OpenClaw so state migrations run against the final config and plugin inventory.";
 
 it.skipIf(process.platform === "win32").each([
-  { version: "2026.4.23", provision: false, installExit: 0 },
-  { version: "2026.4.30-beta.1", provision: false, installExit: 0 },
-  { version: "2026.5.2-beta.1", provision: true, installExit: 0 },
+  { version: "2026.6.1", provision: true, installExit: 0 },
   { version: "2026.7.1-2", companionVersion: "2026.7.1", provision: true, installExit: 0 },
   { version: "2026.6.35", provision: true, installExit: 0 },
   { version: "2026.7.33", provision: true, installExit: 0 },

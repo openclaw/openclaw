@@ -35,6 +35,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { createWorktreeSpawnRepositoryFixture } from "./server.sessions.create-worktree-spawn.test-support.js";
 import { settleWorkspaceRuns } from "./server.sessions.create.projects.test-support.js";
 import { agentDiscoveryMock, dispatchInboundMessageMock, testState } from "./test-helpers.js";
@@ -171,6 +172,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await disposeSessionReadContexts();
   await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   projectCloneMocks.materializeProjectClone.mockReset();

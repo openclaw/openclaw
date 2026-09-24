@@ -359,16 +359,14 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
-  it("uses explicit agent sandbox scope before inherited legacy perSession", async () => {
-    // `perSession` is retired runtime config but remains raw doctor input so policy evidence can
-    // verify that an explicit modern scope wins over the legacy field.
+  it("uses explicit agent sandbox scope before inherited shared scope", async () => {
     const cfg = rawCfgWithPolicy({
       agents: {
         defaults: {
           sandbox: {
             mode: "all",
             backend: "docker",
-            perSession: false,
+            scope: "shared",
             docker: {
               network: "none",
             },

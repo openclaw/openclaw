@@ -80,7 +80,6 @@ type TestChatPane = HTMLElement & {
   updated: () => void;
   handleBoardCommand: (event: BoardCommandEvent) => void;
   showDashboard: (expanded: boolean) => void;
-  persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => ResolvedBoardView;
   renderBoardPanel: (
@@ -114,6 +113,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
     chatError: null,
     chatLoading: false,
     chatMessages: [],
+    chatToolMessages: [],
     chatQueue: [],
     chatRunId: null,
     chatSending: false,
@@ -662,7 +662,10 @@ describe("chat pane board shell", () => {
     pane.state.sessionKey = "agent:main:main";
     pane.boardProvider = createMockBoardProvider("main");
     pane.routeFace = "dashboard";
-    pane.persistBoardSessionView({ activeTabId: "research" });
+    pane.handleBoardCommand({
+      sessionKey: "main",
+      command: { kind: "focus_tab", tabId: "research" },
+    });
 
     pane.boardProvider = createMockBoardProvider("agent:main:main");
 
@@ -678,8 +681,12 @@ describe("chat pane board shell", () => {
     pane.sessionKey = "agent:main:retained";
     const onFaceChange = vi.fn();
     pane.onFaceChange = onFaceChange;
+    pane.boardProvider = createMockBoardProvider(pane.state.sessionKey);
 
-    pane.persistBoardSessionView({ face: "dashboard" });
+    pane.handleBoardCommand({
+      sessionKey: pane.state.sessionKey,
+      command: { kind: "set_chat_dock", dock: "right" },
+    });
 
     expect(onFaceChange).toHaveBeenCalledWith("pane-1", "agent:main:retained", "dashboard");
   });
@@ -702,7 +709,10 @@ describe("chat pane board shell", () => {
       face: "dashboard",
     });
 
-    pane.persistBoardSessionView({ activeTabId: "main" });
+    pane.handleBoardCommand({
+      sessionKey: pane.state.sessionKey,
+      command: { kind: "focus_tab", tabId: "main" },
+    });
     expect(pane.resolveBoardView()).toMatchObject({
       activeTabId: "main",
       face: "dashboard",
@@ -726,7 +736,10 @@ describe("chat pane board shell", () => {
     secondPane.state.settings = initialSettings;
     secondPane.boardProvider = createMockBoardProvider("agent:main:second");
 
-    firstPane.persistBoardSessionView({ activeTabId: "research" });
+    firstPane.handleBoardCommand({
+      sessionKey: firstPane.state.sessionKey,
+      command: { kind: "focus_tab", tabId: "research" },
+    });
 
     secondPane.state.sessionKey = "agent:main:first";
     secondPane.boardProvider = createMockBoardProvider("agent:main:first");
@@ -737,7 +750,10 @@ describe("chat pane board shell", () => {
 
     secondPane.state.sessionKey = "agent:main:second";
     secondPane.boardProvider = createMockBoardProvider("agent:main:second");
-    secondPane.persistBoardSessionView({ activeTabId: "main" });
+    secondPane.handleBoardCommand({
+      sessionKey: secondPane.state.sessionKey,
+      command: { kind: "focus_tab", tabId: "main" },
+    });
 
     expect(loadSettings().boardSessionViews).toMatchObject({
       "agent:main:first": { activeTabId: "research" },

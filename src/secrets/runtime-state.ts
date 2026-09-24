@@ -308,13 +308,7 @@ function captureProfileOwnerMutationLineage(
   return {
     owner,
     databaseOwner,
-    token:
-      owner === "external"
-        ? { revision: 0, known: true }
-        : getRuntimeAuthProfileStoreCredentialMutationToken(agentDir, profileId, {
-            includeMain: owner === "absent" || owner === "inherited",
-            owner: databaseOwner,
-          }),
+    token: readProfileOwnerMutationToken(agentDir, profileId, { owner, databaseOwner }),
   };
 }
 
@@ -538,37 +532,28 @@ function preserveResolvedAuthStoreSecretValues(
       const previousCredential = previousStore.profiles[profileId];
       const candidateCredential = candidateStore.profiles[profileId];
       const currentCredential = currentStore.profiles[profileId];
+      const ref = credentialSecretRef(credential);
+      if (
+        !ref ||
+        previousCredential?.type !== credential.type ||
+        candidateCredential?.type !== credential.type ||
+        currentCredential?.type !== credential.type ||
+        !isDeepStrictEqual(ref, credentialSecretRef(previousCredential)) ||
+        !isDeepStrictEqual(ref, credentialSecretRef(candidateCredential)) ||
+        !isDeepStrictEqual(ref, credentialSecretRef(currentCredential)) ||
+        !hasSameSecretProviderDefinition(ref, [previousConfig, candidateConfig, currentConfig])
+      ) {
+        continue;
+      }
       if (
         credential.type === "api_key" &&
-        previousCredential?.type === "api_key" &&
-        candidateCredential?.type === "api_key" &&
-        currentCredential?.type === "api_key" &&
-        isSecretRef(credential.keyRef) &&
-        isDeepStrictEqual(credential.keyRef, previousCredential.keyRef) &&
-        isDeepStrictEqual(credential.keyRef, candidateCredential.keyRef) &&
-        isDeepStrictEqual(credential.keyRef, currentCredential.keyRef) &&
-        hasSameSecretProviderDefinition(credential.keyRef, [
-          previousConfig,
-          candidateConfig,
-          currentConfig,
-        ]) &&
+        currentCredential.type === "api_key" &&
         currentCredential.key !== undefined
       ) {
         store.profiles[profileId] = { ...credential, key: currentCredential.key };
       } else if (
         credential.type === "token" &&
-        previousCredential?.type === "token" &&
-        candidateCredential?.type === "token" &&
-        currentCredential?.type === "token" &&
-        isSecretRef(credential.tokenRef) &&
-        isDeepStrictEqual(credential.tokenRef, previousCredential.tokenRef) &&
-        isDeepStrictEqual(credential.tokenRef, candidateCredential.tokenRef) &&
-        isDeepStrictEqual(credential.tokenRef, currentCredential.tokenRef) &&
-        hasSameSecretProviderDefinition(credential.tokenRef, [
-          previousConfig,
-          candidateConfig,
-          currentConfig,
-        ]) &&
+        currentCredential.type === "token" &&
         currentCredential.token !== undefined
       ) {
         store.profiles[profileId] = { ...credential, token: currentCredential.token };
@@ -625,7 +610,7 @@ function compareMutationTokens(
 function readProfileOwnerMutationToken(
   agentDir: string,
   profileId: string,
-  lineage: ProfileOwnerMutationLineage,
+  lineage: Pick<ProfileOwnerMutationLineage, "owner" | "databaseOwner">,
 ): RuntimeAuthProfileStoreMutationToken {
   return lineage.owner === "external"
     ? { revision: 0, known: true }
@@ -793,19 +778,12 @@ function mergeRollbackAuthStoreCredentials(
         } else {
           invalidateStore = true;
         }
+      } else if (!profileMutated && isDeepStrictEqual(currentCredential, candidateCredential)) {
+        credential = baselineCredential;
+        selectedSource = baselineStore;
       } else {
-        if (isDeepStrictEqual(currentCredential, candidateCredential)) {
-          if (profileMutated) {
-            credential = currentCredential;
-            selectedSource = currentStore;
-          } else {
-            credential = baselineCredential;
-            selectedSource = baselineStore;
-          }
-        } else {
-          credential = currentCredential;
-          selectedSource = currentStore;
-        }
+        credential = currentCredential;
+        selectedSource = currentStore;
       }
       const baselineRef = credentialSecretRef(baselineCredential);
       const candidateRef = credentialSecretRef(candidateCredential);

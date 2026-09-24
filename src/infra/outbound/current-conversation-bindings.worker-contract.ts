@@ -16,6 +16,10 @@ export type CurrentConversationBindingTouch = {
 };
 
 export type CurrentConversationBindingWorkerOperations = {
+  "conversationBindings.readSelection": {
+    input: readonly ConversationRef[];
+    output: ReadonlyArray<SessionBindingRecord | null>;
+  };
   "conversationBindings.resolve": { input: ConversationRef; output: SessionBindingRecord | null };
   "conversationBindings.touch": {
     input: CurrentConversationBindingTouch;

@@ -92,7 +92,7 @@ export async function sendSubagentAnnounceDirectly(params: {
   isCompletionOwnedByRequesterYield?: () => boolean;
   requesterIsSubagent: boolean;
   createUserTurnTranscriptRecorder?: (sessionId: string) => UserTurnTranscriptRecorder;
-  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
+  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   signal?: AbortSignal;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<SubagentAnnounceDeliveryResult> {

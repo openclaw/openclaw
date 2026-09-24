@@ -74,23 +74,30 @@ function smokeInInstalledLayout() {
       path.join(installedPackageRoot, "node_modules"),
       process.platform === "win32" ? "junction" : "dir",
     );
-    const result = spawnSync(
-      process.execPath,
-      [fileURLToPath(import.meta.url), "--package-root", installedPackageRoot],
-      {
-        env: { ...process.env, [installedLayoutEnv]: "1" },
-        stdio: "inherit",
-      },
-    );
-    return result.status ?? 1;
+    return smokeInstalledPackageOnPlainNode(installedPackageRoot);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 }
 
-if (process.env[installedLayoutEnv] !== "1" && !packageRootLooksInstalled(packageRoot)) {
+// tsx's CJS hook would resolve the plugin loader's require(esm) graph (execa ->
+// npm-run-path -> unicorn-magic) with the require condition; probe on plain Node.
+function smokeInstalledPackageOnPlainNode(installedPackageRoot: string) {
+  const result = spawnSync(
+    process.execPath,
+    [fileURLToPath(import.meta.url), "--package-root", installedPackageRoot],
+    { env: { ...process.env, [installedLayoutEnv]: "1" }, stdio: "inherit" },
+  );
+  return result.status ?? 1;
+}
+
+if (process.env[installedLayoutEnv] !== "1") {
   // Let the layout owner's finally run before terminating this process.
-  process.exit(smokeInInstalledLayout());
+  process.exit(
+    packageRootLooksInstalled(packageRoot)
+      ? smokeInstalledPackageOnPlainNode(packageRoot)
+      : smokeInInstalledLayout(),
+  );
 }
 
 async function importBuiltModule(absolutePath: string): Promise<unknown> {

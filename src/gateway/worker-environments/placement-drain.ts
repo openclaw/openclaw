@@ -7,6 +7,7 @@ import {
   type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
 import { getRequired, query, transitionValues } from "./placement-row-codec.js";
+import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 import { hasWorkerWorkspacePendingResult } from "./placement-workspace-result.js";
 
@@ -87,5 +88,7 @@ export function drainWorkerSessionPlacement(
   if (input.workspaceBaseManifestRef !== undefined) {
     clearWorkerWorkspaceReconciliation(db, sessionId, input.workspaceBaseManifestRef);
   }
-  return getRequired(db, sessionId);
+  const record = getRequired(db, sessionId);
+  publishPlacementTurnClaimState(db, record);
+  return record;
 }

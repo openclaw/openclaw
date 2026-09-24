@@ -13,6 +13,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { buildStatusText } from "../status/status-text.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
 import { prepareTaskRegistryRead } from "./task-registry-read.js";
@@ -84,19 +85,13 @@ it("renders a cold persisted task through /tasks without parent SQL through clos
       });
       closeOpenClawStateDatabase();
       const params = buildCommandTestParams("/tasks", baseCommandTestConfig);
-      const native = requireNodeSqlite();
-      const counters = [
-        vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-        vi.spyOn(native.DatabaseSync.prototype, "exec"),
-        ...(["iterate", "get", "all", "run"] as const).map((method) =>
-          vi.spyOn(native.StatementSync.prototype, method),
-        ),
-      ];
+      requireNodeSqlite();
+      const sql = observeMainThreadSql();
       const result = await handleTasksCommand(params, true);
       expect(result?.reply?.text).toContain("✅ persisted worker status");
       expect(result?.reply?.text).toContain("Current session: 0 active · 1 total");
       await closeOpenClawStateDatabaseAsync();
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      sql.expectIdle();
     } finally {
       vi.restoreAllMocks();
       await closeOpenClawStateDatabaseAsync();
