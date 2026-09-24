@@ -4,6 +4,7 @@ import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
 } from "../infra/outbound/deliver-types.js";
+import { makeJob } from "./isolated-agent.test-harness.js";
 
 const mocks = vi.hoisted(() => ({
   resolveDeliveryTarget: vi.fn(),
@@ -11,6 +12,9 @@ const mocks = vi.hoisted(() => ({
   resolveAgentOutboundIdentity: vi.fn().mockReturnValue({ kind: "identity" }),
   buildOutboundSessionContext: vi.fn().mockReturnValue({ kind: "session" }),
   createOutboundSendDeps: vi.fn().mockReturnValue({ kind: "deps" }),
+  appendAssistantMessageToSessionTranscript: vi.fn().mockResolvedValue({ ok: true }),
+  resolveOutboundSessionRoute: vi.fn(),
+  ensureOutboundSessionEntry: vi.fn(),
 }));
 
 vi.mock("./isolated-agent/delivery-target.js", () => ({
@@ -29,6 +33,16 @@ vi.mock("../infra/outbound/session-context.js", () => ({
 vi.mock("../cli/outbound-send-deps.js", () => ({
   createOutboundSendDeps: mocks.createOutboundSendDeps,
 }));
+vi.mock("../infra/outbound/outbound-session.js", () => ({
+  resolveOutboundSessionRoute: mocks.resolveOutboundSessionRoute,
+  ensureOutboundSessionEntry: mocks.ensureOutboundSessionEntry,
+}));
+vi.mock("../config/sessions/transcript.runtime.js", () => ({
+  appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
+}));
+vi.mock("./isolated-agent/session.js", () => ({
+  loadCronSessionEntryLatest: () => ({ sessionId: "destination-session", updatedAt: 1 }),
+}));
 
 const { sendCronAnnouncePayloadStrict } = await import("./delivery.js");
 
@@ -44,6 +58,10 @@ describe("sendCronAnnouncePayloadStrict", () => {
       mode: "explicit",
     });
     mocks.deliverOutboundPayloads.mockResolvedValue([{ ok: true }]);
+    mocks.resolveOutboundSessionRoute.mockResolvedValue({
+      sessionKey: "agent:main:telegram:group:123:topic:42",
+      baseSessionKey: "agent:main:telegram:group:123",
+    });
   });
 
   it("delivers the payload through the resolved target with strict send settings", async () => {
@@ -78,6 +96,36 @@ describe("sendCronAnnouncePayloadStrict", () => {
         bestEffort: false,
       }),
       undefined,
+    );
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("records confirmed command output in the destination's replayable cron context", async () => {
+    const job = makeJob({ kind: "command", argv: ["/bin/echo", "Readiness 65 today"] });
+    mocks.deliverOutboundPayloads.mockImplementationOnce(async (params) => {
+      params.onPayload?.({ text: "Delivered readiness: 65", mediaUrls: [] });
+      expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+      return [{ channel: "telegram", messageId: "confirmed-message" }];
+    });
+
+    await sendCronAnnouncePayloadStrict({
+      deps: {} as never,
+      cfg: {},
+      agentId: "main",
+      jobId: job.id,
+      target: { channel: "telegram", to: "123", threadId: 42 },
+      payload: { text: "Readiness 65 today" },
+      completion: { job, runStartedAt: 1000 },
+      abortSignal: new AbortController().signal,
+    });
+
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:group:123:topic:42",
+        text: "Delivered readiness: 65",
+        deliveryMirror: { kind: "cron-direct-delivery-context" },
+        idempotencyKey: "cron-direct-delivery:v1:cron:job-1:1000:telegram:bot-a:123:42",
+      }),
     );
   });
 
