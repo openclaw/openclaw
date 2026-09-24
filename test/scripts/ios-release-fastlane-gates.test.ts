@@ -150,9 +150,9 @@ describe("iOS Fastlane release upload gates", () => {
     const lockfile = readFileSync(gemfileLockPath, "utf8");
 
     expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.10\n");
-    expect(gemfile).toContain('gem "fastlane", "2.239.0"');
+    expect(gemfile).toContain('gem "fastlane", "2.240.1"');
     expect(gemfile).toContain('ruby "3.4.10"');
-    expect(lockfile).toContain("fastlane (2.239.0)");
+    expect(lockfile).toContain("fastlane (2.240.1)");
     expect(lockfile).toContain("arm64-darwin");
     expect(lockfile).toContain("x86_64-darwin");
     expect(lockfile).toContain("CHECKSUMS");
@@ -164,7 +164,7 @@ describe("iOS Fastlane release upload gates", () => {
     expect(iosJob).not.toContain("Install locked Fastlane bundle");
     expect(shardJob).toContain('BUNDLE_DEPLOYMENT: "true"');
     expect(shardJob).toContain("BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile");
-    expect(shardJob).toContain("ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b");
+    expect(shardJob).toContain("ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4");
     expect(shardJob).toContain('ruby-version: "3.4.10"');
     expect(shardJob).toContain('bundler: "2.6.9"');
     expect(shardJob).toContain("bundler-cache: false");
@@ -1004,7 +1004,6 @@ end
     expect(screenshots).toContain("build_for_testing: true");
     expect(screenshots).toContain("RELEASE_IOS_SCREENSHOT_TESTS.each");
     expect(screenshots).toContain("capture_release_ios_screenshot!(");
-    expect(capture).toContain("1.upto(2)");
     expect(screenshots).toContain(
       "result_bundle_archive_directory: result_bundle_archive_directory",
     );
@@ -1015,13 +1014,7 @@ end
     expect(capture).toContain("result_bundle: true");
     expect(capture).toContain("number_of_retries: 0");
     expect(capture).toContain("stop_after_first_error: true");
-    expect(capture).toContain("retrying once in a fresh simulator session");
     expect(capture).toContain("verify_snapshot_test_result!");
-    expect(capture).toContain('capture_outcome: "failed"');
-    expect(capture).toContain('capture_outcome: "succeeded"');
-    expect(capture.indexOf('capture_outcome: "failed"')).toBeLessThan(
-      capture.indexOf("raise if attempt == 2"),
-    );
     expect(attemptRecorder).toContain('"captureOutcome" => capture_outcome');
     expect(attemptRecorder).toContain("write_release_ios_screenshot_attempts!(");
     expect(attemptWriter).toContain('"schemaVersion" => 1');
@@ -1039,6 +1032,91 @@ end
     expect(verifier).toContain('"xcresulttool"');
     expect(verifier).toContain('summary.fetch("failedTests")');
     expect(verifier).toContain("UI.test_failure!");
+  });
+
+  it("preserves the first screenshot failure and records one capture without retrying", () => {
+    const fastfile = readFastfile();
+    const source = `
+require "json"
+require "fileutils"
+require "tmpdir"
+module UI
+  def self.important(*); end
+end
+SNAPSHOT_STATUS_BAR_ARGUMENTS = "fixture"
+IOS_SCREENSHOT_XCARGS = "fixture"
+${[
+  "archive_snapshot_test_result!",
+  "write_release_ios_screenshot_attempts!",
+  "record_release_ios_screenshot_attempt!",
+  "capture_release_ios_screenshot!",
+]
+  .map((name) => functionDefinition(fastfile, name))
+  .join("\n")}
+def capture_ios_screenshots(**options)
+  @calls += 1
+  raise "native retries enabled" unless options.fetch(:number_of_retries) == 0
+  FileUtils.mkdir_p(@result_path)
+  File.write(File.join(@result_path, "result"), "capture #{@calls}")
+  raise "synthetic capture failure" if @scenario == "capture" && @calls == 1
+end
+def verify_snapshot_test_result!(*)
+  @checks += 1
+  raise "synthetic result failure" if @scenario == "result" && @checks == 1
+end
+rows = %w[capture result success].map do |scenario|
+  Dir.mktmpdir("openclaw-capture-") do |root|
+    @scenario, @calls, @checks = scenario, 0, 0
+    @result_path = File.join(root, "current.xcresult")
+    archive = File.join(root, "archive")
+    FileUtils.mkdir_p(archive)
+    ledger = File.join(archive, "capture-attempts.json")
+    error = nil
+    begin
+      capture_release_ios_screenshot!(
+        project: "fixture", device: "fixture-device",
+        screenshot: { test: "fixture-test", name: "fixture-screen" },
+        output_directory: root, result_bundle_path: @result_path,
+        result_bundle_archive_directory: archive, capture_attempts: [],
+        capture_attempts_path: ledger, derived_data_path: root,
+        clear_previous_screenshots: true
+      )
+    rescue => failure
+      error = failure.message
+    end
+    { scenario: scenario, calls: @calls, checks: @checks, error: error,
+      attempts: JSON.parse(File.read(ledger)).fetch("attempts"),
+      archived: File.read(File.join(archive, "fixture-device-fixture-screen-attempt-1.xcresult", "result")) }
+  end
+end
+puts JSON.generate(rows)
+`;
+    const result = spawnSync("ruby", ["-e", source], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    const rows = JSON.parse(result.stdout) as {
+      scenario: string;
+      calls: number;
+      checks: number;
+      error: string | null;
+      attempts: { attempt: number; captureOutcome: string }[];
+      archived: string;
+    }[];
+    expect(
+      rows.map(({ scenario, calls, checks, error }) => ({ scenario, calls, checks, error })),
+    ).toEqual([
+      { scenario: "capture", calls: 1, checks: 0, error: "synthetic capture failure" },
+      { scenario: "result", calls: 1, checks: 1, error: "synthetic result failure" },
+      { scenario: "success", calls: 1, checks: 1, error: null },
+    ]);
+    for (const row of rows) {
+      expect(row.attempts).toEqual([
+        expect.objectContaining({
+          attempt: 1,
+          captureOutcome: row.scenario === "success" ? "succeeded" : "failed",
+        }),
+      ]);
+      expect(row.archived).toBe("capture 1");
+    }
   });
 
   it("captures each release screen from an independent direct launch", () => {

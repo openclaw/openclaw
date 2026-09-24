@@ -1,5 +1,4 @@
 import { performance } from "node:perf_hooks";
-import { setTimeout as delay } from "node:timers/promises";
 import { threadId, type MessagePort } from "node:worker_threads";
 import {
   createSqliteLifecycleAggregateError,
@@ -7,10 +6,9 @@ import {
   SqliteCoordinatorError,
 } from "../../infra/sqlite-coordinator.js";
 import type { SqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
+import { acquireStateDatabaseCoordinatorWithWait } from "../../infra/state-database-coordinator-acquisition.js";
 import {
-  acquireStateDatabaseCoordinator,
   attachStateLifecycleDelegate,
-  StateDatabaseCoordinatorContentionError,
   tryCreateStateLifecycleDelegate,
   withStateDatabaseCoordinatorRuntimeDirectory,
 } from "../../infra/state-database-coordinator.js";
@@ -33,38 +31,22 @@ export type SqliteMutationWorkerCoordination = {
 };
 
 async function prepareLifecycleDelegate(context: OpenClawStateWorkerContext, actorId: string) {
-  const deadline = performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS;
-  return withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, async () => {
-    while (true) {
-      try {
-        // Sibling agent workers borrow one parent owner rather than racing native
-        // lifecycle locks while claiming their separate shared-state leases.
-        return runWithSqliteCoordinator(
-          acquireStateDatabaseCoordinator({
-            databasePath: context.admission.databasePath,
-            busyTimeoutMs: 0,
-          }),
-          "SQLite mutation Worker lifecycle admission",
-          () =>
-            tryCreateStateLifecycleDelegate({
-              databasePath: context.admission.databasePath,
-              actorId,
-            }),
-        );
-      } catch (error) {
-        const remaining = deadline - performance.now();
-        if (
-          !(error instanceof StateDatabaseCoordinatorContentionError) ||
-          error.family !== "state-lifecycle" ||
-          remaining <= 0
-        ) {
-          throw error;
-        }
-        // Retry only custody acquisition, before dispatch or any mutation.
-        await delay(Math.min(25, remaining));
-      }
-    }
+  // This custody also drains retained workers after read admission is revoked.
+  // Request owners validate new work; cleanup keeps its original native custody.
+  const coordinator = await acquireStateDatabaseCoordinatorWithWait({
+    operation: "mutation-worker-admission",
+    databasePath: context.admission.databasePath,
+    runtime: context.coordinatorRuntime,
+    deadlineMs: performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   });
+  return withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, () =>
+    runWithSqliteCoordinator(coordinator, "SQLite mutation Worker lifecycle admission", () => {
+      return tryCreateStateLifecycleDelegate({
+        databasePath: context.admission.databasePath,
+        actorId,
+      });
+    }),
+  );
 }
 
 /** The original request owns this pin until its result or native exit is settled. */

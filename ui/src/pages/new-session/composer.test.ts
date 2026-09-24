@@ -1,6 +1,6 @@
 import { html, render } from "lit";
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -595,6 +595,8 @@ describe("new-session composer start control", () => {
 });
 
 describe("new-session composer sizing lifecycle", () => {
+  beforeEach(() => vi.spyOn(CSS, "supports").mockReturnValue(false));
+
   it("keeps the shared fallback for non-pixel CSS caps", () => {
     const textarea = document.createElement("textarea");
     Object.defineProperty(textarea, "scrollHeight", { configurable: true, value: 500 });

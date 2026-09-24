@@ -15,10 +15,14 @@ import {
 } from "../../scripts/run-node.mts";
 import { inspectControlUiRootAssets } from "../../src/infra/control-ui-assets.ts";
 import { normalizeControlUiBuildInfo } from "../../ui/src/build-info-normalizers.ts";
-import type { ControlUiE2eBuildIdentity } from "../../ui/src/test-helpers/control-ui-e2e-shared-preview.ts";
+import type {
+  ControlUiE2eBuildIdentity,
+  ControlUiE2ePrebuiltAssets,
+} from "../../ui/src/test-helpers/control-ui-e2e-shared-preview.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
+    controlUiE2ePrebuiltAssets?: ControlUiE2ePrebuiltAssets;
     controlUiE2ePrebuiltGeneration: string;
   }
 }

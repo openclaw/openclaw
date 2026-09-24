@@ -56,8 +56,8 @@ import {
   getCoreTtsToolResultMediaUrls,
   transferCoreTtsToolResultProvenance,
 } from "../tools/tts-tool-result-provenance.js";
-import { bindHarnessContextMedia } from "./context-media.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import { bindHarnessMedia } from "./host-media.js";
 import {
   registerAgentHarnessBeforeToolCallRetention,
   registerAgentHarnessScheduledToolProjectionCapability,
@@ -69,7 +69,6 @@ import { bindHarnessModelExecution, retainHarnessSource } from "./host-source-au
 import { bindHarnessTrajectory } from "./host-trajectory.js";
 import { formatHarnessApprovalPresentation } from "./native-hook-relay-approval-presentation.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
-import { bindHarnessReplyMedia } from "./reply-media.js";
 
 type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
   Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "runId">;
@@ -185,6 +184,7 @@ export function createAgentHarnessHostCapabilities(params: {
 }): {
   capabilities: AgentHarnessHostCapabilities;
   close: () => void;
+  setInputAttachmentReadAllowed: (allowed: boolean) => void;
   runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
   const attempt = params.attempt;
@@ -277,8 +277,7 @@ export function createAgentHarnessHostCapabilities(params: {
   };
   const config = attempt.config ? cloneSnapshot(attempt.config) : undefined;
   const hostSandboxEnabled = attempt.sandbox?.enabled === true;
-  const prepareContextMedia = bindHarnessContextMedia({ attempt, config, assertActive });
-  const prepareReplyMedia = bindHarnessReplyMedia({
+  const media = bindHarnessMedia({
     attempt,
     config,
     assertActive,
@@ -498,8 +497,7 @@ export function createAgentHarnessHostCapabilities(params: {
       }
     },
     ...(annotateCurrentUserTurn ? { annotateCurrentUserTurn } : {}),
-    ...(prepareContextMedia ? { prepareContextMedia } : {}),
-    ...(prepareReplyMedia ? { prepareReplyMedia } : {}),
+    ...media.capabilities,
     ...(trajectoryRecorder
       ? {
           trajectory: bindHarnessTrajectory(trajectoryRecorder, assertActive),
@@ -696,6 +694,7 @@ export function createAgentHarnessHostCapabilities(params: {
   });
   return {
     capabilities,
+    setInputAttachmentReadAllowed: media.setInputAttachmentReadAllowed,
     runWithScope: (run) => {
       const nodeAuthorities = createSessionNodeAuthorities(
         attempt,

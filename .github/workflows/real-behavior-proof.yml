@@ -7,21 +7,24 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
-
 permissions: {}
 
 jobs:
   real-behavior-proof:
     name: PR context and evidence
+    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
     if: >-
-      ${{
-        github.event.action != 'edited' ||
-        github.event.changes.body ||
-        github.event.changes.base
-      }}
+      ${{ (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (
+        github.event.pull_request.user.type != 'Bot' &&
+        !endsWith(github.event.pull_request.user.login, '[bot]') &&
+        !startsWith(github.event.pull_request.user.login, 'app/') &&
+        !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) &&
+        (github.event.action != 'edited' ||
+          github.event.changes.body || github.event.changes.base)
+      ) }}
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     permissions:
       contents: read
       issues: read

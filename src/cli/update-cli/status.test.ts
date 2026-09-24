@@ -258,16 +258,17 @@ describe("update status Node runtime findings", () => {
         prepare: (this: DatabaseSync, sql: string) => ReturnType<DatabaseSync["prepare"]>;
       } = DatabaseSync.prototype;
       const realPrepare = sqlitePrototype.prepare;
-      const prepare = vi
-        .spyOn(DatabaseSync.prototype, "prepare")
-        .mockImplementation(function (this: DatabaseSync, sql) {
-          return realPrepare.call(
-            this,
-            sql === "SELECT sqlite_version() AS version"
-              ? `SELECT '${sqliteVersion}' AS version`
-              : sql,
-          );
-        });
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        return realPrepare.call(
+          this,
+          sql === "SELECT sqlite_version() AS version"
+            ? `SELECT '${sqliteVersion}' AS version`
+            : sql,
+        );
+      });
       const freshGuard = await import("../../infra/runtime-guard.js");
       vi.spyOn(freshGuard, "detectRuntime").mockResolvedValue({
         kind: "node",

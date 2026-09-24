@@ -4,6 +4,10 @@ import ai.openclaw.app.AndroidScreenshotFixture
 import ai.openclaw.app.AndroidScreenshotScene
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayConnectionDisplay
+import ai.openclaw.app.GatewayTalkSetupIssue
+import ai.openclaw.app.GatewayTalkSetupReadiness
+import ai.openclaw.app.GatewayTalkSetupState
+import ai.openclaw.app.GatewayTalkSetupTarget
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
@@ -23,9 +27,11 @@ import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
+import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.ui.FoldAwareContent
 import ai.openclaw.app.ui.TabletopPaneBounds
 import ai.openclaw.app.ui.UnifiedChatShellScreen
@@ -33,6 +39,7 @@ import ai.openclaw.app.ui.WindowDisplayFeatureSnapshot
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.testFold
+import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
@@ -1030,6 +1037,138 @@ class ChatComposerLayoutTest {
   @Test
   fun physicalEnterSendsTheDraftDuringANonTalkActiveRun() {
     assertPhysicalEnterDuringActiveRun(talkActive = false, expectedSends = 1)
+  }
+
+  @Test
+  fun talkProviderFailureStaysDismissedAfterLeavingChatAndNewFailuresRemainVisible() {
+    val chatVisible = mutableStateOf(true)
+    val viewModel = showChat(useChatShell = true, chatVisible = { chatVisible.value })
+    val message = "Realtime provider authentication failed. Check the provider credentials and try again."
+    composeRule.runOnIdle {
+      val getter = NodeRuntime::class.java.getDeclaredMethod("getTalkMode")
+      getter.isAccessible = true
+      val manager = getter.invoke(runtime) as TalkModeManager
+      manager.stopAllCapture(failure = verbatimText(message))
+    }
+    composeRule.waitUntil {
+      composeRule.onAllNodesWithText(message).fetchSemanticsNodes().isNotEmpty()
+    }
+    assertFalse(viewModel.talkModeEnabled.value)
+    composeRule.mainClock.advanceTimeBy(6_000)
+    composeRule.onNodeWithText(message).assertIsDisplayed()
+    composeRule.onNodeWithText(nativeString("OK")).performClick()
+    composeRule.onNodeWithText(message).assertDoesNotExist()
+    // Navigation removes Chat from composition while the runtime retains its status.
+    composeRule.runOnIdle { chatVisible.value = false }
+    composeRule.waitForIdle()
+    composeRule.runOnIdle { chatVisible.value = true }
+    composeRule.onNodeWithText(message).assertDoesNotExist()
+    composeRule.runOnIdle {
+      val getter = NodeRuntime::class.java.getDeclaredMethod("getTalkMode")
+      getter.isAccessible = true
+      val manager = getter.invoke(runtime) as TalkModeManager
+      manager.stopAllCapture(failure = verbatimText(message))
+    }
+    composeRule.waitUntil {
+      composeRule.onAllNodesWithText(message).fetchSemanticsNodes().isNotEmpty()
+    }
+    composeRule.onNodeWithText(message).assertIsDisplayed()
+  }
+
+  @Test
+  fun dismissingSetupDoesNotAcknowledgeAnUnseenTalkFailure() {
+    val viewModel = showChat(useChatShell = true)
+    val setup = "Configure a Realtime Talk provider on the Gateway"
+    val failure = "Realtime provider authentication failed. Check the provider credentials and try again."
+    composeRule.runOnIdle { viewModel.showTalkSetupMessage(verbatimText(setup)) }
+    val setupDismiss =
+      checkNotNull(
+        composeRule
+          .onNodeWithText(nativeString("OK"))
+          .fetchSemanticsNode()
+          .config[SemanticsActions.OnClick]
+          .action,
+      )
+
+    // A failure may arrive after the setup dialog was drawn, but before its OK tap is handled.
+    composeRule.runOnIdle {
+      val getter = NodeRuntime::class.java.getDeclaredMethod("getTalkMode")
+      getter.isAccessible = true
+      val manager = getter.invoke(runtime) as TalkModeManager
+      manager.stopAllCapture(failure = verbatimText(failure))
+      assertTrue(setupDismiss())
+    }
+    composeRule.onNodeWithText(failure).assertIsDisplayed()
+  }
+
+  @Test
+  fun missingTalkProviderShowsPersistentSetupMessageWithoutStartingCapture() {
+    val permission = Manifest.permission.RECORD_AUDIO
+    val permissionWasGranted = app.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+    shadowOf(app).grantPermissions(permission)
+    try {
+      val chatVisible = mutableStateOf(true)
+      val viewModel = showChat(useChatShell = true, chatVisible = { chatVisible.value })
+      composeRule.runOnIdle {
+        controller.handleGatewayEvent(
+          "agent",
+          """{"sessionKey":"${AndroidScreenshotFixture.mainSessionKey}","runId":"android-screenshot-active-run","seq":1,"stream":"lifecycle","data":{"phase":"end"}}""",
+        )
+        @Suppress("UNCHECKED_CAST")
+        val readiness =
+          NodeRuntime::class.java
+            .getDeclaredField("_talkSetupReadiness")
+            .apply { isAccessible = true }
+            .get(runtime) as MutableStateFlow<GatewayTalkSetupReadiness>
+        readiness.value =
+          readiness.value.copy(
+            realtimeTalk =
+              GatewayTalkSetupState.NeedsSetup(
+                GatewayTalkSetupIssue.ConfigureProvider(GatewayTalkSetupTarget.REALTIME_TALK),
+              ),
+          )
+      }
+      val dictation =
+        composeRule.onNode(
+          SemanticsMatcher("dictation control") { node ->
+            node.config.getOrNull(SemanticsActions.OnClick)?.label == nativeString("Dictation")
+          },
+        )
+      dictation.performSemanticsAction(SemanticsActions.OnLongClick) { action -> action() }
+      composeRule.onNodeWithText(nativeString("Start Talk")).performClick()
+      composeRule.mainClock.advanceTimeBy(6_000)
+      composeRule.onNodeWithText("Configure a Realtime Talk provider on the Gateway").assertIsDisplayed()
+      assertFalse(viewModel.talkModeEnabled.value)
+      composeRule.runOnIdle { chatVisible.value = false }
+      composeRule.waitForIdle()
+      composeRule.runOnIdle { chatVisible.value = true }
+      composeRule.onNodeWithText("Configure a Realtime Talk provider on the Gateway").assertIsDisplayed()
+      val secondGatewayId = "talk-setup-second-gateway"
+      composeRule.runOnIdle {
+        prefs.gatewayRegistry.upsert(
+          GatewayRegistryEntry(
+            stableId = secondGatewayId,
+            kind = GatewayRegistryEntryKind.MANUAL,
+            name = "Second gateway",
+          ),
+        )
+        prefs.gatewayRegistry.setActive(secondGatewayId)
+      }
+      composeRule.waitUntil {
+        viewModel.activeGatewayStableId.value == secondGatewayId && viewModel.pendingTalkSetupMessage.value == null
+      }
+      composeRule.onNodeWithText("Configure a Realtime Talk provider on the Gateway").assertDoesNotExist()
+      dictation.performSemanticsAction(SemanticsActions.OnLongClick) { action -> action() }
+      composeRule.onNodeWithText(nativeString("Start Talk")).performClick()
+      composeRule.onNodeWithText("Configure a Realtime Talk provider on the Gateway").assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("OK")).performClick()
+      composeRule.onNodeWithText("Configure a Realtime Talk provider on the Gateway").assertDoesNotExist()
+      dictation.performSemanticsAction(SemanticsActions.OnLongClick) { action -> action() }
+      composeRule.onNodeWithText(nativeString("Start Talk")).performClick()
+      composeRule.onNodeWithText("Configure a Realtime Talk provider on the Gateway").assertIsDisplayed()
+    } finally {
+      if (!permissionWasGranted) shadowOf(app).denyPermissions(permission)
+    }
   }
 
   @Test
@@ -3222,6 +3361,112 @@ class ChatComposerLayoutTest {
 
   @Test
   @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun effortHeldDragPreviewsGaugeAndCommitsOnlyOnRelease() =
+    withEffortRequests { model, requests, release ->
+      composeRule.runOnIdle {
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"reason":"patch","session":{"key":"${controller.sessionKey.value}","fastMode":true,"effectiveFastMode":true}}""",
+        )
+      }
+      assertEffortGauge("low", fast = true)
+      val lowGauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage().asAndroidBitmap()
+      val dialog = openEffortSheet()
+      val (x, y, time) = startEffortDrag(dialog)
+      assertEquals("Preview must not dispatch", 0, requests.size)
+      assertEquals("Preview must not mutate the authoritative setting", "low", model.chatThinkingLevel.value)
+      assertEffortGauge("high", fast = true)
+      val previewGauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage().asAndroidBitmap()
+      assertFalse("Fast mode must not mask the previewed effort", lowGauge.sameAs(previewGauge))
+      composeRule.runOnUiThread { sheetTouch(dialog, MotionEvent.ACTION_UP, x, y, time, time + 80) }
+      composeRule.waitUntil { requests.size == 1 }
+      assertEquals(JsonPrimitive("high"), requests.single().second["thinkingLevel"])
+      composeRule.runOnIdle { release.complete(Unit) }
+      composeRule.waitUntil { model.chatThinkingLevel.value == "high" }
+      assertEffortGauge("high", fast = true)
+      assertTrue(dialog.isShowing)
+    }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun effortCancelledDragAndRejectedReleaseRestoreAuthoritativeGauge() =
+    withEffortRequests { model, requests, release ->
+      val dialog = openEffortSheet()
+      val (x, y, time) = startEffortDrag(dialog)
+      composeRule.runOnUiThread { sheetTouch(dialog, MotionEvent.ACTION_CANCEL, x, y, time, time + 80) }
+      composeRule.waitForIdle()
+      assertEquals("A cancelled drag must not dispatch", 0, requests.size)
+      assertEffortGauge("low")
+      effortSlider().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Low")))
+
+      val (nextX, nextY, nextTime) = startEffortDrag(dialog)
+      composeRule.runOnUiThread { sheetTouch(dialog, MotionEvent.ACTION_UP, nextX, nextY, nextTime, nextTime + 80) }
+      composeRule.waitUntil { requests.size == 1 }
+      composeRule.runOnIdle {
+        release.completeExceptionally(GatewayRequestRejected(GatewaySession.ErrorShape("FORBIDDEN", "Effort update rejected")))
+      }
+      composeRule.waitUntil {
+        composeRule.runOnIdle { model.chatThinkingLevel.value == "low" && model.chatPendingSessionSettingsKeys.value.isEmpty() }
+      }
+      assertEffortGauge("low")
+      effortSlider().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Low")))
+      assertTrue(dialog.isShowing)
+    }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun effortModelChangeResetsHeldPreviewWithoutReplacingNativeSheet() =
+    withEffortRequests { model, requests, release ->
+      val dialog = openEffortSheet()
+      val staleSelect = checkNotNull(effortSlider().fetchSemanticsNode().config[SemanticsActions.SetProgress].action)
+      val (x, y, time) = startEffortDrag(dialog)
+      composeRule.mainClock.autoAdvance = false
+      composeRule.runOnUiThread {
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"session":{"key":"${controller.sessionKey.value}","modelProvider":"openai","model":"effort-proof-second"}}""",
+        )
+      }
+      composeRule.waitUntil { model.chatSelectedModelRef.value == "openai/effort-proof-second" }
+      composeRule.runOnUiThread { staleSelect(0f) }
+      assertEquals("A saved callback must reject the new model before recomposition", 0, requests.size)
+      composeRule.mainClock.autoAdvance = true
+      composeRule.waitForIdle()
+      assertTrue("A model change must preserve the same native sheet", dialog.isShowing)
+      assertTrue(dialog === ShadowDialog.getLatestDialog())
+      assertEffortGauge("low")
+      effortSlider().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Low")))
+      composeRule.runOnUiThread { sheetTouch(dialog, MotionEvent.ACTION_UP, x, y, time, time + 80) }
+      composeRule.waitForIdle()
+      assertEquals("The old model's held gesture cannot commit to the new model", 0, requests.size)
+      val (nextX, nextY, nextTime) = startEffortDrag(dialog)
+      composeRule.runOnUiThread { sheetTouch(dialog, MotionEvent.ACTION_UP, nextX, nextY, nextTime, nextTime + 80) }
+      composeRule.waitUntil { requests.size == 1 }
+      composeRule.runOnIdle { release.complete(Unit) }
+      composeRule.waitUntil { model.chatThinkingLevel.value == "high" }
+      assertTrue(dialog.isShowing)
+    }
+
+  private fun assertEffortGauge(
+    level: String,
+    fast: Boolean = false,
+  ) {
+    composeRule
+      .onNode(hasContentDescription(nativeString("Thinking")) and hasAnyDescendant(hasTestTag("chat-thinking-gauge")), useUnmergedTree = true)
+      .assert(
+        SemanticsMatcher.expectValue(
+          SemanticsProperties.StateDescription,
+          chatThinkingChipStateDescription(
+            fast,
+            level,
+            listOf(ChatThinkingLevelOption("off", "off"), ChatThinkingLevelOption("low", "low"), ChatThinkingLevelOption("high", "high")),
+          ),
+        ),
+      )
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
   fun effortOpeningRejectsHeldSliderReleaseAfterUnsafeRecovery() =
     withEffortRequests { model, requests, release ->
       val editor = composeRule.onNode(hasSetTextAction())
@@ -3860,29 +4105,118 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun fastModeGaugeRetainsAccessibleStateWithoutAnOverlayBadge() {
-    showChat(viewportWidth = 360.dp, viewportHeight = { 640.dp })
-    composeRule.runOnIdle {
-      controller.handleGatewayEvent(
-        "sessions.changed",
-        """
-        {"reason":"patch","session":{
-          "key":"${AndroidScreenshotFixture.mainSessionKey}",
-          "thinkingLevel":"high",
-          "thinkingLevels":[{"id":"off","label":"off"},{"id":"high","label":"high"}],
-          "fastMode":true,"effectiveFastMode":true
-        }}
-        """.trimIndent(),
-      )
+  fun fastModeGaugeTracksEffortAndRetainsASeparateFastCue() {
+    val direction = mutableStateOf(LayoutDirection.Ltr)
+    showChat(viewportWidth = 360.dp, viewportHeight = { 640.dp }, layoutDirection = { direction.value })
+
+    fun publishEffort(
+      level: String,
+      fastMode: Boolean = true,
+    ) {
+      composeRule.runOnIdle {
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """
+          {"reason":"patch","session":{
+            "key":"${AndroidScreenshotFixture.mainSessionKey}",
+            "thinkingLevel":"$level",
+            "thinkingLevels":[{"id":"off","label":"off"},{"id":"high","label":"high"}],
+            "fastMode":$fastMode,"effectiveFastMode":$fastMode
+          }}
+          """.trimIndent(),
+        )
+      }
+      composeRule.waitForIdle()
     }
 
-    composeRule.onNodeWithContentDescription(nativeString("Thinking")).assertIsDisplayed()
-    composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).assertIsDisplayed()
-    composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).assertDoesNotExist()
+    fun capture(label: String) {
+      System.getenv("OPENCLAW_CHAT_WORK_PROOF_DIR")?.let { path ->
+        val folder = File(path).apply { mkdirs() }
+        val image = composeRule.onNodeWithTag("chat-viewport").captureToImage().asAndroidBitmap()
+        assertTrue(image.width > 0 && image.height > 0)
+        File(folder, "fast-effort-$label.png").outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+      }
+    }
+
+    fun assertFastBoltInsideWedge() {
+      val gauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+      val bolt = composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+      val touchTarget = composeRule.onNodeWithContentDescription(nativeString("Thinking")).fetchSemanticsNode().boundsInRoot
+      val pixelsPerDp = composeRule.density.density
+      val pivotX = gauge.center.x
+      val pivotY = gauge.top + gauge.height * 0.72f
+      val innerArcRadius = gauge.width * 0.43f - pixelsPerDp // Half the 2dp stroke sits inside the red arc.
+      val tipX = bolt.left + bolt.width * 0.58f
+      val leftX = bolt.left + bolt.width * 0.2f
+      val leftY = bolt.top + bolt.height * 0.56f
+      val rightX = bolt.left + bolt.width * 0.86f
+      val rightY = bolt.top + bolt.height * 0.38f
+      assertTrue("Fast bolt must be legible at 360dp: at least 6.5dp wide", bolt.width + 0.5f >= 6.5f * pixelsPerDp)
+      assertTrue("The dial needs room for a readable bolt", gauge.width + 0.5f >= 26f * pixelsPerDp)
+      assertTrue("The 48dp touch target must remain intact", touchTarget.width + 0.5f >= 48f * pixelsPerDp)
+      assertTrue("Fast bolt must be fully inside the dial", bolt.left > gauge.left && bolt.right < gauge.right && bolt.top > gauge.top && bolt.bottom < gauge.bottom)
+      assertTrue("Fast bolt must clear the needle pivot", leftX > pivotX + 1.5f * pixelsPerDp)
+      assertTrue("Fast bolt must occupy the right wedge", bolt.top < pivotY && bolt.center.y < pivotY + 1.5f * pixelsPerDp)
+      assertTrue("The lower bolt tip must align with the needle pivot", kotlin.math.abs(bolt.bottom - pivotY) <= 0.75f * pixelsPerDp)
+      val tipDx = tipX - pivotX
+      val tipDy = bolt.top - pivotY
+      val rightDx = rightX - pivotX
+      val rightDy = rightY - pivotY
+      assertTrue("Fast bolt must not cover the red arc", maxOf(tipDx * tipDx + tipDy * tipDy, rightDx * rightDx + rightDy * rightDy) < innerArcRadius * innerArcRadius)
+      val highNeedleAtTop = pivotX + (pivotY - bolt.top) * 0.5774f + pixelsPerDp // High: 300 degrees, 2dp stroke.
+      val highNeedleAtLeft = pivotX + (pivotY - leftY) * 0.5774f + pixelsPerDp
+      assertTrue("Fast bolt must not cover the High needle", tipX > highNeedleAtTop && leftX > highNeedleAtLeft)
+    }
+
+    publishEffort("off")
+    val offGaugeImage = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage()
+    val offGauge = offGaugeImage.asAndroidBitmap()
+    capture("off")
+    assertFastBoltInsideWedge()
+    val pixels = offGaugeImage.toPixelMap()
+    // The bolt sits below this quadrant; only the original Fast red-zone arc paints it red.
+    val redZonePixels =
+      (pixels.width * 3 / 4 until pixels.width * 19 / 20).sumOf { x ->
+        (pixels.height * 3 / 8 until pixels.height / 2).count { y ->
+          val color = pixels[x, y]
+          color.red > 0.6f && color.red > color.green * 1.4f && color.red > color.blue * 1.2f
+        }
+      }
+    assertTrue("The right red sector must remain visible independently of the Fast badge", redZonePixels >= 3)
+    publishEffort("high")
+    val highGauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage().asAndroidBitmap()
+    capture("high")
+    assertFalse("Effort changes must move the needle even while Fast stays on", offGauge.sameAs(highGauge))
+    composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).assertIsDisplayed()
     composeRule.onNodeWithContentDescription(nativeString("Thinking")).assert(
       SemanticsMatcher.expectValue(
         SemanticsProperties.StateDescription,
-        chatThinkingChipStateDescription(true, "high", listOf(ChatThinkingLevelOption("high", "high"))),
+        chatThinkingChipStateDescription(true, "high", listOf(ChatThinkingLevelOption("off", "off"), ChatThinkingLevelOption("high", "high"))),
+      ),
+    )
+
+    composeRule.runOnIdle { direction.value = LayoutDirection.Rtl }
+    publishEffort("off")
+    capture("rtl-off")
+    assertFastBoltInsideWedge()
+    val fastOnGauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage().toPixelMap()
+    publishEffort("off", fastMode = false)
+    capture("rtl-fast-off")
+    composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).assertDoesNotExist()
+    val fastOffGauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage().toPixelMap()
+    val paintedBoltColumns =
+      (0 until fastOnGauge.width).count { x ->
+        (0 until fastOnGauge.height).any { y ->
+          val on = fastOnGauge[x, y]
+          val off = fastOffGauge[x, y]
+          on.red > off.red + 0.2f && on.red > on.green * 1.3f
+        }
+      }
+    assertTrue("Fast bolt must paint at least 3.5dp of red width at normal scale", paintedBoltColumns >= 3.5f * composeRule.density.density)
+    composeRule.onNodeWithContentDescription(nativeString("Thinking")).assert(
+      SemanticsMatcher.expectValue(
+        SemanticsProperties.StateDescription,
+        chatThinkingChipStateDescription(false, "off", listOf(ChatThinkingLevelOption("off", "off"), ChatThinkingLevelOption("high", "high"))),
       ),
     )
   }
@@ -5567,6 +5901,7 @@ class ChatComposerLayoutTest {
     expectedMessageCount: Int? = null,
     onOpenSidebar: () -> Unit = {},
     useChatShell: Boolean = false,
+    chatVisible: () -> Boolean = { true },
     currentViewportWidth: () -> Dp = { viewportWidth },
     displayFeatures: (() -> List<DisplayFeature>)? = null,
     viewportOffset: () -> IntOffset = { IntOffset.Zero },
@@ -5580,6 +5915,7 @@ class ChatComposerLayoutTest {
     viewModel.enterScreenshotFixtureMode(scene)
     val setContent = restorationTester?.let { it::setContent } ?: composeRule::setContent
     setContent {
+      if (!chatVisible()) return@setContent
       val currentActivity = requireNotNull(LocalActivity.current)
       SideEffect { chatActivity = currentActivity }
       if (scene == AndroidScreenshotScene.Branches) {

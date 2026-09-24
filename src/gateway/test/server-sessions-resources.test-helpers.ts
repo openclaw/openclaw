@@ -43,11 +43,8 @@ const getGatewayServerHarnessModule = createLazyRuntimeModule(
   () => import("../server.e2e-ws-harness.js"),
 );
 
-/** Deselect before disposal so topology publication cannot reopen a fixture store. */
-export async function releaseGatewaySessionStoreFixture(
-  dir: string,
-  options: { settleSuiteProjection?: boolean } = {},
-) {
+/** Join accepted work while retaining the selected store and its database workers. */
+export async function settleGatewaySessionStoreFixture(dir: string) {
   // Transcript observers outlive session admission; join before config changes can
   // reopen the store. This also runs in suite teardown, outside expect.poll's test context.
   await vi.waitFor(() => expect(getActiveGatewayRootWorkCount({ excludeCurrent: true })).toBe(0), {
@@ -70,15 +67,21 @@ export async function releaseGatewaySessionStoreFixture(
   }
   // Participant persistence outlives request roots; retain selectors until its FIFO settles.
   await drainOpenClawAgentWriteQueuesForTest(ownsPath);
-  const runtime = options.settleSuiteProjection ? getGatewayRecoveryRuntime() : undefined;
+  const runtime = getGatewayRecoveryRuntime();
   const projection = getSessionRowProjection(runtime && getGatewayContextResolver(runtime)?.());
   if (projection) {
     await waitForSessionTranscriptIndexReconcilesInStateDir(root);
     await drainOpenClawAgentWriteQueuesForTest(ownsPath);
-    // The chat suite keeps this projection alive across stores. Settle its readers
+    // Suite Gateways keep this projection alive across stores. Settle its readers
     // before unregistration invalidates their canonical admission.
     await projection.ensureMaterialized();
   }
+  return { root, ownsPath, projection };
+}
+
+/** Deselect before disposal so topology publication cannot reopen a fixture store. */
+export async function releaseGatewaySessionStoreFixture(dir: string) {
+  const { root, ownsPath, projection } = await settleGatewaySessionStoreFixture(dir);
   if (testState.sessionStorePath && ownsPath(testState.sessionStorePath)) {
     testState.sessionStorePath = undefined;
   }

@@ -149,7 +149,8 @@ permissions:
 jobs:
   quality-shards:
     name: Select Critical Quality shards
-    if: ${{ (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
+    if: ${{ (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && ((github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'pull_request' || !github.event.pull_request.draft)) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -680,7 +681,8 @@ jobs:
 
   ui-control-plane:
     name: Critical Quality (ui-control-plane)
-    if: ${{ (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
+    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
+    if: ${{ (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && ((github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -702,7 +704,8 @@ jobs:
 
   web-media-runtime-boundary:
     name: Critical Quality (web-media-runtime-boundary)
-    if: ${{ (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
+    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
+    if: ${{ (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && ((github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:

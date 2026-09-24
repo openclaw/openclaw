@@ -35,9 +35,8 @@ import {
   observeBrowserExtensionSetup,
   runBrowserExtensionSetup,
 } from "../browser/extension-setup.js";
-import type { BrowserParentOpts } from "./browser-cli-shared.js";
+import { runBrowserCliCommand, type BrowserParentOpts } from "./browser-cli-shared.js";
 import {
-  danger,
   defaultRuntime,
   getRuntimeConfig,
   info,
@@ -242,54 +241,47 @@ export function registerBrowserExtensionCommands(
       String(30_000),
     )
     .action(async (opts, command) => {
-      await runCommandWithRuntime(
-        defaultRuntime,
-        async () => {
-          const json = opts.json === true || parentOpts(command).json === true;
-          const waitMs = normalizeExtensionInstallWaitMs(opts.waitMs);
-          const bundledDir = resolveChromeExtensionDir(pluginRoot);
-          if (!json) {
-            defaultRuntime.log(info("Preparing the OpenClaw Chrome extension…"));
+      await runBrowserCliCommand(async () => {
+        const json = opts.json === true || parentOpts(command).json === true;
+        const waitMs = normalizeExtensionInstallWaitMs(opts.waitMs);
+        const bundledDir = resolveChromeExtensionDir(pluginRoot);
+        if (!json) {
+          defaultRuntime.log(info("Preparing the OpenClaw Chrome extension…"));
+        }
+        const status = await observeBrowserExtensionSetup({
+          action: "install",
+          nativeHostExecutable: opts.nativeHostExecutable,
+          bundledDir,
+          pluginRoot: resolveBrowserPluginRoot(pluginRoot),
+          waitMs,
+          requestStoreInstall: opts.store !== false,
+          profile: opts.browserProfile ?? parentOpts(command).browserProfile,
+          onProgress: json ? undefined : (message) => defaultRuntime.log(info(message)),
+        });
+        if (json) {
+          defaultRuntime.writeJson(status);
+        } else {
+          for (const issue of status.issues) {
+            defaultRuntime.error(theme.warn(issue));
           }
-          const status = await observeBrowserExtensionSetup({
-            action: "install",
-            nativeHostExecutable: opts.nativeHostExecutable,
-            bundledDir,
-            pluginRoot: resolveBrowserPluginRoot(pluginRoot),
-            waitMs,
-            requestStoreInstall: opts.store !== false,
-            profile: opts.browserProfile ?? parentOpts(command).browserProfile,
-            onProgress: json ? undefined : (message) => defaultRuntime.log(info(message)),
-          });
-          if (json) {
-            defaultRuntime.writeJson(status);
-          } else {
-            for (const issue of status.issues) {
-              defaultRuntime.error(theme.warn(issue));
-            }
-            defaultRuntime.log(
-              status.manualSetupRequired
-                ? theme.warn(
-                    status.platformSupport === "manual_required"
-                      ? "Automatic native bootstrap is not supported on this platform; use Settings for manual pairing."
-                      : status.storeInstallRequests.some((entry) => entry.state === "requested")
-                        ? `Store installation requested. Enable OpenClaw in chrome://extensions and approve Chrome's prompt. If it has not appeared, restart Chrome when convenient or add it from ${FOUNDATION_CHROME_WEB_STORE_URL}. Run extension status to check setup again.`
-                        : `Setup needs attention. Add OpenClaw from ${FOUNDATION_CHROME_WEB_STORE_URL} after native registration succeeds. For development, load the printed unpacked path. If the extension attempted setup before the native host existed, restart Chrome once.`,
-                  )
-                : info(
-                    `Native host and extension identity verified for ${status.discovered.length + status.storeDiscovered.length} profile registration(s). Check the extension popup for Connected before using browser automation.`,
-                  ),
-            );
-          }
-          if (status.manualSetupRequired) {
-            defaultRuntime.exit(1);
-          }
-        },
-        (err: unknown) => {
-          defaultRuntime.error(danger(String(err)));
+          defaultRuntime.log(
+            status.manualSetupRequired
+              ? theme.warn(
+                  status.platformSupport === "manual_required"
+                    ? "Automatic native bootstrap is not supported on this platform; use Settings for manual pairing."
+                    : status.storeInstallRequests.some((entry) => entry.state === "requested")
+                      ? `Store installation requested. Enable OpenClaw in chrome://extensions and approve Chrome's prompt. If it has not appeared, restart Chrome when convenient or add it from ${FOUNDATION_CHROME_WEB_STORE_URL}. Run extension status to check setup again.`
+                      : `Setup needs attention. Add OpenClaw from ${FOUNDATION_CHROME_WEB_STORE_URL} after native registration succeeds. For development, load the printed unpacked path. If the extension attempted setup before the native host existed, restart Chrome once.`,
+                )
+              : info(
+                  `Native host and extension identity verified for ${status.discovered.length + status.storeDiscovered.length} profile registration(s). Check the extension popup for Connected before using browser automation.`,
+                ),
+          );
+        }
+        if (status.manualSetupRequired) {
           defaultRuntime.exit(1);
-        },
-      );
+        }
+      });
     });
 
   extension
@@ -438,47 +430,38 @@ export function registerBrowserExtensionCommands(
       "Print a remote pairing string for a Chrome on another machine (e.g. wss://gateway.example.com)",
     )
     .action(async (opts, command) => {
-      await runCommandWithRuntime(
-        defaultRuntime,
-        async () => {
-          const json = opts.json === true || parentOpts(command).json === true;
-          const result = await buildPairingString({
-            gatewayUrl: opts.gatewayUrl,
-            localGateway: opts.localGateway === true,
+      await runBrowserCliCommand(async () => {
+        const json = opts.json === true || parentOpts(command).json === true;
+        const result = await buildPairingString({
+          gatewayUrl: opts.gatewayUrl,
+          localGateway: opts.localGateway === true,
+        });
+        if (json) {
+          defaultRuntime.writeJson({
+            pairingString: result.pairing,
+            relayPort: result.relayPort,
+            remote: result.remote,
           });
-          if (json) {
-            defaultRuntime.writeJson({
-              pairingString: result.pairing,
-              relayPort: result.relayPort,
-              remote: result.remote,
-            });
-            return;
-          }
-          const setupLine = result.remote
-            ? info(
-                "Remote pairing: load and pair the extension on the machine running Chrome; it connects to this gateway over wss://.",
-              )
-            : info(
-                "Run this on the machine that hosts the browser (gateway host or browser node).",
-              );
-          defaultRuntime.log(
-            [
-              setupLine,
-              info("1. Load the extension: chrome://extensions → Developer mode → Load unpacked →"),
-              `   ${resolveChromeExtensionDir(pluginRoot)}`,
-              info("2. Open the OpenClaw popup and paste this pairing string:"),
-              "",
-              theme.heading(result.pairing),
-              "",
-              info("The relay key is a host-local secret; keep it private."),
-            ].join("\n"),
-          );
-        },
-        (err: unknown) => {
-          defaultRuntime.error(danger(String(err)));
-          defaultRuntime.exit(1);
-        },
-      );
+          return;
+        }
+        const setupLine = result.remote
+          ? info(
+              "Remote pairing: load and pair the extension on the machine running Chrome; it connects to this gateway over wss://.",
+            )
+          : info("Run this on the machine that hosts the browser (gateway host or browser node).");
+        defaultRuntime.log(
+          [
+            setupLine,
+            info("1. Load the extension: chrome://extensions → Developer mode → Load unpacked →"),
+            `   ${resolveChromeExtensionDir(pluginRoot)}`,
+            info("2. Open the OpenClaw popup and paste this pairing string:"),
+            "",
+            theme.heading(result.pairing),
+            "",
+            info("The relay key is a host-local secret; keep it private."),
+          ].join("\n"),
+        );
+      });
     });
 
   extension
@@ -490,44 +473,37 @@ export function registerBrowserExtensionCommands(
       "Print the legacy Bearer header while browser.extensionRelay.allowLegacyAuth is enabled",
     )
     .action(async (opts, command) => {
-      await runCommandWithRuntime(
-        defaultRuntime,
-        async () => {
-          const json = opts.json === true || parentOpts(command).json === true;
-          const legacyBearer = opts.legacyBearer === true;
-          const endpoint = await buildCdpEndpoint({ legacyBearer });
-          if (legacyBearer) {
-            defaultRuntime.error(
-              theme.warn(
-                "Warning: --legacy-bearer reveals the relay key in an authorization header. Migrate this client to Browser Relay Authentication v2.",
-              ),
-            );
-          }
-          if (json) {
-            defaultRuntime.writeJson(endpoint);
-            return;
-          }
-          const lines = [
-            info("Relay CDP endpoint (pair the extension first):"),
-            `browserUrl: ${endpoint.browserUrl}`,
-            `wsEndpoint: ${endpoint.wsEndpoint}`,
-            `auth:       ${endpoint.auth.label} v${endpoint.auth.version}`,
-            `keyId:      ${endpoint.auth.keyId}`,
-            `challenge:  POST ${endpoint.auth.challengeUrl}`,
-            `complete:   POST ${endpoint.auth.completeUrl}`,
-            `sequence:   ${endpoint.auth.resource}`,
-          ];
-          if (endpoint.headers) {
-            lines.push(`legacy:     Authorization: ${endpoint.headers.Authorization}`);
-          } else {
-            lines.push("", info("No relay key or authorization header is printed."));
-          }
-          defaultRuntime.log(lines.join("\n"));
-        },
-        (err: unknown) => {
-          defaultRuntime.error(danger(String(err)));
-          defaultRuntime.exit(1);
-        },
-      );
+      await runBrowserCliCommand(async () => {
+        const json = opts.json === true || parentOpts(command).json === true;
+        const legacyBearer = opts.legacyBearer === true;
+        const endpoint = await buildCdpEndpoint({ legacyBearer });
+        if (legacyBearer) {
+          defaultRuntime.error(
+            theme.warn(
+              "Warning: --legacy-bearer reveals the relay key in an authorization header. Migrate this client to Browser Relay Authentication v2.",
+            ),
+          );
+        }
+        if (json) {
+          defaultRuntime.writeJson(endpoint);
+          return;
+        }
+        const lines = [
+          info("Relay CDP endpoint (pair the extension first):"),
+          `browserUrl: ${endpoint.browserUrl}`,
+          `wsEndpoint: ${endpoint.wsEndpoint}`,
+          `auth:       ${endpoint.auth.label} v${endpoint.auth.version}`,
+          `keyId:      ${endpoint.auth.keyId}`,
+          `challenge:  POST ${endpoint.auth.challengeUrl}`,
+          `complete:   POST ${endpoint.auth.completeUrl}`,
+          `sequence:   ${endpoint.auth.resource}`,
+        ];
+        if (endpoint.headers) {
+          lines.push(`legacy:     Authorization: ${endpoint.headers.Authorization}`);
+        } else {
+          lines.push("", info("No relay key or authorization header is printed."));
+        }
+        defaultRuntime.log(lines.join("\n"));
+      });
     });
 }

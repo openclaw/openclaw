@@ -24,6 +24,7 @@ import {
   monotonicClock,
   resetRestartHealthMocks,
   restoreRestartHealthMocks,
+  sleep,
 } from "../daemon-cli/restart-health.test-helpers.js";
 import {
   GatewayRestartHealthError,
@@ -79,6 +80,140 @@ afterEach(async () => {
 });
 
 describe("update readiness generation", () => {
+  it.each([
+    { readyzStatus: 200, replaced: false },
+    { readyzStatus: 503, replaced: false },
+    { readyzStatus: 200, replaced: true },
+  ])(
+    "observes foreground identity and HTTP once (HTTP $readyzStatus, replaced=$replaced)",
+    async ({ readyzStatus, replaced }) => {
+      const service = makeGatewayService({ status: "stopped" });
+      vi.mocked(service.readRuntime).mockResolvedValue({ status: "unknown" });
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+      inspectPortUsage.mockImplementation(async (port) => ({
+        port,
+        status: "busy",
+        listeners: [{ pid: 8000 }],
+        hints: [],
+      }));
+      let bootId = "foreground-boot";
+      callGateway.mockImplementation((opts) =>
+        gatewayHealthResponse({
+          server: { version: "2026.9.5", buildId: "installed-build", bootId },
+        })(opts),
+      );
+      const requests: string[] = [];
+      server = createServer((req, res) => {
+        requests.push(req.url ?? "");
+        if (replaced && req.url === "/readyz") {
+          bootId = "replacement-boot";
+        }
+        res.writeHead(req.url === "/readyz" ? readyzStatus : 200).end();
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("missing loopback listener");
+      }
+      const result: UpdateRunResult = {
+        status: "error",
+        mode: "npm",
+        reason: "doctor-failed",
+        steps: [],
+        durationMs: 0,
+      };
+      const verification = verifyUpdatedGateway({
+        result,
+        opts: { json: true },
+        purpose: "recovery",
+        serviceEnv: { HOME: "/synthetic-home" },
+        gatewayPort: address.port,
+        expectedVersion: "2026.9.5",
+        expectedBuildId: "installed-build",
+        waitForStartup: false,
+        signal: controller.signal,
+      });
+      pendingVerification = verification;
+      expect(await verification).toMatchObject({ ok: readyzStatus === 200 && !replaced });
+      expect(requests.toSorted()).toEqual(["/healthz", "/readyz"]);
+      expect(callGateway).toHaveBeenCalledTimes(3);
+      expect(sleep).not.toHaveBeenCalled();
+      expect(monotonicClock.nowMs).toBe(0);
+      expect(result).toMatchObject({ status: "error", reason: "doctor-failed" });
+      expect(result.verification?.serviceRunning).toBeUndefined();
+      expect(result.verification?.readyz).toBe(readyzStatus === 200);
+      expect(result.steps[0]?.exitCode).toBe(readyzStatus === 200 && !replaced ? 0 : 1);
+      expect(result.steps[0]?.termination).toBeUndefined();
+      if (readyzStatus !== 200) {
+        expect(result.steps[0]?.failureFacts).toContainEqual(
+          expect.objectContaining({ code: "readyz-unhealthy" }),
+        );
+      }
+      if (replaced) {
+        expect(result.verification?.settled).toBe(false);
+        expect(result.steps[0]?.failureFacts).toContainEqual(
+          expect.objectContaining({ code: "generation-changed" }),
+        );
+      }
+    },
+  );
+
+  it.each([30 * 60_000, 100])(
+    "bounds a stalled foreground HTTP observation within probe and operator limits (%ims)",
+    async (timeoutMs) => {
+      const service = makeGatewayService({ status: "stopped" });
+      vi.mocked(service.readRuntime).mockResolvedValue({ status: "unknown" });
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+      inspectPortUsage.mockImplementation(async (port) => ({
+        port,
+        status: "busy",
+        listeners: [{ pid: 8000 }],
+        hints: [],
+      }));
+      callGateway.mockImplementation(
+        gatewayHealthResponse({ server: { version: "2026.9.5", bootId: "foreground-boot" } }),
+      );
+      const requests: string[] = [];
+      server = createServer((req, res) => {
+        requests.push(req.url ?? "");
+        if (req.url === "/healthz") {
+          res.writeHead(200).end();
+        }
+        // The accepted readiness request deliberately never produces a response.
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("missing loopback listener");
+      }
+      const result: UpdateRunResult = { status: "error", mode: "npm", steps: [], durationMs: 0 };
+      const startedAt = Date.now();
+      const verification = verifyUpdatedGateway({
+        result,
+        opts: { json: true },
+        purpose: "recovery",
+        serviceEnv: { HOME: "/synthetic-home" },
+        gatewayPort: address.port,
+        expectedVersion: "2026.9.5",
+        waitForStartup: false,
+        timeoutMs,
+        signal: controller.signal,
+      });
+      pendingVerification = verification;
+      await expect(verification).resolves.toMatchObject({ ok: false, summary: "readyz-unhealthy" });
+      expect(Date.now() - startedAt).toBeLessThan(timeoutMs === 100 ? 1_000 : 5_000);
+      expect(requests.toSorted()).toEqual(["/healthz", "/readyz"]);
+      expect(sleep).not.toHaveBeenCalled();
+      expect(result.steps[0]?.termination).toBeUndefined();
+      expect(result.steps[0]?.advisory).toBeUndefined();
+      for (const [params] of callGateway.mock.calls) {
+        expect(params.timeoutMs).toBeLessThanOrEqual(timeoutMs === 100 ? 100 : 3_000);
+      }
+    },
+  );
+
   it("prefers a pending recovery observation over previously saved healthy facts", async () => {
     const result: UpdateRunResult = { status: "error", mode: "npm", steps: [], durationMs: 0 };
     await expect(

@@ -1355,7 +1355,12 @@ Canonical validation belongs to the admitted physical database:
 first admission requires full proof, then the schema-21 pending-key projection
 records changes independently of connection lifetime. Startup and initial Gateway
 authorization of an unadmitted reader use the existing mutation worker for pending
-validation and recheck live authority after awaiting it. Native readers preserve
+validation and recheck live authority after awaiting it. Concurrent runtime readers
+on the same native database owner share its active validation drain. Each waiter
+retains its own lifecycle claim and rechecks physical ownership and canonical proof
+afterward; completion or failure removes the shared drain. Startup's scoped workers
+retain their own batch lifecycle. Schemas, stored data, and update behavior are unchanged.
+Native readers preserve
 their existing main-key admission and raw-row parser behavior; each new reader
 checks pending keys without rescanning unrelated certified entries. Synchronous commit guards still read committed
 rows. See [incremental canonical validation](/reference/database-schemas/agent-schema-history#incremental-canonical-session-validation)
@@ -1728,7 +1733,11 @@ Archive order, retention policy, schemas, and update behavior are unchanged.
 Worker retirement preserves the original operation failure without reporting it
 again as a cleanup failure. A successfully retired execution owner is released for
 later requests; genuine native-close and lease-cleanup failures retain their
-existing retry custody.
+existing retry custody. The next admitted agent operation retries that cleanup
+before opening a replacement generation, so transient lifecycle contention does
+not permanently disable history eviction. Cleanup rechecks the original database
+identity and request authority; it never replays the failed operation. Explicit
+resource revocation remains terminal. Schemas, retention, and update behavior are unchanged.
 Successful pooled-agent close relays its recorded WAL checkpoint after native and
 lease cleanup settle. The original generation and physical database identities
 fence that observation, and the budget owner releases deferral only for a newer
@@ -1816,6 +1825,20 @@ permissions, and Doctor's migration and repair authority remain unchanged.
 Process identity caches retain their existing database-path and identity-key
 scope; warm cached values need no database operation. Schemas and update behavior
 are unchanged; no migration or operator action is required.
+
+Skill Workshop proposal reads, publication, evaluation, rollback metadata, and
+status transitions execute in the existing shared-state worker. Record and event
+writes remain one synchronous transaction, including revision comparisons and
+pending-proposal limits. The host retains filesystem work and the collection and
+target leases through settlement; worker transactions verify every held lease
+before effects and commit. A failed reply is reconciled before discarding a
+staged generation or restoring live files.
+
+Collection history reads and experience-review outcomes use the same worker.
+Doctor awaits legacy proposal imports before deleting their source sidecars.
+Transaction-bound relocation kernels and read-only migration readers retain their
+supplied connections. Proposal generations, schemas, limits, retention, and
+rollback ordering are unchanged.
 
 Task, flow, and Cron receipt execution identity bindings run in the shared-state
 worker. Their synchronous transactions reread the exact live owner rows and

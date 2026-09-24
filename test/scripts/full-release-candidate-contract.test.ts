@@ -87,21 +87,26 @@ describe("full release candidate contract", () => {
     expect(canonicalTestSha256(request)).toBe(CANONICAL_REQUEST_SHA256);
   });
 
-  it("canonicalizes equivalent baseline and scenario set ordering", () => {
+  it("canonicalizes historical baseline receipts and equivalent scenario set ordering", () => {
     const request = buildFullReleaseCandidateRequest(
       fullReleaseCandidateRequestInput({
-        upgradeSurvivorBaselines: "beta latest",
+        upgradeSurvivorBaselines: "beta latest 2026.4.23",
         upgradeSurvivorScenarios: "base feishu-channel",
       }),
     );
     const reordered = buildFullReleaseCandidateRequest(
       fullReleaseCandidateRequestInput({
-        upgradeSurvivorBaselines: "latest,beta",
+        upgradeSurvivorBaselines: "2026.4.23,latest,beta",
         upgradeSurvivorScenarios: "feishu-channel,base",
       }),
     );
 
     expect(request).toEqual(reordered);
+    expect(request.upgradeSurvivorBaselines).toEqual([
+      "openclaw@2026.4.23",
+      "openclaw@beta",
+      "openclaw@latest",
+    ]);
     expect(canonicalTestSha256(request)).toBe(canonicalTestSha256(reordered));
   });
 

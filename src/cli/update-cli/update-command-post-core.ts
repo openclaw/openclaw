@@ -10,6 +10,7 @@ import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   createPluginInstallRecordMap,
+  parsePluginInstallRecordMap,
   serializePluginInstallRecordMap,
   setPluginInstallRecordMapEntry,
 } from "../../config/plugin-install-record-map.js";
@@ -53,10 +54,7 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { runExec } from "../../process/exec.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
-import {
-  normalizePluginInstallRecordMap,
-  writePostCoreSourceConfigFile,
-} from "./update-command-config.js";
+import { writePostCoreSourceConfigFile } from "./update-command-config.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
 import {
@@ -181,7 +179,11 @@ export async function readPostCorePluginInstallRecordsFile(
     );
   }
   try {
-    return normalizePluginInstallRecordMap(parsed);
+    const records = parsePluginInstallRecordMap(parsed);
+    if (!records) {
+      throw new Error("Invalid plugin install record map");
+    }
+    return records;
   } catch (err) {
     throw new Error(
       `Invalid plugin install records in handoff file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,

@@ -234,11 +234,13 @@ export function projectOperatorScopesForMethod(params: {
   requestedScopes: readonly string[];
   allowedScopes: readonly string[];
   requiredScope?: OperatorScope;
+  sessionScope?: SessionOperatorScope;
 }): string[] {
   const requiredScopes = params.requiredScope
     ? [params.requiredScope]
     : resolveLeastPrivilegeOperatorScopesForMethod(params.method, params.requestParams);
-  const sessionScope = resolveSessionMethodScope(params.method, params.requestParams);
+  const sessionScope =
+    params.sessionScope ?? resolveSessionMethodScope(params.method, params.requestParams);
   return params.requestedScopes.flatMap((requestedScope) => {
     if (
       roleScopesAllow({

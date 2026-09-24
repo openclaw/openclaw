@@ -54,6 +54,18 @@ export type AgentHarnessHostCapabilities = Readonly<{
   annotateCurrentUserTurn?: (
     annotation: import("../../sessions/user-turn-transcript.types.js").UserTurnTranscriptAnnotation,
   ) => Promise<void>;
+  /** Execution-only document paths after the harness confirms unsandboxed local placement. */
+  prepareInputAttachments?: (request: {
+    placement: "local-host";
+    maxChars: number;
+    /** Omit for the admitted input; supply the current input for steering. */
+    turn?: Pick<
+      import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams,
+      "media" | "userTurnTranscriptRecorder"
+    >;
+    assertCurrent: () => void;
+    signal?: AbortSignal;
+  }) => Promise<string | undefined>;
   /** Rebuilds retained attachments under this host's captured media policy and run authority. */
   prepareContextMedia?: (request: {
     message: import("../runtime/index.js").AgentMessage;

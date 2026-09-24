@@ -223,6 +223,7 @@ export function buildThreadStartParams(
   options: CodexThreadConfigurationOptions & { cwd: string; dynamicTools: CodexDynamicToolSpec[] },
 ): CodexThreadStartParams {
   const resolvedModelProvider = resolveCodexAppServerModelProvider({
+    homeScope: options.appServer.start.homeScope,
     provider: params.provider,
     authProfileId: params.authProfileId,
     authProfileStore: params.authProfileStore,
@@ -230,6 +231,7 @@ export function buildThreadStartParams(
     config: params.config,
   });
   const modelSelection = resolveCodexAppServerRequestModelSelection({
+    homeScope: options.appServer.start.homeScope,
     model: options.model ?? params.modelId,
     modelProvider: options.modelProvider ?? resolvedModelProvider,
     authProfileId: params.authProfileId,
@@ -270,10 +272,12 @@ export function buildThreadResumeParams(
   const modelSelection = options.preserveNativeModel
     ? undefined
     : resolveCodexAppServerRequestModelSelection({
+        homeScope: options.appServer.start.homeScope,
         model: options.model ?? params.modelId,
         modelProvider:
           options.modelProvider ??
           resolveCodexAppServerModelProvider({
+            homeScope: options.appServer.start.homeScope,
             provider: params.provider,
             authProfileId: options.authProfileId ?? params.authProfileId,
             authProfileStore: params.authProfileStore,

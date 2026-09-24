@@ -420,22 +420,28 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     });
   });
 
-  it("does not run the announce decider for same-session sends without an announce target", async () => {
-    await runSessionsSendA2AFlow({
-      targetAgentId: "main",
-      targetSessionKey: "agent:main:main",
-      displayKey: "agent:main:main",
-      message: "Test message",
-      announceTimeoutMs: 10_000,
-      maxPingPongTurns: 2,
-      requesterSessionKey: "agent:main:main",
-      requesterChannel: "qa-channel",
-      roundOneReply: "Already delivered through the source message tool",
-    });
+  it.each([false, true])(
+    "does not deliver without an announce target, with captured requester route %s",
+    async (captured) => {
+      await runSessionsSendA2AFlow({
+        targetAgentId: "main",
+        targetSessionKey: "agent:main:direct:alice",
+        displayKey: "agent:main:direct:alice",
+        message: "Test message",
+        announceTimeoutMs: 10_000,
+        maxPingPongTurns: 2,
+        requesterSessionKey: "agent:main:direct:alice",
+        requesterChannel: "qa-channel",
+        requesterOrigin: captured
+          ? { channel: "qa-channel", to: "dm:alice", accountId: "default" }
+          : undefined,
+        roundOneReply: "Delayed result for a session with no saved route",
+      });
 
-    expect(runAgentStep).not.toHaveBeenCalled();
-    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
-  });
+      expect(runAgentStep).not.toHaveBeenCalled();
+      expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+    },
+  );
 
   it("uses the projected delivery context for the Discord announce account", async () => {
     const accountId = "thinker";

@@ -27,6 +27,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
 import type { SessionCompanionAskDeps } from "./session-companion-ask.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
@@ -65,6 +66,7 @@ afterEach(async () => {
     companion.dispose();
   }
   companions.clear();
+  await disposeSessionReadContexts();
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();

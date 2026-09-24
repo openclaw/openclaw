@@ -97,10 +97,10 @@ Gateway in this browser without reconnecting. Session edits and connection edits
 have independent Save/Apply and Discard actions. Switching Gateways restores
 that Gateway's saved session selection.
 
-Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a five-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery reuses its ten-second snapshot. CPU count and model are sampled once when the Gateway process starts; restart the Gateway to reflect CPU topology changes. Process counters, load averages, and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
+Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a ten-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery and state-directory disk space reuse thirty-second snapshots. Machine name, CPU count, and CPU model are sampled once when the Gateway process starts; restart the Gateway to reflect CPU topology changes. Process counters, load averages, and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
 
 The **Connection** card also shows average ping and p50, p95, and p99 round-trip
-times in milliseconds. It samples every five seconds while the page is visible
+times in milliseconds. It samples every ten seconds while the page is visible
 and summarizes the last 100 successful samples from the current connection.
 The sample count makes small sets visible; p95 and p99 become more useful as
 samples accumulate. Reconnecting, switching Gateways, or leaving the page resets
@@ -108,10 +108,14 @@ the readings. Failed requests are excluded and shown as a retry notice.
 
 The ping graph shows individual round trips. **Gateway activity** uses the same
 CPU, process memory, and event-loop delay graphs as the debug overlay, with up to
-100 snapshots sampled every five seconds while visible. CPU includes event-loop
+100 snapshots sampled every ten seconds while visible. CPU includes event-loop
 utilization, memory shows process RSS and used heap, and delay shows the Gateway's
 event-loop p99 and maximum delay. These are Gateway process measurements, separate
 from connection ping and the machine-wide **Gateway Host** readings below.
+Gateway, Appearance, Devices, Systems, and System busyness share status reads for the same connection,
+so opening the tray alongside Settings does not multiply `system.info` traffic.
+Hidden tabs pause these reads and resume when visible. Cached samples retain their
+original timestamp and measured round-trip time.
 Activity polling reads process counters through `system.info`, without running
 the full task and session inspection used by the operator `status` report.
 
@@ -346,6 +350,15 @@ discard them and load the current configuration. A successful reload resumes
 autosave for new edits; an offline reload keeps the pending draft.
 Devices node-binding controls also pause while configuration reloads, so a pending
 read cannot overwrite a new selection.
+
+In an agent's **Files** editor, **Add file** opens a missing optional workspace
+document. Saving creates it only if it is still missing. If another editor or
+process creates it first, the editor keeps your draft and reports a conflict.
+**Reload** takes the current file; **Overwrite** reloads its current version and
+then saves your draft against that version. Drafts keep their original file
+version when you switch agents or refresh. If a remote workspace provider cannot
+create files exclusively, saving explains how to update it or create the file on
+that host and reload it; it does not overwrite a file silently.
 
 **Native embed mode.** Native hosts can inject `window.__OPENCLAW_NATIVE_EMBED__ = { platform: "ios", formFactor: "phone" }` at document start to show settings without Dashboard navigation chrome. Supported platforms are `ios`, `macos`, and `android`; form factors are `phone`, `pad`, and `desktop`. In this mode, `/settings` lists the same visible groups and destinations as the settings sidebar. Every embedded route outside the settings root provides a Back button and title, including pages reached through links or tabs such as Memory import, Plugins, and Skill Workshop. Back follows app navigation history; direct links fall back to the nearest settings parent (Memory for Memory import) or `/settings`. Layouts respect device safe areas and use touch controls at phone widths. The flag changes presentation only: Gateway scopes and the existing native device-settings capability still determine which settings are available. Ordinary browser loads keep their existing navigation.
 

@@ -53,6 +53,7 @@ type PendingPluginApproval = {
 };
 type ProofProvider = {
   readonly baseUrl: string;
+  readonly sessionObserverUrl: string;
   readonly httpHits: number;
   readonly nativeExecCalls: number;
   readonly observations: readonly string[];
@@ -229,7 +230,15 @@ async function startProofProvider(nodeHome: string): Promise<ProofProvider> {
       const forwarded = await fetch(`${mock.baseUrl}${request.url ?? "/"}`, {
         method: request.method,
         ...(raw.byteLength ? { body: raw } : {}),
-        headers: { "content-type": request.headers["content-type"] ?? "application/json" },
+        headers: {
+          "content-type": request.headers["content-type"] ?? "application/json",
+          ...(typeof request.headers.session_id === "string"
+            ? { session_id: request.headers.session_id }
+            : {}),
+          ...(typeof request.headers["x-session-affinity"] === "string"
+            ? { "x-session-affinity": request.headers["x-session-affinity"] }
+            : {}),
+        },
       });
       response.writeHead(forwarded.status, Object.fromEntries(forwarded.headers));
       response.end(Buffer.from(await forwarded.arrayBuffer()));
@@ -253,6 +262,7 @@ async function startProofProvider(nodeHome: string): Promise<ProofProvider> {
     baseUrl = `http://127.0.0.1:${address.port}`;
     return {
       baseUrl,
+      sessionObserverUrl: mock.sessionObserverUrl,
       get httpHits() {
         return httpHits;
       },
@@ -469,6 +479,7 @@ describe("Codex paired-device exec-server carrier", () => {
           transportBaseUrl: "http://127.0.0.1",
           providerMode: "mock-openai",
           providerBaseUrl: `${provider.baseUrl}/v1`,
+          mockSessionObserverUrl: provider.sessionObserverUrl,
           primaryModel: MODEL,
           alternateModel: MODEL,
           forcedRuntime: "codex",

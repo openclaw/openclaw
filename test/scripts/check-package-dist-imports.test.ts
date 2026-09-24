@@ -158,6 +158,7 @@ describe("check-package-dist-imports", () => {
       "named-export.js": 'export { value } from "./missing.js";\n',
       "multiline-export.js": 'export {\n  value,\n} from "./missing.js";\n',
       "index.cjs": 'module.exports = require("./chunk.cjs");\n',
+      "return.cjs": 'var await = require("./chunk.cjs"); return await;\n',
     };
     for (const [file, source] of Object.entries(sources)) {
       writeFileSync(join(root, "dist", file), source, "utf8");

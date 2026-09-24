@@ -13,12 +13,12 @@ import {
   coerceConfig,
   containsConfigIncludeDirective,
   hashConfigRaw,
-  maybeLoadDotEnvForConfig,
   resolveConfigForRead,
   resolveConfigIncludesForRead,
   restoreEnvChangesIfUnchanged,
   snapshotEnv,
 } from "./io.read-helpers.js";
+import { maybeLoadDotEnvForConfig } from "./io.runtime-env.js";
 import { createConfigFileSnapshot } from "./io.snapshot-shared.js";
 import { loggedConfigWarningFingerprints, loggedInvalidConfigs } from "./io.state.js";
 import {

@@ -8,6 +8,10 @@ import {
   OpenClawQuarantineReadCleanupError,
 } from "./openclaw-quarantine-error.js";
 import {
+  markOpenClawStateDatabaseFailure,
+  readOpenClawStateDatabaseFailurePath,
+} from "./openclaw-state-db-failure.js";
+import {
   createError,
   identifyError,
   parseIdentity,
@@ -25,6 +29,7 @@ type ErrorNode = ErrorIdentity & {
   code?: string | number;
   errcode?: number;
   nativeOpen?: true;
+  stateDatabasePath?: string;
   cause?: ErrorValue;
   errors?: ErrorValue[];
 };
@@ -81,7 +86,9 @@ export function encodeOpenClawStateWorkerError(
     for (const current of errors) {
       const identity = identifyError(current);
       const nativeOpen = isSqliteNativeOpenFailure(current);
+      const stateDatabasePath = readOpenClawStateDatabaseFailurePath(current);
       canonical ||=
+        stateDatabasePath !== undefined ||
         nativeOpen ||
         current instanceof OpenClawQuarantineReadCleanupError ||
         (identity.type !== "error" && identity.type !== "aggregate");
@@ -96,6 +103,7 @@ export function encodeOpenClawStateWorkerError(
           : {}),
         ...(isNativeErrorCode(errcode) ? { errcode } : {}),
         ...(nativeOpen ? { nativeOpen: true } : {}),
+        ...(stateDatabasePath === undefined ? {} : { stateDatabasePath }),
         ...("cause" in current ? { cause: encodeValue(current.cause) } : {}),
         ...(current instanceof AggregateError ? { errors: current.errors.map(encodeValue) } : {}),
       });
@@ -138,6 +146,7 @@ function parseNode(value: unknown, count: number): ErrorNode | undefined {
     "code",
     "errcode",
     "nativeOpen",
+    "stateDatabasePath",
     "cause",
   ]);
   const errors: ErrorValue[] = [];
@@ -160,6 +169,7 @@ function parseNode(value: unknown, count: number): ErrorNode | undefined {
       !(typeof value.code === "number" && Number.isFinite(value.code))) ||
     ("errcode" in value && !isNativeErrorCode(value.errcode)) ||
     ("nativeOpen" in value && value.nativeOpen !== true) ||
+    ("stateDatabasePath" in value && typeof value.stateDatabasePath !== "string") ||
     ("cause" in value && !isErrorValue(value.cause, count))
   ) {
     return undefined;
@@ -173,6 +183,9 @@ function parseNode(value: unknown, count: number): ErrorNode | undefined {
       : {}),
     ...(isNativeErrorCode(value.errcode) ? { errcode: value.errcode } : {}),
     ...(value.nativeOpen === true ? { nativeOpen: true } : {}),
+    ...(typeof value.stateDatabasePath === "string"
+      ? { stateDatabasePath: value.stateDatabasePath }
+      : {}),
     ...(isErrorValue(value.cause, count) ? { cause: value.cause } : {}),
     ...(identity.type === "aggregate" ? { errors } : {}),
   };
@@ -213,6 +226,7 @@ function decodeErrorGraph(
       visited.add(ref);
       const node = nodes[ref]!;
       canonical ||=
+        node.stateDatabasePath !== undefined ||
         node.nativeOpen === true ||
         (node.type === "aggregate" && node.name === DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME) ||
         (node.type !== "error" && node.type !== "aggregate");
@@ -234,6 +248,9 @@ function decodeErrorGraph(
       error.message = node.message;
       if (node.nativeOpen) {
         markSqliteNativeOpenFailure(error);
+      }
+      if (node.stateDatabasePath !== undefined) {
+        markOpenClawStateDatabaseFailure(error, node.stateDatabasePath);
       }
       if (node.code !== undefined) {
         Object.defineProperty(error, "code", {

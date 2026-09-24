@@ -21,9 +21,6 @@ on:
       use_github_hosted_runners:
         required: true
         type: boolean
-      advisory:
-        required: true
-        type: boolean
       allow_unreleased_changelog:
         required: true
         type: boolean
@@ -50,7 +47,6 @@ env:
 jobs:
   build:
     name: Build repo E2E (${{ inputs.build_profile }})
-    continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 90
     outputs:
@@ -114,7 +110,6 @@ jobs:
   test:
     name: Repo E2E (${{ matrix.name }})
     needs: build
-    continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 90
     strategy:

@@ -16,6 +16,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { withEnv } from "../test-utils/env.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { formatModelCatalogAuthLabel } from "./model-catalog-auth-labels.js";
@@ -338,6 +339,27 @@ module.exports = {
   return pluginFile;
 }
 
+function seedFixturePluginModelCatalog(agentDir: string, env: NodeJS.ProcessEnv): void {
+  withEnv(env, () =>
+    replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath(PLUGIN_ID)]: JSON.stringify({
+          generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+          providers: {
+            [PROVIDER_ID]: {
+              baseUrl: "https://worker-catalog.invalid/v1",
+              api: "openai-completions",
+              apiKey: "WORKER_CATALOG_API_KEY",
+              models: [{ id: "sqlite-model", name: "SQLite model" }],
+            },
+          },
+        }),
+      },
+    }),
+  );
+}
+
 export function createCatalogFixture(
   makeTempDir: (prefix: string) => string,
   spinMs: number,
@@ -436,22 +458,7 @@ export function createCatalogFixture(
         syncExternalCli: false,
       })
     : undefined;
-  replacePersistedPluginModelCatalogs({
-    agentDir,
-    pluginCatalogWrites: {
-      [encodePluginModelCatalogRelativePath(PLUGIN_ID)]: JSON.stringify({
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {
-          [PROVIDER_ID]: {
-            baseUrl: "https://worker-catalog.invalid/v1",
-            api: "openai-completions",
-            apiKey: "WORKER_CATALOG_API_KEY",
-            models: [{ id: "sqlite-model", name: "SQLite model" }],
-          },
-        },
-      }),
-    },
-  });
+  seedFixturePluginModelCatalog(agentDir, env);
   return { agentDir, config, env, marker, externalAuthPath, hydratedAuthStore, root, workspaceDir };
 }
 
@@ -623,22 +630,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
       },
     },
   ]);
-  replacePersistedPluginModelCatalogs({
-    agentDir,
-    pluginCatalogWrites: {
-      [encodePluginModelCatalogRelativePath(PLUGIN_ID)]: JSON.stringify({
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {
-          [PROVIDER_ID]: {
-            baseUrl: "https://worker-catalog.invalid/v1",
-            api: "openai-completions",
-            apiKey: "WORKER_CATALOG_API_KEY",
-            models: [{ id: "sqlite-model", name: "SQLite model" }],
-          },
-        },
-      }),
-    },
-  });
+  seedFixturePluginModelCatalog(agentDir, env);
   const input = {
     agentId: "main",
     agentDir,

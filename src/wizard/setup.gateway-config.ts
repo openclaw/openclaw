@@ -1,7 +1,6 @@
 // Setup gateway config helpers build gateway config from onboarding answers.
 import { validateDottedDecimalIPv4Input } from "@openclaw/net-policy/ipv4";
 import { formatPortRangeHint } from "../cli/error-format.js";
-import { parsePort } from "../cli/shared/parse-port.js";
 import {
   normalizeGatewayTokenInput,
   randomToken,
@@ -21,6 +20,7 @@ import {
   TAILSCALE_EXPOSURE_OPTIONS,
 } from "../gateway/gateway-config-prompts.shared.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -62,7 +62,7 @@ function normalizeWizardTextInput(value: unknown): string {
 }
 
 function validateGatewayPortInput(value: unknown): string | undefined {
-  if (parsePort(value) === null) {
+  if (parseTcpPort(value) === null) {
     return formatPortRangeHint();
   }
   return undefined;
@@ -77,7 +77,7 @@ export async function configureGatewayForSetup(
   const port =
     flow === "quickstart"
       ? quickstartGateway.port
-      : parsePort(
+      : parseTcpPort(
           await prompter.text({
             message: t("wizard.gateway.port"),
             initialValue: String(localPort),

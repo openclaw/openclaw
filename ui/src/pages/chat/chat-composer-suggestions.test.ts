@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
 import {
@@ -13,6 +14,7 @@ import { resetChatViewState } from "./chat-view-state.ts";
 import {
   createReactiveDraftHarness,
   createSlashRerenderHarness,
+  getComposerTextarea,
   inputDraft,
   inputDraftAtEnd,
   keydownComposer,
@@ -362,5 +364,24 @@ describe("chat composer suggestion accessibility", () => {
         .querySelector<HTMLTextAreaElement>("textarea")
         ?.hasAttribute("aria-activedescendant"),
     ).toBe(false);
+  });
+
+  it("does not revive a finished composer after a queued selection event", () => {
+    let verifyFinished: () => void = () => undefined;
+    // Finish hooks unwind in reverse registration order.
+    onTestFinished(() => verifyFinished());
+    const { container } = createReactiveDraftHarness();
+    const textarea = getComposerTextarea(container);
+    verifyFinished = () => {
+      try {
+        expect(container.querySelector("textarea")).toBeNull();
+        textarea.dispatchEvent(new Event("select", { bubbles: true }));
+        expect(container.querySelector("textarea")).toBeNull();
+      } finally {
+        render(nothing, container);
+        resetChatViewState();
+      }
+    };
+    textarea.value = "$queued";
   });
 });

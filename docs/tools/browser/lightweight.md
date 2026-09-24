@@ -17,6 +17,88 @@ and applications that require unsupported browser features.
 The examples pin Lightpanda **0.4.1**. They do not change your existing browser
 profile, install a service, or migrate a logged-in Chrome profile.
 
+## Browser plugin architecture
+
+The bundled Browser plugin owns both engine adapters. Chromium and Lightpanda
+use the same `browser` tool, profile selection, route admission, navigation
+policy, and session lifecycle. The registered adapter selects capabilities,
+CDP normalization, snapshot defaults, and connection lifetime; it does not add
+a second browser tool or process manager.
+
+Browser status reports `availableEngines` and the selected engine's
+`sessionScope` and `screenshotFidelity`. Chromium keeps its managed,
+existing-session, extension-relay, and remote-CDP profiles. Lightpanda remains
+an explicitly selected, attach-only external engine with one page per
+connection and no automatic read replay after session loss.
+
+These are adapters inside the existing plugin, not separately installable
+third-party plugins. Enabling the adapter does not download, launch, or bundle
+the Lightpanda engine. Existing profiles and engine configuration are unchanged.
+
+## Licensing and distribution
+
+OpenClaw's adapter remains MIT-licensed. The optional Lightpanda engine is
+**AGPL-3.0-or-later**, not MIT: see its
+[pinned source notice](https://github.com/lightpanda-io/browser/blob/614c1640af8065b1972559abef7ca4cea06f8ba3/src/main.zig#L1)
+and [license](https://github.com/lightpanda-io/browser/blob/614c1640af8065b1972559abef7ca4cea06f8ba3/LICENSE).
+The existing Playwright client is Apache-2.0; the existing `ws` client is MIT.
+Their licenses and third-party notices still apply.
+
+These examples connect over CDP to an independently installed, unmodified engine.
+They do not bundle or relicense Lightpanda in OpenClaw's package or image.
+The engine and its container dependencies are not an MIT-only distribution.
+If your deployment excludes copyleft software, do not select this engine.
+
+Mirroring or bundling the engine requires a separate redistribution review,
+including license notices, Corresponding Source, and third-party obligations.
+Modifying a network-served engine also requires reviewing AGPL section 13.
+A separate process is not a blanket legal exemption, and checksum verification
+does not establish license compliance. See the
+[artifact and dependency review](https://github.com/openclaw/openclaw/blob/main/deploy/lightpanda/README.md)
+for the verified pins and remaining limits.
+
+## Alternatives reviewed
+
+The following is a licensing comparison as of **2026-09-21**, not a claim that
+these alternatives have passed OpenClaw integration or cross-platform tests.
+An MIT-compatible application and an entirely permissive engine distribution
+are different requirements.
+
+| Option                  | Engine and licensing boundary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Chromium headless shell | An established CDP engine, not an all-permissive binary. The inspected 153.0.8010.12 distribution's `LICENSE.headless_shell` includes LGPL and MPL notices; its pinned sources identify [FFmpeg's LGPL terms](https://chromium.googlesource.com/chromium/third_party/ffmpeg/+/53fa34a23be9054d25ac2500dbdae9a0e570bb5c/README.chromium) and [mixed-license hyphenation data](https://chromium.googlesource.com/chromium/src/+/971a7443b0c9b0a9b2860529b33331b76077ec62/third_party/hyphenation-patterns/README.chromium). |
+| Cloudflare Kitesurf     | A [hosted, stateless Browser Run engine](https://developers.cloudflare.com/browser-run/kitesurf/), not a downloadable replacement in this review. Cloudflare's [announcement](https://blog.cloudflare.com/kitesurf/#final-notes) describes open-sourcing as future work; a self-hosted engine release and its license were not available for this audit. Service terms are separate from client-library licenses.                                                                                                         |
+| Obscura 0.2.3           | A standalone Rust engine with embedded Deno/V8 and an [Apache-2.0 root license](https://github.com/h4ckf0r0day/obscura/blob/1a3169da276d7720732c7b20535474942917fb83/LICENSE). It is the strongest standalone lightweight candidate reviewed for avoiding an AGPL engine, but has MPL dependencies and unresolved redistribution-notice work. It is not an all-permissive replacement.                                                                                                                                    |
+
+Automation clients do not replace the engine. For example,
+[Vercel's agent-browser](https://github.com/vercel-labs/agent-browser/blob/44583ac8385d814ab98cbf40feec97620376b50e/README.md)
+offers Chrome and Lightpanda backends; its own Apache-2.0 license does not change
+the selected engine's license. The same distinction applies to Playwright and
+Puppeteer clients.
+
+### Obscura audit boundary
+
+[Release v0.2.3](https://github.com/h4ckf0r0day/obscura/releases/tag/v0.2.3)
+was reviewed at commit `1a3169da276d7720732c7b20535474942917fb83`.
+Its [lockfile](https://github.com/h4ckf0r0day/obscura/blob/1a3169da276d7720732c7b20535474942917fb83/Cargo.lock)
+contains 471 registry packages. Their license declarations include no AGPL,
+but five are MPL-2.0-only: `cooked-waker` 5.0.0, `cssparser` 0.34.0,
+`cssparser-macros` 0.6.1, `dtoa-short` 0.3.5, and `selectors` 0.26.0.
+These dependencies remain in the no-render engine's DOM/JavaScript paths.
+[MPL's file-level obligations](https://www.mozilla.org/en-US/MPL/2.0/FAQ/)
+do not require unrelated MIT adapter files to become MPL; they still apply to
+the covered code and its distribution.
+
+The downloaded Linux x86-64 no-render archive matched release SHA-256
+`b5e55e8f2c97814127a521cd59af1a84b79dc40cf658fda04df04af81a2d89f3`.
+It contained only `obscura` and `obscura-worker`, without license or notice files.
+The pinned [release workflow](https://github.com/h4ckf0r0day/obscura/blob/1a3169da276d7720732c7b20535474942917fb83/.github/workflows/release.yml)
+packages only those executables and does not use Cargo's `--locked` flag.
+Consequently, source-lock metadata is not proof of the complete dependency set
+inside each release binary. Full V8/third-party and platform-library review,
+notices, source availability, and runtime compatibility remain to be verified
+before bundling or recommending an integrated deployment.
+
 ## Choose where the engine runs
 
 | OpenClaw location       | Lightpanda location                              | Profile CDP URL        |
@@ -168,6 +250,42 @@ Engine startup, CDP connectivity, task completion, and full OpenClaw integration
 are separate checks. A running container or a successful `Browser.getVersion`
 does not prove that snapshots, references, and actions work through OpenClaw.
 
+### Chromium headless shell baseline
+
+For an alternative without Lightpanda's AGPL engine, first test Chromium's
+headless shell through the existing Chromium profile. It retains Chromium's
+third-party license obligations; this is not an MIT-only binary. It does not
+require another automation daemon or an OpenClaw engine adapter.
+
+Use the repository-pinned Playwright installer rather than an unpinned wrapper:
+
+```sh
+node node_modules/playwright-core/cli.js install chromium-headless-shell
+node node_modules/playwright-core/cli.js install --dry-run chromium-headless-shell
+```
+
+The second command prints the selected version, platform download, and install
+directory. Locate `chrome-headless-shell` (or `chrome-headless-shell.exe` on
+Windows) in that directory. Linux also needs the browser's system libraries and
+fonts; see [Linux troubleshooting](/tools/browser-linux-troubleshooting).
+Run from the repository root, quoting paths that contain spaces:
+
+```sh
+node --import ./scripts/tsx.mjs extensions/browser/scripts/bench-lightweight.ts --headless-shell "/path/to/chrome-headless-shell" --iterations 10 --output headless-shell-benchmark.json
+```
+
+The report labels the requested distribution separately from its Chromium
+protocol engine and the observed browser version. `--headless-shell` selects
+the benchmark executable only: it does not install a production browser,
+change a profile, or establish binary provenance. Preserve its complete
+distribution and `LICENSE.headless_shell` when reviewing deployment. The installer
+also downloads platform helper assets, including FFmpeg; review and retain their
+own notices separately. Use
+separate invocations for the full Chromium and headless-shell comparisons;
+memory or startup savings must be measured, not inferred from download size.
+
+### Native engine comparison
+
 Run the opt-in synthetic route benchmark from the repository root after
 installing development dependencies:
 
@@ -175,7 +293,7 @@ installing development dependencies:
 node --import ./scripts/tsx.mjs extensions/browser/scripts/bench-lightweight.ts --lightpanda /path/to/lightpanda --chromium /path/to/chrome --iterations 10 --output lightweight-benchmark.json
 ```
 
-Either binary flag can be used alone. The script creates isolated OpenClaw
+Any binary flag can be used alone. The script creates isolated OpenClaw
 state and browser data, serves a local form, then verifies navigation, the default
 efficient AI snapshot, reference-based typing/clicking, exactly one form
 submission, waiting, and text extraction through the browser route dispatcher.

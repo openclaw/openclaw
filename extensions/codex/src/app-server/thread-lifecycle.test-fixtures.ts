@@ -416,6 +416,15 @@ export function createAppServerOptions(): CodexAppServerRuntimeOptions {
   } as unknown as CodexAppServerRuntimeOptions;
 }
 
+export function createThreadRequestAppServerOptions(): CodexAppServerRuntimeOptions {
+  return {
+    start: createAppServerOptions().start,
+    approvalPolicy: "on-request",
+    approvalsReviewer: "user",
+    sandbox: "workspace-write",
+  } as unknown as CodexAppServerRuntimeOptions;
+}
+
 export function createParams(
   sessionFile: string,
   workspaceDir: string,

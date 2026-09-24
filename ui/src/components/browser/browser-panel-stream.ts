@@ -29,7 +29,7 @@ interface BrowserPanelStreamHost extends StreamState {
   readonly mode: "interact" | "annotate" | "inspect";
   readonly operations: Pick<
     BrowserPanelOperationOwnership,
-    "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "markNavigationReconciled"
+    "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "forgetNavigation"
   >;
   readonly urlDraftEditing: boolean;
   readonly observedViewportSize: { width: number; height: number } | null;
@@ -340,7 +340,7 @@ export class BrowserPanelStream {
             ? { browserTab: { ...this.host.operations.route, targetId: attempt.targetId } }
             : {}),
         });
-        this.host.operations.markNavigationReconciled(attempt.client, attempt.targetId);
+        this.host.operations.forgetNavigation(attempt.client, attempt.targetId);
         if (!this.host.urlDraftEditing) {
           this.host.setState("urlDraft", frame.url);
         }
