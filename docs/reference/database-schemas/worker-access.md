@@ -365,8 +365,13 @@ Discord thread-binding startup and bundled mutations use the existing plugin-sta
 worker. Inbound and outbound activity, binding changes, lifecycle settings, thread
 deletion, and expiry await their mutations. The existing registry serializes writes,
 checks the live manager and registry revision at worker admission, and joins accepted
-binds and writes before shutdown retires the manager. A later synchronous SDK update
-rebases on committed rows; delayed acknowledgements preserve that newer projection.
+binds and writes before shutdown retires the manager. Manager and session-wide
+mutations share account ordering, but Discord network preparation stays outside the
+shared persistence queue. Session-wide operations reserve their selected accounts
+before waiting, so later unbinds include an earlier admitted bind. Activity-write
+failures are reported without suppressing inbound dispatch whose original abort
+and policy authority remains current. A later synchronous SDK update rebases on
+committed rows; delayed acknowledgements preserve that newer projection.
 If the native read fails before observing a pending target, compatibility calls leave
 its projection unchanged for the worker result. Accepted metadata uses the existing
 JSON codec to capture nested values before queue waits. An interrupted full-map

@@ -13,7 +13,11 @@ import {
   setBindingRecord,
   type ThreadBindingPersistence,
 } from "./thread-bindings.state.js";
-import type { PersistedThreadBindingRecord, ThreadBindingRecord } from "./thread-bindings.types.js";
+import type {
+  PersistedThreadBindingRecord,
+  ThreadBindingManager,
+  ThreadBindingRecord,
+} from "./thread-bindings.types.js";
 
 export function shouldPersistAnyBindingState(): boolean {
   for (const value of PERSIST_BY_ACCOUNT_ID.values()) {
@@ -40,6 +44,39 @@ function toPersistedBindingRecord(record: ThreadBindingRecord): PersistedThreadB
   return (
     normalizePersistedBinding(record.threadId, snapshotThreadBindingJson(record)) ?? { ...record }
   );
+}
+
+export function runThreadBindingAccountOperation<T>(
+  managers: readonly ThreadBindingManager[],
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (managers.length === 0) {
+    return operation();
+  }
+  const tails = THREAD_BINDINGS_STATE.accountOperationTails;
+  const predecessors = managers.map((manager) => tails.get(manager) ?? Promise.resolve());
+  const result = Promise.all(predecessors).then(operation);
+  const settled = result.then(
+    () => {},
+    () => {},
+  );
+  // Reserve every account before yielding; shared persistence is acquired only afterward.
+  for (const manager of managers) {
+    tails.set(manager, settled);
+  }
+  // Idle accounts must not retain the completed caller's async context.
+  void settled.then(() => {
+    for (const manager of managers) {
+      if (tails.get(manager) === settled) {
+        tails.delete(manager);
+      }
+    }
+  });
+  return result;
+}
+
+export function drainThreadBindingAccountOperations(manager: ThreadBindingManager): Promise<void> {
+  return THREAD_BINDINGS_STATE.accountOperationTails.get(manager) ?? Promise.resolve();
 }
 
 export function runThreadBindingMutation<T>(operation: () => Promise<T>): Promise<T> {

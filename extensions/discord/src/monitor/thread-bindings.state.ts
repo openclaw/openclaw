@@ -38,6 +38,7 @@ type ThreadBindingsGlobalState = {
   lastPersistedAtMs: number;
   revision: number;
   mutationTail: Promise<void>;
+  accountOperationTails: WeakMap<ThreadBindingManager, Promise<void>>;
   activePersistence?: ThreadBindingPersistence;
 };
 
@@ -64,6 +65,7 @@ function createThreadBindingsGlobalState(): ThreadBindingsGlobalState {
     lastPersistedAtMs: 0,
     revision: 0,
     mutationTail: Promise.resolve(),
+    accountOperationTails: new WeakMap(),
   };
 }
 
@@ -73,6 +75,8 @@ function resolveThreadBindingsGlobalState(): ThreadBindingsGlobalState {
     threadBindingsState =
       (globalStore[THREAD_BINDINGS_STATE_KEY] as ThreadBindingsGlobalState | undefined) ??
       createThreadBindingsGlobalState();
+    // Source-plugin reloads retain the previous generation's shared registry.
+    threadBindingsState.accountOperationTails ??= new WeakMap();
     globalStore[THREAD_BINDINGS_STATE_KEY] = threadBindingsState;
   }
   return threadBindingsState;

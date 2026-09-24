@@ -18,6 +18,7 @@ import { getDiscordRuntime } from "../runtime.js";
 import * as discordSend from "../send.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+import { unbindThreadBindingsBySessionKeyAsync } from "./thread-bindings.lifecycle.js";
 import { createThreadBindingManager } from "./thread-bindings.manager.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 
@@ -135,8 +136,24 @@ describe("thread binding current authority", () => {
     },
   );
 
-  it("drains an admitted native create before retiring its manager", async () => {
+  it("drains its own native create without blocking another account's mutations or shutdown", async () => {
     const manager = await createTestThreadBindingManager();
+    const independent = await createThreadBindingManager({
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
+      accountId: "independent",
+      persist: false,
+      enableSweeper: false,
+    });
+    const independentThreadId = "444444444444444444";
+    await independent.bindTarget({
+      threadId: independentThreadId,
+      channelId: PARENT_ID,
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:independent",
+      agentId: "main",
+      webhookId: "synthetic-independent-webhook",
+      webhookToken: "synthetic-independent-token",
+    });
     const entered = createDeferred<void>();
     const created = createDeferred<void>();
     fixture.restPost.mockImplementationOnce(async () => {
@@ -152,19 +169,57 @@ describe("thread binding current authority", () => {
       agentId: "main",
     });
     await entered.promise;
+    let unbindingCompleted = false;
+    const unbinding = unbindThreadBindingsBySessionKeyAsync({
+      accountId: "default",
+      targetSessionKey: "agent:main:subagent:drained",
+      sendFarewell: false,
+    }).then((removed) => {
+      unbindingCompleted = true;
+      return removed;
+    });
     let stopped = false;
     const stopping = manager.stop().then(() => {
       stopped = true;
     });
+    const touchAt = Date.now() + 1000;
+    let touchCompleted = false;
+    let touchFailure: unknown;
+    const touching = independent
+      .touchThread({ threadId: independentThreadId, at: touchAt, persist: false })
+      .then(
+        () => {
+          touchCompleted = true;
+        },
+        (error: unknown) => {
+          touchFailure = error;
+        },
+      );
+    let independentStopped = false;
+    const independentStopping = independent.stop().then(() => {
+      independentStopped = true;
+    });
     try {
-      await Promise.resolve();
+      // The unrelated mutation is memory-only; a full turn drains its promise work.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(stopped).toBe(false);
+      expect(unbindingCompleted).toBe(false);
+      expect(touchFailure).toBeUndefined();
+      expect(touchCompleted).toBe(true);
+      expect(independentStopped).toBe(true);
+      expect(independent.getByThreadId(independentThreadId)?.lastActivityAt).toBe(touchAt);
       expect(manager.getByThreadId(THREAD_ID)).toBeUndefined();
     } finally {
       created.resolve();
-      await Promise.all([binding, stopping]);
+      await Promise.allSettled([binding, unbinding, stopping, touching, independentStopping]);
     }
-    expect(manager.getByThreadId(THREAD_ID)?.targetSessionKey).toBe("agent:main:subagent:drained");
+    await expect(binding).resolves.toMatchObject({
+      targetSessionKey: "agent:main:subagent:drained",
+    });
+    await expect(unbinding).resolves.toHaveLength(1);
+    expect(manager.getByThreadId(THREAD_ID)).toBeUndefined();
     expect(fixture.restPost).toHaveBeenCalledOnce();
   });
 

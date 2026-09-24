@@ -34,6 +34,8 @@ import {
   commitBindingRecord,
   updateBindingRecordSync,
   runThreadBindingMutation,
+  runThreadBindingAccountOperation,
+  drainThreadBindingAccountOperations,
   drainThreadBindingMutations,
   shouldPersistAnyBindingState,
   snapshotThreadBindingJson,
@@ -129,15 +131,22 @@ function createLoadedThreadBindingManager(
       throw new Error("Discord thread binding manager was retired");
     }
   };
-  const mutate = <T>(operation: () => Promise<T>): Promise<T> => {
+  const runOwnedMutation = <T>(operation: () => Promise<T>): Promise<T> => {
     if (stopping) {
       return Promise.reject(new Error("Discord thread binding manager is stopping"));
     }
-    return runThreadBindingMutation(async () => {
+    return runThreadBindingAccountOperation([manager], async () => {
       assertManagerCurrent();
       return await operation();
     });
   };
+  const mutate = <T>(operation: () => Promise<T>): Promise<T> =>
+    runOwnedMutation(() =>
+      runThreadBindingMutation(async () => {
+        assertManagerCurrent();
+        return await operation();
+      }),
+    );
 
   let sweepTimer: NodeJS.Timeout | null = null;
   const runSweepOnce = async () => {
@@ -389,7 +398,7 @@ function createLoadedThreadBindingManager(
           snapshotThreadBindingJson(input.metadata ? { ...input.metadata } : undefined),
         ),
       };
-      return mutate(async () => {
+      return runOwnedMutation(async () => {
         const assertCurrent = bindParams.assertCurrent;
         assertCurrent?.();
         const cfg = resolveCurrentCfg();
@@ -513,18 +522,20 @@ function createLoadedThreadBindingManager(
         if (!nativeBindingCreated) {
           assertCurrent?.();
         }
-        await commitBindingRecord({
-          bindingKey: toBindingRecordKey({ accountId, threadId }),
-          previous: existingValue,
-          next: record,
-          persist,
-          assertCurrent: () => {
-            assertManagerCurrent();
-            if (!nativeBindingCreated) {
-              assertCurrent?.();
-            }
-          },
-        });
+        await runThreadBindingMutation(() =>
+          commitBindingRecord({
+            bindingKey: toBindingRecordKey({ accountId, threadId }),
+            previous: existingValue,
+            next: record,
+            persist,
+            assertCurrent: () => {
+              assertManagerCurrent();
+              if (!nativeBindingCreated) {
+                assertCurrent?.();
+              }
+            },
+          }),
+        );
 
         const introText = bindParams.introText?.trim();
         if (introText && cfg) {
@@ -593,6 +604,7 @@ function createLoadedThreadBindingManager(
       }
       stopPromise = (async () => {
         await sweepPromise;
+        await drainThreadBindingAccountOperations(manager);
         await drainThreadBindingMutations();
         if (MANAGERS_BY_ACCOUNT_ID.get(accountId) === manager) {
           MANAGERS_BY_ACCOUNT_ID.delete(accountId);
