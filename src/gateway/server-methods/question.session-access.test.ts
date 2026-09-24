@@ -7,7 +7,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
-import { historyPages } from "../../config/sessions/session-transcript-worker-resources.js";
+import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { releaseAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -604,9 +604,13 @@ it.each(["generation", "session", "creator restamp", "profile", "source", "reuse
             value: [true, { status: "answered", answers }, undefined],
           });
         } else {
+          const error =
+            change === "profile"
+              ? { code: "FORBIDDEN", message: "Gateway requester authority changed" }
+              : { details: { reason: "QUESTION_NOT_FOUND" } };
           expect(outcome).toMatchObject({
             status: "fulfilled",
-            value: [false, undefined, { details: { reason: "QUESTION_NOT_FOUND" } }],
+            value: [false, undefined, error],
           });
         }
         expect(manager.get(id)?.status).toBe(change === "reused id" ? "pending" : "answered");
@@ -628,10 +632,7 @@ it("prepares question session data in the worker across RPCs and real narrow, br
       { ...f.owner, connect: { ...f.owner.connect, scopes: ["operator.questions"] } },
       "sql-broad",
     );
-    const admin = questionPeer(
-      { ...f.owner, connect: { ...f.owner.connect, scopes: ["operator.admin"] } },
-      "sql-admin",
-    );
+    const admin = questionPeer(adminRequestClient, "sql-admin");
     const revoked = questionPeer({ ...f.viewer, invalidated: true }, "sql-revoked");
     const fallback = vi.fn((client, sessionKeys, agentId, event, payload) =>
       canReceiveSessionEvent({ cfg: f.cfg, client, sessionKeys, agentId, event, payload }),
@@ -699,9 +700,9 @@ it.each([
       owner.send.mockClear();
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const run = historyPages.run.bind(historyPages);
+      const run = historyLane.pool.run.bind(historyLane.pool);
       let held = false;
-      const spy = vi.spyOn(historyPages, "run").mockImplementation(async (input, options) => {
+      const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (input, options) => {
         let exact = false;
         const result = await run(async () => {
           const request = typeof input === "function" ? await input() : input;
@@ -829,8 +830,8 @@ it.each(["request authority", "observer scope"] as const)(
       expect((await f.request())[0]).toBe(true);
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const run = historyPages.run.bind(historyPages);
-      const spy = vi.spyOn(historyPages, "run").mockImplementation(async (...args) => {
+      const run = historyLane.pool.run.bind(historyLane.pool);
+      const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
         const result = await run(...args);
         entered.resolve();
         await release.promise;
@@ -889,7 +890,7 @@ it.each(["admin", "system", "narrow"] as const)(
           canReceiveSessionEvent: fallback,
         }).broadcast,
       );
-      const spy = vi.spyOn(historyPages, "run").mockRejectedValue(failure);
+      const spy = vi.spyOn(historyLane.pool, "run").mockRejectedValue(failure);
       try {
         const client =
           kind === "narrow"
@@ -984,8 +985,8 @@ it.each(["admin", "broad"] as const)(
       const f = await fixture(state);
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const run = historyPages.run.bind(historyPages);
-      const spy = vi.spyOn(historyPages, "run").mockImplementation(async (...args) => {
+      const run = historyLane.pool.run.bind(historyLane.pool);
+      const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
         const result = await run(...args);
         entered.resolve();
         await release.promise;

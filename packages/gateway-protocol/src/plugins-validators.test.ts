@@ -65,6 +65,7 @@ describe("plugin lifecycle protocol validators", () => {
     const runtime = { operationId: "reload", generation: 2, pluginIds: ["alpha", "beta"] };
     const batch = { ok: true, pluginIds: ["alpha", "beta"], restartRequired: false, runtime };
     expect(Value.Check(PluginsReloadResultSchema, batch)).toBe(true);
+    expect(Value.Check(PluginsReloadResultSchema, { ...batch, restartRequired: true })).toBe(true);
     expect(
       Value.Check(PluginsReloadResultSchema, {
         ...batch,
@@ -81,7 +82,7 @@ describe("plugin lifecycle protocol validators", () => {
     const { runtime: _runtime, ...withoutReceipt } = batch;
     for (const result of [
       withoutReceipt,
-      { ...batch, restartRequired: true },
+      { ...batch, restartRequired: "true" },
       { ...batch, pluginIds: [] },
       { ...batch, warnings: "cleanup failed" },
     ]) {
@@ -401,6 +402,7 @@ describe("plugin lifecycle protocol validators", () => {
       generation: 2,
       pluginIds: ["notes"],
       sourceDigests: { notes: "sha256-fixture" },
+      selectedEntries: { notes: "/plugins/notes/dist/index.js" },
     };
     expect(Value.Check(PluginRuntimeApplicationSchema, receipt)).toBe(true);
     expect(Value.Check(PluginsChangedEventSchema, { generation: 2 })).toBe(true);

@@ -9,6 +9,7 @@ import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plug
 import { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
 import { isPlainObject } from "../utils.js";
 import { canHotReloadGatewayAuthCredentials } from "./auth-resolve.js";
+import { haveSameOperatorRoleSourcePolicies } from "./operator-role-source-policy.js";
 
 export type ChannelKind = ChannelId;
 
@@ -84,6 +85,9 @@ type GatewayReloadPlanOptions = {
   /** Candidate config used to reject removed, unknown, or unresolvable account targets. */
   candidateConfig?: OpenClawConfig;
   previousConfig?: OpenClawConfig;
+  /** Authored comparison snapshots retain intent that runtime overlays may hide. */
+  previousCompareConfig?: OpenClawConfig;
+  candidateCompareConfig?: OpenClawConfig;
 };
 
 const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
@@ -155,6 +159,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.controlUi.enabled",
       "gateway.controlUi.environment",
       "gateway.controlUi.communityInvite",
+      "gateway.controlUi.newSessionModelDefaults",
       "gateway.controlUi.github",
       "gateway.controlUi.sessionObserver",
       "gateway.controlUi.embedSandbox",
@@ -482,6 +487,9 @@ function isInspectableChannelAccount(params: {
     if (!params.plugin.config.listAccountIds(params.config).includes(params.accountId)) {
       return false;
     }
+    if (!params.plugin.config.inspectAccount && params.plugin.config.resolveAccountAsync) {
+      return false;
+    }
     const inspectAccount =
       params.plugin.config.inspectAccount ?? params.plugin.config.resolveAccount;
     inspectAccount(params.config, params.accountId);
@@ -497,6 +505,16 @@ export function buildGatewayReloadPlan(
 ): GatewayReloadPlan {
   const noopPaths = new Set(options.noopPaths);
   const forceChangedPaths = new Set(options.forceChangedPaths);
+  const roleModelPolicyOnly =
+    haveSameOperatorRoleSourcePolicies(
+      options.previousConfig?.gateway?.roles,
+      options.candidateConfig?.gateway?.roles,
+    ) &&
+    ((!options.previousCompareConfig && !options.candidateCompareConfig) ||
+      haveSameOperatorRoleSourcePolicies(
+        options.previousCompareConfig?.gateway?.roles,
+        options.candidateCompareConfig?.gateway?.roles,
+      ));
   const restartChannelAccounts = new Map<ChannelKind, Set<string>>();
   const plan: GatewayReloadPlan = {
     changedPaths,
@@ -518,6 +536,15 @@ export function buildGatewayReloadPlan(
   };
 
   for (const path of changedPaths) {
+    if (
+      roleModelPolicyOnly &&
+      matchesReloadPrefix(path, "gateway.roles") &&
+      !forceChangedPaths.has(path)
+    ) {
+      // The committed snapshot notifies model bindings without replacing permitted runtimes.
+      plan.noopPaths.push(path);
+      continue;
+    }
     const isTimestampNoop =
       !forceChangedPaths.has(path) &&
       (noopPaths.size > 0 ? noopPaths.has(path) : isPluginInstallTimestampPath(path));

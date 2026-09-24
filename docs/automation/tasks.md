@@ -414,7 +414,7 @@ After refreshing an invalidated registry projection, agent events with no matchi
 
 WAL growth stays bounded through SQLite's default autocheckpoint threshold plus periodic `PASSIVE` checkpoints. After a checkpoint completes, the next commit resets the WAL and applies a 64 MiB `journal_size_limit` ceiling, so a reader cannot leave the file parked at a pathological high-water mark until restart. Shutdown and explicit maintenance checkpoints use `TRUNCATE` so normal closes reclaim WAL space without making the background sweeper wait on active readers.
 
-The shared database replaced the `tasks/runs.sqlite` and `flows/registry.sqlite` sidecar stores in `v2026.5.30-beta.1`, stable from `v2026.6.1`. If either sidecar is still present under the state root, `openclaw doctor` imports its rows into the shared database. Installs from `v2026.6.1` onward never create these files.
+The shared database replaced the `tasks/runs.sqlite` and `flows/registry.sqlite` sidecar stores in `v2026.5.30-beta.1`, stable from `v2026.6.1`. Current versions no longer import or archive these pre-June files. To preserve their records when upgrading an older installation, back up the state root and [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions), running its `openclaw doctor --fix` before installing `latest`. Installs from `v2026.6.1` onward use the shared database.
 
 ### Automatic maintenance
 

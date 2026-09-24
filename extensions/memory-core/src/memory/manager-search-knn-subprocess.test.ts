@@ -11,8 +11,13 @@ import {
   SQLITE_IDLE_HANDLE_TTL_MS,
 } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import { vectorKnnParentEntrypoint } from "./manager-search-knn-runtime.test-support.js";
 import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
 import type { VectorKnnRequest } from "./manager-search-knn.js";
 import { searchVector } from "./manager-search-vector.js";
@@ -350,11 +355,7 @@ describe("memory vector KNN subprocess boundary", () => {
         const result = await promisify(childProcess.execFile)(
           process.execPath,
           [
-            "--import",
-            import.meta.resolve("tsx"),
-            fileURLToPath(
-              new URL("./fixtures/manager-search-knn-parent.fixture.mjs", import.meta.url),
-            ),
+            ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(vectorKnnParentEntrypoint)),
             JSON.stringify({
               expireIdle,
               databasePaths: fixtures.map((fixture) => fixture.databasePath),
@@ -476,13 +477,22 @@ describe("memory vector KNN subprocess boundary", () => {
   it("queries the real source child across WAL writer visibility and source filters", async () => {
     // The read-only native query must not boot schema/query-builder runtimes
     // through broad SDK barrels on every search (including packaged children).
-    const importGuard = `import { registerHooks } from "node:module";
-      registerHooks({ resolve(specifier, context, nextResolve) {
-        if (/^(?:kysely|typebox)(?:\\/|$)/u.test(specifier)) {
-          throw new Error("KNN child loaded unrelated runtime: " + specifier);
-        }
-        return nextResolve(specifier, context);
-      } });`;
+    const importGuard = process.versions.bun
+      ? `Bun.plugin({
+          name: "openclaw-memory-knn-import-guard",
+          setup(build) {
+            build.onResolve({ filter: /^(?:kysely|typebox)(?:\\/|$)/u }, ({ path: specifier }) => {
+              throw new Error("KNN child loaded unrelated runtime: " + specifier);
+            });
+          },
+        });`
+      : `import { registerHooks } from "node:module";
+        registerHooks({ resolve(specifier, context, nextResolve) {
+          if (/^(?:kysely|typebox)(?:\\/|$)/u.test(specifier)) {
+            throw new Error("KNN child loaded unrelated runtime: " + specifier);
+          }
+          return nextResolve(specifier, context);
+        } });`;
     vi.mocked(childProcess.spawn).mockImplementation((command, args, options) =>
       spawn(
         command,

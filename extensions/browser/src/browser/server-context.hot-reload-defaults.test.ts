@@ -1,7 +1,7 @@
 import "./server-context.chrome-test-harness.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { isChromeReachable, launchOpenClawChrome, stopOpenClawChrome } from "./chrome.js";
 import { resolveBrowserConfig } from "./config.js";
 import { createBrowserRouteContext, type BrowserServerState } from "./server-context.js";

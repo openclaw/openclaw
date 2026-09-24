@@ -1,4 +1,5 @@
 import type { Context, Model } from "@openclaw/llm-core";
+import { resolveOpenAIThinkingApi } from "@openclaw/model-catalog-core/model-catalog-types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ResponseFormatTextConfig,
@@ -7,6 +8,7 @@ import type {
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
 import {
+  isOpenAIGpt6Model,
   supportsOpenAITemperature,
   type OpenAIApiReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
@@ -262,8 +264,11 @@ export function buildOpenAIResponsesParams(
   if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options.temperature;
   }
-  // Astra rejects top_p independently of the temperature compatibility setting.
-  if (options?.topP !== undefined && model.id !== "gpt-6-astra") {
+  // Native GPT-6 rejects top_p; Azure deployments retain their configured sampling.
+  if (
+    options?.topP !== undefined &&
+    (!isOpenAIGpt6Model(model) || resolveOpenAIThinkingApi(model.api) === "azure-openai-responses")
+  ) {
     params.top_p = options.topP;
   }
   if (options?.responseFormat !== undefined) {

@@ -19,13 +19,14 @@ import {
 } from "../infra/sqlite-file-generation.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { VERSION } from "../version.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   OpenClawQuarantineReadCleanupError,
   type OpenClawDatabaseKind,
   type OpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-error.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "./openclaw-state-db-contract.js";
-import { resolveOpenClawStateSqliteDir } from "./openclaw-state-db.paths.js";
+import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 const OPENCLAW_QUARANTINE_SCHEMA_VERSION = 2;
 const OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS = 5_000;
@@ -117,12 +118,11 @@ export function canReuseOpenClawAgentIntegrityVerification(
   pathname: string,
   record: OpenClawAgentIntegrityVerification | undefined,
   migrationPending: boolean,
-  reuseRuntimeIntegrity = false,
 ): boolean {
   if (
     migrationPending ||
     !record ||
-    (!reuseRuntimeIntegrity && record.clean_close !== 1) ||
+    record.clean_close !== 1 ||
     record.app_version !== VERSION ||
     record.path !== resolveAgentIntegrityPath(pathname)
   ) {
@@ -179,15 +179,23 @@ export function recordOpenClawAgentIntegrityVerification(
 export function clearOpenClawAgentIntegrityVerification(
   pathname: string,
   env: NodeJS.ProcessEnv = process.env,
+  runtimeProof: "revoke" | "retain" = "revoke",
 ): void {
+  if (runtimeProof === "revoke") {
+    invalidateOpenClawAgentDatabaseValidation(pathname);
+  }
   withQuarantineWriter(env, (database) =>
     runSqliteImmediateTransactionSync(database, () =>
-      deleteAgentIntegrityVerification(database, pathname),
+      deleteAgentIntegrityVerification(database, pathname, runtimeProof),
     ),
   );
 }
 
-function deleteAgentIntegrityVerification(database: DatabaseSync, pathname: string): void {
+function deleteAgentIntegrityVerification(
+  database: DatabaseSync,
+  pathname: string,
+  runtimeProof: "revoke" | "retain" = "revoke",
+): void {
   const query = getNodeSqliteKysely<IntegrityDatabase>(database);
   const stored = executeSqliteQueryTakeFirstSync(
     database,
@@ -197,6 +205,13 @@ function deleteAgentIntegrityVerification(database: DatabaseSync, pathname: stri
       .where("path", "=", resolveAgentIntegrityPath(pathname)),
   );
   const current = statSync(pathname, { bigint: true, throwIfNoEntry: false });
+  if (runtimeProof === "revoke") {
+    for (const file of [stored, current]) {
+      if (file) {
+        invalidateOpenClawAgentDatabaseValidation(pathname, `${file.dev}:${file.ino}`);
+      }
+    }
+  }
   executeSqliteQuerySync(
     database,
     query
@@ -252,10 +267,6 @@ function createOpenClawDatabaseVerificationError(
   );
   error.name = "SqliteIntegrityError";
   return error;
-}
-
-export function resolveQuarantineStorePath(env: NodeJS.ProcessEnv): string {
-  return path.join(resolveOpenClawStateSqliteDir(env), "openclaw-quarantine.sqlite");
 }
 
 function ensureQuarantineStoreDirectory(storePath: string): void {
@@ -373,30 +384,6 @@ function readOpenClawDatabaseQuarantine(
     throw outcome.error;
   }
   return outcome.value;
-}
-
-/** Reject a known state quarantine while retaining best-effort metadata admission. */
-export function assertOpenClawStateDatabaseNotQuarantined(
-  pathname: string,
-  env: NodeJS.ProcessEnv,
-  onNativeCleanupFailure?: (error: OpenClawQuarantineReadCleanupError) => void,
-): void {
-  let quarantineFailure: Error | undefined;
-  try {
-    quarantineFailure = readOpenClawDatabaseQuarantineFailure("state", pathname, { env });
-  } catch (error) {
-    if (!(error instanceof OpenClawQuarantineReadCleanupError)) {
-      throw error;
-    }
-    onNativeCleanupFailure?.(error);
-    return;
-  }
-  if (quarantineFailure?.cause instanceof OpenClawQuarantineReadCleanupError) {
-    onNativeCleanupFailure?.(quarantineFailure.cause);
-  }
-  if (quarantineFailure) {
-    throw quarantineFailure;
-  }
 }
 
 function readQuarantineDecision(

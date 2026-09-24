@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as snapshots from "../../infra/sqlite-readonly-location.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   beginGatewayRestartSignalAdmission,
@@ -16,6 +17,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
@@ -80,6 +82,47 @@ afterEach(async () => {
 });
 
 describe("update history RPCs", () => {
+  it("keeps private recovery receipts durable while status and history stay public", async () => {
+    const capture = {
+      manifestSha256: "a".repeat(64),
+      configWrites: [
+        {
+          path: path.join(home.home, "private.json"),
+          beforeHash: null,
+          contiguous: true,
+          afterHash: "b".repeat(64),
+        },
+      ],
+      status: "pending" as const,
+    };
+    const run = createUpdateRun({ trigger: "api", origin: { updateRecoveryCapture: capture } });
+    const publicRun = { ...run, origin: {} };
+    expect(readUpdateRunStatus()).toMatchObject({ activeRun: publicRun, lastRun: publicRun });
+    expect(JSON.stringify(readUpdateRunStatus())).not.toContain("updateRecoveryCapture");
+    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(true, {
+      sentinel: null,
+      activeRun: publicRun,
+      lastRun: publicRun,
+      updateAvailable: null,
+      effectiveChannel: "stable",
+    });
+    expect(await requestUpdateRead("update.runs.get", { runId: run.runId })).toHaveBeenCalledWith(
+      true,
+      { run: publicRun },
+    );
+    expect(await requestUpdateRead("update.runs.list")).toHaveBeenCalledWith(true, {
+      runs: [publicRun],
+    });
+    markGatewayRestartDraining();
+    expect(await requestUpdateRead("update.runs.get", { runId: run.runId })).toHaveBeenCalledWith(
+      true,
+      { run: publicRun },
+    );
+    expect(getUpdateRun(run.runId)?.origin.updateRecoveryCapture).toEqual(capture);
+    expect(run.origin.updateRecoveryCapture).toEqual(capture);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it.each(["accepting", "suspension"] as const)(
     "rechecks root ownership after a lazy restart read resets into %s",
     async (nextPhase) => {
@@ -317,20 +360,14 @@ describe("update history RPCs", () => {
       updateAvailable: null,
       effectiveChannel: "stable",
     });
-    const nativeCalls = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    const nativeCalls = observeMainThreadSql();
     expect(await requestUpdateRead("update.runs.list")).toHaveBeenCalledWith(true, {
       runs: [latest, completed],
     });
     expect(await requestUpdateRead("update.runs.list", { limit: 1 })).toHaveBeenCalledWith(true, {
       runs: [latest],
     });
-    expect(nativeCalls.reduce((total, call) => total + call.mock.calls.length, 0)).toBe(0);
+    nativeCalls.expectIdle();
   });
 
   it("rejects malformed identities, invalid limits, and unsupported query fields", async () => {

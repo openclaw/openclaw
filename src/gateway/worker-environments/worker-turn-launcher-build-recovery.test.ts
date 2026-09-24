@@ -40,6 +40,7 @@ import {
   type WorkerTurnLauncherOptions,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
 function createBuildRecoveryHarness(
   options: {
@@ -202,9 +203,9 @@ function createBuildRecoveryHarness(
       await reclaim({ kind: "local", path: root }, begin()),
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
     workspaceOperations,
-    resolveWorkspace: async () => ({ kind: "local", path: root }),
-    reportWorkspaceResultConflict: async () => {},
-    resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
+    ...createWorkerWorkspaceRecoveryFixture({
+      resolveWorkspace: async () => ({ kind: "local", path: root }),
+    }),
   });
   const redispatchReclaimed = vi.fn(async () => {
     replaced = true;
@@ -440,12 +441,16 @@ describe("worker turn launcher build recovery", () => {
     }
   });
 
-  it.each([false, true])(
-    "persists fallback input once after pre-handoff rejection (refreshInPlace=%s)",
-    async (refreshInPlace) => {
+  it.each(
+    [false, true].flatMap((refreshInPlace) =>
+      [false, true].map((withoutRecorder) => ({ refreshInPlace, withoutRecorder })),
+    ),
+  )(
+    "persists input once after pre-handoff rejection (refreshInPlace=$refreshInPlace, withoutRecorder=$withoutRecorder)",
+    async ({ refreshInPlace, withoutRecorder }) => {
       const harness = createBuildRecoveryHarness({
         rejection: "launch",
-        withoutRecorder: true,
+        withoutRecorder,
         refreshInPlace,
       });
       await harness.execute();

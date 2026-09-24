@@ -104,8 +104,9 @@ export function readWindowsProcessArgsSync(
   pid: number,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   env: NodeJS.ProcessEnv = process.env,
+  deadlineMs?: number,
 ): string[] | null {
-  const result = readWindowsProcessArgsResultSync(pid, timeoutMs, env);
+  const result = readWindowsProcessArgsResultSync(pid, timeoutMs, env, deadlineMs);
   return result.ok ? result.args : null;
 }
 
@@ -113,9 +114,22 @@ export function readWindowsProcessArgsResultSync(
   pid: number,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   env: NodeJS.ProcessEnv = process.env,
+  deadlineMs?: number,
 ): WindowsProcessArgsResult {
+  const remainingTimeoutMs = () =>
+    deadlineMs === undefined
+      ? timeoutMs
+      : Math.min(timeoutMs, Math.max(0, Math.ceil(deadlineMs - performance.now())));
+  if (remainingTimeoutMs() <= 0) {
+    return { ok: false, permanent: false };
+  }
+  const powershellPath = getWindowsPowerShellExePath(env, deadlineMs);
+  const powershellTimeoutMs = remainingTimeoutMs();
+  if (powershellTimeoutMs <= 0) {
+    return { ok: false, permanent: false };
+  }
   const powershell = spawnSync(
-    getWindowsPowerShellExePath(env),
+    powershellPath,
     [
       "-NoProfile",
       "-Command",
@@ -124,7 +138,7 @@ export function readWindowsProcessArgsResultSync(
     {
       env: resolveDiagnosticProcessEnv(env),
       encoding: "utf8",
-      timeout: timeoutMs,
+      timeout: powershellTimeoutMs,
       windowsHide: true,
     },
   );
@@ -138,12 +152,20 @@ export function readWindowsProcessArgsResultSync(
         : null,
     };
   }
+  if (remainingTimeoutMs() <= 0) {
+    return { ok: false, permanent: false };
+  }
+  const wmicPath = getWindowsWmicExePath(env, deadlineMs);
+  const wmicTimeoutMs = remainingTimeoutMs();
+  if (wmicTimeoutMs <= 0) {
+    return { ok: false, permanent: false };
+  }
   const wmic = spawnSync(
-    getWindowsWmicExePath(env),
+    wmicPath,
     ["process", "where", `ProcessId=${pid}`, "get", "CommandLine", "/value"],
     {
       env: resolveDiagnosticProcessEnv(env),
-      timeout: timeoutMs,
+      timeout: wmicTimeoutMs,
       windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"],
     },

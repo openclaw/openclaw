@@ -1,4 +1,6 @@
 // ACP manager task state helper resets task flow state for ACP tests.
+import { closeOpenClawStateDatabaseByPathAsync } from "../../src/state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
 import { findTaskByRunId } from "../../src/tasks/task-registry.js";
 import {
   configureTaskFlowRegistryRuntime,
@@ -33,8 +35,14 @@ export async function withAcpManagerTaskStateDir(
     try {
       await run(root);
     } finally {
-      resetAcpManagerTaskStateForTests();
-      envSnapshot.restore();
+      try {
+        await closeOpenClawStateDatabaseByPathAsync(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: root }),
+        );
+      } finally {
+        resetAcpManagerTaskStateForTests();
+        envSnapshot.restore();
+      }
     }
   });
 }

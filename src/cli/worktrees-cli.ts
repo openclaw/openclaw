@@ -161,6 +161,61 @@ export function registerWorktreesCli(program: Command): void {
     );
 
   worktrees
+    .command("retire-snapshot")
+    .description("Retire one removed snapshot whose source is retained elsewhere")
+    .argument("<id>", "Removed managed worktree id")
+    .requiredOption("--expected-ref <ref>", "Exact snapshot ref")
+    .requiredOption("--expected-oid <oid>", "Exact snapshot commit")
+    .requiredOption("--removed-at <milliseconds>", "Exact recorded removal time")
+    .requiredOption("--retained-ref <ref>", "Retained branch or remote-tracking source ref")
+    .requiredOption("--retained-oid <oid>", "Exact retained source commit")
+    .option("--json", "Output JSON", false)
+    .action(
+      async (
+        id: string,
+        opts: JsonOption & {
+          expectedRef: string;
+          expectedOid: string;
+          removedAt: string;
+          retainedRef: string;
+          retainedOid: string;
+        },
+      ) => {
+        const { retireManagedWorktreeSnapshotById } =
+          await import("../agents/worktrees/snapshot-host.js");
+        const result = await retireManagedWorktreeSnapshotById({
+          id,
+          expectedSnapshotRef: opts.expectedRef,
+          expectedSnapshotOid: opts.expectedOid,
+          expectedRemovedAt: Number(opts.removedAt),
+          retainedSourceRef: opts.retainedRef,
+          expectedRetainedSourceOid: opts.retainedOid,
+        });
+        if (opts.json) {
+          printJson(result);
+        } else {
+          defaultRuntime.log(`Retired snapshot ${id}.`);
+        }
+      },
+    );
+
+  worktrees
+    .command("recover-removal")
+    .description("Resume interrupted removal from its original clean snapshot")
+    .argument("<id>", "Managed worktree id")
+    .requiredOption("--snapshot <oid>", "Expected pending snapshot commit")
+    .option("--json", "Output JSON", false)
+    .action(async (id: string, opts: JsonOption & { snapshot: string }) => {
+      const { managedWorktrees } = await import("../agents/worktrees/service.js");
+      const result = await managedWorktrees.recoverRemoval({ id, snapshot: opts.snapshot });
+      if (opts.json) {
+        printJson(result);
+      } else {
+        defaultRuntime.log(`Completed removal of ${id}; original snapshot retained.`);
+      }
+    });
+
+  worktrees
     .command("restore")
     .description("Restore a managed worktree from its snapshot")
     .option(

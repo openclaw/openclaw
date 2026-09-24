@@ -15,6 +15,11 @@ import {
   selectPluginSdkApiReleaseEvidence,
   validatePluginSdkApiReleaseEvidence,
 } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { withTestTimeout } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -51,7 +56,12 @@ function commit(repo: string, message: string): string {
 function runCli(repo: string, runnerTemp: string, binDir: string, args: string[]) {
   return spawnSync(
     process.execPath,
-    ["--import", import.meta.resolve("tsx"), resolve("scripts/plugin-sdk-api-diff.mts"), ...args],
+    [
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl(scriptModuleEntrypoints.pluginSdkApiDiff),
+      ),
+      ...args,
+    ],
     {
       cwd: repo,
       encoding: "utf8",
@@ -197,9 +207,9 @@ describe("Plugin SDK API diff CLI", () => {
     const child = spawn(
       process.execPath,
       [
-        "--import",
-        import.meta.resolve("tsx"),
-        resolve("scripts/plugin-sdk-api-diff.mts"),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(scriptModuleEntrypoints.pluginSdkApiDiff),
+        ),
         "--base",
         baseSha,
         "--head",

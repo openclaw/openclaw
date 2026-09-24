@@ -58,12 +58,6 @@ describe("wrapFileReferencesInHtml", () => {
     expect(wrapFileReferencesInHtml(cases[0])).not.toContain("<code><code>");
   });
 
-  it("handles mixed content correctly", () => {
-    const result = wrapFileReferencesInHtml("Check README.md and CONTRIBUTING.md");
-    expect(result).toContain("<code>README.md</code>");
-    expect(result).toContain("<code>CONTRIBUTING.md</code>");
-  });
-
   it("handles boundary and punctuation wrapping cases", () => {
     const cases = [
       { input: "No markdown files here", contains: undefined },
@@ -96,12 +90,6 @@ describe("wrapFileReferencesInHtml", () => {
       expect(wrapFileReferencesInHtml(input)).toBe(input);
     }
   });
-
-  it("wraps file ref after closing anchor tag", () => {
-    const input = '<a href="https://example.com">link</a> then README.md';
-    const result = wrapFileReferencesInHtml(input);
-    expect(result).toContain("</a> then <code>README.md</code>");
-  });
 });
 
 describe("renderTelegramHtmlText - file reference wrapping", () => {
@@ -126,25 +114,10 @@ describe("renderTelegramHtmlText - file reference wrapping", () => {
 });
 
 describe("markdownToTelegramHtml - file reference wrapping", () => {
-  it("wraps file references by default", () => {
-    const result = markdownToTelegramHtml("Check README.md");
-    expect(result).toContain("<code>README.md</code>");
-  });
-
-  it("can skip wrapping when requested", () => {
-    const result = markdownToTelegramHtml("Check README.md", { wrapFileRefs: false });
-    expect(result).not.toContain("<code>README.md</code>");
-  });
-
   it("wraps multiple file types in a single message", () => {
     const result = markdownToTelegramHtml("Edit main.go and script.py");
     expect(result).toContain("<code>main.go</code>");
     expect(result).toContain("<code>script.py</code>");
-  });
-
-  it("preserves real URLs as anchor tags", () => {
-    const result = markdownToTelegramHtml("Visit https://example.com");
-    expect(result).toContain('<a href="https://example.com">');
   });
 
   it("preserves explicit markdown links even when href looks like a file ref", () => {

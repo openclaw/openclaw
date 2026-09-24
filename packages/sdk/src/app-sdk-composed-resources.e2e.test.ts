@@ -133,6 +133,10 @@ async function createFakeGateway(): Promise<FakeGateway> {
   let seq = 1;
   let worker = workerRecord("ready");
   const workerEnvironmentService = {
+    getDedicatedNodeLeaseSignal: () => undefined,
+    captureSessionAttachment: () => {
+      throw new Error("conversation attachments are outside the SDK environment RPC proof");
+    },
     getSessionAttachment: () => undefined,
     findSessionAttachment: () => undefined,
     getSessionAttachmentStatus: () => undefined,

@@ -229,14 +229,6 @@ async function readStreamingTrack(
   };
 }
 
-function resolveMinimaxMusicModel(model: string | undefined): string {
-  const trimmed = normalizeOptionalString(model);
-  if (!trimmed) {
-    return DEFAULT_MINIMAX_MUSIC_MODEL;
-  }
-  return trimmed;
-}
-
 function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider {
   return {
     id: providerId,
@@ -301,7 +293,7 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
       const jsonHeaders = new Headers(headers);
       jsonHeaders.set("Content-Type", "application/json");
 
-      const model = resolveMinimaxMusicModel(req.model);
+      const model = normalizeOptionalString(req.model) ?? DEFAULT_MINIMAX_MUSIC_MODEL;
       const requestedLyrics = normalizeOptionalString(req.lyrics);
       const body = {
         model,
@@ -377,14 +369,11 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
               policy: requestPolicy,
             })
           : inlineAudio
-            ? (() => {
-                const buffer = decodeHexAudioWithLimit(inlineAudio, maxGeneratedMusicBytes);
-                return {
-                  buffer,
-                  mimeType: "audio/mpeg",
-                  fileName: "track-1.mp3",
-                };
-              })()
+            ? {
+                buffer: decodeHexAudioWithLimit(inlineAudio, maxGeneratedMusicBytes),
+                mimeType: "audio/mpeg",
+                fileName: "track-1.mp3",
+              }
             : await readStreamingTrack(res, deadline, maxGeneratedMusicBytes);
         return {
           tracks: [track],

@@ -17,11 +17,8 @@ import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import { clearSessionWorkspaceTimers } from "./components/chat-session-workspace.ts";
-import {
-  ChatComposerPersistence,
-  type ChatComposerPersistResult,
-  markChatComposerEdit,
-} from "./composer-persistence.ts";
+import type { ChatComposerPersistResult } from "./composer-persistence-state.ts";
+import { ChatComposerPersistence, markChatComposerEdit } from "./composer-persistence.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
 import { cancelChatScroll, lockChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
@@ -31,7 +28,7 @@ type ChatRenderLifecycleScope = {
 };
 
 export class ChatStateController<TState extends ChatPageHost> implements ReactiveController {
-  readonly attachmentReads: ChatAttachmentReadLifecycle;
+  private attachmentReadsValue: ChatAttachmentReadLifecycle;
   private readonly composerPersistence: ChatComposerPersistence;
   private stateValue: TState | undefined;
   private previousChatLoading = false;
@@ -56,7 +53,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     private readonly onStateChange?: () => void,
     private readonly onQueuedMessageDiscarded?: (item: ChatQueueItem) => void,
   ) {
-    this.attachmentReads = new ChatAttachmentReadLifecycle(() =>
+    this.attachmentReadsValue = new ChatAttachmentReadLifecycle(() =>
       this.stateValue?.requestUpdate?.(),
     );
     this.composerPersistence = new ChatComposerPersistence(() => this.stateValue);
@@ -65,6 +62,24 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   get state(): TState | undefined {
     return this.stateValue;
+  }
+
+  get attachmentReads(): ChatAttachmentReadLifecycle {
+    return this.attachmentReadsValue;
+  }
+
+  takeAttachmentReads(): ChatAttachmentReadLifecycle {
+    const reads = this.attachmentReadsValue;
+    this.attachmentReadsValue = new ChatAttachmentReadLifecycle(() =>
+      this.stateValue?.requestUpdate?.(),
+    );
+    return reads;
+  }
+
+  adoptAttachmentReads(reads: ChatAttachmentReadLifecycle, state: TState): void {
+    this.attachmentReadsValue.abortReads();
+    this.attachmentReadsValue = reads;
+    reads.retarget(this.attachmentInputProps(state), () => state.requestUpdate?.());
   }
 
   attachmentInputProps(state: TState) {
@@ -335,6 +350,14 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       // Retain receipt identity through custody-to-history gaps and replay;
       // retire this presentation cache with its pane or physical conversation.
       this.seenInputKeys.add(key);
+      // Persisted rows for this browser's own speech keep the live caption's identity.
+      const entryId = identity.id;
+      if (
+        entryId &&
+        state.realtimeTalkConversation.some((entry) => entry.transcriptId === entryId)
+      ) {
+        return;
+      }
       remoteInputArrived ||= !changedScope && state.chatHasAutoScrolled;
     };
     state.chatMessages.forEach((message) => observe(message));

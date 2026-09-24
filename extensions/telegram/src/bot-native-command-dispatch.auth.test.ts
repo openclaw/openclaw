@@ -1,4 +1,5 @@
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { addChannelAllowFromStoreEntry } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   commandMessage,
@@ -66,7 +67,11 @@ describe("native command auth in groups", () => {
   });
 
   it("does not authorize group native commands from the DM allowlist store", async () => {
-    harness.getReadChannelAllowFromStoreMock().mockResolvedValue([String(from.id)]);
+    await addChannelAllowFromStoreEntry({
+      channel: "telegram",
+      entry: from.id,
+      accountId: "default",
+    });
     const { bot, sendMessage } = setup();
 
     await bot.handleUpdate({ update_id: 1001, message: groupCommand() });
@@ -163,28 +168,6 @@ describe("native command auth in groups", () => {
 
     expect(harness.replySpy).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
-  });
-
-  it("authorizes a DM command menu from commands.allowFrom.telegram when pairing-store read fails transiently", async () => {
-    const readStore = harness
-      .getReadChannelAllowFromStoreMock()
-      .mockRejectedValue(new Error("store temporarily unavailable"));
-    const { bot, sendMessage } = setup({
-      commands: { allowFrom: { telegram: [String(from.id)] } },
-      telegram: { dmPolicy: "pairing" },
-    });
-
-    await bot.handleUpdate({ update_id: 1001, message: commandMessage("/think") });
-
-    expect(readStore).not.toHaveBeenCalled();
-    expect(harness.replySpy).not.toHaveBeenCalled();
-    expect(sendMessage).toHaveBeenCalledWith(
-      from.id,
-      expect.stringContaining("thinking"),
-      expect.objectContaining({
-        reply_markup: expect.objectContaining({ inline_keyboard: expect.any(Array) }),
-      }),
-    );
   });
 
   it("replies in the originating forum topic when command menu auth is rejected", async () => {

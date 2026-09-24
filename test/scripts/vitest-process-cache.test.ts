@@ -6,7 +6,6 @@ import { afterEach, expect, it } from "vitest";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { sharedVitestConfig } from "../vitest/vitest.shared.config.js";
 import { resolveNativeFixtureShortPath } from "./native-boundary-fixture.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -44,7 +43,7 @@ console.log(JSON.stringify({ namespace, output: result.stdout, disabled: process
     };
     const { child, completion } = spawnOwnedVitestProcess({
       command: testNodeExecPath,
-      args: [...sharedVitestConfig.test.execArgv, "--input-type=module", "-e", script],
+      args: ["--import", tsxPreload, "--input-type=module", "-e", script],
       homeMode,
       options: { env, stdio: ["ignore", "pipe", "pipe"] },
     });

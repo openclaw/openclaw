@@ -171,7 +171,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
-  typingActors?: readonly { id: string; label: string; preview?: string }[];
+  typingActors?: readonly { id: string; label: string; preview?: string; paused?: boolean }[];
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;

@@ -346,7 +346,8 @@ These are intentionally guarded by the `ci-workflow-guards`,
   counts and predicted longest jobs separately; fewer test-seconds do not prove
   a workflow wall-time saving.
   CI's plugin flag stays false even on dispatch because Plugin Prerelease owns
-  that separate sweep. Do not infer release inclusion from a shard name or
+  that separate sweep. Plugin-sensitive PR changes override that exclusion in
+  both precise and fallback plans, including bundled metadata coverage. Do not infer release inclusion from a shard name or
   conflate regular full-campaign publication with approved preflight-only beta
   exceptions. Product security, migration, storage, protocol, SDK and
   update-correctness tests are outside this move.
@@ -357,7 +358,7 @@ These are intentionally guarded by the `ci-workflow-guards`,
   plugin row, including the five added QA/provider rows, in the burst envelope.
 - Precise and fallback plugin groups retain separate child processes, including process-bounded
   configs. Compatible envelopes, including repeated configs, run one at a time
-  within 240 predicted seconds without a pair-count limit; expanded serial compact
+  within 300 predicted seconds without a pair-count limit; expanded serial compact
   jobs use 210. The rebased 124-envelope inventory emits 50 extension rows and
   125/119/130 PR Node rows on Blacksmith/hybrid/GitHub; push Node rows are
   57/46/55 and compact PR rows are 77/71/82. These fit the landed 130/70/90
@@ -490,14 +491,17 @@ These are intentionally guarded by the `ci-workflow-guards`,
   and QA; zero failures in 20 Docker and 80 QA main jobs is limited evidence,
   not a measured post-change saving. Keep backend settings, caps, budgets and
   timeouts unchanged, and verify actual emitted rows and timings.
-- GitHub/hybrid test types use three jobs: two paired core rows run the original
-  stripes 1+2 and 3+4 sequentially; the central row runs stripe 5 before the
-  extensions/scripts/root tail. Keep every canonical core test graph, at most two compiler
-  children per stripe, and one builder per child. The central fifth stripe
-  retains the standalone core resource environment. A failing stripe stops its
-  row; other matrix rows keep running. Pure Blacksmith and targets without
-  stripe support retain the full central path. Measure the combined jobs
-  natively; fewer registrations alone do not prove the eight-minute target.
+- Current GitHub/hybrid test types use five canonical core stripe jobs plus
+  the central extensions/scripts/root tail. Eligible core-change PRs keep the
+  same rows: each validates the complete graph boundary and intersects selected
+  consumers with its original stripe. Empty intersections stay empty; ambiguous
+  selection falls back to every canonical graph across those same stripes.
+  Frozen targets retain two paired rows for stripes 1+2 and 3+4 sequentially,
+  with stripe 5 in the central row. Keep at most two compiler children per
+  stripe and one builder per child. A failing stripe stops its row; other
+  matrix rows keep running. Pure Blacksmith and targets without stripe support
+  retain the central path. Keep row caps and deadlines unchanged; measure actual
+  hosted completion rather than inferring wall-time savings from partitioning.
 - CPU-heavy test-type, core test-type stripe, and runtime-topology jobs in `ci.yml`
   request `blacksmith-16vcpu-ubuntu-2404`. The separate `openclaw-npm-preflight.yml`
   jobs retain `blacksmith-32vcpu-ubuntu-2404`. The 2026-09-01 x64 probe

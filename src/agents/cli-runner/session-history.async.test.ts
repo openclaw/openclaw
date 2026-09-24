@@ -10,6 +10,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -127,35 +128,48 @@ it.each(["run", "read-resource"] as const)(
       let active = true;
       let restoreSpy = () => {};
       let pausedKind: unknown;
+      const pauseReply = async <Reply>(reply: Reply) => {
+        received.resolve();
+        await release.promise;
+        return reply;
+      };
       const interceptNext = () => {
-        const spy = vi
-          .spyOn(WorkerTaskPool.prototype, "run")
-          .mockImplementationOnce(
-            function (this: WorkerTaskPool<unknown, unknown>, input, options) {
-              spy.mockRestore();
-              let pauseReply = false;
-              return this.run(async () => {
+        if (kind === "read-resource") {
+          const spy = vi.spyOn(historyLane.pool, "run").mockImplementationOnce((input, options) => {
+            spy.mockRestore();
+            let pause = false;
+            return historyLane.pool
+              .run(async () => {
                 const request = typeof input === "function" ? await input() : input;
-                const requestKind =
-                  request && typeof request === "object" && "kind" in request
-                    ? request.kind
-                    : undefined;
-                pauseReply = kind === "run" || requestKind === "transcript-hydration";
-                if (pauseReply) {
-                  pausedKind = requestKind;
+                pause = request.kind === "transcript-hydration";
+                if (pause) {
+                  pausedKind = request.kind;
                 } else {
                   interceptNext();
                 }
                 return request;
-              }, options).then(async (reply) => {
-                if (pauseReply) {
-                  received.resolve();
-                  await release.promise;
-                }
-                return reply;
-              });
-            },
-          );
+              }, options)
+              .then((reply) => (pause ? pauseReply(reply) : reply));
+          });
+          restoreSpy = () => spy.mockRestore();
+          return;
+        }
+        const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
+          this: WorkerTaskPool<unknown, unknown>,
+          input,
+          options,
+        ) {
+          spy.mockRestore();
+          return this.run(async () => {
+            const request = typeof input === "function" ? await input() : input;
+            const requestKind =
+              request && typeof request === "object" && "kind" in request
+                ? request.kind
+                : undefined;
+            pausedKind = requestKind;
+            return request;
+          }, options).then(pauseReply);
+        });
         restoreSpy = () => spy.mockRestore();
       };
       interceptNext();
@@ -170,7 +184,12 @@ it.each(["run", "read-resource"] as const)(
       );
       const refused = expect(pending).rejects.toThrow("revoked");
       try {
-        await received.promise;
+        await Promise.race([
+          received.promise,
+          refused.then(() => {
+            throw new Error("CLI history settled before the intercepted reply");
+          }),
+        ]);
         expect(pausedKind).toBe(kind === "run" ? "sqlite-target" : "transcript-hydration");
         if (kind === "run") {
           active = false;

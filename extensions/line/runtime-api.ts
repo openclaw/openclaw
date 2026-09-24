@@ -27,7 +27,7 @@ export {
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
 export { setLineRuntime } from "./src/runtime.js";
-export { firstDefined, normalizeAllowFrom } from "./src/bot-access.js";
+export { firstDefined } from "openclaw/plugin-sdk/allow-from";
 export { downloadLineMedia } from "./src/download.js";
 export {
   createAudioMessage,
@@ -49,11 +49,10 @@ export {
 export { monitorLineProvider } from "./src/monitor.js";
 export {
   listLineAccountIds,
-  normalizeAccountId,
   resolveDefaultLineAccountId,
   resolveLineAccount,
 } from "./src/accounts.js";
-export { type NormalizedAllowFrom } from "./src/bot-access.js";
+export { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 export { resolveLineChannelAccessToken } from "./src/channel-access-token.js";
 export {
   LineChannelConfigSchema,
@@ -103,12 +102,6 @@ export type {
   ResolvedLineAccount,
 } from "./src/types.js";
 export { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./src/webhook-node.js";
-export {
-  createLineWebhookMiddleware,
-  type LineWebhookOptions,
-  startLineWebhook,
-  type StartLineWebhookOptions,
-} from "./src/webhook.js";
 export { parseLineWebhookBody } from "./src/webhook-utils.js";
 export { datetimePickerAction, messageAction, postbackAction, uriAction } from "./src/actions.js";
 export type { Action } from "./src/actions.js";
@@ -140,26 +133,3 @@ export type {
   FlexText,
   ListItem,
 } from "./src/flex-templates/types.js";
-export {
-  cancelDefaultRichMenu,
-  createDefaultMenuConfig,
-  createGridLayout,
-  createRichMenu,
-  createRichMenuAlias,
-  deleteRichMenu,
-  deleteRichMenuAlias,
-  getDefaultRichMenuId,
-  getRichMenu,
-  getRichMenuIdOfUser,
-  getRichMenuList,
-  setDefaultRichMenu,
-  uploadRichMenuImage,
-} from "./src/rich-menu.js";
-export type {
-  CreateRichMenuParams,
-  RichMenuArea,
-  RichMenuAreaRequest,
-  RichMenuRequest,
-  RichMenuResponse,
-  RichMenuSize,
-} from "./src/rich-menu.js";
