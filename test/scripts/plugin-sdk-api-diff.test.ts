@@ -3,6 +3,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  globSync,
   mkdirSync,
   readFileSync,
   symlinkSync,
@@ -90,6 +91,101 @@ async function waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
 }
 
 describe("Plugin SDK API diff CLI", () => {
+  it("finishes every revision install before starting declaration rendering", async () => {
+    const repo = tempDirs.make("plugin-sdk-install-order-repo-");
+    const runnerTemp = tempDirs.make("plugin-sdk-install-order-temp-");
+    const binDir = tempDirs.make("plugin-sdk-install-order-bin-");
+    const installClaim = join(binDir, "install-claim");
+    const blockedMarker = join(binDir, "install-blocked");
+    const releaseMarker = join(binDir, "install-release");
+    git(repo, ["init", "--quiet", "--initial-branch=main"]);
+    mkdirSync(join(repo, "src/plugin-sdk"), { recursive: true });
+    mkdirSync(join(repo, "scripts/lib"), { recursive: true });
+    writeFileSync(join(repo, ".gitignore"), "node_modules\n");
+    writeFileSync(
+      join(repo, "package.json"),
+      JSON.stringify({ version: "2026.8.2", type: "module" }),
+    );
+    writeFileSync(
+      join(repo, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          module: "NodeNext",
+          moduleResolution: "NodeNext",
+          target: "ESNext",
+          types: [],
+          skipLibCheck: true,
+        },
+      }),
+    );
+    writeFileSync(join(repo, "scripts/lib/plugin-sdk-entrypoints.json"), '["fixture"]');
+    writeFileSync(join(repo, "scripts/lib/plugin-sdk-private-local-only-subpaths.json"), "[]");
+    const source = join(repo, "src/plugin-sdk/fixture.ts");
+    writeFileSync(source, "export type Fixture = string;\n");
+    const baseSha = commit(repo, "base");
+    writeFileSync(source, "export type Fixture = number;\n");
+    commit(repo, "head");
+    symlinkSync(resolve("node_modules"), join(repo, "node_modules"), "dir");
+
+    const fakePnpm = join(binDir, "pnpm");
+    writeFileSync(
+      fakePnpm,
+      `#!/bin/sh
+if mkdir "$PNPM_MARKER" 2>/dev/null; then
+  exit 0
+fi
+: > "$PNPM_BLOCKED"
+while [ ! -e "$PNPM_RELEASE" ]; do sleep 0.05; done
+`,
+    );
+    chmodSync(fakePnpm, 0o755);
+    const child = spawn(
+      process.execPath,
+      [
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(scriptModuleEntrypoints.pluginSdkApiDiff),
+        ),
+        "--base",
+        baseSha,
+        "--head",
+        "HEAD",
+      ],
+      {
+        cwd: repo,
+        env: {
+          ...process.env,
+          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+          PNPM_MARKER: installClaim,
+          PNPM_BLOCKED: blockedMarker,
+          PNPM_RELEASE: releaseMarker,
+          RUNNER_TEMP: runnerTemp,
+          TSX_TSCONFIG_PATH: resolve("tsconfig.json"),
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      },
+    );
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    const close = new Promise<number | null>((resolveClose) => {
+      child.once("close", resolveClose);
+    });
+    try {
+      await waitFor(() => existsSync(blockedMarker), 10_000);
+      await new Promise((resolveWait) => {
+        setTimeout(resolveWait, 3_000);
+      });
+      expect(globSync("openclaw-plugin-sdk-api-diff-*/*.json", { cwd: runnerTemp })).toEqual([]);
+    } finally {
+      writeFileSync(releaseMarker, "release\n");
+    }
+    expect(await withTestTimeout(close, 15_000, "Plugin SDK API diff did not finish"), stderr).toBe(
+      0,
+    );
+  }, 30_000);
+
   it("reports identical commit aliases without installing or changing a dirty caller", () => {
     const repo = tempDirs.make("plugin-sdk-identical-repo-");
     const runnerTemp = tempDirs.make("plugin-sdk-identical-temp-");
