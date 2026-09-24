@@ -8,48 +8,57 @@ import {
   type NativeBrowserTab,
 } from "../../app/native-browser-bridge.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { readBrowserInspectedNode, type BrowserPanelTab } from "./browser-client.ts";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import {
+  readBrowserInspectedNode,
+  type BrowserInspectedNode,
+  type BrowserPanelTab,
+} from "./browser-client.ts";
+import type { BrowserPanelInputController } from "./browser-panel-controller-input.ts";
 import { BrowserPanelNativePresentation } from "./browser-panel-native-presentation.ts";
+import type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
+import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
 import {
   browserPanelNormalizedPoint,
   browserPanelRemotePoint,
   loadBrowserPanelImage,
+  type BrowserPanelView,
 } from "./browser-panel-surface.ts";
 
-type BrowserPanelNativeState = Pick<
-  BrowserPanelController,
-  | "tabs"
-  | "activeTargetId"
-  | "view"
-  | "mode"
-  | "loading"
-  | "errorText"
-  | "pendingNewTab"
-  | "urlDraft"
-  | "inspected"
-  | "inspectPointer"
->;
-type BrowserPanelNativeHost = BrowserPanelNativeState &
-  Pick<BrowserPanelController, "syncUrlDraft" | "reportError" | "exitCaptureModes"> & {
-    readonly host: Pick<
-      BrowserPanelController["host"],
-      | "isConnected"
-      | "browserPanelIsOpen"
-      | "renderRoot"
-      | "updateComplete"
-      | "sessionKey"
-      | "fixedTab"
-    >;
-    readonly native: Pick<BrowserPanelController["native"], "activeTab">;
-    readonly pendingInput: Pick<BrowserPanelController["pendingInput"], "queueInspection">;
-    readonly input: Pick<BrowserPanelController["input"], "paintOverlay">;
-    selectTab(targetId: string): Promise<void>;
-    setState<Key extends keyof BrowserPanelNativeState>(
-      key: Key,
-      value: BrowserPanelNativeState[Key],
-    ): void;
-  };
+type BrowserPanelNativeState = {
+  tabs: BrowserPanelTab[];
+  activeTargetId: string | null;
+  view: BrowserPanelView | null;
+  mode: "interact" | "annotate" | "inspect";
+  loading: boolean;
+  errorText: string | null;
+  pendingNewTab: boolean;
+  urlDraft: string;
+  inspected: BrowserInspectedNode | null;
+  inspectPointer: { x: number; y: number } | null;
+};
+
+interface BrowserPanelNativeHost extends BrowserPanelNativeState {
+  readonly host: Pick<
+    BrowserPanelControllerHost,
+    | "isConnected"
+    | "browserPanelIsOpen"
+    | "renderRoot"
+    | "updateComplete"
+    | "sessionKey"
+    | "fixedTab"
+  >;
+  readonly native: { readonly activeTab: NativeBrowserTab | undefined };
+  readonly pendingInput: Pick<BrowserPanelPendingInput, "queueInspection">;
+  readonly input: Pick<BrowserPanelInputController, "paintOverlay">;
+  setState<Key extends keyof BrowserPanelNativeState>(
+    key: Key,
+    value: BrowserPanelNativeState[Key],
+  ): void;
+  selectTab(targetId: string): Promise<void>;
+  syncUrlDraft(url: string): void;
+  reportError(error: unknown): void;
+  exitCaptureModes(): void;
+}
 
 const presenters = new Set<BrowserPanelNativeController>();
 const popupScopes = new Map<string, string>();
