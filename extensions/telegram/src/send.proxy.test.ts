@@ -159,6 +159,81 @@ describe("Telegram operation leases through real clients", () => {
     },
   );
 
+  it.each([
+    { writer: "current", topicTwoSends: 1 },
+    { writer: "replaced", topicTwoSends: 0 },
+  ] as const)(
+    "admits a queued group topic send only after the flood wait and for the current writer ($writer)",
+    async ({ writer, topicTwoSends }) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout", "Date"] });
+      const token = fixture.cfg.channels.telegram.botToken;
+      const bot = new Bot(token, { client: { apiRoot: fixture.cfg.channels.telegram.apiRoot } });
+      bot.api.config.use(getOrCreateAccountThrottler(token).transformer);
+      // Installed last, so it runs first: marks topic 2 entering the account limiter.
+      const topicTwoEntered = createDeferred<void>();
+      bot.api.config.use((prev, method, payload, signal) => {
+        if ((payload as { message_thread_id?: unknown }).message_thread_id === 2) {
+          topicTwoEntered.resolve();
+        }
+        return prev(method, payload, signal);
+      });
+      const startedAt = Date.now();
+      const held = { arrived: createDeferred<void>(), release: createDeferred<void>() };
+      fixture.requestHold = held;
+      fixture.rejections.push({
+        error_code: 429,
+        description: "Too Many Requests: retry after 5",
+        parameters: { retry_after: 5 },
+      });
+      let writerIsCurrent = true;
+      const sendTopic = (topic: number, authorized: boolean) =>
+        sendMessageTelegram("-1001", `Topic ${topic} final`, {
+          cfg: fixture.cfg,
+          api: bot.api,
+          messageThreadId: topic,
+          ...(authorized
+            ? {
+                assertPlatformSendAuthorized: () => {
+                  if (!writerIsCurrent) {
+                    throw new Error("group session writer replaced");
+                  }
+                },
+              }
+            : {}),
+        }).then(
+          (result) => ({ result }),
+          (error: unknown) => ({ error }),
+        );
+      const topicOne = sendTopic(1, false);
+      await held.arrived.promise;
+      // Topic 2 passes the caller check and the gate, then queues behind topic 1.
+      const topicTwo = sendTopic(2, true);
+      await topicTwoEntered.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      writerIsCurrent = writer !== "replaced";
+      held.release.resolve();
+      await vi.advanceTimersByTimeAsync(4_900);
+      // Nothing reaches Telegram inside retry_after, including the queued topic.
+      expect(fixture.requests).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      const [one, two] = await Promise.all([topicOne, topicTwo]);
+      const topicTwoRequests = fixture.requests.filter(
+        ({ fields }) => fields.message_thread_id === 2,
+      );
+
+      expect(one).toMatchObject({ result: { messageId: expect.any(String) } });
+      expect(topicTwoRequests).toHaveLength(topicTwoSends);
+      if (writer === "replaced") {
+        expect(String((two as { error?: unknown }).error)).toContain(
+          "group session writer replaced",
+        );
+      } else {
+        expect(two).toMatchObject({ result: { messageId: expect.any(String) } });
+      }
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(5_000);
+    },
+  );
+
   it.each(["not-started", "connect-timeout", "ambiguous"] as const)(
     "preserves %s custody through grammY's transport error envelope",
     async (kind) => {

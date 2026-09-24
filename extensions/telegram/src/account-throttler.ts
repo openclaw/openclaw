@@ -68,13 +68,38 @@ export function runAuthorizedTelegramRequest<T>(
   );
 }
 
+// Synthetic 429s for requests the limiter held back; they never reached Telegram.
+const unsentFloodResponses = new WeakSet<object>();
+
 function skippedFloodResponse(waitMs: number, reason: string): ApiError {
   const retryAfter = Math.max(1, Math.ceil(waitMs / 1000));
-  return {
+  const response: ApiError = {
     ok: false,
     error_code: 429,
     description: `Too Many Requests: retry after ${retryAfter} (${reason}; request not sent)`,
     parameters: { retry_after: retryAfter },
+  };
+  unsentFloodResponses.add(response);
+  return response;
+}
+
+/**
+ * The single enforcement point, run where a request leaves for Telegram after
+ * every scheduler and throttler queue wait: a closed gate holds the request back
+ * and the caller's send authority is checked against the current writer.
+ */
+function admitAtNetwork(
+  gate: TelegramFloodGate,
+  scope: TelegramRequestScope | undefined,
+  prev: TelegramApiCall,
+): TelegramApiCall {
+  return async (method, payload, signal) => {
+    const waitMs = method === "getUpdates" ? 0 : gate.remainingMs();
+    if (waitMs > 0) {
+      return skippedFloodResponse(waitMs, "flood wait active");
+    }
+    scope?.assertCurrent?.();
+    return prev(method, payload, signal);
   };
 }
 
@@ -141,8 +166,6 @@ function callThroughFloodGate(
         }
         await sleepForFloodGate(waitMs, signal);
         waitedMs += waitMs;
-        // The caller's authority check ran before this call entered the API.
-        scope?.assertCurrent?.();
         continue;
       }
       const closeGate = (retryAfterSeconds: number | undefined) => {
@@ -172,7 +195,10 @@ function callThroughFloodGate(
         return result;
       }
       flooded = result;
-      closeGate(result.parameters?.retry_after);
+      // A request held back at the network point already waits on the current deadline.
+      if (!unsentFloodResponses.has(result)) {
+        closeGate(result.parameters?.retry_after);
+      }
       if (replaceable) {
         return result;
       }
@@ -424,11 +450,14 @@ function createTelegramAccountThrottler(
     // Classify at the call site: queued work later runs in the drain's async context.
     const callerScope = requestScopes.getStore();
     const replaceable = method === "sendChatAction" || callerScope?.replaceable === true;
+    const scope = replaceable ? { ...callerScope, replaceable: true as const } : callerScope;
+    // Waiting and retry policy runs outside the queues; admission runs at the network edge.
+    const admitted = admitAtNetwork(floodGate, scope, prev);
     const send = callThroughFloodGate(
       floodGate,
-      replaceable ? { ...callerScope, replaceable: true } : callerScope,
+      scope,
       (queuedMethod, queuedPayload, queuedSignal) =>
-        scheduleRequest(replaceable)(prev, queuedMethod, queuedPayload, queuedSignal),
+        scheduleRequest(replaceable)(admitted, queuedMethod, queuedPayload, queuedSignal),
     );
     const apiPayload = readPayload(payload);
     const groupChatKey = apiPayload ? resolveGroupChatKey(apiPayload) : undefined;
