@@ -1,8 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { listAgentIds } from "../../agents/agent-scope.js";
+import { listAgentIds } from "../../agents/agent-scope-config.js";
 import { isExecApprovalFollowupSessionRebound } from "../../agents/bash-tools.exec-approval-followup-state.js";
-import { resolveExistingSessionKeyForRequest } from "../../agents/command/session.js";
+import { resolveExistingSessionKeyForRequest } from "../../agents/command/session-request.js";
 import { resolveExplicitAgentSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";

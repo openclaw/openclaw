@@ -22,7 +22,7 @@ const hoisted = vi.hoisted(() => ({
   listAgentIdsMock: vi.fn<() => string[]>(),
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
+vi.mock("../../config/sessions/session-accessor.read.js", () => ({
   listSessionEntriesReadOnly: (scope?: { agentId?: string; storePath?: string; clone?: boolean }) =>
     hoisted.listSessionEntriesMock(scope),
   loadExactSessionEntryReadOnly: hoisted.loadExactSessionEntryMock,
@@ -41,13 +41,16 @@ vi.mock("../../config/sessions/main-session.js", () => ({
   resolveExplicitAgentSessionKey: () => undefined,
 }));
 
-vi.mock("../agent-scope.js", async () => ({
-  ...(await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js")),
+vi.mock("../agent-scope-config.js", async () => ({
+  ...(await vi.importActual<typeof import("../agent-scope-config.js")>("../agent-scope-config.js")),
   listAgentIds: () => hoisted.listAgentIdsMock(),
 }));
 
-const { resolveSessionKeyForRequestCore, resolveStoredSessionKeyForSessionId } =
-  await import("./session.js");
+const {
+  resolveExistingSessionKeyForRequest,
+  resolveSessionKeyForRequestCore,
+  resolveStoredSessionKeyForSessionId,
+} = await import("./session-request.js");
 const resolveSessionKeyForRequest = resolveSessionKeyForRequestCore;
 
 function mockSessionStores(storesByPath: Record<string, Record<string, SessionEntry>>): void {
@@ -89,6 +92,27 @@ describe("resolveSessionKeyForRequest", () => {
     hoisted.loadExactSessionEntryMock.mockReset();
     hoisted.listAgentIdsMock.mockReset();
     hoisted.listAgentIdsMock.mockReturnValue(["main", "other"]);
+  });
+
+  it("synthesizes a missing command key but leaves the Gateway lookup existing-only", () => {
+    mockSessionStores({});
+    const request = {
+      cfg: { session: { store: "/stores/{agentId}.json" } },
+      agentId: "main",
+      sessionId: "new-session",
+    };
+
+    expect(resolveSessionKeyForRequestCore(request)).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:explicit:new-session",
+      storePath: "/stores/main.json",
+    });
+    expect(resolveExistingSessionKeyForRequest(request)).toEqual({
+      agentId: "main",
+      sessionKey: undefined,
+      sessionEntry: undefined,
+      storePath: "/stores/main.json",
+    });
   });
 
   it("prefers the current store when equal duplicates exist across stores", () => {

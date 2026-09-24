@@ -17,7 +17,7 @@ import { resolveSessionAgentId } from "./agent-scope.js";
 import {
   resolveExistingSessionKeyForRequest,
   resolveStoredSessionKeyForSessionId,
-} from "./command/session.js";
+} from "./command/session-request.js";
 import type { AgentRunSessionTarget } from "./run-session-target.types.js";
 
 /** Canonical SQLite target resolved from the storage-neutral run identity. */

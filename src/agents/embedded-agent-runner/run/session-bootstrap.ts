@@ -35,7 +35,7 @@ import { resolveSessionAgentId } from "../../agent-scope.js";
 import {
   resolveSessionKeyForRequestCore,
   resolveStoredSessionKeyForSessionId,
-} from "../../command/session.js";
+} from "../../command/session-request.js";
 import {
   AGENT_RUN_SUPERSEDED_ERROR,
   AGENT_RUN_SUPERSEDED_STOP_REASON,

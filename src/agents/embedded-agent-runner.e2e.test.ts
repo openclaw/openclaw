@@ -122,16 +122,14 @@ const installRunEmbeddedMocks = () => {
   installEmbeddedRunnerFastRunE2eMocks({
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
   });
-  vi.doMock("./command/session.js", async () => {
-    const actual =
-      await vi.importActual<typeof import("./command/session.js")>("./command/session.js");
-    return {
-      ...actual,
-      resolveSessionKeyForRequestCore: (opts: unknown) => resolveSessionKeyForRequestMock(opts),
-      resolveStoredSessionKeyForSessionId: (opts: unknown) =>
-        resolveStoredSessionKeyForSessionIdMock(opts),
-    };
-  });
+  vi.doMock("./command/session-request.js", async () => ({
+    ...(await vi.importActual<typeof import("./command/session-request.js")>(
+      "./command/session-request.js",
+    )),
+    resolveSessionKeyForRequestCore: (opts: unknown) => resolveSessionKeyForRequestMock(opts),
+    resolveStoredSessionKeyForSessionId: (opts: unknown) =>
+      resolveStoredSessionKeyForSessionIdMock(opts),
+  }));
   vi.doMock("./embedded-agent-runner/logger.js", async () => {
     const actual = await vi.importActual<typeof import("./embedded-agent-runner/logger.js")>(
       "./embedded-agent-runner/logger.js",

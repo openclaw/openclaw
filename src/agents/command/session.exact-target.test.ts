@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import * as sessionReader from "../../config/sessions/session-accessor.read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   inspectOpenClawAgentDatabaseOwner,
@@ -137,7 +138,7 @@ it.each(["work", "dashboard:incognito-work"])(
           { sessionId: "unrelated-session", updatedAt: Date.now() },
         );
       }
-      const list = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+      const list = vi.spyOn(sessionReader, "listSessionEntriesReadOnly");
       try {
         const resolved = resolveSession({ cfg, sessionKey });
         expect(resolved).toMatchObject({

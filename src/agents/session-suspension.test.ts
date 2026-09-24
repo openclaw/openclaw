@@ -21,7 +21,7 @@ const sessionKeyResolverMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("./command/session.js", () => sessionKeyResolverMocks);
+vi.mock("./command/session-request.js", () => sessionKeyResolverMocks);
 
 async function recordSuspension(ttlMs = 100) {
   const { suspendSession } = await import("./session-suspension.js");

@@ -7,7 +7,7 @@ const hoisted = vi.hoisted(() => ({
   terminalTranscriptNewer: false,
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
+vi.mock("../../config/sessions/session-accessor.read.js", () => ({
   loadExactSessionEntryReadOnly: ({ sessionKey }: { sessionKey: string }) => {
     const entry = hoisted.store[sessionKey];
     return entry ? { sessionKey, entry: structuredClone(entry) } : undefined;

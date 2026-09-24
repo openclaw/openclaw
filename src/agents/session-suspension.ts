@@ -14,7 +14,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveRegisteredAgentIdForDir } from "./agent-dir-registry.js";
-import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
+import { resolveStoredSessionKeyForSessionId } from "./command/session-request.js";
 import type { FailoverReason } from "./failover/signal.js";
 
 const log = createSubsystemLogger("session-suspension");

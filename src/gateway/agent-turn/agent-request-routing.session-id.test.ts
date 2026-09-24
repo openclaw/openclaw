@@ -1,11 +1,12 @@
 import { expect, it, vi } from "vitest";
-import * as commandSession from "../../agents/command/session.js";
+import * as commandSession from "../../agents/command/session-request.js";
 import { backfillSessionKey } from "../../agents/embedded-agent-runner/run/session-bootstrap.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import * as sessionReader from "../../config/sessions/session-accessor.read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
@@ -59,7 +60,7 @@ it.each(
         }
       };
       const openDatabase = nodeSqlite.openNodeSqliteDatabase;
-      const listEntries = sessionAccessor.listSessionEntriesReadOnly;
+      const listEntries = sessionReader.listSessionEntriesReadOnly;
       const resolveExisting = commandSession.resolveExistingSessionKeyForRequest;
       const resolveCore = commandSession.resolveSessionKeyForRequestCore;
       vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
@@ -68,7 +69,7 @@ it.each(
         }
         return openDatabase(...args);
       });
-      vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly").mockImplementation((...args) => {
+      vi.spyOn(sessionReader, "listSessionEntriesReadOnly").mockImplementation((...args) => {
         listingDepth++;
         try {
           return listEntries(...args);

@@ -21,7 +21,7 @@ vi.mock("../../config/sessions/main-session.js", async () => {
   };
 });
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
+vi.mock("../../config/sessions/session-accessor.read.js", () => ({
   listSessionEntriesReadOnly: mocks.listSessionEntriesReadOnly,
   loadExactSessionEntryReadOnly: mocks.loadExactSessionEntryReadOnly,
 }));
@@ -30,11 +30,17 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: mocks.resolveStorePath,
 }));
 
-vi.mock("../../agents/agent-scope.js", async () => {
+vi.mock("../../agents/agent-scope-config.js", async () => {
+  const { AgentSelectionRequiredError, tryResolveLegacyCompatibilityAgentId } =
+    await vi.importActual<typeof import("../../agents/agent-scope-config.js")>(
+      "../../agents/agent-scope-config.js",
+    );
   const { normalizeAgentId } = await vi.importActual<typeof import("../../routing/session-key.js")>(
     "../../routing/session-key.js",
   );
   return {
+    AgentSelectionRequiredError,
+    tryResolveLegacyCompatibilityAgentId,
     listAgentIds: mocks.listAgentIds,
     resolveDefaultAgentId: (cfg: OpenClawConfig) => {
       const agents = cfg.agents?.list ?? [];
