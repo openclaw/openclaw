@@ -12,6 +12,7 @@ import {
   codexNativeSubagentHistoryConnectionFingerprint,
   readCodexNativeSubagentHistoryOwner,
 } from "./native-subagent-history-owner.js";
+import { readThreadParentThreadId } from "./native-subagent-history-recovery.js";
 import {
   CODEX_NATIVE_SUBAGENT_TASK_KIND,
   readCodexNativeSubagentRunId,
@@ -20,7 +21,7 @@ import {
   buildCodexAppServerConnectionFingerprint,
   buildCodexAppServerRuntimeFingerprint,
 } from "./plugin-app-cache-key.js";
-import type { CodexAppServerRequestParams, CodexThread } from "./protocol.js";
+import type { CodexAppServerRequestParams } from "./protocol.js";
 import { sessionBindingIdentity } from "./session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 import {
@@ -34,19 +35,6 @@ import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 type TaskHistoryParams = Parameters<NonNullable<AgentHarnessV2["taskHistory"]>["read"]>[0];
 const MAX_SUBAGENT_ANCESTRY_READS = 32;
 const taskHistoryToolItems = { itemToolArgs, itemTranscriptResultText };
-
-function parentThreadId(thread: CodexThread): string | undefined {
-  const source = thread.source;
-  const spawn =
-    source &&
-    typeof source === "object" &&
-    "subAgent" in source &&
-    typeof source.subAgent === "object" &&
-    "thread_spawn" in source.subAgent
-      ? source.subAgent.thread_spawn
-      : undefined;
-  return thread.parentThreadId?.trim() ?? spawn?.parent_thread_id.trim();
-}
 
 /** Resolves history from the parent binding's native store without adopting the child. */
 export async function readCodexNativeSubagentHistory(
@@ -169,7 +157,7 @@ export async function readCodexNativeSubagentHistory(
     const visited = new Set([threadId]);
     let ancestor = thread;
     for (;;) {
-      const parentId = parentThreadId(ancestor);
+      const parentId = readThreadParentThreadId(ancestor);
       if (parentId === historyParentThreadId) {
         break;
       }

@@ -49,10 +49,7 @@ export {
   CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES,
   CODEX_INTERACTIVE_THREAD_SOURCE_KINDS,
 } from "./protocol-session-source.js";
-export type {
-  CodexSessionSource,
-  CodexSubAgentThreadSpawnSource,
-} from "./protocol-session-source.js";
+export type { CodexSessionSource } from "./protocol-session-source.js";
 export { isRpcResponse } from "./protocol-json.js";
 export type {
   JsonObject,
@@ -485,15 +482,6 @@ export type CodexThreadStatus =
   | { type: "idle" }
   | { type: "systemError" }
   | { type: "active"; activeFlags?: string[] };
-
-export type CodexThreadStartedNotification = {
-  thread: CodexThread;
-};
-
-export type CodexThreadStatusChangedNotification = {
-  threadId: string;
-  status: CodexThreadStatus;
-};
 
 export type CodexThreadItem = {
   id: string;

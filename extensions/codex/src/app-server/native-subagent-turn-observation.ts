@@ -14,6 +14,7 @@ import type { CodexNativeSubagentCompletion } from "./native-subagent-notificati
 import {
   codexNativeSubagentRunId,
   readCodexNativeSubagentRunId,
+  readNativeSubagentThreadIds,
 } from "./native-subagent-task-ids.js";
 import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
@@ -204,11 +205,7 @@ export class CodexNativeSubagentTurnObservation {
     ) {
       if (notification.method === "item/started") {
         const receivers = [
-          ...new Set(
-            item.receiverThreadIds.flatMap((id) =>
-              typeof id === "string" && id.trim() ? [id.trim()] : [],
-            ),
-          ),
+          ...new Set(readNativeSubagentThreadIds(item.receiverThreadIds).map((id) => id.trim())),
         ];
         // V2 has no target IDs; V1 exposes its selected children explicitly.
         const wait: NativeExecutionWait =

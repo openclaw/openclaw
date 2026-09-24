@@ -50,35 +50,6 @@ export function assertNativeModelInputCompatible(sender: ParentOwner, receiver: 
   }
 }
 
-function admitNativeModelInput(
-  request: NativeModelInputRequest,
-  parents: ReadonlyMap<string, ParentState>,
-  knownChildren: ReadonlyMap<string, KnownChild>,
-  children: ReadonlyMap<string, ChildState>,
-  admissions: ReadonlyMap<string, NativeChildAdmissionEvidence[]>,
-  admit: (
-    state: ParentState,
-    owner: ParentOwner,
-    input: NativeModelInputRequest,
-    pendingModelSources: number,
-  ) => void,
-): void {
-  const state = parents.get(request.threadId) ?? knownChildren.get(request.threadId)?.parent;
-  const owner =
-    state &&
-    resolveNativeModelParentOwner(state, request.turnId, request.threadId, children, knownChildren);
-  if (!state || !owner || owner.modelExecutionSettled || owner.modelExecutionCancelled) {
-    throw new Error("Codex native input requires its exact admitted sender turn");
-  }
-  const pendingModelSources = [...admissions.values()]
-    .flat()
-    .filter(
-      (entry) =>
-        entry.kind === "interaction" && entry.modelSource?.owner.modelSource?.hasOperatorSource,
-    ).length;
-  admit(state, owner, request, pendingModelSources);
-}
-
 type InputDependencies = {
   client: NativeSubagentMonitorClient;
   parents: ReadonlyMap<string, ParentState>;
@@ -354,18 +325,40 @@ export async function prepareNativeModelToolInput(
         agentPath: readString(readThreadSpawnSource(metadata), "agent_path"),
       });
     }
-    admitNativeModelInput(
+    const currentState =
+      dependencies.parents.get(request.threadId) ??
+      dependencies.knownChildren.get(request.threadId)?.parent;
+    const currentOwner =
+      currentState &&
+      resolveNativeModelParentOwner(
+        currentState,
+        request.turnId,
+        request.threadId,
+        dependencies.children,
+        dependencies.knownChildren,
+      );
+    if (
+      !currentOwner ||
+      currentOwner.modelExecutionSettled ||
+      currentOwner.modelExecutionCancelled
+    ) {
+      throw new Error("Codex native input requires its exact admitted sender turn");
+    }
+    if (currentState !== state || currentOwner !== owner) {
+      throw new Error("Codex native input sender changed during preparation");
+    }
+    const pendingModelSources = [...dependencies.admissions.values()]
+      .flat()
+      .filter(
+        (entry) =>
+          entry.kind === "interaction" && entry.modelSource?.owner.modelSource?.hasOperatorSource,
+      ).length;
+    dependencies.admit(
+      state,
+      owner,
       { ...request, targetThreadId },
-      dependencies.parents,
-      dependencies.knownChildren,
-      dependencies.children,
-      dependencies.admissions,
-      (parent, currentOwner, input, count) => {
-        if (parent !== state || currentOwner !== owner) {
-          throw new Error("Codex native input sender changed during preparation");
-        }
-        dependencies.admit(state, owner, input, count, preparedOwner);
-      },
+      pendingModelSources,
+      preparedOwner,
     );
   } finally {
     targetRevision?.release();

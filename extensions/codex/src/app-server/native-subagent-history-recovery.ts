@@ -717,14 +717,18 @@ export function isNoFinalCompletion(completion: CodexNativeSubagentCompletion): 
   );
 }
 
-export function readThreadParentThreadId(thread: JsonObject | undefined): string | undefined {
+export function readThreadParentThreadId(
+  thread: Record<string, unknown> | undefined,
+): string | undefined {
   return (
     readString(thread, "parentThreadId")?.trim() ??
     readString(readThreadSpawnSource(thread), "parent_thread_id")?.trim()
   );
 }
 
-export function readThreadSpawnSource(thread: JsonObject | undefined): JsonObject | undefined {
+export function readThreadSpawnSource(
+  thread: Record<string, unknown> | undefined,
+): JsonObject | undefined {
   const source = isJsonObject(thread?.source) ? thread.source : undefined;
   const subAgent = isJsonObject(source?.subAgent) ? source.subAgent : undefined;
   return isJsonObject(subAgent?.thread_spawn) ? subAgent.thread_spawn : undefined;
