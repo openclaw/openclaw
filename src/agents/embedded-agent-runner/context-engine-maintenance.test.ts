@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
@@ -808,11 +808,7 @@ describe("runContextEngineMaintenance", () => {
           expect(secondEngine["dispose"]).toHaveBeenCalledTimes(1);
 
           trigger();
-          await withTestTimeout(
-            waitForDeferredTurnMaintenanceForSession(sessionKey),
-            500,
-            "aborted maintenance did not settle",
-          );
+          await waitForDeferredTurnMaintenanceForSession(sessionKey);
 
           expect(observedSignal?.aborted).toBe(true);
           expect(firstMaintain).toHaveBeenCalledTimes(1);
