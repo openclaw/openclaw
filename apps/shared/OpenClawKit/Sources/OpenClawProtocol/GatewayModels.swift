@@ -24101,6 +24101,7 @@ public struct UpdateRunRecord: Codable, Sendable {
     public let phase: String
     public let status: String
     public let reason: AnyCodable
+    public let admission: [String: AnyCodable]?
     public let origin: [String: AnyCodable]
     public let target: [String: AnyCodable]
     public let before: [String: AnyCodable]
@@ -24120,6 +24121,7 @@ public struct UpdateRunRecord: Codable, Sendable {
         phase: String,
         status: String,
         reason: AnyCodable,
+        admission: [String: AnyCodable]? = nil,
         origin: [String: AnyCodable],
         target: [String: AnyCodable],
         before: [String: AnyCodable],
@@ -24138,6 +24140,7 @@ public struct UpdateRunRecord: Codable, Sendable {
         self.phase = phase
         self.status = status
         self.reason = reason
+        self.admission = admission
         self.origin = origin
         self.target = target
         self.before = before
@@ -24158,6 +24161,7 @@ public struct UpdateRunRecord: Codable, Sendable {
         case phase
         case status
         case reason
+        case admission
         case origin
         case target
         case before

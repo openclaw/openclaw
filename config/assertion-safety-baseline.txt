@@ -9,7 +9,6 @@ extensions/acpx/src/runtime.ts	2
 extensions/acpx/src/service.ts	1
 extensions/acpx/src/state.ts	1
 extensions/active-memory/config.ts	2
-extensions/active-memory/doctor-contract-api.ts	3
 extensions/active-memory/index.ts	3
 extensions/active-memory/query.ts	2
 extensions/active-memory/transcript-result.ts	2
@@ -523,7 +522,6 @@ extensions/imessage/src/remote-host.ts	1
 extensions/imessage/src/send.ts	2
 extensions/imessage/src/setup-core.ts	1
 extensions/imessage/src/shared.ts	1
-extensions/imessage/src/state-migrations.ts	6
 extensions/inworld/tts.ts	2
 extensions/irc/src/channel.ts	5
 extensions/irc/src/inbound.ts	6
@@ -542,7 +540,6 @@ extensions/line/src/accounts.ts	3
 extensions/line/src/actions.ts	4
 extensions/line/src/auto-reply-delivery.ts	1
 extensions/line/src/bot-handlers.ts	1
-extensions/line/src/bot-message-context.ts	1
 extensions/line/src/card-command.ts	3
 extensions/line/src/flex-templates/basic-cards.ts	19
 extensions/line/src/flex-templates/common.ts	2
@@ -554,7 +551,6 @@ extensions/line/src/markdown-to-line.ts	7
 extensions/line/src/monitor-durable.ts	1
 extensions/line/src/monitor.ts	1
 extensions/line/src/outbound.ts	6
-extensions/line/src/rich-menu.ts	1
 extensions/line/src/send.ts	1
 extensions/line/src/setup-core.ts	1
 extensions/line/src/webhook-spool.ts	2
@@ -679,7 +675,6 @@ extensions/memory-core/src/cli.ts	1
 extensions/memory-core/src/concept-vocabulary.ts	1
 extensions/memory-core/src/dreaming-phases.ts	1
 extensions/memory-core/src/dreaming.ts	1
-extensions/memory-core/src/memory/embeddings.ts	2
 extensions/memory-core/src/memory/hybrid.ts	1
 extensions/memory-core/src/memory/manager-db.ts	2
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
@@ -747,7 +742,7 @@ extensions/moonshot/index.ts	2
 extensions/moonshot/native-video.ts	2
 extensions/moonshot/provider-policy-api.ts	1
 extensions/moonshot/src/kimi-web-search-provider.runtime.ts	3
-extensions/msteams/doctor-contract-api.ts	7
+extensions/msteams/doctor-contract-api.ts	1
 extensions/msteams/src/attachments/graph.ts	1
 extensions/msteams/src/attachments/shared.ts	2
 extensions/msteams/src/channel.ts	4
@@ -777,7 +772,6 @@ extensions/msteams/src/sdk-proactive.ts	7
 extensions/msteams/src/sdk.ts	10
 extensions/msteams/src/setup-surface.ts	7
 extensions/msteams/src/sqlite-state.ts	1
-extensions/msteams/src/sso-token-store.ts	2
 extensions/msteams/src/token-response.ts	2
 extensions/msteams/src/user-agent.ts	1
 extensions/mxc/src/fs-bridge.ts	1
@@ -794,7 +788,6 @@ extensions/nextcloud-talk/src/policy.ts	2
 extensions/nextcloud-talk/src/send.ts	1
 extensions/nextcloud-talk/src/setup-core.ts	10
 extensions/nextcloud-talk/src/setup-surface.ts	11
-extensions/nostr/doctor-contract-api.ts	2
 extensions/nostr/index.ts	4
 extensions/nostr/src/channel.setup.ts	2
 extensions/nostr/src/gateway.ts	2
@@ -881,7 +874,7 @@ extensions/qa-lab/src/auth-profile.fixture.ts	3
 extensions/qa-lab/src/browser-runtime.ts	2
 extensions/qa-lab/src/bundled-plugin-staging.ts	4
 extensions/qa-lab/src/bus-server.ts	3
-extensions/qa-lab/src/bus-state.ts	2
+extensions/qa-lab/src/bus-state.ts	1
 extensions/qa-lab/src/character-eval.ts	2
 extensions/qa-lab/src/ci-smoke-plan.ts	1
 extensions/qa-lab/src/cli.runtime.ts	9
@@ -953,13 +946,13 @@ extensions/qa-lab/src/posix-process-group.ts	3
 extensions/qa-lab/src/providers/aimock/server.ts	6
 extensions/qa-lab/src/providers/index.ts	1
 extensions/qa-lab/src/providers/live-config.ts	1
-extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts	3
+extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-openai-assistant-text.ts	3
 extensions/qa-lab/src/providers/mock-openai/mock-openai-contracts.ts	2
 extensions/qa-lab/src/providers/mock-openai/mock-openai-directives.ts	4
-extensions/qa-lab/src/providers/mock-openai/mock-openai-events.ts	4
+extensions/qa-lab/src/providers/mock-openai/mock-openai-events.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	6
-extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	2
+extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	1
 extensions/qa-lab/src/providers/mock-openai/server.ts	6
 extensions/qa-lab/src/providers/shared/auth-store.ts	1
 extensions/qa-lab/src/qa-transport.ts	1
@@ -983,7 +976,7 @@ extensions/qa-lab/src/test-file-scenario-script-evidence.ts	2
 extensions/qa-lab/src/test-file-scenario-vitest-report.ts	1
 extensions/qa-lab/src/tool-search-gateway.fixture.ts	13
 extensions/qa-lab/src/web-runtime.ts	1
-extensions/qa-lab/web/src/app.ts	42
+extensions/qa-lab/web/src/app.ts	40
 extensions/qa-lab/web/src/capture-saved-view.ts	7
 extensions/qa-lab/web/src/http.ts	1
 extensions/qa-lab/web/src/ui-render-capture-controls.ts	1
@@ -1118,7 +1111,7 @@ extensions/telegram/src/bot-handlers.inbound-buffer.ts	1
 extensions/telegram/src/bot-handlers.inbound-media.ts	2
 extensions/telegram/src/bot-handlers.inbound-pipeline.ts	2
 extensions/telegram/src/bot-handlers.message-context.ts	1
-extensions/telegram/src/bot-info-cache.ts	2
+extensions/telegram/src/bot-info-cache.ts	1
 extensions/telegram/src/bot-info.ts	1
 extensions/telegram/src/bot-message-context.body.ts	1
 extensions/telegram/src/bot-message-context.session.ts	2
@@ -1169,10 +1162,7 @@ extensions/telegram/src/send-edit.ts	1
 extensions/telegram/src/send-location.ts	2
 extensions/telegram/src/send-outbound.ts	1
 extensions/telegram/src/sendchataction-401-backoff.ts	2
-extensions/telegram/src/sent-message-cache.legacy-state.ts	2
-extensions/telegram/src/state-migrations.ts	2
 extensions/telegram/src/status-issues.ts	1
-extensions/telegram/src/sticker-cache-store.legacy-state.ts	1
 extensions/telegram/src/target-writeback.test-shared.ts	12
 extensions/telegram/src/telegram-ingress-drain-factory.ts	1
 extensions/telegram/src/telegram-ingress-drain.ts	5
@@ -1181,7 +1171,7 @@ extensions/telegram/src/telegram-ingress-supersede-auth.ts	10
 extensions/telegram/src/telegram-ingress-supersede.ts	7
 extensions/telegram/src/telegram-ingress-worker.runtime.ts	4
 extensions/telegram/src/telegram-ingress-worker.ts	2
-extensions/telegram/src/thread-bindings-store.ts	3
+extensions/telegram/src/thread-bindings-store.ts	1
 extensions/telegram/src/topic-name-cache.ts	1
 extensions/telegram/src/update-offset-store.ts	1
 extensions/telegram/src/webhook.ts	1
@@ -2368,7 +2358,7 @@ src/config/io.write-safety.ts	3
 src/config/io.write.ts	2
 src/config/issue-location.ts	2
 src/config/legacy.default-agent-roles.ts	1
-src/config/legacy.roster.ts	13
+src/config/legacy.roster.ts	8
 src/config/legacy.ts	3
 src/config/markdown-tables.ts	3
 src/config/materialize.ts	2
@@ -2407,7 +2397,7 @@ src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
 src/config/sessions/session-accessor.sqlite-entry.ts	1
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
 src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
-src/config/sessions/session-accessor.sqlite-read.ts	11
+src/config/sessions/session-accessor.sqlite-read.ts	10
 src/config/sessions/session-accessor.sqlite-recovery.ts	1
 src/config/sessions/session-accessor.sqlite-reset-window.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
@@ -2487,7 +2477,7 @@ src/daemon/launchd-service-files.ts	1
 src/daemon/launchd-stop.ts	2
 src/daemon/schtasks-control.ts	5
 src/daemon/schtasks-install.ts	2
-src/daemon/schtasks-process.ts	2
+src/daemon/schtasks-process.ts	1
 src/daemon/schtasks-runtime.ts	4
 src/daemon/service.ts	1
 src/daemon/systemd-exec.ts	2
@@ -2967,7 +2957,6 @@ src/meeting-bot/session-runtime.ts	4
 src/meeting-bot/session-speech-readiness.ts	1
 src/meeting-bot/session-transcript-store.ts	1
 src/meeting-bot/voice-call-gateway.ts	1
-src/memory-host-sdk/dreaming.ts	3
 src/memory-host-sdk/event-store.ts	2
 src/memory-host-sdk/events.ts	1
 src/model-catalog/bundled-catalog-stamp.ts	1
@@ -3138,7 +3127,7 @@ src/plugins/provider-auth-choice-helpers.ts	12
 src/plugins/provider-catalog-result.ts	8
 src/plugins/provider-discovery.runtime.ts	2
 src/plugins/provider-discovery.ts	2
-src/plugins/provider-model-compat.ts	7
+src/plugins/provider-model-compat.ts	6
 src/plugins/provider-model-primary.ts	1
 src/plugins/provider-openai-chatgpt-oauth.ts	1
 src/plugins/provider-policy-surface.ts	1
@@ -3205,15 +3194,14 @@ src/secrets/channel-contract-api.ts	1
 src/secrets/configure.ts	2
 src/secrets/egress-proxy/stream-substitution.ts	2
 src/secrets/legacy-secretref-env-marker.ts	1
-src/secrets/plan.ts	4
+src/secrets/plan.ts	2
 src/secrets/private-plan-file.ts	1
-src/secrets/provider-env-vars.ts	1
 src/secrets/resolve.ts	1
 src/secrets/runtime-command-secrets.ts	4
 src/secrets/runtime-config-collectors-core.ts	7
 src/secrets/runtime-config-collectors-memory.ts	1
 src/secrets/runtime-config-collectors-sandbox.ts	2
-src/secrets/runtime-fast-path.ts	7
+src/secrets/runtime-fast-path.ts	2
 src/secrets/runtime-gateway-auth-surfaces.ts	1
 src/secrets/runtime-openai-file-fixture.test-helper.ts	1
 src/secrets/runtime-owner-assignments.ts	1
@@ -3366,7 +3354,7 @@ src/tui/gateway-chat.ts	2
 src/tui/tui-autocomplete.ts	1
 src/tui/tui-command-handlers.ts	5
 src/tui/tui-event-handlers.ts	5
-src/tui/tui-formatters.ts	4
+src/tui/tui-formatters.ts	3
 src/tui/tui-session-actions.ts	3
 src/tui/tui-session-events.ts	1
 src/tui/tui-session-projection.ts	2

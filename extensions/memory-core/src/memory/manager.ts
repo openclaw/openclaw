@@ -23,7 +23,7 @@ import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { withOpenClawAgentDatabaseWrite } from "openclaw/plugin-sdk/sqlite-runtime";
 import { runInMemoryBackgroundContext } from "./background-context.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
-import type { EmbeddingProvider, EmbeddingProviderRequest } from "./embeddings.js";
+import type { EmbeddingProvider } from "./embeddings.js";
 import { getMemoryManagerLifecycle } from "./lifecycle.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { memoryDatabaseTableExists } from "./manager-db-kernel.js";
@@ -88,7 +88,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
   protected readonly providerRequirement: MemoryEmbeddingProviderRequirement;
-  protected readonly requestedProvider: EmbeddingProviderRequest;
   protected providerInitPromise: Promise<void> | null = null;
   protected providerInitialized = false;
   protected embeddingBootstrapFailure?: MemoryEmbeddingBootstrapDebug;
@@ -255,8 +254,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       store: { ...effectiveSettings.store, databasePath: dbPath },
     };
     this.providerRequirement = params.providerRequirement;
-    this.requestedProvider = effectiveSettings.provider;
-    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
+    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.settings.provider);
     for (const memorySource of effectiveSettings.sources) {
       this.sources.add(memorySource);
     }
@@ -586,7 +584,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     const providerInfo = resolveStatusProviderInfo({
       provider: this.embeddingBootstrapFailure ? null : this.provider,
       providerInitialized: this.embeddingBootstrapFailure ? true : this.providerInitialized,
-      requestedProvider: this.requestedProvider,
+      requestedProvider: this.settings.provider,
       resolveConfiguredModel: () =>
         this.resolveConfiguredIndexIdentity()?.provider.model || this.settings.model,
     });
@@ -610,7 +608,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       storage,
       provider: providerInfo.provider,
       model: providerInfo.model,
-      requestedProvider: this.requestedProvider,
+      requestedProvider: this.settings.provider,
       sources: Array.from(this.sources),
       extraPaths: this.settings.extraPaths,
       sourceCounts: aggregateState.sourceCounts.map((entry) =>

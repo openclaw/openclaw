@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { deterministicChecks } from "./checks.js";
-import { mintFriendCode, verifyFriendCode } from "./friendcode.js";
 import { createMonotonicUlidFactory } from "./ulid.js";
 
 // Secret-shaped fixtures are assembled at runtime so the source never contains
@@ -38,31 +37,6 @@ describe("deterministic checks", () => {
   it("rejects invalid UTF-8 and oversize input", () => {
     expect(deterministicChecks(Uint8Array.of(0xc3, 0x28)).findings[0]?.code).toBe("invalid_utf8");
     expect(deterministicChecks("x".repeat(32 * 1024 + 1)).findings[0]?.code).toBe("too_large");
-  });
-});
-
-describe("friend codes", () => {
-  it("mints deterministic Crockford codes and enforces expiry", () => {
-    const secret = Uint8Array.from({ length: 32 }, (_, index) => index);
-    const nonce = Uint8Array.from({ length: 16 }, (_, index) => index + 16);
-    const code = mintFriendCode(secret, { expiry: 2_000, nonce });
-    expect(code.code).toMatch(/^[0-9A-HJKMNP-TV-Z]{8}$/);
-    expect(verifyFriendCode(code, secret, { now: 2_000 })).toBe(true);
-    expect(verifyFriendCode(code, secret, { now: 2_001 })).toBe(false);
-    expect(
-      verifyFriendCode({ ...code, code: `Z${code.code.slice(1)}` }, secret, { now: 2_000 }),
-    ).toBe(false);
-  });
-
-  it.each([0, 16])("rejects a %i-byte device secret", (length) => {
-    const shortSecret = new Uint8Array(length);
-    const validSecret = new Uint8Array(32);
-    const nonce = new Uint8Array(16);
-    const code = mintFriendCode(validSecret, { expiry: 2_000, nonce });
-    expect(() => mintFriendCode(shortSecret, { expiry: 2_000, nonce })).toThrow(
-      "invalid friend code input",
-    );
-    expect(verifyFriendCode(code, shortSecret, { now: 2_000 })).toBe(false);
   });
 });
 

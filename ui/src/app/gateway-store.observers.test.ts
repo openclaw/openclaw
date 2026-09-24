@@ -105,8 +105,8 @@ describe("application gateway observer ownership", () => {
     const count = () =>
       current().request.mock.calls.filter(([method]) => method === "cron.list").length;
     const [first, shared] = await Promise.all([load(), load()]);
-    expect(first.items).toEqual(shared.items);
-    expect(first.items).toContainEqual(expect.objectContaining({ label: "Automation" }));
+    expect(first).toEqual(shared);
+    expect(first).toContainEqual(expect.objectContaining({ label: "Automation" }));
     expect(count()).toBe(1);
     for (const event of ["cron", "config.changed"]) {
       let pending: ReturnType<typeof load> | undefined;

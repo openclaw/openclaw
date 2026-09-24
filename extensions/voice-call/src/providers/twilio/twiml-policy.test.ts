@@ -28,7 +28,7 @@ describe("twiml policy", () => {
       canStream: true,
     });
 
-    expect(decision.kind).toBe("stored");
+    expect(decision).toBe("stored");
   });
 
   it("returns queue for inbound when another stream is active", () => {
@@ -43,10 +43,10 @@ describe("twiml policy", () => {
       canStream: true,
     });
 
-    expect(decision.kind).toBe("queue");
+    expect(decision).toBe("queue");
   });
 
-  it("returns stream + activation for inbound call when available", () => {
+  it("returns stream for inbound call when available", () => {
     const view = readTwimlRequestView(
       createContext("CallStatus=ringing&Direction=inbound&CallSid=CA789"),
     );
@@ -58,8 +58,7 @@ describe("twiml policy", () => {
       canStream: true,
     });
 
-    expect(decision.kind).toBe("stream");
-    expect(decision.activateStreamCallSid).toBe("CA789");
+    expect(decision).toBe("stream");
   });
 
   it("returns empty for status callbacks", () => {
@@ -76,6 +75,6 @@ describe("twiml policy", () => {
       canStream: true,
     });
 
-    expect(decision.kind).toBe("empty");
+    expect(decision).toBe("empty");
   });
 });
