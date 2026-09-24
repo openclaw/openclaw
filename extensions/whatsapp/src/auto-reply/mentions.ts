@@ -51,8 +51,9 @@ export function renderAgentFacingMentionText(params: {
 }): string {
   const targets = resolveMentionTargets(params.msg, params.authDir);
   const selfMentionIds = targets.normalizedMentions
-    .filter((mention) => identitiesOverlap(targets.self, mention))
-    .flatMap((mention) => [mention.jid, mention.lid])
+    .flatMap((mention) =>
+      identitiesOverlap(targets.self, mention) ? [mention.jid, mention.lid] : [],
+    )
     .filter((jid): jid is string => Boolean(jid))
     .map((jid) => jid.split("@")[0]?.trim())
     .filter((id): id is string => Boolean(id));
