@@ -19,6 +19,7 @@ import {
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 import { getQrRemoteCommandSecretTargetIds } from "./command-secret-targets.js";
+import { isTerminalInteractive } from "./terminal-interactivity.js";
 
 type QrCliOptions = {
   json?: boolean;
@@ -212,24 +213,41 @@ export function registerQrCli(program: Command) {
         const publicUrl =
           explicitUrl ?? (wantsRemote ? undefined : readDevicePairPublicUrlFromConfig(cfg));
 
-        const resolved = await resolvePairingSetupFromConfig(cfg, {
-          publicUrl,
-          preferRemoteUrl: wantsRemote,
-          ...(opts.voiceNode
-            ? { bootstrapProfile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE }
-            : opts.limited
-              ? { bootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE }
-              : {}),
-          runCommandWithTimeout: async (argv, runOpts) =>
-            await runCommandWithTimeout(argv, {
-              timeoutMs: runOpts.timeoutMs,
-            }),
-          loadLocalTlsFingerprint: async () => {
-            const certificate = await inspectGatewayTlsCertificate(cfg.gateway?.tls);
-            return certificate.ok ? certificate.value.fingerprintSha256 : undefined;
-          },
-        });
+        const resolveSetup = (config: OpenClawConfig) =>
+          resolvePairingSetupFromConfig(config, {
+            publicUrl,
+            preferRemoteUrl: wantsRemote,
+            ...(opts.voiceNode
+              ? { bootstrapProfile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE }
+              : opts.limited
+                ? { bootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE }
+                : {}),
+            runCommandWithTimeout: async (argv, runOpts) =>
+              await runCommandWithTimeout(argv, {
+                timeoutMs: runOpts.timeoutMs,
+              }),
+            loadLocalTlsFingerprint: async () => {
+              const certificate = await inspectGatewayTlsCertificate(config.gateway?.tls);
+              return certificate.ok ? certificate.value.fingerprintSha256 : undefined;
+            },
+          });
 
+        let resolved = await resolveSetup(cfg);
+        if (
+          !resolved.ok &&
+          resolved.reason === "loopback" &&
+          !opts.json &&
+          !opts.setupCodeOnly &&
+          !wantsRemote &&
+          !publicUrl &&
+          !token &&
+          !password &&
+          isTerminalInteractive()
+        ) {
+          const { setupQrPhoneAccess } = await import("./qr-setup.js");
+          const configured = await setupQrPhoneAccess();
+          resolved = await resolveSetup(configured);
+        }
         if (!resolved.ok) {
           throw new Error(resolved.error);
         }
