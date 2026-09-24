@@ -420,3 +420,18 @@ export class ReplyRunSuccessorAdmissionBlockedError extends Error {
     this.name = "ReplyRunSuccessorAdmissionBlockedError";
   }
 }
+
+// A steering interrupt can clear this operation's registry slot (abortByUser)
+// before its backend CLI subprocess actually exits. The subprocess's fallback
+// candidate then binds tool authority into a slot a later operation already
+// owns. This is local coordination, not a provider/model failure — the model
+// fallback loop must abort the turn instead of blaming and cascading through
+// candidates. See isNonProviderRuntimeCoordinationError (failover-error.ts).
+export class ReplyRunDisplacedToolAuthorityError extends Error {
+  readonly sessionKey: string;
+  constructor(sessionKey: string) {
+    super("Reply operation has no active tool authority snapshot");
+    this.name = "ReplyRunDisplacedToolAuthorityError";
+    this.sessionKey = sessionKey;
+  }
+}

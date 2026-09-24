@@ -911,6 +911,22 @@ describe("failover-error", () => {
       }
     });
 
+    it("returns true for a reply run displaced by a steering re-admission (#148707)", () => {
+      // The fallback candidate binds its tool authority route right before the
+      // CLI turn runs (agent-runner-cli-candidate.ts). If a second admission on
+      // the same session key displaced this operation's registry slot while the
+      // CLI turn was in flight, the bind throws once the turn completes and the
+      // fallback loop retries a further candidate. That must be classified as
+      // local coordination, not a provider/model failure, or the loop
+      // cascades through every remaining candidate. See GOALNACHT-2026-09-16.
+      const displaced = new Error("Reply operation has no active tool authority snapshot");
+      displaced.name = "ReplyRunDisplacedToolAuthorityError";
+      for (const error of [displaced, new Error("cli candidate failed", { cause: displaced })]) {
+        expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
+        expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+      }
+    });
+
     it("returns true for Codex missing tool-result local execution failures", () => {
       const missingToolResultMessage =
         "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";

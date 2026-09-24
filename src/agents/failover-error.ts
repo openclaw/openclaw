@@ -54,6 +54,7 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "WorkerRunnerCapacityError",
   "WorkerWorkspaceReconciliationError",
   "ActiveTurnClaimError",
+  "ReplyRunDisplacedToolAuthorityError",
 ]);
 
 export { recordModelFallbackStop } from "./model-fallback-stop.js";
