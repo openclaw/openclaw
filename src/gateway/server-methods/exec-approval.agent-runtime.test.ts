@@ -173,7 +173,7 @@ describe("exec approval signed agent runtime", () => {
         const instance = createOperationalRunInstanceRef(claim.runId);
         const delegated = claimAgentRunDelegatedAuthority(instance);
         try {
-          await bindWorkerTurnOwner(
+          const { capability } = await bindWorkerTurnOwner(
             placements,
             claim,
             undefined,
@@ -185,13 +185,17 @@ describe("exec approval signed agent runtime", () => {
             () => {},
           );
           validate = createAgentRuntimeApprovalAuthorityValidator(placements);
-          const runtimeIdentity: AgentRuntimeIdentity = {
+          const runtimeIdentity = await capability.run((owner): AgentRuntimeIdentity => ({
             kind: "agentRuntime",
-            agentId: source.agentId,
-            sessionKey: source.sessionKey,
-            operationalRunInstance: instance,
-            delegatedAuthority: { kind: "worker", ...delegated, turnClaim: claim },
-          };
+            agentId: owner.agentId,
+            sessionKey: owner.sessionKey,
+            operationalRunInstance: owner.operationalRunInstance,
+            delegatedAuthority: {
+              kind: "worker",
+              ...owner.delegatedAuthority,
+              turnClaim: owner.turnClaim,
+            },
+          }));
           const calibration = observeHostDataSql();
           try {
             const statement = database.db.prepare("SELECT 1");

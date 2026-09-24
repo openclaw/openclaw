@@ -354,7 +354,6 @@ extensions/discord/src/monitor/message-text.ts	3
 extensions/discord/src/monitor/model-picker-preferences-migrations.ts	5
 extensions/discord/src/monitor/model-picker-preferences.ts	1
 extensions/discord/src/monitor/model-picker.state.ts	3
-extensions/discord/src/monitor/native-command-model-picker-interaction.ts	1
 extensions/discord/src/monitor/native-command-reply.ts	2
 extensions/discord/src/monitor/native-command.ts	2
 extensions/discord/src/monitor/presence.ts	1
@@ -2914,7 +2913,7 @@ src/infra/state-migrations.runtime-state.ts	7
 src/infra/state-migrations.session-store.ts	9
 src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.state-dir.ts	1
-src/infra/state-migrations.storage.ts	9
+src/infra/state-migrations.storage.ts	7
 src/infra/state-migrations.tui-last-session.ts	2
 src/infra/state-migrations.update-check.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	2
@@ -3098,7 +3097,7 @@ src/plugins/capability-provider-runtime.ts	13
 src/plugins/captured-registration.ts	2
 src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
-src/plugins/clawhub.ts	5
+src/plugins/clawhub.ts	4
 src/plugins/cli-gateway-nodes-runtime.ts	2
 src/plugins/command-registration.ts	3
 src/plugins/computer-use-contract.ts	3
@@ -3107,7 +3106,6 @@ src/plugins/config-schema.ts	5
 src/plugins/contracts/inventory/bundled-capability-metadata.ts	3
 src/plugins/contracts/registry.ts	1
 src/plugins/contracts/tts-contract-suites.ts	19
-src/plugins/conversation-binding.ts	1
 src/plugins/dashboard-capabilities.ts	1
 src/plugins/dev-source-root.ts	1
 src/plugins/discovery.ts	1
@@ -3123,17 +3121,15 @@ src/plugins/hook-isolation.ts	3
 src/plugins/hook-runner-global-state.ts	1
 src/plugins/hook-types.ts	2
 src/plugins/hooks.ts	12
-src/plugins/host-hook-attachments.ts	2
+src/plugins/host-hook-attachments.ts	1
 src/plugins/host-hook-json.ts	1
 src/plugins/host-hook-runtime.ts	1
-src/plugins/host-hook-scheduled-turns.ts	7
-src/plugins/host-hook-state.ts	8
-src/plugins/host-hooks.ts	1
+src/plugins/host-hook-scheduled-turns.ts	6
+src/plugins/host-hook-state.ts	6
 src/plugins/install-managed-npm-state.ts	2
 src/plugins/install-npm-metadata.ts	1
 src/plugins/install-persistence.ts	1
 src/plugins/install-record-commit.ts	3
-src/plugins/install-security-scan.runtime.ts	1
 src/plugins/install-transaction.ts	3
 src/plugins/installed-plugin-index-install-owner.ts	2
 src/plugins/installed-plugin-index-policy.ts	1
@@ -3205,7 +3201,6 @@ src/plugins/runtime/runtime-channel.ts	1
 src/plugins/runtime/runtime-llm-isolated.ts	3
 src/plugins/runtime/runtime-llm.runtime.ts	1
 src/plugins/schema-validator.ts	6
-src/plugins/sdk-alias.ts	1
 src/plugins/session-catalog-history-import.ts	1
 src/plugins/setup-registry.ts	11
 src/plugins/slots.ts	3

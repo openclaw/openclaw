@@ -55,6 +55,7 @@ type RestartSafeChatAdmission = {
 
 export type RestartSafeChatTerminalState = {
   error?: string;
+  errorKind?: "state_contention";
   retryable: boolean;
   status: "failed" | "killed";
 };
@@ -449,6 +450,7 @@ export async function terminalizeRestartSafeChatAdmission(
               endedAt,
               aborted: params.status === "killed",
               error: params.error,
+              errorKind: params.errorKind,
             },
           },
         }),
@@ -476,6 +478,7 @@ export async function terminalizeRestartSafeChatAdmission(
       },
       runId: params.clientRunId,
       error: params.error,
+      errorKind: params.errorKind,
     }).catch((error: unknown) => {
       // The claim is already settled; report failure must not trigger a competing terminal write.
       log.warn(`Failed to record restart-safe chat failure notice: ${boundedWorkerError(error)}`);

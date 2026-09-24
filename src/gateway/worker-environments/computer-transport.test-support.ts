@@ -5,6 +5,7 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
+  claimAgentRunApprovalAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
@@ -267,12 +268,23 @@ export function createHarness(sharedHost = false, withPolicy = true) {
   };
   const run = createOperationalRunInstanceRef(claim.runId);
   const authority = claimAgentRunDelegatedAuthority(run);
+  const workerLifetime = new AbortController();
+  const workerAuthority = claimAgentRunApprovalAuthority(authority, [workerLifetime.signal]);
+  const workerSource = {
+    authority: workerAuthority,
+    assertCurrent() {
+      if (!validateAgentRunDelegatedAuthority(workerAuthority)) {
+        throw new Error("Session desktop placement authority changed");
+      }
+    },
+  };
   return {
     claim,
     options,
     state,
     run,
     authority,
+    workerSource,
     privateInvoke,
     publicInvoke,
     nodeTransport,
@@ -281,6 +293,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     registry,
     nativeExecutionIds,
     releaseClaim() {
+      workerLifetime.abort();
       state.placement = { ...state.placement, turnClaim: null };
       for (const handler of closedHandlers) {
         handler(claim);
@@ -291,7 +304,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
       if (!prepared) {
         throw new Error("Expected a prepared session desktop");
       }
-      return { prepared, transport: prepared.bind(run) };
+      return { prepared, transport: prepared.bind(run, workerSource) };
     },
   };
 }

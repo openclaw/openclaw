@@ -11,6 +11,7 @@ import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -20,6 +21,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
+import { createAgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
@@ -143,12 +145,18 @@ it("rolls back claim fencing and never revives a retained approval after same-ID
     throw new Error("expected retained worker capability");
   }
   const validate = createAgentRuntimeApprovalAuthorityValidator(store);
-  const identity = {
-    kind: "agentRuntime" as const,
-    ...SESSION,
-    operationalRunInstance: instance,
-    delegatedAuthority: { kind: "worker" as const, ...delegated, turnClaim: claim },
-  };
+  const identityParams = await capability.run((owner) => ({
+    agentId: owner.agentId,
+    sessionKey: owner.sessionKey,
+    operationalRunInstance: owner.operationalRunInstance,
+    approvalAuthority: owner.delegatedAuthority,
+    workerTurnClaim: owner.turnClaim,
+  }));
+  const identity = await createAgentRuntimeIdentity(identityParams);
+  const delayedIdentity = await createAgentRuntimeIdentity(identityParams);
+  if (!identity || !delayedIdentity) {
+    throw new Error("expected worker runtime identities");
+  }
   const closed = vi.fn();
   const unregister = store.registerTurnClaimClosedHandler(closed);
   try {
@@ -176,13 +184,28 @@ it("rolls back claim fencing and never revives a retained approval after same-ID
       { database },
     );
     expect(closed).toHaveBeenCalledOnce();
-    await bindWorkerTurnOwner(store, replacement, undefined, instance, sessionTarget, () => {});
+    const nextOwner = await bindWorkerTurnOwner(
+      store,
+      replacement,
+      undefined,
+      instance,
+      sessionTarget,
+      () => {},
+    );
     expect(validate({ ...identity })).toBe(false);
+    expect(validate(delayedIdentity)).toBe(false);
     await expect(capability.run(() => "stale")).rejects.toThrow("worker turn authority changed");
-    const next = {
-      ...identity,
-      delegatedAuthority: { ...identity.delegatedAuthority, turnClaim: replacement },
-    };
+    expect(validateAgentRunDelegatedAuthority(delegated)).toBe(true);
+    const next = await nextOwner.capability.run((owner) =>
+      createAgentRuntimeIdentity({
+        ...identityParams,
+        approvalAuthority: owner.delegatedAuthority,
+        workerTurnClaim: owner.turnClaim,
+      }),
+    );
+    if (!next || next.delegatedAuthority.kind !== "worker") {
+      throw new Error("expected replacement worker identity");
+    }
     expect(validate(next)).toBe(true);
     next.delegatedAuthority.turnClaim = { ...replacement, claimId: "another claim" };
     expect(validate(next)).toBe(false);

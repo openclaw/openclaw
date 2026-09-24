@@ -6,9 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import {
   claimAgentRunDelegatedAuthority,
+  claimAgentRunApprovalAuthority,
   releaseAgentRunDelegatedAuthority,
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
+  validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import { readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
@@ -123,6 +125,58 @@ afterEach(() => {
 });
 
 describe("agent runtime identity token", () => {
+  it.each(["signed", "direct"] as const)(
+    "retains a worker approval scope through delayed first %s use",
+    async (mode) => {
+      useTempHome();
+      const runtimeToken = await importRuntimeTokenModule();
+      const run = operationalRun(`worker-scope-${mode}`);
+      const lifetime = new AbortController();
+      const original = claimAgentRunApprovalAuthority(run.delegatedAuthority, [lifetime.signal]);
+      const params: AgentRuntimeIdentityTokenParams = {
+        agentId: "main",
+        sessionKey: "agent:main:worker-scope",
+        operationalRunInstance: run.operationalRunInstance,
+        approvalAuthority: original,
+        workerTurnClaim: {
+          sessionId: "worker-scope-session",
+          claimId: "worker-scope-claim",
+          runId: run.operationalRunInstance.runId,
+          placementGeneration: 0,
+          owner: { kind: "worker", environmentId: "worker-environment", ownerEpoch: 1 },
+        },
+      };
+      const token =
+        mode === "signed" ? await runtimeToken.mintAgentRuntimeIdentityToken(params) : undefined;
+      const direct =
+        mode === "direct" ? await runtimeToken.createAgentRuntimeIdentity(params) : undefined;
+      lifetime.abort();
+      const replacement = claimAgentRunApprovalAuthority(run.delegatedAuthority, [
+        new AbortController().signal,
+      ]);
+      const stale = token ? await runtimeToken.verifyAgentRuntimeIdentityToken(token) : direct;
+      if (!stale) {
+        throw new Error("Expected decoded worker identity");
+      }
+      expect(validateAgentRunDelegatedAuthority(stale.delegatedAuthority)).toBe(false);
+      expect(validateAgentRunDelegatedAuthority(run.delegatedAuthority)).toBe(true);
+      const current = await createIdentity(runtimeToken, mode, {
+        ...params,
+        approvalAuthority: replacement,
+      });
+      if (!current) {
+        throw new Error("Expected replacement worker identity");
+      }
+      expect(validateAgentRunDelegatedAuthority(current.delegatedAuthority)).toBe(true);
+      await expect(
+        runtimeToken.createAgentRuntimeIdentity({
+          ...params,
+          approvalAuthority: run.delegatedAuthority,
+        }),
+      ).rejects.toThrow("original claim approval authority");
+    },
+  );
+
   it.each(["signed", "direct"] as const)(
     "rejects %s delegated authority after terminal, replacement, and restart boundaries",
     async (mode) => {

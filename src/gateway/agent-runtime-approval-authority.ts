@@ -1,10 +1,6 @@
 import { validateAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
-import type {
-  AgentRuntimeDelegatedAuthority,
-  AgentRuntimeIdentity,
-} from "./agent-runtime-identity-token.js";
+import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import { resolveMessageActionTurnCapability } from "./message-action-turn-capability.js";
-import type { WorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 import {
   captureWorkerTurnClaimCurrentness,
   type WorkerTurnExecutionIdentityStore,
@@ -16,32 +12,16 @@ export type AgentRuntimeApprovalAuthorityValidator = (identity: AgentRuntimeIden
 export function createAgentRuntimeApprovalAuthorityValidator(
   placements?: WorkerTurnExecutionIdentityStore,
 ): AgentRuntimeApprovalAuthorityValidator {
-  const workerClaims = new WeakMap<
-    AgentRuntimeDelegatedAuthority,
-    {
-      claim: WorkerSessionTurnClaim;
-      isCurrent: () => boolean;
-    }
-  >();
   return (identity) => {
     const authority = identity.delegatedAuthority;
-    if (!validateAgentRunDelegatedAuthority(authority)) {
-      return false;
-    }
     if (authority.kind === "worker") {
-      let captured = workerClaims.get(authority);
-      if (!captured) {
-        const isCurrent =
-          placements && captureWorkerTurnClaimCurrentness(placements, authority.turnClaim);
-        if (!isCurrent) {
-          return false;
-        }
-        captured = { claim: authority.turnClaim, isCurrent };
-        workerClaims.set(authority, captured);
-      }
-      if (captured.claim !== authority.turnClaim || !captured.isCurrent()) {
+      const isCurrent =
+        placements && captureWorkerTurnClaimCurrentness(placements, authority.turnClaim, authority);
+      if (!isCurrent?.()) {
         return false;
       }
+    } else if (!validateAgentRunDelegatedAuthority(authority)) {
+      return false;
     }
     const messageActionContext = identity.messageActionContext;
     if (!messageActionContext) {

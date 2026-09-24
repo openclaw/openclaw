@@ -18,10 +18,7 @@ import {
   buildActiveNodeContextText,
   prepareActiveNodeContext,
 } from "../../infra/active-node-context.js";
-import {
-  getActiveAgentRunDelegatedAuthority,
-  registerAgentRunDelegatedAuthorityClosedHandler,
-} from "../../infra/agent-run-registry.js";
+import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
@@ -231,8 +228,11 @@ export async function executeWorkerTurn(
       turn,
       turnClaim: params.turnClaim,
     });
-  preparedComputer?.bind(operationalRunInstance);
-  const authority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
+  preparedComputer?.bind(operationalRunInstance, {
+    authority: runtimeIdentity.approvalAuthority,
+    assertCurrent: assertActive,
+  });
+  const authority = runtimeIdentity.approvalAuthority;
   const authorityAbort = new AbortController();
   const signal = turn.abortSignal
     ? AbortSignal.any([turn.abortSignal, authorityAbort.signal])
@@ -291,6 +291,7 @@ export async function executeWorkerTurn(
                 agentId: placement.agentId,
                 sessionKey: placement.sessionKey,
                 operationalRunInstance,
+                approvalAuthority: runtimeIdentity.approvalAuthority,
                 receiptAuthority: () => {
                   assertSkillAuthority();
                   return true;

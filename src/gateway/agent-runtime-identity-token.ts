@@ -489,6 +489,9 @@ function prepareAgentRuntimeIdentityTokenPayload(
     throw new Error("worker delegated authority disagrees with the operational run");
   }
   const approvalAuthority = params.approvalAuthority ?? activeAuthority;
+  if (params.workerTurnClaim && approvalAuthority.claimId === activeAuthority.claimId) {
+    throw new Error("worker runtime identity requires its original claim approval authority");
+  }
   if (
     approvalAuthority.operationalRunInstance.instanceId !== operationalInstanceId ||
     approvalAuthority.operationalRunInstance.runId !== operationalRunId ||

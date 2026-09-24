@@ -229,10 +229,6 @@ describe("subagent registry steer restarts", () => {
       setImmediate(resolve);
     });
   };
-  const waitForRegistrySideEffect = async (assertion: () => void) => {
-    await vi.waitFor(assertion, { interval: 1, timeout: 1_000 });
-  };
-
   const createDeferredAnnounce = () => {
     const entered = createDeferred();
     const delivery = createDeferred<"delivered" | "retryable">();
@@ -513,16 +509,19 @@ describe("subagent registry steer restarts", () => {
       expect(run.endedHookEmittedAt).toBeUndefined();
       expect(run.endedReason).toBeUndefined();
 
-      emitLifecycleEnd("run-terminal-state-new");
-
-      await waitForRegistrySideEffect(() => {
+      const settleRootWork = observeRootWork();
+      try {
+        emitLifecycleEnd("run-terminal-state-new");
+        await settleRootWork(true);
         const hookCall = requireSubagentEndedHookCall("run-terminal-state-new");
         expect(hookCall.event.runId).toBe("run-terminal-state-new");
         expect(hookCall.ctx.runId).toBe("run-terminal-state-new");
-      });
-      const lifecycleEvent = requireSessionLifecycleEventCall("terminal-state lifecycle event");
-      expect(lifecycleEvent.sessionKey).toBe("agent:main:subagent:terminal-state");
-      expect(lifecycleEvent.reason).toBe("subagent-status");
+        const lifecycleEvent = requireSessionLifecycleEventCall("terminal-state lifecycle event");
+        expect(lifecycleEvent.sessionKey).toBe("agent:main:subagent:terminal-state");
+        expect(lifecycleEvent.reason).toBe("subagent-status");
+      } finally {
+        await settleRootWork();
+      }
     }
   });
 
@@ -992,28 +991,33 @@ describe("subagent registry steer restarts", () => {
       task: "child task",
     });
 
-    emitLifecycleEnd("run-parent");
-    await waitForRegistrySideEffect(() => {
-      const childRunIds = announceSpy.mock.calls.map(
+    const settleRootWork = observeRootWork();
+    try {
+      emitLifecycleEnd("run-parent");
+      await settleRootWork(true);
+      const initialChildRunIds = announceSpy.mock.calls.map(
         (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
       );
-      expect(countMatching(childRunIds, (id) => id === "run-parent")).toBe(1);
-    });
+      expect(countMatching(initialChildRunIds, (id) => id === "run-parent")).toBe(1);
 
-    emitLifecycleEnd("run-child");
-    await waitForRegistrySideEffect(() => {
+      emitLifecycleEnd("run-child");
+      await settleRootWork(true);
+      {
+        const childRunIds = announceSpy.mock.calls.map(
+          (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
+        );
+        expect(countMatching(childRunIds, (id) => id === "run-parent")).toBe(2);
+        expect(countMatching(childRunIds, (id) => id === "run-child")).toBe(1);
+      }
+
       const childRunIds = announceSpy.mock.calls.map(
         (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
       );
       expect(countMatching(childRunIds, (id) => id === "run-parent")).toBe(2);
       expect(countMatching(childRunIds, (id) => id === "run-child")).toBe(1);
-    });
-
-    const childRunIds = announceSpy.mock.calls.map(
-      (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
-    );
-    expect(countMatching(childRunIds, (id) => id === "run-parent")).toBe(2);
-    expect(countMatching(childRunIds, (id) => id === "run-child")).toBe(1);
+    } finally {
+      await settleRootWork();
+    }
   });
 
   it("retries completion delivery beyond three attempts and suspends at its deadline", async () => {

@@ -8,6 +8,7 @@ import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import {
+  claimAgentRunApprovalAuthority,
   getActiveAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
@@ -80,6 +81,7 @@ type BoundWorkerTurnOwner = {
   runtime: {
     assertActive: () => void;
     delegatedAuthority: AgentRunDelegatedAuthority;
+    approvalLifetime: AbortController;
     finishing?: {
       credentialHash: string;
       seq: number;
@@ -143,19 +145,21 @@ export async function bindWorkerTurnOwner(
   const sessionTarget = Object.freeze({ ...requestedSource });
   const scope = captureGatewayRootWorkAdmissionContinuationScope();
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
-  const delegatedAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
-  if (!path || !delegatedAuthority) {
+  const runAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
+  if (!path || !runAuthority) {
     scope?.release();
     throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
   }
   let claimAuthority: PlacementTurnClaimAuthority | undefined;
+  const approvalLifetime = new AbortController();
+  let delegatedAuthority: AgentRunDelegatedAuthority;
   try {
     const prepared = await store.prepareTurnClaimAuthority(claim);
     claimAuthority = prepared;
     const assertPreparedCurrent = () => {
       if (
         !prepared.isCurrent() ||
-        !validateAgentRunDelegatedAuthority(delegatedAuthority) ||
+        !validateAgentRunDelegatedAuthority(runAuthority) ||
         sessionTarget.sessionId !== claim.sessionId ||
         prepared.identity.agentId !== sessionTarget.agentId ||
         prepared.identity.sessionKey !== sessionTarget.sessionKey
@@ -167,7 +171,9 @@ export async function bindWorkerTurnOwner(
     assertRunActive();
     operatorAuthority?.assertCurrent();
     assertPreparedCurrent();
+    delegatedAuthority = claimAgentRunApprovalAuthority(runAuthority, [approvalLifetime.signal]);
   } catch (error) {
+    approvalLifetime.abort();
     claimAuthority?.release();
     scope?.release();
     throw error;
@@ -216,9 +222,6 @@ export async function bindWorkerTurnOwner(
   });
   const existing = owners.get(claim.sessionId);
   const currentClaimKey = claimKey(claim);
-  if (existing) {
-    closeBoundOwner(existing);
-  }
   const owner: BoundWorkerTurnOwner = {
     capability,
     claim,
@@ -226,13 +229,12 @@ export async function bindWorkerTurnOwner(
     runtime: {
       assertActive,
       delegatedAuthority,
+      approvalLifetime,
       prepareAssistantTranscriptMessage,
       scope: scope ?? undefined,
       claimAuthority: authority,
     },
   };
-  owners.set(claim.sessionId, owner);
-  workerTurnOwners.set(path, owners);
   const closeOwner = () => {
     if (owners.get(claim.sessionId) === owner) {
       owners.delete(claim.sessionId);
@@ -243,6 +245,11 @@ export async function bindWorkerTurnOwner(
     closeBoundOwner(owner);
   };
   try {
+    if (existing) {
+      closeBoundOwner(existing);
+    }
+    owners.set(claim.sessionId, owner);
+    workerTurnOwners.set(path, owners);
     owner.runtime.stopWatchingAuthority = authority.onRevoked(closeOwner);
     assertActive();
   } catch (error) {
@@ -280,6 +287,7 @@ export function getWorkerTurnExecutionIdentityCapability(
 export function captureWorkerTurnClaimCurrentness(
   store: WorkerTurnExecutionIdentityStore,
   claim: WorkerSessionTurnClaim,
+  delegatedAuthority: AgentRunDelegatedAuthority,
 ): (() => boolean) | undefined {
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
   const owners = path ? workerTurnOwners.get(path) : undefined;
@@ -293,11 +301,15 @@ export function captureWorkerTurnClaimCurrentness(
   ) {
     return undefined;
   }
-  return () =>
+  const isBoundCurrent = () =>
     claimKey(claim) === capturedKey &&
     workerTurnOwners.get(path) === owners &&
     owners?.get(claim.sessionId) === bound &&
     bound.runtime.claimAuthority.isCurrent();
+  return () =>
+    isBoundCurrent() &&
+    validateAgentRunDelegatedAuthority(delegatedAuthority, bound.runtime.delegatedAuthority) &&
+    isBoundCurrent();
 }
 
 function resolveWorkerTurnRuntime(
@@ -489,6 +501,7 @@ export function registerWorkerTurnClaimClosedHandler(
 }
 
 function closeBoundOwner(owner: BoundWorkerTurnOwner): void {
+  owner.runtime.approvalLifetime.abort();
   owner.runtime.finishing = undefined;
   owner.runtime.stopWatchingAuthority?.();
   owner.runtime.stopWatchingAuthority = undefined;

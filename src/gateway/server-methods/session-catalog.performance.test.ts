@@ -228,10 +228,10 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         expect(io.pluginStateWorkerReadOperations).toBe(0);
         expect(io.sessionEntryReads).toBe(0);
         expect(io.sessionPayloadReads).toBe(0);
-        // The adopted cohort shares one freshness, schema-admission, and authority read path.
+        // The adopted cohort shares bounded freshness and authority reads with admitted schema facts.
         for (const work of workPerList) {
           expect(work).toEqual({
-            sqliteReadCalls: 6,
+            sqliteReadCalls: 2,
             bindingAuthorityReads: 1,
             pluginStateWorkerOperations: 0,
           });

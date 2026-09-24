@@ -2600,7 +2600,7 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       expect(isSessionLifecycleMutationActive(storePath, [params.ownerId])).toBe(true);
       return await originalCreate(params);
     });
-  let worktreeId: string | undefined;
+  let sessionKey: string | undefined;
   try {
     const created = await directSessionReq<{
       key: string;
@@ -2629,7 +2629,7 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     expect(created.payload?.entry.permissionMode).toBeUndefined();
     expect(loadSessionEntry({ sessionKey: key, storePath })?.permissionMode).toBeUndefined();
     expect(created.payload?.entry.sessionRoot).toBe(worktree?.path);
-    worktreeId = worktree?.id;
+    sessionKey = key;
     expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toMatchObject({
       id: worktree?.id,
       path: worktree?.path,
@@ -2684,15 +2684,10 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     });
     ws.close();
   } finally {
+    await disposeSessionReadContexts();
     await releaseGatewaySessionStoreFixture(dir);
     createSpy.mockRestore();
-    if (worktreeId) {
-      await managedWorktrees.remove({
-        id: worktreeId,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
-    }
+    await removeSessionWorktree(sessionKey);
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
