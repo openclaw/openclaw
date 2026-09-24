@@ -44,7 +44,7 @@ describe("exact SQLite session batches", () => {
       })),
     ),
   )(
-    "uses an admission snapshot only when the $reader exact reader requires it ($admission)",
+    "keeps the $reader exact lookup coherent across a concurrent commit ($admission)",
     ({ reader, admission }) => {
       const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-snapshot-") };
       const scope = { agentId: "main", env, sessionKey: "agent:main:snapshot" };
@@ -96,8 +96,10 @@ describe("exact SQLite session batches", () => {
         return statement;
       });
       try {
-        expect(read()?.entry.label).toBe(admission === "warm" ? "after" : "before");
-        expect(selectedInTransaction).toBe(admission !== "warm");
+        // Exact target selection is its first read; BEGIN DEFERRED alone does not pin a snapshot.
+        const pinnedBeforeSelection = reader === "batch" && admission !== "warm";
+        expect(read()?.entry.label).toBe(pinnedBeforeSelection ? "before" : "after");
+        expect(selectedInTransaction).toBe(reader === "single" || pinnedBeforeSelection);
         expect(database.db.isTransaction).toBe(false);
         expect(read()?.entry.label).toBe("after");
       } finally {
