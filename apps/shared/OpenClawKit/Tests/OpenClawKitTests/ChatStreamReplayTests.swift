@@ -529,8 +529,8 @@ struct ChatStreamReplayTests {
         harness.transport.emit(.agent(OpenClawAgentEventPayload(
             runId: runId, seq: 7, stream: "tool", ts: now + 200,
             data: ["phase": AnyCodable("result"), "name": AnyCodable("read"), "toolCallId": AnyCodable("read-1")])))
-        harness.transport.emit(.sessionMessage(OpenClawSessionMessageEventPayload(
-            sessionKey: "main", message: try ChatPayloadDecoding.decode(tool),
+        try harness.transport.emit(.sessionMessage(OpenClawSessionMessageEventPayload(
+            sessionKey: "main", message: ChatPayloadDecoding.decode(tool),
             messageId: "layout-read", messageSeq: nil)))
         harness.transport.emit(replayNarrationEvent(
             runId: runId, itemId: "second", text: secondText, seq: 8, timestamp: now + 600))
@@ -590,8 +590,8 @@ struct ChatStreamReplayTests {
         harness.transport.emit(replayNarrationEvent(
             runId: runId, itemId: "late", text: "Retired run narration", seq: 9, timestamp: now + 800))
         // A canonical echo is the FIFO barrier after the rejected late event.
-        harness.transport.emit(.sessionMessage(OpenClawSessionMessageEventPayload(
-            sessionKey: "main", message: try ChatPayloadDecoding.decode(final),
+        try harness.transport.emit(.sessionMessage(OpenClawSessionMessageEventPayload(
+            sessionKey: "main", message: ChatPayloadDecoding.decode(final),
             messageId: "saved-final", messageSeq: nil)))
         try await harness.converge("final echo consumed after the retired event") { vm in
             vm.historyMutationGeneration > generation
