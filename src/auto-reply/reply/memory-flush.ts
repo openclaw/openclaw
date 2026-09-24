@@ -159,11 +159,6 @@ export function shouldRunPreflightCompaction(params: {
 }
 
 /**
- * Returns true when a memory flush has already been performed for the current
- * compaction cycle. This prevents repeated flush runs within the same cycle —
- * important for both the token-based and transcript-size–based trigger paths.
- */
-/**
  * Transcript growth that re-arms a memory flush on CLI backends.
  *
  * Those backends own compaction natively, so `SessionEntry.compactionCount`
