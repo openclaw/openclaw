@@ -9482,10 +9482,14 @@ struct ChatViewModelTests {
         }
     }
 
-    @Test(arguments: ["main", "agent:main:main"])
+    @Test(arguments: ["main", "agent:main:main"], [false, true])
     @MainActor
-    func `message invalidation recovers selected transcript`(eventSessionKey: String) async throws {
+    func `message invalidation recovers selected transcript`(
+        eventSessionKey: String,
+        refusesFirstRefresh: Bool) async throws
+    {
         let recovered = chatTextMessage(role: "assistant", text: "Stored message recovered", timestamp: 1)
+        let historyCalls = AsyncCounter()
         let (transport, vm) = await makeViewModel(
             activeAgentId: "main",
             historyResponses: [
@@ -9494,7 +9498,17 @@ struct ChatViewModelTests {
                     messages: [recovered],
                     canonicalKey: "agent:main:main",
                     agentId: "main"),
-            ])
+            ],
+            requestHistoryHook: { _ in _ = await historyCalls.increment() },
+            historyResponseHook: { _, index, _ in
+                if refusesFirstRefresh, index == 1 {
+                    throw GatewayResponseError(
+                        method: "chat.history", code: "UNAVAILABLE",
+                        message: "Session history is busy; retry shortly",
+                        details: ["retryable": AnyCodable(true), "retryAfterMs": AnyCodable(250)])
+                }
+                return nil
+            })
         defer { vm.detachTransport() }
         try await loadAndWaitBootstrap(vm: vm)
         #expect(vm.messages.isEmpty)
@@ -9509,6 +9523,7 @@ struct ChatViewModelTests {
                 vm.messages.contains { $0.content.contains { $0.text == "Stored message recovered" } }
             }
         }
+        #expect(await historyCalls.current() == (refusesFirstRefresh ? 3 : 2))
     }
 
     @Test @MainActor func `current session mutations refresh selected model availability`() async throws {
@@ -9701,7 +9716,7 @@ struct ChatViewModelTests {
 
         #expect(vm.modelChoices == (modelSelectionChanged ? [] : [unavailable]))
         #expect(vm.modelSelectionID == (modelSelectionChanged
-            ? OpenClawChatViewModel.defaultModelSelectionID : unavailable.selectionID))
+                ? OpenClawChatViewModel.defaultModelSelectionID : unavailable.selectionID))
         #expect(vm.sessions.first?.model == unavailable.modelID)
         #expect(vm.input == "hello")
         if !modelSelectionChanged { #expect(!vm.canSend) }
