@@ -175,7 +175,7 @@ describe("sessions_send dispatch admission", () => {
       });
       await replaceSessionEntry(
         { agentId: "main", sessionKey: sourceKey },
-        { sessionId: "requester-session", updatedAt: 1 },
+        { sessionId: "requester-session", updatedAt: 1, lifecycleRevision: "original-generation" },
       );
       await replaceSessionEntry(
         { agentId: "main", sessionKey: targetSessionKey },
@@ -206,6 +206,7 @@ describe("sessions_send dispatch admission", () => {
                 {
                   sessionId: "requester-session",
                   updatedAt: 2,
+                  lifecycleRevision: "original-generation",
                   delivery: normalizeSessionDeliveryState({
                     context: { channel: "telegram", accountId: "other", to: "later-recipient" },
                   }),
@@ -259,6 +260,7 @@ describe("sessions_send dispatch admission", () => {
         expect(completion).toMatchObject({
           sessionKey: sourceKey,
           expectedExistingSessionId: "requester-session",
+          expectedExistingSessionLifecycleRevision: "original-generation",
           channel: "telegram",
           accountId,
           to: "original-recipient",

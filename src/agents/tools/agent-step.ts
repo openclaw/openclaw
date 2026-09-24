@@ -18,6 +18,11 @@ import {
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 
+export type AgentStepSession = {
+  sessionId: string;
+  lifecycleRevision?: string;
+};
+
 type GatewayCaller = AgentToolGatewayRequestCaller;
 type AgentCommandRunner = typeof import("../../commands/agent.js").agentCommandFromIngress;
 
@@ -55,9 +60,9 @@ export async function runAgentStep(
     | {
         transcriptMessage?: undefined;
         deliveryContext?: DeliveryContext;
-        expectedSessionId?: string;
+        expectedSession?: AgentStepSession;
       }
-    | { transcriptMessage: string; deliveryContext?: never; expectedSessionId?: never }
+    | { transcriptMessage: string; deliveryContext?: never; expectedSession?: never }
   ),
 ): Promise<string | undefined> {
   const promptedAt = Date.now();
@@ -102,7 +107,10 @@ export async function runAgentStep(
       ...(params.agentId ? { agentId: params.agentId } : {}),
       sessionKey: params.sessionKey,
       idempotencyKey: stepIdem,
-      expectedExistingSessionId: params.expectedSessionId,
+      expectedExistingSessionId: params.expectedSession?.sessionId,
+      expectedExistingSessionLifecycleRevision: params.expectedSession
+        ? (params.expectedSession.lifecycleRevision ?? null)
+        : undefined,
       accountId: params.deliveryContext?.accountId,
       to: params.deliveryContext?.to,
       threadId: stringifyRouteThreadId(params.deliveryContext?.threadId),

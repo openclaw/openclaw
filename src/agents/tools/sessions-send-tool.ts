@@ -7,7 +7,6 @@ import crypto from "node:crypto";
 import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { Type } from "typebox";
 import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
@@ -46,7 +45,6 @@ import {
   parseAgentSessionKey,
   parseSessionDeliveryRoute,
 } from "../../sessions/session-key-utils.js";
-import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
@@ -91,113 +89,10 @@ import { buildAgentToAgentMessageContext } from "./sessions-send-helpers.js";
 import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import { startSessionsSendAgentRun } from "./sessions-send-tool.delivery.js";
+import { SessionsSendToolSchema, SessionsSendOutputSchema } from "./sessions-send-tool.schema.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
-const SessionsSendToolSchema = Type.Object({
-  sessionKey: Type.Optional(Type.String()),
-  label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
-  agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
-  message: Type.String(),
-  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
-  watch: Type.Optional(Type.Boolean()),
-  mode: Type.Optional(
-    Type.Union([
-      Type.Literal("notify"),
-      Type.Literal("steer"),
-      Type.Literal("followup"),
-      Type.Literal("resume"),
-    ]),
-  ),
-});
-
 const log = createSubsystemLogger("agents/sessions-send");
-
-const SessionsSendDeliverySchema = Type.Object(
-  {
-    status: Type.Union([Type.Literal("pending"), Type.Literal("skipped")]),
-    mode: Type.Literal("announce"),
-  },
-  { additionalProperties: false },
-);
-
-const SessionsSendOutputSchema = Type.Union([
-  Type.Object(
-    {
-      status: Type.Literal("accepted"),
-      mode: Type.Literal("resume"),
-      runId: Type.String(),
-      taskRunId: Type.String(),
-      sessionKey: Type.String(),
-      completion: Type.Literal("task"),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      status: Type.Literal("queued"),
-      sessionKey: Type.String(),
-      notificationId: Type.String(),
-      durability: Type.Literal("process"),
-      runStarted: Type.Literal(false),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      runId: Type.String(),
-      status: Type.Union([Type.Literal("error"), Type.Literal("forbidden")]),
-      error: Type.String(),
-      sessionKey: Type.Optional(Type.String()),
-      sentBeforeError: Type.Optional(Type.Literal(true)),
-      watched: Type.Optional(Type.Boolean()),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      runId: Type.String(),
-      status: Type.Literal("accepted"),
-      sessionKey: Type.String(),
-      targetDisposition: Type.Union([Type.Literal("queued"), Type.Literal("steered")]),
-      delivery: SessionsSendDeliverySchema,
-      watched: Type.Optional(Type.Boolean()),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      runId: Type.String(),
-      status: Type.Literal("timeout"),
-      error: Type.String(),
-      sentBeforeError: Type.Literal(true),
-      sessionKey: Type.String(),
-      delivery: Type.Optional(SessionsSendDeliverySchema),
-      watched: Type.Optional(Type.Boolean()),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      runId: Type.String(),
-      status: Type.Literal("no_reply"),
-      sessionKey: Type.String(),
-      message: Type.String(),
-      watched: Type.Optional(Type.Boolean()),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      runId: Type.String(),
-      status: Type.Literal("ok"),
-      sessionKey: Type.String(),
-      delivery: SessionsSendDeliverySchema,
-      reply: Type.String(),
-      watched: Type.Optional(Type.Boolean()),
-    },
-    { additionalProperties: false },
-  ),
-]);
 
 type GatewayCaller = AgentToolGatewayRequestCaller;
 const SESSIONS_SEND_MESSAGE_ALIASES = ["SendMessage", "content", "text"] as const;
@@ -635,6 +530,12 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         projection: "full",
       });
       const requesterSessionEntry = requesterSession.store[requesterSession.canonicalKey];
+      const requesterContinuationSession = opts?.agentSessionId
+        ? {
+            sessionId: opts.agentSessionId,
+            lifecycleRevision: requesterSessionEntry?.lifecycleRevision,
+          }
+        : undefined;
       const requesterIsSubagent = isSubagentSessionFromEntry(
         requesterSession.canonicalKey,
         requesterSessionEntry,
@@ -1084,7 +985,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                         replyMode,
                         requesterSessionKey: replyRequesterSessionKey,
                         requesterAgentId,
-                        requesterSessionId: opts?.agentSessionId,
+                        requesterSession: requesterContinuationSession,
                         requesterOrigin,
                         requesterChannel,
                         roundOneReply: reply?.replyText,

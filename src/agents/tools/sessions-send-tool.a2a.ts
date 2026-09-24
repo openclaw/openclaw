@@ -17,7 +17,7 @@ import {
   waitForAgentRunReply,
 } from "../run-wait.js";
 import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "../subagents/completion/subagent-completion-instructions.js";
-import { runAgentStep } from "./agent-step.js";
+import { runAgentStep, type AgentStepSession } from "./agent-step.js";
 import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
@@ -103,7 +103,7 @@ export async function runSessionsSendA2AFlow(params: {
   replyMode?: "peer" | "one-way";
   requesterSessionKey?: string;
   requesterAgentId?: string;
-  requesterSessionId?: string;
+  requesterSession?: AgentStepSession;
   requesterOrigin?: DeliveryContext;
   requesterChannel?: string;
   sourceReplyDelivered?: true;
@@ -138,7 +138,7 @@ export async function runSessionsSendA2AFlow(params: {
             agentId: params.requesterAgentId,
             sessionKey: params.requesterSessionKey,
             deliveryContext: params.requesterOrigin,
-            expectedSessionId: params.requesterSessionId,
+            expectedSession: params.requesterSession,
             message: wait.sourceReplyDelivered
               ? `sessions_send target run for ${params.displayKey} failed${error}. The target's final reply was already delivered to its source conversation. Do not resend; report the run failure.`
               : `sessions_send delivery to ${params.displayKey} failed${error}. The target may not have received the message; retry or report the failure instead of assuming delivery succeeded.`,
@@ -166,7 +166,7 @@ export async function runSessionsSendA2AFlow(params: {
           agentId: params.requesterAgentId,
           sessionKey: params.requesterSessionKey,
           deliveryContext: params.requesterOrigin,
-          expectedSessionId: params.requesterSessionId,
+          expectedSession: params.requesterSession,
           message: latestReply,
           extraSystemPrompt: `A child session returned the result of your earlier sessions_send request. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} This result is delivered once; your response will not be sent back to the child.`,
           timeoutMs: params.announceTimeoutMs,
@@ -209,7 +209,7 @@ export async function runSessionsSendA2AFlow(params: {
         agentId: params.requesterAgentId,
         sessionKey: oneWayInternalRequesterSessionKey,
         deliveryContext: params.requesterOrigin,
-        expectedSessionId: params.requesterSessionId,
+        expectedSession: params.requesterSession,
         message: latestReply,
         extraSystemPrompt: `Another session returned the result of your earlier sessions_send request. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} This result is delivered once; your response will not be sent back to the target session.`,
         timeoutMs: params.announceTimeoutMs,
@@ -289,7 +289,7 @@ export async function runSessionsSendA2AFlow(params: {
           ...(current.role === "requester"
             ? {
                 deliveryContext: params.requesterOrigin,
-                expectedSessionId: params.requesterSessionId,
+                expectedSession: params.requesterSession,
               }
             : {}),
           message: latestReply,
