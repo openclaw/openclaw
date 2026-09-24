@@ -48,7 +48,6 @@ import {
 import { readSqliteSessionParticipantProjection } from "./session-accessor.sqlite-participant-projection.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import type { SessionParticipantProjection } from "./session-membership-facts.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export {
@@ -81,32 +80,6 @@ type SqliteSessionEntryCacheWriteGeneration = {
 /** Commit-driven projections borrow owner memory; ordinary reads still validate SQLite. */
 export function readCommittedSessionEntryCache(database: DatabaseSync) {
   return sessionEntryCaches.get(database)?.entries;
-}
-
-/** Participant display facts may be borrowed in a transaction only at its native revision. */
-export function readCurrentSessionEntryCacheParticipants(
-  database: DatabaseSync,
-  sessionKey: string,
-): SessionParticipantProjection | undefined {
-  const cached = sessionEntryCaches.get(database);
-  const entry = cached?.entries.get(sessionKey);
-  if (
-    !cached ||
-    !entry ||
-    !getAdmittedSqliteSchemaFacts(database) ||
-    !cacheValidityTokensEqual(
-      cached.validityToken,
-      readSessionEntryCacheValidityToken(database, "cached"),
-    )
-  ) {
-    return undefined;
-  }
-  return entry.participants
-    ? {
-        participants: entry.participants.map(({ identity }) => ({ identity: { ...identity } })),
-        participantCount: entry.participantCount,
-      }
-    : {};
 }
 
 /** A settled worker with an unknown write outcome cannot publish a trustworthy field patch. */

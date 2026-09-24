@@ -9,7 +9,7 @@ import {
 import { SESSION_PARTICIPANTS_TABLE } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import { readCurrentSessionEntryCacheParticipants } from "./session-accessor.sqlite-entry-cache.js";
+import { readCurrentSessionEntryCacheParticipants } from "./session-accessor.sqlite-entry-cache-state.js";
 import {
   readParticipantIdentity,
   type SessionParticipantIdentity,
