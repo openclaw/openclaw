@@ -246,8 +246,8 @@ jobs:
             python_command=python
           fi
           run_owner() {
-            if [ "$RUNNER_OS" = "Linux" ]; then
-              # Later fetch steps reuse workflow code outside the selected/deletable checkout.
+            if [ "$RUNNER_OS" = "Linux" ] || [ "$RUNNER_OS" = "Windows" ]; then
+              # Keep trusted code outside the checkout and below Windows argv limits.
               printf '%s' "$1" > "$RUNNER_TEMP/ci-git-owner.py"
               exec "$python_command" -I -S "$RUNNER_TEMP/ci-git-owner.py"
             fi
