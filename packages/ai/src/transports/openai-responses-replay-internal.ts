@@ -12,7 +12,7 @@ import type { createResponsesPromptEgressObserver } from "./openai-responses-pro
 import { stripEncryptedReasoningContentFields } from "./openai-responses-replay-messages-internal.js";
 import { log } from "./openai-transport-shared.js";
 
-type ResponsesClientLike = ReturnType<typeof createOpenAIResponsesClient>;
+type ResponsesClientLike = Awaited<ReturnType<typeof createOpenAIResponsesClient>>;
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
   return (

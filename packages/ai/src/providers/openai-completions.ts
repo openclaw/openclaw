@@ -67,7 +67,7 @@ export const streamOpenAICompletions: StreamFunction<
       );
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-      const client = createClient(
+      const client = await createClient(
         model,
         context,
         apiKey,
@@ -75,6 +75,7 @@ export const streamOpenAICompletions: StreamFunction<
         cacheSessionId,
         compat,
       );
+      options?.signal?.throwIfAborted();
       let params = buildOpenAICompletionsRequest(model, context, options, {
         mode: "direct",
         compat,

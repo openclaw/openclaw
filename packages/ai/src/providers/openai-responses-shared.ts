@@ -218,7 +218,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   output: AssistantMessage;
   options?: ResponsesLifecycleStreamOptions;
   resolveRequestModel?: (model: Model<TApi>) => Model<TApi>;
-  createClient: (model: Model<TApi>) => ResponsesStreamClient;
+  createClient: (model: Model<TApi>) => ResponsesStreamClient | Promise<ResponsesStreamClient>;
   buildParams: (
     model: Model<TApi>,
     replayMode: OpenAIResponsesReplayMode,
@@ -230,7 +230,8 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
   try {
     const model = params.resolveRequestModel?.(params.model) ?? params.model;
-    const client = params.createClient(model);
+    const client = await params.createClient(model);
+    options?.signal?.throwIfAborted();
     const buildRequest = async (replayMode: OpenAIResponsesReplayMode) => {
       let request = params.buildParams(model, replayMode);
       const nextRequest = await options?.onPayload?.(request, model);

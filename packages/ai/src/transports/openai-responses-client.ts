@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantMessage, Context, Model, StreamFn } from "@openclaw/llm-core";
-import OpenAI, { AzureOpenAI } from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { codeModeToolSurfaceObserver } from "../provider-options.js";
@@ -33,6 +32,7 @@ import {
   OpenAIResponsesWebSocketPreDispatchError,
   OpenAIResponsesWebSocketPostDispatchError,
   OpenAIResponsesWebSocketSafeRetryError,
+  supportsNativeOpenAIResponsesEndpoint,
   type OpenAIResponsesOptions,
 } from "./openai-responses-contracts.js";
 import {
@@ -70,11 +70,7 @@ import { projectResponsesSteeringInput } from "./openai-responses-steering.js";
 import { hasOnlyResponsesFunctionTools } from "./openai-responses-stream-errors.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
-import {
-  createOpenAIResponsesWebSocketStream,
-  type OpenAIResponsesWebSocketMode,
-  supportsNativeOpenAIResponsesEndpoint,
-} from "./openai-responses-websocket.js";
+import type { OpenAIResponsesWebSocketMode } from "./openai-responses-websocket.js";
 import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
@@ -139,15 +135,17 @@ function combineWebSocketTimeoutSignal(
   return AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, resolvedTimeoutMs))]);
 }
 
-export function createOpenAIResponsesClient(
+export async function createOpenAIResponsesClient(
   model: Model,
   apiKey: string,
   defaultHeaders: Record<string, string>,
   fetchOverride?: typeof globalThis.fetch,
 ) {
+  const baseURL = resolveOpenAIClientBaseUrl(model);
+  const { default: OpenAI } = await import("openai");
   return new OpenAI({
     apiKey,
-    baseURL: resolveOpenAIClientBaseUrl(model),
+    baseURL,
     dangerouslyAllowBrowser: true,
     defaultHeaders,
     fetch: fetchOverride ?? buildGuardedModelFetch(model),
@@ -240,7 +238,13 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           stream: config.streamRequest,
           lifecycle: requestLifecycle,
         });
-        const client = config.createClient(model, apiKey, httpHeaders, fetchOverride);
+        const client = await config.createClient(model, apiKey, httpHeaders, fetchOverride);
+        // Prepare selected code before payload admission; load failure must not enter WS fallback.
+        const websocketRuntime = websocketMode
+          ? await import("./openai-responses-websocket.js")
+          : undefined;
+        options?.signal?.throwIfAborted();
+        requestLifecycle?.assertCurrent();
         const nativeAstra =
           model.id === "gpt-6-astra" && supportsNativeOpenAIResponsesEndpoint(model);
         const asyncToolExecutionEligible =
@@ -442,9 +446,9 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           transport = "sse";
           logWebSocketFallback(reason);
         };
-        if (websocketMode) {
+        if (websocketMode && websocketRuntime) {
           try {
-            const websocket = createOpenAIResponsesWebSocketStream({
+            const websocket = websocketRuntime.createOpenAIResponsesWebSocketStream({
               client,
               request: params,
               restoreRequest: (request) =>
@@ -688,7 +692,7 @@ function resolveAzureDeploymentName(model: Model): string {
   });
 }
 
-function createAzureOpenAIClient(
+async function createAzureOpenAIClient(
   model: Model,
   apiKey: string,
   defaultHeaders: Record<string, string>,
@@ -703,6 +707,7 @@ function createAzureOpenAIClient(
     fetch: fetchOverride ?? buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   };
+  const { default: OpenAI, AzureOpenAI } = await import("openai");
 
   if (isOpenAICompatibleAzureResponsesBaseUrl(baseURL)) {
     return new OpenAI(clientOptions);

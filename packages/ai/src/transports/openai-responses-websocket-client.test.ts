@@ -661,7 +661,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     });
     transportState.responseBatches.push([{ type: "error", error: cause }]);
     const response = createOpenAIResponsesWebSocketStream({
-      client: createOpenAIResponsesClient(model, "test-key", {}),
+      client: await createOpenAIResponsesClient(model, "test-key", {}),
       request: { model: model.id, input: [] },
       mode: "websocket",
     });

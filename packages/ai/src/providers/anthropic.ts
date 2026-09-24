@@ -1,5 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { Stream } from "@anthropic-ai/sdk/core/streaming.js";
+import type Anthropic from "@anthropic-ai/sdk";
+import type { Stream } from "@anthropic-ai/sdk/core/streaming.js";
 import type {
   MessageCreateParamsStreaming,
   MessageParam,
@@ -132,13 +132,14 @@ const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
 
 async function* iterateAnthropicEvents(
   response: Response,
+  rawEvents: typeof Stream.rawEvents,
   signal?: AbortSignal,
 ): AsyncGenerator<RawMessageStreamEvent> {
   if (!response.body) {
     throw new Error("Attempted to iterate over an Anthropic response with no body");
   }
 
-  for await (const sse of Stream.rawEvents(response)) {
+  for await (const sse of rawEvents(response)) {
     if (sse.event === "error") {
       throw new Error(sse.data);
     }
@@ -181,6 +182,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
     let usedCompactionReplay = false;
 
     try {
+      // Injected clients still need the parser, but not a new SDK client.
+      const { Stream } = await import("@anthropic-ai/sdk/core/streaming.js");
+      requestOptions?.signal?.throwIfAborted();
       let client: Anthropic;
       let isOAuth: boolean;
       // The beta-gated fallbacks param may only ship on clients we built,
@@ -208,7 +212,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         const cacheRetention = requestOptions?.cacheRetention ?? resolveCacheRetention();
         const cacheSessionId = cacheRetention === "none" ? undefined : requestOptions?.sessionId;
 
-        const created = createClient(
+        const created = await createClient(
           model,
           apiKey,
           requestOptions?.thinkingEnabled === true,
@@ -224,6 +228,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         directApiKeyBetaHeader = created.directApiKeyBetaHeader;
         claudeCodeVersion = created.claudeCodeVersion;
       }
+      requestOptions?.signal?.throwIfAborted();
       const builtParams = await buildParams(
         model,
         requestContext,
@@ -264,7 +269,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       await notifyProviderHttpResponse({ options: requestOptions, response, model });
 
       await consumeAnthropicStream({
-        events: iterateAnthropicEvents(response, requestOptions?.signal),
+        events: iterateAnthropicEvents(
+          response,
+          (incoming) => Stream.rawEvents(incoming),
+          requestOptions?.signal,
+        ),
         model,
         options: requestOptions ?? {},
         output,
@@ -425,7 +434,7 @@ function supportsAnthropicServerSideFallback(model: Model<"anthropic-messages">)
   return isDirectAnthropicModel(model);
 }
 
-function createClient(
+async function createClient(
   model: Model<"anthropic-messages">,
   apiKey: string,
   thinkingEnabled: boolean,
@@ -434,13 +443,14 @@ function createClient(
   optionsHeaders?: Record<string, string>,
   dynamicHeaders?: Record<string, string>,
   sessionId?: string,
-): {
+): Promise<{
   client: Anthropic;
   isOAuthToken: boolean;
   serverSideFallback: boolean;
   directApiKeyBetaHeader?: string;
   claudeCodeVersion?: string;
-} {
+}> {
+  const { default: Anthropic } = await import("@anthropic-ai/sdk");
   // Adaptive thinking models (Opus 4.6, Sonnet 4.6) have interleaved thinking built-in.
   // The beta header is deprecated on Opus 4.6 and redundant on Sonnet 4.6, so skip it.
   const needsInterleavedBeta = interleavedThinking && !supportsClaudeAdaptiveThinking(model);

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Model, StreamFn } from "@openclaw/llm-core";
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import {
   codeModeToolSurfaceObserver,
@@ -117,13 +117,14 @@ function createSseDoneDetector() {
   };
 }
 
-function createOpenAICompletionsClient(
+async function createOpenAICompletionsClient(
   model: Model,
   apiKey: string,
   headers: Record<string, string>,
   opts?: { fetch?: typeof globalThis.fetch },
 ) {
   const clientConfig = buildOpenAICompletionsClientConfig(model, headers);
+  const { default: OpenAI } = await import("openai");
   return new OpenAI({
     apiKey,
     baseURL: clientConfig.baseURL,
@@ -247,7 +248,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           });
         };
         const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-        const client = createOpenAICompletionsClient(
+        const client = await createOpenAICompletionsClient(
           model,
           apiKey,
           buildOpenAIClientHeaders(
@@ -262,6 +263,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
             fetch: doneDetectingFetch,
           },
         );
+        options?.signal?.throwIfAborted();
         let params = buildOpenAICompletionsParams(
           model as OpenAIModeModel,
           context,

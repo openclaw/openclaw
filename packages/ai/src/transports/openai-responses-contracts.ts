@@ -40,6 +40,37 @@ export const OPENAI_RESPONSES_APIS: ReadonlySet<Api> = new Set([
   "openclaw-azure-openai-responses-transport",
 ]);
 
+export function isOfficialOpenAIResponsesBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    const url = new URL(baseUrl);
+    return (
+      url.origin === "https://api.openai.com" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.search === "" &&
+      url.hash === "" &&
+      url.pathname.replace(/\/+$/, "") === "/v1"
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function supportsNativeOpenAIResponsesEndpoint(params: {
+  provider: string;
+  api: string;
+  baseUrl?: string;
+}): boolean {
+  return (
+    params.provider.trim().toLowerCase() === "openai" &&
+    params.api === "openai-responses" &&
+    isOfficialOpenAIResponsesBaseUrl(params.baseUrl)
+  );
+}
+
 export class OpenAIResponsesWebSocketPreDispatchError extends Error {
   constructor(cause: unknown) {
     super("OpenAI Responses WebSocket failed before request dispatch", { cause });

@@ -1,15 +1,15 @@
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import { getAiTransportHost } from "../host.js";
 import { resolveOpenAIClientBaseUrl } from "../transports/openai-transport-shared.js";
 import type { Model } from "../types.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 
-export function createOpenAIProviderClient(
+export async function createOpenAIProviderClient(
   model: Model<"openai-completions" | "openai-responses">,
   apiKey: string,
   headers: Record<string, string>,
   optionsHeaders?: Record<string, string>,
-): OpenAI {
+): Promise<OpenAI> {
   // Merge options headers last so they can override defaults
   if (optionsHeaders) {
     Object.assign(headers, optionsHeaders);
@@ -27,9 +27,11 @@ export function createOpenAIProviderClient(
   const baseUrl = isCloudflareProvider(model.provider)
     ? resolveCloudflareBaseUrl(model)
     : model.baseUrl;
+  const baseURL = resolveOpenAIClientBaseUrl(model, baseUrl);
+  const { default: OpenAI } = await import("openai");
   return new OpenAI({
     apiKey,
-    baseURL: resolveOpenAIClientBaseUrl(model, baseUrl),
+    baseURL,
     dangerouslyAllowBrowser: true,
     defaultHeaders,
     maxRetries: 0,

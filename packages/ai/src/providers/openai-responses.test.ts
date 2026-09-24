@@ -110,9 +110,9 @@ describe("OpenAI Responses provider", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain('Provider "openrouter" requires an explicit base URL');
-    expect(() =>
+    await expect(
       createOpenAIResponsesClient(missingEndpointModel, "sentinel-openrouter-key", {}),
-    ).toThrow('Provider "openrouter" requires an explicit base URL');
+    ).rejects.toThrow('Provider "openrouter" requires an explicit base URL');
     expect(openAiMockState.configs).toEqual([]);
 
     const configuredModel = {
@@ -122,9 +122,9 @@ describe("OpenAI Responses provider", () => {
     await streamOpenAIResponses(configuredModel, context, {
       apiKey: "sentinel-openrouter-key",
     }).result();
-    expect(() =>
+    await expect(
       createOpenAIResponsesClient(configuredModel, "sentinel-openrouter-key", {}),
-    ).not.toThrow();
+    ).resolves.toBeDefined();
     expect(
       openAiMockState.configs.map((config) => (config as { baseURL?: string }).baseURL),
     ).toEqual(["https://openrouter.ai/api/v1", "https://openrouter.ai/api/v1"]);

@@ -17,6 +17,7 @@ import {
   type ResponsesContinuationStatus,
 } from "./openai-responses-continuation.js";
 import {
+  isOfficialOpenAIResponsesBaseUrl,
   parseOpenAIResponsesWebSocketServerError,
   OpenAIResponsesWebSocketPostDispatchError,
   OpenAIResponsesWebSocketPreDispatchError,
@@ -74,36 +75,6 @@ type OpenAIResponsesWebSocketStream = {
 // session-resource cleanup.
 const websocketSessionCache = new Map<string, CachedWebSocketConnection>();
 const degradedWebSocketConnections = new Map<string, { sessionId?: string; retryAt: number }>();
-
-function isOfficialOpenAIResponsesBaseUrl(baseUrl: string | undefined): boolean {
-  if (!baseUrl) {
-    return false;
-  }
-  try {
-    const url = new URL(baseUrl);
-    return (
-      url.origin === "https://api.openai.com" &&
-      url.username === "" &&
-      url.password === "" &&
-      url.search === "" &&
-      url.hash === "" &&
-      url.pathname.replace(/\/+$/, "") === "/v1"
-    );
-  } catch {
-    return false;
-  }
-}
-export function supportsNativeOpenAIResponsesEndpoint(params: {
-  provider: string;
-  api: string;
-  baseUrl?: string;
-}): boolean {
-  return (
-    params.provider.trim().toLowerCase() === "openai" &&
-    params.api === "openai-responses" &&
-    isOfficialOpenAIResponsesBaseUrl(params.baseUrl)
-  );
-}
 
 function closeWebSocketSilently(socket: ResponsesWS, reason = "done"): void {
   try {

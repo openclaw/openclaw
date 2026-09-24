@@ -60,10 +60,8 @@ vi.mock("openai/resources/responses/ws.js", () => ({
 
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
-import {
-  createOpenAIResponsesWebSocketStream,
-  supportsNativeOpenAIResponsesEndpoint,
-} from "./openai-responses-websocket.js";
+import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-contracts.js";
+import { createOpenAIResponsesWebSocketStream } from "./openai-responses-websocket.js";
 
 const initialHost = getAiTransportHost();
 const clientFixture = {
