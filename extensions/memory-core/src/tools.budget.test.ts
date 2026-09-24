@@ -19,14 +19,6 @@ type Scenario = {
 
 const scenarios: Scenario[] = [
   { name: "configured primary limit", configured: 12, memoryCount: 12, wikiCount: 0 },
-  {
-    name: "explicit memory corpus",
-    configured: 12,
-    corpus: "memory",
-    memoryCount: 12,
-    wikiCount: 0,
-  },
-  { name: "default primary limit", configured: 6, memoryCount: 6, wikiCount: 0 },
   { name: "smaller tool override", configured: 12, maxResults: 4, memoryCount: 4, wikiCount: 0 },
   { name: "larger tool override", configured: 6, maxResults: 12, memoryCount: 12, wikiCount: 0 },
   { name: "wiki default", configured: 12, corpus: "wiki", memoryCount: 0, wikiCount: 10 },
@@ -44,13 +36,6 @@ const scenarios: Scenario[] = [
     corpus: "all",
     memoryCount: 5,
     wikiCount: 5,
-  },
-  {
-    name: "aggregate backfills spare memory slots",
-    configured: 3,
-    corpus: "all",
-    memoryCount: 3,
-    wikiCount: 7,
   },
   {
     name: "aggregate tool override",

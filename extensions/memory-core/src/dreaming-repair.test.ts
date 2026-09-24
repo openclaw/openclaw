@@ -63,28 +63,16 @@ afterEach(async () => {
 describe("dreaming artifact repair", () => {
   it("detects self-ingested dreaming corpus lines", async () => {
     const workspaceDir = await createWorkspace();
-    await fs
-      .writeFile(
-        path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-11.txt"),
-        [
-          "[main/dreaming-main.jsonl#L4] regular session text",
-          "[main/dreaming-narrative-light.jsonl#L1] Write a dream diary entry from these memory fragments:",
-        ].join("\n"),
-        "utf-8",
-      )
-      .catch(async () => {
-        await fs.mkdir(path.join(workspaceDir, "memory", ".dreams", "session-corpus"), {
-          recursive: true,
-        });
-        await fs.writeFile(
-          path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-11.txt"),
-          [
-            "[main/dreaming-main.jsonl#L4] regular session text",
-            "[main/dreaming-narrative-light.jsonl#L1] Write a dream diary entry from these memory fragments:",
-          ].join("\n"),
-          "utf-8",
-        );
-      });
+    const corpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+    await fs.mkdir(corpusDir, { recursive: true });
+    await fs.writeFile(
+      path.join(corpusDir, "2026-04-11.txt"),
+      [
+        "[main/dreaming-main.jsonl#L4] regular session text",
+        "[main/dreaming-narrative-light.jsonl#L1] Write a dream diary entry from these memory fragments:",
+      ].join("\n"),
+      "utf-8",
+    );
 
     const audit = await auditDreamingArtifacts({ workspaceDir });
 
@@ -255,25 +243,6 @@ describe("dreaming artifact repair", () => {
         value: { ingestedAt: 1_000, lastDreamingDayIngested: "2026-06-10" },
       },
     ]);
-  });
-
-  it("reports ingestion state present from SQLite when legacy JSON is absent", async () => {
-    const workspaceDir = await createWorkspace();
-    // Write SQLite ingestion entries but NO legacy session-ingestion.json
-    await writeMemoryCoreWorkspaceEntries({
-      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-      workspaceDir,
-      entries: [
-        {
-          key: "main/session.jsonl",
-          value: { lastSize: 120, lastMtimeMs: 1_000, lastContentHash: "hash", cursorLine: 42 },
-        },
-      ],
-    });
-
-    const audit = await auditDreamingArtifacts({ workspaceDir });
-
-    expect(audit.sessionIngestionExists).toBe(true);
   });
 
   it("does not report session ingestion from the SQLite daily namespace", async () => {

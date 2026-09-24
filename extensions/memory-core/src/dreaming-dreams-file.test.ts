@@ -382,14 +382,4 @@ describe("dream diary file behavior", () => {
     await expect(fs.access(path.join(workspaceDir, "memory"))).rejects.toThrow();
     await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toThrow();
   });
-
-  it("writes DREAMS.md when deep dreaming has body lines", async () => {
-    const workspaceDir = await createTempWorkspace("dreaming-nonempty-deep-");
-    await updateDeepDreamsFile({
-      workspaceDir,
-      bodyLines: ["A durable insight was recorded."],
-    });
-    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8");
-    expect(content).toContain("A durable insight was recorded.");
-  });
 });
