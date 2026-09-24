@@ -97,6 +97,24 @@ describe("number-coercion", () => {
     expect(parseStrictFiniteNumber("0x10")).toBeUndefined();
   });
 
+  test.each([
+    { value: -0, integer: -0, finite: -0 },
+    { value: "\u00a0-0\u2003", integer: -0, finite: -0 },
+    { value: "9007199254740992", integer: undefined, finite: 9_007_199_254_740_992 },
+    { value: "1e309", integer: undefined, finite: undefined },
+    { value: "-1e-400", integer: undefined, finite: -0 },
+    { value: " \t ", integer: undefined, finite: undefined },
+    { value: Number.NaN, integer: undefined, finite: undefined },
+    { value: Number.POSITIVE_INFINITY, integer: undefined, finite: undefined },
+    { value: true, integer: undefined, finite: undefined },
+    { value: ["4"], integer: undefined, finite: undefined },
+    { value: { valueOf: () => 4 }, integer: undefined, finite: undefined },
+  ])("preserves strict parser boundaries for $value", ({ value, integer, finite }) => {
+    expect(parseStrictInteger(value)).toBe(integer);
+    expect(parseStrictFiniteNumber(value)).toBe(finite);
+    expect(parseFiniteNumber(value)).toBe(finite);
+  });
+
   test("strict integer range helpers enforce sign", () => {
     expect(parseStrictPositiveInteger("9")).toBe(9);
     expect(parseStrictPositiveInteger("0")).toBeUndefined();
