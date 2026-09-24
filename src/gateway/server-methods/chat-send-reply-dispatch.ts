@@ -482,7 +482,7 @@ export function createChatSendReplyDispatch(params: {
           rewritten: [rewritten],
         });
         if (assistantContent?.length) {
-          attachManagedOutgoingMediaToMessage({
+          await attachManagedOutgoingMediaToMessage({
             messageId: rewritten.messageId,
             blocks: assistantContent,
           });
@@ -522,7 +522,7 @@ export function createChatSendReplyDispatch(params: {
           rewritten: [rewritten],
         });
         if (assistantContent?.length) {
-          attachManagedOutgoingMediaToMessage({
+          await attachManagedOutgoingMediaToMessage({
             messageId: rewritten.messageId,
             blocks: assistantContent,
           });
@@ -583,7 +583,7 @@ export function createChatSendReplyDispatch(params: {
     });
     if (appended.ok) {
       if (appended.messageId && assistantContent?.length) {
-        attachManagedOutgoingMediaToMessage({
+        await attachManagedOutgoingMediaToMessage({
           messageId: appended.messageId,
           blocks: assistantContent,
         });

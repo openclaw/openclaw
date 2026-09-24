@@ -88,14 +88,14 @@ export async function commitCurrentSessionCronCompletion(
       provenance: { kind: "cron", jobId: params.job.id, runId },
       config: params.cfgWithAgentDefaults,
       signal: params.abortSignal,
-      onMessageCommitted: (result) => {
+      onMessageCommitted: async (result) => {
         // Promote before publication; retries own the original committed blocks.
         // Preserve committed media even when promotion or the later drain fails.
         appended = result.appended;
         const blocks = readAssistantDisplayContent(result.message);
         if (
           hasManagedOutgoingAssistantContent(blocks) &&
-          !attachManagedOutgoingMediaToMessage({ messageId: result.messageId, blocks })
+          !(await attachManagedOutgoingMediaToMessage({ messageId: result.messageId, blocks }))
         ) {
           throw new Error("Current-session completion media ownership could not be persisted");
         }

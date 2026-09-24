@@ -227,6 +227,24 @@ serveOwnedWorkerTasks(
           )),
         };
       }
+      if (request.kind === "transcript-mirror-facts") {
+        const { readTranscriptMirrorFactsReadOnly } =
+          await import("./session-accessor.sqlite-transcript-mirror.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, request.kind, () => ({
+            kind: "transcript-mirror-facts" as const,
+            facts: readTranscriptMirrorFactsReadOnly(
+              {
+                ...request.resolved,
+                path: request.database.path,
+                databaseAgentId: request.database.agentId,
+              },
+              { idempotencyKeys: request.idempotencyKeys },
+            ),
+          }))),
+        };
+      }
       if (request.kind === "session-row-backfill") {
         const { readSessionRowTranscriptFields } =
           await import("../../gateway/session-row-transcript-backfill.kernel.js");

@@ -41,7 +41,11 @@ import type {
   SessionEntryReplacementSelection,
   SessionEntryReplacementState,
 } from "./session-accessor.sqlite-replacement-read.js";
-import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import type {
+  ResolvedTranscriptReadScope,
+  ResolvedTranscriptScope,
+} from "./session-accessor.sqlite-scope.js";
+import type { TranscriptMirrorFacts } from "./session-accessor.sqlite-transcript-mirror.js";
 import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type {
   SessionAccessScope,
@@ -186,6 +190,13 @@ type SessionTitleFieldsWorkerInput = {
 type SessionTitleFieldsWorkerResult = {
   kind: "session-title-fields";
   fields: SessionTitleFields;
+};
+
+type SessionTranscriptMirrorFactsWorkerInput = {
+  kind: "transcript-mirror-facts";
+  database: { agentId: string; path: string };
+  resolved: ResolvedTranscriptScope;
+  idempotencyKeys: readonly string[];
 };
 
 type SessionRowBackfillWorkerInput = {
@@ -398,6 +409,7 @@ export type SessionHistoryWorkerInput =
   | SessionPreviewWorkerInput
   | SessionTitleFieldsWorkerInput
   | SessionRowBackfillWorkerInput
+  | SessionTranscriptMirrorFactsWorkerInput
   | SessionRowPresenceWorkerInput
   | SessionMembersWorkerInput
   | SessionMembershipFactsWorkerInput
@@ -444,6 +456,7 @@ export type SessionTranscriptWorkerValues = {
   "session-preview": SessionPreviewWorkerResult;
   "session-title-fields": SessionTitleFieldsWorkerResult;
   "session-row-backfill": SessionRowBackfillWorkerResult;
+  "transcript-mirror-facts": { kind: "transcript-mirror-facts"; facts: TranscriptMirrorFacts };
   "session-row-presence": boolean;
   "session-members": SessionMember[];
   "session-membership-facts": SessionMembershipFacts;
@@ -508,6 +521,9 @@ export type SessionHistoryWorkerDatabase = {
   readTitleFields: (
     input: Omit<SessionTitleFieldsWorkerInput, "kind" | "database">,
   ) => Promise<SessionTitleFieldsWorkerResult["fields"]>;
+  readMirrorFacts: (
+    input: Omit<SessionTranscriptMirrorFactsWorkerInput, "kind" | "database">,
+  ) => Promise<TranscriptMirrorFacts>;
   readRowBackfill: (
     params: SessionRowBackfillWorkerInput["params"],
   ) => Promise<SessionRowBackfillWorkerResult["fields"]>;

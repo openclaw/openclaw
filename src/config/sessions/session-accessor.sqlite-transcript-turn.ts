@@ -384,9 +384,9 @@ export async function appendExpectedSessionTranscriptTurn(
         return publishIdentity;
       }, toDatabaseOptions(resolved));
       publish?.();
-      // Complete committed custody before cancellation can run at an async return.
+      // Capture committed custody before the callback yields; finish promotion before publication.
       for (const message of result.appendedMessages) {
-        options.onMessageCommitted?.(message);
+        await options.onMessageCommitted?.(message);
       }
       return result;
     },

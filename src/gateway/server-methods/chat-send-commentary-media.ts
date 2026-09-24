@@ -241,7 +241,7 @@ export function observeChatSendCommentaryMedia(params: {
                 );
               if (
                 mediaBlocks.length > 0 &&
-                !attachManagedOutgoingMediaToMessage({ messageId, blocks: mediaBlocks })
+                !(await attachManagedOutgoingMediaToMessage({ messageId, blocks: mediaBlocks }))
               ) {
                 throw new Error("Webchat commentary media ownership could not be persisted");
               }

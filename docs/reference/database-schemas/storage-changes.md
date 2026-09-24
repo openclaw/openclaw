@@ -227,9 +227,13 @@ Managed outgoing image metadata lookups and cleanup inventories read through the
 shared-state worker, retaining their writable, creating database-open behavior.
 Typed columns, ordering, cleanup claims, and original-media references are unchanged.
 Downloads retain ticket or owner authorization and current transcript membership;
-verified descriptors and post-render thumbnail checks remain in place. Inserts, message-commit
-promotion, cleanup claim/deletion transactions, Doctor imports, and native session
-metadata reads keep their existing owners and remain separate worker migrations.
+verified descriptors and post-render thumbnail checks remain in place. Inserts,
+message-commit promotion, and cleanup claim/deletion transactions use the same
+shared-state worker broker. Callers await committed custody before publishing;
+worker transaction admission rechecks the captured store and current media authority.
+Cleanup still compares the exact planned record before claiming or deleting it.
+Schemas, stored bytes, retention, and update behavior are unchanged. Doctor imports
+and native session metadata reads retain their existing owners.
 
 Delivery queue maintenance expires tombstones and reads media custody in the
 shared-state worker. Stage expiry retains its existing transaction and unfinished

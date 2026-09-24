@@ -1,8 +1,7 @@
 // Session transcript facade appends mirror messages and reads tails.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
-import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   normalizeAgentId,
@@ -33,14 +32,12 @@ import {
   isSessionTranscriptProjectionUnavailableError,
   persistSessionTranscriptTurn,
   readActiveTranscriptEntryAnchor,
-  readLatestSessionTranscriptMessageEvent,
   readLatestTranscriptAssistantText,
   readSessionTranscriptMessageEventPage,
   resolveSessionEntrySelection,
   updateSessionEntry,
   waitForSessionTranscriptProjection,
   type SessionTranscriptTurnPersistOptions,
-  type SessionTranscriptTurnWriteContext,
   type SessionTranscriptTurnExpectedState,
   type TranscriptEntryAnchor,
   type TranscriptEvent,
@@ -58,6 +55,10 @@ import {
   applyBeforeMessageWriteToAssistant,
   type AssistantBeforeMessageWrite,
 } from "./transcript-assistant-message.js";
+import {
+  findLatestEquivalentAssistantMessageId,
+  isRedundantDeliveryMirror,
+} from "./transcript-mirror-dedup.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import {
   isWithinTranscriptWindow,
@@ -393,6 +394,8 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   mediaUrls?: string[];
   content?: SessionTranscriptAssistantMessage["content"];
   displayContent?: Array<Record<string, unknown>>;
+  /** Prepare display-only attachments under the writer queue; replay retains accepted IDs. */
+  prepareDisplayContent?: () => Promise<Array<Record<string, unknown>> | undefined>;
   eventId?: string;
   idempotencyKey?: string;
   runId?: string;
@@ -440,6 +443,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     ...(params.runId ? { runId: params.runId } : {}),
     updateMode: params.updateMode,
     onMessageCommitted: params.onMessageCommitted,
+    prepareDisplayContent: params.prepareDisplayContent,
     config: params.config,
     ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
     message: {
@@ -490,6 +494,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   config?: OpenClawConfig;
   beforeMessageWrite?: AssistantBeforeMessageWrite;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
+  prepareDisplayContent?: () => Promise<Array<Record<string, unknown>> | undefined>;
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -578,7 +583,11 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       sessionKey: resolved.normalizedKey,
       storePath,
     };
-    if (isRedundantDeliveryMirror(params.message) && !explicitIdempotencyKey) {
+    const deduplicateText =
+      isRedundantDeliveryMirror(params.message) &&
+      !explicitIdempotencyKey &&
+      !params.prepareDisplayContent;
+    if (deduplicateText) {
       // Reconciliation needs the writer queue. Wait before entering it, then
       // read the current projected tail again inside the guarded append.
       await waitForSessionTranscriptProjection(target);
@@ -631,14 +640,37 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
                 }
               : {}),
             shouldAppend: async (appendTarget) => {
-              latestEquivalentAssistantId =
-                isRedundantDeliveryMirror(params.message) && !explicitIdempotencyKey
-                  ? await findLatestEquivalentAssistantMessageId(
-                      appendTarget,
-                      preparedUnkeyedMessage as SessionTranscriptAssistantMessage,
-                      params.config,
+              latestEquivalentAssistantId = deduplicateText
+                ? await findLatestEquivalentAssistantMessageId(
+                    appendTarget,
+                    preparedUnkeyedMessage as SessionTranscriptAssistantMessage,
+                    params.config,
+                  )
+                : undefined;
+              if (!latestEquivalentAssistantId && params.prepareDisplayContent) {
+                const facts = explicitIdempotencyKey
+                  ? await import("./session-accessor.sqlite-transcript-mirror-read.js").then(
+                      ({ readTranscriptMirrorFactsAsync }) =>
+                        readTranscriptMirrorFactsAsync(
+                          { ...appendTarget, sessionId: currentEntry.sessionId },
+                          { idempotencyKeys: [explicitIdempotencyKey] },
+                        ),
                     )
                   : undefined;
+                const prior = explicitIdempotencyKey
+                  ? facts?.messagesByIdempotencyKey.get(explicitIdempotencyKey)
+                  : undefined;
+                // Display IDs are derived custody, not a new replay identity. The
+                // append transaction still compares the caller's text and media URLs.
+                const displayContent = prior
+                  ? asOptionalRecord(prior)?.[ASSISTANT_DISPLAY_CONTENT_FIELD]
+                  : await params.prepareDisplayContent();
+                if (displayContent) {
+                  Object.assign(preparedUnkeyedMessage, {
+                    [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent,
+                  });
+                }
+              }
               return !latestEquivalentAssistantId;
             },
           },
@@ -719,84 +751,4 @@ async function touchSqliteAssistantAppendSessionEntry(params: {
   );
 }
 
-function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
-  return (
-    message.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
-    message.model === OPENCLAW_DELIVERY_MIRROR_MODEL
-  );
-}
-
-async function readLatestVisibleTranscriptMessage(scope: {
-  agentId?: string;
-  sessionId: string;
-  sessionKey?: string;
-  storePath: string;
-}): Promise<{ id?: string; message: unknown } | undefined> {
-  try {
-    const event = readLatestSessionTranscriptMessageEvent(scope)?.event;
-    if (!event || typeof event !== "object" || Array.isArray(event)) {
-      return undefined;
-    }
-    const record = event as { id?: unknown; message?: unknown };
-    if (record.message === undefined) {
-      return undefined;
-    }
-    return {
-      ...(typeof record.id === "string" ? { id: record.id } : {}),
-      message: record.message,
-    };
-  } catch {
-    // Mirror deduplication remains best-effort when transcript reads are unavailable.
-    return undefined;
-  }
-}
-
-function extractAssistantMessageText(message: AgentMessage): string | null {
-  if (message.role !== "assistant" || !Array.isArray(message.content)) {
-    return null;
-  }
-
-  const parts = message.content
-    .filter(
-      (
-        part,
-      ): part is {
-        type: "text";
-        text: string;
-      } => part.type === "text" && typeof part.text === "string" && part.text.trim().length > 0,
-    )
-    .map((part) => part.text.trim());
-
-  return parts.length > 0 ? parts.join("\n").trim() : null;
-}
-
-async function findLatestEquivalentAssistantMessageId(
-  target: SessionTranscriptTurnWriteContext,
-  message: SessionTranscriptAssistantMessage,
-  config?: OpenClawConfig,
-): Promise<string | undefined> {
-  const expectedText = extractAssistantMessageText(redactTranscriptMessage(message, config));
-  if (!expectedText) {
-    return undefined;
-  }
-
-  if (target.storePath && target.sessionId) {
-    const latest = await readLatestVisibleTranscriptMessage({
-      ...(target.agentId ? { agentId: target.agentId } : {}),
-      sessionId: target.sessionId,
-      ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
-      storePath: target.storePath,
-    });
-    const latestMessage = latest?.message as { role?: unknown } | undefined;
-    if (latestMessage?.role !== "assistant") {
-      return undefined;
-    }
-    const candidateText = latest
-      ? extractAssistantMessageText(redactTranscriptMessage(latest.message as AgentMessage, config))
-      : undefined;
-    return candidateText === expectedText ? latest?.id : undefined;
-  }
-
-  return undefined;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

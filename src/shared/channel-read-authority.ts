@@ -12,6 +12,8 @@ type ChannelReadScope = {
   signal?: AbortSignal;
   registerResource: (resource: ChannelReadResource) => void;
   discardResource: (key: string) => Promise<boolean>;
+  /** Transfer exact committed output out of read cancellation before yielding. */
+  acceptResource: (key: string) => Promise<boolean>;
 };
 
 const completionKey = Symbol.for("openclaw.channelReadAuthority.completion");
@@ -108,6 +110,15 @@ export async function withChannelReadAuthority<T>(
             resource.assertCurrent?.();
           },
         });
+      },
+      acceptResource: async (key: string) => {
+        const resource = Array.from(resources).find((entry) => entry.key === key);
+        if (!resource) {
+          return (await parentCompletion?.acceptResource(key)) ?? false;
+        }
+        resources.delete(resource);
+        await settleChannelReadResource(resource, true);
+        return true;
       },
       discardResource: async (key: string) => {
         const resource = Array.from(resources).find((entry) => entry.key === key);

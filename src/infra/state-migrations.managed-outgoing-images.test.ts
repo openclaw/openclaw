@@ -198,7 +198,7 @@ describe("legacy managed outgoing image migration", () => {
   it("fails atomically on a conflicting SQLite row and retains every source", async () => {
     const first = await writeLegacyRecord({ stateDir, index: 1 });
     const second = await writeLegacyRecord({ stateDir, index: 2 });
-    insertManagedImageRecord(
+    await insertManagedImageRecord(
       {
         attachmentId: second.record.attachmentId,
         sessionKey: "agent:other:main",

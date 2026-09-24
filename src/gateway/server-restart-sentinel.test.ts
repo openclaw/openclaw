@@ -76,7 +76,7 @@ type AppendAssistantMessageToSessionTranscriptMock =
   typeof import("../config/sessions/transcript.js").appendAssistantMessageToSessionTranscript;
 type CreateManagedOutgoingMediaBlocksMock =
   typeof import("./managed-image-attachments.js").createManagedOutgoingMediaBlocks;
-type AttachManagedOutgoingMediaToMessageMock =
+type AttachMediaMock =
   typeof import("./managed-image-attachments.js").attachManagedOutgoingMediaToMessage;
 type EnrichAssistantTranscriptMediaForRunMock =
   typeof import("./server-methods/chat-transcript-persistence.js").enrichAssistantTranscriptMediaForRun;
@@ -214,7 +214,7 @@ const mocks = vi.hoisted(() => {
         openUrl: `/api/chat/media/outgoing/${encodeURIComponent(params.sessionKey)}/${encodeURIComponent(item.url)}/full`,
       })),
     ),
-    attachManagedOutgoingMediaToMessage: vi.fn<AttachManagedOutgoingMediaToMessageMock>(() => true),
+    attachManagedOutgoingMediaToMessage: vi.fn<AttachMediaMock>(async () => true),
     enrichAssistantTranscriptMediaForRun: vi.fn<EnrichAssistantTranscriptMediaForRunMock>(
       async () => null,
     ),

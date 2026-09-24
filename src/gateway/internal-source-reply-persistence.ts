@@ -102,10 +102,10 @@ async function completePersistedInternalSourceReply(params: {
     touchSessionEntry: false,
     updateMode: "file-only",
     publishWhen: "always",
-    onMessageCommitted: (result) => {
+    onMessageCommitted: async (result) => {
       // The queue await can outlive admission or the active branch; promotion must use current ownership.
       assertCurrentReplay(result.messageId);
-      attachSourceReplyMedia(result);
+      await attachSourceReplyMedia(result, () => assertCurrentReplay(result.messageId));
     },
   });
   if (replay.rejectedReason || replay.messages.length === 0) {
@@ -114,7 +114,10 @@ async function completePersistedInternalSourceReply(params: {
   return true;
 }
 
-function attachSourceReplyMedia(result: TranscriptMessageAppendResult<unknown>): void {
+async function attachSourceReplyMedia(
+  result: TranscriptMessageAppendResult<unknown>,
+  assertCurrent?: () => void,
+): Promise<void> {
   // Catalog cards are display content, not media custody; only media is promoted after commit.
   const message = result.message;
   const blocks = readAssistantDisplayContent(message).filter(
@@ -122,7 +125,11 @@ function attachSourceReplyMedia(result: TranscriptMessageAppendResult<unknown>):
   );
   if (
     blocks.length > 0 &&
-    !attachManagedOutgoingMediaToMessage({ messageId: result.messageId, blocks })
+    !(await attachManagedOutgoingMediaToMessage({
+      messageId: result.messageId,
+      blocks,
+      assertCurrent,
+    }))
   ) {
     throw new Error("Internal source reply media ownership could not be persisted");
   }
@@ -201,10 +208,10 @@ export async function persistInternalSourceReply(params: {
             }
           : {}),
         config: params.cfg,
-        onMessageCommitted: (result) => {
+        onMessageCommitted: async (result) => {
           // Publication can fail after commit; cleanup must never delete owned media.
           committed = result.appended;
-          attachSourceReplyMedia(result);
+          await attachSourceReplyMedia(result);
         },
       });
       if (!appended.ok) {

@@ -354,7 +354,7 @@ async function finalizeChatSendAgentReplyPayloads(
     if (!attachParams.messageId) {
       return;
     }
-    attachManagedOutgoingMediaToMessage({
+    await attachManagedOutgoingMediaToMessage({
       messageId: attachParams.messageId,
       blocks: attachParams.request.state.persistedContent,
     });

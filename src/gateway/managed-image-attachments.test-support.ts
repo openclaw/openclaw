@@ -126,7 +126,7 @@ export async function createFixture(
   await fs.mkdir(path.dirname(originalPath), { recursive: true });
   const body = options?.body ?? Buffer.from("original-image");
   await fs.writeFile(originalPath, body);
-  insertManagedImageRecord(
+  await insertManagedImageRecord(
     {
       attachmentId,
       sessionKey,

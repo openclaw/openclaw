@@ -1,6 +1,7 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import {
   appendTranscriptMessage,
@@ -13,6 +14,7 @@ import {
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import * as sqliteAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   onSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
@@ -33,10 +35,45 @@ import {
   claimManagedImageRecordCleanupIfCurrent,
   listManagedImageRecordEntries,
 } from "./managed-image-record-store.js";
+import * as managedImageRecords from "./managed-image-record-store.js";
 import { listManagedImageRecordEntriesInDatabase } from "./managed-image-record-store.kernel.js";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
+
+function failSecondMediaPromotionAtTransaction() {
+  const faultScope = new AsyncLocalStorage<Error>();
+  const attach = managedImageRecords.attachManagedImageRecordToMessage;
+  const createAdmission = sqliteAdmission.createSqliteWorkerOperationAdmission;
+  const admissionSpy = vi
+    .spyOn(sqliteAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((admit, attachment) => {
+      const fault = faultScope.getStore();
+      return createAdmission((request, grant) => {
+        if (fault && request.stage === "transaction") {
+          throw fault;
+        }
+        admit(request, grant);
+      }, attachment);
+    });
+  const attachSpy = vi
+    .spyOn(managedImageRecords, "attachManagedImageRecordToMessage")
+    .mockImplementation(async (params) => {
+      const record = await managedImageRecords.readManagedImageRecord(
+        params.attachmentId,
+        params.stateDir,
+      );
+      if (record?.original.filename !== "second.png") {
+        return attach(params);
+      }
+      // The real worker must request its transaction before this fault can fire.
+      return faultScope.run(new Error("second media promotion failed"), () => attach(params));
+    });
+  return () => {
+    attachSpy.mockRestore();
+    admissionSpy.mockRestore();
+  };
+}
 
 async function createSourceReplyFixture(state: OpenClawTestState) {
   const sessionKey = "agent:main:webchat:dm:partial-promotion";
@@ -139,8 +176,11 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
           },
         }),
     );
-  const removePromotionFault = () =>
-    database.db.exec("DROP TRIGGER IF EXISTS fail_second_media_promotion");
+  let restorePromotionFault: (() => void) | undefined;
+  const removePromotionFault = () => {
+    restorePromotionFault?.();
+    restorePromotionFault = undefined;
+  };
   return {
     state,
     scope,
@@ -153,11 +193,9 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
     failNextDrain: () => {
       failDrain = true;
     },
-    failSecondPromotion: () =>
-      database.db.exec(`CREATE TEMP TRIGGER fail_second_media_promotion
-      BEFORE UPDATE OF message_id ON managed_outgoing_image_records
-      WHEN OLD.original_filename = 'second.png' AND NEW.message_id IS NOT NULL
-      BEGIN SELECT RAISE(ABORT, 'second media promotion failed'); END`),
+    failSecondPromotion: () => {
+      restorePromotionFault = failSecondMediaPromotionAtTransaction();
+    },
     removePromotionFault,
     holdWrites: async () => {
       const entered = createDeferredCore();
@@ -352,7 +390,9 @@ describe("internal source reply persistence", () => {
                 throw new Error("expected second prepared media record");
               }
               if (changed === "cleanup-pending") {
-                expect(claimManagedImageRecordCleanupIfCurrent(pending, state.stateDir)).toBe(true);
+                expect(await claimManagedImageRecordCleanupIfCurrent(pending, state.stateDir)).toBe(
+                  true,
+                );
               } else {
                 await removeManagedOutgoingMediaBlocks({
                   stateDir: state.stateDir,

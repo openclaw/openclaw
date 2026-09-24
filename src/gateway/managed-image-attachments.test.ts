@@ -2517,7 +2517,7 @@ describe("attachManagedOutgoingImagesToMessage", () => {
       stateDir,
     });
 
-    attachManagedOutgoingImagesToMessage({
+    await attachManagedOutgoingImagesToMessage({
       messageId: "msg-committed",
       blocks: blocks as Record<string, unknown>[],
       stateDir,
@@ -2575,7 +2575,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(checkedSessionKeys).toEqual([fixture.sessionKey]);
     await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
     expect(
-      attachManagedImageRecordToMessage({
+      await attachManagedImageRecordToMessage({
         attachmentId: fixture.attachmentId,
         sessionKey: fixture.sessionKey,
         messageId: "msg-late",

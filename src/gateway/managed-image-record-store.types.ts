@@ -41,3 +41,13 @@ export type ManagedImageRecordEntry = {
   record: ManagedImageRecord;
   cleanupPending: boolean;
 };
+
+export type ManagedImageWriteOperations = {
+  "managedImages.insert": { input: { record: ManagedImageRecord }; output: void };
+  "managedImages.attach": {
+    input: { attachmentId: string; sessionKey: string; messageId: string; updatedAt: string };
+    output: boolean;
+  };
+  "managedImages.claimCleanup": { input: { record: ManagedImageRecord }; output: boolean };
+  "managedImages.deleteClaimed": { input: { record: ManagedImageRecord }; output: boolean };
+};

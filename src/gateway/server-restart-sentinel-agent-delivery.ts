@@ -434,7 +434,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
             );
           }
           params.queueContext.admission.assertCurrent();
-          const attached = attachManagedOutgoingMediaToMessage({
+          const attached = await attachManagedOutgoingMediaToMessage({
             messageId: appended.messageId,
             blocks: content,
             stateDir,

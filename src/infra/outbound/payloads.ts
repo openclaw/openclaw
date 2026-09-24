@@ -37,6 +37,9 @@ import {
 export type NormalizedOutboundPayload = {
   text: string;
   mediaUrls: string[];
+  attachments?: ReplyPayload["attachments"];
+  trustedLocalMedia?: boolean;
+  sensitiveMedia?: boolean;
   audioAsVoice?: boolean;
   presentation?: MessagePresentation;
   presentationTextMode?: ReplyPayload["presentationTextMode"];
@@ -391,6 +394,9 @@ export function summarizeOutboundPayloadForTransport(
   return {
     text,
     mediaUrls: parts.mediaUrls,
+    ...(payload.attachments ? { attachments: payload.attachments } : {}),
+    ...(payload.trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
+    ...(payload.sensitiveMedia === true ? { sensitiveMedia: true } : {}),
     audioAsVoice: payload.audioAsVoice === true ? true : undefined,
     presentation: payload.presentation,
     ...(payload.presentationTextMode ? { presentationTextMode: payload.presentationTextMode } : {}),

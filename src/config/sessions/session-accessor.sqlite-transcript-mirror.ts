@@ -3,14 +3,20 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   loadTranscriptEventsFromDatabase,
   readTranscriptEventMessage,
 } from "./session-accessor.sqlite-read.js";
-import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import {
+  getSessionKysely,
+  toDatabaseOptions,
+  type ResolvedTranscriptScope,
+} from "./session-accessor.sqlite-scope.js";
 import { createTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
+import { readWithCanonicalSessionAdmission } from "./session-canonical-key.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
@@ -20,7 +26,7 @@ import { transcriptEventJsonSql } from "./transcript-payload.js";
 // Keep supplied-key probes below SQLite's conservative variable ceiling.
 const TRANSCRIPT_MIRROR_KEY_QUERY_BATCH_SIZE = 900;
 
-type TranscriptMirrorFacts = {
+export type TranscriptMirrorFacts = {
   anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
   existingIdempotencyKeys: Set<string>;
   messagesByIdempotencyKey: Map<string, unknown>;
@@ -28,7 +34,7 @@ type TranscriptMirrorFacts = {
 
 /** Returns raw events only when the transcript identity projection is not current. */
 function loadTranscriptEventsForMirrorFallback(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db" | "path">,
   sessionId: string,
 ): TranscriptEvent[] | undefined {
   const db = getSessionKysely(database.db);
@@ -58,9 +64,34 @@ function loadTranscriptEventsForMirrorFallback(
   return loadTranscriptEventsFromDatabase(database, sessionId);
 }
 
+/** Read the same mirror facts without creating or migrating the selected store. */
+export function readTranscriptMirrorFactsReadOnly(
+  resolved: ResolvedTranscriptScope,
+  params: { idempotencyKeys: readonly string[] },
+): TranscriptMirrorFacts {
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) =>
+      readWithCanonicalSessionAdmission(database, () =>
+        readTranscriptMirrorFacts(database, resolved, params),
+      ),
+    toDatabaseOptions(resolved),
+  );
+  if (result.found) {
+    return result.value;
+  }
+  if (result.reason !== "database-missing") {
+    throw new Error(`Session transcript mirror facts unavailable: ${result.reason}`);
+  }
+  return {
+    anchorsByIdempotencyKey: new Map(),
+    existingIdempotencyKeys: new Set(),
+    messagesByIdempotencyKey: new Map(),
+  };
+}
+
 /** Reads the bounded identity facts needed by transcript mirrors. */
 export function readTranscriptMirrorFacts(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db" | "path">,
   resolved: ResolvedTranscriptScope,
   params: {
     idempotencyKeys: readonly string[];
@@ -78,7 +109,7 @@ export function readTranscriptMirrorFacts(
 
 /** Reads mirror facts after the caller has established one SQLite snapshot. */
 function readTranscriptMirrorFactsInSnapshot(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db" | "path">,
   resolved: ResolvedTranscriptScope,
   params: {
     idempotencyKeys: readonly string[];

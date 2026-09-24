@@ -242,9 +242,12 @@ export async function publishHeartbeatSessionReply(params: {
       // Accept at the committed-message boundary, while the writer still owns it.
       // A later drain failure cannot revoke a notification already published here.
       updateMode: "none",
-      onMessageCommitted: (receipt) => {
+      onMessageCommitted: async (receipt) => {
         assertCurrent(receipt.messageId);
-        if (attachMedia && !attachMedia({ messageId: receipt.messageId, blocks: displayMedia })) {
+        if (
+          attachMedia &&
+          !(await attachMedia({ messageId: receipt.messageId, blocks: displayMedia }))
+        ) {
           throw new Error("heartbeat source receipt media custody is unavailable");
         }
         const messageSeq = readCommittedTranscriptMessageSequence(receipt);

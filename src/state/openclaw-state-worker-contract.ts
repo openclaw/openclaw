@@ -26,6 +26,7 @@ import type {
 import type {
   ManagedImageRecord,
   ManagedImageRecordEntry,
+  ManagedImageWriteOperations,
 } from "../gateway/managed-image-record-store.types.js";
 import type { OperatorApprovalWorkerOperations } from "../gateway/operator-approval-store.worker-contract.js";
 import type {
@@ -102,6 +103,7 @@ export type OpenClawStateWorkerOperations = WorktreeRegistryReadOperations &
   OperatorApprovalWorkerOperations &
   AuditWriterOperations &
   NativeHookRelayStoreWorkerOperations &
+  ManagedImageWriteOperations &
   TelemetryWorkerOperations &
   HostedCatalogSnapshotWorkerOperations &
   PluginStateWorkerOperations &

@@ -121,6 +121,23 @@ export function createSessionHistoryWorkerReaders(
           return value.fields;
         },
       ),
+    readMirrorFacts: async (input) =>
+      await runRequest(
+        () => ({ kind: "transcript-mirror-facts", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          if (
+            typeof value === "boolean" ||
+            Array.isArray(value) ||
+            value.kind !== "transcript-mirror-facts"
+          ) {
+            throw new Error(
+              "Session history worker returned another result instead of mirror facts",
+            );
+          }
+          return value.facts;
+        },
+      ),
     readRowBackfill: async (params) =>
       await runRequest(
         () => ({ kind: "session-row-backfill", params }),

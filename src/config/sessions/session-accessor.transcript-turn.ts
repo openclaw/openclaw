@@ -234,7 +234,7 @@ async function appendTranscriptTurnMessages(
       },
     );
     if (result) {
-      options.onMessageCommitted?.(result);
+      await options.onMessageCommitted?.(result);
       appendedMessages.push(result);
     }
   }

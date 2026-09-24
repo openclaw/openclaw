@@ -30,7 +30,7 @@ import {
 
 let stateDir: string;
 
-function seedManagedRecord(
+async function seedManagedRecord(
   attachmentId: string,
   overrides: Partial<Omit<ManagedImageRecord, "attachmentId" | "original">> = {},
 ) {
@@ -38,7 +38,7 @@ function seedManagedRecord(
   const originalPath = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR, filename);
   fs.mkdirSync(path.dirname(originalPath), { recursive: true });
   fs.writeFileSync(originalPath, "original-image");
-  insertManagedImageRecord(
+  await insertManagedImageRecord(
     {
       attachmentId,
       sessionKey: "agent:main:main",
@@ -88,7 +88,7 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
   it("keeps records and bytes when session_nodes is missing", async () => {
     const options = { agentId: "main", env: { OPENCLAW_STATE_DIR: stateDir } };
     openOpenClawAgentDatabase(options);
-    const originalPath = seedManagedRecord("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    const originalPath = await seedManagedRecord("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
     dropSessionNodes();
 
     const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
@@ -105,7 +105,7 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
   it("still deletes dereferenced records when the store is healthy", async () => {
     const options = { agentId: "main", env: { OPENCLAW_STATE_DIR: stateDir } };
     openOpenClawAgentDatabase(options);
-    const originalPath = seedManagedRecord("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    const originalPath = await seedManagedRecord("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
 
     const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
       cleanupManagedOutgoingMediaRecords({ stateDir }),
@@ -120,7 +120,7 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
   it.each(["original_width", "original_height", "original_size_bytes"])(
     "keeps records and orphan files when %s cannot be decoded safely",
     async (column) => {
-      const originalPath = seedManagedRecord("cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+      const originalPath = await seedManagedRecord("cccccccc-cccc-4ccc-8ccc-cccccccccccc");
       const orphanPath = path.join(path.dirname(originalPath), "old-orphan.png");
       fs.writeFileSync(orphanPath, "orphan-image");
       fs.utimesSync(orphanPath, 0, 0);
@@ -142,7 +142,7 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
     },
   );
 
-  it("keeps other agents' claimed and unclaimed bytes without rereading full metadata", async () => {
+  it("keeps other agents' bytes without reading managed metadata on the parent", async () => {
     openOpenClawAgentDatabase({ agentId: "main", env: { OPENCLAW_STATE_DIR: stateDir } });
     const metadata = "synthetic-alt ".repeat(1024);
     const survivorIds = [
@@ -150,21 +150,23 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
       "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
       "ffffffff-ffff-4fff-8fff-ffffffffffff",
     ] as const;
-    const survivors = survivorIds.map((attachmentId, index) =>
-      seedManagedRecord(attachmentId, {
-        agentId: index === 0 ? "main" : "other",
-        sessionKey: index === 0 ? "agent:main:main" : "agent:other:main",
-        messageId: null,
-        alt: metadata,
-      }),
+    const survivors = await Promise.all(
+      survivorIds.map((attachmentId, index) =>
+        seedManagedRecord(attachmentId, {
+          agentId: index === 0 ? "main" : "other",
+          sessionKey: index === 0 ? "agent:main:main" : "agent:other:main",
+          messageId: null,
+          alt: metadata,
+        }),
+      ),
     );
     const claimed = await readManagedImageRecord(survivorIds[2], stateDir);
     if (!claimed) {
       throw new Error("Expected the seeded claimed record");
     }
-    expect(claimManagedImageRecordCleanupIfCurrent(claimed, stateDir)).toBe(true);
+    expect(await claimManagedImageRecordCleanupIfCurrent(claimed, stateDir)).toBe(true);
     const deletedId = "11111111-1111-4111-8111-111111111111";
-    const deleted = seedManagedRecord(deletedId);
+    const deleted = await seedManagedRecord(deletedId);
     const orphan = path.join(path.dirname(deleted), "old-orphan.png");
     fs.writeFileSync(orphan, "orphan-image");
     for (const file of [...survivors, orphan]) {
@@ -189,11 +191,9 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
           cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: "agent:main:main" }),
         ),
       ).resolves.toEqual({ deletedRecordCount: 1, deletedFileCount: 2, retainedCount: 3 });
-      expect(counter.counts.records).toBeGreaterThan(0);
-      expect(counter.counts.records).toBeLessThanOrEqual(5);
-      expect(counter.rowCounts.records).toBeGreaterThan(0);
-      expect(counter.rowCounts.records).toBeLessThanOrEqual(9);
-      expect(counter.textBytes.records).toBeLessThan(4 * Buffer.byteLength(metadata));
+      expect(counter.counts.records).toBe(0);
+      expect(counter.rowCounts.records).toBe(0);
+      expect(counter.textBytes.records).toBe(0);
     } finally {
       counter.restore();
     }
@@ -211,7 +211,7 @@ describe("cleanupManagedOutgoingMediaRecords availability fail-safe", () => {
     "stops orphan deletion when %s becomes unsafe after the first record scan",
     async (column) => {
       const attachmentId = "22222222-2222-4222-8222-222222222222";
-      const originalPath = seedManagedRecord(attachmentId, {
+      const originalPath = await seedManagedRecord(attachmentId, {
         messageId: null,
         createdAt: new Date(0).toISOString(),
       });

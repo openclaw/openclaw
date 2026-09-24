@@ -365,7 +365,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
     });
     if (appended.ok) {
       if (appended.messageId && assistantContent?.length) {
-        attachManagedOutgoingMediaToMessage({
+        await attachManagedOutgoingMediaToMessage({
           messageId: appended.messageId,
           blocks: assistantContent,
         });
