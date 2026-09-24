@@ -1,0 +1,75 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterAll, beforeAll } from "vitest";
+import { resetConfigRuntimeState } from "../../src/config/runtime-snapshot.js";
+import { getSessionKysely } from "../../src/config/sessions/session-accessor.sqlite-scope.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../src/infra/kysely-sync.js";
+import { clearPluginStateStoreForTests } from "../../src/plugin-state/plugin-state-store.test-helpers.js";
+import { runOpenClawAgentWriteTransaction } from "../../src/state/openclaw-agent-db.js";
+import type { DB as StateDatabase } from "../../src/state/openclaw-state-db.generated.js";
+import { runOpenClawStateWriteTransaction } from "../../src/state/openclaw-state-db.js";
+import { captureEnv } from "../../src/test-utils/env.js";
+import {
+  createOpenClawTestState,
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../src/test-utils/openclaw-test-state.js";
+import { drainSessionStateForTest } from "../../src/test-utils/session-state-cleanup.js";
+
+/** Keep admitted databases warm; native transports and registries remain case-owned. */
+export function useCanonicalDescendantState(env: Record<string, string>) {
+  let shared: OpenClawTestState;
+  let sequence = 0;
+  beforeAll(async () => {
+    shared = await createOpenClawTestState({
+      label: "canonical-descendant",
+      env,
+      applyEnv: false,
+    });
+  });
+  afterAll(async () => {
+    shared?.applyEnv();
+    await shared?.cleanup();
+  });
+
+  return async (run: (state: OpenClawTestState) => Promise<void>, isolated = false) => {
+    if (isolated) {
+      // Worker-claim cases also own placement/environment rows and projections.
+      await withOpenClawTestState({ label: "canonical-descendant-worker", env }, run);
+      return;
+    }
+    const previousEnv = captureEnv(Object.keys(shared.envVars));
+    shared.applyEnv();
+    const workspaceDir = path.join(shared.workspaceDir, `case-${++sequence}`);
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await run({ ...shared, workspaceDir });
+    } finally {
+      try {
+        await drainSessionStateForTest({ stateDir: shared.stateDir, rootPath: shared.root });
+        // Cascades remove windows, transcript rows, and their indexes without
+        // replacing admitted database handles or terminating their workers.
+        runOpenClawAgentWriteTransaction(
+          ({ db }) => executeSqliteQuerySync(db, getSessionKysely(db).deleteFrom("session_nodes")),
+          { agentId: "main" },
+        );
+        runOpenClawStateWriteTransaction(({ db }) => {
+          const kysely = getNodeSqliteKysely<StateDatabase>(db);
+          for (const table of [
+            "session_upstream_links",
+            "session_watch_cursors",
+            "session_state_events",
+            "session_state_heads",
+          ] as const) {
+            executeSqliteQuerySync(db, kysely.deleteFrom(table));
+          }
+        });
+        clearPluginStateStoreForTests();
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      } finally {
+        previousEnv.restore();
+        resetConfigRuntimeState();
+      }
+    }
+  };
+}
