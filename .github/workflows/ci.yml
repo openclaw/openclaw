@@ -6118,6 +6118,7 @@ jobs:
             -resultBundlePath "$result_bundle" \
             -parallel-testing-enabled NO \
             -only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests \
+            -only-testing:OpenClawTests/ChatComposerTextViewIOSTests \
             -only-testing:OpenClawTests/DelayedActionGateTests \
             -only-testing:OpenClawTests/IOSGatewayChatTransportTests \
             -only-testing:OpenClawTests/LocationServiceCallbackTests \
