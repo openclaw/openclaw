@@ -99,6 +99,11 @@ describe("agent lifecycle registry", () => {
     expect(() => readAgentDeletionJournal("main", options)).toThrow(
       "Agent deletion journal missing; run openclaw doctor --fix",
     );
+    expect(isAgentDeletionBlocked("main", options)).toBe(false);
+    runOpenClawStateWriteTransaction((current) => {
+      expect(isAgentDeletionBlocked("main", options, current.db)).toBe(false);
+      expect(tableExists(current.db, "agent_deletion_journal")).toBe(false);
+    }, options);
     expect(tableExists(database.db, "agent_deletion_journal")).toBe(false);
   });
 
