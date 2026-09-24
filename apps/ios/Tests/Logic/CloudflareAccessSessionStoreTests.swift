@@ -7,6 +7,7 @@ struct CloudflareAccessSessionStoreTests {
         var values: [CloudflareAccessOrigin: String] = [:]
         var events: [String] = []
         var canSave = true
+        var canDelete = true
 
         var persistence: CloudflareAccessSessionStore.Persistence {
             .init(
@@ -19,6 +20,7 @@ struct CloudflareAccessSessionStoreTests {
                 },
                 delete: {
                     self.events.append("delete")
+                    guard self.canDelete else { return false }
                     self.values.removeValue(forKey: $0)
                     return true
                 })
@@ -145,7 +147,7 @@ struct CloudflareAccessSessionStoreTests {
             retireTransports: { _ in memory.events.append("retire") })
         let attempt = store.signIn(application: application, openBrowser: { _ in })
         await gate.waitUntilStarted()
-        try await store.forget(application.origin)
+        try await store.forget(application.origin).task.value
         gate.complete(session)
         await #expect(throws: CancellationError.self) { try await attempt.value }
         #expect(memory.values.isEmpty)
@@ -190,6 +192,61 @@ struct CloudflareAccessSessionStoreTests {
         #expect(memory.values.isEmpty)
     }
 
+    @Test func `reauthentication revokes completed shared grants before retirement can suspend`() async throws {
+        let memory = MemoryStore()
+        let application = try CloudflareAccessTestTokens.application()
+        let session = try CloudflareAccessTestTokens().session()
+        let retirement = AsyncStream<Void>.makeStream()
+        let retiring = AsyncStream<Void>.makeStream()
+        var holdRetirement = false
+        let store = CloudflareAccessSessionStore(
+            persistence: memory.persistence,
+            authenticate: { _, _ in session },
+            retireTransports: { _ in
+                if holdRetirement {
+                    retiring.continuation.finish()
+                    for await _ in retirement.stream {}
+                }
+            })
+        let first = store.signIn(application: application, openBrowser: { _ in })
+        let peer = store.signIn(application: application, openBrowser: { _ in })
+        var receipt: CloudflareAccessSessionStore.Retirement?
+        func drain() async {
+            retirement.continuation.finish()
+            first.cancel()
+            peer.cancel()
+            _ = await first.result
+            _ = await peer.result
+            _ = await receipt?.task.result
+        }
+        do {
+            let admitted = try await first.value
+            holdRetirement = true
+            receipt = try #require(store.beginReauthentication(
+                for: application.origin, revision: admitted.revision))
+            // No await separates revocation from these admission checks.
+            #expect(store.snapshot(for: application.origin) == nil)
+            #expect(store.currentRevision(for: application.origin) == 0)
+            #expect(store.state(for: application.origin) == .reauthenticationRequired)
+            #expect(store.beginReauthentication(for: application.origin, revision: admitted.revision) == nil)
+            #expect(memory.values[application.origin] != nil)
+
+            let stale = try await peer.value
+            #expect(stale.revision == admitted.revision)
+            #expect(store.snapshot(for: application.origin) == nil)
+            for await _ in retiring.stream {}
+            #expect(memory.values[application.origin] != nil)
+            retirement.continuation.finish()
+            try await receipt?.task.value
+            #expect(memory.values[application.origin] == nil)
+            #expect(store.state(for: application.origin) == .reauthenticationRequired)
+        } catch {
+            await drain()
+            throw error
+        }
+        await drain()
+    }
+
     @Test func `restart loads only a valid session for its exact authority`() throws {
         let memory = MemoryStore()
         let session = try CloudflareAccessTestTokens().session()
@@ -216,6 +273,116 @@ struct CloudflareAccessSessionStoreTests {
         }
         #expect(store.snapshot(for: application.origin) == nil)
         #expect(store.state(for: application.origin) == .reauthenticationRequired)
+    }
+
+    @Test func `explicit revocation is synchronous origin scoped and survives a renewed grant`() async throws {
+        let memory = MemoryStore()
+        let application = try CloudflareAccessTestTokens.application()
+        let session = try CloudflareAccessTestTokens().session()
+        let other = try CloudflareAccessOrigin(#require(URL(string: "https://other.example.test")))
+        let store = CloudflareAccessSessionStore(
+            persistence: memory.persistence,
+            authenticate: { _, _ in session }, retireTransports: { _ in })
+        let original = store.admissionCheckpoint()
+        let retirement = store.forget(application.origin)
+        #expect(!store.admits(original, for: application.origin))
+        #expect(store.admits(original, for: other))
+        let retry = store.admissionCheckpoint()
+        try await retirement.task.value
+        _ = try await store.signIn(application: application, openBrowser: { _ in }).value
+        #expect(!store.admits(original, for: application.origin))
+        #expect(store.admits(retry, for: application.origin))
+        #expect(store.snapshot(for: application.origin) != nil)
+    }
+
+    @Test func `failed deletion retires admission and reports failure without rewriting saved credentials`() async throws {
+        let memory = MemoryStore()
+        let session = try CloudflareAccessTestTokens().session()
+        let encoded = try #require(String(data: JSONEncoder().encode(session), encoding: .utf8))
+        memory.values[session.origin] = encoded
+        memory.canDelete = false
+        let store = CloudflareAccessSessionStore(
+            persistence: memory.persistence,
+            retireTransports: { _ in memory.events.append("retire") })
+        #expect(store.snapshot(for: session.origin) != nil)
+        let checkpoint = store.admissionCheckpoint()
+        let retirement = store.forget(session.origin)
+        #expect(!store.admits(checkpoint, for: session.origin))
+        await #expect(throws: CloudflareAccessError.self) { try await retirement.task.value }
+        #expect(!store.admits(checkpoint, for: session.origin))
+        #expect(store.snapshot(for: session.origin) == nil)
+        #expect(store.state(for: session.origin) == .signedOut)
+        #expect(memory.values[session.origin] == encoded)
+        #expect(memory.events == ["retire", "delete"])
+    }
+
+    @Test func `retirement acknowledgement survives its completion and unrelated origin transitions`() async throws {
+        let memory = MemoryStore()
+        let application = try CloudflareAccessTestTokens.application()
+        let session = try CloudflareAccessTestTokens().session()
+        let other = try CloudflareAccessOrigin(#require(URL(string: "https://other.example.test")))
+        let store = CloudflareAccessSessionStore(
+            persistence: memory.persistence, authenticate: { _, _ in session }, retireTransports: { _ in })
+        let first = store.forget(application.origin)
+        #expect(store.isCurrent(first))
+        try await first.task.value
+        try await store.waitForRetirement(of: application.origin)
+        #expect(store.snapshot(for: application.origin) == nil)
+        #expect(store.isCurrent(first))
+        try await store.forget(other).task.value
+        #expect(store.isCurrent(first))
+
+        let second = store.forget(application.origin)
+        #expect(!store.isCurrent(first))
+        try await second.task.value
+        #expect(store.isCurrent(second))
+        let renewed = try await store.signIn(application: application, openBrowser: { _ in }).value
+        #expect(!store.isCurrent(second))
+        #expect(store.snapshot(for: application.origin)?.revision == renewed.revision)
+        let final = store.forget(application.origin)
+        try await final.task.value
+        #expect(store.isCurrent(final))
+        #expect(memory.values[application.origin] == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func `passive cleanup retains the current successful or failed receipt until a session transition`(
+        succeeds: Bool) async throws
+    {
+        let memory = MemoryStore()
+        memory.canDelete = succeeds
+        let application = try CloudflareAccessTestTokens.application()
+        let session = try CloudflareAccessTestTokens().session()
+        let other = try CloudflareAccessOrigin(#require(URL(string: "https://other.example.test")))
+        let store = CloudflareAccessSessionStore(
+            persistence: memory.persistence, authenticate: { _, _ in session }, retireTransports: { _ in })
+        let first = store.forget(application.origin)
+        if succeeds {
+            try await first.task.value
+        } else {
+            await #expect(throws: CloudflareAccessError.self) { try await first.task.value }
+        }
+        let shared = store.reconcileForget(application.origin)
+        #expect(shared.id == first.id)
+        if succeeds {
+            try await shared.task.value
+        } else {
+            await #expect(throws: CloudflareAccessError.self) { try await shared.task.value }
+        }
+        #expect(memory.events == ["delete"])
+        memory.canDelete = true
+        try await store.forget(other).task.value
+        #expect(store.reconcileForget(application.origin).id == first.id)
+        let explicit = store.forget(application.origin)
+        #expect(explicit.id != first.id)
+        try await explicit.task.value
+        #expect(store.reconcileForget(application.origin).id == explicit.id)
+        _ = try await store.signIn(application: application, openBrowser: { _ in }).value
+        let afterRenewal = store.reconcileForget(application.origin)
+        #expect(afterRenewal.id != explicit.id)
+        #expect(memory.values[application.origin] != nil)
+        try await afterRenewal.task.value
+        #expect(memory.values[application.origin] == nil)
     }
 
     @Test func `expiry while teardown is suspended cannot publish or persist authentication`() async throws {

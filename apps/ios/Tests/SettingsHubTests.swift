@@ -185,7 +185,7 @@ final class SettingsHubVisualProofTests: XCTestCase {
         <body style="font: 17px -apple-system; padding: 24px; color: #222; background: white">
         <h1>Settings</h1><p>Manage your Gateway preferences.</p></body></html>
         """
-        let fixture = try DashboardHTTPFixture(html: html)
+        let fixture = try SettingsHubHTTPFixture(html: html)
         defer { fixture.stop() }
         let fixtureURL = try await fixture.start()
 
@@ -294,7 +294,7 @@ final class SettingsHubVisualProofTests: XCTestCase {
 }
 
 @MainActor
-private final class DashboardHTTPFixture {
+private final class SettingsHubHTTPFixture {
     private struct Client {
         let connection: NWConnection
         var request = Data()

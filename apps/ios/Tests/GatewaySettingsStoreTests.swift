@@ -77,27 +77,29 @@ private func restoreKeychain(_ snapshot: [KeychainEntry: String?]) {
     applyKeychain(snapshot)
 }
 
-private func withBootstrapSnapshots(_ body: () -> Void) {
-    gatewayPersistenceTestSemaphore.wait()
+@MainActor
+private func withBootstrapSnapshots(_ body: () -> Void) async {
+    await GatewayPersistenceTestGate.shared.acquire()
     let defaultsSnapshot = snapshotDefaults(bootstrapDefaultsKeys + lastGatewayDefaultsKeys)
     let keychainSnapshot = snapshotKeychain(
         bootstrapKeychainEntries + [lastGatewayKeychainEntry, gatewayRegistryKeychainEntry])
     defer {
         restoreDefaults(defaultsSnapshot)
         restoreKeychain(keychainSnapshot)
-        gatewayPersistenceTestSemaphore.signal()
+        GatewayPersistenceTestGate.shared.release()
     }
     body()
 }
 
-private func withLastGatewaySnapshot(_ body: () -> Void) {
-    gatewayPersistenceTestSemaphore.wait()
+@MainActor
+private func withLastGatewaySnapshot(_ body: () -> Void) async {
+    await GatewayPersistenceTestGate.shared.acquire()
     let defaultsSnapshot = snapshotDefaults(lastGatewayDefaultsKeys)
     let keychainSnapshot = snapshotKeychain([lastGatewayKeychainEntry, gatewayRegistryKeychainEntry])
     defer {
         restoreDefaults(defaultsSnapshot)
         restoreKeychain(keychainSnapshot)
-        gatewayPersistenceTestSemaphore.signal()
+        GatewayPersistenceTestGate.shared.release()
     }
     body()
 }
@@ -643,8 +645,8 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             gatewayStableID: gatewayID) == .empty)
     }
 
-    @Test func `bootstrap copies defaults to keychain when missing`() {
-        withBootstrapSnapshots {
+    @Test @MainActor func `bootstrap copies defaults to keychain when missing`() async {
+        await withBootstrapSnapshots {
             applyDefaults([
                 "node.instanceId": "node-test",
                 "gateway.preferredStableID": "preferred-test",
@@ -664,8 +666,8 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         }
     }
 
-    @Test func `bootstrap copies keychain to defaults when missing`() {
-        withBootstrapSnapshots {
+    @Test @MainActor func `bootstrap copies keychain to defaults when missing`() async {
+        await withBootstrapSnapshots {
             applyDefaults([
                 "node.instanceId": nil,
                 "gateway.preferredStableID": nil,
@@ -686,8 +688,8 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         }
     }
 
-    @Test func `registry observers refresh only after successful mutations`() {
-        withLastGatewaySnapshot {
+    @Test @MainActor func `registry observers refresh only after successful mutations`() async {
+        await withLastGatewaySnapshot {
             applyKeychain([gatewayRegistryKeychainEntry: nil, lastGatewayKeychainEntry: nil])
             let notifications = OSAllocatedUnfairLock(initialState: 0)
             let observer = NotificationCenter.default.addObserver(
@@ -705,8 +707,8 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         }
     }
 
-    @Test func `registry CRUD round trip persists deterministic ordering`() {
-        withLastGatewaySnapshot {
+    @Test @MainActor func `registry CRUD round trip persists deterministic ordering`() async {
+        await withLastGatewaySnapshot {
             applyKeychain([gatewayRegistryKeychainEntry: nil, lastGatewayKeychainEntry: nil])
             let gatewayB = GatewaySettingsStore.GatewayRegistryEntry(
                 stableID: "manual|z.example.com|443",
@@ -756,8 +758,8 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         }
     }
 
-    @Test func `version one registry upgrades focused gateway to connected`() {
-        withLastGatewaySnapshot {
+    @Test @MainActor func `version one registry upgrades focused gateway to connected`() async {
+        await withLastGatewaySnapshot {
             applyKeychain([
                 gatewayRegistryKeychainEntry:
                     #"{"version":1,"activeStableID":"bonjour|alpha","entries":[{"stableID":"bonjour|alpha","kind":"discovered","name":"Alpha","useTLS":true}]}"#,
@@ -776,8 +778,8 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         }
     }
 
-    @Test func `version two registry without connectivity does not enable focus`() {
-        withLastGatewaySnapshot {
+    @Test @MainActor func `version two registry without connectivity does not enable focus`() async {
+        await withLastGatewaySnapshot {
             applyKeychain([
                 gatewayRegistryKeychainEntry:
                     #"{"version":2,"activeStableID":"bonjour|alpha","entries":[{"stableID":"bonjour|alpha","kind":"discovered","name":"Alpha","useTLS":true}]}"#,
@@ -793,8 +795,8 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         }
     }
 
-    @Test func `newer registry blocks pairing mutations without overwriting`() {
-        withLastGatewaySnapshot {
+    @Test @MainActor func `newer registry blocks pairing mutations without overwriting`() async {
+        await withLastGatewaySnapshot {
             let unsupported = #"{"version":3,"future":["keep-me"]}"#
             applyKeychain([
                 gatewayRegistryKeychainEntry: unsupported,
@@ -835,8 +837,8 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             focusedStableID: "alpha") == ["beta", "gamma"])
     }
 
-    @Test func `registry preserves byte-distinct unicode gateway owners`() {
-        withLastGatewaySnapshot {
+    @Test @MainActor func `registry preserves byte-distinct unicode gateway owners`() async {
+        await withLastGatewaySnapshot {
             applyKeychain([gatewayRegistryKeychainEntry: nil, lastGatewayKeychainEntry: nil])
             let composedOwner = "gateway-\u{00E9}"
             let decomposedOwner = "gateway-e\u{0301}"
@@ -865,8 +867,8 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         }
     }
 
-    @Test func `legacy manual last connection migrates once into active registry`() {
-        withLastGatewaySnapshot {
+    @Test @MainActor func `legacy manual last connection migrates once into active registry`() async {
+        await withLastGatewaySnapshot {
             applyKeychain([
                 gatewayRegistryKeychainEntry: nil,
                 lastGatewayKeychainEntry:
@@ -887,8 +889,8 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         }
     }
 
-    @Test func `legacy discovered last connection migrates into active registry`() {
-        withLastGatewaySnapshot {
+    @Test @MainActor func `legacy discovered last connection migrates into active registry`() async {
+        await withLastGatewaySnapshot {
             applyKeychain([
                 gatewayRegistryKeychainEntry: nil,
                 lastGatewayKeychainEntry:
@@ -914,8 +916,8 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         }
     }
 
-    @Test func `legacy defaults migrate directly into active registry`() {
-        withLastGatewaySnapshot {
+    @Test @MainActor func `legacy defaults migrate directly into active registry`() async {
+        await withLastGatewaySnapshot {
             applyKeychain([
                 gatewayRegistryKeychainEntry: nil,
                 lastGatewayKeychainEntry: nil,
@@ -941,8 +943,8 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         }
     }
 
-    @Test func `legacy unscoped credential bundle migrates to its gateway account`() {
-        withBootstrapSnapshots {
+    @Test @MainActor func `legacy unscoped credential bundle migrates to its gateway account`() async {
+        await withBootstrapSnapshots {
             let instanceID = "legacy-bundle-\(UUID().uuidString)"
             defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
             let gatewayID = "manual|credentials.example.com|443"

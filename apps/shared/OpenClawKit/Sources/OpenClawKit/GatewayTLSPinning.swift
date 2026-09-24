@@ -91,6 +91,16 @@ public protocol GatewayTLSFailureProviding: AnyObject {
     func consumeLastTLSFailure() -> GatewayTLSValidationFailure?
 }
 
+extension GatewayTLSFailureProviding {
+    func consumeHTTPFailure(_ error: Error) -> Error {
+        // The delegate's diagnostic belongs to this attempt, including cancellation.
+        // Consume it once so a later request cannot inherit an earlier trust failure.
+        let failure = self.consumeLastTLSFailure()
+        guard !Task.isCancelled, error is URLError, let failure else { return error }
+        return GatewayTLSValidationError(failure: failure, context: "gateway request")
+    }
+}
+
 // periphery:ignore - Native session adapters declare whether their TLS path permits token retry.
 public protocol GatewayDeviceTokenRetryTrustProviding: AnyObject {
     // periphery:ignore - The shared channel consumes this through the optional provider seam.
@@ -885,6 +895,16 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         return WebSocketTaskBox(task: task)
     }
 
+    /// Read headers without buffering a response body, while retaining the route's TLS policy.
+    public func response(for request: URLRequest) async throws -> URLResponse {
+        self.registerExpectedAuthority(url: request.url)
+        try Task.checkCancellation()
+        let (bytes, response) = try await self.bytes(for: request)
+        defer { bytes.task.cancel() }
+        try Task.checkCancellation()
+        return response
+    }
+
     public func data(
         for request: URLRequest,
         maximumBytes: Int,
@@ -897,9 +917,7 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
 
         try Task.checkCancellation()
         guard isCurrent() else { throw CancellationError() }
-        // AsyncBytes owns a task delegate; without ours, its authentication
-        // handling bypasses the session-level certificate policy.
-        let (bytes, response) = try await self.session.bytes(for: request, delegate: self)
+        let (bytes, response) = try await self.bytes(for: request)
         let expectedLength = response.expectedContentLength
         guard expectedLength < 0 || expectedLength <= Int64(maximumBytes) else {
             bytes.task.cancel()
@@ -927,6 +945,16 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         } onCancel: {
             // Cancellation after headers must also interrupt a stalled body.
             bytes.task.cancel()
+        }
+    }
+
+    private func bytes(for request: URLRequest) async throws -> (URLSession.AsyncBytes, URLResponse) {
+        do {
+            // AsyncBytes owns a task delegate; without ours, its authentication
+            // handling bypasses the session-level certificate policy.
+            return try await self.session.bytes(for: request, delegate: self)
+        } catch {
+            throw self.consumeHTTPFailure(error)
         }
     }
 
