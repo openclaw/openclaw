@@ -182,16 +182,7 @@ function validateIdentityAvatar(
     if (!avatar || isAvatarDataUrl(avatar) || isAvatarHttpUrl(avatar)) {
       continue;
     }
-    if (avatar.startsWith("~")) {
-      issues.push(
-        createIdentityAvatarIssue(
-          source,
-          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
-        ),
-      );
-      continue;
-    }
-    if (hasAvatarUriScheme(avatar) && !isWindowsAbsolutePath(avatar)) {
+    if (avatar.startsWith("~") || (hasAvatarUriScheme(avatar) && !isWindowsAbsolutePath(avatar))) {
       issues.push(
         createIdentityAvatarIssue(
           source,

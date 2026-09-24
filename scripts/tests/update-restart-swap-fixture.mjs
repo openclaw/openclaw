@@ -9,9 +9,7 @@ import vm from "node:vm";
 import { transformSync } from "esbuild";
 
 export async function createDiskSwap(sourceRoot, base) {
-  const require = createRequire(
-    path.join(process.env.RESTART_DEPENDENCY_ROOT ?? sourceRoot, "package.json"),
-  );
+  const require = createRequire(path.join(sourceRoot, "package.json"));
   const expected = JSON.parse(await fs.readFile(path.join(sourceRoot, "package.json"), "utf8"))
     .dependencies["@openclaw/fs-safe"];
   const installed = JSON.parse(

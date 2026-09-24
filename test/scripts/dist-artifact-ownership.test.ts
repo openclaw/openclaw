@@ -527,6 +527,8 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         import fs from 'node:fs';
         import { createRequire } from 'node:module';
         const require = createRequire(import.meta.url);
+        const { registerSourceRunnerServiceFixture } = await import(${JSON.stringify(path.join(sourceRoot, "test/scripts/fixtures/source-runner-service.mjs"))});
+        registerSourceRunnerServiceFixture(${JSON.stringify(sourceRoot)});
         const { runNodeMain } = await import(${JSON.stringify(path.join(sourceRoot, "scripts/run-node.mts"))});
         process.exitCode = await runNodeMain({
           cwd: process.cwd(), args: ['artifact-fixture'],

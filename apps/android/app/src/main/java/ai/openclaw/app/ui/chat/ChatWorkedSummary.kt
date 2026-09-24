@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatToolActivity
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.clickable
@@ -24,6 +25,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
+internal enum class WorkedToolOutcome { Failed, Blocked, Unknown }
+
 internal data class PreparedChatWorkSpan(
   val start: Int,
   val endExclusive: Int,
@@ -31,6 +34,7 @@ internal data class PreparedChatWorkSpan(
   val preservedRowIndexes: List<Int>,
   val key: String,
   val durationMs: Long?,
+  val outcomes: Map<WorkedToolOutcome, Int>,
   val inLatestTurn: Boolean,
   val inLatestRunChain: Boolean,
   val turnIndex: Int,
@@ -245,6 +249,7 @@ internal fun prepareCompletedWorkSpans(
           preservedRowIndexes = answers,
           key = key,
           durationMs = duration,
+          outcomes = workedToolOutcomes(rows, work),
           inLatestTurn = turnIndex == turns.lastIndex,
           inLatestRunChain = turnIndex in latestRunChain,
           turnIndex = turnIndex,
@@ -254,6 +259,44 @@ internal fun prepareCompletedWorkSpans(
     }
   }
 }
+
+private fun workedToolOutcomes(
+  rows: List<ChatTimelineItem>,
+  work: List<Int>,
+): Map<WorkedToolOutcome, Int> {
+  val tools = linkedMapOf<Pair<String, String>, ChatToolActivity>()
+  for (index in work) {
+    val group = rows[index] as? ChatTimelineItem.ToolActivity ?: continue
+    group.tools.forEachIndexed { toolIndex, tool ->
+      if (tool.activity?.suppressChannelProgress != true) tools[group.disclosureKey to group.toolKeys[toolIndex]] = tool
+    }
+  }
+  // Prepared outcomes supersede raw error flags, including cleared or hidden facts.
+  // Keep invocation identity scoped: different runs may reuse a tool call ID.
+  return tools.values
+    .mapNotNull { tool ->
+      val activity = tool.activity
+      if (activity == null) return@mapNotNull if (!tool.activityPrepared && tool.isError) WorkedToolOutcome.Failed else null
+      if (!activity.isVisible) return@mapNotNull null
+      when (activity.status) {
+        "failed" -> WorkedToolOutcome.Failed
+        "blocked" -> WorkedToolOutcome.Blocked
+        null -> WorkedToolOutcome.Unknown
+        else -> null
+      }
+    }.groupingBy { it }
+    .eachCount()
+}
+
+private fun workedToolOutcomeLabel(
+  outcome: WorkedToolOutcome,
+  count: Int,
+): String =
+  when (outcome) {
+    WorkedToolOutcome.Failed -> if (count == 1) nativeString("1 tool failed") else nativeString("\$count tools failed", count)
+    WorkedToolOutcome.Blocked -> if (count == 1) nativeString("1 tool blocked") else nativeString("\$count tools blocked", count)
+    WorkedToolOutcome.Unknown -> if (count == 1) nativeString("1 tool outcome unknown") else nativeString("\$count tool outcomes unknown", count)
+  }
 
 internal fun workedSummaryLabel(durationMs: Long?): String {
   if (durationMs == null || durationMs <= 0) return nativeString("Worked")
@@ -276,23 +319,28 @@ internal fun ChatWorkedSummary(
 ) {
   val color = ClawTheme.colors.textMuted
   Column(modifier = Modifier.fillMaxWidth()) {
-    Row(
+    Column(
       modifier =
         Modifier
           .fillMaxWidth()
           .semantics { stateDescription = if (item.expanded) nativeString("Expanded") else nativeString("Collapsed") }
           .clickable(role = Role.Button, onClick = onToggle)
           .padding(vertical = 12.dp),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-      verticalAlignment = Alignment.CenterVertically,
+      verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-      Text(workedSummaryLabel(item.durationMs), style = ClawTheme.type.body, color = color)
-      Icon(
-        if (item.expanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = null,
-        tint = color,
-        modifier = Modifier.size(16.dp),
-      )
+      Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(workedSummaryLabel(item.durationMs), style = ClawTheme.type.body, color = color)
+        Icon(
+          if (item.expanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+          contentDescription = null,
+          tint = color,
+          modifier = Modifier.size(16.dp),
+        )
+      }
+      val outcomes = WorkedToolOutcome.entries.mapNotNull { outcome -> item.outcomes[outcome]?.let { workedToolOutcomeLabel(outcome, it) } }
+      if (outcomes.isNotEmpty()) {
+        Text(outcomes.joinToString(" · "), style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
+      }
     }
     HorizontalDivider(color = ClawTheme.colors.border)
   }

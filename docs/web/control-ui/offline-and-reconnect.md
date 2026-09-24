@@ -147,6 +147,14 @@ When the Gateway confirms that it holds the same pending input, the Control UI c
 uncertain-delivery warning without sending the message again. The browser keeps its retry
 payload until consumption or cancellation is confirmed. If delivery is still unknown,
 the review warning remains.
+If the Gateway is holding that input for a later turn, it appears in the queue
+above the composer. Canceling that row withdraws the exact queued message without
+stopping the active turn. Server-held messages cannot be edited or reordered.
+
+If automatic restart recovery is interrupted or cancelled before the agent resumes,
+the **System · restart recovery** notice shows that outcome and asks you to send a
+message to continue. It does not mean the agent resumed. Messages forwarded from
+other sessions keep their own delivery status next to each message.
 
 Once the Gateway confirms that a message is in the transcript, reconnecting retires its temporary browser copy even when the original message is outside the latest history page. Loading older history shows the saved message in its original position without adding a second copy.
 

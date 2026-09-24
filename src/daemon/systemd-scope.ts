@@ -193,16 +193,8 @@ async function findUserSystemdGatewayScope(
   env: GatewayServiceEnv,
 ): Promise<SystemdServiceReadTarget | null> {
   const canonicalUnitName = `${resolveSystemdServiceName(env)}.service`;
-  let userPath: string | null;
   try {
-    userPath = resolveSystemdUnitPath(env);
-  } catch {
-    userPath = null;
-  }
-  if (!userPath) {
-    return null;
-  }
-  try {
+    const userPath = resolveSystemdUnitPath(env);
     await fs.access(userPath);
     return { scope: "user", unitName: canonicalUnitName, unitPath: userPath };
   } catch {
@@ -245,7 +237,7 @@ export async function findSystemdGatewayInstallation(
       () => `@${os.userInfo().username}.service`,
     );
   }
-  if (user && system) {
+  if (user) {
     // Only the SAME canonical gateway installed in both scopes is a dueling
     // conflict (issue #79375). A marker-owned system unit with a *different*
     // name is an intentional separate gateway — e.g. a rescue bot on the same
@@ -253,12 +245,9 @@ export async function findSystemdGatewayInstallation(
     // be treated as a duplicate of the user unit, or doctor could remove a
     // legitimate user gateway. The user unit is always canonical; the direct
     // system path is canonical too, so the real #79375 case still matches.
-    if (user.unitName === system.unitName) {
+    if (user.unitName === system?.unitName) {
       return { kind: "dueling", user, system };
     }
-    return { kind: "user", user };
-  }
-  if (user) {
     return { kind: "user", user };
   }
   if (system) {
