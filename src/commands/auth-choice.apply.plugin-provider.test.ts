@@ -63,6 +63,11 @@ vi.mock("../agents/auth-profiles.js", () => ({
   persistAuthProfileBatch,
 }));
 
+const loadAuthProfileStoreWithoutExternalProfiles = vi.hoisted(() => vi.fn());
+vi.mock("../agents/auth-profiles/store-runtime.js", () => ({
+  loadAuthProfileStoreWithoutExternalProfiles,
+}));
+
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "default"));
 const resolveAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/workspace"));
 const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent"));
@@ -317,6 +322,10 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    loadAuthProfileStoreWithoutExternalProfiles.mockReset().mockReturnValue({
+      version: 1,
+      profiles: {},
+    });
     applyAuthProfileConfig.mockImplementation((config) => config);
     resolveManifestProviderAuthChoice.mockReturnValue(undefined);
     resolvePluginSetupProvider.mockReturnValue(undefined);
@@ -333,6 +342,32 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       codexInstalled: false,
     }));
     offerPostInstallMigrations.mockImplementation(async ({ config }) => ({ config }));
+  });
+
+  it("offers only the selected provider's saved profiles during onboarding", async () => {
+    const provider = buildProvider();
+    const credential = {
+      type: "api_key",
+      provider: provider.id,
+      key: "synthetic-saved-key",
+    } as const;
+    loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      version: 1,
+      profiles: {
+        "saved:local": credential,
+        "saved:other": { ...credential, provider: "other" },
+      },
+    });
+    const run = vi.spyOn(provider.auth[0]!, "run");
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValue({ provider, method: provider.auth[0]! });
+
+    await prepareAuthChoiceLoadedPluginProvider(buildParams(), (result) => result);
+
+    expect(run.mock.calls[0]?.[0].existingProfiles).toEqual([
+      { profileId: "saved:local", credential },
+    ]);
+    expect(loadAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith("/tmp/agent");
   });
 
   it("stages provider profiles until the caller commits them", async () => {
@@ -944,6 +979,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     };
 
     const result = await runProviderPluginAuthMethod({
+      providerId: LOCAL_PROVIDER_ID,
       config: {
         agents: {
           defaults: {
@@ -994,6 +1030,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     };
 
     const result = await runProviderPluginAuthMethod({
+      providerId: "google",
       config: {},
       runtime: {} as ApplyAuthChoiceParams["runtime"],
       prompter: {
@@ -1033,6 +1070,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     };
 
     const result = await runProviderPluginAuthMethod({
+      providerId: LOCAL_PROVIDER_ID,
       config: {
         agents: {
           defaults: {

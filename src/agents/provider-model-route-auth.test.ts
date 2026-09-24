@@ -53,6 +53,39 @@ function direct(
 }
 
 describe("provider model route auth", () => {
+  it("keeps renewable OAuth on the provider-selected API route", () => {
+    const source = {
+      ...profile("openai:shared", "oauth", "ready"),
+      authFlow: "chatgpt-token-sharing",
+      authRequirement: "api-key" as const,
+    };
+    const decision = selectProviderModelRouteAuth({
+      provider: "openai",
+      resolution: routes,
+      sourcePlan: buildProviderModelAuthSourcePlan({ profiles: [source] }),
+    });
+    expect(decision).toMatchObject({
+      kind: "selected",
+      selection: { source, route: { api: "openai-responses", authRequirement: "api-key" } },
+      attempts: [{ kind: "profile", source, sameRouteProfileIds: ["openai:shared"] }],
+    });
+  });
+
+  it("rejects a pinned OAuth identity with no inference route", () => {
+    const decision = selectProviderModelRouteAuth({
+      provider: "openai",
+      resolution: routes,
+      sourcePlan: buildProviderModelAuthSourcePlan({
+        profiles: [],
+        ownership: {
+          reason: "runtime-binding",
+          source: { ...profile("openai:identity", "oauth", "ready"), authRequirement: null },
+        },
+      }),
+    });
+    expect(decision).toMatchObject({ kind: "rejected", reason: "required-profile" });
+  });
+
   it("applies the provider preference before an automatic remembered API profile", () => {
     const decision = selectProviderModelRouteAuth({
       provider: "openai",
@@ -122,6 +155,7 @@ describe("provider model route auth", () => {
     ["api_key", "api-key", "api_key"],
     ["aws-sdk", "api-key", "aws-sdk"],
     ["oauth", "subscription", "oauth"],
+    ["oauth", "api-key", "oauth"],
     ["token", "subscription", "token"],
     [undefined, "api-key", "api_key"],
     [undefined, "subscription", "oauth"],

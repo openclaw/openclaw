@@ -1391,7 +1391,7 @@ packages/ai/src/transports/openai-transport-shared.ts	2
 packages/ai/src/transports/provider-compaction-replay.ts	1
 packages/ai/src/transports/provider-transport-stream.ts	2
 packages/ai/src/transports/simple-completion-transport.ts	1
-packages/ai/src/transports/transport-stream-shared.ts	2
+packages/ai/src/transports/transport-stream-shared.ts	1
 packages/ai/src/transports/transport-utils.ts	2
 packages/ai/src/utils/assistant-text-phase.ts	1
 packages/ai/src/utils/credential-redaction.ts	1
