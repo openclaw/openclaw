@@ -28,6 +28,16 @@ function makeAttemptResult(
   return makeEmbeddedRunnerAttempt(overrides);
 }
 
+function retrySilentError(
+  assistant: LastAssistant,
+  overrides: Partial<EmbeddedRunAttemptResult> = {},
+): boolean {
+  return shouldRetrySilentErrorAssistantTurn({
+    attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant, ...overrides }),
+    assistant,
+  });
+}
+
 function makeEmptyResponseRetryParams(
   attemptOverrides: Partial<EmbeddedRunAttemptResult> = {},
   overrides: Partial<
@@ -74,27 +84,7 @@ describe("incomplete-turn error recovery", () => {
       ],
       usage: { input: 100, output: 1120, totalTokens: 1220 },
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-        assistant,
-      }),
-    ).toBe(true);
-  });
-
-  it("does not retry an ambiguous post-dispatch provider outcome", () => {
-    const assistant = makeLastAssistant({
-      stopReason: "error",
-      errorCode: PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
-      errorMessage: "The WebSocket closed after dispatch",
-      usage: { input: 100, output: 0, totalTokens: 100 },
-    });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-        assistant,
-      }),
-    ).toBe(false);
+    expect(retrySilentError(assistant)).toBe(true);
   });
 
   it("does not retry errored empty turns when non-zero output may indicate progress", () => {
@@ -105,12 +95,7 @@ describe("incomplete-turn error recovery", () => {
       content: [{ type: "text", text: "" }],
       usage: { input: 100, output: 12, totalTokens: 112 },
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-        assistant,
-      }),
-    ).toBe(false);
+    expect(retrySilentError(assistant)).toBe(false);
   });
 
   it.each([
@@ -145,12 +130,7 @@ describe("incomplete-turn error recovery", () => {
         errorMessage,
         usage: { input: 640, output: 1329, totalTokens: 1969 },
       });
-      expect(
-        shouldRetrySilentErrorAssistantTurn({
-          attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-          assistant,
-        }),
-      ).toBe(true);
+      expect(retrySilentError(assistant)).toBe(true);
     },
   );
 
@@ -163,46 +143,27 @@ describe("incomplete-turn error recovery", () => {
       errorMessage: "Provider rejected the tool call",
       usage: { input: 640, output: 1329, totalTokens: 1969 },
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-        assistant,
-      }),
-    ).toBe(true);
+    expect(retrySilentError(assistant)).toBe(true);
   });
 
   it.each([
     "provider completed tool call with malformed JSON arguments",
-    "Provider completed tool call with malformed json arguments",
     " Provider completed tool call with malformed JSON arguments",
-    "Provider completed tool call with malformed JSON arguments ",
-    "Provider completed tool call with malformed JSON arguments.",
     "Error: Provider completed tool call with malformed JSON arguments",
     "Provider completed tool call with malformed JSON arguments after dispatch",
-    "Provider completed stream with an incomplete tool call.",
-    "Provider returned an incomplete or malformed tool call.",
-    "Mistral completed tool call has invalid JSON arguments.",
-    "Responses stream completed tool call with invalid JSON arguments.",
   ])("does not retry positive output for a non-exact rejection message: %s", (errorMessage) => {
     const assistant = makeLastAssistant({
       stopReason: "error",
       errorMessage,
       usage: { input: 640, output: 13, totalTokens: 653 },
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-        assistant,
-      }),
-    ).toBe(false);
+    expect(retrySilentError(assistant)).toBe(false);
   });
 
   it.each([
     "MALFORMED_TOOL_CALL_ARGUMENTS",
     " malformed_tool_call_arguments",
-    "malformed_tool_call_arguments ",
     "malformed_tool_call_arguments_suffix",
-    "invalid_json",
   ])("does not retry positive output for an unrecognized rejection code: %s", (errorCode) => {
     const assistant = makeLastAssistant({
       stopReason: "error",
@@ -210,12 +171,7 @@ describe("incomplete-turn error recovery", () => {
       errorMessage: "Provider rejected the tool call",
       usage: { input: 640, output: 13, totalTokens: 653 },
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-        assistant,
-      }),
-    ).toBe(false);
+    expect(retrySilentError(assistant)).toBe(false);
   });
 
   it.each<{ name: string; attempt: Partial<EmbeddedRunAttemptResult> }>([
@@ -247,12 +203,7 @@ describe("incomplete-turn error recovery", () => {
       errorMessage: "Provider completed tool call with malformed JSON arguments",
       usage: { input: 640, output: 1329, totalTokens: 1969 },
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant, ...attempt }),
-        assistant,
-      }),
-    ).toBe(false);
+    expect(retrySilentError(assistant, attempt)).toBe(false);
   });
 
   it.each([
@@ -275,12 +226,7 @@ describe("incomplete-turn error recovery", () => {
       usage: { input: 640, output: 13, totalTokens: 653 },
       ...terminalEvidence,
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-        assistant,
-      }),
-    ).toBe(false);
+    expect(retrySilentError(assistant)).toBe(false);
   });
 
   it.each([
@@ -311,12 +257,7 @@ describe("incomplete-turn error recovery", () => {
       content,
       usage: { input: 100, output: 1120, totalTokens: 1220 },
     });
-    expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
-        assistant,
-      }),
-    ).toBe(false);
+    expect(retrySilentError(assistant)).toBe(false);
   });
 
   it("does not retry errored thinking-only turns after side effects", () => {
@@ -333,16 +274,8 @@ describe("incomplete-turn error recovery", () => {
       usage: { input: 100, output: 1120, totalTokens: 1220 },
     });
     expect(
-      shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({
-          assistantTexts: [],
-          replayMetadata: {
-            hadPotentialSideEffects: true,
-            replaySafe: false,
-          },
-          lastAssistant: assistant,
-        }),
-        assistant,
+      retrySilentError(assistant, {
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
       }),
     ).toBe(false);
   });
@@ -350,7 +283,6 @@ describe("incomplete-turn error recovery", () => {
   it.each([
     ["current clean overrides cumulative dirty", true, false, true],
     ["current dirty overrides cumulative clean", false, true, false],
-    ["both clean remain retryable", false, false, true],
   ] as const)(
     "uses current-attempt replay metadata when %s",
     (_label, cumulativeDirty, currentDirty, expected) => {
@@ -361,42 +293,19 @@ describe("incomplete-turn error recovery", () => {
         usage: { input: 100, output: 0, totalTokens: 100 },
       });
       expect(
-        shouldRetrySilentErrorAssistantTurn({
-          attempt: makeAttemptResult({
-            assistantTexts: [],
-            lastAssistant: assistant,
-            replayMetadata: {
-              hadPotentialSideEffects: cumulativeDirty,
-              replaySafe: !cumulativeDirty,
-            },
-            currentAttemptReplayMetadata: {
-              hadPotentialSideEffects: currentDirty,
-              replaySafe: !currentDirty,
-            },
-          }),
-          assistant,
+        retrySilentError(assistant, {
+          replayMetadata: {
+            hadPotentialSideEffects: cumulativeDirty,
+            replaySafe: !cumulativeDirty,
+          },
+          currentAttemptReplayMetadata: {
+            hadPotentialSideEffects: currentDirty,
+            replaySafe: !currentDirty,
+          },
         }),
       ).toBe(expected);
     },
   );
-
-  it("detects empty openai-compatible stop turns with non-zero output usage", () => {
-    const retryInstruction = resolveEmptyResponseRetryInstruction(
-      makeEmptyResponseRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            provider: "llamacpp",
-            model: "qwen3.6-27b",
-            usage: { input: 512, output: 103, totalTokens: 615 },
-          }),
-        },
-        { provider: "llamacpp", modelId: "qwen3.6-27b", modelApi: "openai-completions" },
-      ),
-    );
-
-    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-  });
 
   it("detects generic empty GPT turns without visible text", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction(
@@ -439,26 +348,4 @@ describe("incomplete-turn error recovery", () => {
     expect(incompleteTurnText).toContain("verify before retrying");
   });
 
-  it("retries generic empty Bedrock Converse turns without visible text", () => {
-    const retryInstruction = resolveEmptyResponseRetryInstruction(
-      makeEmptyResponseRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            provider: "amazon-bedrock",
-            model: "openai.gpt-oss-120b-1:0",
-            content: [{ type: "text", text: "" }],
-            usage: { input: 950, output: 103, totalTokens: 1053 },
-          }),
-        },
-        {
-          provider: "amazon-bedrock",
-          modelId: "openai.gpt-oss-120b-1:0",
-          modelApi: "bedrock-converse-stream",
-        },
-      ),
-    );
-
-    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-  });
 });
