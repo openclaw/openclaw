@@ -41,9 +41,9 @@ describe("file links", () => {
     fragment.remove();
   });
 
-  it("links prefixed single-segment paths but not bare prose filenames", () => {
+  it("links workspace-relative prefixed paths but blocks home and parent traversal", () => {
     const fragment = htmlFragment(
-      toSanitizedMarkdownHtml("~/notes.md ./x.ts ../y.ts foo.ts inventory.csv", {
+      toSanitizedMarkdownHtml("~/notes.md /opt/secrets.txt ./x.ts ../y.ts foo.ts inventory.csv", {
         fileLinks: true,
       }),
     );
@@ -51,7 +51,10 @@ describe("file links", () => {
       [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")].map(
         (link) => link.dataset.filePath,
       ),
-    ).toEqual(["~/notes.md", "./x.ts", "../y.ts"]);
+    ).toEqual(["./x.ts"]);
+    expect(fragment.textContent).toContain("~/notes.md");
+    expect(fragment.textContent).toContain("/opt/secrets.txt");
+    expect(fragment.textContent).toContain("../y.ts");
     expect(fragment.textContent).toContain("foo.ts");
     expect(fragment.textContent).toContain("inventory.csv");
   });
@@ -104,18 +107,15 @@ describe("file links", () => {
     expect(links.map((link) => link.dataset.filePath)).toEqual(["assets/part.3mf"]);
   });
 
-  it("links Windows absolute paths", () => {
+  it("does not link Windows absolute paths", () => {
     const fragment = htmlFragment(
       toSanitizedMarkdownHtml("C:/repo/src/foo.ts:42 and `D:\\work\\bar.ts`", {
         fileLinks: true,
       }),
     );
-    const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
-    expect(links.map((link) => link.dataset.filePath)).toEqual([
-      "C:/repo/src/foo.ts",
-      "D:\\work\\bar.ts",
-    ]);
-    expect(links[0]?.dataset.fileLine).toBe("42");
+    expect(fragment.querySelectorAll("a.markdown-file-link")).toHaveLength(0);
+    expect(fragment.textContent).toContain("C:/repo/src/foo.ts:42");
+    expect(fragment.textContent).toContain("D:\\work\\bar.ts");
   });
 
   it("links inline-code paths and conservative bare filenames", () => {
@@ -136,20 +136,26 @@ describe("file links", () => {
     expect(fragment.textContent).toContain("notes.xyz123");
   });
 
-  it("converts explicit relative and absolute local file links", () => {
+  it("converts explicit workspace-relative links but blocks absolute local links", () => {
     const fragment = htmlFragment(
-      toSanitizedMarkdownHtml("[foo.ts](src/utils/foo.ts:42) [x](/Users/a/b.ts)", {
-        fileLinks: true,
-      }),
+      toSanitizedMarkdownHtml(
+        "[foo.ts](src/utils/foo.ts:42) [home](/Users/a/b.ts) [root](/opt/secrets.txt)",
+        { fileLinks: true },
+      ),
     );
     const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
-    expect(links).toHaveLength(2);
+    expect(links).toHaveLength(1);
     expect(links[0]?.dataset).toMatchObject({
       filePath: "src/utils/foo.ts",
       fileLine: "42",
     });
-    expect(links[1]?.dataset.filePath).toBe("/Users/a/b.ts");
-    expect(links.every((link) => !link.hasAttribute("href"))).toBe(true);
+    expect(links[0]?.hasAttribute("href")).toBe(false);
+    const blocked = [...fragment.querySelectorAll<HTMLAnchorElement>("a")].filter(
+      (link) => link.textContent === "home" || link.textContent === "root",
+    );
+    expect(blocked).toHaveLength(2);
+    expect(blocked.every((link) => !link.hasAttribute("href"))).toBe(true);
+    expect(blocked.every((link) => !link.hasAttribute("data-file-path"))).toBe(true);
 
     const disabled = htmlFragment(toSanitizedMarkdownHtml("[x](/Users/a/b.ts)"));
     expect(disabled.querySelector("a")?.hasAttribute("href")).toBe(false);
@@ -197,7 +203,7 @@ describe("file links", () => {
     }
   });
 
-  it("recognizes Unicode bare and Windows filenames without normalizing their spelling", () => {
+  it("recognizes Unicode bare filenames but blocks Unicode Windows absolute paths", () => {
     const fragment = htmlFragment(
       toSanitizedMarkdownHtml("`re\u0301sume\u0301.md` and `C:\\文档\\café.md:9`", {
         fileLinks: true,
@@ -207,7 +213,8 @@ describe("file links", () => {
       [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")].map(
         (link) => link.dataset.filePath,
       ),
-    ).toEqual(["re\u0301sume\u0301.md", "C:\\文档\\café.md"]);
+    ).toEqual(["re\u0301sume\u0301.md"]);
+    expect(fragment.textContent).toContain("C:\\文档\\café.md:9");
   });
 
   it.each([
@@ -300,10 +307,6 @@ describe("file links", () => {
 
   it.each([
     "./portal.example/service.test",
-    "../example.com/src/app.ts",
-    "~/example.com/guide.md",
-    "/example.com/guide.md",
-    "C:/example.com/guide.md",
     ".config/workflows/check.yml",
     "src/components.v2/Button.tsx",
     "src.v2/app.ts",
@@ -312,6 +315,17 @@ describe("file links", () => {
     expect(fragment.querySelector<HTMLAnchorElement>("a[data-file-path]")?.dataset.filePath).toBe(
       path,
     );
+  });
+
+  it.each([
+    "../example.com/src/app.ts",
+    "~/example.com/guide.md",
+    "/example.com/guide.md",
+    "C:/example.com/guide.md",
+  ])("blocks the non-workspace local path %s", (path) => {
+    const fragment = htmlFragment(toSanitizedMarkdownHtml(path, { fileLinks: true }));
+    expect(fragment.querySelector("a[data-file-path]")).toBeNull();
+    expect(fragment.textContent).toContain(path);
   });
 
   it("does not link paths inside fenced code blocks", () => {
@@ -372,35 +386,30 @@ describe("file links", () => {
 
   it("grows the label only far enough to tell equal basenames apart", () => {
     const fragment = htmlFragment(
-      toSanitizedMarkdownHtml("ui/src/app.ts and api/src/app.ts and `D:\\work\\app.ts`", {
+      toSanitizedMarkdownHtml("ui/src/app.ts and api/src/app.ts and `work/app.ts`", {
         fileLinks: true,
       }),
     );
     const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
-    // The Windows path is unique one segment up, so it stops there while the
-    // other two grow to three — and it keeps its own separator.
+    // The third path is unique one segment up, so it stops there while the
+    // other two grow to three.
     expect(links.map((link) => link.textContent)).toEqual([
       "ui/src/app.ts",
       "api/src/app.ts",
-      "work\\app.ts",
+      "work/app.ts",
     ]);
   });
 
   it.each([
     ["plain text", "/tmp/qa/src/file.ts:7 and tmp/qa/src/file.ts:7"],
     ["inline code", "`/tmp/qa/src/file.ts:7` and `tmp/qa/src/file.ts:7`"],
-  ])("keeps absolute and relative file labels distinct in %s", (_kind, input) => {
+  ])("blocks absolute paths and keeps relative file labels in %s", (_kind, input) => {
     const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { fileLinks: true }));
     const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
-    expect(links.map((link) => link.dataset.filePath)).toEqual([
-      "/tmp/qa/src/file.ts",
-      "tmp/qa/src/file.ts",
-    ]);
-    expect(links.map((link) => link.dataset.fileLine)).toEqual(["7", "7"]);
-    expect(links.map((link) => link.textContent)).toEqual([
-      "/tmp/qa/src/file.ts:7",
-      "tmp/qa/src/file.ts:7",
-    ]);
+    expect(links.map((link) => link.dataset.filePath)).toEqual(["tmp/qa/src/file.ts"]);
+    expect(links.map((link) => link.dataset.fileLine)).toEqual(["7"]);
+    expect(links.map((link) => link.textContent)).toEqual(["file.ts:7"]);
+    expect(fragment.textContent).toContain("/tmp/qa/src/file.ts:7");
   });
 
   it("keeps labels correct and distinct across thousands of paths", () => {
@@ -464,7 +473,6 @@ describe("file links", () => {
     ["README.md", "markdown"],
     ["SKILL.md", "skill"],
     ["skills/review/skill.MD", "skill"],
-    ["C:\\skills\\review\\SKILL.md", "skill"],
     ["skills/review/SKILL.markdown", "markdown"],
     ["skills/review/other-skill.md", "markdown"],
     ["package.json", "package"],
@@ -486,7 +494,7 @@ describe("file links", () => {
   it.each(["constructor", "__proto__", "notes.constructor", "notes.__proto__"])(
     "uses the generic file glyph for the prototype-shaped filename %s",
     (name) => {
-      const path = `/tmp/${name}`;
+      const path = `notes/${name}.txt`;
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml(`[Read file](${path})`, { fileLinks: true }),
       );

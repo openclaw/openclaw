@@ -17,6 +17,7 @@ import { markdownCodeBlockCopyText, renderMarkdownCodeBlock } from "./markdown-c
 import { installMarkdownDetails } from "./markdown-details.ts";
 import {
   isHostLocalMarkdownFileHref,
+  isSessionWorkspaceMarkdownFilePath,
   MARKDOWN_FILE_LINK_SCAN_RE,
   parseMarkdownFileLinkTarget,
   splitMarkdownFileLineSuffix,
@@ -373,21 +374,23 @@ export function createMarkdownParser(): MarkdownItParser {
                   : null);
               if (target) {
                 token.attrs = token.attrs?.filter(([name]) => name !== "href") ?? null;
-                token.attrJoin("class", "markdown-file-link");
-                token.attrSet("role", "button");
-                token.attrSet("tabindex", "0");
-                token.attrSet("data-file-path", target.path);
-                token.attrSet("data-file-kind", fileKindForPath(target.path));
-                if (target.line !== null) {
-                  token.attrSet("data-file-line", String(target.line));
-                }
-                // The author wrote this label, so it is never rewritten; the
-                // tooltip is the only place the reference behind it survives —
-                // and it is skipped when the label already is that reference,
-                // matching the shortened links below.
-                const reference = decodedHref.trim();
-                if (linkLabelText(children, index) !== reference) {
-                  token.attrSet("title", reference);
+                if (isSessionWorkspaceMarkdownFilePath(target.path)) {
+                  token.attrJoin("class", "markdown-file-link");
+                  token.attrSet("role", "button");
+                  token.attrSet("tabindex", "0");
+                  token.attrSet("data-file-path", target.path);
+                  token.attrSet("data-file-kind", fileKindForPath(target.path));
+                  if (target.line !== null) {
+                    token.attrSet("data-file-line", String(target.line));
+                  }
+                  // The author wrote this label, so it is never rewritten; the
+                  // tooltip is the only place the reference behind it survives —
+                  // and it is skipped when the label already is that reference,
+                  // matching the shortened links below.
+                  const reference = decodedHref.trim();
+                  if (linkLabelText(children, index) !== reference) {
+                    token.attrSet("title", reference);
+                  }
                 }
               }
             }
@@ -404,7 +407,7 @@ export function createMarkdownParser(): MarkdownItParser {
         }
         if (token.type === "code_inline") {
           const target = parseMarkdownFileLinkTarget(token.content);
-          if (target) {
+          if (target && isSessionWorkspaceMarkdownFilePath(target.path)) {
             const reference = token.content.trim();
             const meta: MarkdownFileLinkMeta = {
               path: target.path,
@@ -438,7 +441,7 @@ export function createMarkdownParser(): MarkdownItParser {
             continue;
           }
           const target = parseMarkdownFileLinkTarget(matched);
-          if (!target) {
+          if (!target || !isSessionWorkspaceMarkdownFilePath(target.path)) {
             continue;
           }
           if (matchIndex > cursor) {

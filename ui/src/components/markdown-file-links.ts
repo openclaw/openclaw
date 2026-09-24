@@ -149,3 +149,16 @@ export function parseMarkdownFileLinkTarget(
 export function isHostLocalMarkdownFileHref(href: string): boolean {
   return HOST_LOCAL_FILE_HREF_RE.test(href.trim());
 }
+
+export function isSessionWorkspaceMarkdownFilePath(path: string): boolean {
+  const normalized = path.trim().replaceAll("\\", "/");
+  if (
+    !normalized ||
+    normalized.startsWith("/") ||
+    normalized.startsWith("~/") ||
+    /^[A-Za-z]:\//.test(normalized)
+  ) {
+    return false;
+  }
+  return !normalized.split("/").some((segment) => segment === "..");
+}
