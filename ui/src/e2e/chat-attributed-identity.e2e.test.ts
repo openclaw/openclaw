@@ -1,5 +1,5 @@
 import path from "node:path";
-import { expect, type Locator, type Page } from "playwright/test";
+import { expect, type Page } from "playwright/test";
 import { beforeEach, it } from "vitest";
 // Control UI E2E tests cover attributed chat identity placement.
 import { finishElementAnimations } from "../test-helpers/animations.ts";
@@ -9,6 +9,11 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  expectStableNamePosition,
+  readActionTapArea,
+  readFooterGeometry,
+} from "./chat-attributed-identity.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -33,45 +38,6 @@ async function captureProof(page: Page, name: string) {
     animations: "disabled",
     path: path.join(artifactDir, name),
   });
-}
-
-async function readFooterGeometry(group: Locator) {
-  return group.locator(".chat-group-footer").evaluate((footer) => {
-    const actions = footer.querySelector<HTMLElement>(".chat-group-footer-actions");
-    const identity = footer.querySelector<HTMLElement>(".chat-group-footer__meta");
-    const name = footer.querySelector<HTMLElement>(".chat-sender-name");
-    if (!actions || !identity || !name) {
-      throw new Error("Expected message footer identity and actions");
-    }
-    const actionsRect = actions.getBoundingClientRect();
-    const footerRect = footer.getBoundingClientRect();
-    const identityRect = identity.getBoundingClientRect();
-    const nameRect = name.getBoundingClientRect();
-    return {
-      actions: {
-        left: actionsRect.left,
-        right: actionsRect.right,
-        top: actionsRect.top,
-        bottom: actionsRect.bottom,
-      },
-      identity: {
-        top: identityRect.top,
-        bottom: identityRect.bottom,
-        left: identityRect.left,
-        right: identityRect.right,
-      },
-      footer: { right: footerRect.right },
-      name: { left: nameRect.left - footerRect.left, top: nameRect.top - footerRect.top },
-    };
-  });
-}
-
-function expectStableNamePosition(
-  actual: { left: number; top: number },
-  expected: { left: number; top: number },
-) {
-  expect(actual.left).toBe(expected.left);
-  expect(actual.top).toBeCloseTo(expected.top, 0);
 }
 
 suite.define(() => {
@@ -133,25 +99,49 @@ suite.define(() => {
         expect((await agent.boundingBox())?.height).toBe(restingHeight);
         const copy = agent.locator(".chat-copy-btn");
         const target = await copy.boundingBox();
-        expect(target?.width).toBeGreaterThanOrEqual(44);
-        expect(target?.height).toBeGreaterThanOrEqual(44);
-        await copy.tap();
+        expect(target?.width).toBe(24);
+        expect(target?.height).toBe(24);
+        const tapArea = await readActionTapArea(copy);
+        expect(tapArea.width).toBeGreaterThanOrEqual(44);
+        expect(tapArea.height).toBeGreaterThanOrEqual(44);
+        expect(tapArea.hitCorners).toBe(4);
+        // This point is below and outside the painted button, inside its real tap area.
+        await page.touchscreen.tap(tapArea.left + 2, tapArea.top + tapArea.height - 2);
         await expect(copy).toHaveAttribute("data-copy-state", "copied");
         await copy.evaluate(finishElementAnimations);
         await expect
           .poll(() =>
             copy.evaluate((button) => ({
               state: button.dataset.copyState,
-              background: getComputedStyle(button).backgroundColor,
+              painted: getComputedStyle(button).backgroundColor !== "rgba(0, 0, 0, 0)",
             })),
           )
-          .toEqual({ state: "copied", background: "rgba(0, 0, 0, 0)" });
+          .toEqual({ state: "copied", painted: true });
+        const centered = await copy.evaluate((button) => {
+          const box = button.getBoundingClientRect();
+          const icon = button
+            .querySelector(".chat-copy-btn__icon-check svg")!
+            .getBoundingClientRect();
+          return {
+            x: Math.abs(box.x + box.width / 2 - icon.x - icon.width / 2),
+            y: Math.abs(box.y + box.height / 2 - icon.y - icon.height / 2),
+          };
+        });
+        expect(centered.x).toBeLessThanOrEqual(1);
+        expect(centered.y).toBeLessThanOrEqual(1);
         expect(await copy.boundingBox()).toEqual(target);
         await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(reply);
         await expect(copy).not.toHaveAttribute("data-copy-state", "copied");
+        if (width === 390) {
+          await copy.focus();
+          await page.keyboard.press("Enter");
+          await expect(copy).toHaveAttribute("data-copy-state", "copied");
+          await expect(copy).not.toHaveAttribute("data-copy-state", "copied");
+        }
         await agent.locator(".chat-bubble").tap();
         await page.getByRole("textbox", { name: "Chat composer" }).tap();
         await expect(footer).toHaveCSS("opacity", "0");
+        expect((await readActionTapArea(copy)).hitCorners).toBe(0);
       },
     );
   });
@@ -525,6 +515,9 @@ suite.define(() => {
     for (const width of [320, 390, 430]) {
       await page.setViewportSize({ height: 760, width });
       await page.mouse.move(0, 0);
+      // The prior native rewind/cancel interaction can leave fine-pointer hover/focus behind.
+      await page.mouse.move(0, 0);
+      await page.getByRole("textbox", { name: "Chat composer" }).focus();
       const restingTouchGeometry = await readFooterGeometry(longNamePeerGroup);
       const restingTouchHeight = (await longNamePeerGroup.boundingBox())?.height;
       await longNamePeerGroup
@@ -555,9 +548,17 @@ suite.define(() => {
         reply,
         longNamePeerGroup.getByRole("button", { name: "Rewind", exact: true }),
       ]) {
-        const bounds = await control.boundingBox();
-        expect(bounds?.width).toBeGreaterThanOrEqual(44);
-        expect(bounds?.height).toBeGreaterThanOrEqual(44);
+        const target = await readActionTapArea(control);
+        expect(target.width).toBeGreaterThanOrEqual(44);
+        expect(target.height).toBeGreaterThanOrEqual(44);
+        expect(target.hitCorners).toBe(4);
+        if (width === 390 && (await control.getAttribute("aria-label")) === "Rewind") {
+          await page.mouse.click(target.left + 2, target.top + target.height - 2);
+          const confirmation = page.locator(".chat-confirm-popover");
+          await expect(confirmation).toBeVisible();
+          await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+          await expect(confirmation).toHaveCount(0);
+        }
       }
       expect((await longNamePeerGroup.boundingBox())?.height).toBe(restingTouchHeight);
       await longNamePeerGroup
@@ -613,7 +614,11 @@ suite.define(() => {
             targets: [...footer.querySelectorAll(".chat-group-footer-actions button")].map(
               (button) => {
                 const bounds = button.getBoundingClientRect();
-                return { width: bounds.width, height: bounds.height };
+                const extension = getComputedStyle(button, "::before");
+                return {
+                  width: Number.parseFloat(extension.width) || bounds.width,
+                  height: Number.parseFloat(extension.height) || bounds.height,
+                };
               },
             ),
           };

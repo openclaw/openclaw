@@ -817,24 +817,32 @@ img.chat-avatar {
     justify-content: flex-end;
   }
 
-  .chat-group-footer-actions .chat-copy-btn,
-  .chat-group-footer-actions .chat-reply-btn,
-  .chat-group-footer-actions .chat-group-rewind,
-  .chat-message-actions-row .chat-copy-btn,
-  .chat-message-actions-row .chat-reply-btn {
-    min-width: 44px;
+  /* Reserve the touch row without stretching the painted 24px buttons. */
+  :is(.chat-group-footer-actions, .chat-message-actions-row):has(
+    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)
+  ) {
     min-height: 44px;
-    /* Keep 14px icons centered on the metadata’s 24px visual row while
-       the remaining touch target extends downward. */
-    padding-top: 5px;
     align-items: flex-start;
   }
 
-  /* The success check is the feedback, not the invisible 44px touch box. */
-  .chat-group
-    :is(.chat-group-footer-actions, .chat-message-actions-row)
-    .chat-copy-btn[data-copy-state="copied"] {
-    background: transparent;
+  :is(.chat-group-footer-actions, .chat-message-actions-row)
+    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+    position: relative;
+    margin-inline: 10px;
+  }
+
+  /* This transparent extension belongs to the native button. The row and
+     inline margins reserve its full area, so neighboring targets never overlap.
+     The extension inherits the button’s pointer policy during disclosure. */
+  :is(.chat-group-footer-actions, .chat-message-actions-row)
+    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)::before {
+    content: "";
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline-start: -10px;
+    width: 44px;
+    height: 44px;
+    pointer-events: inherit;
   }
 }
 
