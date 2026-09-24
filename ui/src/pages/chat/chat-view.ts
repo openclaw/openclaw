@@ -171,6 +171,9 @@ export function renderChat(props: ChatProps) {
       )
     : undefined;
   const pendingInputs = props.historyState ? getChatPendingInputs(props.historyState) : undefined;
+  const displayedPendingInputs = pendingInputs
+    ? [...pendingInputs.page.items.filter((input) => !input.queued), ...pendingInputs.queuedInputs]
+    : undefined;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const canCompose = props.canSend;
   const questionState = getTranscriptState(props.paneId);
@@ -216,7 +219,7 @@ export function renderChat(props: ChatProps) {
         streamStartedAt: placementStartup?.startedAt ?? props.streamStartedAt,
         queue,
         initialTurnId: props.placementStartup?.initialTurn?.id,
-        pendingInputs: pendingInputs?.page.items,
+        pendingInputs: displayedPendingInputs,
         runActive: props.runActive === true,
         runWorking,
         startupLabel: chatStartupStatusLabel(props.startupStatus, placementStartup),
@@ -383,7 +386,7 @@ export function renderChat(props: ChatProps) {
   const inputDisplay = selectChatInputDisplay(
     props.messages,
     props.queue,
-    pendingInputs?.page.items ?? [],
+    displayedPendingInputs ?? [],
   );
   const defaultComposer = renderChatComposer({
     ...props,

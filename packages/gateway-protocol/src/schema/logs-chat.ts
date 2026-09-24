@@ -89,6 +89,7 @@ export const ChatInputReceiptsSchema = Type.Array(
     closedObject({
       runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
       state: Type.Literal("pending"),
+      queued: Type.Optional(Type.Literal(true)),
     }),
     closedObject({
       runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),

@@ -20,24 +20,77 @@ import {
   clearChatPendingInputs,
   getChatPendingInputs,
   loadChatPendingInputs,
+  readChatInputRunIds,
 } from "./chat-pending-inputs.ts";
 import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
-import { resetChatThreadState } from "./chat-thread.ts";
+import { renderChatView } from "./chat-view.test-helpers.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+} from "./components/chat-transcript.test-support.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 
 beforeEach(() => {
+  installTranscriptDomMocks();
   vi.stubGlobal("sessionStorage", createStorageMock());
 });
 afterEach(() => {
-  resetChatThreadState();
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
+  resetTranscriptTestDom();
 });
 
 describe("server-owned pending input pagination", () => {
+  it("discovers and retains a live queue beyond the latest page until an exact receipt retires it", async () => {
+    let queued = true;
+    const host = makeChatHost({
+      sessionKey,
+      currentSessionId: sessionId,
+      requestHandlers: {
+        "chat.history": (params: { pendingBefore?: number; inputRunIds?: string[] }) => ({
+          sessionId,
+          messages: [],
+          pendingInputs:
+            params.pendingBefore === 21
+              ? {
+                  items: [
+                    {
+                      ...input,
+                      state: queued ? "queued" : "cancelled",
+                      ...(queued ? { queued: true } : {}),
+                    },
+                  ],
+                  total: 21,
+                }
+              : { items: [], total: 21, nextBefore: 21 },
+          inputReceipts: params.inputRunIds?.some((runId) => runId === input.runId)
+            ? [{ runId: input.runId, state: "pending", ...(queued ? { queued: true } : {}) }]
+            : [],
+        }),
+      },
+    });
+    applyChatPendingInputs(host, { items: [], total: 21, nextBefore: 21 });
+    await loadChatPendingInputs(host, 21);
+    applyChatPendingInputs(host, { items: [], total: 21, nextBefore: 21 });
+    expect(readChatInputRunIds(host)).toContain(input.runId);
+    await loadChatHistory(host);
+    expect(host.request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.objectContaining({ inputRunIds: [input.runId] }),
+    );
+    expect(
+      renderChatView({ historyState: host, sessionKey }).querySelector(".chat-queue__text")
+        ?.textContent,
+    ).toBe("Keep my accepted input");
+    queued = false;
+    await loadChatHistory(host);
+    expect(
+      renderChatView({ historyState: host, sessionKey }).querySelector(".chat-queue__item"),
+    ).toBeNull();
+    expect(readChatInputRunIds(host)).not.toContain(input.runId);
+  });
+
   it("pages custody without replacing transcript or applying a stale physical-session response", async () => {
     let resolve!: (value: unknown) => void;
     const response = new Promise((done) => {
@@ -84,6 +137,8 @@ describe("server-owned pending input pagination", () => {
             ...input,
             id: "latest-input",
             runId: "latest-run",
+            queued: true,
+            state: "queued",
             message: {
               role: "user",
               content: "Newest retained input",
@@ -94,6 +149,17 @@ describe("server-owned pending input pagination", () => {
         ],
         total: 21,
         nextBefore: 21,
+      };
+      const refreshedLatestPage: ChatPendingInputsPage = {
+        ...latestPage,
+        items: [
+          {
+            ...latestPage.items[0]!,
+            id: "newer-input",
+            runId: "newer-run",
+            message: { role: "user", content: "New queued input" },
+          },
+        ],
       };
       const olderPage: ChatPendingInputsPage = { items: [input], total: 21 };
       const refreshedOlderPage: ChatPendingInputsPage = {
@@ -124,7 +190,7 @@ describe("server-owned pending input pagination", () => {
                 ? navigation.promise
                 : { sessionId, pendingInputs: refreshedOlderPage }
               : refreshFinished
-                ? { sessionId, pendingInputs: latestPage }
+                ? { sessionId, pendingInputs: refreshedLatestPage }
                 : refresh.promise,
         },
       });
@@ -185,9 +251,10 @@ describe("server-owned pending input pagination", () => {
           ? { kind: "delta", deltaCursor: "next", messages: [] }
           : { sessionId, messages: [canonical] }),
         sessionInfo,
-        pendingInputs: latestPage,
+        pendingInputs: refreshedLatestPage,
         inputReceipts: [
           { runId: "consumed-source", state: "consumed", consumedByEventId: "aggregate" },
+          { runId: "latest-run", state: "consumed", consumedByEventId: "latest-input" },
         ],
       });
       await refreshing;
@@ -207,10 +274,19 @@ describe("server-owned pending input pagination", () => {
       expect(host.chatRunId).toBe("active-run");
       expect(host.chatStream).toBe("Live output");
       expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+      const container = renderChatView({
+        historyState: host,
+        sessionKey,
+        messages: host.chatMessages,
+        queue: host.chatQueue,
+      });
+      expect(container.querySelector(".chat-queue__text")?.textContent).toBe("New queued input");
+      expect(readChatInputRunIds(host)).toContain("newer-run");
+      expect(readChatInputRunIds(host)).not.toContain("latest-run");
 
       await loadChatPendingInputs(host);
       expect(getChatPendingInputs(host)?.before).toBeUndefined();
-      expect(getChatPendingInputs(host)?.page).toEqual(latestPage);
+      expect(getChatPendingInputs(host)?.page).toEqual(refreshedLatestPage);
     },
   );
 

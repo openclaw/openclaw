@@ -6,7 +6,7 @@ import {
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
-  assertOperatorModelAllowed,
+  assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import {
@@ -331,6 +331,13 @@ export function resolveReplyOperatorAuthorityKey(
   ]);
 }
 
+function assertCurrentOperatorAuthority(authority: AdmittedRunOperatorAuthority | undefined): void {
+  if (authority) {
+    assertAdmittedRunOperatorAuthority(authority);
+    authority.assertCurrent();
+  }
+}
+
 function resolveReplyToolAuthorityInputFingerprint(
   snapshot: ReplyToolAuthorityInput,
   route?: ReplyToolAuthorityRoute,
@@ -338,7 +345,7 @@ function resolveReplyToolAuthorityInputFingerprint(
   const execution = snapshot.run;
   const { provider, model, capabilityProfile } = resolveReplyToolAuthorityContext(snapshot, route);
   const authority = snapshot.operatorAuthority;
-  assertOperatorModelAllowed(authority, { provider, model });
+  assertCurrentOperatorAuthority(authority);
   const screenTarget = resolveReplyScreenToolTarget(snapshot, capabilityProfile);
   return createHash("sha256")
     .update(
@@ -401,7 +408,7 @@ export function prepareReplyToolAuthority(
     fingerprint: (route) => resolveReplyToolAuthorityInputFingerprint(snapshot, route),
     project: (overlay, route) => {
       // Steering retains the running turn's authority and browser bindings across reconnects.
-      assertOperatorModelAllowed(snapshot.operatorAuthority, route);
+      assertCurrentOperatorAuthority(snapshot.operatorAuthority);
       const incoming = applyReplyToolAuthorityOverlay(snapshot, overlay);
       return resolveReplyToolAuthorityInputFingerprint(narrow ? narrow(incoming) : incoming, route);
     },

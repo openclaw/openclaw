@@ -248,7 +248,7 @@ export function captureGatewayOperatorRunAuthority(params: {
               allows: (ref: Parameters<typeof original.allows>[0]) =>
                 original.allows(ref) && current.allows(ref),
             })
-          : (original ?? current);
+          : (current ?? original);
       modelPolicyConfig = cfg;
       modelPolicyMetadata = metadata;
     }

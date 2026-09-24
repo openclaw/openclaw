@@ -13,11 +13,9 @@ import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
-import { requestChatAbort } from "./chat-abort-request.ts";
-import { loadChatHistory } from "./chat-history.ts";
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
 import { confirmQueuedMessageCustody, removeQueuedMessage } from "./chat-queue.ts";
-import type { ChatState, ChatHistoryHost } from "./chat-state-contract.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { buildMessageItems, messageMatchesSearchQuery } from "./chat-thread-items.ts";
 import {
@@ -38,6 +36,8 @@ type PendingInputView = {
   sessionId: string | null;
   agentId: string | undefined;
   page: ChatPendingInputsPage;
+  /** Live custody receipts keep the queue independent of retained-input pagination. */
+  queuedInputs: ChatPendingInputsPage["items"];
   before?: number;
   readonly loading: boolean;
   error?: string;
@@ -45,6 +45,30 @@ type PendingInputView = {
   request?: PendingInputRequest;
 };
 const pendingInputViews = new WeakMap<ChatState, PendingInputView>();
+
+function reconcileQueuedInputs(
+  queued: ChatPendingInputsPage["items"],
+  page: ChatPendingInputsPage,
+  receipts: ChatInputReceipts = [],
+): ChatPendingInputsPage["items"] {
+  const observed = new Map(receipts.map((receipt) => [receipt.runId, receipt]));
+  const current = new Map(
+    queued
+      .filter((input) => {
+        const receipt = input.runId ? observed.get(input.runId) : undefined;
+        return !receipt || (receipt.state === "pending" && receipt.queued);
+      })
+      .map((input) => [input.id, input]),
+  );
+  for (const input of page.items) {
+    if (input.queued) {
+      current.set(input.id, input);
+    } else {
+      current.delete(input.id);
+    }
+  }
+  return [...current.values()].toSorted((left, right) => left.acceptedAt - right.acceptedAt);
+}
 
 export function buildPendingInputQueueItems(
   inputs: ChatPendingInputsPage["items"],
@@ -54,12 +78,20 @@ export function buildPendingInputQueueItems(
       return [];
     }
     const message = normalizeMessage(input.message);
+    const attachmentLabels = message.content.flatMap((part) =>
+      part.type === "attachment" || part.type === "attachment_error"
+        ? [part.attachment.label]
+        : part.type === "image"
+          ? part.sources.flatMap((source) => (source.fileName ? [source.fileName] : []))
+          : [],
+    );
     const imageCount = message.content.filter((part) => part.type === "image").length;
     return [
       {
         id: `pending-input:${input.id}`,
         text:
           extractText(input.message) ||
+          attachmentLabels.join(", ") ||
           (imageCount ? t("chat.queue.imageCount", { count: String(imageCount) }) : ""),
         createdAt: input.acceptedAt,
         pendingRunId: input.runId,
@@ -68,42 +100,6 @@ export function buildPendingInputQueueItems(
       },
     ];
   });
-}
-
-export function cancelPendingQueuedChatInput(state: ChatHistoryHost, id: string): boolean {
-  const view = getChatPendingInputs(state);
-  const input = view?.page.items.find(
-    (item) => `pending-input:${item.id}` === id && item.queued && item.state === "queued",
-  );
-  const client = state.client;
-  if (!view || !input?.runId) {
-    return false;
-  }
-  if (!client || !state.connected) {
-    return true;
-  }
-  const epoch = state.connectionEpoch;
-  const current = () =>
-    getChatPendingInputs(state) === view &&
-    state.client === client &&
-    state.connected &&
-    state.connectionEpoch === epoch;
-  void requestChatAbort(client, {
-    sessionKey: view.sessionKey,
-    agentId: view.agentId,
-    runId: input.runId,
-  }).then(async (result) => {
-    if (!current()) {
-      return;
-    }
-    if (!result.ok) {
-      state.chatError = formatUiError(result.error);
-      state.requestUpdate?.();
-      return;
-    }
-    await loadChatHistory(state, { supersedeInFlight: true });
-  });
-  return true;
 }
 
 export function buildPendingInputItems(
@@ -190,6 +186,7 @@ export function readChatInputRunIds(state: ChatState): string[] {
     readChatSessionProjectionScope(state, { agentId: resolveUiSelectedSessionAgentId(state) }),
   );
   const runIds = [
+    ...(getChatPendingInputs(state)?.queuedInputs.map((input) => input.runId) ?? []),
     ...projection.entries
       .filter((entry) => entry.pending && entry.identity?.role === "user")
       .map((entry) => entry.pendingRunId),
@@ -202,8 +199,8 @@ export function readChatInputRunIds(state: ChatState): string[] {
       runIds.filter((id): id is string => Boolean(id && id.length <= CHAT_INPUT_RUN_ID_MAX_CHARS)),
     ),
   ]
-    .toSorted()
-    .slice(0, CHAT_INPUT_RECEIPT_MAX_RUN_IDS);
+    .slice(0, CHAT_INPUT_RECEIPT_MAX_RUN_IDS)
+    .toSorted();
 }
 
 function reconcilePendingInputPage(
@@ -261,12 +258,18 @@ export function applyChatPendingInputs(
 ): void {
   const displayPage = reconcilePendingInputPage(state, page, options.receipts);
   let view = getChatPendingInputs(state);
+  const queuedInputs = reconcileQueuedInputs(
+    view?.queuedInputs ?? [],
+    displayPage,
+    options.receipts,
+  );
   if (!view) {
     view = {
       sessionKey: state.sessionKey,
       sessionId: state.currentSessionId ?? null,
       agentId: resolveUiSelectedSessionAgentId(state),
       page: displayPage,
+      queuedInputs,
       revision: 0,
       get loading() {
         return this.request?.kind === "navigation";
@@ -274,6 +277,7 @@ export function applyChatPendingInputs(
     };
     pendingInputViews.set(state, view);
   } else {
+    view.queuedInputs = queuedInputs;
     view.revision += 1;
     if (view.request && !ownsPendingInputRequest(state, view, view.request)) {
       view.request = undefined;
@@ -320,10 +324,12 @@ async function requestPendingInputPage(
       const result = await client.request<{
         sessionId?: string;
         pendingInputs?: ChatPendingInputsPage;
+        inputReceipts?: ChatInputReceipts;
       }>("chat.history", {
         sessionKey: view.sessionKey,
         agentId: view.agentId,
         limit: 20,
+        ...(view.queuedInputs.length ? { inputRunIds: readChatInputRunIds(state) } : {}),
         ...(request.before === undefined ? {} : { pendingBefore: request.before }),
       });
       if (!current() || result.sessionId !== view.sessionId) {
@@ -333,7 +339,8 @@ async function requestPendingInputPage(
       if (view.revision !== revision) {
         continue;
       }
-      view.page = reconcilePendingInputPage(state, result.pendingInputs);
+      view.page = reconcilePendingInputPage(state, result.pendingInputs, result.inputReceipts);
+      view.queuedInputs = reconcileQueuedInputs(view.queuedInputs, view.page, result.inputReceipts);
       view.before = request.before;
       return;
     }
