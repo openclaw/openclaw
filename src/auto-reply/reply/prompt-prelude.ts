@@ -13,6 +13,7 @@ import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { appendChannelPromptContext } from "./channel-prompt-context.js";
+import { projectTelegramCurrentMessageCarrier } from "./inbound-meta.current-message.js";
 
 const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
 const ROOM_EVENT_PARTICIPATION_RULE =
@@ -228,7 +229,12 @@ export function buildReplyPromptEnvelopeBase(
   const fragments: RuntimeContextFragment[] = [
     ...(isRoomEvent ? [{ kind: "runtime-instruction" as const, text: ROOM_EVENT_PROMPT }] : []),
     ...(inboundUserContext
-      ? [{ kind: "conversation-data" as const, text: inboundUserContext }]
+      ? [
+          {
+            kind: "conversation-data" as const,
+            text: projectTelegramCurrentMessageCarrier(inboundUserContext, params.sessionCtx),
+          },
+        ]
       : []),
     ...(deliveryDirective
       ? [{ kind: "runtime-instruction" as const, text: deliveryDirective }]

@@ -9,19 +9,23 @@ import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
+import { truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatAgentEnvelopeTimestamp } from "../envelope.js";
 import type { TemplateContext } from "../templating.js";
-import {
-  formatContextJsonBlock,
-  MAX_CONTEXT_JSON_STRING_CHARS,
-  neutralizeMarkdownFences,
-  selectInboundHistoryContext,
-} from "./channel-prompt-context.js";
+import { formatContextJsonBlock, selectInboundHistoryContext } from "./channel-prompt-context.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
+import { formatTelegramCurrentMessageContext } from "./inbound-meta.current-message.js";
+import {
+  MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS,
+  normalizePromptMetadataString,
+  normalizePromptMetadataStringArray,
+  sanitizePromptBody,
+  sanitizeTranscriptBody,
+  sanitizeTranscriptField,
+  truncateBodyHeadTail,
+} from "./inbound-meta.text.js";
 
-const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
 const MAX_ACTIVE_GOAL_OBJECTIVE_CHARS = 200;
 const ACTIVE_GOAL_CONTEXT_PREFIX = "Active goal: ";
 const ACTIVE_GOAL_CONTEXT_SUFFIX =
@@ -116,19 +120,6 @@ export function refreshActiveGoalContext(
   };
 }
 
-function stripNullBytes(value: string): string {
-  return value.replaceAll("\u0000", "");
-}
-
-function normalizePromptMetadataString(value: unknown): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  const sanitized = stripNullBytes(normalized);
-  return sanitized || undefined;
-}
-
 function normalizePromptMediaPath(value: unknown): string | undefined {
   const mediaPath = normalizePromptMetadataString(value);
   if (!mediaPath) {
@@ -165,83 +156,6 @@ function normalizePromptMediaPath(value: unknown): string | undefined {
     return undefined;
   }
   return toInboundMediaPath(path.posix.basename(normalized));
-}
-
-function normalizePromptMetadataStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const normalized = value
-    .map((entry) => normalizePromptMetadataString(entry))
-    .filter((entry): entry is string => Boolean(entry));
-  return normalized.length > 0 ? normalized : undefined;
-}
-
-function sanitizePromptBody(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const sanitized = stripNullBytes(value);
-  return sanitized || undefined;
-}
-
-const HEAD_TAIL_OMISSION_MARKER = "…[omitted]…";
-const HEAD_TAIL_MARKER_LENGTH = HEAD_TAIL_OMISSION_MARKER.length;
-const MIN_HEAD_TAIL_CHARS = 20;
-
-/**
- * Applies head+tail truncation so the result is ≤ maxChars and the downstream
- * {@link truncateContextJsonString} (prefix-only 2000-char cap) is a no-op.
- * Head and tail portions are sized to keep the body within
- * {@link MAX_CONTEXT_JSON_STRING_CHARS}, preserving actionable tail content
- * that prefix-only truncation would drop.
- */
-function truncateBodyHeadTail(body: string, maxChars = MAX_CONTEXT_JSON_STRING_CHARS): string {
-  if (body.length <= maxChars) {
-    return body;
-  }
-  const available = maxChars - HEAD_TAIL_MARKER_LENGTH;
-  if (available < MIN_HEAD_TAIL_CHARS * 2) {
-    return `${truncateUtf16Safe(body, Math.max(0, maxChars - 14)).trimEnd()}…[truncated]`;
-  }
-  // Budget in UTF-16 code units because truncateContextJsonString enforces
-  // that same cap after JSON serialization.
-  const headChars = Math.floor(available * 0.6);
-  const tailChars = available - headChars;
-  const head = truncateUtf16Safe(body, headChars);
-  const tail = sliceUtf16Safe(body, -tailChars);
-  return `${head}${HEAD_TAIL_OMISSION_MARKER}${tail}`;
-}
-
-function truncateUntrustedTranscriptField(value: string): string {
-  if (value.length <= MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS) {
-    return value;
-  }
-  return `${truncateUtf16Safe(
-    value,
-    Math.max(0, MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS - 14),
-  ).trimEnd()}…[truncated]`;
-}
-
-function sanitizeTranscriptField(value: unknown): string | undefined {
-  const body = sanitizePromptBody(value);
-  if (!body) {
-    return undefined;
-  }
-  return neutralizeMarkdownFences(truncateUntrustedTranscriptField(body))
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function sanitizeTranscriptBody(value: unknown): string | undefined {
-  const body = sanitizePromptBody(value);
-  if (!body) {
-    return undefined;
-  }
-  const sanitized = neutralizeMarkdownFences(truncateBodyHeadTail(body))
-    .replace(/\s+/g, " ")
-    .trim();
-  return sanitized || undefined;
 }
 
 function formatChannelStructuredContextLabel(label: unknown): string {
@@ -444,33 +358,6 @@ function buildReplyChainPayload(
       },
     ];
   });
-}
-
-function isTelegramInboundContext(ctx: TemplateContext): boolean {
-  return [ctx.OriginatingChannel, ctx.Surface, ctx.Provider].some(
-    (value) => normalizePromptMetadataString(value) === "telegram",
-  );
-}
-
-function resolveInlineReplyQuote(ctx: TemplateContext): string | undefined {
-  return sanitizeTranscriptField(ctx.ReplyToQuoteText) ?? sanitizeTranscriptBody(ctx.ReplyToBody);
-}
-
-function formatTelegramCurrentMessageContext(ctx: TemplateContext): string | undefined {
-  if (!isTelegramInboundContext(ctx)) {
-    return undefined;
-  }
-  const quote = resolveInlineReplyQuote(ctx);
-  if (!quote) {
-    return undefined;
-  }
-  const messageId =
-    normalizePromptMetadataString(ctx.MessageSid) ??
-    normalizePromptMetadataString(ctx.MessageSidFull);
-  const header = messageId ? `#${messageId}:` : undefined;
-  return ["Current message:", `[Replying to: ${JSON.stringify(quote)}]`, header]
-    .filter((line) => line !== undefined)
-    .join("\n");
 }
 
 /** Resolves whether inbound context should join directly with the user body. */
@@ -783,4 +670,3 @@ export function buildInboundUserContextPrefix(
 
   return blocks.filter(Boolean).join("\n\n");
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
