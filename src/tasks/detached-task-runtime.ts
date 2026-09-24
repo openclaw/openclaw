@@ -113,15 +113,6 @@ export function createRunningTaskRun(
 
 type TaskCreationAdmission = { assertCurrent: () => void };
 
-/** Compatibility adapter for shipped synchronous runtimes; retain the registered owner. */
-function createWithLegacyDetachedTaskRuntime(
-  admission: TaskCreationAdmission,
-  create: () => TaskRecord | null,
-): TaskRecord | null {
-  admission.assertCurrent();
-  return create();
-}
-
 function captureTaskCreationAdmission(
   assertOwnerCurrent: () => void,
   assertCurrent?: () => void,
@@ -181,9 +172,8 @@ export function prepareRunningTaskRun(
     const finalize = runtime.finalizeTaskRunByRunId;
     const complete = runtime.completeTaskRunByRunId;
     const fail = runtime.failTaskRunByRunId;
-    const task = createWithLegacyDetachedTaskRuntime(admission, () =>
-      runtime.createRunningTaskRun(params),
-    );
+    admission.assertCurrent();
+    const task = runtime.createRunningTaskRun(params);
     return {
       kind: "legacy",
       task,

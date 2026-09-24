@@ -8,6 +8,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isSessionMember, type SessionEntry } from "../config/sessions.js";
+import type { CapturedSessionEntryReadSource } from "../config/sessions/session-accessor.types.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -41,6 +42,8 @@ export type SessionSharingTarget = {
   storeKey: string;
   storeKeys: string[];
   storePath: string;
+  /** Physical source selected by the store reader, independent of its configured locator. */
+  readSource?: CapturedSessionEntryReadSource;
 };
 
 export function resolveSessionVisibility(
@@ -136,6 +139,7 @@ function toSessionSharingTarget(
         storeKey: match.key,
         storeKeys: target.storeKeys,
         storePath: target.storePath,
+        readSource: target.capturedReadSource,
       }
     : null;
 }

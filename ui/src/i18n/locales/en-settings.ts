@@ -745,6 +745,7 @@ const enSettings = {
       failedStep: "Failure details",
       viewDetails: "View details",
       recoveryActions: "Recovery",
+      diagnoseFailure: "Diagnose update",
       checkStatus: "Check status",
       retryUpdate: "Retry update",
       reportFailure: "Report update failure",

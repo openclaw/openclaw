@@ -2,7 +2,7 @@
 import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
@@ -13,6 +13,7 @@ import {
   createManagedHandoffLeaseDatabase,
 } from "../infra/update-managed-service-handoff-database.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { readConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
@@ -20,6 +21,7 @@ import { createConfigIO } from "./io.factory.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "./io.runtime.js";
 import type { ConfigWriteOptions } from "./io.types.js";
+import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
 import { replaceConfigFile } from "./mutate.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import {
@@ -55,6 +57,16 @@ async function withConfigExecutor(
 }
 
 describe("writeConfigFile canonical reread", () => {
+  const workerRoots = createSuiteTempRootTracker({ prefix: "openclaw-config-reread-workers-" });
+  const workers = createConfigIoWorkerFixture();
+  beforeAll(async () => {
+    await workers.setup(await workerRoots.setup());
+  });
+  afterAll(async () => {
+    await workers.close();
+    await workerRoots.cleanup();
+  });
+
   afterEach(() => {
     setRuntimeConfigSnapshotRefreshHandler(null);
     clearRuntimeConfigSnapshot();

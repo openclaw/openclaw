@@ -215,6 +215,23 @@ Replies come from the completed run's terminal result. When a same-session
 target has already delivered its final reply to the source conversation through
 `message`, OpenClaw skips the duplicate channel announcement. Progress messages
 and replies stored only in the internal UI do not count as external delivery.
+When a same-session follow-up still has an announcement target, its reply preserves
+the requesting turn's channel, account, recipient, and thread when available.
+Later messages can update the session's stored route without redirecting the
+accepted reply, including when an identity link hides the address from the session key.
+
+Each completed same-session reply is queued separately for that original session
+generation. Later ordinary turns and other completed replies do not cancel it.
+Resetting, deleting, or replacing the original session stops replies that have not
+started sending; a send already handed to the channel keeps its normal outcome.
+The queue can recover a completed reply after restart. This does not make an
+unfinished model run or its in-memory reply observer restartable.
+
+Older versions that do not recognize these queue entries leave them and their
+attachments pending while continuing ordinary work. Return to a supporting
+version to resume delivery. Full state backups include queued attachments;
+database-only backups do not. Backup restoration intentionally omits pending
+delivery records and does not resume these replies.
 
 A waited send that finishes without visible assistant text returns `status: "no_reply"`; no announcement remains pending. If the target delivered its final reply directly, the result says so and tells the caller not to resend. Otherwise, continue without waiting or send a new message if a response is required.
 

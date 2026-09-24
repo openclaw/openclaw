@@ -9,6 +9,14 @@ read_when:
 `openclaw doctor --fix` owns the persistent file-to-SQLite migrations. This page
 describes each migration source and what to do when one stays blocked.
 
+Pre-June Telegram and iMessage caches, Active Memory session toggles, Nostr bus
+and profile state, and Microsoft Teams conversations, polls, SSO tokens, and
+feedback learnings are no longer imported from JSON files. If those sources
+remain, Doctor preserves them and directs you to [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
+and run its migrations first. Existing SQLite state remains authoritative.
+Retired `subagents/runs.json` files are also ignored and left untouched;
+transient runs are never restored from them.
+
 ## Legacy state migration
 
 `openclaw doctor --fix` is the only owner for persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Runtime code does not perform lazy imports or fallback reads.
@@ -127,9 +135,11 @@ process for every agent at every check. Repairs still verify the resulting schem
 before reporting completion; only successful recovery of a misplaced copy clears
 that copy's ownership refusal.
 
-Device Pair and Active Memory legacy JSON imports check namespace capacity before writing. If the missing entries do not fit, doctor warns and leaves the source unchanged. These imports also verify that source keys and pre-existing destination keys remain in SQLite before reporting completion and archiving the source. A retention warning keeps the source available for inspection and retry; do not delete it to silence the warning, because it may contain state that SQLite did not retain. Resolve the capacity problem before rerunning `openclaw doctor --fix`.
+Device Pair's legacy JSON import checks namespace capacity before writing. If the missing entries do not fit, doctor warns and leaves the source unchanged. The import also verifies that source keys and pre-existing destination keys remain in SQLite before reporting completion and archiving the source. A retention warning keeps the source available for inspection and retry; do not delete it to silence the warning, because it may contain state that SQLite did not retain. Resolve the capacity problem before rerunning `openclaw doctor --fix`.
 
-Microsoft Teams conversation, poll, and SSO token imports also verify that selected legacy keys and pre-existing destination keys remain in SQLite before archiving. Poll imports check both metadata and vote buckets; existing conversation and poll retention rules still select which legacy rows to import. If any required keys are missing, doctor warns and leaves the legacy file in place without reporting completion. Existing SQLite conversations, poll metadata, voter selections, and SSO tokens still take precedence over matching legacy values. These checks do not roll back rows already evicted during import.
+Microsoft Teams delegated OAuth tokens still migrate from `msteams-delegated.json`,
+which supported June releases wrote. Doctor verifies the imported credentials
+before archiving the source and preserves a differing existing SQLite token.
 
 Doctor also reports when shared auth still uses the legacy `agents/main/agent/openclaw-agent.sqlite` owner. `openclaw doctor --fix` copies its auth profile and runtime-state rows into `state/openclaw.sqlite`, verifies the exact payloads, removes the source rows, and records the new ownership only after the transaction succeeds. Auth resolution has no dual-read fallback: before migration the legacy database is complete; after migration the shared state database is complete. Once relocated, deleting `main` no longer risks fleet credentials.
 

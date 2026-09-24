@@ -153,6 +153,8 @@ function main() {
     fullReleaseValidationRunId: args["full-release-validation-run-id"],
     fullReleaseValidationRunAttempt: args["full-release-validation-run-attempt"],
     releasePublishRunId: args["release-publish-run-id"],
+    stableSoakWaiver: args["stable-soak-waiver"] ?? "",
+    laneWaiver: args["lane-waiver"] ?? "",
     rollbackDrillId: args["rollback-drill-id"],
     rollbackDrillDate: args["rollback-drill-date"],
     allowStaleRollbackDrill: args["allow-stale-rollback-drill"] === "true",

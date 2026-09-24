@@ -44,6 +44,7 @@ import type {
   DevicePairingReadReply,
 } from "../infra/device-pairing-read.types.js";
 import type { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
+import type { OutboundDeliveryStorageEntry } from "../infra/outbound/delivery-queue-storage.types.js";
 import type {
   ConversationRef,
   SessionBindingRecord,
@@ -103,6 +104,7 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
   | {
       [Kind in keyof McpOAuthReadOnlyOperations]: {
@@ -193,6 +195,12 @@ export type OpenClawStateReadRequest = {
   command: OpenClawStateReadCommand | { type: "admit" };
 };
 export type OpenClawStateReadReply = (
+  | {
+      ok: true;
+      type: "deliveryQueue.outbound";
+      sourceAdmitted: true;
+      entries: OutboundDeliveryStorageEntry[];
+    }
   | {
       ok: true;
       type: "acpSessions.metadata";
