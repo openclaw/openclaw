@@ -219,7 +219,7 @@ jobs:
             if (( delay > remaining )); then
               delay="${remaining}"
             fi
-            echo "::notice::Vercel image is not ready; retrying Sandbox smoke in ${delay}s (attempt ${attempt})."
+            echo "::warning::Vercel image is not ready; retrying Sandbox acquisition in ${delay}s (attempt ${attempt})."
             sleep "${delay}"
             attempt=$((attempt + 1))
           done

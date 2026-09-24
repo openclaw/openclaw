@@ -23,6 +23,14 @@ The Control UI keeps the latest 24 Side chat turns, including failed questions. 
 
 The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Highlighting text in a chat message offers **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
 
+Drop an image onto Side chat or paste one into its question box. You can send it
+with a written question or on its own. Side chat accepts image attachments, not
+other file types; its previews never add attachments to the main composer.
+Images are available only for the current question and are not retained in the
+restored text thread. Reattach an image when asking a later question about it.
+A failed question keeps its image for **Retry** while the current pane is retained;
+reloading the page discards that failed input.
+
 Highlight text and choose **Add to chat** to attach a comment to the main
 composer. The optional comment field starts on one line, grows to five lines,
 then scrolls internally. Confirm or press Enter to save; Shift+Enter adds a line.
@@ -373,6 +381,7 @@ Newly uploaded text files remain file cards, even when their names resemble
 pasted-text attachments. Older history without origin metadata recognizes
 `text/plain` attachments named `pasted-text-<digits>.txt` as pasted text.
 
+Uploaded attachments keep their original filenames on download, including spaces and Unicode characters.
 Select **Open** on an uploaded text attachment to read it directly in the **Files** side
 panel. Plain-text attachments, CSV, and JSON preserve line breaks and indentation. Markdown attachments render as documents
 with interactive code blocks. When an open attachment refreshes with unchanged

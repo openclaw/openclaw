@@ -7,6 +7,7 @@ import {
   acquireStateDatabaseCoordinator,
   resolveStateDatabaseCoordinatorPath,
 } from "../../infra/state-database-coordinator.js";
+import { readAgentDatabaseDeletionSnapshot } from "../../state/agent-deletion-journal.read.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { createCurrentOpenClawAgentDatabaseFixtures } from "../../state/openclaw-agent-db.test-support.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -71,7 +72,7 @@ function observe(context: OpenClawStateWorkerContext, agentPath: string) {
 }
 
 it.each([false, true])(
-  "creates the first shared owner off-thread, borrowed=%s",
+  "initializes runtime without inventing deletion history for a custom agent, borrowed=%s",
   async (borrowed) => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "reconcile-first-creation" },
@@ -80,6 +81,7 @@ it.each([false, true])(
         createCurrentOpenClawAgentDatabaseFixtures(state.path("template.sqlite"), [
           { agentId: "main", path: agentPath },
         ]);
+        const originalBytes = fs.readFileSync(agentPath);
         const context = captureOpenClawStateWorkerContext();
         expect(context.admission.identity.key).toMatch(/^path:/u);
         expect(fs.existsSync(context.admission.databasePath)).toBe(false);
@@ -105,6 +107,10 @@ it.each([false, true])(
           observation.restore();
           parent?.release();
         }
+        expect(
+          readAgentDatabaseDeletionSnapshot(context.environment, "runtime")?.retainedDeletions,
+        ).toMatchObject({ status: "unavailable", cause: "missing" });
+        expect(fs.readFileSync(agentPath)).toEqual(originalBytes);
       },
     );
   },

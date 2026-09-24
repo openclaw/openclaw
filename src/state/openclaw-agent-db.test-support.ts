@@ -8,7 +8,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { agentDatabaseLifecycle as cache } from "./openclaw-agent-db-lifecycle.js";
 import { persistAgentSchemaMetadata } from "./openclaw-agent-db-metadata-write.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-import { resolveQuarantineStorePath } from "./openclaw-quarantine-store.js";
+import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 /** Materialize distinct current databases without runtime handles, leases, or registrations. */
 export function createCurrentOpenClawAgentDatabaseFixtures(

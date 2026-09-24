@@ -6,7 +6,7 @@ import {
   QA_TOOL_SEARCH_PROMPT_RE,
   QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
 } from "./mock-openai-contracts.js";
-import { extractInstructionsText } from "./mock-openai-input.js";
+import { extractCurrentRuntimeContextTexts, extractInstructionsText } from "./mock-openai-input.js";
 function extractLastCapture(text: string, pattern: RegExp) {
   let lastMatch: RegExpExecArray | null = null;
   const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
@@ -131,7 +131,8 @@ export function shouldUseWhatsAppContactMarker(prompt: string) {
   return hasWhatsAppStructuredMessageBody(prompt, /^<contacts?(?::|>)/iu);
 }
 
-export function shouldUseWhatsAppStickerMarker(prompt: string) {
+export function shouldUseWhatsAppStickerMarker(input: ResponsesInputItem[]) {
+  const prompt = extractCurrentRuntimeContextTexts(input).join("\n\n");
   const label = "WhatsApp media:";
   let searchFrom = 0;
   for (;;) {

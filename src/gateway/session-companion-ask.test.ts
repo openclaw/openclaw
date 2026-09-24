@@ -5,6 +5,7 @@ import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import { createSessionCompanion } from "./session-companion.js";
 
 const runEmbeddedAgent = vi.hoisted(() =>
@@ -45,7 +46,10 @@ vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
 vi.mock("../agents/sessions/session-manager-write-admission.js", () => ({
   withSessionManagerWrite: admitWrite,
 }));
-vi.mock("../config/sessions/session-accessor.js", () => ({ loadExactSessionEntry: loadEntry }));
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  loadExactSessionEntry: loadEntry,
+  loadExactSessionEntryCandidates: () => [],
+}));
 vi.mock("../agents/internal-session-effects.js", () => ({
   prepareInternalSessionEffectsSession: async () => preparedTarget,
   removeInternalSessionEffectsSession: removeSession,
@@ -92,6 +96,48 @@ describe("session companion embedded invocation", () => {
       meta: { durationMs: 1, finalAssistantVisibleText: "The session is reading a file." },
     });
   });
+
+  it.each([0, 2_000_001])(
+    "delivers an image with %i padding bytes from the registered RPC to the read-only model run",
+    async (padding) => {
+      const companion = createCompanion();
+      const respond = vi.fn();
+      const data = Buffer.concat([
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=",
+          "base64",
+        ),
+        Buffer.alloc(padding),
+      ]).toString("base64");
+      try {
+        await sessionCompanionHandlers["sessions.companion.ask"]!({
+          params: {
+            sessionKey: question.sessionKey,
+            question: "What does this show?",
+            attachments: [{ mimeType: "image/png", fileName: "proof.png", content: data }],
+          },
+          client: { connId: "image-connection" },
+          context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
+          respond,
+        } as never);
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ answer: expect.any(String) }),
+        );
+        expect(runEmbeddedAgent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            prompt: "What does this show?",
+            images: [expect.objectContaining({ type: "image", mimeType: "image/png", data })],
+            disableMessageTool: true,
+            requireWorkspaceOnly: true,
+            toolsAllow: ["read", "sessions_history", "sessions_search"],
+          }),
+        );
+      } finally {
+        companion.dispose();
+      }
+    },
+  );
 
   it("keeps read-only tools direct when the selected agent model opts into Code Mode", async () => {
     const cfg: OpenClawConfig = {

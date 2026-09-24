@@ -182,6 +182,7 @@ async function startReconcileWorkerTask(
       : {
           actorId: `transcript:${input.mode}:${input.leaseId}`,
           context: captureOpenClawStateWorkerContext({
+            initializationAgentPaths: [input.path],
             env: {
               OPENCLAW_STATE_DIR: input.stateDir,
               ...(input.externallySupervised ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
@@ -233,8 +234,8 @@ async function startReconcileWorkerTask(
       : 0) +
     (input.mode === "memory"
       ? input.sessionIds.reduce((bytes, id) => bytes + 2 * id.length, 0)
-      : 2 * (input.stateDir.length + input.leaseId.length) +
-        (input.mode === "disk" ? 2 * (input.path.length + input.agentId.length) : 0));
+      : 2 * (input.stateDir.length + input.leaseId.length + input.path.length) +
+        (input.mode === "disk" ? 2 * input.agentId.length : 0));
   let poolCompletion: Promise<void> | undefined;
   const execute = async (coordination?: SqliteMutationWorkerCoordination) => {
     poolCompletion = pool.run(

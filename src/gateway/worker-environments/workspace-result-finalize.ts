@@ -247,6 +247,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
           throw new Error("Cloud workspace conflict has no staged result reference");
         }
         const finalized = await finalizeWorkspaceResultConflicts({
+          assertCurrent: assertResultCurrent,
           placements: params.placements,
           turnClaim: params.turnClaim,
           conflictPaths: applied?.conflictPaths ?? [],
@@ -290,6 +291,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
         });
         await params.publishAcceptedWorkspace?.(params.turnClaim);
         await settleStagedWorkspaceResult({
+          assertCurrent: assertResultCurrent,
           placements: params.placements,
           turnClaim: params.turnClaim,
           workspace: params.workspace,

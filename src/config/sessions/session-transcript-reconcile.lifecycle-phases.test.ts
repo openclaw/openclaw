@@ -59,10 +59,10 @@ async function releaseInRealWorker(
   pool: Pool,
   context: OpenClawStateWorkerContext,
   leaseId: string,
+  agentPath: string,
   afterDispatch?: () => void,
   disk?: {
     agentId: string;
-    path: string;
     observe(message: SessionTranscriptReconcileWorkerMessage, port: MessagePort): void;
   },
 ) {
@@ -84,14 +84,15 @@ async function releaseInRealWorker(
           {
             input: {
               ...(disk
-                ? { mode: "disk" as const, agentId: disk.agentId, path: disk.path }
+                ? { mode: "disk" as const, agentId: disk.agentId }
                 : { mode: "release" as const }),
+              path: agentPath,
               stateDir: context.environment.OPENCLAW_STATE_DIR,
               externallySupervised: true,
               leaseId,
             },
             coordination,
-            sourceIdentity: disk ? readDatabasePathIdentitySync(disk.path).key : undefined,
+            sourceIdentity: disk ? readDatabasePathIdentitySync(agentPath).key : undefined,
             port: port2,
           },
           {
@@ -171,12 +172,13 @@ describe("reconciliation cleanup transport native custody", () => {
       await withOpenClawTestState(
         { scenario: "external-service", label: "reconcile-native-phases" },
         async (state) => {
-          const leases = ["cold", "warm"].map((name) =>
-            claimOpenClawAgentDatabaseLease({
-              agentId: name,
-              path: state.path(name, "agent.sqlite"),
-            }),
-          );
+          const leases = ["cold", "warm"].map((name) => {
+            const path = state.path(name, "agent.sqlite");
+            return {
+              path,
+              leaseId: claimOpenClawAgentDatabaseLease({ agentId: name, path }),
+            };
+          });
           closeOpenClawStateDatabaseForTest();
           const context = captureOpenClawStateWorkerContext();
           const parent = borrowed
@@ -186,9 +188,9 @@ describe("reconciliation cleanup transport native custody", () => {
           const observation = observe(context);
           try {
             for (const lease of leases) {
-              await expect(releaseInRealWorker(pool, context, lease)).resolves.toEqual([
-                { type: "lease-released" },
-              ]);
+              await expect(
+                releaseInRealWorker(pool, context, lease.leaseId, lease.path),
+              ).resolves.toEqual([{ type: "lease-released" }]);
             }
             expect(pool.getSnapshot().workersCreated).toBe(1);
             await pool.close();
@@ -254,7 +256,7 @@ describe("reconciliation cleanup transport native custody", () => {
           const observation = observe(context);
           try {
             await expect(
-              releaseInRealWorker(pool, context, lease, () => {
+              releaseInRealWorker(pool, context, lease, state.path("main", "agent.sqlite"), () => {
                 revoked = refusalStage === "before-native";
               }),
             ).rejects.toThrow();
@@ -294,8 +296,8 @@ it.each(["exclude", "schema", "version"] as const)(
         const observation = observe(context);
         let parent: MessagePort | undefined;
         let completed = false;
-        const task = releaseInRealWorker(pool, context, leaseId, undefined, {
-          ...options,
+        const task = releaseInRealWorker(pool, context, leaseId, options.path, undefined, {
+          agentId: options.agentId,
           observe(message, port) {
             if (message.type === "done") {
               ready.resolve(port);
@@ -390,7 +392,7 @@ it("borrows custody acquired after dispatch without adding host SQL beyond that 
       let injected: typeof observation.calls = [];
       try {
         await expect(
-          releaseInRealWorker(pool, context, lease, () => {
+          releaseInRealWorker(pool, context, lease, state.path("main", "agent.sqlite"), () => {
             const offset = observation.calls.length;
             parent = acquireStateDatabaseCoordinator({
               databasePath: context.admission.databasePath,
@@ -425,7 +427,9 @@ it("joins native exit after failed coordinator close without replaying completed
       const pool = createPool(true);
       const observation = observe(context);
       try {
-        await expect(releaseInRealWorker(pool, context, lease)).rejects.toThrow();
+        await expect(
+          releaseInRealWorker(pool, context, lease, state.path("main", "agent.sqlite")),
+        ).rejects.toThrow();
         await pool.close();
         expect(pool.getSnapshot().workers).toBe(0);
         expect(observation.calls).toEqual([]);
@@ -505,7 +509,7 @@ it.each(["phase", "service"] as const)(
         let parent: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
         try {
           await expect(
-            releaseInRealWorker(pool, context, lease, () => {
+            releaseInRealWorker(pool, context, lease, state.path("main", "agent.sqlite"), () => {
               parent = acquireStateDatabaseCoordinator({
                 databasePath: context.admission.databasePath,
               });
@@ -564,8 +568,8 @@ it.each([
         const leaseId = `interphase-drain-${borrowed}-${replacement}`;
         const retainedPath = `${context.admission.databasePath}.retained`;
         let replaced = false;
-        const task = releaseInRealWorker(pool, context, leaseId, undefined, {
-          ...options,
+        const task = releaseInRealWorker(pool, context, leaseId, options.path, undefined, {
+          agentId: options.agentId,
           observe(message, port) {
             if (message.type === "done") {
               ready.resolve(port);

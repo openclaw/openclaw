@@ -13,6 +13,7 @@ import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-sk
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
+import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { formatTimeAgo, formatTimeMs } from "../../../lib/format.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
@@ -25,8 +26,13 @@ import type {
   ChatSessionCompanionThread,
   ChatSessionCompanionTurn,
 } from "../chat-session-companion.ts";
+import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
+import { createChatAttachmentDropHandlers } from "./chat-attachments.ts";
 import { renderMessageMarkdown } from "./chat-message-text.ts";
-import { createSessionRailComposer } from "./chat-session-rail-composer.ts";
+import {
+  createSessionRailComposer,
+  renderSessionRailComposer,
+} from "./chat-session-rail-composer.ts";
 
 export type SessionRailMode = "hidden" | "pill" | "expanded";
 
@@ -223,6 +229,9 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) onCommandConsumed?: (generation: number) => void;
   @property({ attribute: false }) onSubmit?: (question: string | ChatSessionCompanionTurn) => void;
   @property({ attribute: false }) onDraftChange?: (draft: string) => void;
+  @property({ attribute: false }) onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  @property({ attribute: false })
+  attachmentLimits?: ChatAttachmentControlsProps["attachmentLimits"];
   @property({ attribute: false }) onModeChange?: (mode: SessionRailMode) => void;
   @property({ attribute: false }) onVisibilityChange?: (visible: boolean) => void;
   @property({ type: Boolean }) embedded = false;
@@ -355,10 +364,13 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   }
 
   private submit() {
-    const question = this.companion.draft.trim();
+    const question =
+      this.companion.draft.trim() ||
+      (this.companion.attachments?.length ? t("chat.rail.askImageQuestion") : "");
     if (
       question &&
       this.connected &&
+      !this.companion.attachmentReads?.pendingReads &&
       !this.companion.turns.some((turn) => turn.status === "pending")
     ) {
       this.onSubmit?.(question);
@@ -552,6 +564,28 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
 
   override render() {
     this.composer.syncDraft(this.companion.draft);
+    const companion = this.companion;
+    const reads = companion.attachmentReads;
+    const readSignal = reads?.readSignal;
+    const attachmentProps: ChatAttachmentControlsProps = {
+      attachments: companion.attachments,
+      getAttachments: () => companion.attachments ?? [],
+      attachmentReads: reads,
+      readSignal,
+      attachmentLimits: this.attachmentLimits,
+      imagesOnly: true,
+      disabled: !this.connected,
+      onAttachmentsChange: this.onAttachmentsChange,
+      onPendingReadsChange: (delta) => {
+        if (readSignal) {
+          reads?.updatePending(readSignal, delta);
+        }
+      },
+    };
+    const drop = createChatAttachmentDropHandlers({
+      ...attachmentProps,
+      canCompose: this.connected,
+    });
     const pending = this.companion.turns.some((turn) => turn.status === "pending");
     const input = this.input();
     const mode = this.embedded ? "expanded" : this.railState.mode(input);
@@ -560,7 +594,6 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
       return nothing;
     }
     const digest = visibleDigest(input);
-    const placeholder = t("chat.rail.askPlaceholder");
     if (mode === "pill") {
       return html`
         <div class="chat-session-rail chat-session-rail--pill" aria-live="polite">
@@ -615,6 +648,10 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         role="region"
         aria-label=${t("chat.rail.title")}
         tabindex="-1"
+        @dragenter=${drop.onDragenter}
+        @dragleave=${drop.onDragleave}
+        @dragover=${drop.onDragover}
+        @drop=${drop.onDrop}
         @keydown=${(event: KeyboardEvent) => {
           if (!this.embedded && event.key === "Escape") {
             event.preventDefault();
@@ -683,51 +720,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
             ? this.renderStarters()
             : nothing
         }
-        <form
-          class="agent-chat__input chat-session-rail__composer"
-          @submit=${(event: SubmitEvent) => {
-            event.preventDefault();
-            this.submit();
-          }}
-        >
-          <div class="agent-chat__composer-input-row">
-            <label class="agent-chat__composer-combobox chat-session-rail__prompt">
-              <textarea
-                class="chat-session-rail__input"
-                rows="1"
-                maxlength="400"
-                autocomplete="off"
-                aria-label=${t("chat.rail.askLabel")}
-                aria-keyshortcuts=${
-                  this.sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter"
-                }
-                .value=${this.companion.draft}
-                placeholder=${placeholder}
-                ?disabled=${!this.connected}
-                @keydown=${this.composer.handleKeydown}
-                @input=${this.composer.handleInput}
-                ${ref(this.composer.ref)}
-              ></textarea>
-              <span class="agent-chat__composer-placeholder" aria-hidden="true"
-                >${placeholder}</span
-              >
-            </label>
-          </div>
-          <div class="agent-chat__composer-footer">
-            <div class="agent-chat__composer-trail">
-              <div class="agent-chat__composer-actions">
-                <button
-                  class="chat-send-btn"
-                  type="submit"
-                  aria-label=${t("chat.rail.askSubmit")}
-                  ?disabled=${!this.connected || pending || !this.companion.draft.trim()}
-                >
-                  ${icons.arrowUp}
-                </button>
-              </div>
-            </div>
-          </div>
-        </form>
+        ${renderSessionRailComposer({ companion, connected: this.connected, pending, sendShortcut: this.sendShortcut, composer: this.composer, attachmentProps, submit: () => this.submit() })}
       </section>
     `;
   }

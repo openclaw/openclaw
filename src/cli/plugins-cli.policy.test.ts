@@ -236,6 +236,13 @@ describe("plugins cli policy mutations", () => {
   it.each([
     { mode: undefined, json: false, acceptCapabilities: true, ids: ["alpha"] },
     {
+      mode: undefined,
+      json: false,
+      acceptCapabilities: true,
+      ids: ["alpha"],
+      restartRequired: true,
+    },
+    {
       mode: "OPENCLAW_CONFIG_READONLY",
       json: false,
       acceptCapabilities: true,
@@ -246,12 +253,12 @@ describe("plugins cli policy mutations", () => {
     { mode: undefined, json: true, acceptCapabilities: true, ids: ["alpha", "beta"] },
   ])(
     "reloads CLI-selected $ids in one generation (mode=$mode, json=$json, accept=$acceptCapabilities)",
-    async ({ mode, json, acceptCapabilities, ids }) => {
+    async ({ mode, json, acceptCapabilities, ids, restartRequired = false }) => {
       resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
       const receipt = {
         ok: true,
         pluginIds: ids,
-        restartRequired: false,
+        restartRequired,
         runtime: { operationId: "reload-selected", generation: 2, pluginIds: ids },
       };
       const review = buildPluginCapabilityConsentReview({
@@ -306,9 +313,11 @@ describe("plugins cli policy mutations", () => {
         }
       } else {
         expect(pluginsCliRuntimeLogs).toContain(
-          ids.length === 1
-            ? 'Reloaded plugin "alpha" (generation 2).'
-            : 'Reloaded plugins "alpha", "beta" (generation 2).',
+          restartRequired
+            ? 'Reloaded registrations for plugin "alpha" (generation 2). Gateway restart required to load edited code.'
+            : ids.length === 1
+              ? 'Reloaded plugin "alpha" (generation 2).'
+              : 'Reloaded plugins "alpha", "beta" (generation 2).',
         );
       }
       expect(configWriteMock).not.toHaveBeenCalled();

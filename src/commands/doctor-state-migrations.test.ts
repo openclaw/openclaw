@@ -730,14 +730,14 @@ describe("doctor legacy state migrations", () => {
   it("routes shared auth relocation through the doctor-only migration plan", async () => {
     const stateDir = makeDoctorStateDir();
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const mainAgentDir = resolveSharedMainAuthAgentDir(env);
+    const agentDir = resolveSharedMainAuthAgentDir(env);
     const store = {
       version: 1,
       profiles: {
         "openai:default": { type: "api_key" as const, provider: "openai", key: "secret" },
       },
     };
-    writePersistedAuthProfileStoreRaw(store, mainAgentDir);
+    await withStateDir(stateDir, async () => writePersistedAuthProfileStoreRaw(store, agentDir));
     const detected = await detectLegacyStateMigrations({
       cfg: {},
       env,
@@ -760,7 +760,7 @@ describe("doctor legacy state migrations", () => {
       "The main agent no longer owns shared credentials and can now be deleted.",
     );
     expect(readPersistedSharedAuthProfileStoreRaw(env)).toEqual(store);
-    expect(readPersistedAuthProfileStoreRaw(mainAgentDir)).toBeNull();
+    expect(readPersistedAuthProfileStoreRaw(agentDir)).toBeNull();
   });
 
   it("records fresh shared auth ownership without reporting a relocation", async () => {

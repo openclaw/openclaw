@@ -116,6 +116,9 @@ function openUnrelatedAgents(): void {
 }
 
 function prepareUnrelatedAgentFixtures(stateDir: string): void {
+  // Initialize genuinely fresh state before importing closed agent fixtures.
+  const state = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+  expect(closeOpenClawStateDatabaseByPath(state.path)).toBe(true);
   const fixtures = Array.from({ length: UNRELATED_AGENT_COUNT }, (_, index) => {
     const agentId = `pressure-${index}`;
     const pathname = resolveOpenClawAgentSqlitePath({

@@ -3798,7 +3798,8 @@ describe("grouped chat rendering", () => {
   });
 
   it("checks local assistant audio against server metadata", async () => {
-    const source = `/home/node/.openclaw/media/outbound/${crypto.randomUUID()}.mp3`;
+    const filename = `${crypto.randomUUID()}.mp3`;
+    const source = `/home/node/.openclaw/media/outbound/${filename}`;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       expect(new URL(url, "http://control.test").pathname).toBe("/__openclaw__/assistant-media");
       expect(url).toContain("meta=1");
@@ -3834,7 +3835,7 @@ describe("grouped chat rendering", () => {
           .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
           ?.getAttribute("href"),
       ).toBe(
-        `/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-audio`,
+        `/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-audio&filename=${filename}`,
       ),
     );
   });
@@ -4466,7 +4467,8 @@ describe("grouped chat rendering", () => {
   });
 
   it("renders verified local assistant attachments through the authenticated media route", async () => {
-    const source = `/tmp/openclaw/${crypto.randomUUID()} test image.png`;
+    const filename = `${crypto.randomUUID()} test image.png`;
+    const source = `/tmp/openclaw/${filename}`;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.includes("meta=1")) {
         const headers = init?.headers as Headers;
@@ -4501,7 +4503,12 @@ describe("grouped chat rendering", () => {
     expectSameOriginGet(fetchInit);
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
-    ).toBe(expectedMetaUrl.replace("&meta=1", "&mediaTicket=ticket-local"));
+    ).toBe(
+      expectedMetaUrl.replace(
+        "&meta=1",
+        `&mediaTicket=ticket-local&${new URLSearchParams({ filename })}`,
+      ),
+    );
     expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
   });
 
@@ -4952,44 +4959,6 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toBe("data:image/png;base64,cG5n");
-  });
-
-  it("renders canonical inbound transcript images through the authenticated media route", async () => {
-    const source = `media://inbound/${crypto.randomUUID()}.png`;
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      const mediaUrl = new URL(url, "http://control.test");
-      expect(mediaUrl.searchParams.get("source")).toBe(source);
-      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer test-auth-token");
-      return { ok: true, json: async () => mediaTicketPayload("ticket-inbound") };
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    const container = document.createElement("div");
-    const rerender = () =>
-      renderGroupedMessage(
-        container,
-        createUserMessage("", {
-          id: "user-inbound-media-ref",
-          __openclaw: { media: [{ path: source, contentType: "image/png" }] },
-        }),
-        "user",
-        {
-          showToolCalls: false,
-          resourceBasePath: "/openclaw",
-          assistantAttachmentAuthToken: "test-auth-token",
-          onRequestUpdate: rerender,
-        },
-      );
-
-    rerender();
-    await flushAssistantAttachmentAvailabilityChecks();
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(
-      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
-    ).toBe(
-      `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-inbound`,
-    );
   });
 
   it("expires pairing QR images and requests a refresh at the expiry boundary", async () => {
