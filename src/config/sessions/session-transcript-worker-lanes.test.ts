@@ -153,3 +153,45 @@ it("revokes both reader lanes and joins both retirements through one database ow
   await closing;
   expect(observed.unregister).toHaveBeenCalledTimes(1);
 });
+
+it("joins worker retirement before rejecting a mismatched history reply", async () => {
+  const request = input();
+  const entered = createDeferredCore();
+  const retirement = createDeferredCore();
+  observed.run.mockResolvedValue({
+    ok: true,
+    value: { kind: "cold-metadata", archive: undefined },
+  });
+  observed.rotate.mockImplementation(() => {
+    entered.resolve();
+    return retirement.promise;
+  });
+  let settled = false;
+  const pending = withSessionHistoryWorkerDatabase(request.database, (owner) =>
+    owner.readPreview({
+      target: { agentId: "main", sessionId: "preview" },
+      maxItems: 1,
+      maxChars: 80,
+    }),
+  )
+    .catch((error: unknown) => error)
+    .finally(() => {
+      settled = true;
+    });
+  try {
+    expect(
+      await Promise.race([entered.promise.then(() => "retiring"), pending.then(() => "settled")]),
+    ).toBe("retiring");
+    expect(settled).toBe(false);
+    expect(observed.unregister).not.toHaveBeenCalled();
+    retirement.resolve();
+    expect(await pending).toEqual(
+      new Error("Session history worker returned another result instead of a preview"),
+    );
+    expect(observed.rotate).toHaveBeenCalledOnce();
+    expect(observed.unregister).toHaveBeenCalledOnce();
+  } finally {
+    retirement.resolve();
+    await pending;
+  }
+});

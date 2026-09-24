@@ -18,6 +18,18 @@ export type SessionHistoryWorkerRequestRunner = <TResult>(
   onRequest?: (value: unknown) => void,
 ) => Promise<TResult>;
 
+type HistoryValue = SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]];
+
+function assertHistoryResultKind<Kind extends Extract<HistoryValue, { kind: string }>["kind"]>(
+  value: HistoryValue,
+  expectedKind: Kind,
+  description: string,
+): asserts value is Extract<HistoryValue, { kind: Kind }> {
+  if (typeof value === "boolean" || Array.isArray(value) || value.kind !== expectedKind) {
+    throw new Error(`Session history worker returned another result instead of ${description}`);
+  }
+}
+
 /** Decode domain results; database custody remains with the enclosing history owner. */
 export function createSessionHistoryWorkerReaders(
   runRequest: SessionHistoryWorkerRequestRunner,
@@ -28,15 +40,7 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "historical-eviction-candidates", ...input }),
         JSON.stringify(input).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "historical-eviction-candidates"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of eviction candidates",
-            );
-          }
+          assertHistoryResultKind(value, "historical-eviction-candidates", "eviction candidates");
           return value.sessionIds;
         },
       ),
@@ -45,15 +49,7 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "session-archive-pruning", ...input }),
         JSON.stringify(input).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-archive-pruning"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of archive pruning",
-            );
-          }
+          assertHistoryResultKind(value, "session-archive-pruning", "archive pruning");
           return value.result;
         },
       ),
@@ -62,15 +58,7 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "cold-metadata", ...input }),
         JSON.stringify(input).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "cold-metadata"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of cold metadata",
-            );
-          }
+          assertHistoryResultKind(value, "cold-metadata", "cold metadata");
           return value;
         },
       ),
@@ -79,13 +67,7 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "transcript-search", params }),
         JSON.stringify(params).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "transcript-search"
-          ) {
-            throw new Error("Session history worker returned another result instead of search");
-          }
+          assertHistoryResultKind(value, "transcript-search", "search");
           return value.result;
         },
       ),
@@ -94,13 +76,7 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "session-preview", ...input }),
         JSON.stringify(input).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-preview"
-          ) {
-            throw new Error("Session history worker returned another result instead of a preview");
-          }
+          assertHistoryResultKind(value, "session-preview", "a preview");
           return value.items;
         },
       ),
@@ -109,15 +85,7 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "session-title-fields", ...input }),
         JSON.stringify(input).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-title-fields"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of title fields",
-            );
-          }
+          assertHistoryResultKind(value, "session-title-fields", "title fields");
           return value.fields;
         },
       ),
@@ -126,15 +94,7 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "session-row-backfill", params }),
         JSON.stringify(params).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-row-backfill"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of transcript fields",
-            );
-          }
+          assertHistoryResultKind(value, "session-row-backfill", "transcript fields");
           return value.fields;
         },
       ),
@@ -221,15 +181,7 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "current-turn-entry", ...input }),
         JSON.stringify(input).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "current-turn-entry"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of a current-turn entry",
-            );
-          }
+          assertHistoryResultKind(value, "current-turn-entry", "a current-turn entry");
           return value;
         },
         signal,
@@ -239,15 +191,7 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "usage-cache", ...input }),
         JSON.stringify(input).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "usage-refresh-lock"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of usage cache",
-            );
-          }
+          assertHistoryResultKind(value, "usage-refresh-lock", "usage cache");
           return value;
         },
       ),
@@ -256,15 +200,7 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "session-membership-facts", ...input }),
         JSON.stringify(input).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-membership-facts"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of membership facts",
-            );
-          }
+          assertHistoryResultKind(value, "session-membership-facts", "membership facts");
           return value;
         },
       ),
@@ -284,15 +220,7 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "session-exact-entries", ...input }),
         JSON.stringify(input).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-exact-entries"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of exact entries",
-            );
-          }
+          assertHistoryResultKind(value, "session-exact-entries", "exact entries");
           return value;
         },
         signal,
@@ -310,13 +238,7 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "session-row-facts", ...captured }),
         JSON.stringify(captured).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-row-facts"
-          ) {
-            throw new Error("Session history worker returned another result instead of row facts");
-          }
+          assertHistoryResultKind(value, "session-row-facts", "row facts");
           return value;
         },
       );
@@ -326,15 +248,7 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "session-progress-card", ...input }),
         JSON.stringify(input).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-progress-card"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of a progress card",
-            );
-          }
+          assertHistoryResultKind(value, "session-progress-card", "a progress card");
           return value.card;
         },
       ),
@@ -343,13 +257,7 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "session-entry-read", ...input }),
         JSON.stringify(input).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-entry-read"
-          ) {
-            throw new Error("Session history worker returned another result instead of an entry");
-          }
+          assertHistoryResultKind(value, "session-entry-read", "an entry");
           return value.readError
             ? err(decodeSessionTranscriptWorkerReadError(value.readError))
             : ok(value.entry);
@@ -360,13 +268,7 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "session-entry-list", scope }),
         JSON.stringify(scope).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-entry-list"
-          ) {
-            throw new Error("Session history worker returned another result instead of entries");
-          }
+          assertHistoryResultKind(value, "session-entry-list", "entries");
           return value.entries;
         },
       ),
@@ -375,15 +277,7 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "session-identity-evidence", ...input }),
         JSON.stringify(input).length * 2,
         (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind !== "session-identity-evidence"
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of identity evidence",
-            );
-          }
+          assertHistoryResultKind(value, "session-identity-evidence", "identity evidence");
           return value.evidence;
         },
       ),
