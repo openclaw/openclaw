@@ -1,5 +1,5 @@
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "../extensions/codex/test-api.js";
 import type {
   ConversationSendResult,
@@ -9,13 +9,13 @@ import {
   createConversationsSendTool,
   createConversationsTurnTool,
 } from "../src/agents/tools/conversation-tools.js";
-import * as gateway from "../src/agents/tools/in-process-gateway.js";
+import { callAgentToolGatewayRequest } from "../src/agents/tools/in-process-gateway.js";
+import { resolveConversation } from "../src/config/sessions/conversation-registry.js";
 
 const conversationRef = "conv_0123456789abcdef0123456789abcdef";
 const destination = { conversationRef, channel: "qa-channel" };
 
 describe("Codex core conversation delivery", () => {
-  afterEach(() => vi.restoreAllMocks());
   it.each([
     {
       name: "sent without a platform ID",
@@ -24,7 +24,7 @@ describe("Codex core conversation delivery", () => {
       delivered: true,
       success: true,
     },
-    ...(["sent", "queued"] as const).map((status) => ({
+    ...(["sent", "queued", "suppressed", "unknown"] as const).map((status) => ({
       name: `send ${status} with a platform ID`,
       toolName: "conversations_send" as const,
       receipt: { ...destination, status, messageId: "outbound-1" },
@@ -56,14 +56,14 @@ describe("Codex core conversation delivery", () => {
       delivered: true,
       success: false,
     },
-    ...(["sent", "queued"] as const).map((status) => ({
+    ...(["sent", "queued", "suppressed", "unknown"] as const).map((status) => ({
       name: `turn ${status} with a correlation error`,
       toolName: "conversations_turn" as const,
       receipt: {
         ...destination,
         status,
         messageId: "outbound-1",
-        correlationPersisted: true,
+        correlationPersisted: status === "sent" || status === "queued",
         error: "No process-local reply waiter remains.",
       },
       delivered: status === "sent",
@@ -76,14 +76,13 @@ describe("Codex core conversation delivery", () => {
     delivered: boolean;
     success: boolean;
   }>)("records $name without changing the Gateway result", async (testCase) => {
-    const callGateway = vi
-      .spyOn(gateway, "callAgentToolGatewayRequest")
-      .mockResolvedValue(testCase.receipt);
+    const deps = { callGateway: callAgentToolGatewayRequest, resolveConversation };
+    const callGateway = vi.spyOn(deps, "callGateway").mockResolvedValue(testCase.receipt);
     const createTool =
       testCase.toolName === "conversations_send"
         ? createConversationsSendTool
         : createConversationsTurnTool;
-    const tool = createTool({ agentId: "main" });
+    const tool = createTool({ agentId: "main" }, deps);
     const bridge = createCodexDynamicToolBridge({
       tools: [tool],
       signal: new AbortController().signal,

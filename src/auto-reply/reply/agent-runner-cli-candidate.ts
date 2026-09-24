@@ -407,6 +407,11 @@ export async function runCliFallbackCandidate(
             messageProvider: hookMessageProvider,
             currentChannelId:
               turn.followupRun.originatingTo ?? turn.sessionCtx.OriginatingTo ?? turn.sessionCtx.To,
+            // Key the per-turn send ledger on the same routable delivery target the
+            // CLI threading context resolves, so the current-source send dedups on the
+            // peer that conversations_send uses. currentChannelId keeps native semantics.
+            currentMessagingTarget: cliThreadingContext.currentMessagingTarget,
+            onDeferredTurnSendLedgerScope: params.onDeferredTurnSendLedgerScope,
             senderId: turn.followupRun.run.senderId,
             senderName: turn.followupRun.run.senderName,
             senderUsername: turn.followupRun.run.senderUsername,
