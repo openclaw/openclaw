@@ -68,6 +68,7 @@ import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
 } from "./group-policy.js";
+import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { withAbortTimeout } from "./monitor/timeouts.js";
 import {
   looksLikeDiscordTargetId,
@@ -105,6 +106,34 @@ const discordMessageAdapter = createChannelMessageAdapterFromOutbound({
     },
   },
 });
+
+async function sendDiscordHeartbeatTyping(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  accountId?: string | null;
+  threadId?: string | number | null;
+  signal?: AbortSignal;
+  assertPlatformSendAuthorized?: () => void;
+}) {
+  const resolvedTo = resolveDiscordAttachedOutboundTarget(params);
+  const target = parseDiscordTarget(resolvedTo, { defaultKind: "channel" });
+  if (!target || target.kind !== "channel") {
+    return;
+  }
+  const { sendTypingDiscord } = await loadDiscordSendModule();
+  const assertCurrent = () => {
+    params.signal?.throwIfAborted();
+    params.assertPlatformSendAuthorized?.();
+  };
+  assertCurrent();
+  await withDiscordRequestAuthority(assertCurrent, () =>
+    sendTypingDiscord(target.id, {
+      cfg: params.cfg,
+      accountId: params.accountId ?? undefined,
+      signal: params.signal,
+    }),
+  );
+}
 
 function startDiscordStartupProbe(params: {
   accountId: string;
@@ -380,19 +409,8 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
       conversationBindings: discordConversationBindings,
       heartbeat: {
-        sendTyping: async ({ cfg, to, accountId, threadId }) => {
-          const resolvedTo = resolveDiscordAttachedOutboundTarget({ to, threadId });
-          const target = parseDiscordTarget(resolvedTo, { defaultKind: "channel" });
-          if (!target || target.kind !== "channel") {
-            return;
-          }
-          await (
-            await loadDiscordSendModule()
-          ).sendTypingDiscord(target.id, {
-            cfg,
-            accountId: accountId ?? undefined,
-          });
-        },
+        sendTyping: sendDiscordHeartbeatTyping,
+        sendTypingGuarded: sendDiscordHeartbeatTyping,
       },
       status: createComputedAccountStatusAdapter<ResolvedDiscordAccount, DiscordProbe>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {

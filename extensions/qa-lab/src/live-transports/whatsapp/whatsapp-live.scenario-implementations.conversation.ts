@@ -13,7 +13,7 @@ import {
   resolveWhatsAppQaNoReplyTarget,
   waitForDistinctWhatsAppSutMessages,
   waitForNoWhatsAppReply,
-  waitForWhatsAppScenarioSutMessage,
+  waitForScenarioObservedMessage,
 } from "./whatsapp-live.operations.js";
 
 function buildWhatsAppQuoteReplyRun(target: "dm" | "group"): WhatsAppQaMessageScenarioRun {
@@ -163,10 +163,9 @@ export const whatsappQaGroupActivationAlwaysScenario: WhatsAppQaScenarioImplemen
             context.target,
             `Group activation visible behavior marker ${alwaysMarker}`,
           );
-          const alwaysReply = await waitForWhatsAppScenarioSutMessage(context, {
+          const alwaysReply = await waitForScenarioObservedMessage(context, {
             match: (message) => message.text.includes(alwaysMarker),
             observedAfter: alwaysStartedAt,
-            targetKind: "group",
             timeoutMs: 60_000,
           });
           assertWhatsAppMessageFromSutPhone(alwaysReply, context);
@@ -178,10 +177,9 @@ export const whatsappQaGroupActivationAlwaysScenario: WhatsAppQaScenarioImplemen
         const restoreStartedAt = new Date();
         try {
           await context.driver.sendText(context.target, "/activation mention");
-          const restoreReply = await waitForWhatsAppScenarioSutMessage(context, {
+          const restoreReply = await waitForScenarioObservedMessage(context, {
             match: (message) => /\bactivation\b.*\bmention\b/iu.test(message.text),
             observedAfter: restoreStartedAt,
-            targetKind: "group",
             timeoutMs: 60_000,
           });
           assertWhatsAppMessageFromSutPhone(restoreReply, context);
@@ -255,7 +253,7 @@ export const whatsappQaGroupReplyToBotTriggersScenario: WhatsAppQaScenarioImplem
           throw new Error("WhatsApp driver did not return a quoted trigger message id.");
         }
         const quotedTriggerMessageId = quotedTrigger.messageId;
-        const quotedReply = await waitForWhatsAppScenarioSutMessage(context, {
+        const quotedReply = await waitForScenarioObservedMessage(context, {
           diagnosticChecks: [
             {
               label: "containsTriggerMarker",
@@ -270,7 +268,6 @@ export const whatsappQaGroupReplyToBotTriggersScenario: WhatsAppQaScenarioImplem
             message.text.includes(triggerMarker) &&
             message.quoted?.messageId === quotedTriggerMessageId,
           observedAfter: quotedStartedAt,
-          targetKind: "group",
           timeoutMs: 60_000,
         });
         assertWhatsAppMessageFromSutPhone(quotedReply, context);

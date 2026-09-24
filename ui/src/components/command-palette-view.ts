@@ -57,6 +57,7 @@ type CommandPaletteProps = {
   defaultAgentId: string;
   sessionItems: readonly PaletteItem[];
   catalogItems: readonly PaletteItem[];
+  primaryModelSearch: boolean;
   modelSearchError: string | null;
   sessionSearchPending: boolean;
   catalogSearchPending: boolean;

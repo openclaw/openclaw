@@ -17,6 +17,7 @@ import {
   evaluateReleasePublishGates,
   type ReleasePublishGate,
 } from "./lib/release-publish-gates.mts";
+import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   createPublishPreflightEvidenceClient,
   createPublishPreflightGh,
@@ -66,9 +67,10 @@ const POSITIVE_ID = /^[1-9][0-9]*$/u;
 const PUBLISH_REF = /^release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u;
 
 export async function runReleasePublishPreflight(
-  options: ReleasePublishPreflightOptions,
+  inputOptions: ReleasePublishPreflightOptions,
   context: PreflightContext = {},
 ): Promise<PreflightReport> {
+  let options = inputOptions;
   const rows: ReleasePublishGate[] = [];
   const runGh = createPublishPreflightGh();
   const api = (endpoint: string) => preflightApi(runGh, options.repo, endpoint);
@@ -263,6 +265,7 @@ export async function runReleasePublishPreflight(
     options.pluginPublishScope === "all-publishable" ||
     Boolean(options.fullReleaseValidationRunId || options.preflightRunId);
   let manifest = context.manifest;
+  let sealedInputs: ReturnType<typeof resolveReleasePublishInputs> | undefined;
   let attempt = String(options.fullReleaseValidationRunAttempt ?? "");
   if (evidenceRequired) {
     const run = await check(
@@ -309,6 +312,27 @@ export async function runReleasePublishPreflight(
     }
     if (manifest) {
       const fullManifest = manifest;
+      sealedInputs = await check(
+        "validation.publish-inputs",
+        "Sealed publication defaults resolved.",
+        "Reseal Full Release Validation for this source and selector, or correct the explicit override.",
+        () =>
+          resolveReleasePublishInputs(fullManifest, {
+            targetSha: sourceSha,
+            npmDistTag: options.npmDistTag,
+            pluginSdkApiAcknowledgement: options.pluginSdkApiAcknowledgement,
+            stableSoakWaiver: options.stableSoakWaiver,
+            // Report a sealed waiver as active only while the variable still holds it.
+            currentStableSoakWaiver: process.env.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER,
+          }),
+      );
+      if (sealedInputs) {
+        options = {
+          ...options,
+          pluginSdkApiAcknowledgement: sealedInputs.pluginSdkApiAcknowledgement,
+          stableSoakWaiver: sealedInputs.stableSoakWaiver,
+        };
+      }
       for (const consumer of [
         "publisher",
         ...(options.publishOpenclawNpm === false ? [] : ["core-npm"]),
@@ -324,6 +348,11 @@ export async function runReleasePublishPreflight(
             consumer: consumer as "publisher" | "core-npm" | "stable-closeout",
             releaseTag: options.tag,
             npmDistTag: options.npmDistTag,
+            stableSoakWaiver: options.stableSoakWaiver,
+            // The gate re-resolves the manifest; carry the live variable so a
+            // revoked sealed waiver is reported as revoked here too.
+            currentStableSoakWaiver: process.env.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER ?? "",
+            laneWaiver: options.laneWaiver,
             expectedSha: sourceSha,
             expectedReleaseProfile: options.releaseProfile,
           }),
@@ -445,6 +474,7 @@ export async function runReleasePublishPreflight(
             plugins: inventory.npmPlugins,
             corePackages: inventory.corePackages,
             publishOpenclawNpm: options.publishOpenclawNpm,
+            npmDecisions: sealedInputs?.npmDecisions,
           }),
       )
     : undefined;
@@ -470,6 +500,7 @@ export async function runReleasePublishPreflight(
                 publishTag: plan.publishTag,
                 packageVersion: pkg.version,
                 releaseProfile: manifest?.releaseProfile,
+                stableSoakWaiver: options.stableSoakWaiver,
               });
         rows.push({ ...gate, id: `plugin-npm.bootstrap.${pkg.packageName}` });
       }

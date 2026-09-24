@@ -141,7 +141,6 @@ export async function waitForScenarioObservedMessage(
       label: string;
       match: (message: WhatsAppQaDriverObservedMessage) => boolean;
     }>;
-    expectedSender?: (message: WhatsAppQaDriverObservedMessage) => boolean;
     match: (message: WhatsAppQaDriverObservedMessage) => boolean;
     observedAfter?: Date;
     timeoutMs?: number;
@@ -153,14 +152,12 @@ export async function waitForScenarioObservedMessage(
       observedAfter: params.observedAfter,
       timeoutMs: params.timeoutMs ?? 45_000,
       match: (candidate) =>
-        (params.expectedSender?.(candidate) ??
-          isWhatsAppScenarioSutMessage(candidate, {
-            observedAfter: params.observedAfter ?? new Date(0),
-            sutPhoneE164: context.sutPhoneE164,
-            target: context.target,
-            targetKind: context.targetKind,
-          })) &&
-        params.match(candidate),
+        isWhatsAppScenarioSutMessage(candidate, {
+          observedAfter: params.observedAfter ?? new Date(0),
+          sutPhoneE164: context.sutPhoneE164,
+          target: context.target,
+          targetKind: context.targetKind,
+        }) && params.match(candidate),
     });
   } catch (error) {
     if (/\btimed out waiting for WhatsApp QA driver message\b/iu.test(formatErrorMessage(error))) {
