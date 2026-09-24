@@ -9,7 +9,7 @@ import {
   withEnv,
   withEnvAsync,
 } from "../../test-utils/env.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
 import {
   captureDeliveryQueueStateContext,

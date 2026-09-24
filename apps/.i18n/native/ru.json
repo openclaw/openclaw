@@ -1450,7 +1450,6 @@
     "native.android.cee2b043b9ff723d": "Группы",
     "native.android.cee7ae53f86ff1c8": "Не удалось загрузить сведения из ClawHub для ${skill.reference}.",
     "native.android.cee89e52e2b139f2": "Запрос на действие",
-    "native.android.cf320580ecbef407": "Работа",
     "native.android.cf52b615bd004b95": "Проблема с подключением",
     "native.android.cf576be7d9474fa6": "текст: $value",
     "native.android.cf7b99fc56670b51": "Снимок: $snapshotLabel",

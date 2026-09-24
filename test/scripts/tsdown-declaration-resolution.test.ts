@@ -88,6 +88,118 @@ function nestedFixture(groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_
 }
 
 describe("tsdown checkout declaration resolution", () => {
+  it("bounds standalone package builds while preserving public declarations and sibling outputs", () => {
+    const { root, write } = containedFixture();
+    fs.symlinkSync(
+      fs.realpathSync("node_modules/semver"),
+      path.join(root, "node_modules/semver"),
+      "junction",
+    );
+    write(
+      "scripts/build-workspace-package.mts",
+      fs.readFileSync("scripts/build-workspace-package.mts", "utf8"),
+    );
+    const manifest = JSON.parse(
+      fs.readFileSync("packages/gateway-client/package.json", "utf8"),
+    ) as {
+      exports: Record<string, { import: string; types: string }>;
+      dependencies?: Record<string, string>;
+    };
+    manifest.dependencies = { ...manifest.dependencies, "standalone-dependency": "1.0.0" };
+    write("packages/gateway-client/package.json", JSON.stringify(manifest));
+    write(
+      "node_modules/standalone-dependency/package.json",
+      JSON.stringify({
+        name: "standalone-dependency",
+        version: "1.0.0",
+        type: "module",
+        exports: { "./value": { types: "./value.d.ts", import: "./value.js" } },
+      }),
+    );
+    write(
+      "node_modules/standalone-dependency/value.d.ts",
+      "export declare const externalValue: string;",
+    );
+    write(
+      "node_modules/standalone-dependency/value.js",
+      'export const externalValue = "package-owned";',
+    );
+    for (const entry of Object.values(manifest.exports)) {
+      write(
+        entry.import.replace("./dist/", "packages/gateway-client/src/").replace(/\.mjs$/u, ".ts"),
+        'export const marker = "bounded";\n',
+      );
+    }
+    write(
+      "packages/gateway-client/src/index.ts",
+      `
+      export const marker = "bounded";
+      export { externalValue } from "standalone-dependency/value";
+      declare const process: { env: { NODE_ENV?: string } };
+      export function runtimeMode(env: { NODE_ENV?: string }) {
+        return env.NODE_ENV ?? process.env.NODE_ENV;
+      }
+    `,
+    );
+    write("packages/sdk/src/index.ts", 'export const sdkMarker = "sdk";\n');
+    // Upstream whole-project declaration emit rejects this unselected test helper (TS4094).
+    write(
+      "src/unrelated.test-support.ts",
+      "export const hidden = new (class { private value = 1; })();\n",
+    );
+    write("packages/gateway-client/dist/obsolete.d.mts", "export declare const retired: 1;");
+    write("dist/keep.txt", "root output");
+    write("packages/gateway-protocol/dist/keep.txt", "sibling output");
+    const result = runFixtureModule(
+      root,
+      `
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { buildWorkspacePackage } from "./scripts/build-workspace-package.mts";
+import configs from "./tsdown.config.ts";
+const root = process.cwd();
+for (const [name, target] of [["sdk", undefined], ["gateway-client", ["node22.19.0"]]]) {
+  const config = configs.find(config => config.outDir === "packages/" + name + "/dist");
+  const original = config.hooks;
+  config.hooks = async hooks => {
+    await original(hooks);
+    hooks.hook("build:prepare", ({ options }) => assert.deepEqual(options.target, target));
+  };
+}
+await buildWorkspacePackage("sdk");
+assert.match(fs.readFileSync("packages/sdk/dist/index.d.mts", "utf8"), /sdkMarker.*"sdk"/);
+process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = "1";
+const packageDir = path.join(root, "packages/gateway-client");
+process.chdir(packageDir);
+await buildWorkspacePackage("gateway-client");
+assert.equal(process.cwd(), packageDir);
+assert.equal(fs.existsSync("dist/obsolete.d.mts"), false);
+fs.writeFileSync(path.join(root, "node_modules/standalone-dependency/value.js"), 'export const externalValue = "installed-update";');
+process.env.NODE_ENV = "runtime-mode";
+const output = await import(pathToFileURL(path.join(packageDir, "dist/index.mjs")).href);
+assert.deepEqual(
+  { mode: output.runtimeMode({}), external: output.externalValue },
+  { mode: "runtime-mode", external: "installed-update" },
+);
+const manifest = JSON.parse(fs.readFileSync("package.json", "utf8"));
+for (const entry of Object.values(manifest.exports)) {
+  assert.ok(fs.existsSync(entry.import), entry.import);
+  assert.match(fs.readFileSync(entry.types, "utf8"), /marker.*"bounded"/);
+}
+assert.equal(fs.readFileSync(path.join(root, "dist/keep.txt"), "utf8"), "root output");
+assert.equal(fs.readFileSync(path.join(root, "packages/gateway-protocol/dist/keep.txt"), "utf8"), "sibling output");
+fs.writeFileSync("src/index.ts", 'export const invalid: number = "selected";');
+await assert.rejects(buildWorkspacePackage("gateway-client"), /Native declaration emit failed/);
+assert.equal(process.cwd(), packageDir);
+console.log("standalone package boundary verified");
+`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("standalone package boundary verified");
+  });
+
   it.runIf(process.platform === "win32")(
     "starts the checkout compiler when its Windows executable uses an extended-length path",
     () => {
