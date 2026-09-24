@@ -22,10 +22,6 @@ import type {
 import type { GroupKeyResolution } from "../../config/sessions/types.js";
 import type { DmScope } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type {
-  DeliverOutboundPayloadsParams,
-  DurableFinalDeliveryRequirements,
-} from "../../infra/outbound/deliver.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
@@ -34,6 +30,7 @@ import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
 import type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
 import type { ChannelDeliveryResult } from "./delivery-outcome.js";
+import type { DurableInboundReplyDeliveryOptions } from "./durable-delivery.js";
 
 export type { SupplementalContextFacts } from "../../auto-reply/templating.js";
 
@@ -173,16 +170,6 @@ type ChannelProviderOwnedDeliveryInfo = ChannelDeliveryInfo & {
 
 export type { ChannelDeliveryOutcome, ChannelDeliveryResult } from "./delivery-outcome.js";
 
-/** Durable outbound delivery options available to channel turn delivery adapters. */
-type ChannelTurnDurableDeliveryOptions = Pick<
-  DeliverOutboundPayloadsParams,
-  "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
-> & {
-  to?: string | null;
-  replyToId?: string | null;
-  requiredCapabilities?: DurableFinalDeliveryRequirements;
-};
-
 type ChannelDeliveryAdapterBase = {
   /** Return null when channel policy intentionally suppresses this logical payload. */
   preparePayload?: (
@@ -211,14 +198,14 @@ export type ChannelCoreManagedTurnDeliveryAdapter = ChannelDeliveryAdapterBase &
   ) => Promise<ChannelDeliveryResult | void>;
   durable?:
     | false
-    | ChannelTurnDurableDeliveryOptions
+    | DurableInboundReplyDeliveryOptions
     | ((
         payload: ReplyPayload,
         info: ChannelDeliveryInfo,
       ) =>
         | false
-        | ChannelTurnDurableDeliveryOptions
-        | Promise<false | ChannelTurnDurableDeliveryOptions>);
+        | DurableInboundReplyDeliveryOptions
+        | Promise<false | DurableInboundReplyDeliveryOptions>);
 };
 
 /** Delivery adapter used by legacy caller-assembled channel turns. */
@@ -299,17 +286,28 @@ type ChannelTurnReplyPipelineOptions = Omit<
   "cfg" | "agentId" | "channel" | "accountId"
 >;
 
-/** Fully assembled channel turn ready to build the dispatch runner. */
-export type AssembledChannelTurn = {
-  cfg: OpenClawConfig;
+type ChannelTurnContext = {
   channel: string;
   accountId?: string;
-  agentId: string;
   routeSessionKey: string;
   storePath: string;
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
   afterRecord?: () => void | Promise<void>;
+  record?: ChannelTurnRecordOptions;
+  history?: ChannelTurnHistoryFinalizeOptions;
+  admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+  botLoopProtection?: ChannelBotLoopProtectionFacts;
+  /** Transport-defined outbound source identity, such as a webhook id. */
+  outboundEchoSourceId?: string;
+  log?: (event: ChannelTurnLogEvent) => void;
+  messageId?: string;
+};
+
+/** Fully assembled channel turn ready to build the dispatch runner. */
+export type AssembledChannelTurn = ChannelTurnContext & {
+  cfg: OpenClawConfig;
+  agentId: string;
   dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
   delivery: ChannelEventDeliveryAdapter;
   replyPipeline?: ChannelTurnReplyPipelineOptions;
@@ -324,14 +322,6 @@ export type AssembledChannelTurn = {
     signal?: AbortSignal;
     sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   };
-  record?: ChannelTurnRecordOptions;
-  history?: ChannelTurnHistoryFinalizeOptions;
-  admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
-  botLoopProtection?: ChannelBotLoopProtectionFacts;
-  /** Transport-defined outbound source identity, such as a webhook id. */
-  outboundEchoSourceId?: string;
-  log?: (event: ChannelTurnLogEvent) => void;
-  messageId?: string;
   /** Canonical adoption lifecycle threaded into replyOptions. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
 };
@@ -347,27 +337,12 @@ type PreparedChannelTurnDispatchLifecycle = {
 };
 
 /** Channel turn with dispatch runner already prepared. */
-export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
-  channel: string;
-  accountId?: string;
-  routeSessionKey: string;
-  storePath: string;
-  ctxPayload: FinalizedMsgContext;
-  recordInboundSession: RecordInboundSession;
-  afterRecord?: () => void | Promise<void>;
-  record?: ChannelTurnRecordOptions;
-  history?: ChannelTurnHistoryFinalizeOptions;
+export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = ChannelTurnContext & {
   onPreDispatchFailure?: (err: unknown) => void | Promise<void>;
   runDispatch: () => Promise<TDispatchResult>;
   /** Optional for the legacy direct prepared runner; inbound adapters use the stricter type. */
   runDispatchLifecycle?: PreparedChannelTurnDispatchLifecycle;
   observeOnlyDispatchResult?: TDispatchResult;
-  admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
-  botLoopProtection?: ChannelBotLoopProtectionFacts;
-  /** Transport-defined outbound source identity, such as a webhook id. */
-  outboundEchoSourceId?: string;
-  log?: (event: ChannelTurnLogEvent) => void;
-  messageId?: string;
 };
 
 type ChannelTurnRoute = {
