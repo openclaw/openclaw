@@ -32,6 +32,7 @@ function fixture(
     load?: PreparedModelRuntimeSnapshot["loadFullModelCatalog"];
     loadNative?: PreparedModelRuntimeSnapshot["loadNativeModelCatalog"];
     readFull?: PreparedModelRuntimeSnapshot["readFullModelCatalog"];
+    captureSelection?: AgentHarness["captureModelCatalogSelectionAuthority"];
   } = {},
 ) {
   const config: OpenClawConfig = params.config ?? {
@@ -50,6 +51,9 @@ function fixture(
     loadModelCatalog: async () => [],
     readModelCatalogReadiness: () =>
       params.ready === false ? undefined : { accountType: "chatgpt", authMode: "oauth" },
+    ...(params.captureSelection
+      ? { captureModelCatalogSelectionAuthority: params.captureSelection }
+      : {}),
     runAttempt: vi.fn(),
   };
   const pluginRegistry = createEmptyPluginRegistry();
@@ -110,7 +114,7 @@ describe("first-turn native model catalog resolution", () => {
         provider: "openai",
         modelId: "gpt-6-luna",
       }),
-    ).resolves.toEqual(luna);
+    ).resolves.toMatchObject({ entry: luna });
   });
 
   it("loads a cold exact Luna row and returns it only after readiness", async () => {
@@ -124,7 +128,7 @@ describe("first-turn native model catalog resolution", () => {
         provider: "openai",
         modelId: "gpt-6-luna",
       }),
-    ).resolves.toEqual(luna);
+    ).resolves.toMatchObject({ entry: luna });
     expect(load).toHaveBeenCalledWith({
       refresh: true,
       providerIds: ["openai"],
@@ -145,6 +149,40 @@ describe("first-turn native model catalog resolution", () => {
       }),
     ).resolves.toBeUndefined();
     expect(loadNative).toHaveBeenCalledOnce();
+  });
+
+  it("captures an execution assertion for the selected native catalog row", async () => {
+    const assertCurrent = vi.fn();
+    const { harness, snapshot } = fixture({
+      entries: [luna],
+      captureSelection: () => assertCurrent,
+    });
+
+    const selection = await resolveReadyNativeModelCatalogEntry({
+      snapshot,
+      harness,
+      provider: "openai",
+      modelId: "gpt-6-luna",
+    });
+
+    expect(selection?.entry).toEqual(luna);
+    expect(selection?.assertCurrent).toBe(assertCurrent);
+  });
+
+  it("rejects a native row when its execution authority cannot be captured", async () => {
+    const { harness, snapshot } = fixture({
+      entries: [luna],
+      captureSelection: () => undefined,
+    });
+
+    await expect(
+      resolveReadyNativeModelCatalogEntry({
+        snapshot,
+        harness,
+        provider: "openai",
+        modelId: "gpt-6-luna",
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("waits past the default catalog window for a cold native row", async () => {
@@ -178,7 +216,7 @@ describe("first-turn native model catalog resolution", () => {
       await vi.advanceTimersByTimeAsync(5_001);
       expect(settled).toBe(false);
       await vi.advanceTimersByTimeAsync(999);
-      await expect(resolved).resolves.toEqual(luna);
+      await expect(resolved).resolves.toMatchObject({ entry: luna });
     } finally {
       vi.useRealTimers();
     }

@@ -1,5 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { resolveDefaultAgentId } from "../agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agent-scope.js";
 import {
   createModelCatalogDecisions,
   resolveCatalogDecisionRuntime,
@@ -24,6 +24,11 @@ function findOwnedEntry(
   return catalog?.entries.find(matchesSelection) ?? catalog?.routeVariants.find(matchesSelection);
 }
 
+export type ReadyNativeModelCatalogSelection = {
+  entry: ModelCatalogEntry;
+  assertCurrent?: () => void;
+};
+
 /**
  * Resolves a first-turn model only from a current native catalog observation owned by
  * the selected harness. Catalog membership alone is not readiness or auth evidence.
@@ -33,7 +38,7 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
   harness: AgentHarness;
   provider: string;
   modelId: string;
-}): Promise<ModelCatalogEntry | undefined> {
+}): Promise<ReadyNativeModelCatalogSelection | undefined> {
   const { snapshot, harness, provider, modelId } = params;
   if (!snapshot || !harness.loadModelCatalog || !snapshot.isCurrent()) {
     return undefined;
@@ -140,12 +145,41 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
     evaluation,
     pluginRegistry: snapshot.pluginRegistry,
   });
-  return snapshot.isCurrent() &&
-    decisions.isCurrent() &&
-    evaluation.availability === true &&
-    evaluation.availabilityAuthoritative === true &&
-    evaluation.runtimeAuth?.id === harness.id &&
-    runtime?.id === harness.id
-    ? entry
-    : undefined;
+  if (
+    !snapshot.isCurrent() ||
+    !decisions.isCurrent() ||
+    evaluation.availability !== true ||
+    evaluation.availabilityAuthoritative !== true ||
+    evaluation.runtimeAuth?.id !== harness.id ||
+    runtime?.id !== harness.id
+  ) {
+    return undefined;
+  }
+  let assertCurrent: (() => void) | undefined;
+  if (harness.captureModelCatalogSelectionAuthority) {
+    try {
+      assertCurrent = harness.captureModelCatalogSelectionAuthority({
+        config: snapshot.config,
+        agentId,
+        agentDir: snapshot.agentDir,
+        workspaceDir: snapshot.workspaceDir ?? resolveAgentWorkspaceDir(snapshot.config, agentId),
+        provider,
+        modelId,
+      });
+    } catch {
+      return undefined;
+    }
+    if (!assertCurrent) {
+      return undefined;
+    }
+  }
+  if (!snapshot.isCurrent() || !decisions.isCurrent()) {
+    return undefined;
+  }
+  try {
+    assertCurrent?.();
+  } catch {
+    return undefined;
+  }
+  return { entry, ...(assertCurrent ? { assertCurrent } : {}) };
 }

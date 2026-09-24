@@ -240,7 +240,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
     );
   }
 
-  const nativeCatalogEntry = nativeSessionRuntime
+  const nativeCatalogSelection = nativeSessionRuntime
     ? undefined
     : await resolveReadyNativeModelCatalogEntry({
         snapshot: params.preparedModelRuntime,
@@ -248,6 +248,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
         provider,
         modelId,
       });
+  const nativeCatalogEntry = nativeCatalogSelection?.entry;
   runParams.abortSignal?.throwIfAborted();
   if (!nativeSessionRuntime && params.preparedModelRuntime) {
     assertPreparedModelRuntimeInputCurrent(
@@ -361,6 +362,9 @@ export async function resolveEmbeddedRunModelSetup(params: {
     pluginHarnessOwnsTransport,
     pinnedHarnessId,
     nativeModelOwned,
+    ...(nativeCatalogSelection?.assertCurrent
+      ? { assertNativeModelSelectionCurrent: nativeCatalogSelection.assertCurrent }
+      : {}),
     nativeSessionRuntime,
     modelConfigProvider,
     model,
