@@ -113,6 +113,8 @@ type RenderMessageGroupOptions = Omit<
     frameContent?: readonly unknown[];
     frameActionOwner?: MessageGroup["messages"][number] | null;
     latestAssistant?: boolean;
+    /** Rendered as a transcript search result, outside its turn. */
+    searchResult?: boolean;
   };
 
 function prepareGroupMessage(
@@ -517,6 +519,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const isTurnBlock =
     normalizedRole === "tool" ||
     (normalizedRole === "assistant" &&
+      !opts.searchResult &&
       !ownsRunFrame &&
       !isForwarded &&
       resolveAssistantReplyPhase(group.messages[0]?.message) === "commentary");
