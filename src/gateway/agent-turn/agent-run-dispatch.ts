@@ -32,7 +32,6 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage, readErrorName, toErrorObject } from "../../infra/errors.js";
 import { withTimeout } from "../../infra/fs-safe.js";
-import { defaultRuntime } from "../../runtime.js";
 import type { CreatedDetachedTaskRun } from "../../tasks/detached-task-runtime-contract.js";
 import {
   prepareRunningTaskRun,
@@ -49,9 +48,9 @@ import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.j
 import { errorShapeFromError } from "../error-shape.js";
 import { tryFinalizeTrackedAgentTask } from "../server-methods/agent-task-tracking.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
-import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { captureAgentJobSession } from "./agent-job.js";
+import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import { readAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
 import { createGatewayTaskExecutionBinding } from "./agent-run-task-binding.js";
 import type { GatewayAgentDispatchTaskTracking } from "./agent-run-task-tracking.js";
@@ -153,12 +152,19 @@ export function dispatchAgentRunFromGateway(
     canonicalSkillWorkspaceDir?: string;
     restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
     commandRuntimeContext?: PreparedAgentCommandRuntimeContext;
+    /** Privacy classification carried from the resolved session entry. */
+    isIncognito?: boolean;
     onSettled?: (outcome: {
       terminalOutcome: AgentRunTerminalOutcome;
       onRecovered?: () => void;
     }) => Promise<boolean> | boolean;
   } & TaskSettlementAdmission,
 ) {
+  const diagnostics = createAgentRunDiagnostics(
+    params.ingressOpts.sessionKey,
+    params.isIncognito,
+    params.context.logGateway,
+  );
   const assertSettlementCurrent = params.assertSettlementCurrent;
   const registeredRunEntry = params.admittedRunEntry;
   const jobSessionBinding = registeredRunEntry ?? params.ingressOpts;
@@ -212,11 +218,9 @@ export function dispatchAgentRunFromGateway(
       return;
     }
     if (!executionActivated && createdTask) {
-      const settlementFailed = (error: unknown) => {
-        params.context.logGateway.warn(
-          `failed to settle unstarted tracked task ${task.taskId}: ${formatForLog(error)}`,
-        );
-      };
+      const settlementFailed = diagnostics.warning(
+        `failed to settle unstarted tracked task ${task.taskId}`,
+      );
       try {
         return createdTask
           .settleUnstarted(terminal, canSettleTrackedTask)
@@ -227,11 +231,9 @@ export function dispatchAgentRunFromGateway(
       return;
     }
     if (createdTask) {
-      const settlementFailed = (error: unknown) => {
-        params.context.logGateway.warn(
-          `failed to finalize tracked agent task ${params.runId}: ${formatForLog(error)}`,
-        );
-      };
+      const settlementFailed = diagnostics.warning(
+        `failed to finalize tracked agent task ${params.runId}`,
+      );
       try {
         if (!assertSettlementCurrent) {
           throw new Error("Active task settlement requires its Gateway admission");
@@ -253,6 +255,7 @@ export function dispatchAgentRunFromGateway(
         ...terminal,
         runId: params.runId,
         sessionKey: task.childSessionKey,
+        isIncognito: diagnostics.incognito,
         log: params.context.logGateway,
       });
     }
@@ -260,11 +263,7 @@ export function dispatchAgentRunFromGateway(
   let createTrackedTask:
     | Extract<PreparedDetachedTaskRun, { kind: "receipt" }>["create"]
     | undefined;
-  const creationFailed = (error: unknown) => {
-    params.context.logGateway.warn(
-      `failed to start tracked agent task ${params.runId}: ${formatForLog(error)}`,
-    );
-  };
+  const creationFailed = diagnostics.warning(`failed to start tracked agent task ${params.runId}`);
   if (params.taskTrackingMode === "cli") {
     try {
       assertCurrent();
@@ -306,9 +305,7 @@ export function dispatchAgentRunFromGateway(
     try {
       return (await params.onSettled?.(outcome)) ?? true;
     } catch (error) {
-      params.context.logGateway.warn(
-        `failed to settle agent continuation ${params.runId}: ${formatForLog(error)}`,
-      );
+      diagnostics.warning(`failed to settle agent continuation ${params.runId}`)(error);
       return false;
     }
   };
@@ -380,7 +377,7 @@ export function dispatchAgentRunFromGateway(
           cronCreatorAuthorityCapability
             ? { ...ingressOptsWithTaskBinding, cronCreatorAuthorityCapability }
             : ingressOptsWithTaskBinding,
-          defaultRuntime,
+          diagnostics.runtime,
           params.context.deps,
           {
             restoreAdmittedRecovery: params.restoreAdmittedRecovery,
@@ -529,14 +526,14 @@ export function dispatchAgentRunFromGateway(
           dedupe: params.context.dedupe,
           keys: params.dedupeKeys,
           session: captureAgentJobSession(jobSessionBinding),
-          entry: {
+          entry: diagnostics.forReplay({
             ts: Date.now(),
             ok: true,
             payload: {
               ...payload,
               ...(inputProcessingCompleted ? { inputProcessingCompleted: true } : {}),
             },
-          },
+          }),
         });
       };
       const settled = await settle({ terminalOutcome, onRecovered: persistTerminalDedupe });
@@ -548,7 +545,12 @@ export function dispatchAgentRunFromGateway(
           dedupe: params.context.dedupe,
           keys: params.dedupeKeys,
           session: captureAgentJobSession(jobSessionBinding),
-          entry: { ts: Date.now(), ok: false, payload: failedPayload, error },
+          entry: diagnostics.forReplay({
+            ts: Date.now(),
+            ok: false,
+            payload: failedPayload,
+            error,
+          }),
         });
         cleanupRunOwner();
         params.io.emitFinal([false, failedPayload, error], {
@@ -596,9 +598,7 @@ export function dispatchAgentRunFromGateway(
             params.ingressOpts.userTurnTranscriptRecorder?.completeProcessing?.(terminalOutcome) ??
             terminalOutcome;
         } catch (completionError) {
-          params.context.logGateway.warn(
-            `input completion persistence failed: ${formatForLog(completionError)}`,
-          );
+          diagnostics.warning("input completion persistence failed")(completionError);
         }
       }
       const responseStatus = projectRejectedGatewayStatus(terminalOutcome);
@@ -631,12 +631,12 @@ export function dispatchAgentRunFromGateway(
           dedupe: params.context.dedupe,
           keys: params.dedupeKeys,
           session: captureAgentJobSession(jobSessionBinding),
-          entry: {
+          entry: diagnostics.forReplay({
             ts: Date.now(),
             ok: aborted && settlementPersisted,
             payload,
             ...(aborted ? {} : { error }),
-          },
+          }),
         });
       };
       const settled = await settle({
@@ -645,9 +645,10 @@ export function dispatchAgentRunFromGateway(
       });
       persistTerminalDedupe(settled);
       cleanupRunOwner();
-      params.io.emitFinal([aborted && settled, payload, aborted && settled ? undefined : error], {
+      const responseError = aborted && settled ? undefined : error;
+      params.io.emitFinal([aborted && settled, payload, responseError], {
         runId: params.runId,
-        ...(aborted ? {} : { error: renderedErr }),
+        ...diagnostics.errorMeta(responseError?.message, !aborted),
       });
       return { terminalOutcome, settled };
     })
