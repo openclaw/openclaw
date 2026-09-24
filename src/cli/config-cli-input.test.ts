@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildConfigSetOperations, readConfigPatchOperations } from "./config-cli-input.js";
+import { parseConfigSetPath } from "./config-cli-path.js";
 
 const DEEP_CONFIG_DEPTH = 20_000;
 
@@ -126,5 +127,50 @@ describe("exec provider config inputs", () => {
         },
       }),
     ).toThrow(testCase.error);
+  });
+});
+
+// The unused-path error echoes the argument the user has to correct, so the printed path must be
+// one this command's own parser accepts: joining on dots drops the brackets a quoted key needs,
+// which leaves a retry that can never match no matter how often it is pasted back.
+describe("unused --replace-path echo", () => {
+  const patch = '{"models":{"providers":{"openai":{"models":[{"id":"gpt-4o"}]}}}}';
+
+  async function rejectionMessage(patchPath: string, replacePath: string): Promise<string> {
+    return await readConfigPatchOperations({ file: patchPath, replacePath: [replacePath] }).then(
+      () => "expected the unused --replace-path to be rejected",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+  }
+
+  it.each([
+    {
+      name: "plain key",
+      replacePath: "channels.discord.guilds",
+      echo: "channels.discord.guilds",
+      segments: ["channels", "discord", "guilds"],
+    },
+    {
+      name: "key holding a dot",
+      replacePath: 'models.providers["local.service"].modals',
+      echo: 'models.providers["local.service"].modals',
+      segments: ["models", "providers", "local.service", "modals"],
+    },
+    {
+      name: "array index",
+      replacePath: "models.providers.openai.models.5.id",
+      echo: 'models.providers.openai.models["5"].id',
+      segments: ["models", "providers", "openai", "models", "5", "id"],
+    },
+  ])("prints a retry that re-parses for a $name", async ({ replacePath, echo, segments }) => {
+    await withPatchFile(patch, async (patchPath) => {
+      const message = await rejectionMessage(patchPath, replacePath);
+
+      expect(message).toContain(
+        `--replace-path ${echo} did not match any value in the input patch.`,
+      );
+      const printed = /--replace-path (\S+) did not match/u.exec(message)?.[1] ?? "";
+      expect(parseConfigSetPath(printed)).toEqual(segments);
+    });
   });
 });
