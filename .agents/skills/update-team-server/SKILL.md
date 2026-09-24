@@ -36,9 +36,9 @@ Treat every authorized update request, including a brief ping to update, as an e
 
 When the update fails or defers, repeat this loop until it succeeds:
 
-1. Inspect the exact native failure, invocation, journal, and current owner; diagnose the root cause rather than blindly retrying.
-2. Repair the owning invariant in the best coherent way, including connected lifecycle and recovery defects. Do not substitute a workaround, weaker guard, or success-shaped status for a fix.
-3. Reproduce the failure, prove the repair, obtain review, and land the repair PR through normal CI and landing gates.
+1. Inspect the exact native outcome, invocation, journal, and current owner; diagnose the cause rather than blindly retrying. For an expected busy or deferred outcome with no confirmed defect, observe the existing owner and use its supported continuation or retry path; skip repair and PR landing.
+2. For a confirmed owned defect, repair the owning invariant in the best coherent way, including connected lifecycle and recovery defects. Do not substitute a workaround, weaker guard, or success-shaped status for a fix.
+3. When a repair is needed, reproduce the failure, prove the repair, obtain review, and land the repair PR through normal CI and landing gates.
 4. Reconcile custody again and redo the update through the canonical owner. Verify the requested release’s full native acceptance; if it fails again, return to diagnosis.
 
 A genuine access or external dependency may pause the blocked action, but not close the request or transfer its ownership. Name the dependency and its owner, pursue supported coordination, and continue independent authorized repair work. Preserve the existing approval for continuation once the dependency is resolved; do not ask for another routine update request or bypass access, ownership, persistence, or recovery safeguards.
