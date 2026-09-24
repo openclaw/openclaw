@@ -56,6 +56,10 @@ jobs:
             /scripts/lib/bounded-response.mjs
           sparse-checkout-cone-mode: false
 
+      - name: Report checkout infrastructure retry
+        if: ${{ !cancelled() && steps.checkout.outcome == 'failure' }}
+        run: echo "::warning::Trusted workflow checkout failed; retrying GitHub source transport once."
+
       - name: Retry trusted workflow checkout
         id: checkout_retry
         if: ${{ !cancelled() && steps.checkout.outcome == 'failure' }}
@@ -124,6 +128,10 @@ jobs:
             /.github/actions/setup-security-review/package.json
             /.github/actions/setup-security-review/package-lock.json
           sparse-checkout-cone-mode: false
+
+      - name: Report checkout infrastructure retry
+        if: ${{ !cancelled() && steps.checkout.outcome == 'failure' }}
+        run: echo "::warning::Trusted workflow checkout failed; retrying GitHub source transport once."
 
       - name: Retry trusted workflow checkout
         id: checkout_retry

@@ -8,7 +8,6 @@ import { resolve } from "node:path";
 import { resolveUpgradeSurvivorConfigStepsForBaseline } from "../e2e/lib/upgrade-survivor/config-recipe.mts";
 import {
   BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
-  DEFAULT_LIVE_RETRIES,
   allReleasePathLanes,
   fleetCacheLane,
   mainLanes,
@@ -36,7 +35,6 @@ import {
   supportsUpgradeSurvivorScenarioAtBaseline,
 } from "./upgrade-survivor-policy.mjs";
 
-export { DEFAULT_LIVE_RETRIES };
 export { normalizeReleaseProfile };
 export { normalizeUpgradeSurvivorBaselineSpec };
 
@@ -84,7 +82,6 @@ type DockerE2ePlanOptions = {
   frozenTarget?: InertTargetContract;
   includeOpenWebUI: boolean;
   liveMode: LiveMode;
-  liveRetries: number;
   orderLanes: (lanes: DockerE2eLane[], timingStore?: unknown) => DockerE2eLane[];
   planReleaseAll: boolean;
   profile: string;
@@ -657,10 +654,6 @@ function applyLiveMode(poolLanes: DockerE2eLane[], mode: LiveMode): DockerE2eLan
   return poolLanes.filter((poolLane) => (mode === "only" ? poolLane.live : !poolLane.live));
 }
 
-function applyLiveRetries(poolLanes: DockerE2eLane[], retries: number): DockerE2eLane[] {
-  return poolLanes.map((poolLane) => (poolLane.live ? { ...poolLane, retries } : poolLane));
-}
-
 export function laneWeight(poolLane: DockerE2eLane): number {
   return Math.max(1, poolLane.weight ?? 1);
 }
@@ -675,11 +668,10 @@ export function laneSummary(poolLane: DockerE2eLane): string {
   const noOutputTimeout = poolLane.noOutputTimeoutMs
     ? ` no-output=${Math.round(poolLane.noOutputTimeoutMs / 1000)}s`
     : "";
-  const retries = poolLane.retries > 0 ? ` retries=${poolLane.retries}` : "";
   const cache = poolLane.cacheKey ? ` cache=${poolLane.cacheKey}` : "";
   const image = poolLane.e2eImageKind ? ` image=${poolLane.e2eImageKind}` : "";
   const state = poolLane.stateScenario ? ` state=${poolLane.stateScenario}` : "";
-  return `${poolLane.name}(w=${laneWeight(poolLane)} r=${resources}${timeout}${noOutputTimeout}${retries}${cache}${image}${state})`;
+  return `${poolLane.name}(w=${laneWeight(poolLane)} r=${resources}${timeout}${noOutputTimeout}${cache}${image}${state})`;
 }
 
 export function lanesNeedE2eImageKind(
@@ -886,8 +878,6 @@ function buildPlanJson(params: {
 
 export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
   const releaseProfile = normalizeReleaseProfile(options.releaseProfile);
-  const retriedMainLanes = applyLiveRetries(mainLanes, options.liveRetries);
-  const retriedTailLanes = applyLiveRetries(tailLanes, options.liveRetries);
   const upgradeSurvivorBaselines = options.upgradeSurvivorBaselines ?? "";
   const upgradeSurvivorScenarios = options.upgradeSurvivorScenarios ?? "";
   const unexpandedSelectableLanes = dedupeLanes([
@@ -897,8 +887,8 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
     }),
     ...publicInstallerLanes,
     fleetCacheLane,
-    ...retriedMainLanes,
-    ...retriedTailLanes,
+    ...mainLanes,
+    ...tailLanes,
   ]);
   const omittedUnsupportedLaneNames = new Set<string>();
   const expandRequestedSurvivorLanes = (poolLanes: DockerE2eLane[]) => {
@@ -986,8 +976,8 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
     : releaseLanes
       ? applyLiveMode(releaseLanes, options.liveMode)
       : options.liveMode === "only"
-        ? applyLiveMode([...retriedMainLanes, ...retriedTailLanes], options.liveMode)
-        : applyLiveMode(retriedMainLanes, options.liveMode);
+        ? applyLiveMode([...mainLanes, ...tailLanes], options.liveMode)
+        : applyLiveMode(mainLanes, options.liveMode);
   if (options.allowFrozenTargetScenarioOmissions) {
     const unsupportedLaneRules = [
       {
@@ -1033,7 +1023,7 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
       ? []
       : options.liveMode === "only"
         ? []
-        : applyLiveMode(retriedTailLanes, options.liveMode);
+        : applyLiveMode(tailLanes, options.liveMode);
   const orderedLanes = options.orderLanes(configuredLanes, options.timingStore);
   const orderedTailLanes = options.orderLanes(configuredTailLanes, options.timingStore);
   return {

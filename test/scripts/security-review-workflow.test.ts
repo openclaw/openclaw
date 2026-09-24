@@ -17,6 +17,7 @@ import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 type WorkflowStep = {
+  name?: string;
   "continue-on-error"?: boolean;
   "timeout-minutes"?: number;
   env?: Record<string, string>;
@@ -148,7 +149,9 @@ describe("security review workflow trust boundaries", () => {
         expect(bootstrapIndex).toBeGreaterThan(
           job.steps.findIndex((step) => step === checkouts[0]),
         );
-        expect(bootstrapIndex).toBeLessThan(job.steps.findIndex((step) => step.run));
+        expect(bootstrapIndex).toBeLessThan(
+          job.steps.findIndex((step) => step.run?.startsWith("node ")),
+        );
       }
       for (const step of job.steps) {
         if (step.uses && step.uses !== `./${runtimeActionPath}` && step !== bootstrap[0]) {
@@ -157,6 +160,13 @@ describe("security review workflow trust boundaries", () => {
           );
         }
         if (step.run) {
+          if (step.name === "Report checkout infrastructure retry") {
+            expect(step.if).toBe("${{ !cancelled() && steps.checkout.outcome == 'failure' }}");
+            expect(step.run).toBe(
+              'echo "::warning::Trusted workflow checkout failed; retrying GitHub source transport once."',
+            );
+            continue;
+          }
           expect(step.run).toBe(
             `node scripts/github/security-review${name === "resolve" ? "-event" : ""}.mjs`,
           );
@@ -379,7 +389,7 @@ describe("security review workflow trust boundaries", () => {
 
   it("limits autoscrub writes to PR events and always enforces after failures", () => {
     const steps = readWorkflow("security-review").jobs.review!.steps;
-    const commands = steps.filter((step) => step.run);
+    const commands = steps.filter((step) => step.run?.startsWith("node "));
     expect(commands.map((step) => step.env?.OPENCLAW_SECURITY_REVIEW_MODE)).toEqual([
       "detect",
       "autoscrub",

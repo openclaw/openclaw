@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { runReleaseAgentTurn } from "./agent.ts";
 import type {
-  AgentTurnResult,
+  CommandResult,
   GatewayHandle,
   LaneCommandParams,
   LaneState,
@@ -286,18 +286,15 @@ export async function runModelsSet(params: LaneCommandParams & { providerConfig:
 
 export async function runAgentTurn(
   params: LaneCommandParams & { label: string },
-): Promise<AgentTurnResult> {
-  return runReleaseAgentTurn(
-    params,
-    (args, timeoutMs) =>
-      runOpenClaw({
-        lane: params.lane,
-        env: params.env,
-        args,
-        logPath: params.logPath,
-        timeoutMs,
-      }),
-    "agent turn",
+): Promise<CommandResult> {
+  return runReleaseAgentTurn(params, (args, timeoutMs) =>
+    runOpenClaw({
+      lane: params.lane,
+      env: params.env,
+      args,
+      logPath: params.logPath,
+      timeoutMs,
+    }),
   );
 }
 

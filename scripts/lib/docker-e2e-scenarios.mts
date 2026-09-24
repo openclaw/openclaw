@@ -23,8 +23,6 @@ export type DockerE2eLane = {
   noOutputTimeoutMs?: number;
   prepublishPluginPackages?: string[];
   resources: string[];
-  retries: number;
-  retryPatterns: RegExp[];
   stateScenario?: string;
   timeoutMs?: number;
   upgradeSurvivorScenario?: string;
@@ -36,7 +34,6 @@ type LaneOptions = Partial<Omit<DockerE2eLane, "command" | "e2eImageKind" | "nam
   providers?: string[];
 };
 
-export const DEFAULT_LIVE_RETRIES = 1;
 const LIVE_DOCKER_DEFAULT_HARNESS_DIR =
   /[\\/]\.release-harness[\\/]/u.test(fileURLToPath(import.meta.url)) &&
   process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT
@@ -88,15 +85,6 @@ const npmOnboardLaneOptions = {
   weight: 3,
 } satisfies LaneOptions;
 
-const LIVE_RETRY_PATTERNS = [
-  /529\b/i,
-  /overloaded/i,
-  /capacity/i,
-  /rate.?limit/i,
-  /gateway closed \(1000 normal closure\)/i,
-  /ECONNRESET|ETIMEDOUT|ENOTFOUND/i,
-];
-
 export function liveDockerScriptCommand(
   script: string,
   envPrefix = "",
@@ -132,8 +120,6 @@ function lane(name: string, command: string, options: LaneOptions = {}): DockerE
     ...(options.needsPackage ? { needsPackage: true } : {}),
     needsLiveImage: options.needsLiveImage,
     prepublishPluginPackages: options.prepublishPluginPackages,
-    retryPatterns: options.retryPatterns ?? [],
-    retries: options.retries ?? 0,
     resources: options.resources ?? [],
     stateScenario: options.stateScenario,
     timeoutMs: options.timeoutMs,
@@ -180,8 +166,6 @@ function liveLane(name: string, command: string, options: LaneOptions = {}) {
     // not require building the separate source live-test image.
     needsLiveImage: options.needsLiveImage ?? !options.e2eImageKind,
     resources: ["live", ...liveProviderResources(options), ...(options.resources ?? [])],
-    retryPatterns: options.retryPatterns ?? LIVE_RETRY_PATTERNS,
-    retries: options.retries ?? DEFAULT_LIVE_RETRIES,
     weight: options.weight ?? 3,
   });
 }
@@ -230,8 +214,6 @@ function createPackageUpdateMaintenanceLanes() {
       },
     ),
     npmLane("skill-install", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install", {
-      retryPatterns: LIVE_RETRY_PATTERNS,
-      retries: 1,
       stateScenario: "empty",
       timeoutMs: 10 * 60 * 1000,
       weight: 2,
@@ -422,8 +404,6 @@ export const mainLanes: DockerE2eLane[] = [
   liveLane("live-anthropic-cache", liveDockerScriptCommand("e2e/anthropic-cache-live-docker.sh"), {
     e2eImageKind: "functional",
     provider: "claude",
-    retries: 0,
-    retryPatterns: [],
     timeoutMs: 15 * 60 * 1000,
     weight: 2,
   }),
@@ -457,7 +437,7 @@ export const mainLanes: DockerE2eLane[] = [
     "live-cli-backend-gemini",
     liveDockerScriptCommand(
       "test-live-cli-backend-docker.sh",
-      "OPENCLAW_LIVE_CLI_BACKEND_ADVISORY=1 OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP=1 OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
+      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
     ),
     {
       cacheKey: "cli-backend-gemini",

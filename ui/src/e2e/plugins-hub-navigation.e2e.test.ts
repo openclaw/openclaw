@@ -153,14 +153,26 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
     },
   }[active];
   const header = page.locator(".plugins-hub-header");
-  const title = header.getByRole("heading", { level: 1 });
-  expect(await title.textContent()).toBe(expected.title);
-  const titleBox = (await title.boundingBox())!;
-  const tabsBox = (await header.locator(".plugins-tabs").boundingBox())!;
-  expect(titleBox.height).toBeGreaterThan(1);
-  expect(titleBox.width).toBeGreaterThan(1);
-  expect(tabsBox.y + tabsBox.height).toBeLessThanOrEqual(titleBox.y);
-  expect(Math.abs(tabsBox.x - titleBox.x)).toBeLessThanOrEqual(1);
+  expect(await header.getByRole("heading", { level: 1 }).textContent()).toBe(expected.title);
+  // All three routes share the settings-style header. Allow subtitle wrapping
+  // to change its height, but keep the visible title and tabs left-aligned.
+  await expect
+    .poll(() =>
+      header.evaluate((element) => {
+        const title = element.querySelector(".page-title")?.getBoundingClientRect();
+        const intro = element.querySelector(".hub-page-header__title")?.getBoundingClientRect();
+        const tabs = element.querySelector(".hub-page-header__tabs")?.getBoundingClientRect();
+        if (!title || !intro || !tabs) {
+          return null;
+        }
+        return {
+          visibleTitle: title.width > 1 && title.height > 1,
+          leftAligned: Math.abs(tabs.left - title.left) <= 1,
+          tabsBelowIntro: tabs.top >= intro.bottom,
+        };
+      }),
+    )
+    .toEqual({ visibleTitle: true, leftAligned: true, tabsBelowIntro: true });
   expect(await header.locator(".page-subtitle").textContent()).toContain(expected.subtitle);
   expect(await header.getByRole("link", { name: "Learn more" }).getAttribute("href")).toBe(
     expected.docs,
@@ -358,6 +370,9 @@ suite.define(() => {
           .getByRole("tab", { name: "Skills", exact: true })
           .click();
         await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
+        expectStableHeader(await headerGeometry(page), pluginsHeader);
+        await expectHeaderCopy(page, "skills");
+        await expectActivePanelLabel(page, "plugins-tab-skills");
         await page.getByRole("tab", { name: "Plugins", exact: true }).click();
         await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
         expectStableHeader(await headerGeometry(page), pluginsHeader);
