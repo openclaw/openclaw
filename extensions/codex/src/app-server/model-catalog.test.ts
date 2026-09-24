@@ -23,7 +23,7 @@ vi.mock("./auth-profile.js", async () => {
   });
 });
 
-const rpc = vi.hoisted(() => ({ request: vi.fn(), epoch: 0, client: {} }));
+const rpc = vi.hoisted(() => ({ request: vi.fn(), epoch: 0, registered: true, client: {} }));
 vi.mock("./request.js", () => ({
   withCodexAppServerJsonClient: vi.fn(
     (_options: unknown, run: (request: unknown, client: unknown) => unknown) =>
@@ -31,6 +31,7 @@ vi.mock("./request.js", () => ({
   ),
 }));
 vi.mock("./shared-client.js", () => ({
+  captureSharedCodexAppServerClientRegistration: () => () => rpc.registered,
   captureSharedCodexAppServerCatalogLifetime: () => {
     const epoch = rpc.epoch;
     return () => rpc.epoch === epoch;
@@ -59,6 +60,7 @@ describe("Codex app-server model catalog", () => {
 
   beforeEach(() => {
     profiles.store = { version: 1, profiles: {} };
+    rpc.registered = true;
     vi.mocked(probeCodexNativeAuth).mockReset().mockResolvedValue({
       apiKey: "native-presence",
       source: "native login",
@@ -299,6 +301,56 @@ describe("Codex app-server model catalog", () => {
       );
     },
   );
+
+  it("keeps agent-home profile auth current across its expected login revision", async () => {
+    profiles.store = {
+      version: 1,
+      profiles: {
+        "openai:work": {
+          type: "oauth",
+          provider: "openai",
+          access: "synthetic-access",
+          refresh: "synthetic-refresh",
+          expires: Date.now() + 60 * 60_000,
+          accountId: "synthetic-account",
+        },
+      },
+      order: { openai: ["openai:work"] },
+    };
+    const params = {
+      ...catalogParams,
+      config: { auth: { order: { openai: ["openai:work"] } } },
+    };
+    const pluginConfig = { appServer: { homeScope: "agent" } };
+    rpc.request.mockResolvedValue({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
+    listModelsMock.mockResolvedValue({
+      models: [
+        {
+          id: "synthetic-profile-model",
+          model: "synthetic-profile-model",
+          inputModalities: ["text"],
+          supportedReasoningEfforts: [],
+        },
+      ],
+    });
+
+    await owner.load(params, pluginConfig);
+    expect(vi.mocked(withCodexAppServerJsonClient).mock.calls[0]?.[0].authProfileId).toBe(
+      "openai:work",
+    );
+    const assertSelectionCurrent = owner.captureSelectionAuthority(
+      { ...params, provider: "openai", modelId: "synthetic-profile-model" },
+      pluginConfig,
+    );
+    expect(assertSelectionCurrent).toBeTypeOf("function");
+
+    rpc.epoch += 1;
+    expect(() => assertSelectionCurrent?.()).not.toThrow();
+    rpc.registered = false;
+    expect(() => assertSelectionCurrent?.()).toThrow(
+      "Codex native model catalog selection is no longer current",
+    );
+  });
 
   it("discovers configured hidden models without exposing other hidden models or readiness", async () => {
     const models = ["visible", "configured", "other-agent", "unconfigured", "other-provider"].map(

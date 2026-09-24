@@ -303,6 +303,29 @@ describe("native acknowledged turn requests", () => {
     expect(cleanup.interrupt).not.toHaveBeenCalled();
   });
 
+  it("writes turn/start after profile auth applies its expected account revision", async () => {
+    let profileAuthRevision = 1;
+    let clientRegistered = true;
+    const assertProfileSelectionCurrent = vi.fn(() => {
+      if (!clientRegistered) {
+        throw new Error("Codex native model catalog selection is no longer current");
+      }
+    });
+    const attempt = await prepare(
+      undefined,
+      createNativeThread(),
+      true,
+      assertProfileSelectionCurrent,
+    );
+
+    profileAuthRevision += 1;
+    expect(profileAuthRevision).toBe(2);
+    await attempt.prepared.startCodexTurn();
+    expect(assertProfileSelectionCurrent).toHaveBeenCalledOnce();
+    expect(attempt.writtenMethods).toContain("turn/start");
+    clientRegistered = false;
+  });
+
   it.each<SelectionChange>(["thread", "thread ID"])(
     "settles the dispatched thread when its %s changes before the accepted response",
     async (kind) => {

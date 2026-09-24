@@ -1296,9 +1296,16 @@ export function clearSharedCodexAppServerClientIfCurrent(
 export function captureSharedCodexAppServerCatalogLifetime(
   client: CodexAppServerClient,
 ): () => boolean {
-  const isCurrent = captureSharedClientRegistration(client);
+  const isCurrent = captureSharedCodexAppServerClientRegistration(client);
   const revision = client.getModelCatalogRevision();
   return () => isCurrent() && client.getModelCatalogRevision() === revision;
+}
+
+/** Captures only the exact shared-client registration, without account/catalog revision. */
+export function captureSharedCodexAppServerClientRegistration(
+  client: CodexAppServerClient,
+): () => boolean {
+  return captureSharedClientRegistration(client);
 }
 
 /** Registration ends on retirement even when sibling leases keep the process alive. */

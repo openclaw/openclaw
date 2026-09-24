@@ -12,7 +12,10 @@ import { listAllCodexAppServerModels, type CodexAppServerModel } from "./models.
 import { probeCodexNativeAuth } from "./native-auth.js";
 import type { CodexGetAccountResponse } from "./protocol.js";
 import { withCodexAppServerJsonClient } from "./request.js";
-import { captureSharedCodexAppServerCatalogLifetime } from "./shared-client.js";
+import {
+  captureSharedCodexAppServerCatalogLifetime,
+  captureSharedCodexAppServerClientRegistration,
+} from "./shared-client.js";
 
 // Manifest contract (openclaw.plugin.json discovery.timeoutMs default): live model
 // discovery is bounded tightly so a wedged app-server degrades to the static catalog.
@@ -55,6 +58,8 @@ export function createCodexAppServerModelCatalog(runtime: string) {
     models?: ReadonlySet<string>;
     accountType?: "apiKey" | "chatgpt";
     authMode?: string;
+    profileAuthSelected?: boolean;
+    isClientCurrent?: () => boolean;
     isCurrent?: () => boolean;
   };
   const scopes = new WeakMap<AgentHarnessModelCatalogParams["config"], Map<string, Observation>>();
@@ -96,7 +101,9 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         observation.pluginConfig === pluginConfig &&
         observation.models?.has(params.modelId) === true &&
         observation.accountType !== undefined &&
-        observation.isCurrent?.() === true;
+        (observation.profileAuthSelected
+          ? observation.isClientCurrent?.() === true
+          : observation.isCurrent?.() === true);
       if (!isCurrent()) {
         return undefined;
       }
@@ -140,6 +147,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       const authProfileId = authProfileStore
         ? resolveCodexAppServerAuthProfileId({ store: authProfileStore, config: params.config })
         : undefined;
+      observation.profileAuthSelected = authProfileId !== undefined;
       const usesNativeHome = ownsLocalProcess && options.start.homeScope === "user";
       const native = usesNativeHome ? await probeCodexNativeAuth({ pluginConfig }) : undefined;
       if ((usesNativeHome && !native) || disposed || observations.get(key) !== observation) {
@@ -158,6 +166,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         async (request, client) => {
           const discover = async () => {
             const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
+            const isClientCurrent = captureSharedCodexAppServerClientRegistration(client);
             const listed = await listAllCodexAppServerModels({
               request,
               limit: 100,
@@ -180,7 +189,13 @@ export function createCodexAppServerModelCatalog(runtime: string) {
                 ? observedType
                 : undefined
               : undefined;
-            return { models, rawModelCount: listed.models.length, isCurrent, accountType } as const;
+            return {
+              models,
+              rawModelCount: listed.models.length,
+              isCurrent,
+              isClientCurrent,
+              accountType,
+            } as const;
           };
           const first = await discover();
           if (first.rawModelCount > 0 && first.isCurrent()) {
@@ -204,6 +219,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
           ? result.accountType
           : undefined;
       observation.isCurrent = result.isCurrent;
+      observation.isClientCurrent = result.isClientCurrent;
       // A remote ChatGPT account does not distinguish OAuth from caller-supplied tokens.
       // Carry the local mode only after its account type matches this discovery observation.
       observation.authMode =
