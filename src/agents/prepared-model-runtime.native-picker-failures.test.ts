@@ -19,8 +19,8 @@ import {
   loadProviderScopedThinkingCatalog,
   loadPublishedPreparedModelCatalogOwnerSnapshot,
 } from "./prepared-model-catalog.js";
-import * as fullCatalog from "./prepared-model-runtime.full-catalog.js";
 import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
+import * as fullCatalog from "./prepared-model-runtime.full-catalog.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
@@ -328,6 +328,26 @@ it("does not share a failed pending native discovery with another runtime, and r
   );
   expect(recovered.authoritative).not.toBe(false);
   expect(recovered.refreshFailed).toBeUndefined();
+});
+
+it("attests the selected native row while another provider's earlier failure remains", async () => {
+  const { owner, b, loadB } = await fixture(true);
+  mocks.runPreparedModelCatalogWorker.mockRejectedValueOnce(new Error("Provider A unavailable"));
+  await owner.loadFullModelCatalog!({ refresh: true }).catch(() => undefined);
+
+  const onSelectionReady = vi.fn();
+  const selectedCatalog = await owner.loadNativeModelCatalog!(
+    {
+      provider: b.provider,
+      modelId: b.id,
+      runtime: b.nativeRuntime,
+    },
+    { onSelectionReady },
+  );
+  expect(selectedCatalog.entries).toContainEqual(expect.objectContaining(b));
+  expect(selectedCatalog.refreshFailed).toBe(true);
+  expect(onSelectionReady).toHaveBeenCalledWith(true);
+  expect(loadB).toHaveBeenCalledOnce();
 });
 
 it("does not authorize a targeted native row with a failed runtime outcome", async () => {

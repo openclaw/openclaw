@@ -1296,15 +1296,13 @@ export function clearSharedCodexAppServerClientIfCurrent(
 export function captureSharedCodexAppServerCatalogLifetime(
   client: CodexAppServerClient,
 ): () => boolean {
-  const isCurrent = captureSharedCodexAppServerClientRegistration(client);
+  const isCurrent = captureSharedClientRegistration(client);
   const revision = client.getModelCatalogRevision();
   return () => isCurrent() && client.getModelCatalogRevision() === revision;
 }
 
 /** Registration ends on retirement even when sibling leases keep the process alive. */
-export function captureSharedCodexAppServerClientRegistration(
-  client: CodexAppServerClient,
-): () => boolean {
+export function captureSharedClientRegistration(client: CodexAppServerClient): () => boolean {
   const state = getSharedCodexAppServerClientState();
   const entry = getCurrentSharedClientEntry(client);
   const generation = readCodexAppServerClientDesktopGeneration(client);
@@ -1364,7 +1362,7 @@ export function captureCodexAppServerClientLifetime(
   const isolated = requiredOwnership !== "connection" && state.isolatedClients.has(client);
   const isCurrent = isolated
     ? () => state.isolatedClients.has(client) && !client.getCloseError()
-    : captureSharedCodexAppServerClientRegistration(client);
+    : captureSharedClientRegistration(client);
   const assertCurrent = () => {
     if (!isCurrent()) {
       throw new CodexAdoptedThreadActiveError(

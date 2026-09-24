@@ -18,7 +18,7 @@ import type { CodexGetAccountResponse } from "./protocol.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 import {
   captureSharedCodexAppServerCatalogLifetime,
-  captureSharedCodexAppServerClientRegistration,
+  captureSharedClientRegistration,
 } from "./shared-client.js";
 
 // Manifest contract (openclaw.plugin.json discovery.timeoutMs default): live model
@@ -257,7 +257,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         async (request, client) => {
           const discover = async () => {
             const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
-            const isClientCurrent = captureSharedCodexAppServerClientRegistration(client);
+            const isClientCurrent = captureSharedClientRegistration(client);
             const listed = await listAllCodexAppServerModels({
               request,
               limit: 100,

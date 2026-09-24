@@ -33,7 +33,7 @@ vi.mock("./request.js", () => ({
   ),
 }));
 vi.mock("./shared-client.js", () => ({
-  captureSharedCodexAppServerClientRegistration: () => () => rpc.registered,
+  captureSharedClientRegistration: () => () => rpc.registered,
   captureSharedCodexAppServerCatalogLifetime: () => {
     const epoch = rpc.epoch;
     return () => rpc.epoch === epoch;
