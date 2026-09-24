@@ -60,7 +60,9 @@ type HeapSample = {
 const heaps = new Map<Worker, HeapSample>();
 let measuring = false;
 function observeWorker(worker: Worker): void {
-  if (!measuring) return;
+  if (!measuring) {
+    return;
+  }
   heaps.set(worker, {
     threadId: worker.threadId,
     limitMiB: worker.resourceLimits?.maxOldGenerationSizeMb,
@@ -72,7 +74,9 @@ function observeWorker(worker: Worker): void {
 process.on("worker", observeWorker);
 function sampleHeaps(): void {
   for (const [worker, sample] of heaps) {
-    if (sample.pending || worker.threadId < 0) continue;
+    if (sample.pending || worker.threadId < 0) {
+      continue;
+    }
     sample.pending = true;
     void worker
       .getHeapStatistics()
@@ -87,7 +91,9 @@ function sampleHeaps(): void {
   }
 }
 function errorChain(error: unknown): string {
-  if (!(error instanceof Error)) return String(error);
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
   const code = Reflect.get(error, "code");
   return `${error.name}: ${code ?? ""} ${error.message}${error.cause ? `; ${errorChain(error.cause)}` : ""}${error instanceof AggregateError ? error.errors.map(errorChain).join("; ") : ""}`;
 }
@@ -164,8 +170,11 @@ try {
                 navigation_json: null,
               }
             : prepareTranscriptPayload(database.db, json, event);
-        if (payload.event_zstd) compressedRows++;
-        else identityRows++;
+        if (payload.event_zstd) {
+          compressedRows++;
+        } else {
+          identityRows++;
+        }
         insert.run(
           sessionId,
           index + 1,
@@ -271,7 +280,7 @@ try {
       /ERR_WORKER_OUT_OF_MEMORY|reaching memory limit|heap out of memory/i,
     );
   } else {
-    if (failure) throw failure;
+    assert.ifError(failure);
     const actual = readRollup(marker);
     assert.deepEqual(actual.rollup, reference.rollup);
     assert.equal(actual.parsedRecords, reference.parsedRecords);
