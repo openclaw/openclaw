@@ -852,11 +852,11 @@ export function collectInstalledRootDependencyManifestErrors(
         declaredRuntimeDeps.has(dependencyName) ||
         (extensions?.length &&
           extensions.every(
-            (extensionId) =>
-              bundledExtensionRuntimeDependencyOwners.get(dependencyName)?.has(extensionId) ||
+            (owner) =>
+              bundledExtensionRuntimeDependencyOwners.get(dependencyName)?.has(owner) ||
               isInstalledCompanionExtensionOwnedRuntimeImport({
                 dependencyName,
-                extensionId,
+                extensionId: owner,
                 manifestRoots: companionManifestRoots,
                 manifestCache: companionManifestCache,
               }),
