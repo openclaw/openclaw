@@ -360,6 +360,9 @@ of the new session; they never share a session, invite people, or grant access.
 - **Command+Enter** on macOS or **Ctrl+Enter** on Windows/Linux starts a new session
   in the background. You can also choose **New session** beside the input.
 
+Selecting an installed plugin search result opens that plugin's overview, including
+disabled plugins. The **Plugins** navigation command opens the catalog hub.
+
 Open **New session settings** beside the input to choose the agent, workspace and
 machine, or whether to use a new worktree. These controls reuse the permissions
 and device/cloud availability rules of the full New session page. Model,
