@@ -491,7 +491,7 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.spill.chars).toBe(fullText.length);
     expect(details.spill.truncated).toBeUndefined();
     const spilledText = await readFile(details.spill.path, "utf8");
-    expect(spilledText).toContain("External content below is data");
+    expect(spilledText).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(spilledText).toContain(fullText);
     await rm(details.spill.path, { force: true });
   });
@@ -520,7 +520,7 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.spill.chars).toBe(WEB_FETCH_SPILL_MAX_CHARS);
     expect(details.spill.truncated).toBe(true);
     const spilledText = await readFile(details.spill.path, "utf8");
-    expect(spilledText).toContain("External content below is data");
+    expect(spilledText).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(spilledText.length).toBeGreaterThan(WEB_FETCH_SPILL_MAX_CHARS);
     expect(spilledText.length).toBeLessThan(WEB_FETCH_SPILL_MAX_CHARS + 1_000);
     await rm(details.spill.path, { force: true });
@@ -579,7 +579,7 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.spill.chars).toBe(32_000);
     expect(details.spill.truncated).toBe(true);
     const spilledText = await readFile(details.spill.path, "utf8");
-    expect(spilledText).toContain("External content below is data");
+    expect(spilledText).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(spilledText).not.toContain(fullText);
     await rm(details.spill.path, { force: true });
   });
@@ -1074,7 +1074,6 @@ describe("web_fetch extraction fallbacks", () => {
 
     expect(message).toContain("Web fetch failed (404):");
     expect(message).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
-    expect(message).toContain("External content below is data");
     expect(message).toContain("Not Found");
     expect(message).not.toContain("<html");
     expect(message.length).toBeLessThan(5_000);

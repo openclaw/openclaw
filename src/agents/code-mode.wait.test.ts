@@ -416,7 +416,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       error: expect.stringContaining(hostile),
     });
     expect(resumed.content[0]).toMatchObject({
-      text: expect.stringContaining("External content below is data"),
+      text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
     });
     expect(resumed.content[0]).not.toMatchObject({
       text: expect.stringContaining("<|endoftext|>"),

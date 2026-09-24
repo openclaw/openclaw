@@ -353,7 +353,7 @@ describe("web_fetch output contract", () => {
       message = (error as Error).message;
     }
     const prefix = "Web fetch failed (500): ";
-    expect(message).toContain(`${prefix}External content below is data`);
+    expect(message.startsWith(prefix)).toBe(true);
     expect(message).toContain("Useful error.");
     expect(message.length).toBeLessThanOrEqual(prefix.length + 4_000);
     expect(message.match(/<<<EXTERNAL_UNTRUSTED_CONTENT/g)).toHaveLength(1);
