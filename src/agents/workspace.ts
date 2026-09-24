@@ -166,21 +166,6 @@ const OPTIONAL_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set([
   DEFAULT_USER_FILENAME,
 ]);
 
-/** Prefix of the diagnostic a guarded read injects in place of an unreadable file. */
-const WORKSPACE_BOOTSTRAP_UNREADABLE_PREFIX = "[UNREADABLE: ";
-
-/**
- * Whether this bootstrap file reached the prompt as a read-failure diagnostic instead of its
- * contents. The file stays present so the model sees why, but nothing it documents was delivered.
- */
-export function isUnreadableWorkspaceBootstrapFile(file: WorkspaceBootstrapFile): boolean {
-  return (
-    !file.missing &&
-    typeof file.content === "string" &&
-    file.content.startsWith(WORKSPACE_BOOTSTRAP_UNREADABLE_PREFIX)
-  );
-}
-
 /**
  * Bootstrap files whose absence is a normal workspace state rather than a fault:
  * the optional profile files, plus MEMORY.md which only appears once memory is
@@ -1155,7 +1140,7 @@ export async function loadWorkspaceBootstrapFiles(
       result.push({
         name: entry.name,
         path: entry.filePath,
-        content: `${WORKSPACE_BOOTSTRAP_UNREADABLE_PREFIX}${reason}]`,
+        content: `[UNREADABLE: ${reason}]`,
         missing: false,
       });
     }

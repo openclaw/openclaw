@@ -6,11 +6,8 @@
 import { isAcpSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import type { BootstrapContextRunKind, BootstrapMode } from "./bootstrap-mode.js";
 import { resolveBootstrapMode } from "./bootstrap-mode.js";
-import {
-  DEFAULT_BOOTSTRAP_FILENAME,
-  isUnreadableWorkspaceBootstrapFile,
-  type WorkspaceBootstrapFile,
-} from "./workspace.js";
+import { isUnreadableWorkspaceBootstrapFile } from "./workspace-bootstrap-read.js";
+import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "./workspace.js";
 
 /**
  * Returns whether a session should receive primary bootstrap context. Subagents

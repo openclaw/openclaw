@@ -13,10 +13,10 @@ import {
   isPrimaryBootstrapRun,
   resolveWorkspaceBootstrapRouting,
 } from "../../bootstrap-routing.js";
+import { isUnreadableWorkspaceBootstrapFile } from "../../workspace-bootstrap-read.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
-  isUnreadableWorkspaceBootstrapFile,
   isWorkspaceBootstrapPending,
   type WorkspaceBootstrapFile,
 } from "../../workspace.js";
