@@ -28,6 +28,7 @@ export async function admitAgentRestartRecovery(params: {
     );
   }
   const sessionKey = admission.sessionKey ?? params.sessionKey;
+  const admittedAttempt = admission.transition.admission;
   let restored = false;
   return async () => {
     if (restored) {
@@ -36,16 +37,14 @@ export async function admitAgentRestartRecovery(params: {
     const recovery = await commitMainSessionRecovery({
       command: {
         kind: "mark_admitted_recovery_interrupted",
-        lifecycleGeneration: params.lifecycleGeneration,
+        ...admittedAttempt,
         now: Date.now(),
-        runId: params.runId,
-        sessionId: params.sessionId,
       },
       requireWriteSuccess: true,
       target: { sessionKey, storePath: params.storePath },
     });
     restored = true;
-    return recovery.transition.kind === "applied" &&
+    return (recovery.transition.kind === "applied" || recovery.transition.kind === "no_change") &&
       recovery.entry?.sessionId === params.sessionId &&
       recovery.sessionKey
       ? {
