@@ -291,7 +291,8 @@ suite.define(() => {
           const composer = page.locator(".agent-chat__composer-combobox textarea");
           for (const message of queuedMessages) {
             await composer.fill(message);
-            await composer.press("Enter");
+            // Return adds a new line on touch-only devices; the modifier shortcut sends.
+            await composer.press(touch ? "Control+Enter" : "Enter");
             await page.locator(".chat-queue__item", { hasText: message }).waitFor();
           }
           const draft = "Keep every control reachable while reviewing this long draft.\n".repeat(

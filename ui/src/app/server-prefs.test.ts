@@ -234,7 +234,7 @@ describe("server preferences", () => {
       themeMode: "system",
       accent: null,
       locale: null,
-      chatSendShortcut: "enter",
+      chatSendShortcut: null,
       chatFollowUpMode: null,
     });
     expect(reset).toMatchObject({
@@ -244,7 +244,7 @@ describe("server preferences", () => {
     expect(reset.locale).toBeUndefined();
     expect(reset.chatFollowUpMode).toBeUndefined();
     expect(reset.accent).toBeUndefined();
-    expect(reset.chatSendShortcut).toBe("enter");
+    expect(reset.chatSendShortcut).toBeUndefined();
     const persisted = JSON.parse(
       localStorage.getItem(`openclaw.control.settings.v1:${reset.gatewayUrl}`) ?? "{}",
     ) as Record<string, unknown>;

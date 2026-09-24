@@ -32,7 +32,8 @@ export function defineQuestionFooterTests({
       const composer = page.locator(".agent-chat__input");
       const draft = composer.locator(".agent-chat__composer-combobox > textarea");
       await draft.fill("Review the footer controls");
-      await draft.press("Enter");
+      // Return adds a new line on touch-only devices; the modifier shortcut sends.
+      await draft.press("Control+Enter");
       const sent = requireRecord((await gateway.waitForRequest("chat.send")).params);
       const runId = requireString(sent.idempotencyKey, "sent run ID");
       await gateway.emitGatewayEvent("chat", {

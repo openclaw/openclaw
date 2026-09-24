@@ -6,9 +6,8 @@ import { isSupportedLocale } from "../i18n/index.ts";
 import {
   normalizeAccentColor,
   normalizeChatFollowUpModeOverride,
-  normalizeChatSendShortcut,
+  normalizeChatSendShortcutOverride,
   UI_APPEARANCE_DEFAULTS,
-  type ChatSendShortcut,
   type UiSettings,
 } from "./settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
@@ -30,7 +29,9 @@ type SyncedPrefSpec<T> = {
 
 const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
 
-const optionalPrefSpec = <K extends "accent" | "fontUi" | "fontChat" | "chatFollowUpMode">(
+const optionalPrefSpec = <
+  K extends "accent" | "fontUi" | "fontChat" | "chatFollowUpMode" | "chatSendShortcut",
+>(
   key: K,
   normalize: (value: unknown) => UiSettings[K],
   configSync = true,
@@ -88,13 +89,8 @@ export const SYNCED_PREFS = {
     extract: (value) => (typeof value === "boolean" ? value : undefined),
     local: (settings) => settings.chatPersistCommentary !== false,
   }),
-  chatSendShortcut: prefSpec<ChatSendShortcut>({
-    extract: (value) => (value === "enter" || value === "modifier-enter" ? value : undefined),
-    local: (settings) => normalizeChatSendShortcut(settings.chatSendShortcut),
-    write: (value) => ({ chatSendShortcut: value }),
-    clearable: true,
-    reset: () => ({ chatSendShortcut: undefined }),
-  }),
+  // Unset lets each device pick: Enter sends with a keyboard, inserts a new line on touch.
+  chatSendShortcut: optionalPrefSpec("chatSendShortcut", normalizeChatSendShortcutOverride),
   // Unset uses the server-configured queue mode; clearing sends an explicit null removal.
   chatFollowUpMode: optionalPrefSpec("chatFollowUpMode", normalizeChatFollowUpModeOverride),
   sidebarEntries: prefSpec<string[]>({
