@@ -107,6 +107,10 @@ export function createConfigWriteCoordinator({
       state.lastError = t("configView.adminRequired");
       publish();
     }
+    if (allowed && method !== "config.patch" && !reconciliation.canWriteDraft()) {
+      publish();
+      return false;
+    }
     return allowed;
   };
   const clearAutoSaveDraftConnection = () => {
@@ -159,6 +163,7 @@ export function createConfigWriteCoordinator({
   const canAutoSaveDraft = () =>
     state.configAutoSaveStatus !== "conflict" &&
     state.configRecoveryError === null &&
+    reconciliation.canWriteDraft() &&
     !autoSaveRequiresExplicitSubmit &&
     autoSaveDraftConnection !== null &&
     autoSaveDraftConnection.client === state.client &&
@@ -257,7 +262,7 @@ export function createConfigWriteCoordinator({
       (onSubmitted) =>
         run(() =>
           submitConfigDraft(state, "auto", onSubmitted, () => {
-            if (!canCallConfigMethod("config.set")) {
+            if (!canDispatchConfigMutation("config.set")) {
               return false;
             }
             patches.clear();

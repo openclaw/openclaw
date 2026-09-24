@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
@@ -33,7 +33,7 @@ function createPatchServer() {
     if (method === "config.patch" || method === "config.set") {
       const submission = params as { raw: string; baseHash: string };
       if (submission.baseHash !== store.currentHash()) {
-        throw new Error(CONFLICT);
+        throw new GatewayRequestError({ code: "INVALID_REQUEST", message: CONFLICT });
       }
       if (method === "config.patch") {
         const snapshot = (await store.request("config.get")) as ConfigSnapshot;

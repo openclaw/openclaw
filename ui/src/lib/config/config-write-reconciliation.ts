@@ -1,3 +1,4 @@
+import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
@@ -19,9 +20,11 @@ import {
   type RuntimeConfigState,
 } from "./config-state-model.ts";
 
+type ConfigWriteReceipt = ConfigSubmission & { gatewayUrl: string };
+
 export type ConfigWriteFlight = {
   promise: Promise<unknown>;
-  submission: ConfigSubmission | null;
+  submission: ConfigWriteReceipt | null;
   snapshotAtDispatch: ConfigSnapshot | null;
 };
 
@@ -51,9 +54,9 @@ export function createConfigWriteReconciliation({
   publish: () => void;
   reconcileAppliedRefresh: () => void;
 }) {
-  let lastSubmission: ConfigSubmission | null = null;
+  let lastSubmission: ConfigWriteReceipt | null = null;
   let hasInterruptedWrite = false;
-  let interruptedSubmission: ConfigSubmission | null = null;
+  let interruptedSubmission: ConfigWriteReceipt | null = null;
   const clearInterruptedWrite = () => {
     hasInterruptedWrite = false;
     interruptedSubmission = null;
@@ -68,6 +71,22 @@ export function createConfigWriteReconciliation({
       : null;
   };
   const hasUnacknowledgedDraftWrite = () => unacknowledgedDraftWrite() !== null;
+  const matchesGateway = (submission: ConfigWriteReceipt, client: GatewayBrowserClient | null) =>
+    client !== null &&
+    (submission.gatewayUrl === client.gatewayUrl ||
+      gatewayCredentialScope(submission.gatewayUrl) === gatewayCredentialScope(client.gatewayUrl));
+  const canWriteDraft = () => {
+    const submitted = unacknowledgedDraftWrite();
+    if (!submitted || matchesGateway(submitted, state.client)) {
+      return true;
+    }
+    if (!state.client) {
+      return false;
+    }
+    state.configAutoSaveStatus = "error";
+    state.lastError = t("configView.writeGatewayChanged");
+    return false;
+  };
   const applySnapshot = (snapshot: ConfigSnapshot, options: LoadConfigOptions = {}) => {
     const submitted = unacknowledgedDraftWrite();
     applyConfigSnapshot(state, snapshot, {
@@ -88,6 +107,7 @@ export function createConfigWriteReconciliation({
         : snapshot.raw;
     if (
       submitted &&
+      matchesGateway(submitted, state.client) &&
       getFlight()?.submission !== submitted &&
       snapshotRaw === submitted.raw &&
       snapshot.hash &&
@@ -116,6 +136,7 @@ export function createConfigWriteReconciliation({
 
   return {
     applySnapshot,
+    canWriteDraft,
     unacknowledgedDraftWrite,
     hasUnacknowledgedDraftWrite,
     get latestSubmission() {
@@ -134,14 +155,17 @@ export function createConfigWriteReconciliation({
       const client = state.client;
       const epoch = currentConfigConnectionEpoch(state);
       const onSubmitted = (submission: ConfigSubmission) => {
+        if (!client) {
+          return;
+        }
+        const receipt = { ...submission, gatewayUrl: client.gatewayUrl };
         if (!submission.ack && !submission.rejected) {
           flight.snapshotAtDispatch = state.configSnapshot;
         }
-        flight.submission = submission;
+        flight.submission = receipt;
         // Old-connection completions retain their flight receipt only for teardown.
         if (client && !isDisposed() && isCurrentConfigConnection(state, client, epoch)) {
-          lastSubmission =
-            submission.rejected && previousSubmission ? previousSubmission : submission;
+          lastSubmission = submission.rejected && previousSubmission ? previousSubmission : receipt;
           if (submission.ack) {
             clearInterruptedWrite();
           }
@@ -184,7 +208,7 @@ export function createConfigWriteReconciliation({
         // Adopt the acknowledged pair even when admission prevents a final write.
         const submitted = flight.submission;
         const ack = submitted?.ack ?? null;
-        if (ack && submitted) {
+        if (ack && submitted && matchesGateway(submitted, client)) {
           teardownFlushConfigDraft(state, client, submitted, ack, canDispatch);
         }
       });
@@ -192,7 +216,7 @@ export function createConfigWriteReconciliation({
     retireConnection() {
       lastSubmission = null;
     },
-    interrupt(submitted: ConfigSubmission | null) {
+    interrupt(submitted: ConfigWriteReceipt | null) {
       hasInterruptedWrite = true;
       interruptedSubmission = submitted?.ack ? null : submitted;
     },
@@ -228,6 +252,11 @@ export function createConfigWriteReconciliation({
           // Reload failed or the connection flipped again: keep the
           // interruption metadata so the NEXT reconnect retries
           // reconciliation instead of silently taking the plain path.
+          reconcileAppliedRefresh();
+          return;
+        }
+        if (!canWriteDraft()) {
+          publish();
           reconcileAppliedRefresh();
           return;
         }

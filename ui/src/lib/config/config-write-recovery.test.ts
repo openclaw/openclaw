@@ -4,10 +4,17 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
 import {
+  createGatewayStoreTestStore,
+  stubGatewayStoreTestGlobals,
+} from "../../app/gateway-store.test-support.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { setAvatarGatewayOrigin } from "../identity-avatar-context.ts";
+import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createConfigCapabilityHarness,
   createConfigServerMock,
 } from "./config-test-harness.ts";
+import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 const originalRaw = '{ "tools": { "exec": { "node": "original" } } }\n';
 const nodePath = ["tools", "exec", "node"];
@@ -110,6 +117,113 @@ function createRecoveryHarness(
 }
 
 describe("config write recovery", () => {
+  it.each([
+    ["save", false],
+    ["apply", false],
+    ["save", true],
+    ["apply", true],
+  ] as const)(
+    "keeps unsettled %s retry on its originating Gateway (same target: %s)",
+    async (operation, sameTarget) => {
+      vi.useFakeTimers();
+      stubGatewayStoreTestGlobals();
+      const store = createGatewayStoreTestStore();
+      const serverA = createConfigServerMock();
+      const serverB = sameTarget ? serverA : createConfigServerMock();
+      const hello = gatewayHelloForMethods([
+        "config.schema",
+        "config.set",
+        "config.apply",
+        "config.patch",
+      ]);
+      const runtimeConfig = createRuntimeConfigCapability(store.gateway);
+      try {
+        store.gateway.start();
+        const originalUrl = store.current().gatewayUrl;
+        store.current().request.mockImplementation(async (method, params) => {
+          if (method === "config.set" || method === "config.apply") {
+            throw new Error("Request timed out");
+          }
+          return serverA.request(method, params);
+        });
+        store.current().opts.onHello?.(hello);
+        await runtimeConfig.ensureLoaded();
+        runtimeConfig.patchForm(["count"], 2);
+        await expect(
+          operation === "apply" ? runtimeConfig.apply() : runtimeConfig.save(),
+        ).resolves.toBe(false);
+        expect(runtimeConfig.state.lastError).toContain("Request timed out");
+
+        store.gateway.connect({
+          gatewayUrl: sameTarget
+            ? `${originalUrl.replace(/\/+$/, "")}/`
+            : "wss://other-gateway.example.test",
+        });
+        const replacement = store.current();
+        replacement.request.mockImplementation((method, params) => serverB.request(method, params));
+        replacement.opts.onHello?.(hello);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(runtimeConfig.state.configForm).toEqual({ count: 2 });
+        expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-1");
+        const retried = await runtimeConfig.retry();
+        const writes = replacement.request.mock.calls.filter(
+          ([method]) => method === "config.set" || method === "config.apply",
+        );
+        expect.soft(writes).toHaveLength(sameTarget ? 1 : 0);
+        expect(retried).toBe(sameTarget);
+        if (sameTarget) {
+          expect(writes[0]?.[0]).toBe(operation === "apply" ? "config.apply" : "config.set");
+        }
+        await expect(serverB.request("config.get")).resolves.toMatchObject({
+          config: { count: sameTarget ? 2 : 1 },
+        });
+        if (!sameTarget) {
+          expect(runtimeConfig.state.lastError).toContain("different Gateway");
+          const originalDraftBase = runtimeConfig.state.configRawOriginal;
+          // Matching content on another Gateway cannot confirm the original write.
+          await serverB.request("config.apply", {
+            raw: JSON.stringify({ count: 2 }, null, 2) + "\n",
+            baseHash: "hash-1",
+          });
+          await runtimeConfig.refresh();
+          expect(runtimeConfig.state.configRawOriginal).toBe(originalDraftBase);
+          expect(canReloadControlUiDocument()).toBe(false);
+          await expect(runtimeConfig.retry()).resolves.toBe(false);
+          expect(
+            replacement.request.mock.calls.filter(
+              ([method]) => method === "config.set" || method === "config.apply",
+            ),
+          ).toHaveLength(0);
+          if (operation === "save") {
+            store.gateway.connect({ gatewayUrl: originalUrl });
+            store
+              .current()
+              .request.mockImplementation((method, params) => serverA.request(method, params));
+            store.current().opts.onHello?.(hello);
+            await vi.advanceTimersByTimeAsync(0);
+            await expect(runtimeConfig.retry()).resolves.toBe(true);
+            expect(serverA.submissions).toMatchObject([{ method: "config.set" }]);
+          } else {
+            await runtimeConfig.discardDraft();
+            expect(runtimeConfig.state.configFormDirty).toBe(false);
+            expect(canReloadControlUiDocument()).toBe(true);
+            runtimeConfig.patchForm(["count"], 3);
+            await expect(runtimeConfig.save()).resolves.toBe(true);
+            await expect(serverB.request("config.get")).resolves.toMatchObject({
+              config: { count: 3 },
+            });
+          }
+        }
+      } finally {
+        runtimeConfig.setWritesSuspended(true);
+        runtimeConfig.dispose();
+        store.gateway.stop();
+        await vi.dynamicImportSettled();
+        setAvatarGatewayOrigin(null);
+      }
+    },
+  );
+
   it("shows unresolved reconnect uncertainty and preserves a revert when the old write later commits", async () => {
     vi.useFakeTimers();
     const server = createConfigServerMock();
