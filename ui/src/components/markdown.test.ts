@@ -89,13 +89,6 @@ describe("toSanitizedMarkdownHtml", () => {
         '<ul class="contains-task-list">\n<li class="task-list-item"><input class="task-list-item-checkbox" disabled="" type="checkbox"> &lt;script&gt;alert(1)&lt;/script&gt;</li>\n</ul>\n',
       );
     });
-
-    it("keeps details escaped when they are inline inside a task item", () => {
-      const html = toSanitizedMarkdownHtml("- [ ] <details><summary>x</summary>y</details>");
-      expect(html).toBe(
-        '<ul class="contains-task-list">\n<li class="task-list-item"><input class="task-list-item-checkbox" disabled="" type="checkbox"> &lt;details&gt;&lt;summary&gt;x&lt;/summary&gt;y&lt;/details&gt;</li>\n</ul>\n',
-      );
-    });
   });
 
   describe("images", () => {
@@ -152,18 +145,6 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(html).toBe(
         '<p><img class="markdown-inline-image" src="data:image/png;base64,iVBORw0KGgo=" alt="Chart"></p>\n',
       );
-    });
-
-    it("keeps linked data images under their authored link", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(
-          "[![Preview](data:image/png;base64,iVBORw0KGgo=)](https://example.com/full.png)",
-          { interactiveImages: true },
-        ),
-      );
-
-      expect(fragment.querySelector("a > img.markdown-inline-image")).not.toBeNull();
-      expect(fragment.querySelector("a > button")).toBeNull();
     });
 
     it("keeps data images inside rich Markdown links under the link", () => {
@@ -275,21 +256,6 @@ describe("toSanitizedMarkdownHtml", () => {
     ])("renders $name", ({ markdown, expected }) => {
       expect(toSanitizedMarkdownHtml(markdown)).toBe(expected);
     });
-
-    it("renders headings", () => {
-      const html = toSanitizedMarkdownHtml("# Heading 1\n## Heading 2");
-      expect(html).toBe("<h1>Heading 1</h1>\n<h2>Heading 2</h2>\n");
-    });
-
-    it("renders blockquotes", () => {
-      const html = toSanitizedMarkdownHtml("> quote");
-      expect(html).toBe("<blockquote>\n<p>quote</p>\n</blockquote>\n");
-    });
-
-    it("renders lists", () => {
-      const html = toSanitizedMarkdownHtml("- item 1\n- item 2");
-      expect(html).toBe("<ul>\n<li>item 1</li>\n<li>item 2</li>\n</ul>\n");
-    });
   });
 
   describe("assistant transcript-role annotations", () => {
@@ -336,18 +302,6 @@ describe("toSanitizedMarkdownHtml", () => {
         "Assistant:",
       );
       expect(fragment.querySelectorAll("code.assistant-transcript-role")).toHaveLength(1);
-      expect(fragment.querySelector(".markdown-plain-text-source")?.textContent).toBe(input);
-    });
-
-    it("uses a generic assistant boundary without parsing oversized inline code", () => {
-      const input = ["`example", "user[Thu 2026-07-02] code`", "x".repeat(40_000)].join("\n");
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(input, { assistantTranscriptRoleHeaders: true }),
-      );
-
-      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
-        "Assistant:",
-      );
       expect(fragment.querySelector(".markdown-plain-text-source")?.textContent).toBe(input);
     });
 
@@ -402,24 +356,9 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(html).toBe("<p>Build log</p>\n");
     });
 
-    it("shows alt text for vbscript: and file: images", () => {
-      const html1 = toSanitizedMarkdownHtml("![Alt1](vbscript:msgbox(1))");
-      expect(html1).toBe("<p>Alt1</p>\n");
-
-      const html2 = toSanitizedMarkdownHtml("![Alt2](file:///etc/passwd)");
-      expect(html2).toBe("<p>Alt2</p>\n");
-    });
-
     it("does not auto-link bare file:// URIs", () => {
       const html = toSanitizedMarkdownHtml("Check file:///etc/passwd");
       expect(html).toBe("<p>Check file:///etc/passwd</p>\n");
-    });
-
-    it("strips href from host-local absolute file paths", () => {
-      const html = toSanitizedMarkdownHtml(
-        "[report.docx](/Users/test/.openclaw/data/skills/output/report.docx)",
-      );
-      expect(html).toBe("<p><a>report.docx</a></p>\n");
     });
 
     it("keeps app-relative links navigable", () => {

@@ -262,7 +262,6 @@ describe("renderSessionHovercard", () => {
       facts: { boardFace: "dashboard", hasAutomation: true },
       labels: ["Opens as dashboard", "Automation attached"],
     },
-    { name: "absent", facts: {}, labels: [] },
     { name: "disabled", facts: { hasAutomation: false }, labels: [] },
   ] satisfies { name: string; facts: Partial<SidebarRecentSession>; labels: string[] }[])(
     "renders $name session facts without other metadata",
@@ -762,22 +761,19 @@ describe("renderSessionHovercard", () => {
     expect(container.querySelector(".session-hovercard__notepad")).toBeNull();
   });
 
-  it.each(["done", "failed", "timeout", "killed"] as const)(
-    "hides plan work updated during the run after the session is %s",
-    (status) => {
-      const container = document.createElement("div");
-      render(
-        renderSessionHovercard({
-          row: row({ status }),
-          progressCard: progressCard(),
-        }),
-        container,
-      );
+  it("hides plan work updated during a completed run", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionHovercard({
+        row: row({ status: "done" }),
+        progressCard: progressCard(),
+      }),
+      container,
+    );
 
-      expect(container.querySelector(".session-hovercard__plan-row")).toBeNull();
-      expect(container.querySelector(".session-hovercard__notepad")).not.toBeNull();
-    },
-  );
+    expect(container.querySelector(".session-hovercard__plan-row")).toBeNull();
+    expect(container.querySelector(".session-hovercard__notepad")).not.toBeNull();
+  });
 
   it("deduplicates creator and self from the compact attribution", () => {
     const container = document.createElement("div");

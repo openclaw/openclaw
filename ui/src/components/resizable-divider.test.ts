@@ -6,7 +6,6 @@ import { i18n } from "../i18n/index.ts";
 import "./resizable-divider.ts";
 
 let container: HTMLDivElement;
-const originalPointerEvent = globalThis.PointerEvent;
 
 type ResizableDivider = HTMLElement & {
   orientation: "horizontal" | "vertical";
@@ -14,19 +13,6 @@ type ResizableDivider = HTMLElement & {
   measureRatio?: () => number;
   updateComplete: Promise<boolean>;
 };
-
-class TestPointerEvent extends MouseEvent {
-  readonly pointerId: number;
-  readonly pointerType: string;
-  readonly isPrimary: boolean;
-
-  constructor(type: string, init: PointerEventInit = {}) {
-    super(type, init);
-    this.pointerId = init.pointerId ?? 1;
-    this.pointerType = init.pointerType ?? "mouse";
-    this.isPrimary = init.isPrimary ?? true;
-  }
-}
 
 function nextFrame() {
   return new Promise<void>((resolve) => {
@@ -94,12 +80,6 @@ function expectLastResizeRatio(resized: ReturnType<typeof vi.fn>, splitRatio: nu
 
 describe("resizable-divider", () => {
   beforeEach(() => {
-    if (!globalThis.PointerEvent) {
-      Object.defineProperty(globalThis, "PointerEvent", {
-        configurable: true,
-        value: TestPointerEvent as typeof PointerEvent,
-      });
-    }
     container = document.createElement("div");
     document.body.append(container);
   });
@@ -107,14 +87,6 @@ describe("resizable-divider", () => {
   afterEach(() => {
     render(nothing, container);
     container.remove();
-    if (originalPointerEvent) {
-      Object.defineProperty(globalThis, "PointerEvent", {
-        configurable: true,
-        value: originalPointerEvent,
-      });
-    } else {
-      delete (globalThis as Partial<typeof globalThis>).PointerEvent;
-    }
     vi.restoreAllMocks();
   });
 

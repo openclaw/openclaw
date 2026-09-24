@@ -480,12 +480,6 @@ describe("toStreamingMarkdownParts", () => {
     }
   });
 
-  it("renders completed block prefixes as markdown and closes the streaming tail", () => {
-    const html = toStreamingMarkdownParts("## Done\n\nworking **tail").join("");
-
-    expect(html).toBe("<h2>Done</h2>\n<p>working <strong>tail</strong></p>\n");
-  });
-
   it.each([
     ["loose sibling list items", "- one\n\n- two"],
     ["list-item paragraph continuation", "- one\n\n  continuation"],

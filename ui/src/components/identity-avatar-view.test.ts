@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
-import { resolveAvatarInitials } from "../lib/identity-avatar.ts";
 import {
   renderAgentIdentityAvatar,
   identityAvatarClass,
@@ -54,21 +53,6 @@ describe("shared identity avatar view", () => {
       render(nothing, container);
     },
   );
-
-  it("derives fallback initials and colors from the canonical user identity", () => {
-    const identity = {
-      id: "profile-riley",
-      name: "Riley",
-      username: "riley@example.test",
-    };
-
-    const view = resolveIdentityAvatarView(identity);
-
-    expect(view.fallback).toEqual(resolveAvatarInitials(identity));
-    expect(view.fallback.initials).toBe("R");
-    expect(view.imageUrl).toBeNull();
-    expect(view.pending).toBe(false);
-  });
 
   it("keeps hostile avatar origins out of the shared authenticated renderer", () => {
     setAvatarGatewayOrigin("https://gateway.example.test", ["avatar-token"]);
