@@ -1,17 +1,15 @@
 // Commander registration for device pairing and auth-token commands.
 import { Option, type Command } from "commander";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import type { runDevicesListCommand } from "./devices-cli.runtime.js";
+import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isDevicesMachineOutput } from "./devices-output-mode.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
-
-type DevicesRpcOpts = Omit<Parameters<typeof runDevicesListCommand>[0], "name">;
 
 const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
 
 // Keep device-pairing crypto/table dependencies out of root help startup.
 const loadDevicesRuntime = createLazyRuntimeModule(() => import("./devices-cli.runtime.js"));
+const deviceAction = createLazyRuntimeMethodBinder(loadDevicesRuntime);
 
 const devicesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
@@ -36,10 +34,7 @@ export function registerDevicesCli(program: Command) {
     devices
       .command("list")
       .description("List pending and paired devices")
-      .action(async (opts: DevicesRpcOpts) => {
-        const { runDevicesListCommand } = await loadDevicesRuntime();
-        await runDevicesListCommand(opts);
-      }),
+      .action(deviceAction((runtime) => runtime.runDevicesListCommand)),
   );
 
   devicesCallOpts(
@@ -48,10 +43,7 @@ export function registerDevicesCli(program: Command) {
       .description(
         "Mint a single-use node onboarding URL (not a mobile app setup code; use `openclaw qr` for that)",
       )
-      .action(async (opts: DevicesRpcOpts) => {
-        const { runDevicesJoinCodeCommand } = await loadDevicesRuntime();
-        await runDevicesJoinCodeCommand(opts);
-      }),
+      .action(deviceAction((runtime) => runtime.runDevicesJoinCodeCommand)),
   );
 
   devicesCallOpts(
@@ -59,10 +51,7 @@ export function registerDevicesCli(program: Command) {
       .command("remove")
       .description("Remove a paired device entry")
       .argument("<deviceId>", "Paired device id")
-      .action(async (deviceId: string, opts: DevicesRpcOpts) => {
-        const { runDevicesRemoveCommand } = await loadDevicesRuntime();
-        await runDevicesRemoveCommand(deviceId, opts);
-      }),
+      .action(deviceAction((runtime) => runtime.runDevicesRemoveCommand)),
   );
 
   devicesCallOpts(
@@ -71,10 +60,7 @@ export function registerDevicesCli(program: Command) {
       .description("Clear paired devices from the gateway table")
       .option("--pending", "Also reject all pending pairing requests", false)
       .option("--yes", "Confirm destructive clear", false)
-      .action(async (opts: DevicesRpcOpts) => {
-        const { runDevicesClearCommand } = await loadDevicesRuntime();
-        await runDevicesClearCommand(opts);
-      }),
+      .action(deviceAction((runtime) => runtime.runDevicesClearCommand)),
   );
 
   devicesCallOpts(
@@ -83,10 +69,7 @@ export function registerDevicesCli(program: Command) {
       .description("Approve a pending device pairing request")
       .argument("[requestId]", "Pending request id")
       .option("--latest", "Show the most recent pending request to approve explicitly", false)
-      .action(async (requestId: string | undefined, opts: DevicesRpcOpts) => {
-        const { runDevicesApproveCommand } = await loadDevicesRuntime();
-        await runDevicesApproveCommand(requestId, opts);
-      }),
+      .action(deviceAction((runtime) => runtime.runDevicesApproveCommand)),
   );
 
   devicesCallOpts(
@@ -94,10 +77,7 @@ export function registerDevicesCli(program: Command) {
       .command("reject")
       .description("Reject a pending device pairing request")
       .argument("<requestId>", "Pending request id")
-      .action(async (requestId: string, opts: DevicesRpcOpts) => {
-        const { runDevicesRejectCommand } = await loadDevicesRuntime();
-        await runDevicesRejectCommand(requestId, opts);
-      }),
+      .action(deviceAction((runtime) => runtime.runDevicesRejectCommand)),
   );
 
   devicesCallOpts(
@@ -106,10 +86,7 @@ export function registerDevicesCli(program: Command) {
       .description("Assign an operator label to a paired device")
       .requiredOption("--device <id>", "Device id")
       .requiredOption("--name <label>", "Operator-assigned label (max 64 characters)")
-      .action(async (opts: DevicesRpcOpts) => {
-        const { runDevicesRenameCommand } = await loadDevicesRuntime();
-        await runDevicesRenameCommand(opts);
-      }),
+      .action(deviceAction((runtime) => runtime.runDevicesRenameCommand)),
   );
 
   devicesCallOpts(
@@ -120,10 +97,7 @@ export function registerDevicesCli(program: Command) {
       .requiredOption("--role <role>", "Role name")
       .option("--scope <scope...>", "Scopes to attach to the token (repeatable)")
       .addOption(new Option("--no-scopes", "Rotate with an empty scope set").conflicts("scope"))
-      .action(async (opts: DevicesRpcOpts) => {
-        const { runDevicesRotateCommand } = await loadDevicesRuntime();
-        await runDevicesRotateCommand(opts);
-      }),
+      .action(deviceAction((runtime) => runtime.runDevicesRotateCommand)),
   );
 
   devicesCallOpts(
@@ -132,10 +106,7 @@ export function registerDevicesCli(program: Command) {
       .description("Revoke a device token for a role")
       .requiredOption("--device <id>", "Device id")
       .requiredOption("--role <role>", "Role name")
-      .action(async (opts: DevicesRpcOpts) => {
-        const { runDevicesRevokeCommand } = await loadDevicesRuntime();
-        await runDevicesRevokeCommand(opts);
-      }),
+      .action(deviceAction((runtime) => runtime.runDevicesRevokeCommand)),
   );
 
   setCommandJsonMode(devices, "output", ({ argv }) => isDevicesMachineOutput(argv));

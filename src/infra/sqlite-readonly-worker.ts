@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -14,6 +13,10 @@ import {
 } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
+import {
+  readOnlyWorkerScope,
+  type SqliteReadOnlyWorkerScope,
+} from "./sqlite-readonly-worker-context.js";
 import {
   SQLITE_READONLY_WORKER_MAX_BUFFER,
   readSqliteReadOnlyWorkerValue,
@@ -117,22 +120,6 @@ export function sqliteInspectionTimeoutError(
     `SQLite ${operation} timed out after ${timeoutMs / 1000} seconds (budget for ${size}) for ${pathname}. Stop the Gateway service and other OpenClaw processes using this database, then retry; if already stopped, check storage performance.`,
   );
 }
-
-type SqliteReadOnlyWorkerScope = {
-  active: boolean;
-  busy: boolean;
-  controller: AbortController;
-  pending: Set<Promise<SqliteReadOnlyWorkerValue>>;
-  deadlineOwnedByCaller: boolean;
-  worker?: ReturnType<typeof createScopedSqliteReadOnlyWorker>;
-  authWorker?: {
-    source: SqliteAuthProfileReadOptions["source"];
-    launch: SqliteReadOnlyWorkerLaunch;
-    session: ReturnType<typeof createScopedSqliteReadOnlyWorker>;
-  };
-  authTail: Promise<void>;
-};
-const readOnlyWorkerScope = new AsyncLocalStorage<SqliteReadOnlyWorkerScope>();
 
 /** Reuse child imports until the lifecycle owner closes; reads reacquire source admission. */
 export function createSqliteReadOnlyWorkerScope(options?: {

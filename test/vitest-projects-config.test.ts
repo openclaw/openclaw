@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, assert, describe, expect, it } from "vitest";
 import { resolveConfig } from "vitest/node";
 import { resolveExtensionTestConfig } from "../scripts/lib/extension-test-plan.mts";
-import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
+import {
+  buildFullSuiteVitestRunPlans,
+  buildVitestRunPlans,
+} from "../scripts/test-projects.test-support.mts";
+import { withEnv } from "../src/test-utils/env.js";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
@@ -369,13 +373,13 @@ describe("projects vitest config", () => {
       createUnitFastIsolatedVitestConfig,
       "src/system-agent/assistant.configured.test.ts",
     ],
-    ["fake timers", createUnitFastFakeTimersVitestConfig, "src/acp/control-plane/manager.test.ts"],
+    ["fake timers", createUnitFastFakeTimersVitestConfig, "src/acp/translator.stop-reason.test.ts"],
   ])("limits %s unit-fast include files to the project's owned tests", (_, createConfig, owned) => {
     const unrelated = "src/gateway/openresponses-http.test.ts";
     const mixedIncludeFile = patternFiles.writePatternFile("mixed-unit-fast-include.json", [
       "src/plugin-sdk/text-chunking.test.ts",
       "src/system-agent/assistant.configured.test.ts",
-      "src/acp/control-plane/manager.test.ts",
+      "src/acp/translator.stop-reason.test.ts",
       unrelated,
     ]);
     const unrelatedIncludeFile = patternFiles.writePatternFile("unrelated-unit-fast-include.json", [
@@ -447,41 +451,56 @@ describe("projects vitest config", () => {
       "test/vitest/vitest.full-extensions.config.ts",
     );
     const configFiles = new Map<string, string[]>();
-    const matches: string[] = [];
     const processLimits = [
       ["test/vitest/vitest.extension-codex.config.ts", "extensions/codex/", 24, 12],
       ["test/vitest/vitest.extension-matrix.config.ts", "extensions/matrix/", 40, 40],
       ["test/vitest/vitest.extension-telegram.config.ts", "extensions/telegram/", 10, 1],
     ] as const;
-    for (const plan of buildVitestRunPlans(["extensions"])) {
-      let files = configFiles.get(plan.config);
-      if (!files) {
-        files = await listVitestConfigTestFiles(plan.config);
-        configFiles.set(plan.config, files);
-      }
-      const selected = files.filter(
-        (file) =>
-          !plan.includePatterns ||
-          plan.includePatterns.some((pattern) => path.matchesGlob(file, pattern)),
-      );
-      for (const [boundedConfig, root, limit, workerLimit] of processLimits) {
-        const inheritedWorkerLimit =
-          plan.config === "test/vitest/vitest.extension-database-workers.config.ts" &&
-          selected.some((file) => file.startsWith(root));
-        if (plan.config === boundedConfig || inheritedWorkerLimit) {
-          expect(
-            selected.every((file) => file.startsWith(root)),
-            plan.config,
-          ).toBe(true);
-          expect(selected.length, plan.config).toBeLessThanOrEqual(
-            inheritedWorkerLimit ? workerLimit : limit,
-          );
+    const extensionConfigs = new Set(
+      fullSuiteVitestShards.find((shard) =>
+        shard.config.endsWith("vitest.full-extensions.config.ts"),
+      )?.projects,
+    );
+    const fullSuitePlans = withEnv({ OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: "1" }, () =>
+      buildFullSuiteVitestRunPlans([]).filter((plan) => extensionConfigs.has(plan.config)),
+    );
+    for (const plans of [buildVitestRunPlans(["extensions"]), fullSuitePlans]) {
+      const matches: string[] = [];
+      for (const plan of plans) {
+        let files = configFiles.get(plan.config);
+        if (!files) {
+          files = await listVitestConfigTestFiles(plan.config);
+          configFiles.set(plan.config, files);
         }
+        const targets = plan.includePatterns ?? plan.timingTargets;
+        for (const target of targets ?? []) {
+          expect(
+            files.some((file) => path.matchesGlob(file, target)),
+            target,
+          ).toBe(true);
+        }
+        const selected = files.filter(
+          (file) => !targets || targets.some((pattern) => path.matchesGlob(file, pattern)),
+        );
+        for (const [boundedConfig, root, limit, workerLimit] of processLimits) {
+          const inheritedWorkerLimit =
+            plan.config === "test/vitest/vitest.extension-database-workers.config.ts" &&
+            selected.some((file) => file.startsWith(root));
+          if (plan.config === boundedConfig || inheritedWorkerLimit) {
+            expect(
+              selected.every((file) => file.startsWith(root)),
+              plan.config,
+            ).toBe(true);
+            expect(selected.length, plan.config).toBeLessThanOrEqual(
+              inheritedWorkerLimit ? workerLimit : limit,
+            );
+          }
+        }
+        matches.push(...selected);
       }
-      matches.push(...selected);
+      expect(matches.toSorted()).toEqual(expected.toSorted());
+      expect(new Set(matches).size).toBe(matches.length);
     }
-    expect(matches.toSorted()).toEqual(expected.toSorted());
-    expect(new Set(matches).size).toBe(matches.length);
   });
 
   it("keeps all embedded harnesses under their canonical embedded owner", () => {

@@ -1,23 +1,25 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import fs from "node:fs";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import type { Result } from "@openclaw/normalization-core/result";
 import chokidar, { type FSWatcher } from "chokidar";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createNativeSkillsAncestorWatcher } from "./refresh-ancestor-native.js";
 import { teardownSkillsPathWatcher } from "./refresh-watch-close.js";
 import type { createSkillsWatchPathFilter } from "./refresh-watch-path.js";
+import { shouldUseNativeSkillsWatcher } from "./refresh-watch-transport.js";
 
 type AncestorSubscription = {
   path: string;
   ignored: ReturnType<typeof createSkillsWatchPathFilter>["ignored"];
   ready: () => void;
+  reconcile: () => void;
   changed: (event: string, path: string) => void;
   raw: (event: string, path: unknown, details: unknown) => void;
   error: (error: Error) => void;
 };
 type AncestorWatcher = {
   watcher: FSWatcher | ReturnType<typeof createNativeSkillsAncestorWatcher>;
-  close: () => Promise<void>;
+  close: () => Promise<Result<void, unknown>>;
   ready: boolean;
   error?: Error;
   subscriptions: Set<AncestorSubscription>;
@@ -26,19 +28,6 @@ type AncestorWatcher = {
 // Imported with the refresh owner at Gateway startup, outside turn contexts.
 const runInWatcherContext = AsyncLocalStorage.snapshot();
 const ancestorWatchers = new Map<string, AncestorWatcher>();
-
-function useNativeAncestorWatcher(watchRoot: string, usePolling: boolean): boolean {
-  if (process.platform !== "linux" || process.versions.bun || usePolling) {
-    return false;
-  }
-  try {
-    // fs.watch follows a symlink. Keep Chokidar's parent observation for links
-    // and its existing recovery/error handling for a root that disappeared.
-    return fs.lstatSync(watchRoot).isDirectory();
-  } catch {
-    return false;
-  }
-}
 
 function createAncestorWatcher(
   watchRoot: string,
@@ -57,13 +46,24 @@ function createAncestorWatcher(
     return allIgnored;
   };
   return runInWatcherContext(() => {
-    if (useNativeAncestorWatcher(watchRoot, usePolling)) {
-      // Linux supplies child names directly. Chokidar enumerates/stats every
-      // sibling before its ignored filter can reject unrelated state-file work.
+    if (shouldUseNativeSkillsWatcher(usePolling)) {
       const watcher = createNativeSkillsAncestorWatcher(watchRoot, ignored, () => {
         const current = ancestorWatchers.get(watchRoot);
         if (current?.watcher === watcher) {
           replaceAncestorWatcher(watchRoot, usePolling, current);
+        }
+      });
+      watcher.on("reconcile", (_changedPath: string, structural: boolean) => {
+        const current = ancestorWatchers.get(watchRoot);
+        if (!structural || current?.watcher !== watcher) {
+          return;
+        }
+        // Native Windows names can alias any admitted entry. Do not apply the
+        // union or per-subscription lexical filter to this reconciliation hint.
+        for (const target of Array.from(subscriptions)) {
+          if (current.watcher === watcher && !watcher.closed && subscriptions.has(target)) {
+            target.reconcile();
+          }
         }
       });
       return { watcher, close: () => watcher.close() };

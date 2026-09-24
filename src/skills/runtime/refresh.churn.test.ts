@@ -14,7 +14,7 @@ import {
 } from "./refresh.watcher.test-support.js";
 
 type SkillsChangeEvent = NonNullable<Parameters<typeof bumpSkillsSnapshotVersion>[0]>;
-const { createdWatchers, watchMock, nativeWatchMock, watchForSkillRoot } =
+const { createdWatchers, watchMock, nativeWatchMock, nativeContentWatchMock, watchForSkillRoot } =
   createSkillsWatcherMock();
 let refreshModule: typeof import("./refresh.js");
 let buildSkillSnapshot: typeof import("../loading/workspace-skill-prompt.js").buildSkillSnapshot;
@@ -24,6 +24,9 @@ let fixtureWorkspaceDir: string;
 vi.mock("chokidar", () => ({ default: { watch: watchMock } }));
 vi.mock("./refresh-ancestor-native.js", () => ({
   createNativeSkillsAncestorWatcher: nativeWatchMock,
+}));
+vi.mock("./refresh-content-native.js", () => ({
+  createNativeSkillsContentWatcher: nativeContentWatchMock,
 }));
 vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],
@@ -458,8 +461,8 @@ describe("skills watcher churn", () => {
     const secondVersion = getSkillsSourceVersion(workspaceDir, {
       executionWorkspaceDir: secondExecution,
     });
-    for (const watcher of createdWatchers.slice(watcherCount)) {
-      watcher.emit("ready");
+    for (let index = watcherCount; index < createdWatchers.length; index += 1) {
+      createdWatchers[index]!.emit("ready");
     }
     expect(getSkillsSourceVersion(workspaceDir)).toBe(afterReady);
     expect(

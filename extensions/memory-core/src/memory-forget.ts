@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   resolveAgentWorkspaceDir,
@@ -386,7 +385,7 @@ async function forgetWorkspaceMemory(
       value: {
         ...value,
         content: scrubbed.content,
-        contentHash: createHash("sha256").update(scrubbed.content).digest("hex"),
+        contentHash: hashMemoryContent(scrubbed.content),
       },
     };
   });

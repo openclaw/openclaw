@@ -8,6 +8,10 @@ import type {
   SqliteWalCheckpointSnapshot,
 } from "./sqlite-wal-checkpoint.js";
 
+const VACUUM_UNIT_TARGET_MS = 25;
+// Scheduling estimates belong to the native connection lifetime, never persisted store facts.
+const vacuumPageBudgets = new WeakMap<DatabaseSync, number>();
+
 export type SqliteWalReclamationOptions = {
   maxPages?: number;
   checkpointMode?: SqliteWalCheckpointMode;
@@ -90,12 +94,13 @@ export function reclaimSqliteWalFreePages(
     if (!Number.isSafeInteger(before) || before <= 0) {
       return result;
     }
-    const pages = Math.min(512, before, options.maxPages ?? 512);
+    const pages = Math.min(vacuumPageBudgets.get(database) ?? 8, before, options.maxPages ?? 512);
     if (!Number.isSafeInteger(pages) || pages <= 0) {
       throw new Error("SQLite page reclamation requires a positive integer page limit");
     }
     const startedAt = performance.now();
     let entered = false;
+    let completed = false;
     try {
       runSqliteImmediateTransactionSync(
         database,
@@ -110,13 +115,28 @@ export function reclaimSqliteWalFreePages(
         },
         { busyTimeoutMs: 0, operationLabel: "incremental-vacuum" },
       );
+      completed = true;
     } catch (error) {
       if (entered || !isSqliteLockError(error)) {
         throw error;
       }
       return result;
     } finally {
-      result.vacuumMs += performance.now() - startedAt;
+      const elapsedMs = performance.now() - startedAt;
+      result.vacuumMs += elapsedMs;
+      if (completed) {
+        vacuumPageBudgets.set(
+          database,
+          Math.max(
+            1,
+            Math.min(
+              512,
+              pages * 2,
+              Math.floor((pages * VACUUM_UNIT_TARGET_MS) / Math.max(elapsedMs, 0.001)),
+            ),
+          ),
+        );
+      }
     }
     options.afterCommit?.();
     if (checkpoint()) {

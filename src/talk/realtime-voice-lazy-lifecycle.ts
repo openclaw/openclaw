@@ -174,12 +174,13 @@ export function createLazyRealtimeVoiceBridgeLifecycle(params: {
         : {}),
       ...(request.onTranscript
         ? {
-            onTranscript: (role, text, isFinal) => {
+            onTranscript: (...args) => {
+              const isFinal = args[2];
               if (
                 isCurrent() ||
                 (isFinal && closing?.connection === connection && lifecycle.isCurrent(connection))
               ) {
-                request.onTranscript?.(role, text, isFinal);
+                request.onTranscript?.(...args);
               }
             },
           }

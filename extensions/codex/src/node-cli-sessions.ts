@@ -337,7 +337,7 @@ function formatSessionSearchTruncation(result: CodexCliSessionsListResult): stri
 }
 
 async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<string> {
-  const params = readRecordParam(paramsJSON);
+  const params = parseJsonRecord(paramsJSON);
   const limit = normalizeLimit(params.limit);
   const filter = typeof params.filter === "string" ? params.filter.trim().toLowerCase() : "";
   // Absent on a node build that predates the flag, which is the safe default: the bounded scan.
@@ -369,7 +369,7 @@ async function resumeLocalCodexCliSession(
   context?: Parameters<OpenClawPluginNodeHostCommand["handle"]>[2],
 ): Promise<string> {
   context?.signal?.throwIfAborted();
-  const params = readRecordParam(paramsJSON);
+  const params = parseJsonRecord(paramsJSON);
   const sessionId = typeof params.sessionId === "string" ? params.sessionId.trim() : "";
   const prompt = typeof params.prompt === "string" ? params.prompt.trim() : "";
   const expectedHomeId = readBoundedOptionalString(params, "sourceHomeId", MAX_SESSION_ID_LENGTH);
@@ -581,7 +581,7 @@ function unwrapNodeInvokePayload(raw: unknown): unknown {
   return raw;
 }
 
-function readRecordParam(paramsJSON?: string | null): Record<string, unknown> {
+function parseJsonRecord(paramsJSON?: string | null): Record<string, unknown> {
   if (!paramsJSON?.trim()) {
     return {};
   }

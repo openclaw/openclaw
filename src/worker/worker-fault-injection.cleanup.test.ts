@@ -97,7 +97,7 @@ describe("composed worker Gateway fixture cleanup", () => {
   });
 
   it("retains the fixture and propagates a resource retirement failure", async () => {
-    const root = tempDirs.make("oc-wfc-rejected-");
+    const root = tempDirs.make("oc-wfc-r-");
     const failure = new Error("fixture resource retirement failed");
     let fail = true;
     let harness: ComposedGatewayHarness | undefined;

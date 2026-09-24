@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { ExecFileException } from "node:child_process";
 import { createHash } from "node:crypto";
 import nodeFs from "node:fs";
@@ -248,7 +249,7 @@ describe("downloadVerifiedFile", () => {
     expect(onProgress.mock.calls.map(([progress]) => progress.downloadedSize)).toEqual([
       1_000_000, 2_000_000, 3_000_000,
     ]);
-    expect(await fs.readFile(destination)).toEqual(payload);
+    assert.deepStrictEqual(await fs.readFile(destination), payload);
     expect(release).toHaveBeenCalledOnce();
   });
 

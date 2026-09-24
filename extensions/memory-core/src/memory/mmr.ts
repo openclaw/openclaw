@@ -27,14 +27,6 @@ export const DEFAULT_MMR_CONFIG: MMRConfig = {
   lambda: 0.7,
 };
 
-/**
- * Compute MMR score for a candidate item.
- * MMR = λ * relevance - (1-λ) * max_similarity_to_selected
- */
-function computeMMRScore(relevance: number, maxSimilarity: number, lambda: number): number {
-  return lambda * relevance - (1 - lambda) * maxSimilarity;
-}
-
 type PreparedMMRItem<T extends MMRItem> = {
   item: T;
   score: number;
@@ -56,7 +48,13 @@ type PreparedMMRItem<T extends MMRItem> = {
  * @param config - MMR configuration (lambda, enabled)
  * @returns Re-ranked items in MMR order
  */
-function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {}): T[] {
+export function applyMMRToHybridResults<T extends MMRItem & { path: string; startLine: number }>(
+  items: T[],
+  config: Partial<MMRConfig> = {},
+): T[] {
+  if (items.length === 0) {
+    return items;
+  }
   const { enabled = DEFAULT_MMR_CONFIG.enabled, lambda = DEFAULT_MMR_CONFIG.lambda } = config;
   if (!enabled || items.length <= 1) {
     return [...items];
@@ -89,7 +87,8 @@ function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {
     let bestItem: PreparedMMRItem<T> | null = null;
     let bestMMRScore = -Infinity;
     for (const candidate of remaining) {
-      const mmrScore = computeMMRScore(candidate.relevance, candidate.maxSimilarity, clampedLambda);
+      const mmrScore =
+        clampedLambda * candidate.relevance - (1 - clampedLambda) * candidate.maxSimilarity;
       if (
         mmrScore > bestMMRScore ||
         (mmrScore === bestMMRScore && candidate.score > (bestItem?.score ?? -Infinity))
@@ -116,16 +115,4 @@ function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {
     }
   }
   return selected;
-}
-
-/**
- * Apply MMR re-ranking to hybrid search results.
- */
-export function applyMMRToHybridResults<
-  T extends { score: number; snippet: string; path: string; startLine: number },
->(results: T[], config: Partial<MMRConfig> = {}): T[] {
-  if (results.length === 0) {
-    return results;
-  }
-  return mmrRerank(results, config);
 }

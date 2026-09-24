@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import type { ProgressCard, ProgressCardChangedEvent } from "@openclaw/gateway-protocol";
 import { html, render } from "lit";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -25,6 +25,10 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
 import { renderChat } from "./chat-view.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+} from "./components/chat-transcript.test-support.ts";
 import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
 
 describe("chat pane assistant identity snapshots", () => {
@@ -282,7 +286,7 @@ describe("chat pane approval requester identity", () => {
     };
     const state = pane.initialize(context);
     state.sessionKey = host.key;
-    pane.paneTitle = "Unrelated pane title";
+    pane.presentationTitle = "Unrelated pane title";
     const now = Date.now();
     state.chatSessionApprovalQueue = projectSessionApprovalReplay(
       {
@@ -460,6 +464,9 @@ function globalProgressCard(agentId: string, revision = 1): ProgressCard {
 }
 
 describe("global chat pane feature ownership", () => {
+  beforeEach(installTranscriptDomMocks);
+  afterEach(resetTranscriptTestDom);
+
   it.each([
     ["global", "research"],
     ["main", "research"],

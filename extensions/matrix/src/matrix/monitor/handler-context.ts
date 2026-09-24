@@ -240,9 +240,7 @@ export async function resolveMatrixInboundContext(config: {
       threadId: threadTarget,
     },
     route: {
-      agentId: _route.agentId,
-      dmScope: _route.dmScope,
-      accountId: _route.accountId,
+      ..._route,
       routeSessionKey: _route.sessionKey,
       parentSessionKey:
         threadTarget && _route.matchedBy !== "binding.channel" ? _route.mainSessionKey : undefined,

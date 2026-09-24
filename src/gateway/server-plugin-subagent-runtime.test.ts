@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { FailoverError } from "../agents/failover-error.js";
 import type { runIsolatedCompletion } from "../agents/isolated-completion.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
@@ -24,6 +26,7 @@ import {
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 import * as inProcessDispatch from "./server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -33,9 +36,14 @@ import {
 } from "./server-plugin-subagent-runtime.js";
 
 const isolated = vi.hoisted(() => vi.fn<typeof runIsolatedCompletion>());
+const normalizeProviderModelIdWithRuntime = vi.hoisted(() =>
+  vi.fn<(params: { provider: string; context: { modelId: string } }) => string | undefined>(
+    () => undefined,
+  ),
+);
 vi.mock("../agents/isolated-completion.js", () => ({ runIsolatedCompletion: isolated }));
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
-  normalizeProviderModelIdWithRuntime: () => undefined,
+  normalizeProviderModelIdWithRuntime,
 }));
 
 const PLUGIN_ID = "test-completion";
@@ -96,6 +104,7 @@ function blockBackgroundSlots(count: number) {
 
 beforeEach(() => {
   resetCommandQueueStateForTest();
+  normalizeProviderModelIdWithRuntime.mockReset().mockImplementation(() => undefined);
   isolated.mockReset().mockImplementation(async (params) => ({
     text: `${params.agentId}:${params.provider}/${params.model}`,
     provider: params.provider,
@@ -313,6 +322,63 @@ describe("plugin background completions", () => {
     });
   });
 
+  it.each([true, false])(
+    "preserves the original tool source through isolated model selection (allowed=%s)",
+    async (allowed) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        config.gateway = {
+          roles: {
+            default: "limited",
+            definitions: {
+              limited: {
+                sessions: { others: "none" },
+                agents: ["research"],
+                scopes: ["operator.write"],
+                modelPolicy: {
+                  sourceAgent: "research",
+                  allow: allowed ? ["test-provider/research-model"] : [],
+                },
+              },
+            },
+          },
+        };
+        const profile = ensureProfileForEmail("completion-model-policy@example.com");
+        const source = captureGatewayOperatorRunAuthority({
+          client: createSyntheticPluginRuntimeClient({
+            scopes: ["operator.write"],
+            authenticatedUserProfile: { ...operatorProfile, profileId: profile.id },
+          }),
+          context: { getRuntimeConfig: () => config },
+        });
+        if (!source) {
+          throw new Error("missing operator source");
+        }
+        try {
+          const result = withGatewayToolCallerIdentity(
+            {
+              agentId: "main",
+              sessionKey: "agent:main:completion-source",
+              operatorAuthority: source.authority,
+            },
+            () => complete(createRuntime()),
+          );
+          if (allowed) {
+            await expect(result).resolves.toEqual({
+              text: "research:test-provider/research-model",
+            });
+            expect(isolated.mock.calls[0]?.[0].operatorAuthority).toBe(source.authority);
+          } else {
+            await expect(result).rejects.toThrow("operator role cannot use this model");
+            expect(isolated).not.toHaveBeenCalled();
+          }
+          expect(source.authority.assertCurrent).not.toThrow();
+        } finally {
+          source.release();
+        }
+      });
+    },
+  );
+
   it("snapshots the authorized agent and credentials before queued request mutation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       restrictOperatorAgents();
@@ -516,6 +582,153 @@ describe("plugin background completions", () => {
       expect(isolated).toHaveBeenCalledTimes(2);
       blockers.release();
       await blockers.settled();
+    },
+  );
+
+  function configureResearchFallbacks() {
+    config.agents = {
+      defaults: { model: "test-provider/global-model" },
+      entries: {
+        main: { model: "test-provider/main-model" },
+        research: {
+          model: {
+            primary: "test-provider/research-model@research-profile",
+            fallbacks: ["fallback-provider/fallback-model"],
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+  }
+
+  it("fails over default plugin completions to the agent's configured model.fallbacks", async () => {
+    configureResearchFallbacks();
+    isolated.mockRejectedValueOnce(
+      new FailoverError(
+        "ExpiredTokenException: The security token included in the request is expired",
+        {
+          reason: "auth",
+          provider: "test-provider",
+          model: "research-model",
+        },
+      ),
+    );
+    isolated.mockResolvedValueOnce({
+      text: "fallback-ok",
+      provider: "fallback-provider",
+      model: "fallback-model",
+      owner: { kind: "harness", id: "test-runtime" },
+    });
+    await expect(complete(createRuntime())).resolves.toEqual({ text: "fallback-ok" });
+    expect(isolated).toHaveBeenCalledTimes(2);
+    expect(isolated.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        provider: "test-provider",
+        model: "research-model",
+        authProfileId: "research-profile",
+      }),
+    );
+    expect(isolated.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        provider: "fallback-provider",
+        model: "fallback-model",
+        authProfileId: undefined,
+      }),
+    );
+    expect(isolated.mock.calls[0]?.[0].abortSignal).toBe(isolated.mock.calls[1]?.[0].abortSignal);
+  });
+
+  it("keeps explicit plugin completion overrides on a single candidate", async () => {
+    configureResearchFallbacks();
+    config.plugins = {
+      entries: {
+        [PLUGIN_ID]: {
+          subagent: { allowModelOverride: true, allowedModels: ["test-provider/override"] },
+        },
+      },
+    };
+    isolated.mockRejectedValueOnce(
+      new FailoverError(
+        "ExpiredTokenException: The security token included in the request is expired",
+        {
+          reason: "auth",
+          provider: "test-provider",
+          model: "override",
+        },
+      ),
+    );
+    await expect(complete(createRuntime(), { model: "test-provider/override" })).rejects.toThrow(
+      /ExpiredTokenException|failover/i,
+    );
+    expect(isolated).toHaveBeenCalledOnce();
+    expect(isolated.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        provider: "test-provider",
+        model: "override",
+      }),
+    );
+  });
+
+  it.each([
+    {
+      name: "default selection",
+      model: undefined as string | undefined,
+      allowOverride: false,
+    },
+    {
+      name: "explicit override",
+      model: "alias-chain/latest@work",
+      allowOverride: true,
+    },
+  ])(
+    "preserves the resolved $name and its pinned profile through chained aliases",
+    async ({ model, allowOverride }) => {
+      normalizeProviderModelIdWithRuntime.mockImplementation(
+        ({ provider, context: modelContext }) => {
+          if (provider !== "alias-chain") {
+            return undefined;
+          }
+          if (modelContext.modelId === "latest") {
+            return "release";
+          }
+          if (modelContext.modelId === "release") {
+            return "stable";
+          }
+          return undefined;
+        },
+      );
+      config.agents = {
+        defaults: { model: "test-provider/global-model" },
+        entries: {
+          main: { model: "test-provider/main-model" },
+          research: {
+            model: {
+              primary: "alias-chain/latest@work",
+              fallbacks: ["fallback-provider/fallback-model"],
+            },
+          },
+        },
+      };
+      if (allowOverride) {
+        config.plugins = {
+          entries: {
+            [PLUGIN_ID]: { subagent: { allowModelOverride: true } },
+          },
+        };
+      }
+      setRuntimeConfigSnapshot(config);
+
+      await expect(complete(createRuntime(), model ? { model } : {})).resolves.toEqual({
+        text: "research:alias-chain/release",
+      });
+      expect(isolated).toHaveBeenCalledOnce();
+      expect(isolated.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({
+          provider: "alias-chain",
+          model: "release",
+          authProfileId: "work",
+        }),
+      );
     },
   );
 });

@@ -1397,6 +1397,7 @@ export default class {
             "infra/sqlite-snapshot-source": "src/infra/sqlite-snapshot-source.ts",
           };
           export const preservedModuleBuildSources = ["src/infra/runtime-process-entrypoints.ts"];
+          export const preservedModuleBuildAssets = [];
           `,
         );
         const databasePath = path.join(fixture, "probe.sqlite");

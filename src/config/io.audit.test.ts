@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, expectTypeOf, it } fr
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   appendConfigAuditRecord,
   createConfigWriteAuditRecordBase,

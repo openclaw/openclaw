@@ -61,6 +61,7 @@ describe("action-bound plugin state", () => {
                     agents: ["main"],
                     scopes: ["operator.sessions.write"],
                     sandbox: "required",
+                    modelPolicy: {},
                   },
                 },
               },

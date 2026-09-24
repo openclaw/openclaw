@@ -8,9 +8,10 @@ import {
 } from "./release-version.mjs";
 
 const STABLE_RELEASE_TAG_RE = /^v(?<version>\d{4}\.\d{1,2}\.\d{1,2})(?:-[1-9]\d*)?$/u;
-const STABLE_PACKAGE_VERSION_RE =
-  /^(?<year>\d{4})\.(?<month>\d{1,2})\.(?<patch>\d{1,2})(?:-(?<correction>[1-9]\d*))?$/u;
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/u;
+const GIT_SHA_RE = /^[a-f0-9]{40}$/u;
+const APPCAST_NEWEST_VERSION_RE =
+  /<sparkle:shortVersionString>([^<]+)<\/sparkle:shortVersionString>/u;
 const THIN_MAC_RELEASE_MINIMUM = "2026.9.6";
 
 function parseStableReleaseTagDetails(tag) {
@@ -44,31 +45,23 @@ export function requiresThinMacArtifacts(tag) {
   return compareReleaseVersions(tagVersion, THIN_MAC_RELEASE_MINIMUM) >= 0;
 }
 
-function parseStablePackageVersion(version) {
-  const match = STABLE_PACKAGE_VERSION_RE.exec(version);
-  if (!match?.groups) {
-    return null;
-  }
-  return [
-    Number.parseInt(match.groups.year, 10),
-    Number.parseInt(match.groups.month, 10),
-    Number.parseInt(match.groups.patch, 10),
-    Number.parseInt(match.groups.correction ?? "0", 10),
-  ];
+function isStableMainVersionAtLeast(mainVersion, shippedVersion) {
+  return (
+    parseReleaseVersion(mainVersion)?.channel === "stable" &&
+    (compareReleaseVersions(mainVersion, shippedVersion) ?? -1) >= 0
+  );
 }
 
-function isStableMainVersionAtLeast(mainVersion, shippedVersion) {
-  const main = parseStablePackageVersion(mainVersion);
-  const shipped = parseStablePackageVersion(shippedVersion);
-  if (!main || !shipped) {
-    return false;
-  }
-  for (let index = 0; index < main.length; index += 1) {
-    if (main[index] !== shipped[index]) {
-      return main[index] > shipped[index];
+// GitHub commit list entries; the first `Refs #NNN` line (or the subject) is the reason.
+export function findAppcastWithdrawal(commits, version) {
+  const subject = `chore(release): withdraw the ${version} macOS build from the Sparkle feed`;
+  for (const entry of commits) {
+    const message = entry?.commit?.message ?? "";
+    if (message.split("\n", 1)[0].startsWith(subject) && GIT_SHA_RE.test(entry.sha)) {
+      return { commit: entry.sha, reason: /^Refs #\d+/mu.exec(message)?.[0] ?? subject };
     }
   }
-  return true;
+  return undefined;
 }
 
 export function extractStableChangelogSection(changelog, version) {
@@ -349,33 +342,53 @@ export function verifyStableMainCloseout(params) {
     : macAttachedAtCloseout;
   // Fresh closeout must validate the same main snapshot it hashes. Only a
   // pending recorded closeout may use the current feed for late publication.
-  const appcast =
+  const feed = (name) =>
     existingManifest && !appcastVerifiedAtCloseout
-      ? (params.publishedAppcast ?? params.mainAppcast)
-      : params.mainAppcast;
+      ? (params[`published${name}`] ?? params[`main${name}`])
+      : params[`main${name}`];
+  const appcast = feed("Appcast");
   const appcastContracts = [
     { name: "main appcast.xml", content: appcast, asset: universalMacAssets[0] },
     ...thinMacVariants.map((arch) => ({
       name: `main appcast-${arch}.xml`,
-      content:
-        existingManifest && !appcastVerifiedAtCloseout
-          ? (params[`published${arch === "arm64" ? "Arm64" : "X86_64"}Appcast`] ??
-            params[`main${arch === "arm64" ? "Arm64" : "X86_64"}Appcast`])
-          : params[`main${arch === "arm64" ? "Arm64" : "X86_64"}Appcast`],
+      content: feed(`${arch === "arm64" ? "Arm64" : "X86_64"}Appcast`),
       asset: `OpenClaw-${macAssetVersion}-${arch}.zip`,
     })),
   ];
-  if (macPublished && (!existingManifest || !appcastVerifiedAtCloseout)) {
+  // A deliberately withdrawn macOS build keeps an older newest Sparkle entry;
+  // only its explicit withdrawal commit on main replaces the feed contracts.
+  const appcastWithdrawnAtCloseout = existingManifest?.appcast === "withdrawn";
+  const checksAppcast =
+    macPublished &&
+    !appcastWithdrawnAtCloseout &&
+    (!existingManifest || !appcastVerifiedAtCloseout);
+  const newestAppcastVersion = APPCAST_NEWEST_VERSION_RE.exec(appcast ?? "")?.[1];
+  const appcastWithdrawal =
+    checksAppcast &&
+    newestAppcastVersion !== undefined &&
+    compareReleaseVersions(newestAppcastVersion, version) === -1
+      ? params.findAppcastWithdrawal?.(version)
+      : undefined;
+  if (checksAppcast && !appcastWithdrawal) {
     for (const contract of appcastContracts) {
       if (!contract.content?.includes(`/releases/download/${params.tag}/${contract.asset}`)) {
         errors.push(`${contract.name} does not point at ${contract.asset} from ${params.tag}.`);
       }
     }
   }
+  const appcastState = !macAttachedAtCloseout
+    ? "pending"
+    : (existingManifest ? appcastWithdrawnAtCloseout : appcastWithdrawal)
+      ? "withdrawn"
+      : "verified";
   const appPlatforms = Object.fromEntries(
     Object.entries(platformAssets).map(([platform, assets]) => [
       platform,
-      assets.every((asset) => verifiedAssetNames.has(asset)) ? "attached" : "pending",
+      platform === "macos" && appcastState === "withdrawn"
+        ? "withdrawn"
+        : assets.every((asset) => verifiedAssetNames.has(asset))
+          ? "attached"
+          : "pending",
     ]),
   );
   const apps = Object.values(appPlatforms).every((state) => state === "attached")
@@ -391,20 +404,21 @@ export function verifyStableMainCloseout(params) {
     if (Object.hasOwn(existingManifest, "apps") && existingManifest.apps !== apps) {
       errors.push("Recorded aggregate app state does not match canonical release asset digests.");
     }
-    const expectedAppcastState = macAttachedAtCloseout ? "verified" : "pending";
-    if (
-      Object.hasOwn(existingManifest, "appcast") &&
-      existingManifest.appcast !== expectedAppcastState
-    ) {
+    if (Object.hasOwn(existingManifest, "appcast") && existingManifest.appcast !== appcastState) {
       errors.push("Recorded appcast state does not match canonical macOS release asset digests.");
     }
     const hasAppcastSha256 = Object.hasOwn(existingManifest, "appcastSha256");
+    const hasAppcastWithdrawal = Object.hasOwn(existingManifest, "appcastWithdrawal");
     if (
-      hasAppcastSha256 !== macAttachedAtCloseout ||
-      (hasAppcastSha256 && !isSha256Hex(existingManifest.appcastSha256))
+      hasAppcastSha256 !== (appcastState === "verified") ||
+      (hasAppcastSha256 && !isSha256Hex(existingManifest.appcastSha256)) ||
+      hasAppcastWithdrawal !== (appcastState === "withdrawn") ||
+      (hasAppcastWithdrawal &&
+        (!GIT_SHA_RE.test(String(existingManifest.appcastWithdrawal?.commit)) ||
+          typeof existingManifest.appcastWithdrawal?.reason !== "string"))
     ) {
       errors.push(
-        "Recorded appcast hash presence or format does not match canonical macOS release asset state.",
+        "Recorded appcast evidence presence or format does not match canonical macOS release asset state.",
       );
     }
   }
@@ -452,16 +466,32 @@ export function verifyStableMainCloseout(params) {
     // evolve, while the independent frozen contribution record must not.
     changelogSha256: sha256(tagChangelog),
     ...(existingManifest
-      ? copyOwnFields(existingManifest, "apps", "appPlatforms", "appcast", "appcastSha256")
+      ? copyOwnFields(
+          existingManifest,
+          "apps",
+          "appPlatforms",
+          "appcast",
+          "appcastSha256",
+          "appcastWithdrawal",
+        )
       : {
           apps,
           appPlatforms,
-          appcast: macAttachedAtCloseout ? "verified" : "pending",
-          ...(macAttachedAtCloseout ? { appcastSha256: sha256(params.mainAppcast) } : {}),
+          appcast: appcastState,
+          ...(appcastState === "verified" ? { appcastSha256: sha256(params.mainAppcast) } : {}),
+          ...(appcastState === "withdrawn" ? { appcastWithdrawal } : {}),
         }),
     fullReleaseValidationRunId: params.fullReleaseValidationRunId,
     fullReleaseValidationRunAttempt,
     releasePublishRunId: params.releasePublishRunId,
+    // Operator waivers that authorized this stable travel into the closeout
+    // record; a replay keeps the recorded field set byte-identical.
+    ...(existingManifest
+      ? copyOwnFields(existingManifest, "stableSoakWaiver", "laneWaiver")
+      : {
+          ...(params.stableSoakWaiver ? { stableSoakWaiver: params.stableSoakWaiver } : {}),
+          ...(params.laneWaiver ? { laneWaiver: params.laneWaiver } : {}),
+        }),
     ...(existingManifest
       ? copyOwnFields(existingManifest, "releasePublishRecovery")
       : params.allowFailedPublishRecovery

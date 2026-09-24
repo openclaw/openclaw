@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
-  missingScopeErrorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -29,10 +28,7 @@ import {
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import {
-  resolveSessionMethodScope,
-  type SessionOperatorScope,
-} from "../shared/session-method-scopes-base.js";
+import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import {
   consumeControlPlaneWriteBudget,
@@ -40,12 +36,7 @@ import {
   CONTROL_PLANE_RATE_LIMIT_WINDOW_MS,
 } from "./control-plane-rate-limit.js";
 import { createExpectedProfileBinding, type ExpectedProfileBinding } from "./expected-profile.js";
-import {
-  ADMIN_SCOPE,
-  authorizeOperatorScopesForMethod,
-  authorizeOperatorScopesForRequiredScope,
-  resolveLeastPrivilegeOperatorScopesForMethod,
-} from "./method-scopes.js";
+import { ADMIN_SCOPE } from "./method-scopes.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
@@ -54,15 +45,15 @@ import {
   isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
-import { isOperatorScope } from "./operator-scopes.js";
 import { canSelectQuestion } from "./question-access.js";
-import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { coreGatewayHandlers } from "./server-methods/core-handlers.js";
 import { authorizeAuthenticatedProfileForMethod } from "./server-methods/gateway-client-identity.js";
 import { prepareGatewayRequestHandler } from "./server-methods/lazy-core-handlers.js";
+import { authorizeGatewayMethod } from "./server-methods/method-authorization.js";
 import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart-request.js";
 import {
   bindGatewayRequestHandlerMutationAuthority,
+  captureGatewayRequestOperatorGuard,
   readGatewayRequestMutationAuthority,
   withSessionMutationCommitGuard,
 } from "./server-methods/session-mutation-guards.js";
@@ -75,6 +66,10 @@ import type {
 } from "./server-methods/types.js";
 import type { GatewayRequestEntry } from "./server-request-entry.js";
 import type { GatewayRpcDiagnostics } from "./server/ws-connection/request-diagnostics.js";
+import {
+  prepareGatewaySessionAccessAuthority,
+  type GatewaySessionAccessAuthority,
+} from "./session-access-authority.js";
 import { sessionMutationTargetFields } from "./session-method-policy.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
@@ -92,61 +87,6 @@ import {
 import { classifyGatewayStaleInstall } from "./stale-install.js";
 
 export { coreGatewayHandlers };
-
-function authorizeGatewayMethod(
-  method: string,
-  client: GatewayRequestOptions["client"],
-  params: unknown,
-  methodRegistry: GatewayMethodRegistry,
-): { error: ErrorShape | null; sessionScope?: SessionOperatorScope } {
-  // Pre-connect and health requests are allowed through; role/scope checks require the
-  // authenticated connect metadata established by the gateway handshake.
-  if (!client?.connect || method === "health") {
-    return { error: null };
-  }
-  const roleRaw = client.connect.role ?? "operator";
-  const role = parseGatewayRole(roleRaw);
-  if (!role) {
-    return { error: errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${roleRaw}`) };
-  }
-  const scopes = client.connect.scopes ?? [];
-  if (!isRoleAuthorizedForMethod(role, method)) {
-    return { error: errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`) };
-  }
-  if (role === "node") {
-    return { error: null };
-  }
-  if (method === "device.scopes.requestUpgrade" || method === "device.scopes.waitUpgrade") {
-    // Scope recovery must remain reachable from a paired operator whose grant is empty;
-    // the handlers bind both calls to the connection's exact device identity.
-    return { error: null };
-  }
-  if (scopes.includes(ADMIN_SCOPE)) {
-    return { error: null };
-  }
-  const registeredScope = methodRegistry.getScope(method);
-  const scopeAuth = isOperatorScope(registeredScope)
-    ? authorizeOperatorScopesForRequiredScope(
-        registeredScope,
-        scopes,
-        resolveSessionMethodScope(method, params),
-        method,
-      )
-    : authorizeOperatorScopesForMethod(method, scopes, params);
-  if (!scopeAuth.allowed) {
-    const resolvedRequiredScopes = isOperatorScope(registeredScope)
-      ? [registeredScope]
-      : resolveLeastPrivilegeOperatorScopesForMethod(method, params);
-    return {
-      error: missingScopeErrorShape({
-        missingScope: scopeAuth.missingScope,
-        requiredScopes:
-          resolvedRequiredScopes.length > 0 ? resolvedRequiredScopes : [scopeAuth.missingScope],
-      }),
-    };
-  }
-  return { error: null, sessionScope: scopeAuth.sessionScope };
-}
 
 const SUSPEND_CONTROL_METHODS = new Set([
   "gateway.suspend.prepare",
@@ -266,17 +206,19 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   context: GatewayRequestContext;
   methodRegistry: GatewayMethodRegistry;
   expectedProfileBinding?: ExpectedProfileBinding;
+  hasCurrentClientAuthority?: () => boolean;
+  assertInvocationCurrent?: () => void;
 }): Promise<{
   error: ErrorShape | null;
   sessionScope?: SessionOperatorScope;
   sessionMutationAuthorization?: SessionMutationAuthorization;
+  sessionAccessAuthority?: GatewaySessionAccessAuthority;
 }> {
   if (params.context.ensureSessionRowProjection) {
     await params.context.ensureSessionRowProjection();
   }
-  while (true) {
-    // Dynamic scope lookup must use the same registry as the eventual handler.
-    const scopeAuthorization = withPluginRuntimeRegistryScope(
+  const authorizeMethod = () =>
+    withPluginRuntimeRegistryScope(
       // SAFETY: The host-owned method registry carries the PluginRegistry selected for dispatch.
       params.methodRegistry.pluginRegistry as PluginRegistry | undefined,
       () =>
@@ -285,8 +227,19 @@ export async function authorizeGatewayRequestPreDispatch(params: {
           params.client,
           params.requestParams,
           params.methodRegistry,
+          params.context,
         ),
     );
+  const startupError = () =>
+    params.context.unavailableGatewayMethods?.has(params.method)
+      ? errorShape(ErrorCodes.UNAVAILABLE, `${params.method} unavailable during gateway startup`, {
+          retryable: true,
+          retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+          details: { ...gatewayStartupUnavailableDetails(), method: params.method },
+        })
+      : null;
+  while (true) {
+    const scopeAuthorization = authorizeMethod();
     if (scopeAuthorization.error) {
       return { error: scopeAuthorization.error };
     }
@@ -300,7 +253,8 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         params.methodRegistry.requiresAuthenticatedProfile(params.method) ||
         resolveDirectIncognitoTargets(params.method, params.requestParams).length > 0 ||
         (sessionMutationTargetFields(params.method).length > 0 &&
-          params.context.getRuntimeConfig().gateway?.roles !== undefined),
+          (params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig)().gateway
+            ?.roles !== undefined),
     });
     if (profileError) {
       return { error: profileError };
@@ -315,18 +269,9 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     }
     // Startup gating precedes session authorization: session stores are not loaded yet,
     // so an authorization read here would deny with a misleading non-retryable error.
-    if (params.context.unavailableGatewayMethods?.has(params.method)) {
-      return {
-        error: errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `${params.method} unavailable during gateway startup`,
-          {
-            retryable: true,
-            retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
-            details: { ...gatewayStartupUnavailableDetails(), method: params.method },
-          },
-        ),
-      };
+    const unavailableError = startupError();
+    if (unavailableError) {
+      return { error: unavailableError };
     }
     if (params.method.startsWith("sessions.groups.")) {
       const { ensureSessionGroupCatalog } = await import("./session-group-catalog.js");
@@ -339,19 +284,24 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       }
       params.expectedProfileBinding?.assertCurrent();
     }
+    const sessionPolicy = params.methodRegistry.getSessionAccess?.(params.method);
     const projection =
-      params.method === "sessions.describe" && !isGatewayAdmin(params.client)
+      !sessionPolicy &&
+      resolveDirectSessionTargets(params.method, params.requestParams).length > 0 &&
+      !isGatewayAdmin(params.client)
         ? getSessionRowProjection(params.context)
         : undefined;
     const authorizeSession = (sessionRowRead?: SessionRowReadView) =>
-      resolveSessionMutationAuthorization({
-        client: params.client ?? null,
-        method: params.method,
-        requestParams: params.requestParams,
-        context: params.context,
-        sessionRowRead,
-        sessionScope: scopeAuthorization.sessionScope,
-      });
+      sessionPolicy
+        ? { error: null }
+        : resolveSessionMutationAuthorization({
+            client: params.client ?? null,
+            method: params.method,
+            requestParams: params.requestParams,
+            context: params.context,
+            sessionRowRead,
+            sessionScope: scopeAuthorization.sessionScope,
+          });
     const preparedSessionMutation = projection
       ? await projection.withPreparedExactRows(
           (cfg) =>
@@ -374,6 +324,28 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     if (sessionMutation.error) {
       return { error: sessionMutation.error };
     }
+    let sessionAccessAuthority: GatewaySessionAccessAuthority | undefined;
+    if (sessionPolicy) {
+      try {
+        sessionAccessAuthority = await prepareGatewaySessionAccessAuthority({
+          policy: sessionPolicy,
+          requestParams: params.requestParams,
+          client: params.client ?? null,
+          context: params.context,
+          ownSessionOnly: scopeAuthorization.sessionScope === "operator.sessions.write",
+          hasCurrentClientAuthority: params.hasCurrentClientAuthority,
+          assertInvocationCurrent: params.assertInvocationCurrent,
+        });
+        params.expectedProfileBinding?.assertCurrent();
+        sessionAccessAuthority.assertCurrent();
+      } catch (error) {
+        sessionAccessAuthority?.release();
+        if (error instanceof SessionMutationAuthorizationChangedError) {
+          return { error: error.error };
+        }
+        throw error;
+      }
+    }
     if (
       params.client?.connect.role === "node" &&
       (!params.client.connId ||
@@ -386,9 +358,29 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         }),
       };
     }
+    const currentAuthorization = authorizeMethod();
+    const currentError = currentAuthorization.error ?? startupError();
+    if (currentError) {
+      sessionAccessAuthority?.release();
+      return { error: currentError };
+    }
+    try {
+      params.expectedProfileBinding?.assertCurrent();
+    } catch (error) {
+      sessionAccessAuthority?.release();
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        return { error: error.error };
+      }
+      throw error;
+    }
+    if (currentAuthorization.sessionScope !== scopeAuthorization.sessionScope) {
+      sessionAccessAuthority?.release();
+      return { error: errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed") };
+    }
     return {
       error: null,
       sessionScope: scopeAuthorization.sessionScope,
+      ...(sessionAccessAuthority ? { sessionAccessAuthority } : {}),
       ...(sessionMutation.authorization
         ? { sessionMutationAuthorization: sessionMutation.authorization }
         : {}),
@@ -593,6 +585,7 @@ export async function handleGatewayRequest(
     : opts.sessionMutationCommitGuard;
   const entry = opts.requestEntry ?? context.requestEntryLifetime?.enter(opts);
   const releaseForegroundWork = retainSessionListForegroundWork();
+  let sessionAccessAuthority: GatewaySessionAccessAuthority | undefined;
   try {
     entry?.assertOpen();
     // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
@@ -603,6 +596,7 @@ export async function handleGatewayRequest(
       opts.methodRegistry?.getHandler(req.method) !== undefined
         ? opts.methodRegistry
         : createRequestGatewayMethodRegistry(opts.extraHandlers);
+    const requestMutationAuthority = readGatewayRequestMutationAuthority(opts);
     const authorization = await authorizeGatewayRequestPreDispatch({
       method: req.method,
       requestParams: req.params,
@@ -610,7 +604,15 @@ export async function handleGatewayRequest(
       context,
       methodRegistry,
       expectedProfileBinding: profileBinding,
+      hasCurrentClientAuthority,
+      assertInvocationCurrent: () => {
+        profileBinding?.assertCurrent();
+        // Profile hydration binds the operator guard later; retain the original request lifetime.
+        readGatewayRequestMutationAuthority(opts).assertOperatorCurrent?.();
+        requestMutationAuthority.assertCurrent();
+      },
     });
+    sessionAccessAuthority = authorization.sessionAccessAuthority;
     entry?.assertOpen();
     if (authorization.error) {
       respond(false, undefined, authorization.error);
@@ -624,13 +626,36 @@ export async function handleGatewayRequest(
     }
     // Every session mutation owner uses these pre-commit assertions. Compose the
     // host lifetime here so individual handlers cannot lose it across an await.
-    const requestMutationAuthority = readGatewayRequestMutationAuthority(opts);
+    const assertOperatorCurrent = captureGatewayRequestOperatorGuard(opts);
     const sessionMutationAuthorization = withSessionMutationCommitGuard(
       authorization.sessionMutationAuthorization,
-      requestMutationAuthority.assertCurrent,
+      () => {
+        assertOperatorCurrent();
+        requestMutationAuthority.assertCurrent();
+      },
       profileBinding?.assertCurrent,
-      requestMutationAuthority.assertAdmittedInputCurrent,
+      requestMutationAuthority.assertAdmittedInputCurrent
+        ? () => {
+            assertOperatorCurrent();
+            requestMutationAuthority.assertAdmittedInputCurrent?.();
+          }
+        : undefined,
     );
+    const respondToHandler: GatewayRequestOptions["respond"] =
+      authorization.sessionScope === "operator.sessions.read"
+        ? (...response) => {
+            try {
+              sessionMutationAuthorization?.assertCurrent();
+            } catch (error) {
+              if (!(error instanceof SessionMutationAuthorizationChangedError)) {
+                throw error;
+              }
+              respond(false, undefined, error.error);
+              return;
+            }
+            respond(...response);
+          }
+        : respond;
     const invokeHandler = async () => {
       const preparedHandler = await prepareGatewayRequestHandler(handler, entry);
       const handlerOptions = bindGatewayRequestHandlerMutationAuthority(
@@ -640,17 +665,22 @@ export async function handleGatewayRequest(
           params: (req.params ?? {}) as Record<string, unknown>,
           client,
           isWebchatConnect,
-          respond,
+          respond: respondToHandler,
           context,
           signal,
           ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
           sessionMutationCommitGuard,
           sessionMutationAuthorization,
+          ...(authorization.sessionAccessAuthority
+            ? { sessionAccessAuthority: authorization.sessionAccessAuthority }
+            : {}),
         },
         profileBinding,
         authorization.sessionScope,
       );
       sessionMutationCommitGuard?.();
+      assertOperatorCurrent();
+      authorization.sessionAccessAuthority?.assertCurrent();
       entry?.assertOpen();
       if (signal?.aborted) {
         return;
@@ -679,6 +709,7 @@ export async function handleGatewayRequest(
       reject: (error) => respond(false, undefined, error),
     });
   } finally {
+    sessionAccessAuthority?.release();
     releaseForegroundWork();
     // Transport/import owners retain failures through their response and logging paths.
     if (!opts.requestEntry) {

@@ -47,14 +47,17 @@ function npmFailureCode(value: string | undefined): NpmFailureCode {
   return NPM_FAILURE_CODES.find((code) => code === value) ?? "unknown";
 }
 
-function sanitizeNpmLine(line: string, context: SupportRedactionContext): string {
-  return truncateUtf8Prefix(
-    redactSupportDiagnosticLine(line, context).replace(
+function sanitizeNpmLines(lines: readonly string[], context: SupportRedactionContext): string[] {
+  const marker = " …[truncated]";
+  return lines.slice(0, 5).map((line) => {
+    const message = redactSupportDiagnosticLine(line, context, Number.MAX_SAFE_INTEGER).replace(
       /^(npm (?:ERR!|error) code)\s+\S+/u,
       (_match, prefix: string) => `${prefix} ${npmFailureCode(line.split(/\s+/u)[3])}`,
-    ),
-    200,
-  );
+    );
+    return Buffer.byteLength(message) > 200
+      ? `${truncateUtf8Prefix(message, 200 - Buffer.byteLength(marker))}${marker}`
+      : message;
+  });
 }
 
 /** Capture npm's error lines before command tails or permission guidance replace them. */
@@ -73,9 +76,10 @@ export function createNpmFailureFacts(
   const context = { env, stateDir: resolveStateDir(env) };
   // The existing ledger admits five 200-character facts. Stay within that contract
   // and a stricter UTF-8 budget instead of introducing a second diagnostic store.
-  return (lines.length ? lines.slice(0, 5) : ["npm error (no error lines captured)"]).map(
-    (line) => ({ check: "npm", code, message: sanitizeNpmLine(line, context) }),
-  );
+  return sanitizeNpmLines(
+    lines.length ? lines : ["npm error (no error lines captured)"],
+    context,
+  ).map((message) => ({ check: "npm", code, message }));
 }
 
 export function formatNpmFailureFacts(
@@ -97,7 +101,10 @@ export function formatNpmFailureFacts(
           : undefined;
   return [
     `npm failure code: ${code}`,
-    ...npm.flatMap((fact) => (fact.message ? [sanitizeNpmLine(fact.message, context)] : [])),
+    ...sanitizeNpmLines(
+      npm.flatMap((fact) => (fact.message ? [fact.message] : [])),
+      context,
+    ),
     ...(remedy ? [`Next step: ${remedy}`] : []),
   ];
 }

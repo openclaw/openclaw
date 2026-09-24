@@ -14,6 +14,7 @@ import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
@@ -416,13 +417,20 @@ describe("chat pane composer controls", () => {
       container,
     );
 
-    const docsLink = container.querySelector<HTMLAnchorElement>(
-      ".chat-controls__permission-learn-more",
+    const docsLink = container.querySelector<HTMLElement>(
+      "wa-dropdown > wa-dropdown-item.chat-controls__permission-heading",
     );
-    expect(docsLink?.textContent?.trim()).toBe("Learn more");
-    expect(docsLink?.href).toBe("https://docs.openclaw.ai/gateway/permission-modes");
-    expect(docsLink?.target).toBe("_blank");
-    expect(docsLink?.rel.split(/\s+/).toSorted()).toEqual(["noopener", "noreferrer"]);
+    expect(
+      docsLink?.querySelector(".chat-controls__permission-learn-more")?.textContent?.trim(),
+    ).toBe("Learn more");
+    expect(docsLink?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/gateway/permission-modes",
+    );
+    expect(docsLink?.getAttribute("target")).toBe("_blank");
+    expect(docsLink?.getAttribute("rel")?.split(/\s+/).toSorted()).toEqual([
+      "noopener",
+      "noreferrer",
+    ]);
   });
 
   it("patches a rootless session, clears to default, and locks full access", async () => {
@@ -438,6 +446,7 @@ describe("chat pane composer controls", () => {
       chatRunId: null,
       connected: true,
       client: {},
+      hello: sessionMutationGatewayHello(["operator.write"]),
       chatLoading: false,
       chatModelCatalog: [],
       sessions: { state: { modelOverrides: {} }, think: () => undefined, patch },
@@ -527,6 +536,7 @@ describe("chat pane composer controls", () => {
       connected: true,
       connectionEpoch: 1,
       client: {},
+      hello: sessionMutationGatewayHello(),
       sessions: { state: { modelOverrides: {} }, think: () => undefined, patch },
       sessionKey: key,
       sessionsResult: { defaults: {}, sessions: [selectedSession] },
@@ -628,6 +638,7 @@ describe("chat pane composer controls", () => {
       connected: true,
       connectionEpoch: 1,
       client: {},
+      hello: sessionMutationGatewayHello(),
       chatLoading: false,
       chatModelCatalog: [],
       sessions: {

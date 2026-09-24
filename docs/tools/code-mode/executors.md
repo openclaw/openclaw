@@ -95,6 +95,9 @@ Gateway shutdown releases them. Neither survives a Gateway restart.
 `timeoutMs`, output limits, pending-call limits, suspended-run capacity, and
 `snapshotTtlSeconds` apply to both executors. The historical
 `snapshotTtlSeconds` name also controls Node's suspended-context lifetime.
+The host enforces Node's execution deadline by terminating an overdue worker,
+including synchronous loops and promise continuations. Output emitted before
+the timeout remains available within the configured output limit.
 QuickJS additionally checks serialized VM state against `maxSnapshotBytes`.
 Node has no serialized VM snapshot, so that setting does not bound its live
 heap. Saved JSON results retain their shared memory/snapshot data allowance.

@@ -373,6 +373,19 @@ export function resolveChannelMessageToolSchemaProperties(
     };
   };
   const seenPluginIds = new Set<string>();
+  const mergePluginSchema = (pluginId: string, actions: ChannelMessageToolDiscoveryAdapter) => {
+    for (const contribution of resolveMessageActionDiscoveryForPlugin({
+      pluginId,
+      actions,
+      context: contextForPlugin(pluginId),
+      includeSchema: true,
+    }).schemaContributions) {
+      const visibility = contribution.visibility ?? "current-channel";
+      if (!currentChannel || visibility === "all-configured" || pluginId === currentChannel) {
+        mergeToolSchemaProperties(properties, contribution.properties);
+      }
+    }
+  };
 
   const channels = listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog);
   for (const plugin of channels) {
@@ -380,21 +393,7 @@ export function resolveChannelMessageToolSchemaProperties(
       continue;
     }
     seenPluginIds.add(plugin.id);
-    for (const contribution of resolveMessageActionDiscoveryForPlugin({
-      pluginId: plugin.id,
-      actions: plugin.actions,
-      context: contextForPlugin(plugin.id),
-      includeSchema: true,
-    }).schemaContributions) {
-      const visibility = contribution.visibility ?? "current-channel";
-      if (currentChannel) {
-        if (visibility === "all-configured" || plugin.id === currentChannel) {
-          mergeToolSchemaProperties(properties, contribution.properties);
-        }
-        continue;
-      }
-      mergeToolSchemaProperties(properties, contribution.properties);
-    }
+    mergePluginSchema(plugin.id, plugin.actions);
   }
   if (currentChannel && !seenPluginIds.has(currentChannel)) {
     // The active channel may be bundled but not configured/registered yet; use
@@ -404,17 +403,7 @@ export function resolveChannelMessageToolSchemaProperties(
       params.preparedMessageToolCatalog,
     );
     if (currentActions?.actions) {
-      for (const contribution of resolveMessageActionDiscoveryForPlugin({
-        pluginId: currentActions.pluginId,
-        actions: currentActions.actions,
-        context: contextForPlugin(currentActions.pluginId),
-        includeSchema: true,
-      }).schemaContributions) {
-        const visibility = contribution.visibility ?? "current-channel";
-        if (visibility === "all-configured" || currentActions.pluginId === currentChannel) {
-          mergeToolSchemaProperties(properties, contribution.properties);
-        }
-      }
+      mergePluginSchema(currentActions.pluginId, currentActions.actions);
     }
   }
 

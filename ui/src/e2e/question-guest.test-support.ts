@@ -7,7 +7,7 @@ import type { AgentQuestionDispatcher } from "../../../src/agents/harness/gatewa
 import { createAskUserTool } from "../../../src/agents/tools/ask-user-tool.js";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../../src/gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../../src/gateway/agent-runtime-approval-authority.js";
 import type { OperatorScope } from "../../../src/gateway/operator-scopes.js";
 import { QuestionManager } from "../../../src/gateway/question-manager.js";
 import { createGatewayBroadcaster } from "../../../src/gateway/server-broadcast.js";

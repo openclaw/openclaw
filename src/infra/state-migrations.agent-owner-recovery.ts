@@ -1,7 +1,6 @@
 /** Doctor recovers only proven duplicate files, before either owner's schema changes. */
 import fs from "node:fs";
 import path from "node:path";
-import { checkpointDoctorSqliteFile } from "../commands/doctor-sqlite-compact.js";
 import { isSessionArchiveArtifactName } from "../config/sessions/artifacts.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -19,6 +18,7 @@ import {
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { moveSqliteFilesAside } from "./sqlite-recovery-files.js";
+import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
 import { formatAgentDatabaseOwnershipRepairHint } from "./state-migrations.agent-owner-guidance.js";
 
 type Target = { agentId: string; path: string };
@@ -103,7 +103,7 @@ function checkpoint(target: Target, maintenance: OpenClawStateLeaseContext): voi
     assertOpenClawAgentDatabaseOwner(database, { agentId: target.agentId, pathname: target.path });
     assertSqliteIntegrity(database, target.path);
     maintenance.assertOwned();
-    checkpointDoctorSqliteFile(database, target.path);
+    truncateSqliteWal(database, target.path);
   } finally {
     database.close();
   }

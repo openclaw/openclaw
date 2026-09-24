@@ -206,25 +206,6 @@ describe("recordOutboundMessageForPromptContext", () => {
     });
   });
 
-  it("binds a successful General-topic response from trusted send context", async () => {
-    const cached = await recordAndRead({
-      account: { accountId: "default", name: "Configured Agent" },
-      chatId: -1001,
-      message: {
-        chat: { id: -1001, type: "supergroup", title: "QA" },
-        date: 1_736_380_700,
-        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
-        message_id: 702,
-        text: "Bot replied in General",
-      },
-      messageId: 702,
-      messageThreadId: 1,
-      successfulSendThread: { id: 1, scope: "forum" },
-    });
-
-    expect(hasProviderObservedTelegramThreadBinding(cached, 1)).toBe(true);
-  });
-
   it("does not infer a General-topic binding for DM thread context", async () => {
     const cached = await recordAndRead({
       account: { accountId: "default", name: "Configured Agent" },

@@ -90,7 +90,7 @@ class AboutPage extends OpenClawLightDomElement {
     return html`
       <section class="content-header">
         <div>
-          <div class="page-title">${titleForRoute("about")}</div>
+          <h1 class="page-title">${titleForRoute("about")}</h1>
         </div>
       </section>
       ${renderSettingsWorkspace(body)}

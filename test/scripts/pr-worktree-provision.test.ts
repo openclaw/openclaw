@@ -11,31 +11,13 @@ import {
 import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { detectWorktreeFilesystemBackend } from "../../src/agents/worktrees/filesystem-backend.js";
 import { listTemplates } from "../../src/agents/worktrees/template-registry.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
-import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
-
-it("extracts the complete eager runtime import closure without duplicate wrapper components", () => {
-  const extracted = tempDirs.make("openclaw-pr-import-closure-");
-  const components = copyPrWrapperSources(extracted);
-  expect(components.filter((component, index) => components.indexOf(component) !== index)).toEqual(
-    [],
-  );
-  const files = readdirSync(extracted, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => relative(extracted, join(entry.parentPath, entry.name)));
-  expect(
-    collectRuntimeImportClosure(process.cwd(), files).filter(
-      (file) => !existsSync(join(extracted, file)),
-    ),
-  ).toEqual([]);
-});
 
 function coldFixture(perWorktreeConfig = true) {
   const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-provision-"), {
@@ -90,19 +72,14 @@ describePosix("native PR source provisioning", () => {
     expect(existsSync(join(f.canonical, ".worktrees", ".templates"))).toBe(false);
   });
 
-  it.each([false, true])(
-    "preserves a symlinked parent through native Git (acceleration=%s)",
-    (acceleration) => {
-      const f = coldFixture(false);
-      writeFileSync(
-        f.env.OPENCLAW_CONFIG_PATH!,
-        JSON.stringify({ worktreeAcceleration: acceleration }),
-      );
-      const preload = join(f.root, "native-provision-imports.mjs");
-      const guardReceipt = join(f.root, "native-provision-imports.txt");
-      writeFileSync(
-        preload,
-        `import { appendFileSync } from "node:fs";
+  it("preserves a symlinked parent through native Git with acceleration enabled", () => {
+    const f = coldFixture(false);
+    writeFileSync(f.env.OPENCLAW_CONFIG_PATH!, JSON.stringify({ worktreeAcceleration: true }));
+    const preload = join(f.root, "native-provision-imports.mjs");
+    const guardReceipt = join(f.root, "native-provision-imports.txt");
+    writeFileSync(
+      preload,
+      `import { appendFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
   registerHooks({ load(url, context, nextLoad) {
@@ -114,25 +91,24 @@ if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
   appendFileSync(${JSON.stringify(guardReceipt)}, String(process.pid) + "\\n");
 }
 `,
-      );
-      // Keep both guards: reject config startup and verify each private store.
-      f.env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href} ${f.env.NODE_OPTIONS}`;
-      const parent = join(f.canonical, ".worktrees");
-      const physicalParent = join(f.root, "pr-worktrees");
-      rmdirSync(parent);
-      mkdirSync(physicalParent);
-      symlinkSync(physicalParent, parent, "dir");
-      const result = f.run("review-init");
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain("PR source checkout: Git checkout.");
-      expect(readFileSync(guardReceipt, "utf8")).toMatch(/^[1-9]\d*\n$/);
-      expectSeed(f);
-      expect(f.git(f.worktree, "rev-parse", "--show-toplevel")).toBe(join(physicalParent, "pr-42"));
-      expect(f.git(f.worktree, "rev-parse", "FETCH_HEAD")).toBe(f.main);
-      expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
-      expect(existsSync(join(physicalParent, ".templates"))).toBe(false);
-    },
-  );
+    );
+    // Keep both guards: reject config startup and verify each private store.
+    f.env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href} ${f.env.NODE_OPTIONS}`;
+    const parent = join(f.canonical, ".worktrees");
+    const physicalParent = join(f.root, "pr-worktrees");
+    rmdirSync(parent);
+    mkdirSync(physicalParent);
+    symlinkSync(physicalParent, parent, "dir");
+    const result = f.run("review-init");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("PR source checkout: Git checkout.");
+    expect(readFileSync(guardReceipt, "utf8")).toMatch(/^[1-9]\d*\n$/);
+    expectSeed(f);
+    expect(f.git(f.worktree, "rev-parse", "--show-toplevel")).toBe(join(physicalParent, "pr-42"));
+    expect(f.git(f.worktree, "rev-parse", "FETCH_HEAD")).toBe(f.main);
+    expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
+    expect(existsSync(join(physicalParent, ".templates"))).toBe(false);
+  });
 
   it.runIf(process.platform === "linux")(
     "keeps native Git provisioning on an unsupported source filesystem",

@@ -687,29 +687,44 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(fitted).toContain("[truncated ");
   });
 
-  it("keeps the current request and fitting hook context after projecting history", async () => {
-    const before = "OpenClaw assembled context for this turn:\n<conversation_context>\n";
-    const context = `recent context ${"c".repeat(800)}`;
-    const request = "\n</conversation_context>\n\nCurrent user request:\nkeep this request";
-    const hookAppend = "\n\nhook context survives";
-    const promptText = `${before}${context}${request}${hookAppend}`;
-    const maxChars = 420;
+  it.each(
+    ["fits", "exact", "overflow"].flatMap((mode) =>
+      [false, true].map((withHook) => ({ mode, withHook })),
+    ),
+  )(
+    "preserves current context priorities when non-history text $mode the limit with hook $withHook",
+    ({ mode, withHook }) => {
+      const before = "OpenClaw assembled context for this turn:\n<conversation_context>\n";
+      const context = `recent context ${"c".repeat(800)} historical tail`;
+      const request = "\n</conversation_context>\n\nCurrent user request:\nkeep this request";
+      const hookAppend = withHook ? "\n\nhook context survives" : "";
+      const promptText = `${before}${context}${request}${hookAppend}`;
+      const currentChars = before.length + request.length + hookAppend.length;
+      const maxChars = mode === "fits" ? 420 : currentChars - (mode === "overflow" ? 1 : 0);
 
-    const { promptText: fitted } = fitCodexProjectedContextForTurnStart({
-      promptText,
-      contextRange: { start: before.length, end: before.length + context.length },
-      requestRange: {
-        start: before.length + context.length,
-        end: before.length + context.length + request.length,
-      },
-      maxChars,
-    });
+      const { promptText: fitted } = fitCodexProjectedContextForTurnStart({
+        promptText,
+        contextRange: { start: before.length, end: before.length + context.length },
+        requestRange: {
+          start: before.length + context.length,
+          end: before.length + context.length + request.length,
+        },
+        maxChars,
+      });
 
-    expect(fitted.length).toBeLessThanOrEqual(maxChars);
-    expect(fitted).toContain("[truncated ");
-    expect(fitted).toContain("Current user request:\nkeep this request");
-    expect(fitted).toContain("hook context survives");
-  });
+      expect(fitted.length).toBeLessThanOrEqual(maxChars);
+      expect(fitted).toContain("Current user request:\nkeep this request");
+      if (withHook) {
+        expect(fitted).toContain("hook context survives");
+      }
+      if (mode === "overflow") {
+        expect(fitted).not.toContain(before);
+        expect(fitted).toContain("tail");
+      } else {
+        expect(fitted).toContain(before);
+      }
+    },
+  );
 
   it("keeps the original input when a hook appends context without a projection", async () => {
     const prompt = "current prompt survives";
