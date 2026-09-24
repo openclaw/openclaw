@@ -9,7 +9,7 @@ const channelMocks = vi.hoisted(() => ({
 }));
 const terminalMocks = vi.hoisted(() => ({ isTerminalInteractive: vi.fn() }));
 
-vi.mock("../channels/plugins/bundled-package-channel-metadata.js", () => channelMocks);
+vi.mock("../plugins/bundled-package-channel-metadata.js", () => channelMocks);
 vi.mock("../channels/plugins/catalog.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../channels/plugins/catalog.js")>()),
   listRawChannelPluginCatalogEntries: vi.fn(() => []),
@@ -32,7 +32,7 @@ describe("channelsAddCommand non-TTY advice", () => {
   it("points at the channel's help command when its setup contract omits --use-env", async () => {
     channelMocks.listBundledPackageChannelMetadata.mockReturnValue([
       {
-        id: "signal",
+        id: "fixture-signal",
         setup: {
           fields: [
             {
@@ -48,10 +48,10 @@ describe("channelsAddCommand non-TTY advice", () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     const runtime = createTestRuntime();
 
-    await channelsAddCommand({ channel: "signal" }, runtime, { hasFlags: false });
+    await channelsAddCommand({ channel: "fixture-signal" }, runtime, { hasFlags: false });
 
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw channels add --channel signal --help"),
+      expect.stringContaining("openclaw channels add --channel fixture-signal --help"),
     );
     expect(runtime.error).not.toHaveBeenCalledWith(
       expect.stringContaining("channels add --channel <id> --use-env"),
