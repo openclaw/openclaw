@@ -84,6 +84,112 @@ type MainCronFixture = {
   getReplySpy: Mock<(ctx: MsgContext) => Promise<MainCronReply>>;
 };
 
+type MainCronPhase =
+  | "fixture-start"
+  | "cron-service-started"
+  | "cron-wake-requested"
+  | "cron-started"
+  | "cron-finished"
+  | "reply-entered"
+  | "heartbeat-started"
+  | "heartbeat-settled"
+  | "follow-up-completed"
+  | "watchdog-armed";
+type HeartbeatObservation = {
+  attempt: number;
+  startedMs: number;
+  endedMs?: number;
+  outcome?: Awaited<ReturnType<typeof runHeartbeatOnce>>["status"] | "threw";
+};
+
+// Observe this fixture's existing owners; never retain payloads, wake reasons or errors.
+function createMainCronDiagnostics(followUpNeeded: boolean, now = () => performance.now()) {
+  const startedAt = now();
+  let lastStage: MainCronPhase = "fixture-start";
+  let lastStageAt = startedAt;
+  let watchdogAt: number | undefined;
+  let cronFinished = false;
+  let cronStatus: CronEvent["status"];
+  let followUpCompleted = false;
+  let heartbeatStarts = 0;
+  let heartbeatSettlements = 0;
+  const firstHeartbeats: HeartbeatObservation[] = [];
+  let latestHeartbeat: HeartbeatObservation | undefined;
+  const stage = (value: MainCronPhase) => {
+    lastStage = value;
+    lastStageAt = now();
+    if (value === "watchdog-armed") {
+      watchdogAt = lastStageAt;
+    }
+  };
+  return {
+    stage,
+    cronFinished(status: CronEvent["status"]) {
+      cronFinished = true;
+      cronStatus = status;
+      stage("cron-finished");
+    },
+    followUpCompleted() {
+      followUpCompleted = true;
+      stage("follow-up-completed");
+    },
+    heartbeatStarted() {
+      const observed: HeartbeatObservation = {
+        attempt: ++heartbeatStarts,
+        startedMs: Math.round(now() - startedAt),
+      };
+      if (firstHeartbeats.length < 2) {
+        firstHeartbeats.push(observed);
+      }
+      latestHeartbeat = observed;
+      stage("heartbeat-started");
+      return observed;
+    },
+    heartbeatSettled(
+      observed: HeartbeatObservation,
+      outcome: Awaited<ReturnType<typeof runHeartbeatOnce>> | "threw",
+    ) {
+      observed.endedMs = Math.round(now() - startedAt);
+      observed.outcome = outcome === "threw" ? outcome : outcome.status;
+      heartbeatSettlements += 1;
+      stage("heartbeat-settled");
+    },
+    timeoutError(
+      mode: WakeNowRunMode,
+      counts: { replyCalls: number; deliveryCalls: number; activeCron: number; cronLane: number },
+    ) {
+      const at = now();
+      const pending = [
+        ...(!cronFinished ? ["cron-terminal"] : []),
+        ...(followUpNeeded && !followUpCompleted ? ["follow-up-heartbeat"] : []),
+      ];
+      const snapshot = {
+        pending,
+        cronFinished,
+        cronStatus: cronStatus ?? "not-observed",
+        followUpNeeded,
+        followUpCompleted,
+        heartbeatStarts,
+        heartbeatSettlements,
+        // Retries must not grow the error; retain the first two and latest attempt.
+        heartbeats:
+          latestHeartbeat && latestHeartbeat.attempt > 2
+            ? [...firstHeartbeats, latestHeartbeat]
+            : firstHeartbeats,
+        elapsedMs: Math.round(at - startedAt),
+        watchdogElapsedMs: watchdogAt === undefined ? undefined : Math.round(at - watchdogAt),
+        lastStage,
+        lastStageElapsedMs: Math.round(at - lastStageAt),
+        replyCalls: counts.replyCalls,
+        deliveryCalls: counts.deliveryCalls,
+        activeCron: counts.activeCron,
+        cronLane: counts.cronLane,
+      };
+      return new Error(mode + " cron run did not finish; diagnostics=" + JSON.stringify(snapshot));
+    },
+  };
+}
+
 async function runMainCronCase(
   mode: WakeNowRunMode,
   wakeMode: "now" | "next-heartbeat" = "now",
@@ -102,9 +208,11 @@ async function runMainCronCase(
   exercise?: (fixture: MainCronFixture) => Promise<void>,
 ) {
   const sandbox = makeSandbox();
+  const diagnostics = createMainCronDiagnostics(options.mixedExec === true);
   const followUpCompleted = createDeferred<Awaited<ReturnType<typeof runHeartbeatOnce>>>();
   const wakeSignals: Array<AbortSignal | undefined> = [];
   const getReplySpy = vi.fn<(ctx: MsgContext) => Promise<MainCronReply>>(async (ctx) => {
+    diagnostics.stage("reply-entered");
     wakeSignals.push(getHeartbeatWakeAbortSignal());
     if (options.mixedExec && ctx.InternalTurnSource === "cron") {
       enqueueSystemEventWithReceipt("Reminder: Late arrival", {
@@ -153,15 +261,23 @@ async function runMainCronCase(
   }
 
   const runHeartbeatOnceReal: typeof runHeartbeatOnce = async (opts) => {
-    const outcome = await runHeartbeatOnce({
-      ...opts,
-      cfg,
-      deps: { getReplyFromConfig: getReplySpy, telegram: sendTelegram },
-    });
-    if (options.mixedExec && getReplySpy.mock.calls.length >= 2) {
-      followUpCompleted.resolve(outcome);
+    const observed = diagnostics.heartbeatStarted();
+    try {
+      const outcome = await runHeartbeatOnce({
+        ...opts,
+        cfg,
+        deps: { getReplyFromConfig: getReplySpy, telegram: sendTelegram },
+      });
+      diagnostics.heartbeatSettled(observed, outcome);
+      if (options.mixedExec && getReplySpy.mock.calls.length >= 2) {
+        diagnostics.followUpCompleted();
+        followUpCompleted.resolve(outcome);
+      }
+      return outcome;
+    } catch (error) {
+      diagnostics.heartbeatSettled(observed, "threw");
+      throw error;
     }
-    return outcome;
   };
 
   const heartbeatRunner = startHeartbeatRunner({ cfg, runOnce: runHeartbeatOnceReal });
@@ -183,6 +299,7 @@ async function runMainCronCase(
     },
     requestHeartbeat,
     requestHeartbeatAndWait: (opts, lifecycle) => {
+      diagnostics.stage("cron-wake-requested");
       const sessionKey = opts.sessionKey ?? expectedMainSessionKey;
       if (options.mixedExec) {
         enqueueSystemEventWithReceipt("Exec completed (report, code 0) :: ready", { sessionKey });
@@ -201,12 +318,17 @@ async function runMainCronCase(
       status: "ok",
     })) as unknown as CronServiceDeps["runIsolatedAgentJob"],
     onEvent: (event) => {
+      if (event.action === "started") {
+        diagnostics.stage("cron-started");
+      }
       if (event.action === "finished") {
+        diagnostics.cronFinished(event.status);
         resolveFinished?.(event);
       }
     },
   });
   await cron.start();
+  diagnostics.stage("cron-service-started");
   let scheduledTick: Promise<void> | undefined;
 
   const runBody = async () => {
@@ -253,13 +375,22 @@ async function runMainCronCase(
       scheduledTick = Promise.resolve(clock.advanceTo(job.state.nextRunAtMs!));
     }
 
+    diagnostics.stage("watchdog-armed");
     let finishTimeout: ReturnType<typeof setTimeout> | undefined;
     const [terminal, followUp] = await Promise.race([
       // Cron emits finished before asynchronous finalization releases its busy guard.
       Promise.all([finished, options.mixedExec ? followUpCompleted.promise : undefined]),
       new Promise<never>((_, reject) => {
         finishTimeout = setTimeout(
-          () => reject(new Error(`${mode} cron run did not finish`)),
+          () =>
+            reject(
+              diagnostics.timeoutError(mode, {
+                replyCalls: getReplySpy.mock.calls.length,
+                deliveryCalls: sendTelegram.mock.calls.length,
+                activeCron: getActiveCronJobCount(),
+                cronLane: getQueueSize(CommandLane.Cron),
+              }),
+            ),
           10_000,
         );
       }),
@@ -692,4 +823,105 @@ describe("main cron with the real heartbeat runner", () => {
       }
     },
   );
+});
+
+describe("main cron watchdog diagnostics", () => {
+  it.each([
+    {
+      cronDone: false,
+      followUpNeeded: true,
+      followUpDone: false,
+      pending: ["cron-terminal", "follow-up-heartbeat"],
+    },
+    { cronDone: true, followUpNeeded: true, followUpDone: false, pending: ["follow-up-heartbeat"] },
+    { cronDone: false, followUpNeeded: true, followUpDone: true, pending: ["cron-terminal"] },
+    { cronDone: false, followUpNeeded: false, followUpDone: false, pending: ["cron-terminal"] },
+  ])(
+    "identifies pending signals for $cronDone/$followUpNeeded/$followUpDone",
+    ({ cronDone, followUpNeeded, followUpDone, pending }) => {
+      let clock = 100;
+      const diagnostics = createMainCronDiagnostics(followUpNeeded, () => clock);
+      clock = 150;
+      diagnostics.stage("watchdog-armed");
+      if (cronDone) {
+        diagnostics.cronFinished("ok");
+      }
+      if (followUpDone) {
+        diagnostics.followUpCompleted();
+      }
+      clock = 10_150;
+      const error = diagnostics.timeoutError("scheduled", {
+        replyCalls: 1,
+        deliveryCalls: 1,
+        activeCron: 1,
+        cronLane: 1,
+      });
+      const snapshot: unknown = JSON.parse(
+        error.message.slice(error.message.indexOf("diagnostics=") + "diagnostics=".length),
+      );
+      expect(error.message).toContain("scheduled cron run did not finish");
+      expect(snapshot).toMatchObject({
+        pending,
+        cronFinished: cronDone,
+        followUpNeeded,
+        followUpCompleted: followUpDone,
+        elapsedMs: 10_050,
+        watchdogElapsedMs: 10_000,
+        replyCalls: 1,
+        deliveryCalls: 1,
+        activeCron: 1,
+        cronLane: 1,
+      });
+    },
+  );
+
+  it("freezes bounded heartbeat outcomes without retaining private failure reasons", () => {
+    let clock = 0;
+    const diagnostics = createMainCronDiagnostics(true, () => clock);
+    diagnostics.stage("watchdog-armed");
+    const first = diagnostics.heartbeatStarted();
+    clock = 20;
+    diagnostics.heartbeatSettled(first, { status: "ran", durationMs: 20 });
+    const second = diagnostics.heartbeatStarted();
+    clock = 30;
+    const privateReason = "synthetic-private-prompt-chat-token-config-marker";
+    diagnostics.heartbeatSettled(second, { status: "failed", reason: privateReason });
+    const third = diagnostics.heartbeatStarted();
+    clock = 40;
+    diagnostics.heartbeatSettled(third, { status: "skipped", reason: privateReason });
+    diagnostics.cronFinished("ok");
+    const fourth = diagnostics.heartbeatStarted();
+    clock = 10_000;
+    const counts = {
+      replyCalls: 2,
+      deliveryCalls: 1,
+      activeCron: 0,
+      cronLane: 0,
+      privateData: privateReason,
+    };
+    const error = diagnostics.timeoutError("scheduled", counts);
+    diagnostics.heartbeatSettled(fourth, "threw");
+    diagnostics.followUpCompleted();
+    const snapshot: unknown = JSON.parse(
+      error.message.slice(error.message.indexOf("diagnostics=") + "diagnostics=".length),
+    );
+    expect(snapshot).toMatchObject({
+      pending: ["follow-up-heartbeat"],
+      cronFinished: true,
+      cronStatus: "ok",
+      followUpCompleted: false,
+      heartbeatStarts: 4,
+      heartbeatSettlements: 3,
+      lastStage: "heartbeat-started",
+      lastStageElapsedMs: 9_960,
+      heartbeats: [
+        { attempt: 1, startedMs: 0, endedMs: 20, outcome: "ran" },
+        { attempt: 2, startedMs: 20, endedMs: 30, outcome: "failed" },
+        { attempt: 4, startedMs: 40 },
+      ],
+    });
+    expect(snapshot).toHaveProperty("heartbeats.length", 3);
+    expect(snapshot).not.toHaveProperty("heartbeats.2.endedMs");
+    expect(error.message).not.toContain(privateReason);
+  });
 });
