@@ -7,7 +7,7 @@ import { registerOpenClawStateDatabaseAsyncResource } from "../state/openclaw-st
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
   SQLITE_WORKER_MAX_QUEUED_BYTES,
-  SQLITE_WORKER_MAX_REQUESTS,
+  SQLITE_WORKER_MAX_REQUESTS_PER_WORKER,
 } from "./sqlite-worker-broker.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES, SqliteWorkerError } from "./sqlite-worker-contract.js";
 import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
@@ -40,7 +40,7 @@ async function runAdmittedScope<T>(
   const bytes = serialize(input).byteLength;
   if (
     bytes > SQLITE_WORKER_MAX_MESSAGE_BYTES ||
-    admissions.count >= SQLITE_WORKER_MAX_REQUESTS ||
+    admissions.count >= SQLITE_WORKER_MAX_REQUESTS_PER_WORKER ||
     admissions.bytes + bytes > SQLITE_WORKER_MAX_QUEUED_BYTES
   ) {
     throw new SqliteWorkerError("Web Push storage admission capacity reached", "overloaded");
