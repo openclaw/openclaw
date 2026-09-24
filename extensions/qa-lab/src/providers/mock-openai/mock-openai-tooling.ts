@@ -2,12 +2,35 @@
 import { createHash } from "node:crypto";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
-import type { MockToolCallItem, StreamEvent } from "./mock-openai-contracts.js";
+import {
+  type MockToolCallItem,
+  type StreamEvent,
+  QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE,
+  QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
+  TINY_PNG_BASE64,
+} from "./mock-openai-contracts.js";
 import { MockResponseStream } from "./mock-openai-stream.js";
 
 let mockFunctionCallSequence = 0;
 
 export const QA_TOOL_SEARCH_SECONDARY_TARGET = "fake_plugin_tool_01";
+
+export function buildWhatsAppAgentActionArgs(prompt: string): Record<string, unknown> | undefined {
+  if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(prompt)) {
+    return { action: "react", emoji: "👍", final: true };
+  }
+  const uploadCaption = QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE.exec(prompt)?.[1];
+  if (uploadCaption) {
+    return {
+      action: "upload-file",
+      buffer: TINY_PNG_BASE64,
+      caption: uploadCaption,
+      contentType: "image/png",
+      filename: "whatsapp-qa-agent-upload.png",
+    };
+  }
+  return undefined;
+}
 
 function normalizePromptPathCandidate(candidate: string) {
   const trimmed = candidate.trim().replace(/^`+|`+$/g, "");
@@ -202,6 +225,9 @@ export function buildQaToolSearchArgs(
       ].join("\n"),
     };
   }
+  if (failureMode && targetTool === "sessions_spawn") {
+    return { task: "" };
+  }
   if (failureMode) {
     return { __qaFailureMode: "denied-input" };
   }
@@ -343,6 +369,7 @@ export function buildQaToolSearchArgs(
       label: "runtime-tool-fixture",
       mode: "run",
       thread: false,
+      expectsCompletionMessage: false,
     };
   }
   if (targetTool === "memory_recall") {

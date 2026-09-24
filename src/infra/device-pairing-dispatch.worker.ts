@@ -23,6 +23,9 @@ function execute(
   recordTokenReplacement: (
     facts: NonNullable<DevicePairingCommitReceipt["tokensReplaced"]>,
   ) => void,
+  recordWorkerEnvironment: (
+    facts: NonNullable<DevicePairingCommitReceipt["workerEnvironment"]>,
+  ) => void,
 ) {
   switch (command.type) {
     case "devicePairing.request":
@@ -60,7 +63,7 @@ function execute(
     case "node.rename":
       return executeDevicePairingNodeMutation(command, database);
     default:
-      return executeDeviceBootstrapMutation(command, database);
+      return executeDeviceBootstrapMutation(command, database, recordWorkerEnvironment);
   }
 }
 
@@ -74,9 +77,17 @@ export function executeDevicePairingMutationInWorker(
         withDevicePairingMutationAdmission(() => {
           const before = readDevicePairingStoreStateFromDatabase(database.db).pairedByDeviceId;
           let tokensReplaced: DevicePairingCommitReceipt["tokensReplaced"];
-          const result = execute(command, database, (facts) => {
-            tokensReplaced = facts;
-          });
+          let workerEnvironment: DevicePairingCommitReceipt["workerEnvironment"];
+          const result = execute(
+            command,
+            database,
+            (facts) => {
+              tokensReplaced = facts;
+            },
+            (facts) => {
+              workerEnvironment = facts;
+            },
+          );
           const after = readDevicePairingStoreStateFromDatabase(database.db).pairedByDeviceId;
           const changed: DevicePairingCommitReceipt["changed"] = [];
           for (const deviceId of new Set([...Object.keys(before), ...Object.keys(after)])) {
@@ -90,6 +101,7 @@ export function executeDevicePairingMutationInWorker(
             revision: resolveDevicePairingStoreRevision(after),
             changed,
             ...(tokensReplaced ? { tokensReplaced } : {}),
+            ...(workerEnvironment ? { workerEnvironment } : {}),
           } satisfies DevicePairingCommitReceipt);
           return result;
         }),

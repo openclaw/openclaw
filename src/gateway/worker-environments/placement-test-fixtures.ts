@@ -1,6 +1,15 @@
+import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
-import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { workerEnvironmentProjections } from "./store-projection.js";
+import { readWorkerEnvironmentFacts } from "./store-row-codec.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
 type PlacementEnvironmentFixture = Pick<
@@ -8,6 +17,29 @@ type PlacementEnvironmentFixture = Pick<
   "environmentId" | "state" | "ownerEpoch" | "attachedSessionIds"
 > &
   Partial<WorkerEnvironmentRecord>;
+
+export function publishWorkerEnvironmentFixture(db: DatabaseSync, environmentId: string): void {
+  const owner = workerEnvironmentProjections.get(requireOpenClawStateDatabaseIdentity({ db }));
+  if (!owner?.active) {
+    return;
+  }
+  const facts = readWorkerEnvironmentFacts(db, [environmentId]);
+  const revision = owner.nextSequence();
+  if (
+    !stageSqliteTransactionState(db, {
+      stage() {},
+      rollback() {},
+      commit() {
+        if (owner.active) {
+          owner.install(facts, revision, false);
+        }
+      },
+    })
+  ) {
+    throw new Error("Worker environment fixture publication requires its owning transaction");
+  }
+  sessionChanges.emit({ all: true, scope: "worker-environments" }, db);
+}
 
 // Mock providers still publish the durable ownership read by placement activation.
 // Updating a fixture must preserve activation history recorded by the real store.
@@ -53,31 +85,50 @@ export function writePlacementEnvironmentFixture(
     destroy_requested_at_ms: environment.destroyRequestedAtMs ?? null,
     last_error: environment.lastError ?? null,
   };
-  executeSqliteQuerySync(
-    database.db,
-    getNodeSqliteKysely<Pick<StateDatabase, "worker_environments">>(database.db)
-      .insertInto("worker_environments")
-      .values({
-        ...values,
-        created_at_ms: environment.createdAtMs ?? 1_000,
-        last_activated_at_ms: null,
-        preparation_key: null,
-        preparation_demand_at_ms: null,
-        preparation_expires_at_ms: null,
-        preparation_consumed_at_ms: null,
-      })
-      .onConflict((oc) =>
-        oc.column("environment_id").doUpdateSet({
-          state: environment.state,
-          owner_epoch: environment.ownerEpoch,
-          attached_session_ids_json: JSON.stringify(environment.attachedSessionIds),
-          ...(environment.providerId !== undefined ? { provider_id: environment.providerId } : {}),
-          ...(environment.profileId !== undefined ? { profile_id: environment.profileId } : {}),
-          ...(environment.nodeDeviceId !== undefined
-            ? { node_device_id: environment.nodeDeviceId }
-            : {}),
-        }),
-      ),
+  runOpenClawStateWriteTransaction(
+    () => {
+      executeSqliteQuerySync(
+        database.db,
+        getNodeSqliteKysely<Pick<StateDatabase, "worker_environments">>(database.db)
+          .insertInto("worker_environments")
+          .values({
+            ...values,
+            created_at_ms: environment.createdAtMs ?? 1_000,
+            last_activated_at_ms: null,
+            preparation_key: null,
+            preparation_demand_at_ms: null,
+            preparation_expires_at_ms: null,
+            preparation_consumed_at_ms: null,
+          })
+          .onConflict((oc) =>
+            oc.column("environment_id").doUpdateSet({
+              state: environment.state,
+              owner_epoch: environment.ownerEpoch,
+              attached_session_ids_json: JSON.stringify(environment.attachedSessionIds),
+              ...(environment.providerId !== undefined
+                ? { provider_id: environment.providerId }
+                : {}),
+              ...(environment.profileId !== undefined ? { profile_id: environment.profileId } : {}),
+              ...(environment.nodeDeviceId !== undefined
+                ? { node_device_id: environment.nodeDeviceId }
+                : {}),
+              ...(environment.leaseId !== undefined ? { lease_id: values.lease_id } : {}),
+              ...(environment.sharedHost !== undefined ? { shared_host: values.shared_host } : {}),
+              ...(environment.sshEndpoint !== undefined
+                ? {
+                    ssh_host: values.ssh_host,
+                    ssh_port: values.ssh_port,
+                    ssh_user: values.ssh_user,
+                    ssh_host_key: values.ssh_host_key,
+                    ssh_key_ref_json: values.ssh_key_ref_json,
+                  }
+                : {}),
+            }),
+          ),
+      );
+      publishWorkerEnvironmentFixture(database.db, environment.environmentId);
+    },
+    { database },
   );
 }
 

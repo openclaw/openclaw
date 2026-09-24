@@ -20,6 +20,8 @@ permissions:
 jobs:
   prepare-mermaid:
     name: Prepare Mermaid assets
+    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
+    if: (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -98,7 +100,7 @@ jobs:
           path: apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:
           languages: swift
           build-mode: manual
@@ -110,7 +112,7 @@ jobs:
 
       - name: Analyze
         id: analyze
-        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:
           output: sarif-results
           upload: failure-only
@@ -147,7 +149,7 @@ jobs:
           done
 
       - name: Upload filtered SARIF
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:
           sarif_file: sarif-results-filtered
           category: "/codeql-critical-security/macos"

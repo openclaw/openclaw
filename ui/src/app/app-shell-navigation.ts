@@ -79,7 +79,7 @@ export class ShellNavigationOwner {
     );
   }
 
-  navigate(routeId: string, options?: ApplicationNavigationOptions): void {
+  readonly navigate = (routeId: string, options?: ApplicationNavigationOptions): void => {
     const context = this.host.context;
     if (!context || !isRouteId(routeId)) {
       return;
@@ -89,7 +89,7 @@ export class ShellNavigationOwner {
       routeId,
       isSessionRouteId(routeId) ? this.chatNavigationOptions(routeId, options) : options,
     );
-  }
+  };
 
   recoverNotFoundRoute(): boolean {
     const context = this.host.context;

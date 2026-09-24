@@ -13,6 +13,7 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
@@ -252,25 +253,33 @@ describe("sessions_send gateway loopback", () => {
 
   it("returns reply when lifecycle ends before agent.wait", async () => {
     const body = "    const first = 1;\n        const second = 2;";
+    const announcement = createDeferred();
+    void announcement.promise.catch(() => {});
     const spy = agentCommandMock as unknown as Mock<
       (opts: AgentCommandGatewayIngressOpts) => Promise<void>
     >;
-    spy.mockImplementation(async (opts) => {
-      await opts.userTurnTranscriptRecorder?.persistApproved();
-      await emitLifecycleAssistantReply({
-        opts,
-        defaultSessionId: "main",
-        includeTimestamp: true,
-        resolveText: (extraSystemPrompt) => {
-          if (extraSystemPrompt?.includes("Agent-to-agent reply step")) {
-            return "REPLY_SKIP";
-          }
-          if (extraSystemPrompt?.includes("Agent-to-agent announce step")) {
-            return "ANNOUNCE_SKIP";
-          }
-          return "pong";
-        },
-      });
+    spy.mockImplementation((opts) => {
+      const completed = (async () => {
+        await opts.userTurnTranscriptRecorder?.persistApproved();
+        await emitLifecycleAssistantReply({
+          opts,
+          defaultSessionId: "main",
+          includeTimestamp: true,
+          resolveText: (extraSystemPrompt) => {
+            if (extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+              return "REPLY_SKIP";
+            }
+            if (extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+              return "ANNOUNCE_SKIP";
+            }
+            return "pong";
+          },
+        });
+      })();
+      if (opts.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+        announcement.resolve(completed);
+      }
+      return completed;
     });
 
     const tool = getSessionsSendTool();
@@ -290,6 +299,8 @@ describe("sessions_send gateway loopback", () => {
     expect(result.details).toMatchObject({ runId: firstCall?.runId });
     expect(firstCall?.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
 
+    // The reply precedes its detached announcement's writes to this same transcript.
+    await announcement.promise;
     const { callGateway } = await import("./call.js");
     const history = await callGateway<{ messages?: unknown[] }>({
       method: "chat.history",
@@ -423,7 +434,7 @@ describe("sessions_send gateway loopback", () => {
           },
         });
 
-        agentStepTesting.setDepsForTest({
+        await agentStepTesting.setDepsForTest({
           agentCommandFromIngress: async () => ({
             payloads: [{ text: "announce through channel", mediaUrl: null }],
             meta: { durationMs: 1 },
@@ -453,7 +464,7 @@ describe("sessions_send gateway loopback", () => {
           { timeout: 5_000 },
         );
       } finally {
-        agentStepTesting.setDepsForTest();
+        await agentStepTesting.setDepsForTest();
       }
     },
   );
@@ -607,7 +618,7 @@ describe("sessions_send gateway loopback", () => {
           terminalReply: { disposition: "visible", text: deliveredReply },
           terminalReceipt: { runId, sourceReplyDelivered: true },
         });
-        agentStepTesting.setDepsForTest({
+        await agentStepTesting.setDepsForTest({
           agentCommandFromIngress: async () => ({
             payloads: [{ text: "SHOULD_NOT_SEND", mediaUrl: null }],
             meta: { durationMs: 1 },
@@ -628,7 +639,7 @@ describe("sessions_send gateway loopback", () => {
 
         expect(sendCalls).toEqual([]);
       } finally {
-        agentStepTesting.setDepsForTest();
+        await agentStepTesting.setDepsForTest();
       }
     },
   );

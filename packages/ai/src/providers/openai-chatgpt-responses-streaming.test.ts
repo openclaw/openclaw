@@ -210,6 +210,15 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
         code,
         type: "invalid_request_error",
         message: "This synthetic request was refused by provider policy.",
+        ...(category === "misalignment"
+          ? {
+              misalignment: {
+                error_type: "future_category",
+                detailed_explanation: "The proposed action differed from the requested task.",
+                steer: { message: "  Continue only the requested task.\n" },
+              },
+            }
+          : {}),
       };
       const payload =
         terminal === "response.failed"
@@ -255,7 +264,19 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
             diagnostics: [
               {
                 type: "provider_refusal",
-                details: { provider: "openai", category },
+                details: {
+                  provider: "openai",
+                  category,
+                  ...(error.misalignment
+                    ? {
+                        review: {
+                          explanation: error.misalignment.detailed_explanation,
+                          continuation: error.misalignment.steer,
+                          errorType: error.misalignment.error_type,
+                        },
+                      }
+                    : {}),
+                },
               },
             ],
           },
@@ -487,18 +508,26 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     }
   });
 
-  it.each(["sse", "websocket"] as const)(
-    "preserves failed response identity and provider error details over %s",
-    async (transport) => {
+  it.each(
+    (["sse", "websocket"] as const).flatMap((transport) =>
+      ["invalid_prompt", "misalignment_policy_violation"].map((code) => ({ transport, code })),
+    ),
+  )(
+    "preserves failed response identity and $code details over $transport",
+    async ({ transport, code }) => {
       const failedResponse = {
         type: "response.failed",
         response: {
           id: "resp_failed",
           status: "failed",
           error: {
-            code: "invalid_prompt",
+            code,
             type: "hostile type: user prompt echoed here",
             message: "rejected",
+            misalignment: {
+              detailed_explanation: "The proposed action differs from the requested task.",
+              steer: { message: "Continue only the requested task." },
+            },
           },
         },
       };
@@ -551,9 +580,28 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
         error: {
           responseId: "resp_failed",
           stopReason: "error",
-          errorMessage: "invalid_prompt: rejected",
+          errorMessage: `${code}: rejected`,
         },
       });
+      const result = await stream.result();
+      if (code === "misalignment_policy_violation") {
+        expect(result.diagnostics).toMatchObject([
+          {
+            type: "provider_refusal",
+            details: {
+              category: "misalignment",
+              review: {
+                explanation: failedResponse.response.error.misalignment.detailed_explanation,
+                continuation: failedResponse.response.error.misalignment.steer,
+              },
+            },
+          },
+        ]);
+      } else {
+        expect(result.diagnostics?.some((entry) => entry.type === "provider_refusal")).not.toBe(
+          true,
+        );
+      }
       // Provider message text reaches the stream consumer only; the transport
       // log keeps timing and classification and never the message body.
       expect(logWarn).toHaveBeenCalledTimes(1);

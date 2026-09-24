@@ -1,10 +1,13 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { normalizeSubagentRunState } from "../agents/subagents/registry/subagent-delivery-state.js";
 import { registerRequiredQueuedSubagent } from "../agents/subagents/registry/subagent-registry-queued-registration.js";
 import { persistSubagentRunsToDiskAsyncOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
+import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
@@ -21,6 +24,7 @@ import { OpenClawStateOwnershipError } from "../state/openclaw-state-ownership.j
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   executeOpenClawStateWorker,
+  inspectOpenClawStateDatabase,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
 import { buildFlowRecord } from "../tasks/task-flow-registry.records.js";
@@ -35,6 +39,7 @@ import * as nodeSqlite from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { SqliteSchemaVersionError } from "./sqlite-user-version.js";
+import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "./sqlite-worker-contract.js";
 import { registerSharedStateWorkerAdmissionTests } from "./sqlite-worker-shared-state-admission.test-support.js";
 import { closeUnclaimedSharedStateSqliteWorkers } from "./sqlite-worker-store.js";
 import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
@@ -54,6 +59,72 @@ function context() {
 }
 
 describe("canonical shared-state worker admission", () => {
+  it.each(["key", "value"])("bounds captured environment %s bytes before opening", async (part) => {
+    const padding = "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES);
+    const env = {
+      OPENCLAW_STATE_DIR: dirs.make("worker-environment-budget-"),
+      [part === "key" ? padding : "PADDING"]: part === "value" ? padding : "x",
+    };
+    const captured = captureOpenClawStateWorkerContext({ env });
+    await expect(
+      executeOpenClawStateWorker(captured, {
+        type: "flows.list",
+        input: { ownerKey: "agent:main:environment-budget" },
+      }),
+    ).rejects.toMatchObject({ code: "overloaded" });
+    expect(existsSync(captured.admission.databasePath)).toBe(false);
+  });
+
+  it.each([false, true])(
+    "retains selected storage environment before worker initialization (retained: %s)",
+    async (retained) => {
+      const root = dirs.make("worker-selected-storage-");
+      const env = {
+        HOME: path.join(root, "home"),
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+        OPENCLAW_CONFIG_PATH: path.join(root, "selected.json"),
+        STORE_ROOT: path.join(root, "retained"),
+      };
+      mkdirSync(env.HOME);
+      mkdirSync(env.STORE_ROOT);
+      const agentPath = path.join(env.STORE_ROOT, "openclaw-agent.sqlite");
+      if (retained) {
+        const database = nodeSqlite.openNodeSqliteDatabase(agentPath);
+        database.exec(
+          "CREATE TABLE retained_history (value TEXT); INSERT INTO retained_history VALUES ('kept')",
+        );
+        database.close();
+      }
+      const bytes = retained ? readFileSync(agentPath) : undefined;
+      writeFileSync(
+        env.OPENCLAW_CONFIG_PATH,
+        JSON.stringify({ agents: { entries: { main: { agentDir: "${STORE_ROOT}" } } } }),
+      );
+      const captured = captureOpenClawStateWorkerContext({ env });
+      env.OPENCLAW_CONFIG_PATH = path.join(root, "later.json");
+      env.STORE_ROOT = path.join(root, "later");
+
+      await executeOpenClawStateWorker(captured, {
+        type: "flows.list",
+        input: { ownerKey: "agent:main:journal-freshness" },
+      });
+      expect(existsSync(captured.admission.databasePath)).toBe(true);
+      const database = openOpenClawStateDatabase({
+        path: captured.admission.databasePath,
+        env: captured.environment,
+      });
+      const journal = database.db
+        .prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'")
+        .get();
+      if (retained) {
+        expect(journal).toBeUndefined();
+        expect(readFileSync(agentPath)).toEqual(bytes);
+      } else {
+        expect(journal).toEqual({ name: "agent_deletion_journal" });
+      }
+    },
+  );
+
   it.each(["open", "execute"] as const)(
     "keeps typed %s errors for a reloaded caller of the existing shared worker",
     async (phase) => {
@@ -264,6 +335,24 @@ describe("canonical shared-state worker admission", () => {
       await runOpenClawStateWorkerOperation(captured, inspect, { existingOnly: true }),
     ).toBeUndefined();
     expect(inspect).not.toHaveBeenCalled();
+    expect(
+      await inspectOpenClawStateDatabase(captured, {
+        type: "database.generationMatches",
+        input: {
+          generation: {
+            database: {
+              birthtimeNs: 0n,
+              ctimeNs: 0n,
+              dev: 0n,
+              ino: 0n,
+              mtimeNs: 0n,
+              size: 0n,
+              sha256: "0".repeat(64),
+            },
+          },
+        },
+      }),
+    ).toBeUndefined();
     expect(existsSync(captured.admission.databasePath)).toBe(false);
   });
 
@@ -464,15 +553,41 @@ it("commits captured registry rows without host SQL", async () => {
       ]),
     );
     const queued = createRun("queued");
+    const capturedTask = 'captured task with "quotes", \\slashes, and 🦞\n'.repeat(256);
+    queued.task = capturedTask;
+    queued.queuedLaunch = {
+      request: { sessionKey: queued.childSessionKey, task: queued.task },
+      timeoutMs: 100,
+      schedulerGroupKey: "synthetic-group",
+      maxConcurrent: 1,
+    };
+    const terminal = createRun("private-terminal");
+    terminal.completionTarget = "parent";
+    terminal.execution = { status: "terminal", endedAt: 200 };
+    const terminalReply = {
+      disposition: "visible" as const,
+      text: "[Mon 2026-09-21 12:00 UTC] [Mon 2026-09-21 12:00 UTC] captured reply",
+    };
+    terminal.completion = {
+      required: false,
+      resultText: "captured result 🦞\n".repeat(256),
+      terminalReply,
+    };
+    const expected = [queued, terminal].map((entry) =>
+      bindSubagentRunRecord(normalizeSubagentRunState(structuredClone(entry))),
+    );
     const capturedContext = captureOpenClawStateWorkerContext();
     const sql = observeMainThreadSql();
     try {
       const write = persistSubagentRunsToDiskAsyncOrThrow(
-        new Map([[queued.runId, queued]]),
-        [queued.runId, removed.runId],
+        new Map([queued, terminal].map((entry) => [entry.runId, entry])),
+        [queued.runId, terminal.runId, removed.runId],
         { context: capturedContext },
       );
       queued.task = "mutated after capture";
+      queued.queuedLaunch.request.task = "mutated descriptor";
+      terminal.completion.resultText = "mutated result";
+      terminalReply.text = "mutated reply";
       await write;
       sql.expectIdle();
     } finally {
@@ -480,9 +595,9 @@ it("commits captured registry rows without host SQL", async () => {
       await closeOpenClawStateDatabaseAsync();
     }
     const stored = loadSubagentRegistryFromSqlite();
-    expect([...stored.keys()].toSorted()).toEqual(["queued", "retained"]);
+    expect([...stored.keys()].toSorted()).toEqual(["private-terminal", "queued", "retained"]);
     expect(stored.get("queued")).toMatchObject({
-      task: "captured task",
+      task: capturedTask,
       execution: { status: "queued" },
       completion: queued.completion,
       delivery: queued.delivery,
@@ -491,6 +606,12 @@ it("commits captured registry rows without host SQL", async () => {
       path: capturedContext.admission.databasePath,
       env: capturedContext.environment,
     });
+    for (const row of expected) {
+      expect(
+        database.db.prepare("SELECT * FROM subagent_runs WHERE run_id = ?").get(row.run_id),
+      ).toMatchObject(row);
+    }
+    expect(expected[1]?.payload_json).toContain('"parentCompletion":');
     const calibration = observeMainThreadSql();
     try {
       database.db.exec("BEGIN EXCLUSIVE;");

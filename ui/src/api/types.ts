@@ -257,6 +257,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   permissionMode?: GatewaySessionRow["permissionMode"];
   nativeRuntimeConsent?: string;
   modelOverrideSource?: GatewayWireSessionsPatchResult["entry"]["modelOverrideSource"];
+  boardFace?: GatewaySessionRow["boardFace"];
   boardPresentation?: GatewaySessionRow["boardPresentation"];
   archivedAt?: number;
   archivedBy?: GatewaySessionRow["archivedBy"];

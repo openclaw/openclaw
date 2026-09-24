@@ -8,34 +8,38 @@ import {
   listMatrixAccountIds,
   resolveDefaultMatrixAccountId,
   resolveMatrixAccount,
+  resolveMatrixAccountAsync,
   resolveMatrixAccountConfig,
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
 import { normalizeMatrixAllowList } from "./matrix/monitor/allowlist.js";
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 
-export const matrixConfigAdapter = createScopedChannelConfigAdapter<
-  ResolvedMatrixAccount,
-  ReturnType<typeof resolveMatrixAccountConfig>
->({
-  sectionKey: "matrix",
-  listAccountIds: listMatrixAccountIds,
-  resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
-  resolveAccessorAccount: ({ cfg, accountId }) => resolveMatrixAccountConfig({ cfg, accountId }),
-  defaultAccountId: resolveDefaultMatrixAccountId,
-  clearBaseFields: [
-    "name",
-    "homeserver",
-    "network",
-    "proxy",
-    "userId",
-    "accessToken",
-    "password",
-    "deviceId",
-    "deviceName",
-    "avatarUrl",
-    "initialSyncLimit",
-  ],
-  resolveAllowFrom: (account) => account.dm?.allowFrom,
-  formatAllowFrom: (allowFrom) => normalizeMatrixAllowList(allowFrom),
-});
+export const matrixConfigAdapter = {
+  ...createScopedChannelConfigAdapter<
+    ResolvedMatrixAccount,
+    ReturnType<typeof resolveMatrixAccountConfig>
+  >({
+    sectionKey: "matrix",
+    listAccountIds: listMatrixAccountIds,
+    resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
+    resolveAccessorAccount: ({ cfg, accountId }) => resolveMatrixAccountConfig({ cfg, accountId }),
+    defaultAccountId: resolveDefaultMatrixAccountId,
+    clearBaseFields: [
+      "name",
+      "homeserver",
+      "network",
+      "proxy",
+      "userId",
+      "accessToken",
+      "password",
+      "deviceId",
+      "deviceName",
+      "avatarUrl",
+      "initialSyncLimit",
+    ],
+    resolveAllowFrom: (account) => account.dm?.allowFrom,
+    formatAllowFrom: (allowFrom) => normalizeMatrixAllowList(allowFrom),
+  }),
+  resolveAccountAsync: adaptScopedAccountAccessor(resolveMatrixAccountAsync),
+};

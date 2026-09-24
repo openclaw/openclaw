@@ -368,6 +368,8 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "@slack/bolt",
     "@slack/web-api",
     "@vitest/expect",
+    // LanceDB's serializer and plugin schemas must share Arrow's CJS type identity.
+    "apache-arrow",
     "jimp",
     "matrix-js-sdk",
     "prism-media",
@@ -387,10 +389,10 @@ function shouldNeverBundleDependency(id: string): boolean {
 }
 
 function shouldNeverBundleDeclarationDependency(id: string): boolean {
-  // Arrow's relative module augmentations must stay beside their package modules.
+  // Keep dependency declarations beside their package modules.
   return (
     shouldNeverBundleDependency(id) ||
-    ["zod", "apache-arrow", "kysely"].some((name) => id === name || id.startsWith(`${name}/`))
+    ["zod", "kysely"].some((name) => id === name || id.startsWith(`${name}/`))
   );
 }
 
@@ -457,7 +459,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
-    "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "config/sessions/disk-budget.worker": "src/config/sessions/disk-budget.worker.ts",
     "config/sessions/session-transcript-reconcile":
@@ -721,6 +722,7 @@ function buildUnifiedDistEntries(): Record<string, string> {
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
     "extensions/browser/relay-daemon-entry": "extensions/browser/relay-daemon-entry.ts",
+    "extensions/browser/setup-entry": "extensions/browser/setup-entry.ts",
     ...bundledHookEntries,
   };
 }
@@ -976,6 +978,9 @@ const configs: UserConfig[] = [
   workerDeployBuildConfig({ "worker/worker": "src/worker/worker-deploy-entry.ts" }),
   workerDeployBuildConfig({
     "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
+  }),
+  workerDeployBuildConfig({
+    "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
   }),
   { ...createManagedHandoffBuildConfig(), name: TSDOWN_UNIFIED_CONFIG_GROUP, env },
   nodeBuildConfig(

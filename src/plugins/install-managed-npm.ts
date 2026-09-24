@@ -7,6 +7,7 @@ import {
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
+import { withInstallActivity } from "../infra/install-progress.js";
 import {
   buildNpmResolutionFields,
   formatNpmCommandFailureOutput,
@@ -45,10 +46,7 @@ import {
 } from "./install-managed-npm-state.js";
 import { verifyInstalledNpmResolution } from "./install-npm-resolution.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
-import {
-  preflightPluginNpmInstallPolicy,
-  type InstallSafetyOverrides,
-} from "./install-security-scan.js";
+import { preflightPluginNpmInstallPolicy } from "./install-security-scan.js";
 import {
   defaultLogger,
   ensureInstallTargetAvailableForMode,
@@ -64,8 +62,7 @@ import {
 } from "./install-transaction.js";
 import type {
   InstallPluginResult,
-  PluginInstallArtifactConsentHandler,
-  PluginInstallLogger,
+  PackageInstallCommonParams,
   PluginInstallPolicyRequest,
 } from "./install-types.js";
 import { isOfficialCatalogLookupPluginIdReplacement } from "./official-external-install-records.js";
@@ -79,7 +76,10 @@ import {
 } from "./status-dependencies-core.js";
 
 export async function installPluginFromManagedNpmRoot(
-  params: InstallSafetyOverrides & {
+  params: Omit<
+    PackageInstallCommonParams,
+    "requirePluginManifest" | "allowSourceTypeScriptEntries"
+  > & {
     packageName: string;
     dependencySpec?: string;
     prepareDependencySpec?: ManagedNpmRootDependencySpecPreparation;
@@ -89,19 +89,9 @@ export async function installPluginFromManagedNpmRoot(
     policyPreflightSourcePath?: string;
     policyPreflightSourcePathKind?: "file" | "directory";
     skipPolicyPreflight?: boolean;
-    extensionsDir?: string;
-    npmDir?: string;
-    timeoutMs?: number;
-    workTimeoutMs?: number | null;
     signal?: AbortSignal;
-    logger?: PluginInstallLogger;
-    mode?: "install" | "update";
-    dryRun?: boolean;
-    expectedPluginId?: string;
     expectedReplacementPluginId?: string;
     integrityDrift?: NpmIntegrityDrift;
-    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
-    beforePersistentApply?: () => void;
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -607,7 +597,9 @@ export async function installPluginFromManagedNpmRoot(
         afterCopy: (stageDir) => copyManagedNpmProjectInputs({ npmRoot: targetNpmRoot, stageDir }),
         afterInstall: async (stageDir) => {
           try {
-            staged.result = await runManagedNpmInstall(stageDir);
+            staged.result = await withInstallActivity(logger, "dependencies", () =>
+              runManagedNpmInstall(stageDir),
+            );
             return staged.result;
           } catch (error) {
             // The directory owner cleans its stage before the original consent/policy error escapes.

@@ -6,6 +6,11 @@ import {
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelIngressResolver,
+  resolveChannelMessageIngress,
+  resolveStableChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 
 type SessionRecord = {
@@ -89,6 +94,11 @@ export function createQaRunnerRuntime(): PluginRuntime {
         dispatchReplyWithBufferedBlockDispatcher,
       },
       inbound: {
+        ingress: {
+          createResolver: createChannelIngressResolver,
+          resolve: resolveChannelMessageIngress,
+          resolveStable: resolveStableChannelMessageIngress,
+        },
         async dispatch(params: Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0]) {
           const sessionKey =
             typeof params.ctxPayload.SessionKey === "string"

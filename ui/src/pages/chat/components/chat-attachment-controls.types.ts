@@ -9,6 +9,7 @@ export type ChatAttachmentControlsProps = {
   attachmentReads?: ChatAttachmentReadLifecycle;
   attachments?: ChatAttachment[];
   disabled?: boolean;
+  imagesOnly?: boolean;
   getAttachments?: () => ChatAttachment[];
   draft?: string;
   getDraft?: () => string;

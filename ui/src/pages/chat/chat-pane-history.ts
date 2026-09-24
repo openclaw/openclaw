@@ -116,6 +116,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
             requests.initialSnapshotHydration !== hydration ||
             this.state !== state ||
             !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
+            resolveChatSnapshotKey(state, { sessionKey }) !== cacheKey ||
             readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })
           ) {
             return;
@@ -159,7 +160,12 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     }
     const historyLoad = getChatHistoryLoadState(state);
     const startup = historyLoad.phase === "failed" && historyLoad.startup;
-    void refreshPageChat(state, { awaitHistory: true, scheduleScroll: false, startup });
+    void refreshPageChat(state, {
+      historyLoad: loadChatHistory(state, { startup, supersedeInFlight: true }),
+      awaitHistory: true,
+      scheduleScroll: false,
+      startup,
+    });
   };
 
   protected hasOlderMessages(): boolean {
@@ -288,7 +294,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         areUiSessionKeysEquivalent(renderedSessionKey, stateSessionKey)
       ) {
         saveChatSessionScrollPosition(
-          this.presentationId,
+          this.paneId,
           renderedSessionKey,
           captureChatSessionScrollPosition(root),
         );

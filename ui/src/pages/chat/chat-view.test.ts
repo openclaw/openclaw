@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
   ModelAuthStatusResult,
@@ -15,11 +15,7 @@ import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.t
 import type { UiSettings } from "../../app/settings.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
-import {
-  buildFallbackSlashCommands,
-  replaceSlashCommands,
-  SLASH_COMMANDS,
-} from "../../lib/chat/commands.ts";
+import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type {
   SessionPatchOptions,
@@ -59,6 +55,12 @@ import * as chatThread from "./chat-thread.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import {
   appendChatBubble,
+  replaceSkillCommands,
+  inputDraft,
+  inputDraftAtEnd,
+  keydownComposer,
+  createReactiveDraftHarness,
+  createSlashRerenderHarness,
   createChatProps,
   createPasteEvent,
   createTestTranscript,
@@ -67,6 +69,14 @@ import {
   getComposerTextarea,
   requireElement,
   stubAnimationFrames,
+  createDragEvent,
+  getChatModelSelect,
+  getChatThinkingValue,
+  getThinkingReasoningValueLabel,
+  getThinkingSelect,
+  getThinkingSlider,
+  getThinkingSliderValues,
+  itemAt,
 } from "./chat-view.test-helpers.ts";
 import { renderChat } from "./chat-view.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
@@ -273,7 +283,7 @@ type ChatHeaderTestState = {
   chatAvatarUrl: string | null;
   client: GatewayBrowserClient;
   connected: boolean;
-  hello: null;
+  hello: GatewayHelloOk | null;
   lastError: string | null;
   modelAuthStatusResult?: ModelAuthStatusResult | null;
   sessionKey: string;
@@ -461,7 +471,7 @@ function createChatHeaderState(
   });
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = createTestSessionCapability({
-    snapshot: { client, phase: "connected", hello: null },
+    snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
   });
@@ -508,7 +518,7 @@ function createChatHeaderState(
     lastError: null,
     chatAvatarUrl: null,
     basePath: "",
-    hello: null,
+    hello: sessionMutationGatewayHello(),
     agentsList: null,
     agentsPanel: "overview",
     agentsSelectedId: null,
@@ -559,15 +569,6 @@ function createOpenAiHeaderState(overrides: Parameters<typeof createChatHeaderSt
     models: createOpenAiModelCatalog(),
     ...overrides,
   });
-}
-
-function getChatModelSelect(container: Element): HTMLElement {
-  const select = container.querySelector<HTMLElement>('[data-chat-model-select="true"]');
-  expect(select).toBeInstanceOf(HTMLElement);
-  if (!(select instanceof HTMLElement)) {
-    throw new Error("Expected chat model control");
-  }
-  return select;
 }
 
 type ChatModelControlsProps = Parameters<typeof renderChatModelControls>[0];
@@ -625,46 +626,6 @@ function renderModelControls(
     container,
   );
   return container;
-}
-
-function getChatThinkingValue(control: HTMLElement): string {
-  return control.dataset.chatThinkingValue ?? "";
-}
-
-function getThinkingSelect(container: Element): HTMLElement {
-  const select = container.querySelector<HTMLElement>('[data-chat-thinking-select="true"]');
-  expect(select).toBeInstanceOf(HTMLElement);
-  if (!(select instanceof HTMLElement)) {
-    throw new Error("Expected chat thinking control");
-  }
-  return select;
-}
-
-function getThinkingSlider(container: Element): HTMLInputElement | null {
-  return container.querySelector<HTMLInputElement>('[data-chat-thinking-slider="true"]');
-}
-
-function getThinkingSliderValues(container: Element): string[] {
-  const values = getThinkingSlider(container)?.dataset.chatThinkingValues ?? "";
-  return values ? values.split(",") : [];
-}
-
-function getThinkingReasoningValueLabel(container: Element): string {
-  const preview = container.querySelector(
-    "[data-chat-thinking-preview-committed]:not([hidden]), " +
-      "[data-chat-thinking-preview-index]:not([hidden])",
-  );
-  return preview?.textContent?.trim() ?? "";
-}
-
-function createDragEvent(type: string, types = ["Files"]): Event {
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperty(event, "dataTransfer", { value: { types } });
-  return event;
-}
-
-function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
-  return expectDefined(items[index], `${label} ${index}`);
 }
 
 describe("chat typing status", () => {
@@ -2575,6 +2536,36 @@ describe("chat loading skeleton", () => {
     };
   }
 
+  it("retires only the exact saved Talk entries, retaining unsaved speech and repeated words", () => {
+    const container = renderChatView({
+      realtimeTalkActive: true,
+      messages: [{ role: "user", content: "Repeated words", __openclaw: { id: "voice:call:1" } }],
+      realtimeTalkConversation: [
+        {
+          id: "u1",
+          role: "user",
+          text: "Repeated words",
+          isStreaming: false,
+          transcriptId: "voice:call:1",
+        },
+        {
+          id: "u2",
+          role: "user",
+          text: "Repeated words",
+          isStreaming: false,
+          transcriptId: "voice:call:2",
+        },
+        { id: "a1", role: "assistant", text: "Still speaking", isStreaming: true },
+      ],
+    });
+    const turns = [...container.querySelectorAll(".agent-chat__voice-turn")];
+    expect(turns).toHaveLength(2);
+    expect(turns.map((turn) => turn.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "You Repeated words",
+      "Val Still speaking",
+    ]);
+  });
+
   it("renders realtime Talk transcript as ordered voice turns", () => {
     const container = renderChatView({
       realtimeTalkActive: true,
@@ -3564,160 +3555,7 @@ describe("chat composer IME composition", () => {
   });
 });
 
-describe("chat composer sizing", () => {
-  it("sizes restored drafts after the rendered value is committed", async () => {
-    const container = renderChatView({ draft: "A restored long draft" });
-    const textarea = getComposerTextarea(container);
-    Object.defineProperties(textarea, {
-      scrollHeight: { configurable: true, value: 180 },
-      clientHeight: { configurable: true, value: 150 },
-    });
-    document.body.append(container);
-
-    await Promise.resolve();
-
-    expect(textarea.style.height).toBe("150px");
-    expect(textarea.style.overflowY).toBe("auto");
-    container.remove();
-  });
-
-  it("shows the textarea scrollbar only when the draft overflows", () => {
-    const container = renderChatView({});
-    const textarea = getComposerTextarea(container);
-    let scrollHeight = 42;
-    let clientHeight = 42;
-    Object.defineProperties(textarea, {
-      scrollHeight: { configurable: true, get: () => scrollHeight },
-      clientHeight: { configurable: true, get: () => clientHeight },
-    });
-
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-
-    expect(textarea.style.height).toBe("42px");
-    expect(textarea.style.overflowY).toBe("hidden");
-
-    scrollHeight = 180;
-    clientHeight = 150;
-    textarea.value = "A long draft";
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-
-    expect(textarea.style.height).toBe("150px");
-    expect(textarea.style.overflowY).toBe("auto");
-  });
-
-  it("resizes the draft when responsive layout changes the textarea width", () => {
-    let resizeCallback: ResizeObserverCallback | undefined;
-    let animationFrameCallback: FrameRequestCallback | undefined;
-    let nextAnimationFrameId = 0;
-    const requestAnimationFrameMock = vi.fn((callback: FrameRequestCallback) => {
-      animationFrameCallback = callback;
-      nextAnimationFrameId += 1;
-      return nextAnimationFrameId;
-    });
-    const cancelAnimationFrameMock = vi.fn();
-    class TestResizeObserver {
-      constructor(callback: ResizeObserverCallback) {
-        resizeCallback = callback;
-      }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-      takeRecords(): ResizeObserverEntry[] {
-        return [];
-      }
-    }
-    vi.stubGlobal("ResizeObserver", TestResizeObserver);
-    vi.stubGlobal("requestAnimationFrame", requestAnimationFrameMock);
-    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrameMock);
-
-    let width = 320;
-    let scrollHeight = 42;
-    let clientHeight = 42;
-    vi.spyOn(HTMLTextAreaElement.prototype, "getBoundingClientRect").mockImplementation(() => ({
-      bottom: clientHeight,
-      height: clientHeight,
-      left: 0,
-      right: width,
-      top: 0,
-      width,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    }));
-
-    const container = renderChatView({});
-    const textarea = getComposerTextarea(container);
-    Object.defineProperties(textarea, {
-      scrollHeight: { configurable: true, get: () => scrollHeight },
-      clientHeight: { configurable: true, get: () => clientHeight },
-    });
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    expect(textarea.style.height).toBe("42px");
-    expect(textarea.style.overflowY).toBe("hidden");
-
-    scrollHeight = 180;
-    clientHeight = 150;
-    resizeCallback?.([], {} as ResizeObserver);
-    expect(textarea.style.overflowY).toBe("auto");
-    expect(requestAnimationFrameMock).not.toHaveBeenCalled();
-
-    width = 180;
-    scrollHeight = 120;
-    clientHeight = 120;
-    resizeCallback?.([], {} as ResizeObserver);
-    expect(requestAnimationFrameMock).toHaveBeenCalledOnce();
-    expect(textarea.style.height).toBe("42px");
-
-    animationFrameCallback?.(0);
-    expect(textarea.style.height).toBe("120px");
-    expect(textarea.style.overflowY).toBe("hidden");
-
-    width = 160;
-    resizeCallback?.([], {} as ResizeObserver);
-    render(html``, container);
-    expect(cancelAnimationFrameMock).toHaveBeenCalledWith(2);
-  });
-});
-
 describe("chat slash menu accessibility", () => {
-  function replaceSkillCommands(
-    ...skills: Array<{ key: string; name?: string; skillDisplayName?: string; description: string }>
-  ) {
-    replaceSlashCommands([
-      ...buildFallbackSlashCommands(),
-      ...skills.map(({ key, name = key, skillDisplayName, description }) => ({
-        key,
-        name,
-        skillDisplayName,
-        description,
-        source: "skill" as const,
-        skillModelVisible: true,
-      })),
-    ]);
-  }
-
-  function inputDraft(container: HTMLElement, value: string) {
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
-    textarea!.value = value;
-    textarea!.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-
-  function inputDraftAtEnd(container: HTMLElement, value: string) {
-    const textarea = getComposerTextarea(container);
-    textarea.value = value;
-    textarea.setSelectionRange(value.length, value.length);
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
-  }
-
-  function keydownComposer(container: HTMLElement, key: string, init: KeyboardEventInit = {}) {
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
-    const event = new KeyboardEvent("keydown", { ...init, key, bubbles: true, cancelable: true });
-    textarea!.dispatchEvent(event);
-    return event;
-  }
-
   function replayInput(textarea: HTMLTextAreaElement, value: string, type = "input") {
     if (type === "input") {
       textarea.value = value;
@@ -3738,47 +3576,6 @@ describe("chat slash menu accessibility", () => {
     });
     renderChatInto(container, { draft, getDraft: () => draft, onDraftChange, onSend });
     return { container, onDraftChange, onSend };
-  }
-
-  function createReactiveDraftHarness({
-    onDraftChange: observeDraftChange,
-    ...overrides
-  }: Partial<ChatProps> = {}) {
-    let draft = "";
-    let currentOverrides = overrides;
-    const container = document.createElement("div");
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-      observeDraftChange?.(next);
-    });
-    const renderCurrent = (nextOverrides: Partial<ChatProps> = {}) => {
-      currentOverrides = { ...currentOverrides, ...nextOverrides };
-      renderChatInto(container, {
-        draft,
-        getDraft: () => draft,
-        onDraftChange,
-        onRequestUpdate: renderCurrent,
-        ...currentOverrides,
-      });
-    };
-    renderCurrent();
-    return { container, renderCurrent };
-  }
-
-  function createSlashRerenderHarness() {
-    let draft = "";
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
-    const renderCurrent = () => renderChatView({ draft, onDraftChange });
-    return {
-      container: renderCurrent(),
-      inputAndRender(container: HTMLElement, value: string) {
-        inputDraft(container, value);
-        return renderCurrent();
-      },
-      renderCurrent,
-    };
   }
 
   function createSessionDraftHarness(prefix: string) {
@@ -4377,28 +4174,6 @@ describe("chat slash menu accessibility", () => {
     expect(onSlashIntent).toHaveBeenCalledOnce();
   });
 
-  it("opens a skill picker for $ references anywhere in a normal prompt", async () => {
-    replaceSkillCommands({
-      key: "prose_writer",
-      skillDisplayName: "Prose Writer",
-      description: "Draft polished prose.",
-    });
-    const onSlashIntent = vi.fn(async () => undefined);
-    const { container } = createReactiveDraftHarness({ onSlashIntent });
-
-    inputDraftAtEnd(container, "Polish this with $pro:");
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const listbox = container.querySelector<HTMLElement>("#chat-single-skill-menu-listbox");
-    const renderedTextarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
-    expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("Prose Writer");
-    expect(renderedTextarea?.getAttribute("aria-controls")).toBe("chat-single-skill-menu-listbox");
-    expect(renderedTextarea?.getAttribute("aria-expanded")).toBe("true");
-    expect(onSlashIntent).toHaveBeenCalledOnce();
-  });
-
   it("shows skills after commands in the slash picker and highlights typed prefixes", () => {
     replaceSkillCommands({
       key: "status_report",
@@ -4610,31 +4385,31 @@ describe("chat slash menu accessibility", () => {
       animationFrames.push(callback);
       return animationFrames.length;
     });
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-      function (this: HTMLElement) {
-        const height = 28;
-        let top = 0;
-        if (this.classList.contains("slash-menu-item")) {
-          const scrollRegion = this.closest<HTMLElement>(".slash-menu__scroll");
-          const options = Array.from(
-            scrollRegion?.querySelectorAll<HTMLElement>(".slash-menu-item") ?? [],
-          );
-          top = options.indexOf(this) * height - (scrollRegion?.scrollTop ?? 0);
-        }
-        const bottom = this.classList.contains("slash-menu__scroll") ? height * 2 : top + height;
-        return {
-          bottom,
-          height: bottom - top,
-          left: 0,
-          right: 240,
-          top,
-          width: 240,
-          x: 0,
-          y: top,
-          toJSON: () => ({}),
-        };
-      },
-    );
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const height = 28;
+      let top = 0;
+      if (this.classList.contains("slash-menu-item")) {
+        const scrollRegion = this.closest<HTMLElement>(".slash-menu__scroll");
+        const options = Array.from(
+          scrollRegion?.querySelectorAll<HTMLElement>(".slash-menu-item") ?? [],
+        );
+        top = options.indexOf(this) * height - (scrollRegion?.scrollTop ?? 0);
+      }
+      const bottom = this.classList.contains("slash-menu__scroll") ? height * 2 : top + height;
+      return {
+        bottom,
+        height: bottom - top,
+        left: 0,
+        right: 240,
+        top,
+        width: 240,
+        x: 0,
+        y: top,
+        toJSON: () => ({}),
+      };
+    });
     const { container } = createReactiveDraftHarness();
     document.body.append(container);
     inputDraftAtEnd(container, "Use $");
@@ -4983,309 +4758,6 @@ describe("chat slash menu accessibility", () => {
     render(renderChat(createChatProps({ onDraftChange, draft: "history recall" })), container);
 
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("history recall");
-  });
-
-  it("wires command suggestions to the composer with stable active option ids", () => {
-    const harness = createSlashRerenderHarness();
-    const container = harness.inputAndRender(harness.container, "/");
-
-    const wrapper = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
-    const activeId = textarea?.getAttribute("aria-activedescendant");
-
-    expect(wrapper?.hasAttribute("role")).toBe(false);
-    expect(wrapper?.hasAttribute("aria-expanded")).toBe(false);
-    expect(wrapper?.hasAttribute("aria-haspopup")).toBe(false);
-    expect(wrapper?.hasAttribute("aria-controls")).toBe(false);
-    expect(textarea?.hasAttribute("role")).toBe(false);
-    expect(textarea?.getAttribute("aria-expanded")).toBe("true");
-    expect(textarea?.hasAttribute("aria-haspopup")).toBe(false);
-    expect(textarea?.getAttribute("aria-controls")).toBe("chat-single-slash-menu-listbox");
-    expect(textarea?.getAttribute("aria-autocomplete")).toBe("list");
-    expect(listbox?.getAttribute("role")).toBe("listbox");
-    expect(activeId).toMatch(/^chat-single-slash-option-command-/u);
-    expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("role")).toBe("option");
-  });
-
-  it("keeps filtered command DOM and keyboard order aligned with relevance", () => {
-    replaceSlashCommands([
-      {
-        key: "pair",
-        name: "pair",
-        description: "Pair a device.",
-        tier: "power",
-        category: "tools",
-      },
-      {
-        key: "pair-device",
-        name: "pair-device",
-        description: "Pair a specific device.",
-        tier: "standard",
-        category: "session",
-      },
-      {
-        key: "openclaw",
-        name: "openclaw",
-        description: "Run the setup and repair helper.",
-        tier: "essential",
-        category: "tools",
-      },
-    ]);
-    const harness = createSlashRerenderHarness();
-    let container = harness.inputAndRender(harness.container, "/pair");
-
-    expect(
-      Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
-        (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
-      ),
-    ).toEqual(["/pair", "/pair-device", "/openclaw"]);
-    expect(
-      Array.from(container.querySelectorAll(".slash-menu-group__label")).map((label) =>
-        label.textContent?.trim(),
-      ),
-    ).toEqual(["Tools", "Session", "Tools"]);
-
-    keydownComposer(container, "ArrowDown");
-    container = harness.renderCurrent();
-    const options = container.querySelectorAll<HTMLElement>(".slash-menu [role='option']");
-    const activeId = container
-      .querySelector<HTMLTextAreaElement>("textarea")
-      ?.getAttribute("aria-activedescendant");
-    expect(options[1]?.id).toBe(activeId);
-    expect(options[1]?.getAttribute("aria-selected")).toBe("true");
-
-    keydownComposer(container, "Enter");
-    container = harness.renderCurrent();
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/pair-device ");
-    expect(container.querySelector(".slash-menu")).toBeNull();
-  });
-
-  it("keeps a stable composer name when attachments change its placeholder", () => {
-    const harness = createReactiveDraftHarness();
-    const textarea = requireElement(
-      harness.container,
-      "textarea",
-      "chat composer",
-    ) as HTMLTextAreaElement;
-    const initialPlaceholder = textarea.placeholder;
-    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-    expect(textarea.hasAttribute("role")).toBe(false);
-
-    harness.renderCurrent({
-      attachments: [
-        {
-          id: "image",
-          fileName: "sample.png",
-          mimeType: "image/png",
-          previewUrl: "blob:sample-image",
-          sizeBytes: 3,
-        },
-      ],
-    });
-    expect(harness.container.querySelector(".chat-attachment-thumb")).not.toBeNull();
-    expect(textarea.placeholder).not.toBe(initialPlaceholder);
-    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-    expect(textarea.hasAttribute("role")).toBe(false);
-
-    harness.renderCurrent({ attachments: [] });
-    expect(textarea.placeholder).toBe(initialPlaceholder);
-    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-  });
-
-  it("updates the active descendant and live announcement during command navigation", () => {
-    const harness = createSlashRerenderHarness();
-    let container = harness.inputAndRender(harness.container, "/");
-    const initialActiveId = container
-      .querySelector<HTMLTextAreaElement>("textarea")
-      ?.getAttribute("aria-activedescendant");
-
-    keydownComposer(container, "ArrowDown");
-    container = harness.renderCurrent();
-
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const nextActiveId = textarea?.getAttribute("aria-activedescendant");
-    const activeOption = nextActiveId
-      ? container.querySelector<HTMLElement>(`#${nextActiveId}`)
-      : null;
-    const status = container.querySelector<HTMLElement>("#chat-single-slash-active-announcement");
-
-    if (!nextActiveId) {
-      throw new Error("Expected command navigation to set aria-activedescendant");
-    }
-    expect(nextActiveId).not.toBe(initialActiveId);
-    expect(activeOption?.getAttribute("aria-selected")).toBe("true");
-    expect(status?.getAttribute("aria-live")).toBe("polite");
-    const announcementText = status?.textContent?.trim();
-    if (!announcementText) {
-      throw new Error("Expected command navigation to update the live announcement");
-    }
-    const expectedAnnouncement = [
-      activeOption?.querySelector(".slash-menu-name")?.textContent?.trim(),
-      activeOption?.querySelector(".slash-menu-args")?.textContent?.trim(),
-      activeOption?.querySelector(".slash-menu-desc")?.textContent?.trim(),
-    ]
-      .filter(Boolean)
-      .join(" ");
-    expect(announcementText).toBe(expectedAnnouncement);
-  });
-
-  it("uses the localized command description in the live announcement", async () => {
-    const clearCommand = SLASH_COMMANDS.find((command) => command.name === "clear");
-    if (!clearCommand) {
-      throw new Error("Expected the clear slash command");
-    }
-    const originalDescriptionKey = clearCommand.descriptionKey;
-    clearCommand.descriptionKey = "common.health";
-    await i18n.setLocale("zh-CN");
-    try {
-      const harness = createSlashRerenderHarness();
-      const container = harness.inputAndRender(harness.container, "/clear");
-
-      const status = container.querySelector<HTMLElement>("#chat-single-slash-active-announcement");
-      expect(status?.textContent?.trim()).toBe(`/clear ${t("common.health")}`);
-    } finally {
-      clearCommand.descriptionKey = originalDescriptionKey;
-      await i18n.setLocale("en");
-    }
-  });
-
-  it("wires fixed argument suggestions with command-and-argument option ids", () => {
-    const harness = createSlashRerenderHarness();
-    const container = harness.inputAndRender(harness.container, "/tools ");
-
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
-    const activeId = textarea?.getAttribute("aria-activedescendant");
-
-    expect(listbox?.getAttribute("aria-label")).toBe("Command arguments");
-    expect(activeId).toBe("chat-single-slash-option-arg-tools-compact");
-    expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("aria-selected")).toBe("true");
-  });
-
-  it.each([
-    { name: "direct", sessionKey: "main", rowKey: "main" },
-    { name: "global alias", sessionKey: "agent:work:main", rowKey: "global" },
-  ])(
-    "opens model-supported thinking arguments after tab-completing /think ($name)",
-    ({ sessionKey, rowKey }) => {
-      const sessions = createSessionsListResult({
-        model: "gpt-5.6-sol",
-        modelProvider: "openai",
-      });
-      const session = expectDefined(sessions.sessions[0], "active session");
-      session.key = rowKey;
-      session.thinkingLevels = [
-        { id: "off", label: "off" },
-        { id: "minimal", label: "minimal" },
-        { id: "low", label: "low" },
-        { id: "medium", label: "medium" },
-        { id: "high", label: "high" },
-        { id: "xhigh", label: "xhigh" },
-        { id: "max", label: "max" },
-        { id: "ultra", label: "ultra" },
-      ];
-      const { container } = createReactiveDraftHarness({
-        sessions,
-        sessionKey,
-        selectedSession: session,
-      });
-
-      inputDraft(container, "/think");
-      keydownComposer(container, "Tab");
-
-      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
-      expect(
-        Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
-          (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
-        ),
-      ).toEqual(["default", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
-    },
-  );
-
-  it("suppresses thinking arguments while the active model is switching", () => {
-    const sessions = createSessionsListResult({
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-    });
-    const session = expectDefined(sessions.sessions[0], "active session");
-    session.thinkingLevels = [
-      { id: "low", label: "low" },
-      { id: "high", label: "high" },
-    ];
-    const { container } = createReactiveDraftHarness({
-      modelSwitching: true,
-      sessions,
-      selectedSession: session,
-    });
-
-    inputDraft(container, "/think");
-    keydownComposer(container, "Tab");
-
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
-    expect(container.querySelector(".slash-menu")).toBeNull();
-  });
-
-  it("closes open thinking arguments when the active model starts switching", () => {
-    const sessions = createSessionsListResult({
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-    });
-    const session = expectDefined(sessions.sessions[0], "active session");
-    session.thinkingLevels = [
-      { id: "low", label: "low" },
-      { id: "high", label: "high" },
-    ];
-    const { container, renderCurrent } = createReactiveDraftHarness({
-      sessions,
-      selectedSession: session,
-    });
-
-    inputDraft(container, "/think");
-    keydownComposer(container, "Tab");
-    expect(container.querySelector(".slash-menu")).not.toBeNull();
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.getAttribute("aria-activedescendant"),
-    ).toBe("chat-single-slash-option-arg-think-default");
-
-    renderCurrent({ modelSwitching: true });
-
-    expect(container.querySelector(".slash-menu")).toBeNull();
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.hasAttribute("aria-activedescendant"),
-    ).toBe(false);
-  });
-
-  it("clears active descendant when suggestions close", () => {
-    const harness = createSlashRerenderHarness();
-    let container = harness.inputAndRender(harness.container, "/");
-    const activeDescendant = container
-      .querySelector<HTMLTextAreaElement>("textarea")
-      ?.getAttribute("aria-activedescendant");
-    if (!activeDescendant) {
-      throw new Error("Expected slash suggestions to set aria-activedescendant");
-    }
-
-    container = harness.inputAndRender(container, "plain message");
-
-    expect(container.querySelector(".slash-menu")).toBeNull();
-    expect(
-      container.querySelector<HTMLTextAreaElement>("textarea")?.hasAttribute("aria-expanded"),
-    ).toBe(false);
-    expect(
-      container
-        .querySelector<HTMLElement>(".agent-chat__composer-combobox")
-        ?.hasAttribute("aria-expanded"),
-    ).toBe(false);
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.hasAttribute("aria-activedescendant"),
-    ).toBe(false);
   });
 });
 
@@ -7187,25 +6659,6 @@ describe("chat model controls", () => {
     },
   );
 
-  it("does not patch the model for a locked session", async () => {
-    const { state, request } = createOpenAiHeaderState();
-    state.sessionsResult = createSessionsResultFromRows([
-      {
-        key: "agent:main:main",
-        kind: "direct",
-        model: "gpt-5.5",
-        modelProvider: "openai",
-        modelSelectionLocked: true,
-        updatedAt: 1,
-      },
-    ]);
-
-    await expect(
-      switchChatModel(state as unknown as Parameters<typeof switchChatModel>[0], "openai/gpt-5.4"),
-    ).resolves.toBe(false);
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it("ignores model clicks while a run is active", () => {
     const { state } = createOpenAiHeaderState();
     state.chatRunId = "run-123";
@@ -7354,12 +6807,12 @@ describe("chat model controls", () => {
     },
   );
 
-  it("matches the default model by its localized marker", () => {
+  it("matches the default model by its localized marker and canonical reference", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
       models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "gpt-5.5", name: "Chat Model", provider: "openai" },
         { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
       ],
     });
@@ -7372,14 +6825,14 @@ describe("chat model controls", () => {
     const container = renderModelControls(state);
     const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
 
-    search!.value = "default";
-    search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    for (const query of ["default", "gpt-5.5", "OPENAI/GPT-5.5"]) {
+      search!.value = query;
+      search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
 
-    const visibleOptions = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
-    ).filter((option) => !option.hidden);
-    expect(visibleOptions).toHaveLength(1);
-    expect(visibleOptions[0]?.dataset.chatModelDefault).toBe("true");
+      const visibleOptions = container.querySelectorAll("[data-chat-model-option]:not([hidden])");
+      expect(visibleOptions, query).toHaveLength(1);
+      expect(visibleOptions[0]?.getAttribute("data-chat-model-default")).toBe("true");
+    }
   });
 
   it("leaves digit keys to nested controls and selects the numbered row from the picker", () => {

@@ -6,11 +6,15 @@ import { assertModelSelectionUnlocked } from "../../sessions/model-overrides.js"
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import {
   openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { invalidateSessionBranchCache } from "./session-accessor.sqlite-branches.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import {
+  commitSqliteSessionDeletion,
+  runSqliteSessionDeletionTransaction,
+  withSqliteSessionContextReset,
+} from "./session-accessor.sqlite-deletion.js";
 import {
   collectSessionEntryLookupKeys,
   readSessionEntryRow,
@@ -143,53 +147,65 @@ async function mutateSqliteSessionAtMessage(
       sessionId: preparedEntry.sessionId,
     });
   }
-  return await runExclusiveSqliteSessionWrite(
-    resolved,
-    async () => {
-      let previousIdentity = new Map<string, SessionEntry>();
-      const { databasePath, result, publish } = runOpenClawAgentWriteTransaction((database) => {
-        params.commitGuard?.();
-        const identityKeys = uniqueStrings([
-          ...collectSessionEntryLookupKeys(database, sourceKey),
-          ...collectSessionEntryLookupKeys(database, targetKey),
-        ]);
-        previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
-        const mutationResult = mutateSqliteSessionAtMessageInTransaction(database, resolved, {
-          entryId: params.entryId,
-          canonicalSourceKey,
-          creation: params.creation,
-          forkWorkspace: params.forkWorkspace,
-          mode,
-          expectedState: preparedExpectedState,
-          repositoryWorkspaceId: params.repositoryWorkspaceId,
-          sourceKey,
-          targetKey,
-        });
-        const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
-        return {
-          databasePath: database.path,
-          result: mutationResult,
-          publish: prepareSessionIdentityPublication(
-            database,
-            resolved.agentId,
-            previousIdentity,
-            currentIdentity,
-          ),
-        };
-      }, toDatabaseOptions(resolved));
-      if (result.status === "created") {
-        invalidateSessionBranchCache(databasePath, [
-          ...[...previousIdentity.values()].flatMap((entry) =>
-            entry.sessionId ? [entry.sessionId] : [],
-          ),
-          ...(result.entry.sessionId ? [result.entry.sessionId] : []),
-        ]);
-      }
-      publish();
-      return result;
-    },
-    "session.message-cut.mutate",
-  );
+  const mutate = async (assertPreparedCurrent?: () => void) =>
+    await runExclusiveSqliteSessionWrite(
+      resolved,
+      async () => {
+        let previousIdentity = new Map<string, SessionEntry>();
+        const { databasePath, result, publish } = runSqliteSessionDeletionTransaction(
+          (database) => {
+            assertPreparedCurrent?.();
+            params.commitGuard?.();
+            const identityKeys = uniqueStrings([
+              ...collectSessionEntryLookupKeys(database, sourceKey),
+              ...collectSessionEntryLookupKeys(database, targetKey),
+            ]);
+            previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
+            const mutationResult = mutateSqliteSessionAtMessageInTransaction(database, resolved, {
+              entryId: params.entryId,
+              canonicalSourceKey,
+              creation: params.creation,
+              forkWorkspace: params.forkWorkspace,
+              mode,
+              expectedState: preparedExpectedState,
+              repositoryWorkspaceId: params.repositoryWorkspaceId,
+              sourceKey,
+              targetKey,
+            });
+            const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
+            return {
+              databasePath: database.path,
+              result: mutationResult,
+              publish: prepareSessionIdentityPublication(
+                database,
+                resolved.agentId,
+                previousIdentity,
+                currentIdentity,
+              ),
+            };
+          },
+          toDatabaseOptions(resolved),
+        );
+        if (result.status === "created") {
+          invalidateSessionBranchCache(databasePath, [
+            ...[...previousIdentity.values()].flatMap((entry) =>
+              entry.sessionId ? [entry.sessionId] : [],
+            ),
+            ...(result.entry.sessionId ? [result.entry.sessionId] : []),
+          ]);
+        }
+        publish();
+        return result;
+      },
+      "session.message-cut.mutate",
+    );
+  return mode !== "fork" && preparedEntry
+    ? await withSqliteSessionContextReset(
+        resolved,
+        { sessionKey: sourceKey, entry: preparedEntry },
+        mutate,
+      )
+    : await mutate();
 }
 
 function mutateSqliteSessionAtMessageInTransaction(
@@ -242,6 +258,10 @@ function mutateSqliteSessionAtMessageInTransaction(
       params.repositoryWorkspaceId === currentEntry.repositoryWorkspaceId)
   ) {
     throw new Error("Repository session fork requires its own prepared workspace");
+  }
+
+  if (params.mode !== "fork") {
+    commitSqliteSessionDeletion(params.sourceKey, currentEntry);
   }
 
   const nextSessionId = randomUUID();

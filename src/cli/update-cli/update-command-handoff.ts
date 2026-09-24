@@ -30,7 +30,6 @@ import {
 } from "../../infra/update-managed-service-handoff.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
-import { defaultRuntime } from "../../runtime.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { formatInstallationTargetCommand } from "../installation-target-format.js";
 import { printResult } from "./progress.js";
@@ -191,7 +190,7 @@ export async function handoffUpdateFromGateway(params: {
   if (started.status === "joined") {
     throw new UpdatePreMutationError(
       "managed-service-handoff-already-running",
-      "Another managed update is already running. Inspect `openclaw status --all` before retrying.",
+      "Another managed update is already running. Check progress with `openclaw update status`.",
     );
   }
   const identity = {
@@ -200,7 +199,7 @@ export async function handoffUpdateFromGateway(params: {
     installRoot: started.installRoot,
   };
   const target = resolveInstallationTarget(env);
-  const statusCommand = formatInstallationTargetCommand(["openclaw", "status", "--all"], target, {
+  const statusCommand = formatInstallationTargetCommand(["openclaw", "update", "status"], target, {
     env,
   });
   const healthCommand = formatInstallationTargetCommand(
@@ -208,7 +207,7 @@ export async function handoffUpdateFromGateway(params: {
     target,
     { env },
   );
-  const guidance = `Update continues outside the Gateway process. Log: ${started.logPath}\nFollow up: ${statusCommand}; ${healthCommand}.`;
+  const guidance = `Update is not finished. It will continue in the background so it can restart the Gateway.\nLog: ${started.logPath}\nCheck progress: ${statusCommand}`;
   const result: UpdateRunResult = {
     runId: params.opts.run?.runId,
     status: "skipped",
@@ -255,10 +254,7 @@ export async function handoffUpdateFromGateway(params: {
       { env: params.opts.run.env },
     );
   }
-  await printResult(result, params.opts);
-  if (!params.opts.json) {
-    defaultRuntime.log(guidance);
-  }
+  await printResult(result, params.opts, { nextAction: guidance });
   process.exitCode = UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE;
   return true;
 }

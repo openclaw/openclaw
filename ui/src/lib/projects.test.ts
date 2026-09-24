@@ -114,7 +114,7 @@ describe("registered project catalog", () => {
     await refresh;
     expect(invalidated).toEqual({ result: null, repositories: [], ready: false });
     expect(listener).toHaveBeenCalledTimes(2);
-    expect(h.store.snapshot).toEqual({ result: null, repositories: [], ready: true });
+    expect(h.store.snapshot).toEqual({ result: null, repositories: [], ready: false });
     h.request.mockResolvedValue({
       projects: [{ ...project, originUrl: "https://github.com/replacement/clawsweeper.git" }],
     });

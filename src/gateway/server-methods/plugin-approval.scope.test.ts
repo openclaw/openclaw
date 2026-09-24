@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi, type TestContext } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
@@ -9,7 +10,8 @@ function createApprovalScopeRequest(testContext: TestContext, scope: unknown) {
   const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
     approvalKind: "plugin",
   });
-  const respond = vi.fn();
+  const acknowledged = createDeferred();
+  const respond = vi.fn(() => acknowledged.resolve());
   const params = {
     title: "Sensitive action",
     description: "Review the action",
@@ -31,12 +33,12 @@ function createApprovalScopeRequest(testContext: TestContext, scope: unknown) {
     createPluginApprovalHandlers(manager)["plugin.approval.request"],
     "plugin approval request handler",
   );
-  return { manager, respond, handler, options };
+  return { manager, respond, handler, options, acknowledged: acknowledged.promise };
 }
 
 describe("plugin approval request scopes", () => {
   it("sanitizes owner-declared scope before storing or broadcasting the approval", async (testContext) => {
-    const { manager, handler, options } = createApprovalScopeRequest(testContext, {
+    const { manager, handler, options, acknowledged } = createApprovalScopeRequest(testContext, {
       kind: "message-send",
       target: "email\u202Esystem",
       recipientCount: 3,
@@ -44,11 +46,10 @@ describe("plugin approval request scopes", () => {
       audience: "external",
     });
     const pending = handler(options);
-    await vi.waitFor(async () => expect(await manager.listPendingRecords()).toHaveLength(1));
-    const record = expectDefined(
-      (await manager.listPendingRecords())[0],
-      "pending plugin approval",
-    );
+    await Promise.race([acknowledged, pending]);
+    const records = await manager.listPendingRecords();
+    expect(records).toHaveLength(1);
+    const record = expectDefined(records[0], "pending plugin approval");
 
     expect(record.request.scope).toEqual({
       kind: "message-send",
@@ -62,17 +63,16 @@ describe("plugin approval request scopes", () => {
   });
 
   it("drops scope after escaped text exceeds its bounds without rejecting approval", async (testContext) => {
-    const { manager, handler, options } = createApprovalScopeRequest(testContext, {
+    const { manager, handler, options, acknowledged } = createApprovalScopeRequest(testContext, {
       kind: "external-post",
       target: `github${"\u202E".repeat(20)}`,
       visibility: "public",
     });
     const pending = handler(options);
-    await vi.waitFor(async () => expect(await manager.listPendingRecords()).toHaveLength(1));
-    const record = expectDefined(
-      (await manager.listPendingRecords())[0],
-      "pending plugin approval",
-    );
+    await Promise.race([acknowledged, pending]);
+    const records = await manager.listPendingRecords();
+    expect(records).toHaveLength(1);
+    const record = expectDefined(records[0], "pending plugin approval");
 
     expect(record.request.scope).toBeNull();
     await manager.resolve(record.id, "allow-once");

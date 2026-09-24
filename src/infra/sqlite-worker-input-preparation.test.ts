@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -56,6 +57,36 @@ it("charges preparing inputs and dispatched commands to the same byte budget", a
   recovered.release();
   expect(await store.execute({ type: "read", input: undefined })).toEqual(["accepted"]);
 });
+
+it.each([
+  { limit: "message", reservedMiB: 0, inputMiB: 16, preparationMiB: 16 },
+  { limit: "queue", reservedMiB: 61, inputMiB: 1, preparationMiB: 3 },
+])(
+  "charges opening input and preparation together against the $limit limit",
+  async ({ reservedMiB, inputMiB, preparationMiB }) => {
+    const broker = createBroker();
+    const databasePath = path.join(dirs.make("sqlite-opening-budget-"), "store.sqlite");
+    const prepared = broker.reserveInputPreparation(reservedMiB * MIB);
+    const options = {
+      moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+      databasePath,
+      input: "x".repeat(inputMiB * MIB),
+    };
+    try {
+      await expect(
+        broker.open<FixtureOperations>(options, undefined, undefined, {
+          preparation: "y".repeat(preparationMiB * MIB),
+        }),
+      ).rejects.toMatchObject({ code: "overloaded" });
+      expect(existsSync(databasePath)).toBe(false);
+    } finally {
+      prepared.release();
+    }
+    const store = await broker.open<FixtureOperations>({ ...options, input: undefined });
+    expect(await store?.execute({ type: "read", input: undefined })).toEqual([]);
+    await store?.close();
+  },
+);
 
 it("bounds oversized preparation and releases each reservation only once", () => {
   const broker = createBroker();

@@ -99,7 +99,7 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
-    if: ${{ github.event_name == 'schedule' || inputs.mode != 'vitest-pair' }}
+    if: ${{ (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -766,6 +766,10 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
 
+      - name: Report Kova artifact transport retry
+        if: ${{ always() && steps.lane.outputs.run == 'true' && steps.upload_kova_artifacts.outcome == 'failure' }}
+        run: echo "::warning::Kova artifact upload failed; retrying artifact transport once."
+
       - name: Retry Kova artifact upload
         if: ${{ always() && steps.lane.outputs.run == 'true' && steps.upload_kova_artifacts.outcome == 'failure' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -1117,6 +1121,10 @@ jobs:
           path: .artifacts/openclaw-performance/source
           if-no-files-found: error
           retention-days: 30
+
+      - name: Report source performance artifact transport retry
+        if: ${{ always() && steps.upload_source_performance_artifacts.outcome == 'failure' }}
+        run: echo "::warning::Source performance artifact upload failed; retrying artifact transport once."
 
       - name: Retry source performance artifact upload
         if: ${{ always() && steps.upload_source_performance_artifacts.outcome == 'failure' }}
@@ -1836,9 +1844,9 @@ jobs:
           set -euo pipefail
           pnpm_prefix="$RUNNER_TEMP/vitest-pair-pnpm"
           npm_config_cache="$RUNNER_TEMP/vitest-pair-npm-cache" \
-            npm install --global --prefix "$pnpm_prefix" pnpm@12.4.0
+            npm install --global --prefix "$pnpm_prefix" pnpm@12.4.2
           pnpm_bin="$pnpm_prefix/bin/pnpm"
-          [[ "$("$pnpm_bin" --version)" == "12.4.0" ]]
+          [[ "$("$pnpm_bin" --version)" == "12.4.2" ]]
           echo "VITEST_PAIR_PNPM_BIN=$pnpm_bin" >> "$GITHUB_ENV"
 
       - name: Run Vitest pair benchmark

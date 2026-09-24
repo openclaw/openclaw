@@ -24,6 +24,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseCoordinator as holdCoordinator } from "../test-utils/state-database-contention.js";
 import { createTaskFlowForTask, readResidentTaskFlow } from "./task-flow-registry.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
+import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
 import { captureTaskRegistryReadFence } from "./task-registry-listener-state.js";
 import { updateTask } from "./task-registry-mutation.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
@@ -88,11 +89,13 @@ describe("task agent event persistence", () => {
     { phase: "start", outcome: "replacement" },
     { phase: "start", outcome: "ABA" },
     { phase: "start", outcome: "observer ABA" },
+    { phase: "start", outcome: "settlement ABA" },
     { phase: "end", outcome: "commit" },
     { phase: "end", outcome: "rollback" },
     { phase: "end", outcome: "replacement" },
     { phase: "end", outcome: "ABA" },
     { phase: "end", outcome: "observer ABA" },
+    { phase: "end", outcome: "settlement ABA" },
   ] as const)(
     "publishes native $phase delivery only after outer $outcome",
     async ({ phase, outcome }) => {
@@ -105,6 +108,7 @@ describe("task agent event persistence", () => {
           notifyPolicy: phase === "start" ? "state_changes" : "done_only",
           deliveryStatus: "pending",
         });
+        using deliveries = captureTaskDeliveryWork();
         const failure = new Error("Synthetic enclosing transaction rollback");
         let observerReplaced = false;
         const stop = onTaskRegistryChange(() => {
@@ -147,7 +151,17 @@ describe("task agent event persistence", () => {
         } catch (error) {
           transactionError = error;
         }
+        if (outcome === "settlement ABA") {
+          const published = tasks.get(task.taskId)!;
+          updateTask(task.taskId, { ...published, task: "Settlement replacement" });
+          updateTask(task.taskId, published);
+        }
         try {
+          // The event publishes its detached delivery only after leaving the accepted prefix.
+          await Promise.allSettled([
+            captureTaskRegistryReadFence(captureOpenClawStateWorkerContext().admission),
+          ]);
+          await deliveries.settle();
           await joinEvents();
         } finally {
           stop();

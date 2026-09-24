@@ -634,8 +634,10 @@ suite.define(() => {
       );
       const archiveToast = page.locator("openclaw-toast-host .app-toast");
       await expect.poll(() => archiveToast.textContent()).toContain("Session archived");
+      const archivedSession = await gateway.getSessionRow(selected.key);
       await gateway.emitGatewayEvent("sessions.changed", {
         ...selected,
+        updatedAt: archivedSession.updatedAt,
         archived: true,
         archivedAt,
         archivedBy,
@@ -708,8 +710,10 @@ suite.define(() => {
         gateway,
         (params) => params.key === selected.key && params.archived === false,
       );
+      const restoredSession = await gateway.getSessionRow(selected.key);
       await gateway.emitGatewayEvent("sessions.changed", {
         ...selected,
+        updatedAt: restoredSession.updatedAt,
         archived: false,
         archivedAt: null,
         archivedBy: null,

@@ -4,10 +4,9 @@
 // a ReactiveController keeps the pet element focused on the resident.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
-import { THEME_CRITTER_IDS } from "../../../packages/gateway-protocol/src/theme.ts";
 import {
   LOBSTER_BOTTLE_FORTUNES,
-  LOBSTER_PASSER_CROSS_MS,
+  resolveLobsterPasserCrossMs,
   planLobsterBottle,
   planLobsterPasser,
   prefersReducedMotion,
@@ -42,6 +41,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
   private passerWatchTimer: number | null = null;
   private seed: number | null = null;
   private passerConsumed = false;
+  private crossingMs = 0;
   private bottleTimer: number | null = null;
   private bottleEndTimer: number | null = null;
 
@@ -95,11 +95,14 @@ export class LobsterLedgeTraffic implements ReactiveController {
   replanPasser(seed: number) {
     const passer = this.passer;
     const options = this.hooks.passerOptions();
-    const themeCritter = THEME_CRITTER_IDS.find((kind) => kind === passer?.kind);
+    const regular =
+      passer && ["stranger", "crab", "snail", "duck", "jellyfish"].includes(passer.kind);
     if (
       passer &&
-      (passer.kind !== "stranger" || options.strangers !== false) &&
-      (!themeCritter || options.critters?.includes(themeCritter))
+      (passer.kind !== "stranger" ||
+        options.strangers !== false ||
+        options.critters?.includes(passer.kind)) &&
+      (regular || options.critters?.includes(passer.kind))
     ) {
       return;
     }
@@ -115,7 +118,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
   }
 
   passerCrossMs(): number {
-    return this.passer ? LOBSTER_PASSER_CROSS_MS[this.passer.kind] : 0;
+    return this.passer ? this.crossingMs : 0;
   }
 
   bottle(): LobsterBottleScene | null {
@@ -186,8 +189,12 @@ export class LobsterLedgeTraffic implements ReactiveController {
       }
       this.hooks.onPasserStart(plan);
       this.passer = plan;
+      this.crossingMs = resolveLobsterPasserCrossMs(
+        plan.kind,
+        this.hooks.passerOptions().critterArtwork,
+      );
       this.host.requestUpdate();
-      const crossMs = LOBSTER_PASSER_CROSS_MS[plan.kind];
+      const crossMs = this.passerCrossMs();
       this.hooks.onPasserFacing(plan.direction === 1 ? -1 : 1);
       this.passerWatchTimer = window.setTimeout(() => {
         this.passerWatchTimer = null;

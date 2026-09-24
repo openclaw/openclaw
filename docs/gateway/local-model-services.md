@@ -25,6 +25,8 @@ Startup is serialized per configured provider and command/argument/env set, so c
 
 OpenClaw waits for any idle shutdown already in progress when it closes local services. A new request for the same service waits for that stop before acquiring a replacement. Shutdown errors remain visible; subsequent requests recheck the owned process before starting a replacement.
 
+Shutdown completion requires the child and its output streams to close and pending tree-termination operations to finish. A missing PID alone does not release the service for replacement.
+
 If another OpenClaw process already has a healthy server at the same `healthUrl`, this process reuses it without adopting it (each process only manages the child it personally started). Startup and exit logs include bounded, redacted child-output tails plus timing and exit details; configured environment values are never emitted.
 
 ## Managed llama.cpp

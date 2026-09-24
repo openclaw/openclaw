@@ -15,6 +15,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   resetPluginStateStoreForTests();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -438,18 +439,29 @@ it.each(["closed", "missing EOSE"] as const)(
         onMessage: async () => {},
         onFatalError: (error) => fatal.push(error),
       });
+      if (failure === "missing EOSE") {
+        await bus.sendText({ channelId: fixture.roomId, text: "restoration startup barrier" });
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
       const history = fixture.pauseNextRoomHistory();
       publishBotRole(fixture, skipped.roomId, "bot", skipped.createdAt + 1);
       notifyBotMembership(fixture, skipped.roomId, 44100, skipped.createdAt + 1);
       await history.started;
       if (failure === "closed") {
         history.close("fixture room history failed");
+        await vi.waitFor(() => expect(fatal).toHaveLength(1), { timeout: 11000 });
+        expect(fatal[0]?.message).toContain("closed");
+      } else {
+        expect(fatal).toEqual([]);
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(fatal).toHaveLength(1);
+        expect(fatal[0]?.message).toBe(
+          `Timed out loading Buzz room membership changes for ${skipped.roomId}`,
+        );
       }
-      await vi.waitFor(() => expect(fatal).toHaveLength(1), { timeout: 11000 });
-      expect(fatal[0]?.message).toContain(failure === "closed" ? "closed" : "Timed out");
       await expect(
         bus.sendText({ channelId: fixture.roomId, text: "failed generation reply" }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(fatal[0]);
     } finally {
       await bus?.close();
       await fixture.close();

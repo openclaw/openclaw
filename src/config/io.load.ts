@@ -1,3 +1,4 @@
+import { isMainThread } from "node:worker_threads";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
@@ -12,12 +13,12 @@ import {
   coerceConfig,
   containsConfigIncludeDirective,
   hashConfigRaw,
-  maybeLoadDotEnvForConfig,
   resolveConfigForRead,
   resolveConfigIncludesForRead,
   restoreEnvChangesIfUnchanged,
   snapshotEnv,
 } from "./io.read-helpers.js";
+import { maybeLoadDotEnvForConfig } from "./io.runtime-env.js";
 import { createConfigFileSnapshot } from "./io.snapshot-shared.js";
 import { loggedConfigWarningFingerprints, loggedInvalidConfigs } from "./io.state.js";
 import {
@@ -40,6 +41,8 @@ type ConfigLoadEffect = {
 
 type ConfigLoadOperation<T> = Generator<ConfigLoadEffect, T, void>;
 
+type ConfigLoadOptions = { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void };
+
 function* resolveConfigLoadEffect<T>(effect: {
   sync: () => T;
   async: () => Promise<T>;
@@ -59,13 +62,15 @@ function* resolveConfigLoadEffect<T>(effect: {
 
 export function loadConfigFromContext(
   context: ConfigIoContext,
-  options: { skipSuspiciousRecovery?: boolean } = {},
+  options: ConfigLoadOptions = {},
 ): OpenClawConfig {
   const operation = loadConfigWithEffects(context, options);
   let step = operation.next();
   while (!step.done) {
     try {
+      options.assertCurrent?.();
       step.value.sync();
+      options.assertCurrent?.();
       step = operation.next();
     } catch (error) {
       step = operation.throw(error);
@@ -76,8 +81,12 @@ export function loadConfigFromContext(
 
 export async function loadConfigFromContextAsync(
   context: ConfigIoContext,
-  options: { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void } = {},
+  options: ConfigLoadOptions = {},
 ): Promise<OpenClawConfig> {
+  // SDK callers already inside a worker use the same effects without a host broker.
+  if (!isMainThread) {
+    return loadConfigFromContext(context, options);
+  }
   const operation = loadConfigWithEffects(context, options);
   let step = operation.next();
   while (!step.done) {
@@ -95,7 +104,7 @@ export async function loadConfigFromContextAsync(
 
 function* loadConfigWithEffects(
   context: ConfigIoContext,
-  options: { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void },
+  options: ConfigLoadOptions,
 ): ConfigLoadOperation<OpenClawConfig> {
   const { deps, configPath, pathResolution } = context;
   let envBeforeRead: Record<string, string | undefined> | undefined;

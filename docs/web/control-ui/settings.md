@@ -10,11 +10,17 @@ sidebarTitle: "Settings"
 
 Everything under Settings, plus the settings-owned pages the sidebar links to.
 
+**Back to app** returns to the workspace page you were using before opening Settings, including its selected session and URL filters. Escape does the same when an editor or dialog is not using that key. Moving between Settings pages does not change the return destination.
+
 Use **Search settings** to find pages and configuration fields. Search for **Typography**, **font**, or **Chat prose** to jump to the Interface and Chat prose font controls in Appearance. Authored schema tags remain searchable with `tag:<name>` but are not displayed as field badges. Tags are not inferred from setting names, sensitivity, or complexity. For a field authored with a `storage` tag, combine it with text such as `Log tag:storage File`. Multiple tags require a field to match every tag.
 
 Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact, and custom model entry remains available where the setting supports it.
 
 Global model defaults apply to every agent. Switching the Settings agent while saving does not change the save target. If a save fails, **Retry** resubmits that change; after recovery, the controls follow the saved configuration, including later updates from another client.
+
+Configuration edits, including reverting a value while a save is pending, survive refreshes and reconnects. If a save's outcome is unknown, the UI keeps your draft and pauses unrelated settings writes until a refresh confirms the saved revision or you explicitly retry the save or discard the draft. Even when a reverted draft looks unchanged, the save indicator keeps **Retry** available and prevents managed UI reloads from losing the unresolved draft. **Retry** repeats the failed Save or Apply operation. Seeing the old saved value after reconnect does not confirm that an earlier write has stopped; the UI keeps the uncertainty visible so a later commit cannot erase your revert. Changes from another writer retain the original draft and report a conflict instead of silently replacing your edits. Raw-editor drafts remain manual-save-only.
+
+An unsettled Save or Apply stays bound to its original Gateway. Switching Gateways does not transfer that pending change: reconnect to the original Gateway to retry it, or discard the retained draft before editing the new Gateway.
 
 In **Models**, **Connect provider** offers the credential-only sign-in methods declared by installed provider plugins. Connecting saves the credential without selecting its starter model. If model restrictions hide the provider, choose **Show all provider models** or **Keep current restrictions**; saving a credential alone does not widen access. Choose **Models → Connect provider → On this Gateway** to find existing connections or open [setup and explicit model activation](/start/onboarding). Saving credentials does not activate a model; testing and using a model remains a separate choice for the selected agent. If saving has already started, cancellation keeps the dialog open until the saved result arrives. Leaving the page closes pending sign-in input and lets an active save finish, so a later sign-in can start without losing saved credentials.
 
@@ -95,10 +101,10 @@ Gateway in this browser without reconnecting. Session edits and connection edits
 have independent Save/Apply and Discard actions. Switching Gateways restores
 that Gateway's saved session selection.
 
-Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a five-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery reuses its ten-second snapshot. CPU count and model share a two-second snapshot; process counters and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
+Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a ten-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery and state-directory disk space reuse thirty-second snapshots. Machine name, CPU count, and CPU model are sampled once when the Gateway process starts; restart the Gateway to reflect CPU topology changes. Process counters, load averages, and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
 
 The **Connection** card also shows average ping and p50, p95, and p99 round-trip
-times in milliseconds. It samples every five seconds while the page is visible
+times in milliseconds. It samples every ten seconds while the page is visible
 and summarizes the last 100 successful samples from the current connection.
 The sample count makes small sets visible; p95 and p99 become more useful as
 samples accumulate. Reconnecting, switching Gateways, or leaving the page resets
@@ -106,10 +112,14 @@ the readings. Failed requests are excluded and shown as a retry notice.
 
 The ping graph shows individual round trips. **Gateway activity** uses the same
 CPU, process memory, and event-loop delay graphs as the debug overlay, with up to
-100 snapshots sampled every five seconds while visible. CPU includes event-loop
+100 snapshots sampled every ten seconds while visible. CPU includes event-loop
 utilization, memory shows process RSS and used heap, and delay shows the Gateway's
 event-loop p99 and maximum delay. These are Gateway process measurements, separate
 from connection ping and the machine-wide **Gateway Host** readings below.
+Gateway, Appearance, Devices, Systems, and System busyness share status reads for the same connection,
+so opening the tray alongside Settings does not multiply `system.info` traffic.
+Hidden tabs pause these reads and resume when visible. Cached samples retain their
+original timestamp and measured round-trip time.
 Activity polling reads process counters through `system.info`, without running
 the full task and session inspection used by the operator `status` report.
 
@@ -139,13 +149,15 @@ Theme stylesheets can set `--chat-composer-corner-shape` (default `superellipse(
 
 Themes can choose a neutral prompt mark instead of the lobster mascot and supply their own long-wait status vocabulary. They can also add occasional penguin or fedora visitors to the composer ledge and occasional hats on agent avatars from the `fedora`, `crown`, `santa`, `party`, and `pumpkin` catalog. A theme without the mascot hides the resident lobster and visiting lobster strangers while ordinary ledge traffic continues under the unchanged **Lobster visits** toggle. See the [theme definition fields](/tools/theme#create-and-apply-a-personal-theme) for the portable settings and limits.
 
+Plugin themes can also bring their own SVG hats and composer visitors through [declared artwork](/plugins/manifest/surfaces#themes).
+
 Every built-in theme includes matching light and dark background artwork across the app canvas. The small, bundled lossless WebP images stay quiet behind content and follow the selected mode, including System. Plugin, personal, and imported palettes use neutral artwork. New-session and chat composers use a lightly translucent surface instead of repeating the image; navigation, menus, and reading cards retain their own surfaces. No external image requests are required. Increased contrast and forced colors hide the artwork and make composers opaque; reduced transparency also makes composers opaque.
 
 Themes imported from tweakcn are stored only in the current browser profile; they are not written to gateway config and do not sync across devices. Replacing the imported theme updates the one local slot; clearing it switches back to Claw if the imported theme was active.
 
 Selecting a **different theme** in Appearance applies its complete default look, clearing the interface and chat font overrides and selecting its own accent palette. You can customize the fonts and accent afterward. Selecting the same theme, reloading, reconnecting, receiving synced preferences, or changing light/dark mode does not reset those customizations. Language, text size, chat display, and other unrelated preferences are unchanged.
 
-The mounted UI keeps a live display-preference snapshot for its connected Gateway. Local changes and same-Gateway browser-tab edits update open composers without a reload. Selecting a different Gateway in another tab does not retarget the current tab. Credentials remain owned by the connection, separate from this display snapshot.
+The mounted UI keeps a live display-preference snapshot for its connected Gateway. Local changes and same-Gateway browser-tab edits update open composers without a reload. Sidebar width, sidebar entries, and pinned agents also update across tabs; collapsing the sidebar stays local to each tab. Resizing the sidebar preserves pins and entries changed in another tab. Selecting a different Gateway in another tab does not retarget the current tab. Credentials remain owned by the connection, separate from this display snapshot.
 
 Choose an **Accent color** preset or custom color in Appearance to override the active theme's accent. For an authenticated Gateway profile, the accent precedence is the profile's `ui.accent` preference, the gateway-wide `ui.prefs.accent` setting, the operator-configured `ui.seamColor`, and finally the active theme's default. A theme selection stores the explicit `"theme"` accent preference, which uses the selected theme's complete palette in both light and dark modes instead of inheriting gateway accent or seam colors. **Restore default** clears only that profile's preference, leaving the gateway-wide settings unchanged. Connections without an authenticated profile keep the existing gateway-wide preference behavior.
 
@@ -192,20 +204,29 @@ the Control UI. For example, a base path of `/openclaw` uses
 optional plugin is disabled.
 
 The **Plugins** hub at `/plugins` browses the catalog. Its **Skills** and
-**Workshop** tabs open the per-agent skill manager at `/skills` and Skill
+**Skill workshop** tabs open the per-agent skill manager at `/skills` and Skill
 Workshop at `/skills/workshop`. **Settings → Plugins** at `/settings/plugins`
-shows the local inventory, with search and installed/enabled filters. Select a
-plugin to open its overview.
+shows the searchable local inventory. Select a plugin to open its overview.
 
-Opening a plugin shows its description, publisher, supported capabilities, and
-full README on one overview. Select a tool to read its full description. The
-metadata rail shows available release details, categories, repository, and
+Opening a plugin shows its description, publisher when available, skills, tools,
+MCP servers, and full README on one overview. Select a tool to read its full
+description. The metadata rail shows available release details, categories, repository, and
 documentation. Security audits link to ClawHub.
 
-Installed plugins offer **Reload plugin**, **Enable** or **Disable**, **Uninstall**
-when removable, and **Settings**. Installing from a catalog overview keeps the
-same URL and changes those actions in place. **Settings** opens an addressable
-editor with plugin configuration and permissions; Back returns to the overview.
+Installed, disabled plugins put **Enable** first as the primary action, followed
+by **Ask OpenClaw**. Enabled plugins put primary **Ask OpenClaw** first, followed
+by **Disable**. Both rows then offer **Uninstall** when removable and an icon
+button for **Settings**. Uninstalled plugins put **Install** first. **Install**
+starts installation immediately and accepts the staged plugin’s declared
+capabilities without changing your hook and model permissions. Configured
+install-policy warnings still require an explicit acknowledgment. Installing from
+a catalog overview keeps the same URL. Its progress popover shows the reported
+steps and elapsed time, including runtime application. Installed actions appear
+only after the Gateway returns the final result.
+Ready new plugins become enabled; missing required configuration or an existing
+disabled choice keeps them disabled. **Settings** opens an addressable
+editor with plugin configuration and editable **Permissions** controls; Back returns
+to the overview.
 Existing `#configuration` links still open the editor. Local controls and the
 installed README remain available when optional ClawHub metadata cannot load.
 The catalog shows featured plugins and category shelves. Search queries
@@ -223,7 +244,7 @@ Copy controls. Reading a bundle requires `operator.read`.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
-**Workshop** tab shows installed skills and pending
+**Skill workshop** tab shows installed skills and pending
 [skill proposals](/tools/skill-workshop). **Learn from past conversations** opens
 a normal session with the selected agent's configured model and permitted tools.
 The agent chooses which history and skills to inspect, following the current
@@ -239,8 +260,12 @@ enabling, disabling, or removing a plugin and changing MCP servers require
 `operator.admin`; those actions stay disabled for read-only operators.
 
 Plugin-declared credential fields support masked key entry and an inline key-signup
-link. The eye reveals only the key you are entering; it never retrieves the stored
-secret. Leaving an empty input unchanged preserves its existing credential.
+link. The eye reveals the key you are entering. With no new key entered,
+administrators can choose **Show API key** to retrieve the stored literal for that
+field and current config revision. A revealed saved value is hidden again when
+the field, configuration revision, or Gateway connection changes. Secret references
+and environment values are never resolved or revealed. Leaving an empty input
+unchanged preserves its existing credential.
 
 Administrators can inspect and edit a declared credential's secret reference: its
 source (`env`, `file`, `exec`, or `store`), provider alias, and identifier. The
@@ -260,7 +285,7 @@ the ordinary schema editor.
 
 ClawHub installs run through the Gateway and keep the same trust, integrity,
 and plugin-install policy checks as other Gateway-mediated installs. Install,
-enable, disable, remove, and Reload actions wait for runtime application without
+enable, disable, and remove actions wait for runtime application without
 restarting the Gateway. Ordinary plugin config edits also apply automatically
 in the default hybrid reload mode. See
 [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
@@ -284,6 +309,11 @@ show the installed → target short commit SHAs on a separate line below the com
 count. **Compare on GitHub** opens a comparison when the tracked upstream is
 a GitHub repository; other installs show plain revisions. This distinguishes
 revisions that share a version number.
+After a checkout refresh, the count, revisions, and comparison link describe the
+same checked upstream. An automatic update campaign keeps its announced target;
+its displayed comparison stays bound to that target. If the installed revision
+has changed, the campaign shows its target without an outdated count or link.
+Commit details from a different comparison stay hidden.
 
 After confirmation, one update view shows the ordered phases, current or last
 step details, and verification results for the service, version, plugins,
@@ -324,6 +354,15 @@ discard them and load the current configuration. A successful reload resumes
 autosave for new edits; an offline reload keeps the pending draft.
 Devices node-binding controls also pause while configuration reloads, so a pending
 read cannot overwrite a new selection.
+
+In an agent's **Files** editor, **Add file** opens a missing optional workspace
+document. Saving creates it only if it is still missing. If another editor or
+process creates it first, the editor keeps your draft and reports a conflict.
+**Reload** takes the current file; **Overwrite** reloads its current version and
+then saves your draft against that version. Drafts keep their original file
+version when you switch agents or refresh. If a remote workspace provider cannot
+create files exclusively, saving explains how to update it or create the file on
+that host and reload it; it does not overwrite a file silently.
 
 **Native embed mode.** Native hosts can inject `window.__OPENCLAW_NATIVE_EMBED__ = { platform: "ios", formFactor: "phone" }` at document start to show settings without Dashboard navigation chrome. Supported platforms are `ios`, `macos`, and `android`; form factors are `phone`, `pad`, and `desktop`. In this mode, `/settings` lists the same visible groups and destinations as the settings sidebar. Every embedded route outside the settings root provides a Back button and title, including pages reached through links or tabs such as Memory import, Plugins, and Skill Workshop. Back follows app navigation history; direct links fall back to the nearest settings parent (Memory for Memory import) or `/settings`. Layouts respect device safe areas and use touch controls at phone widths. The flag changes presentation only: Gateway scopes and the existing native device-settings capability still determine which settings are available. Ordinary browser loads keep their existing navigation.
 

@@ -20,19 +20,19 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
+import { isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { createExpectedProfileBinding } from "../../expected-profile.js";
 import {
   GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
   hasCurrentGatewayOperatorAccess,
 } from "../../operator-access-policy.js";
+import { onOperatorRolePolicyChanged } from "../../operator-role-policy.js";
 import { bindWebSocketRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestEntry } from "../../server-request-entry.js";
-import {
-  getSharedGatewaySessionGenerationReaderState,
-  onSharedGatewayAuthInvalidated,
-} from "../../server-shared-auth-generation.js";
+import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
 import { classifyGatewayStaleInstall } from "../../stale-install.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import {
@@ -64,6 +64,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
 }) {
   const {
     connId,
+    clients,
     getRequiredSharedGatewaySessionGeneration,
     extraHandlers,
     getMethodRegistry,
@@ -78,10 +79,12 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
   let deviceCredentialMutationBarrier: Promise<void> | undefined;
 
   const closeInvalidatedClient = (client: GatewayWsClient, method: string): boolean => {
-    if (!client.invalidated) {
+    const policyChanged = !isGatewayAuthPolicyCurrent(client.authPolicyGeneration);
+    if (!client.invalidated && !policyChanged) {
       return false;
     }
-    const reason = client.invalidatedReason ?? "invalidated";
+    const reason =
+      client.invalidatedReason ?? (policyChanged ? "gateway-policy-changed" : "invalidated");
     setCloseCause("client-invalidated", {
       reason,
       method,
@@ -124,7 +127,16 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     const diagnostics = createGatewayRpcDiagnostics(req.method, getMethodRegistry, extraHandlers);
     logWs("in", "req", { connId, id: req.id, method: req.method });
     const context = buildRequestContext();
-    const expectedProfileBinding = createExpectedProfileBinding(req.expectedProfileId, client);
+    const generationState = SharedGatewaySessionGenerationState.fromReader(
+      getRequiredSharedGatewaySessionGeneration,
+    );
+    const sourceContext = context.resolveGatewayContext?.() ?? context;
+    const isCommittedPolicyCurrent = () =>
+      client.authPolicyGeneration === undefined ||
+      isGatewayAuthPolicyCurrent(
+        client.authPolicyGeneration,
+        sourceContext.getCommittedRuntimeConfig?.() ?? sourceContext.getRuntimeConfig(),
+      );
     const clientAuthority = captureGatewayDeviceRevocation(
       context,
       { deviceId: client.connect.device?.id, role: client.connect.role },
@@ -160,22 +172,36 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         return true;
       },
       client.connectionSignal,
-      client.connect.role === "operator" &&
-        (!client.usesSharedGatewayAuth ||
-          getSharedGatewaySessionGenerationReaderState(getRequiredSharedGatewaySessionGeneration))
+      client.connect.role === "operator" && (!client.usesSharedGatewayAuth || generationState)
         ? {
-            isCurrent: () => hasCurrentGatewayPolicyClientSource(client),
+            dependencies: {
+              client,
+              context: sourceContext,
+              authPolicyGeneration: client.authPolicyGeneration,
+              sharedGenerationOwner: client.usesSharedGatewayAuth ? generationState : undefined,
+              sharedGeneration: client.usesSharedGatewayAuth
+                ? client.sharedGatewaySessionGeneration
+                : undefined,
+            },
+            isCurrent: () =>
+              hasCurrentGatewayPolicyClientSource(client) && isCommittedPolicyCurrent(),
             subscribe: (onRevoked) => {
               const releaseClient = onGatewayPolicyClientInvalidated(client, onRevoked);
+              const releasePolicy = onOperatorRolePolicyChanged((change) => {
+                if (
+                  change.kind === "config" &&
+                  change.context === sourceContext &&
+                  !isCommittedPolicyCurrent()
+                ) {
+                  onRevoked();
+                }
+              });
               const releaseGeneration = client.usesSharedGatewayAuth
-                ? onSharedGatewayAuthInvalidated(
-                    getRequiredSharedGatewaySessionGeneration,
-                    client.sharedGatewaySessionGeneration,
-                    onRevoked,
-                  )
+                ? generationState?.onInvalidated(client.sharedGatewaySessionGeneration, onRevoked)
                 : undefined;
               return () => {
                 releaseClient();
+                releasePolicy();
                 releaseGeneration?.();
               };
             },
@@ -183,7 +209,35 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         : undefined,
     );
     const hasCurrentClientAuthority = clientAuthority.isCurrent;
+    // Origin/profile policy still enumerates clients; keep this invocation visible
+    // after transport closure without adding it to presence or message fanout.
+    const releaseAuthority = clients.retainRequest(client);
+    // Reserve receipt order before profile preparation can yield. A failed middle
+    // request must still carry the unfinished predecessor for later frames.
+    const credentialMutationBarrier = deviceCredentialMutationBarrier;
+    const mutationCompletion = DEVICE_CREDENTIAL_INVALIDATING_METHODS.has(req.method)
+      ? createDeferredCore()
+      : undefined;
+    if (mutationCompletion) {
+      const barrier = Promise.allSettled([
+        credentialMutationBarrier,
+        mutationCompletion.promise,
+      ]).then(() => {
+        if (deviceCredentialMutationBarrier === barrier) {
+          deviceCredentialMutationBarrier = undefined;
+        }
+      });
+      deviceCredentialMutationBarrier = barrier;
+    }
     try {
+      const expectedProfileBinding =
+        req.expectedProfileId === undefined
+          ? undefined
+          : await createExpectedProfileBinding(req.expectedProfileId, client, () => {
+              if (!hasCurrentClientAuthority()) {
+                throw new Error("Gateway requester authority changed");
+              }
+            });
       const publishResponse = (
         ok: boolean,
         payload?: unknown,
@@ -287,9 +341,6 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       const executeRequest = async () => {
         diagnostics?.bindTrace();
         let entry: GatewayRequestEntry | undefined;
-        // Capture the predecessor before this request publishes its own mutation tail.
-        // Later frames wait on that tail, preserving credential mutation order.
-        const credentialMutationBarrier = deviceCredentialMutationBarrier;
         // Most UI/SDK RPCs outlive a reconnect. Companion asks are the exception:
         // without their requester there is no safe recipient for a late answer.
         const cancelOnDisconnect =
@@ -419,17 +470,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         client.connect.role === "node"
           ? params.handler.nodeLifecycleDispatch.dispatch(req.method, dispatchRequest)
           : dispatchRequest();
-      if (DEVICE_CREDENTIAL_INVALIDATING_METHODS.has(req.method)) {
-        const barrier = requestDispatch.finally(() => {
-          if (deviceCredentialMutationBarrier === barrier) {
-            deviceCredentialMutationBarrier = undefined;
-          }
-        });
-        deviceCredentialMutationBarrier = barrier;
-      }
       await requestDispatch;
     } finally {
-      clientAuthority.release();
+      try {
+        releaseAuthority();
+      } finally {
+        try {
+          clientAuthority.release();
+        } finally {
+          mutationCompletion?.resolve();
+        }
+      }
     }
   };
 

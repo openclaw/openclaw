@@ -12,10 +12,9 @@ import type {
 import {
   assertRecordShape,
   nextGeneration,
-  normalizeCursor,
   normalizeEpoch,
+  normalizeNonNegativeInteger,
   normalizeWorkerPlacementExecutionMode,
-  normalizeTimestamp,
   nullableRequired,
   required,
   type PersistedTurnClaim,
@@ -29,7 +28,10 @@ import { parseWorkerSessionPlacementState } from "./placement-state.js";
 type PlacementRow = Selectable<WorkerSessionPlacements>;
 type PlacementDatabase = Pick<
   StateDatabase,
-  "worker_session_placements" | "worker_session_tool_operations" | "worker_turn_tool_authorities"
+  | "worker_environments"
+  | "worker_session_placements"
+  | "worker_session_tool_operations"
+  | "worker_turn_tool_authorities"
 >;
 
 export const query = (db: DatabaseSync) => getNodeSqliteKysely<PlacementDatabase>(db);
@@ -78,13 +80,16 @@ export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
     ),
     remoteWorkspaceDir: nullableRequired(row.remote_workspace_dir, "remote workspace directory"),
     workerBundleHash: nullableRequired(row.worker_bundle_hash, "worker bundle hash"),
-    lastTranscriptAckCursor: normalizeCursor(
+    lastTranscriptAckCursor: normalizeNonNegativeInteger(
       row.last_transcript_ack_cursor,
       "transcript ACK cursor",
     ),
-    lastLiveEventAckCursor: normalizeCursor(row.last_live_event_ack_cursor, "live ACK cursor"),
+    lastLiveEventAckCursor: normalizeNonNegativeInteger(
+      row.last_live_event_ack_cursor,
+      "live ACK cursor",
+    ),
     terminalReason: nullableRequired(row.terminal_reason, "terminal reason"),
-    terminalAtMs: normalizeTimestamp(row.terminal_at_ms, "terminal timestamp"),
+    terminalAtMs: normalizeNonNegativeInteger(row.terminal_at_ms, "terminal timestamp"),
   };
   const recoveryError = nullableRequired(row.recovery_error, "recovery error");
   const turnClaim = parseTurnClaim(row);
@@ -122,10 +127,48 @@ export function find(
 
 export function readWorkerPlacementChangeSnapshotInDatabase(
   db: DatabaseSync,
+  profileIds?: readonly string[],
 ): WorkerSessionPlacementChangeSnapshot[] {
+  if (profileIds?.length === 0) {
+    return [];
+  }
+  let select = query(db)
+    .selectFrom("worker_session_placements")
+    .selectAll("worker_session_placements");
+  if (profileIds) {
+    select = select
+      .innerJoin(
+        "worker_environments",
+        "worker_environments.environment_id",
+        "worker_session_placements.environment_id",
+      )
+      .where(
+        "worker_session_placements.environment_id",
+        "in",
+        query(db)
+          .selectFrom("worker_environments")
+          .select("environment_id")
+          .where("profile_id", "in", profileIds),
+      )
+      // Match the instance correlation used by readWorkerPlacementIdentity, including
+      // terminal provenance and pre-epoch dispatch states.
+      .where((eb) =>
+        eb.or([
+          eb(
+            "worker_session_placements.active_owner_epoch",
+            "=",
+            eb.ref("worker_environments.owner_epoch"),
+          ),
+          eb.and([
+            eb("worker_session_placements.active_owner_epoch", "is", null),
+            eb("worker_session_placements.state", "in", ["provisioning", "syncing", "starting"]),
+          ]),
+        ]),
+      );
+  }
   return executeSqliteQuerySync(
     db,
-    query(db).selectFrom("worker_session_placements").selectAll().orderBy("session_id"),
+    select.orderBy("worker_session_placements.session_id"),
   ).rows.map((row) => {
     const { sessionId, state, generation, updatedAtMs, sessionKey, agentId } = fromRow(row);
     return {
@@ -268,12 +311,12 @@ export function transitionValues(
       ? null
       : patch.lastTranscriptAckCursor === undefined
         ? current.lastTranscriptAckCursor
-        : normalizeCursor(patch.lastTranscriptAckCursor, "transcript ACK cursor"),
+        : normalizeNonNegativeInteger(patch.lastTranscriptAckCursor, "transcript ACK cursor"),
     last_live_event_ack_cursor: clearsWorkerMetadata
       ? null
       : patch.lastLiveEventAckCursor === undefined
         ? current.lastLiveEventAckCursor
-        : normalizeCursor(patch.lastLiveEventAckCursor, "live ACK cursor"),
+        : normalizeNonNegativeInteger(patch.lastLiveEventAckCursor, "live ACK cursor"),
     recovery_error: clearsWorkerMetadata
       ? null
       : patch.recoveryError === undefined

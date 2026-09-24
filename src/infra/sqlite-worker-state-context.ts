@@ -5,13 +5,32 @@ import type { StateDatabaseCoordinatorRuntime } from "./state-database-coordinat
 
 /** Resolved host facts for the canonical shared-state owner, never authority. */
 export type SqliteWorkerStateContext = {
-  environment: {
+  environment: NodeJS.ProcessEnv & {
     OPENCLAW_STATE_DIR: string;
     OPENCLAW_SUPERVISOR_MODE?: "external";
   };
+  /** Selected config inputs for native shared-state initialization, not command environment. */
+  initializationEnvironment?: NodeJS.ProcessEnv;
   coordinatorRuntime: StateDatabaseCoordinatorRuntime;
   existingSchemaPath?: string;
 };
+
+/** Charge the captured environment together with the request bytes retained by admission. */
+export function sqliteWorkerRequestBytes(
+  input: Uint8Array,
+  context?: SqliteWorkerStateContext,
+  preparation?: Uint8Array,
+): number {
+  return [context?.environment, context?.initializationEnvironment].reduce(
+    (bytes, environment) =>
+      Object.entries(environment ?? {}).reduce(
+        (total, [key, value]) =>
+          total + Buffer.byteLength(key, "utf8") + Buffer.byteLength(value ?? "", "utf8"),
+        bytes,
+      ),
+    input.byteLength + (preparation?.byteLength ?? 0),
+  );
+}
 
 // Source hosts and built backends can load separate module copies in one Worker.
 const stateContexts = resolveGlobalSingleton(

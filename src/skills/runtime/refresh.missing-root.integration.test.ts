@@ -214,13 +214,12 @@ it("refreshes skills created beneath an initially missing project skills root", 
 });
 
 describe("shared missing skill ancestors", () => {
-  let captureFailure: (() => void) | undefined;
+  let captureFailure: ((stage: "before test teardown" | "afterEach fallback") => void) | undefined;
   const roots = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(async ({ task }) => {
-      // onTestFailed runs after afterEach. Freeze the failed operation's state
-      // before closing watches or clearing their pending timers.
+      // afterEach may follow the body's cleanup; retain any earlier snapshot.
       if (task.result?.state === "fail") {
-        captureFailure?.();
+        captureFailure?.("afterEach fallback");
       }
       captureFailure = undefined;
       const { closeSkillsWatchers } = await import("./refresh.js");
@@ -270,8 +269,9 @@ describe("shared missing skill ancestors", () => {
           stack: string | undefined;
         }
       >();
-      captureFailure = () => {
-        failureSnapshot = JSON.stringify({
+      captureFailure = (captureStage) => {
+        failureSnapshot ??= JSON.stringify({
+          captureStage,
           ancestor,
           phase,
           pendingTimers: Array.from(pendingTimers.values(), ({ delayMs, createdAt, stack }) => ({
@@ -291,7 +291,7 @@ describe("shared missing skill ancestors", () => {
         });
       };
       onTestFailed(() => {
-        console.error(`[skills ancestor failure before cleanup] ${failureSnapshot}`);
+        console.error(`[skills ancestor failure] ${failureSnapshot}`);
       });
       const root = await fs.realpath(roots.make("skills-shared-ancestor-"));
       const source = (name: string) => {
@@ -513,6 +513,13 @@ describe("shared missing skill ancestors", () => {
         await writeSkill(second, "recreated-proof");
         phase = "discover recreated sibling skill";
         await expect.poll(() => read(second), { timeout: 3_000 }).toContain("recreated-proof");
+      } catch (error) {
+        try {
+          captureFailure?.("before test teardown");
+        } catch {
+          // Diagnostic failure must not replace the original operation error.
+        }
+        throw error;
       } finally {
         unregister();
         await closeSkillsWatchers(true);
@@ -558,9 +565,17 @@ describe("shared missing skill ancestors", () => {
       }
       return originalUnwatchFile(...args);
     });
+    const observed: Array<{ watcher: ReturnType<typeof chokidar.watch>; ready: boolean }> = [];
+    const watcherErrors: unknown[] = [];
     const originalWatch = chokidar.watch;
     const watch = vi.spyOn(chokidar, "watch").mockImplementation((...args) => {
       const watcher = originalWatch(...args);
+      const observation = { watcher, ready: false };
+      observed.push(observation);
+      watcher.once("ready", () => {
+        observation.ready = true;
+      });
+      watcher.on("error", (error) => watcherErrors.push(error));
       if (resolveSkillsWatcherUsePolling()) {
         const originalEmit = watcher.emit.bind(watcher);
         vi.spyOn(watcher, "emit").mockImplementation((...emitArgs) => {
@@ -591,18 +606,11 @@ describe("shared missing skill ancestors", () => {
       }).map((entry) => entry.skill.name);
     ensureSkillsWatcher({ workspaceDir, config });
     expect(read()).toEqual([]);
-    await Promise.all(
-      watch.mock.results.map((result) => {
-        if (result.type !== "return") {
-          throw new Error("Watcher acquisition failed");
-        }
-        return new Promise<void>((resolve, reject) => {
-          result.value.once("ready", resolve);
-          result.value.once("error", reject);
-        });
-      }),
-    );
-    // Ready handlers reconcile synchronously before these promises resolve.
+    // Ready handlers may acquire another verification generation synchronously.
+    await vi.waitFor(() => {
+      expect(watcherErrors).toEqual([]);
+      expect(observed.every(({ watcher, ready }) => ready || watcher.closed)).toBe(true);
+    });
     // Unchanged empty inventory suppresses public events, but discovery still invalidates.
     const sourceVersion = getSkillsSourceVersion(workspaceDir);
     const chokidarAdmissionStart = replaceAncestor ? watch.mock.calls.length : 0;

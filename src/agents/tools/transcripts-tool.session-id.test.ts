@@ -5,6 +5,8 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -15,14 +17,6 @@ import type { TranscriptSourceProvider } from "../../transcripts/provider-types.
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
-
-const { getTranscriptSourceProviderMock } = vi.hoisted(() => ({
-  getTranscriptSourceProviderMock: vi.fn(),
-}));
-vi.mock("../../transcripts/provider-registry.js", () => ({
-  getTranscriptSourceProvider: getTranscriptSourceProviderMock,
-  listTranscriptSourceProviders: () => [],
-}));
 
 const tempDirs = createTempDirTracker();
 const pendingStops = new Map<ReturnType<typeof createTranscriptsTool>, Set<string>>();
@@ -42,14 +36,21 @@ function createHarness() {
   const importTranscript = vi.fn<NonNullable<TranscriptSourceProvider["importTranscript"]>>(
     async () => [{ text: note }],
   );
-  getTranscriptSourceProviderMock.mockReturnValue({
+  const provider: TranscriptSourceProvider = {
     id: "room-audio",
     name: "Room Audio",
     sourceKinds: ["live-audio", "posthoc-transcript"],
     start,
     stop,
     importTranscript,
-  } satisfies TranscriptSourceProvider);
+  };
+  const registry = createEmptyPluginRegistry();
+  registry.transcriptSourceProviders.push({
+    pluginId: provider.id,
+    provider,
+    source: import.meta.url,
+  });
+  setActivePluginRegistry(registry);
   const tool = createTranscriptsTool({ stateDir, caller: { kind: "operator", source: "local" } });
   const active = new Set<string>();
   pendingStops.set(tool, active);
@@ -97,7 +98,7 @@ afterEach(async () => {
     }
   } finally {
     pendingStops.clear();
-    getTranscriptSourceProviderMock.mockReset();
+    setActivePluginRegistry(createEmptyPluginRegistry());
     vi.useRealTimers();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();

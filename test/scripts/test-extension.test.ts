@@ -25,6 +25,7 @@ import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestProcessTargetChunks,
   createExtensionTestShards,
+  estimateExtensionTestCost,
   listExtensionTestFilesForRoots,
   listTrackedTestPlanFiles,
   resolveExtensionBatchPlan,
@@ -37,15 +38,21 @@ import {
   prepareVitestRuntime,
   resolveVitestPretestBuildMode,
 } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import {
   parseExtensionIds,
   parseExactVitestExcludePaths,
   resolveExtensionBatchParallelism,
   runExtensionBatchPlan,
 } from "../../scripts/test-extension-batch.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { waitForPidFile } from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { listVitestConfigTestFiles } from "../vitest-projects-config.test-support.js";
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
 import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.config.ts";
 
@@ -251,58 +258,10 @@ describe("scripts/test-extension.mts", () => {
     },
   );
 
-  it.each([
-    {
-      name: "Matrix",
-      config: "test/vitest/vitest.extension-matrix.config.ts",
-      root: "matrix",
-      limit: 40,
-    },
-    {
-      name: "Telegram",
-      config: "test/vitest/vitest.extension-telegram.config.ts",
-      root: "telegram",
-      limit: 1,
-    },
-  ])("bounds $name test files across balanced process lifetimes", ({ config, root, limit }) => {
-    const roots = [bundledPluginRoot(root)];
-    const expectedFiles = listExtensionTestFilesForRoots(roots).filter(
-      (file) => !databaseWorkerExtensionTestFiles.includes(file),
-    );
-    const chunks = createExtensionTestProcessTargetChunks(config, roots);
-
-    expect(chunks).toHaveLength(Math.max(1, Math.ceil(expectedFiles.length / limit)));
-    expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
-    expect(Math.max(...chunks.map((chunk) => chunk.length))).toBeLessThanOrEqual(
-      Math.min(...chunks.map((chunk) => chunk.length)) + 1,
-    );
-    expect(chunks.flat()).toEqual(expectedFiles);
-    expect(new Set(chunks.flat()).size).toBe(expectedFiles.length);
-  });
-
   it("excludes plugin browser tests from the server-side extension inventory", () => {
     const files = listExtensionTestFilesForRoots([bundledPluginRoot("workboard")]);
     expect(files.length).toBeGreaterThan(0);
     expect(files.some((file) => file.includes("/browser/"))).toBe(false);
-  });
-
-  it("includes newly authored Matrix tests in bounded process targets", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-test-plan-"));
-    const relativeRoot = path.relative(process.cwd(), root);
-    const testFile = path.join(root, "newly-authored.test.ts");
-    writeFileSync(testFile, "export {};\n");
-    try {
-      const chunks = createExtensionTestProcessTargetChunks(
-        "test/vitest/vitest.extension-matrix.config.ts",
-        [relativeRoot],
-      );
-
-      expect(chunks.flat()).toEqual([
-        path.relative(process.cwd(), testFile).split(path.sep).join("/"),
-      ]);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
   });
 
   posixIt("preserves newline and leading-space tokens in the tracked Git inventory", () => {
@@ -726,6 +685,14 @@ describe("scripts/test-extension.mts", () => {
   });
 
   it("balances extension test shards by estimated CI cost", () => {
+    for (const [config, singletonSeconds, tenFileSeconds] of [
+      ["test/vitest/vitest.extension-slack.config.ts", 2, 12],
+      ["test/vitest/vitest.extension-telegram.config.ts", 6, 43],
+      ["test/vitest/vitest.extension-database-workers.config.ts", 8, 76],
+    ] as const) {
+      expect(estimateExtensionTestCost(config, 1), config).toBe(singletonSeconds);
+      expect(estimateExtensionTestCost(config, 10), config).toBe(tenFileSeconds);
+    }
     const shards = balancedExtensionShards;
 
     expect(shards).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
@@ -799,21 +766,23 @@ describe("scripts/test-extension.mts", () => {
     await expect(runPromise).resolves.toBe(0);
     expect(runGroup).toHaveBeenCalledTimes(3);
     const firstRunGroupParams = requireFirstMockArg<RunGroupParams>(runGroup);
-    expect(firstRunGroupParams).toEqual({
+    expect(firstRunGroupParams).toMatchObject({
       args: ["--reporter=dot"],
       config: "heavy",
       env: {
         OPENCLAW_EXTENSION_BATCH_PARALLEL: "2",
-        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
-          process.cwd(),
-          ".cache",
-          "vitest",
-          "extension-batch",
-          "0-heavy",
-        ),
       },
       targets: ["two"],
     });
+    const cachePaths = runGroup.mock.calls.map(([params]) =>
+      params.env?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/"),
+    );
+    expect(new Set(cachePaths).size).toBe(3);
+    expect(
+      cachePaths.every((cachePath) =>
+        /\/\.cache\/vitest\/slots\/[a-f\d]+\/0$/u.test(cachePath ?? ""),
+      ),
+    ).toBe(true);
   });
 
   it("stops admitting extension batch groups after a parallel failure", async () => {
@@ -1080,14 +1049,16 @@ fs.writeFileSync(${JSON.stringify(descendantPidPath)},String(descendant.pid));
 fs.writeFileSync(${JSON.stringify(childPidPath)},String(process.pid));
 await new Promise(()=>{});export default {};`,
       );
+      const batchRunnerUrl = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.vitestBatchRunner);
       writeFileSync(
         entry,
-        `import {runVitestBatch} from ${JSON.stringify(path.join(process.cwd(), "scripts/lib/vitest-batch-runner.mts"))};process.exitCode=await runVitestBatch({config:${JSON.stringify(config)},args:['--configLoader=native'],targets:[]});`,
+        `import {runVitestBatch} from ${JSON.stringify(batchRunnerUrl.href)};process.exitCode=await runVitestBatch({config:${JSON.stringify(config)},args:['--configLoader=native'],targets:[]});`,
       );
-      const runner = spawn(process.execPath, ["--import", "tsx", entry], {
-        cwd: process.cwd(),
-        stdio: "ignore",
-      });
+      const runner = spawn(
+        process.execPath,
+        [...resolveRuntimeWorkerArgv(batchRunnerUrl).slice(0, -1), entry],
+        { cwd: process.cwd(), stdio: "ignore" },
+      );
       let childPid = 0;
       let descendantPid = 0;
 
@@ -1158,7 +1129,12 @@ await new Promise(()=>{});export default {};`,
   ])("preserves Codex process bounds with release options %j", async (...vitestArgs) => {
     const runGroup = vi.fn<(params: RunGroupParams) => Promise<number>>().mockResolvedValue(0);
     const excluded = "extensions/codex/src/app-server/run-attempt.test.ts";
-    const expectedFiles = listExtensionTestFilesForRoots([bundledPluginRoot("codex")])
+    const expectedFiles = [
+      ...(await listVitestConfigTestFiles("test/vitest/vitest.extension-codex.config.ts")),
+      ...(
+        await listVitestConfigTestFiles("test/vitest/vitest.extension-database-workers.config.ts")
+      ).filter((file) => file.startsWith("extensions/codex/")),
+    ]
       .filter((file) => file !== excluded)
       .map((file) => file.replace(/^extensions\//u, ""));
 

@@ -1,5 +1,5 @@
 /**
- * Host-side Code Mode controller for isolated QuickJS execution with bridged
+ * Host-side Code Mode controller for selectable JavaScript execution with bridged
  * tool search/call/yield support.
  */
 import { Type } from "typebox";
@@ -16,6 +16,11 @@ import {
   isCodeModeControlTool,
   markCodeModeControlTool,
 } from "./code-mode-control-tools.js";
+import {
+  normalizeCodeModeTimeoutResult,
+  CodeModeHeadlessAbortError,
+  CodeModeHeadlessTimeoutError,
+} from "./code-mode-errors.js";
 import { runCodeModeExec, runWait } from "./code-mode-execution.js";
 import { runCodeModeScriptHeadless } from "./code-mode-headless.js";
 import { describeCodeModeNamespacesForPrompt } from "./code-mode-namespaces.js";
@@ -26,11 +31,6 @@ import {
   readRunId,
   resolveCodeModeConfig,
 } from "./code-mode-runtime.js";
-import {
-  normalizeCodeModeTimeoutResult,
-  CodeModeHeadlessAbortError,
-  CodeModeHeadlessTimeoutError,
-} from "./code-mode-worker.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { executionTitleSchema } from "./schema/typebox.js";

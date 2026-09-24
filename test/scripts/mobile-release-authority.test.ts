@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   cleanupOwnedKeychain,
@@ -45,6 +45,8 @@ const TOOLING_FILES = [
   "scripts/lib/release-version.mjs",
 ] as const;
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
+const repositoryTemplateRoots = useAutoCleanupTempDirTracker(afterAll);
+const repositoryTemplates = new Map<string, ReturnType<typeof createFixtureRepositories>>();
 const joinedObservationRoots: string[] = [];
 afterEach(() => cleanupTempDirs(joinedObservationRoots));
 
@@ -464,22 +466,12 @@ if (endpoint.includes("/collaborators/")) {
   );
 }
 
-function createFixture(options: FixtureOptions = {}): Fixture {
+function createFixtureRepositories(root: string, options: FixtureOptions) {
   const platform = options.platform ?? "ios";
-  const root = tempRoots.make("openclaw-mobile-release-authority-");
   const source = path.join(root, "source");
   const trusted = path.join(root, "trusted");
   const workspace = path.join(root, "workspace");
-  const runnerTemp = path.join(root, "runner");
-  const stateDir = path.join(root, "state");
-  const binDir = path.join(root, "bin");
-  const outputPath = path.join(root, "output");
   fs.mkdirSync(source);
-  fs.mkdirSync(runnerTemp);
-  fs.mkdirSync(stateDir);
-  fs.mkdirSync(binDir);
-  fs.writeFileSync(outputPath, "");
-
   git(source, "init", "-b", "main");
   git(source, "config", "user.email", "ci@example.invalid");
   git(source, "config", "user.name", "Mobile Release Test");
@@ -545,6 +537,64 @@ function createFixture(options: FixtureOptions = {}): Fixture {
     workspace,
   );
   git(workspace, "checkout", "--detach", targetSha);
+
+  return { source, trusted, workspace, baseSha, targetSha };
+}
+
+function prepareFixtureRepositories(root: string, options: FixtureOptions) {
+  if (
+    options.mutateBase ||
+    options.beforeCandidate ||
+    options.buildCandidate ||
+    options.mutateCandidate
+  ) {
+    return createFixtureRepositories(root, options);
+  }
+  const key = JSON.stringify([
+    options.platform ?? "ios",
+    options.baseState ?? null,
+    options.emptyCandidate ?? false,
+    options.realFetch ?? false,
+  ]);
+  let template = repositoryTemplates.get(key);
+  if (!template) {
+    template = createFixtureRepositories(
+      repositoryTemplateRoots.make("openclaw-mobile-release-repositories-"),
+      options,
+    );
+    git(template.source, "repack", "-ad");
+    repositoryTemplates.set(key, template);
+  }
+  const source = path.join(root, "source");
+  const trusted = path.join(root, "trusted");
+  const workspace = path.join(root, "workspace");
+  // Ref, index, and object mutations stay private, including cold partial-clone faults.
+  const copyOptions = { recursive: true, mode: fs.constants.COPYFILE_FICLONE };
+  fs.cpSync(template.source, source, copyOptions);
+  fs.cpSync(template.trusted, trusted, copyOptions);
+  fs.cpSync(template.workspace, workspace, copyOptions);
+  for (const repository of [trusted, workspace]) {
+    git(repository, "remote", "set-url", "origin", source);
+  }
+  return { ...template, source, trusted, workspace };
+}
+
+function createFixture(options: FixtureOptions = {}): Fixture {
+  const platform = options.platform ?? "ios";
+  const root = tempRoots.make("openclaw-mobile-release-authority-");
+  const runnerTemp = path.join(root, "runner");
+  const stateDir = path.join(root, "state");
+  const binDir = path.join(root, "bin");
+  const outputPath = path.join(root, "output");
+  fs.mkdirSync(runnerTemp);
+  fs.mkdirSync(stateDir);
+  fs.mkdirSync(binDir);
+  fs.writeFileSync(outputPath, "");
+
+  const { source, trusted, workspace, baseSha, targetSha } = prepareFixtureRepositories(
+    root,
+    options,
+  );
 
   writeGitShim(binDir, options.realFetch === true);
   writeGhShim(binDir);
@@ -2855,9 +2905,19 @@ fi
         "-c",
         [
           "set -euo pipefail",
+          "unset SECONDS",
+          "SECONDS=0",
+          'mkfifo "$PROBE_READY_FILE"',
+          'exec 3<>"$PROBE_READY_FILE"',
+          // Expire only after the child has installed its TERM trap and recorded its PID.
+          "sleep() {",
+          "  read -r ready <&3",
+          '  [[ "$ready" == ready ]]',
+          "  SECONDS=1",
+          "}",
           probeFunction,
           'run_bounded_probe "$PROBE_OUTPUT" "$((SECONDS + 1))" /bin/bash -c ' +
-            '\'trap "" TERM; printf "%s\\n" "$$" >"$PROBE_PID_FILE"; exec sleep 30\'',
+            '\'trap "" TERM; printf "%s\\n" "$$" >"$PROBE_PID_FILE"; printf "ready\\n" >&3; exec sleep 30\'',
           'printf "status=%s timed_out=%s\\n" "$probe_status" "$probe_timed_out"',
         ].join("\n"),
       ],
@@ -2867,6 +2927,7 @@ fi
           ...process.env,
           PROBE_OUTPUT: path.join(probeTimeoutRoot, "probe.txt"),
           PROBE_PID_FILE: probePidFile,
+          PROBE_READY_FILE: path.join(probeTimeoutRoot, "probe.ready"),
         },
         timeout: 5_000,
       },
@@ -3306,7 +3367,7 @@ fi
         file: ".github/workflows/ios-beta-release.yml",
         name: "iOS Beta Release",
         platform: "ios",
-        releaseRunner: "macos-26",
+        releaseRunner: "xcode-27",
         signingCheckoutName: "Checkout encrypted iOS signing assets",
         signingCheckoutRevalidateName:
           "Revalidate release authority immediately before iOS signing checkout",
@@ -4515,7 +4576,7 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
       };
     };
     const releaseSteps = workflow.jobs.release.steps;
-    const xcodeIndex = releaseSteps.findIndex((step) => step.name === "Select Xcode 26");
+    const xcodeIndex = releaseSteps.findIndex((step) => step.name === "Select Xcode 27");
     const rustIndex = releaseSteps.findIndex(
       (step) => step.name === "Install Watch Rust toolchain",
     );

@@ -939,8 +939,9 @@ describe("mock OpenAI response markers", () => {
     }
   });
 
-  it("resumes the MCP Code Mode fixture until the latest result completes", async () => {
-    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+  it.each(["current", "legacy"])("resumes the MCP Code Mode fixture (%s catalog)", async (mode) => {
+    const env = { OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE: mode };
+    await withMockServer(mockOpenAiPath, env, async (baseUrl) => {
       const input: Record<string, unknown>[] = [
         { content: "mcp code mode api file qa check", role: "user" },
       ];
@@ -963,9 +964,13 @@ describe("mock OpenAI response markers", () => {
       };
       const first = await request();
       expect(first.output?.[0]).toMatchObject({ name: "exec", type: "function_call" });
-      expect(JSON.parse(first.output[0].arguments)).toEqual({
+      const execArguments = JSON.parse(first.output[0].arguments);
+      expect(execArguments).toEqual({
         code: expect.stringContaining('MCP.fixture.lookupNote({ id: "alpha" })'),
       });
+      expect(execArguments.code).toContain(
+        mode === "legacy" ? "ALL_TOOLS.some(" : "catalog.all().some(",
+      );
 
       for (const reason of ["pending_tools", "yield"]) {
         input.push({

@@ -113,6 +113,18 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     connection.assertCurrent();
     connection.runAbortController.signal.throwIfAborted();
   };
+  const inputAttachmentNote = await connection.prepareInputAttachments({
+    maxChars: Math.max(
+      0,
+      CODEX_TURN_START_TEXT_INPUT_MAX_CHARS -
+        (nativeHistoryProvenancePrefix?.length ?? 0) -
+        params.prompt.length -
+        2,
+    ),
+    assertCurrent: assertProjectionCurrent,
+    signal: connection.runAbortController.signal,
+  });
+  assertProjectionCurrent();
   const admittedMessage =
     params.userTurnTranscriptRecorder?.message ??
     (await params.userTurnTranscriptRecorder?.resolveMessage());
@@ -417,10 +429,19 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       projectedRanges && promptState.promptContextRange
         ? projectedRanges.contextRange.start - promptState.promptContextRange.start
         : undefined;
+    const inputLimit =
+      CODEX_TURN_START_TEXT_INPUT_MAX_CHARS - (nativeHistoryProvenancePrefix?.length ?? 0);
+    const requiredInputChars =
+      turnPromptText.length -
+      (projectedRanges ? projectedRanges.contextRange.end - projectedRanges.contextRange.start : 0);
+    // Optional paths may consume projected history, never current inbound or hook context.
+    const attachmentNote =
+      inputAttachmentNote && requiredInputChars + inputAttachmentNote.length + 2 <= inputLimit
+        ? inputAttachmentNote
+        : undefined;
     const fitted = fitCodexProjectedContextForTurnStart({
       promptText: turnPromptText,
-      maxChars:
-        CODEX_TURN_START_TEXT_INPUT_MAX_CHARS - (nativeHistoryProvenancePrefix?.length ?? 0),
+      maxChars: inputLimit - (attachmentNote ? attachmentNote.length + 2 : 0),
       contextRange: projectedRanges?.contextRange,
       requestRange: projectedRanges?.requestRange,
       preservedRange,
@@ -434,7 +455,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
             })),
     });
     turnContextImageGroups = fitted.imageGroups ?? [];
-    return fitted.promptText;
+    return attachmentNote ? `${fitted.promptText}\n\n${attachmentNote}` : fitted.promptText;
   };
   const firstPromptBuild = await buildPromptFromCurrentInputs();
   const turnState = {
@@ -529,14 +550,18 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     action: "started" | "resumed" | "forked",
     binding?: NonNullable<typeof mutable.startupBinding>,
   ) => {
-    // A fresh thread can inherit summaries after all prior user messages were compacted away.
+    // A bounded history can retain an answer after its user turn falls outside the window.
+    // Fresh threads need that text (or summaries), but tool-only suffixes are not continuity.
     // Resumed bindings hand off only newer local conversation and durable notes.
     const hasContinuity = historyState.messages.some(
       (message) =>
         message.role === "user" ||
         isCodexDurableCustomMessage(message) ||
         (action === "started" &&
-          (message.role === "compactionSummary" || message.role === "branchSummary")),
+          (message.role === "compactionSummary" ||
+            message.role === "branchSummary" ||
+            (message.role === "assistant" &&
+              message.content.some((part) => part.type === "text" && part.text.trim())))),
     );
     if (activeContextEngine || (!hasContinuity && !params.pluginRuntimeRefreshMessages?.length)) {
       return false;

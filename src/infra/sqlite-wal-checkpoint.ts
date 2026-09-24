@@ -34,7 +34,8 @@ export type SqliteWalHealth = {
   readerDiagnostics?: Array<Omit<SqliteReaderDiagnostics, "activeReaders">>;
 };
 
-export type SqliteWalCheckpointObservation = { databasePath: string; health: SqliteWalHealth };
+export type SqliteWalCheckpointSnapshot = { health: SqliteWalHealth; observedAtNs: bigint };
+export type SqliteWalCheckpointObservation = SqliteWalCheckpointSnapshot & { databasePath: string };
 const checkpointListeners = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteWalCheckpointListeners"),
   () => new Set<(observation: SqliteWalCheckpointObservation) => void>(),
@@ -79,12 +80,13 @@ function observeSqliteWalCheckpointHealth(
   };
 }
 
-function notifyCheckpoint(databasePath: string, health: SqliteWalHealth): void {
+function notifyCheckpoint(databasePath: string, snapshot: SqliteWalCheckpointSnapshot): void {
   for (const listener of checkpointListeners) {
     try {
       listener({
         databasePath: sqliteReaderDatabasePathKey(databasePath),
-        health: structuredClone(health),
+        health: structuredClone(snapshot.health),
+        observedAtNs: snapshot.observedAtNs,
       });
     } catch {
       // Diagnostic consumers cannot change the native checkpoint's outcome.
@@ -93,11 +95,14 @@ function notifyCheckpoint(databasePath: string, health: SqliteWalHealth): void {
 }
 
 /** Worker result transport relays the recorded fact and returns its enriched diagnostic snapshot. */
-export function publishSqliteWalCheckpointHealth(
+export function publishSqliteWalCheckpointObservation(
   databasePath: string,
-  health: SqliteWalHealth,
-): SqliteWalHealth {
-  const observed = observeSqliteWalCheckpointHealth(databasePath, health);
+  snapshot: SqliteWalCheckpointSnapshot,
+): SqliteWalCheckpointSnapshot {
+  const observed = {
+    health: observeSqliteWalCheckpointHealth(databasePath, snapshot.health),
+    observedAtNs: snapshot.observedAtNs,
+  };
   notifyCheckpoint(databasePath, observed);
   return observed;
 }
@@ -128,7 +133,7 @@ export function createSqliteWalCheckpoint(
   options: SqliteWalCheckpointOptions,
   journalSizeLimitBytes: number,
 ) {
-  let health: SqliteWalHealth | undefined;
+  let snapshot: SqliteWalCheckpointSnapshot | undefined;
 
   const checkpointObservation = (): SqliteWalHealth => ({
     state: "error",
@@ -137,7 +142,7 @@ export function createSqliteWalCheckpoint(
     databaseBytes: null,
     logFrames: null,
     checkpointedFrames: null,
-    lastCompletedAtMs: health?.lastCompletedAtMs ?? null,
+    lastCompletedAtMs: snapshot?.health.lastCompletedAtMs ?? null,
     consecutiveBlocked: 0,
     warning: true,
   });
@@ -151,11 +156,14 @@ export function createSqliteWalCheckpoint(
       warning: true,
       error: formatErrorMessage(error),
     };
-    health = options.databasePath
-      ? observeSqliteWalCheckpointHealth(options.databasePath, failed)
-      : failed;
+    snapshot = {
+      observedAtNs: process.hrtime.bigint(),
+      health: options.databasePath
+        ? observeSqliteWalCheckpointHealth(options.databasePath, failed)
+        : failed,
+    };
     if (options.databasePath) {
-      notifyCheckpoint(options.databasePath, health);
+      notifyCheckpoint(options.databasePath, snapshot);
     }
     options.onCheckpointError?.(error);
   };
@@ -164,6 +172,8 @@ export function createSqliteWalCheckpoint(
     mode: SqliteWalCheckpointMode,
     row: Record<string, SQLOutputValue> | undefined,
   ): boolean => {
+    // Worker relays keep this same-process ordering fact even if the wall clock steps backward.
+    const observedAtNs = process.hrtime.bigint();
     const observation = checkpointObservation();
     let busy: boolean;
     let sizeError: unknown;
@@ -177,7 +187,7 @@ export function createSqliteWalCheckpoint(
       if (observation.state === "complete") {
         observation.lastCompletedAtMs = observation.observedAtMs;
       } else {
-        observation.consecutiveBlocked = (health?.consecutiveBlocked ?? 0) + 1;
+        observation.consecutiveBlocked = (snapshot?.health.consecutiveBlocked ?? 0) + 1;
       }
       if (options.databasePath) {
         try {
@@ -196,11 +206,14 @@ export function createSqliteWalCheckpoint(
           (observation.walBytes !== null &&
             observation.databaseBytes !== null &&
             observation.walBytes > Math.max(2 * observation.databaseBytes, journalSizeLimitBytes)));
-      health = options.databasePath
-        ? observeSqliteWalCheckpointHealth(options.databasePath, observation)
-        : observation;
+      snapshot = {
+        observedAtNs,
+        health: options.databasePath
+          ? observeSqliteWalCheckpointHealth(options.databasePath, observation)
+          : observation,
+      };
       if (options.databasePath) {
-        notifyCheckpoint(options.databasePath, health);
+        notifyCheckpoint(options.databasePath, snapshot);
       }
     } catch (error) {
       recordCheckpointError(error, observation);
@@ -232,7 +245,10 @@ export function createSqliteWalCheckpoint(
       );
     },
     get health() {
-      return health ? structuredClone(health) : undefined;
+      return snapshot ? structuredClone(snapshot.health) : undefined;
+    },
+    get snapshot() {
+      return snapshot ? structuredClone(snapshot) : undefined;
     },
   };
 }

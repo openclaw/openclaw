@@ -43,6 +43,7 @@ type RuntimePinTestContext = {
     buildGatewayInstallPlan: Mock;
     auditGatewayServiceConfig: Mock;
     resolveSystemNodeInfo: Mock;
+    resolveNodeRuntimeInfo: Mock;
     needsNodeRuntimeMigration: Mock;
     install: Mock;
   };
@@ -55,6 +56,55 @@ export function registerDoctorRuntimePinTests({
   runRepair,
   createRecommendedServiceAudit,
 }: RuntimePinTestContext) {
+  it.each([
+    { runtime: "bun", runtimePath: "/home/test/.bun/bin/bun", supported: true },
+    { runtime: "node", runtimePath: "/opt/homebrew/opt/node@24/bin/node", supported: true },
+    { runtime: "node", runtimePath: "/unsupported/node", supported: false },
+  ])(
+    "repairs the recorded $runtime runtime with no system replacement (supported=$supported)",
+    async ({ runtime, runtimePath, supported }) => {
+      const command = {
+        programArguments: [runtimePath, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
+        environment: {},
+      };
+      mocks.readCommand.mockResolvedValue(command);
+      mocks.resolveNodeRuntimeInfo.mockResolvedValue({
+        status: supported ? "supported" : "unsupported",
+      });
+      mocks.needsNodeRuntimeMigration.mockReturnValue(!supported);
+      mocks.buildGatewayInstallPlan.mockImplementation(
+        async (options: { runtimePath?: string }) => ({
+          ...command,
+          programArguments: [
+            options.runtimePath ?? "/automatic/node",
+            ...command.programArguments.slice(1),
+          ],
+        }),
+      );
+      mocks.auditGatewayServiceConfig.mockResolvedValue(
+        createRecommendedServiceAudit(
+          "gateway-path-nonminimal",
+          "Gateway PATH should be regenerated",
+        ),
+      );
+
+      await runRepair({ gateway: {} });
+
+      for (const [options] of mocks.buildGatewayInstallPlan.mock.calls) {
+        expect(options.runtime).toBe(runtime);
+        expect(options.runtimePath).toBe(supported ? runtimePath : undefined);
+      }
+      expect(mocks.install).toHaveBeenCalledWith(
+        expect.objectContaining({
+          programArguments: [
+            supported ? runtimePath : "/automatic/node",
+            ...command.programArguments.slice(1),
+          ],
+        }),
+      );
+    },
+  );
+
   it("preserves an explicit Node pin instead of migrating it during doctor repair", async () => {
     const pin = "/home/test/.nvm/versions/node/v26.8.1/bin/node";
     pinSnapshotMock.mockReturnValue({

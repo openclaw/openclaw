@@ -34,7 +34,7 @@ const reference = Type.Object(
 );
 export const PluginCredentialInspectionSchema = Type.Union([
   Type.Object({ kind: Type.Literal("missing") }, closed),
-  Type.Object({ kind: Type.Literal("literal") }, closed),
+  Type.Object({ kind: Type.Literal("literal"), value: Type.Optional(Type.String()) }, closed),
   Type.Object({ kind: Type.Literal("invalid") }, closed),
   Type.Object({ kind: Type.Literal("environment"), envVar: text }, closed),
   Type.Object(
@@ -44,7 +44,7 @@ export const PluginCredentialInspectionSchema = Type.Union([
 ]);
 /** An admin can inspect only a credential advertised by this installed plugin, at this revision. */
 export const PluginsCredentialsInspectParamsSchema = Type.Object(
-  { pluginId: text, path, baseHash: text },
+  { pluginId: text, path, baseHash: text, reveal: Type.Optional(Type.Boolean()) },
   closed,
 );
 export const PluginsCredentialsInspectResultSchema = Type.Object(

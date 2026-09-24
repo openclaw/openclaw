@@ -55,7 +55,8 @@ waits in durable pending-input custody, including during workspace preparation.
 An optional `messageSeq` comes only from a committed transcript receipt. Clients
 must not predict it from history length or treat `status: "started"` as persistence.
 The Control UI replaces its provisional source with accepted custody, then with
-the canonical row. Its renderer keeps a loaded local preview in the same image
+the canonical row. Accepted inputs stay below saved conversation history until
+they are committed to the transcript. Its renderer keeps a loaded local preview in the same image
 element during this handoff while canonical media metadata and image bytes load.
 Authoritative text, media replacements, and removals still win. Unavailable or
 access-denied media shows a visible reason.
@@ -95,9 +96,10 @@ Delivery is best-effort. The Inbox and replay bookkeeping survive Gateway restar
 
 ## Control UI agents tools panel
 
-- The Control UI `/agents` Tools panel has an "Available Right Now" view backed by `tools.effective(sessionKey=...)`. That view is a server-derived, read-only projection of the current session's tool inventory. It includes core, plugin, channel-owned, and already-discovered MCP server tools.
+- The Control UI `/agents` Tools panel has a "Tool preview" backed by `tools.effective(sessionKey=...)`. It previews core, plugin, channel-owned, and already-discovered MCP server tools using the session's saved settings. It does not report the exact tools of an active run.
 - A separate config-editing view (backed by `tools.catalog`) covers profiles, per-agent overrides, and catalog semantics.
-- Runtime availability is session-scoped. Switching sessions on the same agent can change the "Available Right Now" list. Resetting a session refreshes its inventory too. The panel shows a notice when configured MCP servers have not been connected or changed since the last discovery. It does not silently start MCP transports from the read path.
+- The preview is session-scoped. Switching sessions on the same agent can change it, and resetting a session refreshes it. Unsaved config edits are not reflected in the preview, and saved or runtime changes may take time to appear. Run-specific tools can become available when a run starts; a tool missing from the preview is not necessarily disabled. The run still applies its current policy, credentials, and execution checks.
+- The panel shows a notice when configured MCP servers have not been connected or changed since the last discovery. It does not silently start MCP transports from the read path. Loading and failed previews do not mean the session has zero tools.
 - The config editor does not imply runtime availability. Effective access still follows policy precedence (`allow`/`deny`, per-agent and provider/channel overrides).
 
 ## Remote use

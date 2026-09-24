@@ -22,6 +22,7 @@ import {
   observeOpenClawDatabaseMaintenanceResource,
 } from "./openclaw-state-db-async-lifecycle.js";
 import {
+  closeOpenClawStateDatabaseByPathAsync,
   openClawStateDatabaseCache as stateDbCache,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
@@ -145,13 +146,14 @@ export function repairOpenClawStateDatabaseReadabilityForDoctor(
   );
 }
 
-/** Automatic preparation shares runtime schema convergence; historical repair stays with Doctor. */
-export function repairOpenClawStateDatabaseSchemaIfNeeded(
+/** Prepare schema and retire resources only when the admitted operation actually repairs it. */
+export async function prepareOpenClawStateDatabaseSchema(
   options: OpenClawStateDatabaseOptions = {},
-): {
+  mode: "automatic" | "doctor-preparation" | "doctor" = "automatic",
+): Promise<{
   changes: string[];
   warnings: string[];
-} {
+}> {
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
   assertOpenClawStateSchemaRepairAllowed(pathname);
@@ -159,22 +161,48 @@ export function repairOpenClawStateDatabaseSchemaIfNeeded(
     return { changes: [], warnings: [] };
   }
 
-  return runWithOpenClawStateWriteAccess(
-    { databasePath: pathname, env },
-    "state schema repair preflight/repair",
-    () =>
-      needsOpenClawStateDatabaseSchemaRepair(pathname)
-        ? withStateSchemaFence({ databasePath: pathname }, () =>
-            repairStateSchema(pathname, env, "automatic"),
-          )
-        : { changes: [], warnings: [] },
-  );
+  const scope = mode === "automatic" ? "automatic" : "doctor";
+  let repairStarted = false;
+  try {
+    return runWithOpenClawStateWriteAccess(
+      {
+        databasePath: pathname,
+        env,
+        ...(scope === "doctor"
+          ? { openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission }
+          : {}),
+      },
+      "state schema repair preflight/repair",
+      () => {
+        let needsRepair = mode === "doctor";
+        if (mode === "doctor-preparation") {
+          try {
+            assertOpenClawStateDatabaseFreshOpenAllowed(options);
+          } catch {
+            // The full repair must clear quarantine before dependent readers can proceed.
+            needsRepair = true;
+          }
+        }
+        return needsRepair || needsOpenClawStateDatabaseSchemaRepair(pathname, scope)
+          ? withStateSchemaFence({ databasePath: pathname }, () => {
+              repairStarted = true;
+              return repairStateSchema(pathname, env, scope);
+            })
+          : { changes: [], warnings: [] };
+      },
+    );
+  } finally {
+    // Readiness checks borrow the live generation; only admitted repair retires it.
+    if (repairStarted) {
+      await closeOpenClawStateDatabaseByPathAsync(pathname);
+    }
+  }
 }
 
 /** Bootstrap fresh/native-only state canonically before startup checkpoint access. */
 export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
   callback: (db: DatabaseSync) => T,
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { atomic?: boolean } = {},
 ): T {
   return withOpenClawStateStartupCheckpointConnection(callback, options, ensureSchema);
 }
@@ -183,8 +211,8 @@ export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
 export function initializeNativeOpenClawStateDatabase(
   options: OpenClawStateDatabaseOptions = {},
 ): void {
-  initializeNativeOpenClawStateConnection(options, (db, pathname, env) =>
-    ensureSchema(db, pathname, env, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS, true),
+  initializeNativeOpenClawStateConnection(options, (db, pathname, env, initialization) =>
+    ensureSchema(db, pathname, env, initialization, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS, true),
   );
 }
 
@@ -301,7 +329,9 @@ function openOpenClawStateDatabaseWithBusyTimeout(
           busyTimeoutMs,
           lockFailureReporting,
           existingSchema,
-          ensureSchema: (database) => ensureSchema(database, pathname, env, busyTimeoutMs),
+          initializationAgentPaths: options.initializationAgentPaths,
+          ensureSchema: (database, initialization) =>
+            ensureSchema(database, pathname, env, initialization, busyTimeoutMs),
           recordOpenFailure: recordOpenClawStateDatabaseOpenFailure,
         }));
       },

@@ -14,7 +14,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
-import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
@@ -31,7 +30,6 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
 import { resolveImplicitMessageActionTarget } from "../../infra/outbound/message-action-normalization.js";
 import {
   hydrateAttachmentParamsForAction,
@@ -59,7 +57,7 @@ import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capabili
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
-import { normalizeAccountId, normalizeOptionalAccountId } from "../../routing/session-key.js";
+import { normalizeOptionalAccountId } from "../../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
   resolveMissingAgentHarnessSessionError,
@@ -100,6 +98,7 @@ import {
   createGatewayInflightUnavailableFailure,
   scheduleDeliveredSourceReplyTranscriptMirror,
 } from "./message-operation-result.js";
+import { resolveMessageOperationAccountRoute } from "./send-account-route.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -230,17 +229,7 @@ function resolveGatewayInflightRequest(params: {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   operation?: string;
   requestScope?: string;
-}):
-  | {
-      kind: "ready";
-      idem: string;
-      dedupeKey: string;
-      inflightMap: Map<string, Promise<InflightResult>>;
-    }
-  | {
-      kind: "handled";
-      done: Promise<void>;
-    } {
+}) {
   const idem = params.idempotencyKey;
   const authorityScope = resolveMessageOperationAuthorityScope(params);
   const requestScope = params.requestScope ? `:${params.requestScope}` : "";
@@ -415,40 +404,6 @@ function replayReservedMessageOperationRoute(params: {
   return inflight.done;
 }
 
-function resolveMessageOperationAccountRoute(params: {
-  cfg: OpenClawConfig;
-  channel: string;
-  plugin: ChannelPlugin;
-  accountIds: readonly unknown[];
-  conflictMessage: string;
-}): { accountId: string | undefined; effectiveAccountId: string; requestScope: string } {
-  const accountIds = params.accountIds
-    .map((accountId) =>
-      validateExplicitMessageAccountSelection({
-        cfg: params.cfg,
-        channel: params.channel,
-        accountId,
-        plugin: params.plugin,
-      }),
-    )
-    .filter((accountId): accountId is string => accountId !== undefined);
-  const distinctAccountIds = [...new Set(accountIds)];
-  if (distinctAccountIds.length > 1) {
-    throw new Error(params.conflictMessage);
-  }
-  const accountId = distinctAccountIds[0];
-  // Missing input remains host-derived authority; this value only canonicalizes
-  // idempotency and is not forwarded as a caller-supplied explicit selection.
-  const effectiveAccountId =
-    accountId ??
-    normalizeAccountId(resolveChannelDefaultAccountId({ plugin: params.plugin, cfg: params.cfg }));
-  return {
-    accountId,
-    effectiveAccountId,
-    requestScope: JSON.stringify([params.channel, effectiveAccountId]),
-  };
-}
-
 async function withMessageOperationRoute<
   T extends {
     cfg: OpenClawConfig;
@@ -485,7 +440,7 @@ async function withMessageOperationRoute<
       return;
     }
     try {
-      const accountRoute = resolveMessageOperationAccountRoute({
+      const accountRoute = await resolveMessageOperationAccountRoute({
         ...resolved,
         accountIds: params.routeAccountIds(undefined),
         conflictMessage: params.conflictMessage,
@@ -549,9 +504,9 @@ async function withMessageOperationRoute<
     if (!resolved) {
       return;
     }
-    let accountRoute: ReturnType<typeof resolveMessageOperationAccountRoute>;
+    let accountRoute: Awaited<ReturnType<typeof resolveMessageOperationAccountRoute>>;
     try {
-      accountRoute = resolveMessageOperationAccountRoute({
+      accountRoute = await resolveMessageOperationAccountRoute({
         ...resolved,
         accountIds: params.routeAccountIds(binding),
         conflictMessage: params.conflictMessage,
@@ -679,38 +634,6 @@ async function resolveRequestedChannel(params: {
     }
   }
   return { cfg, sourceCfg, channel };
-}
-
-async function resolveInternalDeliveryChannel(
-  requestChannel: unknown,
-  context: GatewayRequestContext,
-  config?: OpenClawConfig,
-): Promise<
-  | {
-      kind: "ready";
-      cfg: OpenClawConfig;
-      sourceCfg: OpenClawConfig;
-      channel: string;
-    }
-  | {
-      kind: "failed";
-      result: InflightResult;
-    }
-> {
-  const resolvedChannel = await resolveRequestedChannel({
-    requestChannel,
-    unsupportedMessage: (input) => `unsupported channel: ${input}`,
-    context,
-    config,
-    rejectWebchatAsInternalOnly: true,
-  });
-  if ("error" in resolvedChannel) {
-    return {
-      kind: "failed",
-      result: { ok: false, error: resolvedChannel.error },
-    };
-  }
-  return { kind: "ready", ...resolvedChannel };
 }
 
 function resolveGatewayOutboundTarget(params: {
@@ -1133,10 +1056,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           );
           return completed;
         } catch (err) {
-          if (isChannelPartialDeliveryError(err)) {
-            return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
-          }
-          if (!authorize()) {
+          if (!isChannelPartialDeliveryError(err) && !authorize()) {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
           }
           return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
@@ -1195,14 +1115,15 @@ export const sendHandlers: GatewayRequestHandlers = {
       conflictMessage: "send account selections do not match",
       authorize: agentRuntimeAuthority.hasActive,
       resolveChannel: async (requestChannel) => {
-        const resolved = await resolveInternalDeliveryChannel(
+        const resolved = await resolveRequestedChannel({
           requestChannel,
+          unsupportedMessage: (input) => `unsupported channel: ${input}`,
           context,
-          messageActionConfig,
-        );
-        if (resolved.kind !== "ready") {
-          const result = resolved.result;
-          respond(result.ok, result.payload, result.error, result.meta);
+          config: messageActionConfig,
+          rejectWebchatAsInternalOnly: true,
+        });
+        if ("error" in resolved) {
+          respond(false, undefined, resolved.error, undefined);
           return undefined;
         }
         const { cfg, channel } = resolved;
@@ -1458,10 +1379,11 @@ export const sendHandlers: GatewayRequestHandlers = {
             channel,
           });
         } catch (err) {
-          if (isChannelPartialDeliveryError(err)) {
-            return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
-          }
-          if (hasAgentRuntimeAuthority && !agentRuntimeAuthority.hasActive()) {
+          if (
+            !isChannelPartialDeliveryError(err) &&
+            hasAgentRuntimeAuthority &&
+            !agentRuntimeAuthority.hasActive()
+          ) {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
           }
           return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
@@ -1588,10 +1510,11 @@ export const sendHandlers: GatewayRequestHandlers = {
           const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
           return createGatewayInflightSuccess({ context, dedupeKey, payload, channel });
         } catch (err) {
-          if (isChannelPartialDeliveryError(err)) {
-            return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
-          }
-          if (hasAgentRuntimeAuthority && !agentRuntimeAuthority.hasActive()) {
+          if (
+            !isChannelPartialDeliveryError(err) &&
+            hasAgentRuntimeAuthority &&
+            !agentRuntimeAuthority.hasActive()
+          ) {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
           }
           return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });

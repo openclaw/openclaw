@@ -18,6 +18,7 @@ import { logWarn } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 
 export type RunCronAgentTurnParams = {
+  admissionSource?: import("../../agents/admitted-run-context.js").AdmittedRunContext["admissionSource"];
   cfg: OpenClawConfig;
   deps: CliDeps;
   job: CronStoredJob;
@@ -83,6 +84,7 @@ function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
  * persistence will write.
  */
 export async function resolveCronAuthSelection(params: {
+  agentId: string;
   cfg: OpenClawConfig;
   provider: string;
   modelId: string;
@@ -105,6 +107,7 @@ export async function resolveCronAuthSelection(params: {
   }
   const runtime = await loadCronAuthProfileRuntime();
   return await runtime.resolveSessionAuthSelection({
+    agentId: params.agentId,
     cfg: params.cfg,
     provider: params.provider,
     modelId: params.modelId,

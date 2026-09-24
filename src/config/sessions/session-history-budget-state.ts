@@ -1,5 +1,9 @@
 import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
-import { onSqliteWalCheckpoint, type SqliteWalHealth } from "../../infra/sqlite-wal-checkpoint.js";
+import {
+  onSqliteWalCheckpoint,
+  type SqliteWalCheckpointSnapshot,
+  type SqliteWalHealth,
+} from "../../infra/sqlite-wal-checkpoint.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SessionDiskBudgetSweepResult } from "./disk-budget.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
@@ -66,12 +70,16 @@ type BudgetKickState = {
   running: boolean;
   pendingForce?: SessionHistoryBudgetKick;
   blockedUntil?: number;
-  checkpointBlocked?: { databasePath: string; checkpoint?: SqliteWalHealth; warned?: boolean };
+  checkpointBlocked?: {
+    databasePath: string;
+    checkpoint?: SqliteWalCheckpointSnapshot;
+    warned?: boolean;
+  };
 };
 
 export const budgetKickStateByStore = new Map<string, BudgetKickState>();
 
-onSqliteWalCheckpoint(({ databasePath, health }) => {
+onSqliteWalCheckpoint(({ databasePath, health, observedAtNs }) => {
   if (health.state !== "complete") {
     return;
   }
@@ -79,7 +87,8 @@ onSqliteWalCheckpoint(({ databasePath, health }) => {
     // Worker messages can arrive after a newer parent-side observation.
     if (
       state.checkpointBlocked?.databasePath === databasePath &&
-      health.observedAtMs >= (state.checkpointBlocked.checkpoint?.observedAtMs ?? -Infinity)
+      (!state.checkpointBlocked.checkpoint ||
+        observedAtNs >= state.checkpointBlocked.checkpoint.observedAtNs)
     ) {
       state.checkpointBlocked = undefined;
       state.blockedUntil = undefined;
@@ -92,7 +101,7 @@ onSqliteWalCheckpoint(({ databasePath, health }) => {
 export function deferPhysicalBudgetForCheckpoint(
   params: SessionHistoryDiskBudgetParams,
   databasePath: string,
-  checkpoint: SqliteWalHealth | undefined,
+  checkpoint: SqliteWalCheckpointSnapshot | undefined,
 ): void {
   const state = getBudgetKickState(params.storePath, params.maintenance);
   state.checkpointBlocked = { databasePath: sqliteReaderDatabasePathKey(databasePath), checkpoint };

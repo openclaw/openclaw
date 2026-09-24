@@ -119,16 +119,6 @@ on:
         required: false
         default: false
         type: boolean
-      advisory:
-        description: Treat failures as advisory for the caller
-        required: false
-        default: false
-        type: boolean
-      live_advisory:
-        description: Treat only live-provider suite failures as advisory for the caller; repo and Docker E2E stay blocking
-        required: false
-        default: false
-        type: boolean
       allow_unreleased_changelog:
         description: Allow current-tree QA packaging to use Unreleased notes when no exact version section exists
         required: false
@@ -212,16 +202,6 @@ on:
         description: Docker image archive SHA-256
         value: ${{ jobs.prepare_docker_e2e_image.outputs.image_archive_sha256 }}
     inputs:
-      advisory:
-        description: Treat failures as advisory for the caller
-        required: false
-        default: false
-        type: boolean
-      live_advisory:
-        description: Treat only live-provider suite failures as advisory for the caller; repo and Docker E2E stay blocking
-        required: false
-        default: false
-        type: boolean
       allow_unreleased_changelog:
         description: Allow current-tree QA packaging to use Unreleased notes when no exact version section exists
         required: false
@@ -1168,7 +1148,6 @@ jobs:
   validate_release_live_cache:
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
-    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 20
     env:
@@ -1205,16 +1184,7 @@ jobs:
       - name: Verify live prompt cache floors
         run: |
           set -euo pipefail
-          for attempt in 1 2; do
-            echo "live-cache attempt ${attempt}/2"
-            if timeout --foreground --kill-after=30s 8m pnpm test:live:cache; then
-              exit 0
-            fi
-            if [[ "$attempt" == "2" ]]; then
-              exit 1
-            fi
-            sleep $((attempt * 15))
-          done
+          timeout --foreground --kill-after=30s 8m pnpm test:live:cache
 
   validate_repo_e2e_gateway:
     name: Gateway E2E
@@ -1232,7 +1202,6 @@ jobs:
          {"name":"Gateway 3/4","command":"pnpm test:e2e:gateway --shard=3/4"},
          {"name":"Gateway 4/4","command":"pnpm test:e2e:gateway --shard=4/4"}]
       use_github_hosted_runners: ${{ inputs.use_github_hosted_runners && inputs.gateway_repo_e2e_use_github_hosted_runners }}
-      advisory: ${{ inputs.advisory }}
       allow_unreleased_changelog: ${{ inputs.allow_unreleased_changelog }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
 
@@ -1253,14 +1222,12 @@ jobs:
          {"name":"UI 4/4","command":"pnpm test:ui:e2e --shard=4/4"},
          {"name":"Agent plugin Gateway","command":"pnpm test:e2e:agent-plugin-gateway","target_script":"test:e2e:agent-plugin-gateway"}]
       use_github_hosted_runners: ${{ inputs.use_github_hosted_runners }}
-      advisory: ${{ inputs.advisory }}
       allow_unreleased_changelog: ${{ inputs.allow_unreleased_changelog }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
 
   validate_special_e2e:
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_repo_e2e && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'openshell-e2e')
-    continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -1300,18 +1267,8 @@ jobs:
           (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_BUILD_PRIVATE_QA: "1"
         run: pnpm build
-
-      - name: Configure suite-specific env
-        if: inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "${{ matrix.suite_id }}" in
-            openshell-e2e)
-              echo "OPENCLAW_E2E_OPENSHELL_CONFIG_HOME=$HOME/.config" >> "$GITHUB_ENV"
-              ;;
-          esac
 
       - name: Install OpenShell CLI
         if: |
@@ -1320,101 +1277,249 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export OPENSHELL_VERSION=v0.0.109
-          installer_path="$(mktemp "${RUNNER_TEMP}/openshell-install.XXXXXX")"
-          trap 'rm -f "$installer_path"' EXIT
+          # The installer also starts a systemd gateway. Install only the verified
+          # package so the E2E shell below is the sole gateway lifecycle owner.
+          package_path="$(mktemp "${RUNNER_TEMP}/openshell.XXXXXX.deb")"
+          trap 'rm -f "$package_path"' EXIT
           curl -LsSf --connect-timeout 10 --max-time 120 \
-            -o "$installer_path" \
-            https://raw.githubusercontent.com/NVIDIA/OpenShell/8d67250a5d17348eb96c4fa46226b06d8041f2ba/install.sh
-          sh "$installer_path"
+            -o "$package_path" \
+            https://github.com/NVIDIA/OpenShell/releases/download/v0.0.109/openshell_0.0.109-1_amd64.deb
+          printf '%s  %s\n' \
+            0364a21f279023a241d967309ebb0177dadb66bd792eeb3daf542283158ca40f \
+            "$package_path" | sha256sum --check -
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$package_path"
           openshell --version
 
-      - name: Bootstrap OpenShell gateway
+      - name: Run ${{ matrix.label }}
         if: |
           (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id) &&
           matrix.suite_id == 'openshell-e2e'
         shell: bash
         run: |
           set -euo pipefail
-          mtls_dir="$HOME/.config/openshell/gateways/openshell/mtls"
-          gateway_tls_dir="$RUNNER_TEMP/openshell-gateway-certs"
-          fallback_pid=""
-          if ! openshell --gateway openshell sandbox list >/dev/null 2>&1; then
-            rm -rf "$gateway_tls_dir"
-            openshell-gateway generate-certs \
-              --output-dir "$gateway_tls_dir" \
-              --server-san 127.0.0.1 \
-              --server-san localhost \
-              --server-san host.openshell.internal
-            rm -rf "$mtls_dir"
-            mkdir -p "$mtls_dir"
-            cp "$gateway_tls_dir/ca.crt" "$mtls_dir/ca.crt"
-            cp "$gateway_tls_dir/client/tls.crt" "$mtls_dir/tls.crt"
-            cp "$gateway_tls_dir/client/tls.key" "$mtls_dir/tls.key"
-            openshell gateway remove openshell >/dev/null 2>&1 || true
-            OPENSHELL_LOCAL_TLS_DIR="$gateway_tls_dir" nohup openshell-gateway \
-              --bind-address 0.0.0.0 \
-              --port 17670 \
-              --drivers docker \
-              --tls-cert "$gateway_tls_dir/server/tls.crt" \
-              --tls-key "$gateway_tls_dir/server/tls.key" \
-              --tls-client-ca "$mtls_dir/ca.crt" \
-              >"$RUNNER_TEMP/openshell-gateway.log" 2>&1 &
-            fallback_pid=$!
-            echo "OPENCLAW_OPENSHELL_FALLBACK_PID=$fallback_pid" >> "$GITHUB_ENV"
-            for _ in $(seq 1 30); do
-              if openshell gateway add --local --name openshell https://127.0.0.1:17670; then
-                break
-              fi
-              sleep 1
+          umask 077
+          fixture_root="$(mktemp -d "${RUNNER_TEMP}/openshell-e2e.XXXXXX")"
+          gateway_name="openshell-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          gateway_port=17680
+          gateway_pid=""
+          command_pid=""
+          run_owned() {
+            # Async wait handles cancellation immediately; the process group
+            # includes pnpm's test-runner descendants in the same cleanup.
+            setsid "$@" &
+            command_pid=$!
+            local command_result=0
+            wait "$command_pid" || command_result=$?
+            # Keep surviving descendants owned; a readiness retry must not replace
+            # their group with the next command's PID.
+            if kill -0 -- "-$command_pid" 2>/dev/null; then
+              echo "OpenShell command left a running process group after its leader exited." >&2
+              (( command_result != 0 )) || command_result=1
+              exit "$command_result"
+            fi
+            command_pid=""
+            return "$command_result"
+          }
+          owned_target_running() {
+            local target="$1"
+            if [[ "$target" == -* ]]; then
+              kill -0 -- "$target" 2>/dev/null
+              # A bare return inside EXIT would inherit the pre-trap failure.
+              return "$?"
+            fi
+            # Bash may reap an early gateway exit while waiting for the suite.
+            # Only a still-running child job owns its saved numeric PID.
+            local child
+            local children=()
+            mapfile -t children < <(jobs -pr)
+            for child in "${children[@]}"; do
+              [[ "$child" == "$target" ]] && return 0
             done
-            openshell gateway select openshell
-            for _ in $(seq 1 60); do
-              if openshell --gateway openshell sandbox list >/dev/null 2>&1; then
-                break
+            return 1
+          }
+          cleanup() {
+            local result=$?
+            trap - EXIT
+            trap '' INT TERM
+            local pid
+            local owned_pids=()
+            [[ -n "$gateway_pid" ]] && owned_pids+=("$gateway_pid")
+            [[ -n "$command_pid" ]] && owned_pids+=("-$command_pid")
+            for pid in "${owned_pids[@]}"; do
+              if owned_target_running "$pid" && ! kill -TERM -- "$pid" 2>/dev/null; then
+                if owned_target_running "$pid"; then
+                  (( result != 0 )) || result=1
+                fi
               fi
-              sleep 1
             done
-          fi
-          if [[ -z "$fallback_pid" ]]; then
-            echo "OPENCLAW_OPENSHELL_FALLBACK_PID=" >> "$GITHUB_ENV"
-          fi
-          openshell --gateway openshell sandbox list >/dev/null
-          openshell gateway list
-
-      - name: Validate suite credentials
-        if: inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id
-        shell: bash
-        run: |
+            for _ in $(seq 1 20); do
+              local remaining=()
+              for pid in "${owned_pids[@]}"; do
+                if owned_target_running "$pid"; then
+                  remaining+=("$pid")
+                else
+                  wait "${pid#-}" 2>/dev/null || true
+                fi
+              done
+              owned_pids=("${remaining[@]}")
+              (( ${#owned_pids[@]} )) || break
+              sleep 0.2
+            done
+            local unsettled=0
+            for pid in "${owned_pids[@]}"; do
+              if ! owned_target_running "$pid"; then
+                wait "${pid#-}" 2>/dev/null || true
+                continue
+              fi
+              kill -KILL -- "$pid" 2>/dev/null || true
+              (( result != 0 )) || result=1
+              wait "${pid#-}" 2>/dev/null || true
+              if owned_target_running "$pid"; then unsettled=1; fi
+            done
+            local docker_cleanup_ok=0
+            # Share the former two one-second Docker budgets across owned cleanup.
+            # timeout owns this subprocess group, including hung Docker children.
+            if timeout --kill-after=1s 2s bash -s -- "$gateway_name" <<'CLEANUP_DOCKER'
           set -euo pipefail
-          case "${{ matrix.suite_id }}" in
-            openshell-e2e)
-              ;;
-          esac
+          namespace="$1"
+          listed="$(docker ps -aq \
+            --filter "label=openshell.ai/managed-by=openshell" \
+            --filter "label=openshell.ai/sandbox-namespace=$namespace")"
+          helpers="$(docker ps -aq --filter "label=openclaw.ai/openshell-e2e-gateway=$namespace")"
+          ids=()
+          while IFS= read -r id; do
+            [[ -n "$id" ]] || continue
+            [[ "$id" =~ ^[0-9a-f]+$ ]] || exit 1
+            ids+=("$id")
+          done <<< "$listed"$'\n'"$helpers"
+          if (( ${#ids[@]} )); then docker rm -f -- "${ids[@]}"; fi
+          networks="$(docker network ls --format '{{.Name}}')"
+          if grep -Fxq -- "$namespace" <<< "$networks"; then docker network rm "$namespace"; fi
+          CLEANUP_DOCKER
+            then
+              docker_cleanup_ok=1
+            else
+              (( result != 0 )) || result=1
+            fi
+            if (( unsettled == 0 && docker_cleanup_ok == 1 )); then
+              if ! rm -rf -- "$fixture_root"; then (( result != 0 )) || result=1; fi
+            else
+              echo "Retaining OpenShell fixture state because owned cleanup did not complete." >&2
+            fi
+            exit "$result"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          export XDG_CONFIG_HOME="$fixture_root/config"
+          export XDG_STATE_HOME="$fixture_root/state"
+          export OPENCLAW_E2E_OPENSHELL_CONFIG_HOME="$XDG_CONFIG_HOME"
+          # Local registration imports this bundle too; a server-only override
+          # would replace the CLI certificates with the package-managed bundle.
+          export OPENSHELL_LOCAL_TLS_DIR="$fixture_root/pki"
+          mkdir -p "$XDG_CONFIG_HOME" "$XDG_STATE_HOME"
+          run_owned openshell-gateway generate-certs --output-dir "$OPENSHELL_LOCAL_TLS_DIR" \
+            --server-san 127.0.0.1 --server-san localhost --server-san host.openshell.internal
+          cat > "$fixture_root/gateway.toml" <<TOML
+          [openshell]
+          version = 1
+          [openshell.gateway]
+          compute_drivers = ["docker"]
+          [openshell.gateway.mtls_auth]
+          enabled = true
+          [openshell.drivers.docker]
+          sandbox_namespace = "$gateway_name"
+          network_name = "$gateway_name"
+          grpc_endpoint = "https://host.openshell.internal:$gateway_port"
+          TOML
+          RUST_LOG=info openshell-gateway --config "$fixture_root/gateway.toml" \
+            --bind-address 0.0.0.0 --port "$gateway_port" \
+            > "$RUNNER_TEMP/$gateway_name.raw.log" 2>&1 &
+          gateway_pid=$!
+          run_owned openshell gateway add --local --name "$gateway_name" "https://127.0.0.1:$gateway_port"
+          ready_deadline=$((SECONDS + 60))
+          until run_owned timeout --foreground 5s openshell --gateway "$gateway_name" whoami \
+            > "$fixture_root/whoami.txt" 2> "$fixture_root/auth-error.txt"; do
+            owned_target_running "$gateway_pid" || {
+              echo "OpenShell gateway exited before authenticated readiness." >&2
+              exit 1
+            }
+            if (( SECONDS >= ready_deadline )); then
+              cat "$fixture_root/auth-error.txt" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          owned_target_running "$gateway_pid"
+          run_owned timeout --foreground 20s openshell --gateway "$gateway_name" sandbox list
+          echo "OpenShell bootstrap passed: owned gateway and protected whoami/sandbox list."
+          run_owned ${{ matrix.command }}
 
-      - name: Run ${{ matrix.label }}
+      - name: Redact OpenShell gateway log
         if: |
-          (
-            (inputs.include_repo_e2e && matrix.requires_repo_e2e) ||
-            (inputs.include_live_suites && matrix.requires_live_suites)
-          ) &&
-          (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
-        run: ${{ matrix.command }}
-
-      - name: Stop fallback OpenShell gateway
-        if: always() && matrix.suite_id == 'openshell-e2e'
+          always() && inputs.include_repo_e2e &&
+          (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id) &&
+          matrix.suite_id == 'openshell-e2e'
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${OPENCLAW_OPENSHELL_FALLBACK_PID:-}" ]]; then
-            kill "$OPENCLAW_OPENSHELL_FALLBACK_PID" 2>/dev/null || true
+          umask 077
+          log_base="$RUNNER_TEMP/openshell-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'rm -f "$log_base.raw.log" "$log_base.redacted.tmp"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          # Logging runs after owned-process/PKI cleanup, never extending its
+          # cancellation grace. Only this bounded, redacted file may be uploaded.
+          if timeout --foreground --kill-after=1s 5s node --input-type=module - \
+            "$log_base.raw.log" > "$log_base.redacted.tmp" 2>/dev/null <<'NODE'
+          import fs from "node:fs";
+          import { stripVTControlCharacters } from "node:util";
+          import { redactSensitiveText } from "./dist/plugin-sdk/logging-core.js";
+          const fd = fs.openSync(process.argv[2], "r");
+          try {
+            const size = fs.fstatSync(fd).size;
+            const start = Math.max(0, size - 1024 * 1024);
+            const buffer = Buffer.alloc(size - start);
+            const bytes = fs.readSync(fd, buffer, 0, buffer.length, start);
+            let text = buffer.subarray(0, bytes).toString("utf8");
+            if (start > 0) {
+              const newline = text.indexOf("\n");
+              text = newline < 0 ? "" : text.slice(newline + 1);
+            }
+            text = text.slice(0, text.lastIndexOf("\n") + 1);
+            // v0.0.109 logs SSH bearer UUIDs as session_id/object.id, not token.
+            // Remove full values before canonical redaction, including in spans.
+            text = stripVTControlCharacters(text).replace(
+              /[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/gi, "[redacted-uuid]",
+            );
+            process.stdout.write(redactSensitiveText(text, { mode: "tools" }));
+          } finally {
+            fs.closeSync(fd);
+          }
+          NODE
+          then
+            mv "$log_base.redacted.tmp" "$log_base.log"
+            tail -n 120 "$log_base.log"
+          else
+            echo "OpenShell gateway log omitted: source or canonical redaction unavailable."
           fi
+
+      - name: Upload redacted OpenShell gateway log
+        if: |
+          always() && inputs.include_repo_e2e &&
+          (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id) &&
+          matrix.suite_id == 'openshell-e2e'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openshell-gateway-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openshell-e2e-${{ github.run_id }}-${{ github.run_attempt }}.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   validate_docker_e2e:
     needs: [validate_selected_ref, prepare_docker_e2e_image, plan_release_workflow_matrices]
     if: (!inputs.prepare_only) && inputs.include_release_path_suites && inputs.docker_lanes == '' && needs.plan_release_workflow_matrices.outputs.docker_e2e_count != '0'
     name: Docker E2E (${{ matrix.label }})
-    continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -1774,7 +1879,6 @@ jobs:
   plan_docker_lane_groups:
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.docker_lanes != ''
-    continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 90
     outputs:
@@ -1826,7 +1930,6 @@ jobs:
     needs: [validate_selected_ref, prepare_docker_e2e_image, plan_docker_lane_groups]
     if: (!inputs.prepare_only) && inputs.docker_lanes != '' && needs.plan_docker_lane_groups.outputs.groups_json != '[]'
     name: Docker E2E targeted lanes (${{ matrix.group.label }})
-    continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.group.timeout_minutes || 60 }}
     strategy:
@@ -2127,7 +2230,6 @@ jobs:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
     if: (!inputs.prepare_only) && inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full')
     name: Docker E2E (openwebui)
-    continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     env:
@@ -2275,7 +2377,6 @@ jobs:
     name: Prepare shared Docker E2E image
     needs: validate_selected_ref
     if: inputs.prepare_only || inputs.include_release_path_suites || inputs.include_openwebui || inputs.docker_lanes != ''
-    # Image preparation stays blocking even when validation suites are advisory.
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
     permissions:
@@ -3527,6 +3628,8 @@ jobs:
               echo "Full release candidate evidence metadata is unavailable." >&2
               exit 1
             fi
+            # A newly uploaded artifact may precede its metadata projection; no tests run here.
+            echo "::warning::Full release candidate artifact metadata returned 404; retrying acquisition ($attempt/3)."
             sleep "$((attempt * 2))"
           done
           artifact_expires_at="$(
@@ -3558,7 +3661,6 @@ jobs:
   prepare_live_test_image:
     needs: [validate_selected_ref, plan_release_workflow_matrices]
     if: inputs.include_live_suites && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-') || startsWith(inputs.live_suite_filter, 'docker-live-models'))
-    # Image preparation stays blocking even when validation suites are advisory.
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     permissions:
@@ -3710,7 +3812,6 @@ jobs:
     name: Docker live models (${{ matrix.provider_label }})
     needs: [validate_selected_ref, prepare_live_test_image, plan_release_workflow_matrices]
     if: (!inputs.prepare_only) && inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models') && needs.plan_release_workflow_matrices.outputs.live_models_count != '0'
-    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
@@ -3892,7 +3993,6 @@ jobs:
     name: Docker live models (selected providers)
     needs: [validate_selected_ref, prepare_live_test_image]
     if: (!inputs.prepare_only) && inputs.include_live_suites && inputs.live_model_providers != '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
-    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     env:
@@ -4097,7 +4197,6 @@ jobs:
   validate_live_provider_suites:
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || (startsWith(inputs.live_suite_filter, 'native-live-') && !startsWith(inputs.live_suite_filter, 'native-live-extensions-media') && inputs.live_suite_filter != 'native-live-extensions-a-k'))
-    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -4135,7 +4234,6 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku
             suite_group: native-live-src-gateway-profiles-anthropic
@@ -4143,7 +4241,6 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-google
             label: Native live gateway profiles Google
@@ -4180,14 +4277,12 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=fireworks node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-deepseek
             label: Native live gateway profiles DeepSeek
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek OPENCLAW_LIVE_GATEWAY_MODELS=deepseek/deepseek-v4-flash,deepseek/deepseek-v4-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-deepseek-glm
             suite_group: native-live-src-gateway-profiles-opencode-go
@@ -4195,7 +4290,6 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash,opencode-go/deepseek-v4-pro,opencode-go/glm-5,opencode-go/glm-5.1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-kimi
             suite_group: native-live-src-gateway-profiles-opencode-go
@@ -4203,7 +4297,6 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/kimi-k2.5,opencode-go/kimi-k2.6 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-mimo
             suite_group: native-live-src-gateway-profiles-opencode-go
@@ -4211,7 +4304,6 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-minimax-qwen
             suite_group: native-live-src-gateway-profiles-opencode-go
@@ -4219,7 +4311,6 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/minimax-m2.5,opencode-go/minimax-m2.7,opencode-go/qwen3.5-plus,opencode-go/qwen3.6-plus node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-smoke
             label: Native live gateway profiles OpenCode Go smoke
@@ -4233,21 +4324,18 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openrouter node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-xai
             label: Native live gateway profiles xAI
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-zai
             label: Native live gateway profiles Z.ai
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=zai node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-backends
             label: Native live gateway backends
@@ -4272,14 +4360,12 @@ jobs:
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-l-n
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-moonshot
             label: Native live Moonshot plugin
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-moonshot
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-openai
             label: Native live OpenAI plugin
@@ -4292,14 +4378,12 @@ jobs:
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-o-z-other
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-xai
             label: Native live xAI plugin
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-xai
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -4451,27 +4535,13 @@ jobs:
         if: steps.selection.outputs.run == 'true'
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
-          OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
         shell: bash
-        run: |
-          set +e
-          bash .release-harness/scripts/ci-live-command-retry.sh
-          status=$?
-          set -e
-          if [[ "$status" -eq 0 ]]; then
-            exit 0
-          fi
-          if [[ "${OPENCLAW_LIVE_SUITE_ADVISORY:-}" == "true" ]]; then
-            echo "::warning::Advisory live suite failed with exit code ${status}: ${{ matrix.suite_id }}"
-            exit 0
-          fi
-          exit "$status"
+        run: bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"
 
   validate_live_docker_provider_suites:
     name: Docker live suites (${{ matrix.label }})
     needs: [validate_selected_ref, prepare_live_test_image, plan_release_workflow_matrices]
     if: (!inputs.prepare_only) && needs.plan_release_workflow_matrices.outputs.live_docker_count != '0'
-    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -4654,28 +4724,13 @@ jobs:
         if: steps.codex_compat.outputs.run_lane != 'false' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
-          OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
-          LIVE_SUITE_ID: ${{ matrix.suite_id }}
         shell: bash
-        run: |
-          set +e
-          bash .release-harness/scripts/ci-live-command-retry.sh
-          status=$?
-          set -e
-          if [[ "$status" -eq 0 ]]; then
-            exit 0
-          fi
-          if [[ "${OPENCLAW_LIVE_SUITE_ADVISORY:-}" == "true" ]]; then
-            echo "::warning::Advisory live suite failed with exit code ${status}: $LIVE_SUITE_ID"
-            exit 0
-          fi
-          exit "$status"
+        run: bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"
 
   validate_live_media_provider_suites:
     name: Live media suites (${{ matrix.label }})
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'native-live-extensions-media') || inputs.live_suite_filter == 'native-live-extensions-a-k')
-    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     container:
       image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04
@@ -4692,28 +4747,24 @@ jobs:
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-a-k
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-audio
             label: Native live media audio plugins
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-audio
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-music-google
             label: Native live media music Google
             command: OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS=google node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-music-google
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-music-minimax
             label: Native live media music MiniMax
             command: OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS=minimax node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-music-minimax
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-video-a
             suite_group: native-live-extensions-media-video
@@ -4721,7 +4772,6 @@ jobs:
             command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=alibaba,byteplus,deepinfra,fal node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-video-b
             suite_group: native-live-extensions-media-video
@@ -4729,7 +4779,6 @@ jobs:
             command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,minimax node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-video-c
             suite_group: native-live-extensions-media-video
@@ -4737,7 +4786,6 @@ jobs:
             command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-video-d
             suite_group: native-live-extensions-media-video
@@ -4745,7 +4793,6 @@ jobs:
             command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=qwen,runway,together,vydra node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -4847,18 +4894,6 @@ jobs:
       - name: Run ${{ matrix.label }}
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         env:
-          OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
+          OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
         shell: bash
-        run: |
-          set +e
-          ${{ matrix.command }}
-          status=$?
-          set -e
-          if [[ "$status" -eq 0 ]]; then
-            exit 0
-          fi
-          if [[ "${OPENCLAW_LIVE_SUITE_ADVISORY:-}" == "true" ]]; then
-            echo "::warning::Advisory live suite failed with exit code ${status}: ${{ matrix.suite_id }}"
-            exit 0
-          fi
-          exit "$status"
+        run: bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"

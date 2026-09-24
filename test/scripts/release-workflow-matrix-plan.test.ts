@@ -590,14 +590,6 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       expect(definition.on.workflow_call.inputs).toHaveProperty(input);
       expect(definition.on.workflow_dispatch.inputs).not.toHaveProperty(input);
     }
-    expect(definition.on.workflow_dispatch.inputs.live_advisory).toEqual(
-      definition.on.workflow_call.inputs.live_advisory,
-    );
-    expect(definition.on.workflow_dispatch.inputs.live_advisory).toMatchObject({
-      default: false,
-      required: false,
-      type: "boolean",
-    });
     expect(definition.on.workflow_dispatch.inputs.allow_unreleased_changelog).toEqual(
       definition.on.workflow_call.inputs.allow_unreleased_changelog,
     );
@@ -776,7 +768,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     });
   });
 
-  it("keeps stable Anthropic Docker proof blocking and full proof advisory", () => {
+  it("keeps stable and full Anthropic Docker proof blocking", () => {
     const jobs = workflow().jobs;
     const dockerLiveJob = expectDefined(
       jobs.validate_live_docker_provider_suites,
@@ -804,8 +796,8 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
         suiteId: "live-gateway-anthropic-docker",
       },
       {
-        advisory: true,
-        label: "Docker live gateway Anthropic (full advisory)",
+        advisory: undefined,
+        label: "Docker live gateway Anthropic (full)",
         profiles: "full",
         suiteId: "live-gateway-anthropic-docker-full",
       },

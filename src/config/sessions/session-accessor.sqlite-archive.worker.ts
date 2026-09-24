@@ -13,6 +13,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -49,6 +50,7 @@ import type {
   SessionColdPreparationWorkerData,
   SessionColdWorkerData,
 } from "./session-cold-storage-worker.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 type TranscriptArchiveDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -187,7 +189,7 @@ function stageTranscriptArchiveContent(
       database,
       db
         .selectFrom("transcript_events")
-        .select("event_json")
+        .select(transcriptEventJsonSql(database).as("event_json"))
         .where("session_id", "=", sessionId)
         .orderBy("seq", "asc"),
     )) {
@@ -320,29 +322,21 @@ export async function materializeTranscriptArchiveInWorker(
   })}.${randomUUID()}.jsonl-stage`;
   try {
     const opened = withFreshOpenClawAgentDatabaseReadOnly(
-      (database) => {
-        let transactionOpen = false;
-        try {
-          // sqlite-allow-raw: metadata and transcript rows must come from one read snapshot.
-          database.db.exec("BEGIN");
-          transactionOpen = true;
-          const snapshot = readSessionStateDeleteSnapshot(database.db, plan.sessionId);
-          if (!sqliteSessionStateDeleteSnapshotsEqual(snapshot, plan.snapshot)) {
-            throw new Error(
-              `SQLite session state changed before archive materialization for ${plan.sessionId}`,
-            );
-          }
-          const rowCount = stageTranscriptArchiveContent(database.db, plan.sessionId, stagedPath);
-          database.db.exec("COMMIT"); // sqlite-allow-raw: closes the consistent read snapshot.
-          transactionOpen = false;
-          return { rowCount, snapshot };
-        } catch (error) {
-          if (transactionOpen) {
-            database.db.exec("ROLLBACK"); // sqlite-allow-raw: releases a failed read snapshot.
-          }
-          throw error;
-        }
-      },
+      (database) =>
+        runSqliteDeferredTransactionSync(
+          database.db,
+          () => {
+            const snapshot = readSessionStateDeleteSnapshot(database.db, plan.sessionId);
+            if (!sqliteSessionStateDeleteSnapshotsEqual(snapshot, plan.snapshot)) {
+              throw new Error(
+                `SQLite session state changed before archive materialization for ${plan.sessionId}`,
+              );
+            }
+            const rowCount = stageTranscriptArchiveContent(database.db, plan.sessionId, stagedPath);
+            return { rowCount, snapshot };
+          },
+          { databaseLabel: database.path, operationLabel: "session.archive.materialize" },
+        ),
       { agentId: plan.agentId, path: plan.databasePath, env },
     );
     if (!opened.found) {

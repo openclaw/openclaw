@@ -1,4 +1,9 @@
-export const TSGO_CORE_TEST_MAX_ROOTS = 720;
+/**
+ * Advisory shard size. Oversized shards only warn: they cost tsgo memory and wall
+ * time but never block CI, so unrelated test-only PRs keep landing while a
+ * rebalance is scheduled.
+ */
+const TSGO_CORE_TEST_MAX_ROOTS = 720;
 
 export const TSGO_CORE_TEST_SHARDS = [
   {
@@ -147,34 +152,49 @@ export function selectTsgoCoreTestShards(
 export function selectTsgoCoreTestStripe(
   stripeSpec: string,
 ): readonly { name: string; config: string }[] | undefined {
-  const match = /^([1-9]\d*)\/([1-9]\d*)$/u.exec(stripeSpec);
+  const match = /^([1-9]\d*)(?:-([1-9]\d*))?\/([1-9]\d*)$/u.exec(stripeSpec);
   if (!match) {
     return undefined;
   }
   const stripe = Number(match[1]);
-  const stripeCount = Number(match[2]);
-  if (stripe > stripeCount) {
+  const lastStripe = Number(match[2] ?? match[1]);
+  const stripeCount = Number(match[3]);
+  if (
+    ![stripe, lastStripe, stripeCount].every(Number.isSafeInteger) ||
+    stripe > lastStripe ||
+    lastStripe > stripeCount
+  ) {
     return undefined;
   }
-  return TSGO_CORE_TEST_SHARDS.filter((_, index) => index % stripeCount === stripe - 1);
+  return TSGO_CORE_TEST_SHARDS.filter((_, index) => {
+    const owner = (index % stripeCount) + 1;
+    return owner >= stripe && owner <= lastStripe;
+  });
 }
 
-export function findTsgoCoreTestShardViolations(params: {
-  canonicalRoots: readonly string[];
+/** Oversized shards are advisory: report them as warnings, never as violations. */
+export function findOversizedTsgoCoreTestShards(params: {
   maxRoots?: number;
   shards: readonly { name: string; roots: readonly string[] }[];
 }): string[] {
   const maxRoots = params.maxRoots ?? TSGO_CORE_TEST_MAX_ROOTS;
+  return params.shards
+    .filter((shard) => shard.roots.length > maxRoots)
+    .map(
+      (shard) =>
+        `${shard.name}: ${shard.roots.length} test roots exceeds the advisory ${maxRoots} limit; rebalance when convenient`,
+    );
+}
+
+export function findTsgoCoreTestShardViolations(params: {
+  canonicalRoots: readonly string[];
+  shards: readonly { name: string; roots: readonly string[] }[];
+}): string[] {
   const canonical = new Set(params.canonicalRoots);
   const owners = new Map<string, string[]>();
   const violations: string[] = [];
 
   for (const shard of params.shards) {
-    if (shard.roots.length > maxRoots) {
-      violations.push(
-        `${shard.name}: ${shard.roots.length} test roots exceeds the ${maxRoots} limit`,
-      );
-    }
     for (const root of shard.roots) {
       const rootOwners = owners.get(root) ?? [];
       rootOwners.push(shard.name);
@@ -199,17 +219,26 @@ export function findTsgoCoreTestShardViolations(params: {
   return violations;
 }
 
+/** Ambient declarations and compiler configuration retain the full graph check. */
+export function isChangedTsgoCoreTestInput(file: string): boolean {
+  return (
+    /^(?:src|ui|packages|test)\/.+\.[cm]?[jt]sx?$/u.test(file) &&
+    !/\.d\.[cm]?ts$/u.test(file) &&
+    !/^test\/.+\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file)
+  );
+}
+
 /** Select every consuming graph, not just the file's declared root partition. */
 export function selectChangedTsgoCoreTestShards(
   paths: readonly string[],
   graphs: readonly { config: string; roots: readonly string[]; files: readonly string[] }[],
 ): readonly { name: string; config: string }[] | undefined {
-  if (
-    paths.length === 0 ||
-    paths.some((file) => !/^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file))
-  ) {
+  if (paths.length === 0 || !paths.every(isChangedTsgoCoreTestInput)) {
     return undefined;
   }
+  const changedTestRoots = paths.filter((file) =>
+    /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file),
+  );
   const testConfigs = new Set<string>(TSGO_CORE_TEST_SHARDS.map((shard) => shard.config));
   const testGraphs = graphs.filter((graph) => testConfigs.has(graph.config));
   if (
@@ -217,10 +246,14 @@ export function selectChangedTsgoCoreTestShards(
     TSGO_CORE_GRAPHS.some(
       (expected) => graphs.filter((graph) => graph.config === expected.config).length !== 1,
     ) ||
-    paths.some((file) => testGraphs.filter((graph) => graph.roots.includes(file)).length !== 1) ||
+    changedTestRoots.some(
+      (file) => testGraphs.filter((graph) => graph.roots.includes(file)).length !== 1,
+    ) ||
     paths.some((file) => !testGraphs.some((graph) => graph.files.includes(file))) ||
     graphs.some(
-      (graph) => !testConfigs.has(graph.config) && paths.some((file) => graph.files.includes(file)),
+      (graph) =>
+        !testConfigs.has(graph.config) &&
+        changedTestRoots.some((file) => graph.files.includes(file)),
     )
   ) {
     return undefined;

@@ -381,6 +381,7 @@ wait_for_run() {
   local started_job="${4:-}"
   local approve_environments="${5:-true}"
   local approved_environment="${6:-}"
+  local wait_for_terminal="${7:-false}"
   local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json approval_status run_json jobs_json started_jobs state
 
   if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
@@ -399,8 +400,10 @@ wait_for_run() {
     if [[ -n "${failed_json}" ]] && jq -e 'length > 0' <<< "$failed_json" >/dev/null; then
       echo "${workflow} has failed jobs before the workflow completed: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >&2
       jq '.[] | {name, conclusion, url}' <<< "$failed_json" >&2 || true
-      print_failed_run_summary "${run_id}"
-      return 1
+      if [[ "$wait_for_terminal" != "true" ]]; then
+        print_failed_run_summary "${run_id}"
+        return 1
+      fi
     fi
     if [[ -n "${started_job}" && -n "${jobs_json}" ]]; then
       started_jobs="$(jq -c --arg name "${started_job}" '[.[] | select(.name == $name)]' <<< "${jobs_json}")" || return 1
@@ -783,6 +786,7 @@ render_github_release_notes() {
   local output_file="$1"
   local verification_file="${2:-}"
   local metadata_file="${3:-}"
+  local regular_stable_version=""
   local -a render_args=(
     node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts"
     --root "${GITHUB_WORKSPACE}" --ref "${TARGET_SHA}"
@@ -796,6 +800,10 @@ render_github_release_notes() {
   fi
   if [[ -n "${metadata_file}" ]]; then
     render_args+=(--metadata-output "${metadata_file}")
+  fi
+  if [[ "${RELEASE_NPM_DIST_TAG:-}" == "extended-stable" ]]; then
+    regular_stable_version="$(jq -er '.version | strings' "${GITHUB_WORKSPACE}/.release-harness/package.json")"
+    render_args+=(--regular-stable-version "${regular_stable_version}")
   fi
   "${render_args[@]}"
 }
@@ -1295,7 +1303,6 @@ verify_published_release() {
   run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
   jq \
     --arg telegram_waiver "${telegram_waiver}" \
-    --arg stable_soak_waiver "${STABLE_SOAK_WAIVER:-}" \
     --arg release_publish_run_id "$GITHUB_RUN_ID" \
     --arg validation_label "${run_label}" \
     --arg validation_run_id "${run_id}" \
@@ -1304,7 +1311,6 @@ verify_published_release() {
     --arg validation_url "${run_url}" \
     --arg validation_workflow_ref "${workflow_ref}" '
       (if $telegram_waiver == "" then . else .telegramWaiver = $telegram_waiver end) |
-      (if $stable_soak_waiver == "" then . else .stableSoakWaiver = $stable_soak_waiver end) |
       .releasePublishRunId = $release_publish_run_id |
       .workflowRuns += [{
         id: $validation_run_id,
@@ -1377,7 +1383,6 @@ append_release_proof_to_github_release() {
     CLAWHUB_LINE="${clawhub_line}" \
     CLAWHUB_BOOTSTRAP_LINE="${clawhub_bootstrap_line}" \
     TELEGRAM_LINE="${telegram_line}" \
-    STABLE_SOAK_WAIVER="$(jq -r '.stableSoakWaiver // ""' "${evidence_path}")" \
     ANDROID_LINE="${android_line}" \
     node --input-type=module <<'NODE'
 import { writeFileSync } from "node:fs";
@@ -1406,9 +1411,6 @@ const section = [
     ? [
         `- OpenClaw npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.OPENCLAW_NPM_RUN_ID}${process.env.OPENCLAW_NPM_RUN_ATTEMPT ? `/attempts/${process.env.OPENCLAW_NPM_RUN_ATTEMPT}` : ""}`,
       ]
-    : []),
-  ...(process.env.STABLE_SOAK_WAIVER
-    ? [`- Stable soak waived by operator: ${JSON.stringify(process.env.STABLE_SOAK_WAIVER)}`]
     : []),
   process.env.TELEGRAM_LINE,
   ...(process.env.ANDROID_LINE ? [process.env.ANDROID_LINE] : []),

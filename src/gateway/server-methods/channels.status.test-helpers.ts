@@ -1,7 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, type vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { ChannelStatusIssue } from "../../channels/plugins/types.public.js";
 import { requireGatewayRecord } from "../test-helpers.assertions.js";
+import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./types.js";
 
 type ChannelTestPlugin = {
   id: string;
@@ -79,7 +80,7 @@ export function requireFirstCallArg(mock: { mock: { calls: readonly (readonly un
   return call[0];
 }
 
-export function requireRespondPayload(respond: ReturnType<typeof vi.fn>): Record<string, unknown> {
+function requireRespondPayload(respond: ReturnType<typeof vi.fn>): Record<string, unknown> {
   const call = respond.mock.calls[0];
   if (!call) {
     throw new Error("Expected respond call");
@@ -87,4 +88,41 @@ export function requireRespondPayload(respond: ReturnType<typeof vi.fn>): Record
   expect(call[0]).toBe(true);
   expect(call[2]).toBeUndefined();
   return requireGatewayRecord(call[1], "respond payload");
+}
+
+export function createChannelsStatusHarness(options: {
+  handler: GatewayRequestHandler;
+  getRuntimeConfig: GatewayRequestHandlerOptions["context"]["getRuntimeConfig"];
+}) {
+  function createOptions(
+    params: Record<string, unknown>,
+    overrides?: Partial<GatewayRequestHandlerOptions>,
+  ): GatewayRequestHandlerOptions {
+    return {
+      req: { type: "req", id: "req-1", method: "channels.status", params },
+      params,
+      client: null,
+      isWebchatConnect: () => false,
+      respond: vi.fn(),
+      context: {
+        getRuntimeConfig: options.getRuntimeConfig,
+        getRuntimeSnapshot: () => ({
+          channels: {},
+          channelAccounts: {},
+        }),
+      },
+      ...overrides,
+    } as unknown as GatewayRequestHandlerOptions;
+  }
+
+  async function runChannelsStatus(
+    params: Record<string, unknown>,
+    overrides?: Partial<GatewayRequestHandlerOptions>,
+  ) {
+    const respond = vi.fn();
+    await options.handler(createOptions(params, { respond, ...overrides }));
+    return requireRespondPayload(respond);
+  }
+
+  return { createOptions, runChannelsStatus };
 }

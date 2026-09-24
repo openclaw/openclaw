@@ -807,3 +807,107 @@ describe("createCliJsonlStreamingParser", () => {
     expect(commentaryTexts).toEqual(expectedCommentary);
   });
 });
+
+it.each([
+  { name: "discrete", results: ["First answer.", "Second answer.", "Final answer."] },
+  { name: "shared lexical prefix", results: ["Hi", "History matters.", "Final answer."] },
+  {
+    name: "shared paragraph prefix",
+    results: ["First answer.", "First answer.\nMore detail.", "Final answer."],
+  },
+])(
+  "delivers completed $name results before transport settlement and retains retry boundaries",
+  ({ results }) => {
+    const completed: string[] = [];
+    const indices: number[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+      onCompletedReply: (text, assistantMessageIndex) => {
+        completed.push(text);
+        indices.push(assistantMessageIndex);
+      },
+    });
+    for (const result of results.slice(0, 2)) {
+      parser.push(
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          result,
+          openclaw_interim_result: true,
+        }) + "\n",
+      );
+    }
+    expect(completed).toEqual(results.slice(0, 2));
+    expect(indices).toEqual([0, 1]);
+    parser.push(JSON.stringify({ type: "result", subtype: "success", result: results[2] }) + "\n");
+    parser.finish();
+    expect(completed).toEqual(results.slice(0, 2));
+    expect(parser.getOutput()).toMatchObject({
+      text: results.join("\n"),
+      textParts: results,
+    });
+  },
+);
+
+it("does not redeliver repeated or empty held result acknowledgments", () => {
+  const completed: string[] = [];
+  const parser = createCliJsonlStreamingParser({
+    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+    providerId: "claude-cli",
+    onAssistantDelta: () => {},
+    onCompletedReply: (text) => completed.push(text),
+  });
+  for (const result of [
+    "First answer.",
+    "",
+    "First answer.",
+    "Second answer.",
+    "Second answer.",
+    "",
+  ]) {
+    parser.push(
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        result,
+        openclaw_interim_result: true,
+      }) + "\n",
+    );
+  }
+  parser.finish();
+  expect(completed).toEqual(["First answer.", "Second answer."]);
+  expect(parser.getOutput()).toMatchObject({
+    text: "First answer.\nSecond answer.",
+    textParts: ["First answer.", "Second answer."],
+  });
+  expect(parser.hasTerminalResult()).toBe(false);
+  parser.push(
+    JSON.stringify({ type: "result", subtype: "success", result: "Second answer." }) + "\n",
+  );
+  expect(parser.hasTerminalResult()).toBe(true);
+  expect(parser.getOutput()?.textParts).toEqual(["First answer.", "Second answer."]);
+});
+
+it.each([
+  {
+    subtype: "error_during_execution",
+    is_error: true,
+    result: "Failed answer",
+    errors: ["synthetic failure"],
+  },
+  { subtype: "success", result: "", terminal_reason: "hook_stopped", stop_reason: "tool_use" },
+])("does not dispatch failed held results: $subtype $terminal_reason", (result) => {
+  const completed: string[] = [];
+  const parser = createCliJsonlStreamingParser({
+    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+    providerId: "claude-cli",
+    onAssistantDelta: () => {},
+    onCompletedReply: (text) => completed.push(text),
+  });
+  parser.push(JSON.stringify({ type: "result", ...result, openclaw_interim_result: true }) + "\n");
+  parser.finish();
+  expect(completed).toEqual([]);
+  expect(parser.getOutput()?.errorText).toBeTruthy();
+});

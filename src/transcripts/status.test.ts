@@ -55,7 +55,10 @@ describe("transcript library capture health", () => {
       appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: source.providerId,
-      provider: {},
+      stopProvider: async () => {
+        throw new Error("Reading transcript status must not stop capture");
+      },
+      releaseProvider: async () => {},
       phase: "active",
     });
     const configured = [
@@ -89,7 +92,10 @@ describe("transcript library capture health", () => {
       appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: "canonical-captions",
-      provider: {},
+      stopProvider: async () => {
+        throw new Error("Reading transcript status must not stop capture");
+      },
+      releaseProvider: async () => {},
       phase: "active",
     });
     const result = await readTranscriptLibraryStatus(store, {
@@ -131,7 +137,10 @@ describe("transcript library capture health", () => {
       session,
       providerId: source.providerId,
       phase: "active",
-      provider: {},
+      stopProvider: async () => {
+        throw new Error("Reading transcript status must not stop capture");
+      },
+      releaseProvider: async () => {},
     });
     result = await readTranscriptLibraryStatus(store, cfg);
     expect(result.configuredSources[0]).toMatchObject({

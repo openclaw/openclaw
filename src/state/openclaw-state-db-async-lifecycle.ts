@@ -48,6 +48,7 @@ type MaintenanceResource = {
   phase:
     | "agent-resources"
     | "agent-handles"
+    | "shared-leases"
     | "shared-resources"
     | "shared-references"
     | "shared-handles";
@@ -66,8 +67,8 @@ type AgentSchemaMigration = {
 
 export type OpenClawDatabaseMaintenanceScope = {
   readonly ownsSchemaMaintenance: boolean;
-  assertOwnerCurrent(): void;
-  assertAdmission(): void;
+  assertOwnerCurrent(this: void): void;
+  assertAdmission(this: void): void;
   addAgentSchemaMigrationCheck(check: (migration: AgentSchemaMigration) => void): void;
   assertAgentSchemaMigration(migration: AgentSchemaMigration): void;
   run<T>(operation: () => T): T;
@@ -249,6 +250,7 @@ export function createOpenClawDatabaseMaintenanceScope(
             for (const phase of [
               "agent-resources",
               "agent-handles",
+              "shared-leases",
               "shared-resources",
               "shared-references",
               "shared-handles",

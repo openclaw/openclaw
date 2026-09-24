@@ -155,7 +155,7 @@ describe("keyboard shortcuts dialog", () => {
         context.gateway.snapshot.hello.auth.scopes = ["operator.read"];
         expect(key({}).defaultPrevented).toBe(false);
         expect(dialog.isOpen).toBe(true);
-        context.gateway.snapshot.hello.auth.scopes = ["operator.write"];
+        context.gateway.snapshot.hello.auth.scopes = ["operator.sessions.write"];
         expect(openNewSession).not.toHaveBeenCalled();
         expect(key({}).defaultPrevented).toBe(true);
         await dialog.updateComplete;
@@ -176,9 +176,9 @@ describe("keyboard shortcuts dialog", () => {
     dialog.toggle();
     await dialog.updateComplete;
 
-    dialog.shadowRoot
-      ?.querySelector("openclaw-modal-dialog")
-      ?.dispatchEvent(new CustomEvent("modal-cancel"));
+    const cancellation = new CustomEvent("modal-cancel", { cancelable: true });
+    dialog.shadowRoot?.querySelector("openclaw-modal-dialog")?.dispatchEvent(cancellation);
+    expect(cancellation.defaultPrevented).toBe(true);
     await dialog.updateComplete;
 
     expect(dialog.isOpen).toBe(false);

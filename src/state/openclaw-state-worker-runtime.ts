@@ -9,8 +9,18 @@ import {
   listNativeHookRelayBridgeSnapshotsInDatabase,
 } from "../agents/harness/native-hook-relay-store.kernel.js";
 import { executeNativeHookRelayMutation } from "../agents/harness/native-hook-relay-store.worker.js";
+import {
+  isMcpOAuthWorkerCommand,
+  executeMcpOAuthWorkerCommand,
+} from "../agents/mcp-oauth-store.worker.js";
+import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
+import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
-import { listRegistryWorktreesInDatabase } from "../agents/worktrees/registry-read.kernel.js";
+import {
+  isWorktreeRegistryReadCommand,
+  executeWorktreeRegistryReadCommand,
+} from "../agents/worktrees/registry-read.worker.js";
+import { executeWorktreeRunLeaseCommand } from "../agents/worktrees/run-lease-store.worker.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
 import { executeAuditWriterCommand } from "../audit/audit-event-writer.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
@@ -23,7 +33,6 @@ import {
 import {
   executeCronStateCommand,
   isCronStateWorkerCommand,
-  prepareCronStateWorkerCommand,
 } from "../cron/store/dispatch.worker.js";
 import { executeFleetRegistryCommand } from "../fleet/registry.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
@@ -36,14 +45,19 @@ import {
   executeOperatorApprovalCommand,
   isOperatorApprovalCommand,
 } from "../gateway/operator-approval-store.worker.js";
-import { registerSessionGroupInDatabase } from "../gateway/session-group-registration.kernel.js";
-import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
+import { isWorkerEnvironmentCommand } from "../gateway/worker-environments/store-worker-contract.js";
+import { executeWorkerEnvironmentCommand } from "../gateway/worker-environments/store.worker.js";
+import { readDeferredPluginMigrationsInWorker } from "../infra/deferred-plugin-migrations.worker.js";
 import * as deliveryQueue from "../infra/delivery-queue.worker.js";
 import * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import { executeDevicePairingMutationInWorker } from "../infra/device-pairing-dispatch.worker.js";
 import { isDevicePairingMutationCommand } from "../infra/device-pairing-worker-contract.js";
 import { commitExecAuthorizationsInWorker } from "../infra/exec-approvals-authorization.worker.js";
-import { executeCurrentConversationBindingCommand } from "../infra/outbound/current-conversation-bindings.worker.js";
+import {
+  executeCurrentConversationBindingCommand,
+  readCurrentConversationBindingSelectionInWorker,
+} from "../infra/outbound/current-conversation-bindings.worker.js";
 import { executePromotionCommand } from "../infra/promotions-feed.worker.js";
 import { isApnsRegistrationWorkerCommand } from "../infra/push-apns-store.worker-contract.js";
 import { executeApnsRegistrationCommand } from "../infra/push-apns-store.worker.js";
@@ -57,7 +71,6 @@ import {
   sameSqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
@@ -65,6 +78,7 @@ import {
   persistTelemetrySuccessInDatabase,
   readTelemetryStateInWorker,
 } from "../infra/telemetry-store.kernel.js";
+import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
 import { isNodeWorkerJournalCommand } from "../node-host/node-worker-journal.worker-contract.js";
@@ -83,25 +97,24 @@ import {
 } from "../plugins/official-external-plugin-catalog-snapshot-store.kernel.js";
 import { HostedCatalogSignedFeedMonotonicityError } from "../plugins/official-external-plugin-catalog-source.js";
 import {
-  ensureProjectRegistrySchema,
-  insertProjectRegistryInDatabase,
-  listProjectRegistryInDatabase,
-  removeProjectRegistryInDatabase,
-  resolveProjectCloneRefreshOwnerInDatabase,
-  resolveProjectRegistryInDatabase,
-  resolveRecordedProjectRootInDatabase,
-} from "../projects/project-registry.kernel.js";
-import {
-  pruneSessionStateEventsInDatabase,
-  recordSessionStateEventInDatabase,
-} from "../sessions/session-state-events.kernel.js";
+  executeProjectRegistryCommand,
+  isProjectRegistryCommand,
+} from "../projects/project-registry.worker.js";
+import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
+import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
-import { commitSkillUploadInDatabase } from "../skills/lifecycle/upload-store-commit.js";
+import {
+  isSkillUploadCommand,
+  executeSkillUploadCommand,
+} from "../skills/lifecycle/upload-store.worker.js";
 import * as skillWorkshop from "../skills/workshop/store.worker.js";
 import { isTaskRegistryWorkerCommand } from "../tasks/task-registry.worker-contract.js";
 import { executeTaskRegistryCommand } from "../tasks/task-registry.worker.js";
 import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
-import { executeTranscriptWrite } from "../transcripts/store-worker-write.js";
+import {
+  executeTranscriptWrite,
+  isTranscriptWriteCommand,
+} from "../transcripts/store-worker-write.js";
 import {
   listAgentProvenanceInDatabase,
   readAgentProvenanceBatchInDatabase,
@@ -111,7 +124,6 @@ import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
 import { readConfigMachineState } from "./config-machine-state.js";
 import { isOnboardingRecommendationWriteCommand } from "./onboarding-recommendations.contract.js";
 import { executeOnboardingRecommendationCommand } from "./onboarding-recommendations.kernel.js";
-import { executeAgentDatabaseCleanupCommand } from "./openclaw-agent-execution-cleanup.worker.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import {
@@ -121,15 +133,15 @@ import {
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
-import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "./openclaw-state-lease-worker.js";
 import type {
   OpenClawStateWorkerOperations,
+  OpenClawStateWorkerRuntimeCommand,
   OpenClawStateWorkerInspectionOperations,
   OpenClawStateWorkerCleanupOperations,
 } from "./openclaw-state-worker-contract.js";
 import { readUserModelAuthProfile } from "./user-model-accounts.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
-import { executeUserProfileCommand } from "./user-profiles.worker.js";
+import { executeUserProfileCommand, isUserProfileCommand } from "./user-profiles.worker.js";
 
 type Operations = OpenClawStateWorkerOperations &
   OpenClawStateWorkerInspectionOperations &
@@ -137,19 +149,21 @@ type Operations = OpenClawStateWorkerOperations &
 
 const log = createSubsystemLogger("state/worker");
 
-export function prepareSharedStateCommand(type: PropertyKey): Promise<void> | undefined {
-  return prepareCronStateWorkerCommand(type);
-}
+export { prepareCronStateWorkerCommand as prepareSharedStateCommand } from "../cron/store/dispatch.worker.js";
 
 export function executeSharedStateCommand(
-  command: Exclude<
-    SqliteWorkerCommand<Operations>,
-    { type: "plugins.metadata.read" | "database.inspectIdle" | "stateLease.acquire" }
-  >,
+  command: OpenClawStateWorkerRuntimeCommand,
   context: { databasePath: string },
   open: () => OpenClawStateDatabase,
   hasNativeDatabase: boolean,
 ): Operations[keyof Operations]["output"] {
+  // Dispatch preparation has loaded this module; do not open or observe token state.
+  if (command.type === "deviceAuth.prepare") {
+    return undefined;
+  }
+  if (isMcpOAuthWorkerCommand(command)) {
+    return executeMcpOAuthWorkerCommand(open(), command);
+  }
   if (command.type === "execApprovals.commitAuthorizations" || isOperatorApprovalCommand(command)) {
     const databaseOptions = {
       database: open(),
@@ -163,15 +177,14 @@ export function executeSharedStateCommand(
   if (isDevicePairingMutationCommand(command)) {
     return executeDevicePairingMutationInWorker(command, open());
   }
-  if (command.type === "agentDatabases.releaseExitedLease") {
-    return executeAgentDatabaseCleanupCommand(
-      command,
-      open(),
-      getSqliteWorkerStateContext().environment,
-    );
+  if (isWorkerEnvironmentCommand(command)) {
+    return executeWorkerEnvironmentCommand(command, open());
   }
   if (command.type === "audit.events.list") {
     return listAuditEventsInDatabase(open().db, command.input);
+  }
+  if (command.type === "conversationBindings.readSelection") {
+    return readCurrentConversationBindingSelectionInWorker(command.input, context.databasePath);
   }
   if (command.type === "audit.writer.process" || command.type === "audit.writer.prune") {
     return executeAuditWriterCommand(
@@ -316,11 +329,20 @@ export function executeSharedStateCommand(
       { database, path: context.databasePath, env: getSqliteWorkerStateContext().environment },
     );
   }
-  if (command.type === "plugins.deferredMigrations.read") {
-    return readDeferredPluginMigrations({
+  if (command.type === "updateRuns.reconcileInterrupted") {
+    return persistInterruptedUpdateObservation(
+      command.input,
+      { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
+      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    );
+  }
+  if (
+    command.type === "plugins.deferredMigrations.read" ||
+    command.type === "plugins.deferredMigrations.completions.read"
+  ) {
+    return readDeferredPluginMigrationsInWorker(command, {
       path: context.databasePath,
       env: getSqliteWorkerStateContext().environment,
-      artifactPreservingReadOnly: command.input.artifactPreservingReadOnly,
     });
   }
   if (command.type === "claws.install-schema-versions") {
@@ -356,13 +378,7 @@ export function executeSharedStateCommand(
       env: getSqliteWorkerStateContext().environment,
     });
   }
-  if (
-    command.type === "userProfiles.list" ||
-    command.type === "userProfiles.directory" ||
-    command.type === "userProfiles.email.ensure" ||
-    command.type === "userProfiles.avatar.inspect" ||
-    command.type === "userProfiles.avatar.adopt"
-  ) {
+  if (isUserProfileCommand(command)) {
     return executeUserProfileCommand(command, {
       database: open(),
       path: context.databasePath,
@@ -394,6 +410,9 @@ export function executeSharedStateCommand(
       }) ?? { state: {}, basis: {} }
     );
   }
+  if (isNodeWorkerJournalCommand(command)) {
+    return executeNodeWorkerJournalCommand(command, context.databasePath, open);
+  }
   if (command.type === "deviceAuth.read" || command.type === "deviceAuth.readOrigin") {
     const read = (db: OpenClawStateDatabase["db"]) =>
       command.type === "deviceAuth.read"
@@ -416,10 +435,11 @@ export function executeSharedStateCommand(
   if (command.type === "deviceAuth.list") {
     return deviceAuth.readDeviceAuthTokensFromDatabase(database.db, command.input);
   }
-  if (command.type === "transcripts.append" || command.type === "transcripts.writeSummary") {
+  if (isTranscriptWriteCommand(command)) {
     return executeTranscriptWrite(command, { database, path: context.databasePath });
   }
   switch (command.type) {
+    case "transcripts.canonicalSessionRow":
     case "transcripts.readEntries":
     case "transcripts.exportOwnership":
     case "transcripts.exportPathCollisions":
@@ -460,18 +480,6 @@ export function executeSharedStateCommand(
   if (command.type === "nativeHookRelay.listSnapshots") {
     return listNativeHookRelayBridgeSnapshotsInDatabase(database);
   }
-  if (
-    command.type === "nativeHookRelay.write" ||
-    command.type === "nativeHookRelay.renew" ||
-    command.type === "nativeHookRelay.deleteOwned" ||
-    command.type === "nativeHookRelay.prune"
-  ) {
-    return executeNativeHookRelayMutation(command, {
-      database,
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
-    });
-  }
   if (command.type === "sessionUpstream.listWatched") {
     return listWatchedSessionUpstreamLinksInDatabase(database.db);
   }
@@ -487,22 +495,36 @@ export function executeSharedStateCommand(
     env: getSqliteWorkerStateContext().environment,
   };
   if (
+    command.type === "nativeHookRelay.write" ||
+    command.type === "nativeHookRelay.renew" ||
+    command.type === "nativeHookRelay.deleteOwned" ||
+    command.type === "nativeHookRelay.prune"
+  ) {
+    return executeNativeHookRelayMutation(command, writeOptions);
+  }
+  if (command.type === "sandboxRegistry.insertIfMissing") {
+    return importSandboxRegistryRow(command.input, writeOptions);
+  }
+  if (command.type === "sandboxRegistry.write") {
+    return writeSandboxRegistry(command.input, writeOptions);
+  }
+  if (command.type === "secrets.purge") {
+    return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
+  }
+  if (
     command.type === "conversationBindings.resolve" ||
     command.type === "conversationBindings.touch"
   ) {
     return executeCurrentConversationBindingCommand(command, writeOptions);
   }
-  if (isNodeWorkerJournalCommand(command)) {
-    return executeNodeWorkerJournalCommand(command, writeOptions);
-  }
-  if (command.type === "sessionGroups.register") {
-    return registerSessionGroupInDatabase(database, command.input.name, writeOptions.env);
+  if (command.type === "sessionGroups.mutate") {
+    return mutateSessionGroupCatalogInDatabase(database, command.input, writeOptions.env);
   }
   if (deliveryQueue.isDeliveryQueueCommand(command)) {
     return deliveryQueue.executeDeliveryQueueCommand(command, writeOptions);
   }
-  if (command.type === "skillUploads.commit") {
-    return commitSkillUploadInDatabase(command.input, writeOptions);
+  if (isSkillUploadCommand(command)) {
+    return executeSkillUploadCommand(command, writeOptions);
   }
   if (
     command.type === "deviceAuth.store" ||
@@ -548,18 +570,8 @@ export function executeSharedStateCommand(
       { operationLabel: "config-machine-state.update" },
     );
   }
-  if (command.type === "sessionState.recordGoalChange") {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) =>
-        recordSessionStateEventInDatabase(db, command.input.event, command.input.now).notices,
-      writeOptions,
-    );
-  }
-  if (command.type === "sessionState.prune") {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => pruneSessionStateEventsInDatabase(db, command.input.now),
-      writeOptions,
-    );
+  if (command.type === "sessionState.record" || command.type === "sessionState.prune") {
+    return executeSessionStateCommand(command, writeOptions);
   }
   if (command.type === "plugins.catalogSnapshot.write") {
     try {
@@ -602,64 +614,14 @@ export function executeSharedStateCommand(
       writeOptions,
     );
   }
-  if (command.type === "projects.findRoot") {
-    ensureProjectRegistrySchema(writeOptions);
-    return resolveRecordedProjectRootInDatabase(database.db, command.input.repoRoot);
+  if (isWorktreeRegistryReadCommand(command)) {
+    return executeWorktreeRegistryReadCommand(database.db, command);
   }
-  if (command.type === "projects.list") {
-    ensureProjectRegistrySchema(writeOptions);
-    return listProjectRegistryInDatabase(database.db);
+  if (command.type === "worktrees.releaseRunLease" || command.type === "worktrees.reapRunLeases") {
+    return executeWorktreeRunLeaseCommand(command, writeOptions);
   }
-  if (command.type === "worktrees.list") {
-    return listRegistryWorktreesInDatabase(database.db);
-  }
-  if (command.type === "projects.resolve") {
-    ensureProjectRegistrySchema(writeOptions);
-    return resolveProjectRegistryInDatabase(database.db, command.input.id);
-  }
-  if (command.type === "projects.insert") {
-    ensureProjectRegistrySchema(writeOptions);
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const { project, lease } = command.input;
-        if (lease.scope !== "projects.checkout" || lease.key !== project.repoRoot) {
-          throw new Error("Project registry mutation requires its checkout lifecycle lease");
-        }
-        assertOpenClawStateLeaseWorkerOwnedInTransaction(db, lease);
-        return insertProjectRegistryInDatabase(db, project);
-      },
-      writeOptions,
-      { operationLabel: "projects.registry.insert" },
-    );
-  }
-  if (command.type === "projects.resolveRefreshOwner") {
-    ensureProjectRegistrySchema(writeOptions);
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const { project, lease } = command.input;
-        if (lease.scope !== "projects.checkout" || lease.key !== project.repoRoot) {
-          throw new Error("Project refresh requires its checkout lifecycle lease");
-        }
-        assertOpenClawStateLeaseWorkerOwnedInTransaction(db, lease);
-        return resolveProjectCloneRefreshOwnerInDatabase(db, project);
-      },
-      writeOptions,
-      { operationLabel: "projects.registry.refresh-owner.resolve" },
-    );
-  }
-  if (command.type === "projects.remove") {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const { project, lease } = command.input;
-        if (lease.scope !== "projects.checkout" || lease.key !== project.repoRoot) {
-          throw new Error("Project registry mutation requires its checkout lifecycle lease");
-        }
-        assertOpenClawStateLeaseWorkerOwnedInTransaction(db, lease);
-        return removeProjectRegistryInDatabase(db, project);
-      },
-      writeOptions,
-      { operationLabel: "projects.registry.remove" },
-    );
+  if (isProjectRegistryCommand(command)) {
+    return executeProjectRegistryCommand(command, writeOptions);
   }
   if (command.type === "config.health.patch") {
     const { configPath, patch, expected, updatedAtMs } = command.input;

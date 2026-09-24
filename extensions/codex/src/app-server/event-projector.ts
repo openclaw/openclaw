@@ -45,6 +45,16 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     return this.completedTurn?.status;
   }
 
+  getPendingNativeCommands(): ReadonlyMap<string, string | null> {
+    return !this.projectionClosed &&
+      !this.aborted &&
+      !this.options.runAbortSignal?.aborted &&
+      this.completedTurn?.status === "completed" &&
+      !this.terminalFailure.promptError
+      ? this.nativeToolLifecycleProjector.pendingCommands()
+      : new Map();
+  }
+
   /** Native completion owns the answer independently of unfinished host projection. */
   recoverCompletedAnswer(): boolean {
     const completed = this.settlement.completedAnswer;
@@ -247,6 +257,9 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         this.terminalFailure.record({
           message: readCodexErrorNotificationMessage(params),
           codexErrorInfo,
+          misalignment: isJsonObject(params.error) ? params.error.misalignment : undefined,
+          nativeThreadId: this.threadId,
+          nativeTurnId: this.turnId,
           rateLimits: this.options.readRecentRateLimits?.(),
           fallbackMessage: "codex app-server error",
           promptErrorSource: compactionFailure ? "compaction" : "prompt",
@@ -529,6 +542,9 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       this.terminalFailure.record({
         message: turn.error?.message,
         codexErrorInfo,
+        misalignment: turn.error?.misalignment,
+        nativeThreadId: this.threadId,
+        nativeTurnId: this.turnId,
         rateLimits: this.options.readRecentRateLimits?.(),
         fallbackMessage: "codex app-server turn failed",
         promptErrorSource: compactionFailure ? "compaction" : "prompt",

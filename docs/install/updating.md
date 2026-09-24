@@ -17,6 +17,51 @@ Before a significant update, [create a verified backup](#before-updating-create-
 Automatic config copies and migration recovery originals are not a full-state
 backup.
 
+## Upgrading very old versions
+
+For installations older than June 2026, upgrade to **`2026.9.5` first**, run its
+Doctor migrations, and then upgrade to `latest`. The bridge release still
+imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
+`plugin-state/state.sqlite` databases, repairs retired pre-June agent config keys,
+and includes the old runtime aliases.
+Current releases leave those retired database files untouched.
+If you already installed the latest version, Doctor stops before rewriting config
+that still contains these retired agent keys and directs you through the same bridge.
+
+Back up the state first and use a [supported Node version](/install/node):
+Node 24.16+ on the 24.x line, or Node 26.1+. Keep the same owning account,
+installation prefix, profile, and state/configuration paths throughout.
+
+For an npm installation with an OpenClaw-managed Gateway service, run this
+first stage from a terminal:
+
+```bash
+openclaw gateway stop &&
+  npm install -g openclaw@2026.9.5 --allow-scripts=openclaw &&
+  openclaw --version &&
+  openclaw doctor --fix
+```
+
+Confirm that the version output is `2026.9.5` and that Doctor imported the old
+task, flow, and plugin stores you need. Resolve any failed or conflicting
+imports before continuing. Then install the current release and restart:
+
+```bash
+npm install -g openclaw@latest --allow-scripts=openclaw &&
+  openclaw doctor --fix &&
+  openclaw gateway start &&
+  openclaw gateway status --deep
+```
+
+These npm commands are for npm 12 or npm 11.16+; on npm 11.15 and earlier, omit
+`--allow-scripts=openclaw`. For a pnpm-owned installation, replace each install
+command with `pnpm add -g --allow-build=openclaw openclaw@2026.9.5`, then
+`pnpm add -g --allow-build=openclaw openclaw@latest`. For Bun, use
+`bun add -g --trust openclaw@2026.9.5`, then `bun add -g --trust openclaw@latest`.
+Keep any normal `--profile` selector on every `openclaw` command. For a custom
+service or foreground Gateway, stop and start it through its actual owner
+instead of the managed-service commands above.
+
 ## Recommended: `openclaw update`
 
 Detects your install type (npm, pnpm, Bun, or git), checks the new version while
@@ -32,6 +77,13 @@ It leaves unverified service definitions unchanged and skips their automatic
 restart. Restart the Gateway you launched manually after the update, or use its
 actual supervisor. Doctor still checks for active state writers before migrations.
 
+Control UI updates use a verified helper to stop and restart the managed Gateway.
+On macOS, the helper carries its live update ownership into LaunchAgent activation;
+ordinary commands inside the Gateway still cannot stop their own service. If an
+older installed updater reports `managed-service-stop-failed` before activation,
+the candidate has not replaced that updater. Update from an external terminal
+using the same installation owner, then retry the Control UI update.
+
 After package replacement, compatibility config reads from older updaters run
 in a fresh process using the updated package and its dependencies. This also
 applies to updates driven by 2026.9.4. If an optional read fails, the updater
@@ -44,6 +96,11 @@ the update keeps the active CLI's installation as its target and refreshes the
 service through `gateway install --force` before verifying the restarted Gateway.
 The old service command remains the recovery identity until that handoff succeeds.
 Reconciliation failures are recorded as warnings with a manual repair command.
+The code update can report success while service reconciliation remains pending;
+a stopped service stays stopped until repaired. On Linux, regeneration preserves
+the order of retained `PATH` entries and prepends newly added managed entries.
+Paths carried over solely from the old definition still pass the existing safety
+filters. If the definition cannot be preserved, reconciliation requires manual repair.
 Deployment-owned definitions retain their existing installation owner.
 Pending package-publication recovery in either the CLI or selected service
 installation blocks writable preparation. Follow the package recovery command
@@ -56,6 +113,12 @@ with the same owning package manager, prefix, and state/configuration. Back up
 first, stop the Gateway through its actual supervisor or foreground process owner,
 replace the package, run Doctor, and restart through that same owner.
 `--no-restart` cannot repair the old admission check.
+
+Updaters without the admission fix first shipped in 2026.7.2-beta.5, including
+2026.6.34–2026.6.35 and the 2026.7.33–2026.7.35 extended-stable line, refuse before staging with
+`plugins.load.paths: plugin path not found` when a configured plugin path is missing.
+Restore the custom plugin directory or remove its configured path, then update.
+`openclaw doctor --fix` repairs recognized bundled-path aliases but preserves unrelated custom paths.
 
 <Note>
 On macOS, the 2026.9.4 Gateway's `update.run` action or `/update` can hand off
@@ -101,6 +164,8 @@ include the FreeBSD fixes; changes on `main` are not a published release.
 Stop and start the Gateway through its actual supervisor or foreground process
 owner around the manual replacement. This recovery does not add CLI-managed
 FreeBSD rc.d service updates.
+
+After an upgrade, check the [FreeBSD model-runtime limitation](/install/installer#install-clish) before starting agent turns.
 </Note>
 
 An already-installed registry package version or Git target SHA still runs plugin maintenance, repairs eligible old OpenClaw release pins, and restarts a running managed Gateway when plugins change or its service points at another installation, unless `--no-restart` is set. Unchanged runs finish as `skipped` / `already-current`.
@@ -146,6 +211,11 @@ This candidate-side behavior also applies when the installed updater is 2026.9.3
 That older updater still caps the entire validation sequence at five minutes;
 its `--timeout` option cannot increase this cap.
 
+Plugin rehearsal copies are temporary and rebuilt after interruption. Copying
+them avoids a disk flush for every file; canonical state and recovery backups
+retain their existing durability guarantees. An older installed updater keeps
+its initial snapshot behavior until you launch an update from the newer version.
+
 Package updates also check npm availability for enabled configured plugins before
 stopping the serving Gateway or replacing the installed core. Registry targets
 are checked early; explicit package artifacts are checked using the privately
@@ -161,7 +231,10 @@ require registry requests.
 
 This metadata check does not reserve downloads. Plugin-only download, install,
 or load failures remain actionable warnings after an otherwise successful core
-update. The updater preserves recorded choices and retains the previous plugin
+update. Candidate rehearsal also reports a plugin source parse failure as a warning
+with the plugin ID, source path, and parser error, then continues checking other
+plugin entries. Valid ESM plugins can use `import.meta` during dependency inspection.
+The updater preserves recorded choices and retains the previous plugin
 payload where possible. Follow the reported `openclaw plugins update <id>` command for a
 failed install or update, or `openclaw doctor --fix` for a load problem. Invalid
 configuration or state, ownership errors, and failed core startup or readiness
@@ -310,6 +383,12 @@ connected chat. Natural-language requests use the existing `gateway` tool's
 action without granting configuration reads or other Gateway controls. Explicit tool
 restrictions still apply.
 
+Operator-created scheduled automations can also call `gateway` → `update.run`
+without a chat owner identity. The Gateway uses the active scheduled run's
+authority; a notification destination does not become its requester. Jobs created
+by external chat users and webhook turns do not gain this authority. External
+chat update requests still require current command-owner authority.
+
 `/update` is the model-independent fallback: it works without a functioning model
 or access to the `gateway` tool. The tool, slash command, and Control UI all use
 the same Gateway update handler and current authorization checks.
@@ -324,8 +403,11 @@ Gateway observes the recorded milestones:
 3. `🔁 Back on v<to>, verifying…` when the new Gateway starts verification.
 4. The final report, including successful updates.
 
-External update and restart notices go only to destinations listed in
-`commands.ownerAllowFrom`. Selecting a non-owner chat in the Control UI does not
+External update and restart notices go to destinations listed in
+`commands.ownerAllowFrom` or a linked administrator's direct conversation. The
+channel resolves a direct recipient to its stable sender identity before checking
+the administrator link; group and channel targets do not inherit a person's
+administrator authority. Selecting a non-owner chat in the Control UI does not
 authorize notices to that contact. If no owner destination resolves, OpenClaw
 logs the skipped notice and keeps the update outcome in the run record and
 Control UI; it does not redirect the notice to another chat or wake the rejected
@@ -348,10 +430,12 @@ to finish its restart notice attempt. That wait is capped at 10 seconds so a
 stalled notice cannot block activation.
 
 The report includes the outcome, recorded phase durations, failed steps,
-verification facts, and the next action when needed. A run sends each notice
-at most once; an update that stops before restart sends only the notices for
-phases it reached. If the update cannot start, the bot records and explains why
-and provides the manual command when available.
+verification facts, and the next action when needed. Failed-step summaries preserve
+the initiating cause ahead of trailing recovery advice, using recorded failure
+facts when available. Local run history retains verification findings and backup
+recovery paths separately from the excerpt. A run sends each notice at most once;
+an update that stops before restart sends only the notices for phases it reached. If the update cannot
+start, the bot records and explains why and provides the manual command when available.
 The agent relays the returned recovery instructions to the operator. Manual
 update commands run in a terminal outside the Gateway service; the agent must
 not execute them in the shell of the Gateway hosting its session. A missing
@@ -364,11 +448,19 @@ restart; `--json` exposes the `activeRun` and `lastRun` records. See
 [Run history and reports](/cli/update#run-history-and-reports) for Gateway history
 queries.
 
-The sender must be in [`commands.ownerAllowFrom`](/tools/slash-commands#configuration).
+The sender must be in [`commands.ownerAllowFrom`](/tools/slash-commands#configuration)
+or have a [verified channel link to a current Gateway administrator](/concepts/user-model#channel-identity-links).
 Being allowed to chat does not grant owner permissions. If your account is not
 an owner, the reply explains how the Gateway operator can connect it. Channel
 setup and [pairing](/channels/pairing) distinguish owner access from chat access;
 existing allowed users are not automatically promoted.
+Chat updates retain the original authorization source across managed handoffs,
+repair workers, and Doctor runs. Each worker checks the original installation's
+current policy and profile state before acting. Reassigning a channel account to
+another administrator does not transfer an update already in progress; a current
+owner must start a new update. Older updater handoffs without a captured profile
+source retain their configured-owner checks and cannot acquire linked-profile
+authority during recovery.
 External-chat updates through `/update` or the tool require `commands.restart`
 (enabled by default), including managed installations. The slash command also
 follows command-access restrictions; tool calls follow tool policy. Chat updates use the hosting installation's

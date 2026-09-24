@@ -3,8 +3,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   readJsonBodyOrError,
   sendJson,
@@ -12,12 +10,15 @@ import {
   watchClientDisconnect,
 } from "./http-common.js";
 import {
+  assertGatewayHttpRequestCurrent,
+  type GatewayHttpRequestAuthOptions,
+} from "./http-request-authority.js";
+import {
   authorizeScopedGatewayHttpRequestOrReply,
   getHeader,
-  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
-import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -29,12 +30,8 @@ const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 export async function handleToolsInvokeHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
-    auth: ResolvedGatewayAuth;
+  opts: GatewayHttpRequestAuthOptions & {
     maxBodyBytes?: number;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
     resolveGatewayContext?: GatewayContextResolver;
   },
 ): Promise<boolean> {
@@ -59,14 +56,11 @@ export async function handleToolsInvokeHttpRequest(
   // the OpenAI-compatible APIs: token/password bearer auth is full operator
   // access for the gateway, not a narrower per-request scope boundary.
   const authResult = await authorizeScopedGatewayHttpRequestOrReply({
+    ...opts,
     req,
     res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
     operatorMethod: "agent",
-    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
+    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
   });
   if (!authResult) {
     return true;
@@ -91,6 +85,7 @@ export async function handleToolsInvokeHttpRequest(
     if (bodyUnknown === undefined || signal.aborted) {
       return true;
     }
+    await requestAuth.revalidate();
     const body = (bodyUnknown ?? {}) as ToolsInvokeInput;
 
     // Resolve message channel/account hints (optional headers) for policy inheritance.
@@ -120,8 +115,7 @@ export async function handleToolsInvokeHttpRequest(
         context,
         resolveGatewayContext: opts.resolveGatewayContext,
         signal,
-        hasCurrentClientAuthority: () =>
-          !signal.aborted && hasCurrentGatewayOperatorAccess(operatorAccessAuthority),
+        hasCurrentClientAuthority: () => !signal.aborted && requestAuth.hasCurrentClientAuthority(),
         isWebchatConnect: () => false,
       },
       () =>
@@ -139,6 +133,7 @@ export async function handleToolsInvokeHttpRequest(
           conversationReadOrigin: "direct-operator",
           toolCallIdPrefix: "http",
           signal,
+          assertInvocationCurrent: () => assertGatewayHttpRequestCurrent(requestAuth),
         }),
     );
     if (signal.aborted) {
@@ -148,6 +143,10 @@ export async function handleToolsInvokeHttpRequest(
       sendJson(res, outcome.status, { ok: true, result: outcome.result });
     } else {
       sendJson(res, outcome.status, { ok: false, error: outcome.error });
+    }
+  } catch (error) {
+    if (!res.writableEnded && !res.destroyed) {
+      throw error;
     }
   } finally {
     stopWatchingDisconnect();

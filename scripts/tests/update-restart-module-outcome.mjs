@@ -9,7 +9,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
-import ts from "typescript";
+import { transformSync } from "esbuild";
 import { createDiskSwap } from "./update-restart-swap-fixture.mjs";
 
 const sourceRoot = path.resolve(
@@ -86,7 +86,6 @@ async function fixture({
   const opts = { json: true, yes: true, run };
   const assertCurrent = () => run.executorFence.assertCurrent();
   const restartContext = {
-    restartScriptPath: null,
     refreshGatewayServiceEnv: false,
     gatewayServiceEnv: {},
     gatewayServiceInstallEnv: null,
@@ -283,14 +282,13 @@ async function fixture({
   // no function extraction, production-body rewrites, or replacement outcome logic.
   for (const name of realNames) {
     const filename = path.join(sourceRoot, "src/cli/update-cli", name + ".ts");
-    const code = ts.transpileModule(await fs.readFile(filename, "utf8"), {
-      fileName: filename,
-      compilerOptions: {
-        target: ts.ScriptTarget.ESNext,
-        module: ts.ModuleKind.ESNext,
-        verbatimModuleSyntax: true,
-      },
-    }).outputText;
+    const code = transformSync(await fs.readFile(filename, "utf8"), {
+      sourcefile: filename,
+      loader: "ts",
+      target: "esnext",
+      format: "esm",
+      tsconfigRaw: { compilerOptions: { verbatimModuleSyntax: true } },
+    }).code;
     const mod = new vm.SourceTextModule(code, { context, identifier: filename });
     modules.set(path.basename(name) + ".js", mod);
     const imports = new Map();

@@ -17,6 +17,7 @@ import {
 import { assertRealOutputRoot } from "./output-root-guard.mjs";
 import { createPluginInventoryModuleRefsPlugin } from "./plugin-inventory-module-refs.mts";
 import { preparePackageRuntimeAssets } from "./plugin-npm-runtime-assets.mts";
+import { collectPluginThemeAssetPaths } from "./plugin-theme-assets.mts";
 import { isRecord } from "./record-shared.mjs";
 
 const env = {
@@ -240,6 +241,7 @@ function rewriteCommonJsRuntimeSpecifiers(plan: PluginNpmRuntimeBuildPlan) {
 function resolvePluginNpmRuntimePackageFiles(plan: {
   packageJson: PluginPackageJson;
   packageDir: string;
+  manifest: JsonRecord;
 }) {
   const merged = new Set(
     Array.isArray(plan.packageJson.files)
@@ -263,6 +265,9 @@ function resolvePluginNpmRuntimePackageFiles(plan: {
   }
   if (packageRelativePathExists(plan.packageDir, "skills")) {
     merged.add("skills/**");
+  }
+  for (const file of collectPluginThemeAssetPaths(plan.manifest)) {
+    merged.add(file);
   }
   return [...merged];
 }
@@ -388,7 +393,7 @@ export function resolvePluginNpmRuntimeBuildPlan(params: PluginNpmRuntimeBuildPa
   return {
     ...plan,
     runtimeBuildOutputs: listPluginNpmRuntimeBuildOutputs(plan),
-    packageFiles: resolvePluginNpmRuntimePackageFiles(plan),
+    packageFiles: resolvePluginNpmRuntimePackageFiles({ ...plan, manifest }),
     packagePeerMetadata: resolvePluginNpmRuntimePackagePeerMetadata(plan),
   };
 }

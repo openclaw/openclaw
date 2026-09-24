@@ -7,6 +7,7 @@ import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../lib/chat/human-mentions.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import { GatewayPageController } from "../lit/gateway-page-controller.ts";
@@ -37,7 +38,7 @@ import type { OpenClawModalDialog } from "./modal-dialog.ts";
 
 type PaletteItem = CommandPaletteItem;
 
-const SESSION_SEARCH_DEBOUNCE_MS = 50;
+const SEARCH_DEBOUNCE_MS = 200;
 const SESSION_SEARCH_MIN_CHARS = 2;
 const PROMPT_ENTER_CHARS = 60;
 const PROMPT_EXIT_CHARS = 50;
@@ -100,7 +101,6 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         if (!text) {
           this.filter = "all";
         }
-        this.activeId = null;
         this.scheduleSessionSearch(query);
       },
     },
@@ -110,6 +110,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     return this.draft.message;
   }
 
+  @state() private searchQuery = "";
   @state() private promptMode = false;
   @state() private activeId: string | null = null;
   @state() private sessionItems: readonly PaletteItem[] = [];
@@ -135,6 +136,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     invalidateRequests: () => {
       this.clearSessionSearch();
       this.clearCatalogSearch();
+      this.scheduleSessionSearch(this.query);
     },
     onSnapshot: () => this.synchronizePresentationScope(),
     ensureInitialData: () => this.scheduleSessionSearch(this.query),
@@ -146,10 +148,11 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       () => this.context?.gateway,
       (gateway) =>
         gateway.subscribeEvents((event) => {
-          if (
-            this.context?.gateway === gateway &&
-            (event.event === "config.changed" || event.event === "chat.metadata.changed")
-          ) {
+          const invalidation = modelCatalogEventInvalidation(event);
+          if (this.context?.gateway === gateway && (event.event === "cron" || invalidation)) {
+            if (invalidation === "clear") {
+              this.clearCatalogSearch();
+            }
             if (this.open) {
               void this.ensureCatalogItems(true);
             } else {
@@ -162,6 +165,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       () => this.context?.agentSelection,
       (selection, notify) => selection.subscribe(notify),
       () => {
+        this.clearSessionSearch();
         this.clearCatalogSearch();
         this.scheduleSessionSearch(this.query);
       },
@@ -312,12 +316,16 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     this.adoptInitialInput();
   }
 
-  private clearSessionSearch() {
+  private invalidateSessionSearch() {
     if (this.sessionSearchTimer !== null) {
       globalThis.clearTimeout(this.sessionSearchTimer);
       this.sessionSearchTimer = null;
     }
     this.sessionSearchId += 1;
+  }
+
+  private clearSessionSearch() {
+    this.invalidateSessionSearch();
     this.sessionItems = [];
     this.sessionSearchPending = false;
     this.sessionSearchFailed = false;
@@ -390,32 +398,51 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     return promise;
   }
 
-  private scheduleSessionSearch(query: string) {
-    // Invalidate the previous query immediately so late responses cannot
-    // repopulate selectable stale rows during the debounce window.
-    this.clearSessionSearch();
+  private scheduleSessionSearch(query: string, immediate = false) {
+    // Retire in-flight results immediately, but keep the settled search visible
+    // until the typing burst ends. The view disables selection during this pause.
+    this.invalidateSessionSearch();
     if (this.promptMode || this.mentionMenu.open || this.draft.mentions.length > 0) {
       // Retire catalog generations too: late results and refresh events must not
       // revive search while the same field is being used as a session draft.
+      this.clearSessionSearch();
       this.clearCatalogSearch();
       return;
     }
     const search = normalizeOptionalString(query);
-    if (!this.open || !search || search.length < SESSION_SEARCH_MIN_CHARS) {
+    if (!this.open || !search) {
+      this.clearSessionSearch();
+      this.searchQuery = query;
+      this.activeId = null;
       return;
     }
-    this.sessionSearchPending = Boolean(
-      this.onSelectSession && this.context?.sessions && this.gateway.connected,
-    );
-    this.sessionSearchTimer = globalThis.setTimeout(() => {
-      this.sessionSearchTimer = null;
+    if (this.composing) {
+      return;
+    }
+    const applySearch = () => {
+      this.clearSessionSearch();
+      if (this.searchQuery !== query) {
+        this.activeId = null;
+      }
+      this.searchQuery = query;
+      if (search.length < SESSION_SEARCH_MIN_CHARS) {
+        return;
+      }
+      this.sessionSearchPending = Boolean(
+        this.onSelectSession && this.context?.sessions && this.gateway.connected,
+      );
       void this.ensureCatalogItems();
       if (this.onSelectSession) {
         void this.searchSessions(search);
       } else {
         this.sessionSearchPending = false;
       }
-    }, SESSION_SEARCH_DEBOUNCE_MS);
+    };
+    if (immediate) {
+      applySearch();
+    } else {
+      this.sessionSearchTimer = globalThis.setTimeout(applySearch, SEARCH_DEBOUNCE_MS);
+    }
   }
 
   private async searchSessions(search: string) {
@@ -526,10 +553,13 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
 
   override render() {
     this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
-    return renderCommandPalette({
+    return renderCommandPalette(() => ({
       basePath: this.context?.basePath ?? "",
       open: this.open,
       query: this.query,
+      searchQuery: this.searchQuery,
+      searchDebouncing: this.composing || this.query !== this.searchQuery,
+      onFlushSearch: () => this.scheduleSessionSearch(this.query, true),
       promptMode: this.promptMode,
       mentionMenu: this.mentionMenu,
       mentionHost: this.mentionHost,
@@ -549,12 +579,14 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       onSelectionChange: () => this.updateMentionMenu(),
       onCompositionStart: () => {
         this.composing = true;
+        this.invalidateSessionSearch();
         this.mentionMenu.close();
         this.requestUpdate();
       },
       onCompositionEnd: () => {
         this.composing = false;
         this.updateMentionMenu();
+        this.scheduleSessionSearch(this.query);
       },
       activeId: this.activeId,
       filter: this.filter,
@@ -580,10 +612,10 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       ],
       sessionSearchPending: this.sessionSearchPending,
       catalogSearchPending: Boolean(
-        normalizeOptionalString(this.query) &&
+        normalizeOptionalString(this.searchQuery) &&
         !this.promptMode &&
-        ((this.sessionSearchTimer !== null && this.gateway.connected) ||
-          (this.catalogLoad && this.catalogLoad.loadedAt === undefined)),
+        this.catalogLoad &&
+        this.catalogLoad.loadedAt === undefined,
       ),
       sessionSearchFailed: this.sessionSearchFailed,
       sessionSearchPartial: this.sessionSearchPartial,
@@ -608,7 +640,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       onSlashCommand: this.onSlashCommand,
       onInputRef: this.handleInputRef,
       draft: this.draft,
-    });
+    }));
   }
 }
 

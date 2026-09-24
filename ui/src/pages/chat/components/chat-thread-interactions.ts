@@ -81,7 +81,12 @@ export type ChatThreadState = {
   transcriptRenderContext: {
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
-    onAsyncQuestionSubmit?: (message: string) => Promise<boolean>;
+    onAsyncQuestionDiscard?: (item: ChatQueueItem) => void;
+    onAsyncQuestionSubmit?: (
+      message: string,
+      itemId?: string,
+      sourceMessageId?: string,
+    ) => Promise<boolean>;
   };
 };
 
@@ -166,7 +171,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
-  typingActors?: readonly { id: string; label: string; preview?: string }[];
+  typingActors?: readonly { id: string; label: string; preview?: string; paused?: boolean }[];
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;

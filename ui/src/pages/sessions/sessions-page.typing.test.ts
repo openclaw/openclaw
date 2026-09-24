@@ -129,7 +129,7 @@ describe("Sessions page typing ownership", () => {
         if (timing !== "unsubscribed") {
           emitEvent(sessionChangedEvent("agent:main:changed"));
           if (timing === "queued") {
-            await vi.advanceTimersByTimeAsync(200);
+            await vi.advanceTimersByTimeAsync(5_000);
           }
         }
         unsubscribe();
@@ -163,7 +163,7 @@ describe("Sessions page typing ownership", () => {
           document.dispatchEvent(new Event("visibilitychange"));
           await vi.advanceTimersByTimeAsync(0);
         } else if (!resubscribe || timing === "queued") {
-          await vi.advanceTimersByTimeAsync(999);
+          await vi.advanceTimersByTimeAsync(4_999);
           expect(filteredCalls).toBe(1);
           if (resubscribe) {
             expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe(
@@ -482,11 +482,11 @@ describe("Sessions page typing ownership", () => {
     vi.useFakeTimers();
     const { page, requests, pending, input, type, cleanup } = await mountTypingPage();
     try {
-      page.selectedKeys = new Set(["agent:main:initial"]);
+      page.selectedSessions = new Map([["agent:main:initial", { key: "agent:main:initial" }]]);
       await type("older");
       expect.soft(requests).toHaveLength(1);
       expect(page.result).toBeNull();
-      expect(page.selectedKeys.size).toBe(0);
+      expect(page.selectedSessions.size).toBe(0);
       expect(page.loading).toBe(true);
       expect(input().value).toBe("older");
       expect(page.textContent).not.toContain("No sessions match your filters.");

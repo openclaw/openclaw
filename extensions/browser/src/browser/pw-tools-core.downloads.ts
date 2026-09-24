@@ -4,10 +4,12 @@
  */
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  isPrivateNetworkAllowedByPolicy,
+  normalizeHostname,
+} from "openclaw/plugin-sdk/security-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { Frame, Page } from "playwright-core";
-import { isPrivateNetworkAllowedByPolicy } from "../infra/net/ssrf.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { normalizeHostname } from "../sdk-security-runtime.js";
 import { DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import {

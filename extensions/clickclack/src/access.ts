@@ -3,9 +3,9 @@ import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-
  * Maps ClickClack senders and conversations onto the shared channel ingress
  * allowlist/command authorization contract.
  */
-import {
+import type {
   resolveStableChannelMessageIngress,
-  type StableChannelIngressIdentityParams,
+  StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
@@ -279,7 +279,7 @@ export async function resolveClickClackInboundAccess(params: {
       commandSource: "text",
     });
 
-  const resolved = await resolveStableChannelMessageIngress({
+  const resolved = await runtime.channel.inbound.ingress.resolveStable({
     channelId: CHANNEL_ID,
     accountId: params.account.accountId,
     identity: clickClackIngressIdentity,
@@ -294,6 +294,7 @@ export async function resolveClickClackInboundAccess(params: {
     contextBinding: {
       agentId: preparedRoute.route.agentId,
       sessionKey: preparedRoute.route.sessionKey,
+      nativeChannelId: params.message.channel_id || params.message.direct_conversation_id,
       messageId: params.message.id,
       inboundEventKind: "user_request",
     },

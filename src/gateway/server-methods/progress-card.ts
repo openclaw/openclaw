@@ -16,6 +16,7 @@ import { SessionMutationAuthorizationChangedError } from "../session-mutation-au
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
+import { retainSessionScopedRead } from "./session-scoped-read.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -67,9 +68,13 @@ export function createProgressCardHandlers(
       if (!session) {
         return;
       }
-      sessionMutationAuthorization?.assertCurrent();
-      const card = await store.get(session.sessionKey, session.agentId);
-      sessionMutationAuthorization?.assertCurrent();
+      const readCard = async () => {
+        sessionMutationAuthorization?.assertCurrent();
+        const card = await store.get(session.sessionKey, session.agentId);
+        sessionMutationAuthorization?.assertCurrent();
+        return card;
+      };
+      const card = await readCard();
       if (!card) {
         respond(
           false,
@@ -81,9 +86,10 @@ export function createProgressCardHandlers(
       const { requestProgressCardRefresh } = await import("./progress-card-refresh.js");
       invocation.sessionMutationCommitGuard?.();
       sessionMutationAuthorization?.assertCurrent();
-      await requestProgressCardRefresh(invocation, session, card, params.idempotencyKey);
+      await requestProgressCardRefresh(invocation, session, card, params.idempotencyKey, readCard);
     },
-    "progressCard.get": async ({ params, respond, context, sessionMutationAuthorization }) => {
+    "progressCard.get": async (options) => {
+      const { params, respond, context, sessionMutationAuthorization } = options;
       if (!assertValidParams(params, validateProgressCardGetParams, "progressCard.get", respond)) {
         return;
       }
@@ -93,15 +99,19 @@ export function createProgressCardHandlers(
       }
       // Lazy handler preparation can outlive the session authorized by the router.
       sessionMutationAuthorization?.assertCurrent();
+      const read = retainSessionScopedRead(options, session.sessionKey, session.agentId);
       try {
         const card = await store.get(session.sessionKey, session.agentId);
         sessionMutationAuthorization?.assertCurrent();
+        read?.assertCurrent();
         respond(true, { card: projectProgressCard(card, session.scopeKey) }, undefined);
       } catch (error) {
         if (error instanceof SessionMutationAuthorizationChangedError) {
           throw error;
         }
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
+      } finally {
+        read?.release();
       }
     },
     "progressCard.put": async (invocation) => {

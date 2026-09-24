@@ -1,6 +1,6 @@
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
-import type { PluginRuntime } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
@@ -10,23 +10,25 @@ function installInboundAuthzRuntime(params: {
   readAllowFromStore: () => Promise<string[]>;
   buildMentionRegexes: () => RegExp[];
 }) {
-  setNextcloudTalkRuntime({
-    channel: {
-      pairing: {
-        readAllowFromStore: params.readAllowFromStore,
+  setNextcloudTalkRuntime(
+    createPluginRuntimeMock({
+      channel: {
+        pairing: {
+          readAllowFromStore: params.readAllowFromStore,
+        },
+        commands: {
+          shouldHandleTextCommands: () => false,
+        },
+        text: {
+          hasControlCommand: () => false,
+        },
+        mentions: {
+          buildMentionRegexes: params.buildMentionRegexes,
+          matchesMentionPatterns: () => false,
+        },
       },
-      commands: {
-        shouldHandleTextCommands: () => false,
-      },
-      text: {
-        hasControlCommand: () => false,
-      },
-      mentions: {
-        buildMentionRegexes: params.buildMentionRegexes,
-        matchesMentionPatterns: () => false,
-      },
-    },
-  } as unknown as PluginRuntime);
+    }),
+  );
 }
 
 describe("nextcloud-talk inbound authz", () => {

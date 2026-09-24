@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import type { ReplyToolAuthorityOverlay } from "./reply-run-registry.contracts.js";
@@ -21,6 +22,7 @@ function toolAuthorityOverlay(
   run: ReturnType<typeof createQueueTestRun>,
 ): ReplyToolAuthorityOverlay {
   return {
+    operatorAuthority: run.operatorAuthority,
     permissionMode: run.run.permissionMode,
     toolOverrides: run.run.toolOverrides,
     originatingChannel: run.originatingChannel,
@@ -47,7 +49,6 @@ function toolAuthorityOverlay(
     traceAuthorized: run.run.traceAuthorized === true,
     approvalReviewerDeviceId: run.run.approvalReviewerDeviceId,
     clientCaps: run.run.clientCaps,
-    bootstrapUserProfileId: run.run.bootstrapUserProfileId,
     gatewayUiCommandTarget: run.run.gatewayUiCommandTarget,
     toolBindings: run.run.toolBindings,
   };
@@ -79,21 +80,29 @@ describe("reply tool authority", () => {
     },
   );
 
-  it.each(["bob", undefined])(
-    "queues a different personal bootstrap scope instead of steering: %s",
-    async (incoming) =>
+  it.each(["other-participant", undefined])(
+    "steers participant %s without replacing session personal context",
+    async (participant) =>
       withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const alice = ensureProfileForEmail("alice@example.test");
-        const bob = ensureProfileForEmail("bob@example.test");
-        const alias = ensureProfileForEmail("alias@example.test");
-        linkEmail("alias@example.test", alice.id);
-        const run = createQueueTestRun({ prompt: "Alice turn" });
-        run.disableTools = true;
-        run.run.bootstrapUserProfileId = alias.id;
+        const owner = ensureProfileForEmail("owner@example.test");
+        const other = ensureProfileForEmail("participant@example.test");
+        const participantId = participant ? other.id : undefined;
+        const run = createQueueTestRun({ prompt: "Session owner's turn" });
+        run.run.bootstrapUserProfileId = owner.id;
+        run.run.senderId = "first-participant";
+        run.run.permissionMode = "full";
+        run.operatorAuthority = createAdmittedRunOperatorAuthority({
+          profileId: "original-operator",
+          scopes: ["operator.read", "operator.write"],
+          source: {},
+          assertCurrent: () => {},
+        });
         const operation = createTestReplyOperation({ sessionId: "personal-steering" });
         operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-        operation.bindToolAuthorityRoute({ provider: "openai", model: "gpt-primary" });
-        const queueMessage = vi.fn(async () => {});
+        const fingerprint = operation.bindToolAuthorityRoute(run.run);
+        const queueMessage = vi.fn(
+          async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
+        );
         operation.attachBackend({
           kind: "embedded",
           cancel: vi.fn(),
@@ -101,25 +110,58 @@ describe("reply tool authority", () => {
           queueMessage,
         });
         operation.setPhase("running");
-        await expect(
-          queueCurrentReplyRunMessage("personal-steering", "new turn", {
-            isInboundUserMessage: true,
-            toolAuthorityOverlay: {
-              ...toolAuthorityOverlay(run),
-              bootstrapUserProfileId: incoming ? bob.id : undefined,
-            },
-          }),
-        ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
-        expect(queueMessage).not.toHaveBeenCalled();
-        await expect(
-          queueCurrentReplyRunMessage("personal-steering", "same person", {
-            isInboundUserMessage: true,
-            toolAuthorityOverlay: {
-              ...toolAuthorityOverlay(run),
-              bootstrapUserProfileId: alice.id,
-            },
-          }),
-        ).resolves.toMatchObject({ status: "accepted" });
+        const incoming = {
+          ...run,
+          run: { ...run.run, senderId: participantId, bootstrapUserProfileId: participantId },
+        };
+        // An owner reassignment can update the next turn's bootstrap selection,
+        // but it is not a permission change and must not rewrite the active turn.
+        expect(resolveFollowupRunToolAuthorityFingerprint(incoming)).toBe(fingerprint);
+        for (const options of [
+          { toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(incoming) },
+          { toolAuthorityOverlay: toolAuthorityOverlay(incoming) },
+        ]) {
+          await expect(
+            queueCurrentReplyRunMessage("personal-steering", "new turn", {
+              isInboundUserMessage: true,
+              ...options,
+            }),
+          ).resolves.toMatchObject({ status: "accepted" });
+        }
+        expect(queueMessage).toHaveBeenCalledTimes(2);
+        for (const [, options] of queueMessage.mock.calls) {
+          expect(options).not.toHaveProperty("bootstrapUserProfileId");
+          expect(options).not.toHaveProperty("toolAuthorityOverlay");
+        }
+        expect(run.run.bootstrapUserProfileId).toBe(owner.id);
+        expect(incoming.run.bootstrapUserProfileId).toBe(participantId);
+        expect(operation.toolAuthorityFingerprint).toBe(fingerprint);
+
+        for (const changed of [
+          { permissionMode: "guarded" },
+          { toolOverrides: { webSearch: false } },
+          { operatorAuthority: undefined },
+          {
+            operatorAuthority: createAdmittedRunOperatorAuthority({
+              ...run.operatorAuthority,
+              source: {},
+            }),
+          },
+          {
+            operatorAuthority: createAdmittedRunOperatorAuthority({
+              ...run.operatorAuthority,
+              scopes: ["operator.admin"],
+            }),
+          },
+        ] satisfies Partial<ReplyToolAuthorityOverlay>[]) {
+          await expect(
+            queueCurrentReplyRunMessage("personal-steering", "different authority", {
+              isInboundUserMessage: true,
+              toolAuthorityOverlay: { ...toolAuthorityOverlay(incoming), ...changed },
+            }),
+          ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+        }
+        expect(queueMessage).toHaveBeenCalledTimes(2);
       }),
   );
 

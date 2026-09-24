@@ -15,6 +15,9 @@ import {
   runSessionColdStorageMaintenance,
 } from "../config/sessions/session-cold-storage.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -32,6 +35,17 @@ const tempDirs = createTempDirTracker();
 const databasePaths: string[] = [];
 const sessionId = "historical-transcript";
 const sessionKey = "agent:main:backup-cold-history";
+
+function readOriginalEvents(database: DatabaseSync) {
+  return executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<DB>(database)
+      .selectFrom("transcript_events")
+      .select(["seq", transcriptEventJsonSql(database).as("event_json"), "created_at"])
+      .where("session_id", "=", sessionId)
+      .orderBy("seq"),
+  ).rows;
+}
 
 afterEach(async () => {
   for (const databasePath of databasePaths.splice(0)) {
@@ -60,7 +74,11 @@ async function createColdFixture() {
   await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
   await replaceTranscriptEvents(scope, [
     { type: "session", id: sessionId, content: "Historical 你好 🦞\nbytes" },
-    { type: "message", id: "historical-message", message: { role: "user", content: "retain me" } },
+    {
+      type: "message",
+      id: "historical-message",
+      message: { role: "user", content: "retain me 你好 🦞\n".repeat(256) },
+    },
   ]);
   await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: sourcePath });
   await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
@@ -70,11 +88,12 @@ async function createColdFixture() {
       "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
     )
     .run(sessionId);
-  const originalRows = database
-    .prepare(
-      "SELECT seq, event_json, created_at FROM transcript_events WHERE session_id = ? ORDER BY seq",
-    )
-    .all(sessionId);
+  const originalRows = readOriginalEvents(database);
+  expect(
+    database
+      .prepare("SELECT COUNT(*) AS count FROM transcript_events WHERE event_zstd IS NOT NULL")
+      .get(),
+  ).toEqual({ count: 1 });
   expect(
     await runSessionColdStorageMaintenance({
       config: {
@@ -168,13 +187,14 @@ describe("cold transcript backup portability", () => {
     await restoreSessionColdTranscript({ ...fixture.scope, storePath: restoredPath });
     const restored = new DatabaseSync(restoredPath, { readOnly: true });
     try {
+      expect(readOriginalEvents(restored)).toEqual(fixture.originalRows);
       expect(
         restored
           .prepare(
-            "SELECT seq, event_json, created_at FROM transcript_events WHERE session_id = ? ORDER BY seq",
+            "SELECT message_id FROM session_transcript_fts WHERE session_transcript_fts MATCH 'retain'",
           )
-          .all(sessionId),
-      ).toEqual(fixture.originalRows);
+          .all(),
+      ).toEqual([{ message_id: "historical-message" }]);
       expect(restored.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
       expect(restored.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {

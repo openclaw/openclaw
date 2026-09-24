@@ -31,8 +31,6 @@ import { admitCorrelatedSubagentSessionDelivery } from "../completion/subagent-c
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import { maybeSteerSubagentAnnounce } from "./subagent-announce-active-wake.js";
 import {
-  hasAnnounceSendEvidence,
-  isWriterClaimReboundAnnounceError,
   resolveSubagentAnnounceTimeoutMs,
   runAnnounceDeliveryWithRetry,
   sourceOwnerChangedResult,
@@ -42,8 +40,6 @@ import {
   getSubagentAnnounceRuntimeConfig,
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
-  setSubagentAnnounceDeliveryDepsForTest,
-  type SubagentAnnounceDeliveryDeps,
 } from "./subagent-announce-delivery.runtime.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import {
@@ -162,7 +158,7 @@ export async function deliverSubagentAnnouncement(params: {
   requireVisibleReply?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
-  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
+  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   signal?: AbortSignal;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<SubagentAnnounceDeliveryResult> {
@@ -365,17 +361,4 @@ export async function deliverSubagentAnnouncement(params: {
     );
   }
   return delivery;
-}
-
-const testing = {
-  setDepsForTest(overrides?: Partial<SubagentAnnounceDeliveryDeps>) {
-    setSubagentAnnounceDeliveryDepsForTest(overrides);
-  },
-  hasAnnounceSendEvidence,
-  isWriterClaimReboundAnnounceError,
-};
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.subagentAnnounceDeliveryTestApi")
-  ] = testing;
 }

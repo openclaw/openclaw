@@ -644,14 +644,14 @@ describe("SQLite worker store", () => {
     }
     const retiring = createDeferredCore();
     const release = createDeferredCore();
-    const spy = vi
-      .spyOn(Worker.prototype, "terminate")
-      .mockImplementationOnce(async function (this: Worker) {
-        retiring.resolve();
-        await release.promise;
-        spy.mockRestore();
-        return this.terminate();
-      });
+    const spy = vi.spyOn(Worker.prototype, "terminate").mockImplementationOnce(async function (
+      this: Worker,
+    ) {
+      retiring.resolve();
+      await release.promise;
+      spy.mockRestore();
+      return this.terminate();
+    });
     const closed = first.close();
     let replacement: SqliteWorkerStore<FixtureOperations> | undefined;
     try {
@@ -1037,7 +1037,7 @@ describe("SQLite worker store", () => {
     for (const follower of followers) {
       expect(follower).toMatchObject({ status: "rejected", reason: { code: "unavailable" } });
     }
-    await expect(store.close()).rejects.toMatchObject({ code: "unavailable" });
+    await expect(store.close()).resolves.toBeUndefined();
     stores.delete(store);
 
     const recovered = await open(file);

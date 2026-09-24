@@ -24,7 +24,11 @@ import {
   onAgentRuntimeEvent,
   rotateAgentEventLifecycleGeneration,
 } from "../infra/agent-events.js";
-import { claimAgentRunContext, getAgentRunContext } from "../infra/agent-run-registry.js";
+import {
+  claimAgentRunContext,
+  getActiveAgentRunDelegatedAuthority,
+  getAgentRunContext,
+} from "../infra/agent-run-registry.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import {
   ComposedGatewayHarness,
@@ -59,7 +63,7 @@ describe("worker chat.abort settlement", () => {
   ] as const)(
     "settles managed chat.abort with queued preview $queuedPreview and $fence fence",
     async ({ queuedPreview, fence }) => {
-      const descriptor = harness.createDescriptor();
+      const descriptor = await harness.createDescriptor();
       descriptor.assignment.toolAuthority.exec = {
         host: "gateway",
         security: "full",
@@ -83,6 +87,12 @@ describe("worker chat.abort settlement", () => {
         removeChatRun: (...args: Parameters<typeof harness.chat.state.registry.remove>) =>
           harness.chat.state.registry.remove(...args),
       });
+      const authority = getActiveAgentRunDelegatedAuthority(
+        descriptor.assignment.operationalRunInstance,
+      );
+      if (!authority) {
+        throw new Error("managed worker turn has no admitted authority");
+      }
       const registration = registerChatAbortController({
         chatAbortControllers: context.chatAbortControllers,
         runId: RUN_ID,
@@ -92,9 +102,11 @@ describe("worker chat.abort settlement", () => {
         ownerConnId: "fault-operator",
         controlUiVisible: true,
         lifecycleGeneration,
+        operationalRunInstance: authority.operationalRunInstance,
         timeoutMs: 60_000,
         kind: "chat-send",
       });
+      registration.bindAgentRunDelegatedAuthority(authority);
       registration.markExecutionStarted();
       const owner = createWorkerTurnRunOwner({
         placements: harness.placementStore,
@@ -199,7 +211,14 @@ describe("worker chat.abort settlement", () => {
         const publishedAtAbort = events.length;
         previewGate?.release.resolve();
         await withTestTimeout(
-          finishingGate.entered.promise,
+          Promise.race([
+            finishingGate.entered.promise,
+            command.then(() => {
+              throw new Error(
+                `worker command completed before cancellation finishing: ${stdout || "no result"}`,
+              );
+            }),
+          ]),
           10_000,
           "worker did not finish cancellation",
         );
@@ -208,7 +227,7 @@ describe("worker chat.abort settlement", () => {
           harness.settleRun(RUN_ID);
         } else if (fence === "credential") {
           const credential = harness.store.getCredential(ENVIRONMENT_ID)!;
-          harness.store.renewCredential({
+          await harness.store.renewCredential({
             environmentId: ENVIRONMENT_ID,
             expectedOwnerEpoch: harness.epoch,
             sessionId: SESSION_ID,

@@ -68,7 +68,7 @@ function seed() {
   database.db.exec(`
     INSERT INTO memory_index_chunks
       (id,path,start_line,end_line,hash,model,text,embedding,updated_at)
-      VALUES ('synthetic-parent','synthetic',1,1,'hash','synthetic','text','[]',1);
+      VALUES ('synthetic-parent','synthetic',1,1,'hash','synthetic','text',X'',1);
     INSERT INTO memory_index_chunk_recall_metadata (chunk_id, importance)
       VALUES ('synthetic-parent',1);
   `);

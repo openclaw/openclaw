@@ -41,7 +41,7 @@ function createHarness() {
   const completeSubagentRun = vi
     .fn<(_: SubagentCompletionRequest) => Promise<void>>()
     .mockRejectedValue(new Error("synthetic completion failure"));
-  const resumeRun = vi.fn(() => {
+  const resumeRun = vi.fn<() => void>(() => {
     throw resumeError;
   });
   const scheduleSweep = vi.fn();
@@ -312,17 +312,52 @@ describe("subagent completion rejection ownership", () => {
     },
   );
 
-  it("stops retrying when the failed attempt removes the row", async () => {
-    const h = createHarness();
-    h.completeSubagentRun.mockImplementation(async () => {
-      h.runs.delete(h.entry.runId);
-      throw new Error("row retired during completion");
-    });
-    await h.runtime.completeSubagentRunWithRecovery(h.request, "subagent-wait");
-    expect(h.completeSubagentRun).toHaveBeenCalledOnce();
-    expect(h.resumeRun).not.toHaveBeenCalled();
-    expect(h.scheduleSweep).not.toHaveBeenCalled();
-  });
+  it.each(
+    [1, 2].flatMap((attempt) =>
+      ["removal", "replacement", "generation"].map((change) => ({ attempt, change })),
+    ),
+  )(
+    "retires recovery after $change during failed attempt $attempt",
+    async ({ attempt, change }) => {
+      const h = createHarness();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      h.resumeRun.mockImplementation(() => {});
+      h.completeSubagentRun.mockReset();
+      if (attempt === 2) {
+        h.completeSubagentRun.mockRejectedValueOnce(new Error("retry current owner"));
+      }
+      h.completeSubagentRun.mockImplementation(async () => {
+        entered.resolve();
+        await release.promise;
+        throw new Error("row retired during completion");
+      });
+      const completion = h.runtime.completeSubagentRunWithRecovery(
+        { ...h.request, expectedEntry: undefined },
+        "lifecycle-event",
+      );
+      try {
+        await entered.promise;
+        if (change === "removal") {
+          h.runs.delete(h.entry.runId);
+        } else if (change === "replacement") {
+          h.runs.set(h.entry.runId, { ...h.entry, generation: 2 });
+        } else {
+          h.entry.generation = 2;
+        }
+        release.resolve();
+        await completion;
+        expect(h.completeSubagentRun).toHaveBeenCalledTimes(attempt);
+        expect(h.resumeRun).not.toHaveBeenCalled();
+        expect(h.scheduleSweep).not.toHaveBeenCalled();
+        expect(h.entry.cleanupHandled).toBe(true);
+        expect(h.resumed.has(h.entry.runId)).toBe(true);
+      } finally {
+        release.resolve();
+        await completion;
+      }
+    },
+  );
 
   it.each(["running", "cleaned", "yielded"] as const)(
     "preserves %s recovery after both attempts fail",

@@ -316,7 +316,10 @@ describe("native check launchers in paths with spaces", () => {
         installScripts(
           root,
           ["run-tsgo-core-test-shards.mts", "run-oxlint.mts", "run-oxlint-shards.mts"],
-          { compiler: false, dependencies: ["tsx", "@openclaw/fs-safe", "p-map", "koffi"] },
+          {
+            compiler: false,
+            dependencies: ["tsx", "@openclaw/fs-safe", "json5", "p-map", "koffi"],
+          },
         );
         const nativeJob = "src/process/supervisor/service-child-windows-job-native.ts";
         write(root, nativeJob, fs.readFileSync(path.join(sourceRoot, nativeJob), "utf8"));
@@ -372,7 +375,7 @@ describe("native check launchers in paths with spaces", () => {
         );
         expect(child.argv).toEqual(
           compiler
-            ? ["-b", TSGO_CORE_TEST_SHARDS[0].config, "--builders", "1"]
+            ? ["-p", TSGO_CORE_TEST_SHARDS[0].config, "--incremental"]
             : ["--mode=package-boundary"],
         );
         const lock = resolveDistArtifactLockPath(root);
@@ -1006,11 +1009,11 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       installCompiler(root);
       // Entrypoints resolve this fixture as their checkout. SDK and plugin
       // sources let the lint consumer distinguish the narrow preparation mode.
-      installScripts(root, [
-        "run-oxlint.mts",
-        "run-tsgo.mts",
-        "prepare-extension-package-boundary-artifacts.mts",
-      ]);
+      installScripts(
+        root,
+        ["run-oxlint.mts", "run-tsgo.mts", "prepare-extension-package-boundary-artifacts.mts"],
+        { dependencies: ["tsx", "@openclaw/fs-safe", "json5"] },
+      );
       write(root, "tsconfig.json", "{}");
       write(
         root,

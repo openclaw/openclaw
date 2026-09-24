@@ -313,6 +313,8 @@ export function visibleSettingsNavigationGroups(
 // Subpages with a visible owner keep that owner selected so users retain
 // location context while completing the nested flow.
 const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = [
+  // Legacy General redirects remain Settings-owned during router transitions.
+  "config",
   "ai-agents",
   "model-setup",
   "lobsterdex",
@@ -352,8 +354,8 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   usage: navigationPresentation("coins", "usage"),
   cron: navigationPresentation("calendarClock", "cron"),
   tasks: navigationPresentation("listChecks", "tasks"),
-  skills: navigationPresentation("zap", "skills"),
-  "skill-settings": navigationPresentation("zap", "skills"),
+  skills: navigationPresentation("bookOpenText", "skills"),
+  "skill-settings": navigationPresentation("bookOpenText", "skills"),
   plugins: navigationPresentation("plug", "plugins"),
   "plugin-settings": navigationPresentation("plug", "plugins"),
   "skill-workshop": navigationPresentation("wrench", "skillWorkshop"),

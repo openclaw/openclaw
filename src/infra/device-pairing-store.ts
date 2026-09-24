@@ -26,6 +26,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.kernel.js";
 import { bindCloudWorkerSetupCompletion } from "./device-pairing-cloud-worker.js";
+import type { CloudWorkerSetupCompletionPublication } from "./device-pairing-read.types.js";
 import {
   invalidateDevicePairingStoreCache,
   readCachedDevicePairingStoreSnapshot,
@@ -547,6 +548,7 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
     device: PairedDevice | null,
     record: DeviceBootstrapTokenRecord,
   ) => boolean;
+  recordWorkerEnvironment: (facts: CloudWorkerSetupCompletionPublication) => void;
   baseDir?: string;
 }): { record: DeviceBootstrapTokenRecord; completion?: DevicePairSetupCompletionRecord } | null {
   const token = params.token.trim();
@@ -602,7 +604,7 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
     }
     if (completion) {
       if (record.profile?.purpose === "cloud-worker") {
-        bindCloudWorkerSetupCompletion({ db, completion });
+        params.recordWorkerEnvironment(bindCloudWorkerSetupCompletion({ db, completion }));
       }
       executeSqliteQuerySync(
         db,

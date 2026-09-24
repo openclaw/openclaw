@@ -22,7 +22,10 @@ import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginServiceRegistration } from "../plugins/registry-types.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getGatewayContextLifetime,
+  getPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginServiceCronHost } from "../plugins/service-cron.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createServiceRegistration } from "../plugins/services.test-support.js";
@@ -46,6 +49,7 @@ import { GatewayConnectionWork } from "./server-connection-work.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import "./server-startup-outcomes.test-support.js";
 import { registerGatewayStartupReadinessTests } from "./server-startup-readiness.test-support.js";
+import { transcriptSidecarMocks } from "./server-startup-transcripts.test-support.js";
 
 type PluginHookGatewayStartEvent = Parameters<PluginHookHandlerMap["gateway_start"]>[0];
 
@@ -116,11 +120,6 @@ const hoisted = vi.hoisted(() => {
   const prewarmConfigDrivenReplyRuntime = vi.fn(async () => {});
   const prewarmContextWindowCacheAfterReady = vi.fn(async () => {});
   const scheduleGatewayHandlerPrewarm = vi.fn(() => ({ stop: vi.fn() }));
-  const transcriptsAutoStartService = {
-    start: vi.fn(),
-    stop: vi.fn(async () => {}),
-  };
-  const createTranscriptsAutoStartService = vi.fn(() => transcriptsAutoStartService);
   return {
     startPluginServices,
     startGmailWatcherWithLogs,
@@ -151,8 +150,6 @@ const hoisted = vi.hoisted(() => {
     prewarmConfigDrivenReplyRuntime,
     prewarmContextWindowCacheAfterReady,
     scheduleGatewayHandlerPrewarm,
-    transcriptsAutoStartService,
-    createTranscriptsAutoStartService,
   };
 });
 
@@ -258,10 +255,6 @@ vi.mock("../agents/context.js", () => ({
 
 vi.mock("./server-startup-handler-prewarm.js", () => ({
   scheduleGatewayHandlerPrewarm: hoisted.scheduleGatewayHandlerPrewarm,
-}));
-
-vi.mock("../transcripts/auto-start.js", () => ({
-  createTranscriptsAutoStartService: hoisted.createTranscriptsAutoStartService,
 }));
 
 const {
@@ -531,10 +524,6 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.prewarmContextWindowCacheAfterReady.mockReset();
     hoisted.prewarmContextWindowCacheAfterReady.mockResolvedValue(undefined);
     hoisted.scheduleGatewayHandlerPrewarm.mockClear();
-    hoisted.transcriptsAutoStartService.start.mockClear();
-    hoisted.transcriptsAutoStartService.stop.mockClear();
-    hoisted.transcriptsAutoStartService.stop.mockResolvedValue(undefined);
-    hoisted.createTranscriptsAutoStartService.mockClear();
   });
 
   afterEach(async () => {
@@ -1808,7 +1797,10 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("keeps transcripts auto-start alive when Gmail post-ready sidecars stop", async () => {
     const onPostReadySidecars = vi.fn<SidecarPublisher>();
-    const onGatewayLifetimeSidecars = vi.fn<SidecarPublisher>();
+    const started = createDeferred();
+    transcriptSidecarMocks.transcriptsAutoStartService.start.mockImplementationOnce(() =>
+      started.resolve(),
+    );
     const config = {
       hooks: {
         enabled: true,
@@ -1820,33 +1812,38 @@ describe("startGatewayPostAttachRuntime", () => {
       },
     };
 
-    await startGatewayPostAttachRuntime({
+    const params = {
       ...createPostAttachParams({
         cfgAtStart: config as never,
         gatewayPluginConfigAtStart: config as never,
       }),
       onPostReadySidecars,
-      onGatewayLifetimeSidecars,
-    });
+      onGatewayLifetimeSidecars: vi.fn<SidecarPublisher>(),
+    };
+    await startGatewayPostAttachRuntime(params);
 
     const gmailSidecars = onPostReadySidecars.mock.calls[0];
     const lifetimeSidecars = [...publishedGatewayLifetimeSidecars];
     expect(gmailSidecars).toHaveLength(2);
     expect(lifetimeSidecars).toHaveLength(4);
 
-    await waitForGatewayTestState(() => {
-      expect(hoisted.transcriptsAutoStartService.start).toHaveBeenCalledTimes(1);
-    });
+    await started.promise;
 
     for (const sidecar of gmailSidecars ?? []) {
       await stopTrackedSidecar(sidecar);
     }
-    expect(hoisted.transcriptsAutoStartService.stop).not.toHaveBeenCalled();
+    expect(transcriptSidecarMocks.transcriptsAutoStartService.stop).not.toHaveBeenCalled();
+    expect(transcriptSidecarMocks.transcriptCapturePolicy.drain).not.toHaveBeenCalled();
 
     for (const sidecar of lifetimeSidecars) {
       await stopTrackedSidecar(sidecar);
     }
-    expect(hoisted.transcriptsAutoStartService.stop).toHaveBeenCalledTimes(1);
+    expect(transcriptSidecarMocks.transcriptsAutoStartService.stop).toHaveBeenCalledTimes(1);
+    expect(transcriptSidecarMocks.transcriptCapturePolicy.drain).toHaveBeenCalledTimes(1);
+    getGatewayContextLifetime(createPostAttachParams().resolveGatewayContext).abort();
+    expect(transcriptSidecarMocks.transcriptCapturePolicy.resume).not.toHaveBeenCalled();
+    getGatewayContextLifetime(params.resolveGatewayContext).abort();
+    expect(transcriptSidecarMocks.transcriptCapturePolicy.resume).toHaveBeenCalledTimes(1);
   });
 
   it("starts channels when channel startup is enabled", async () => {
@@ -3410,7 +3407,9 @@ describe("startGatewayPostAttachRuntime", () => {
 
         expect.soft(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
         expect.soft(hoisted.loadModelCatalog).not.toHaveBeenCalled();
-        expect.soft(hoisted.transcriptsAutoStartService.start).not.toHaveBeenCalled();
+        expect
+          .soft(transcriptSidecarMocks.transcriptsAutoStartService.start)
+          .not.toHaveBeenCalled();
         expect.soft(hoisted.triggerInternalHook).not.toHaveBeenCalled();
         expect.soft(params.log.warn).not.toHaveBeenCalled();
         expect.soft(params.logHooks.warn).not.toHaveBeenCalled();
@@ -4626,24 +4625,23 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 });
 
-function createCronHost() {
-  return {
-    status: vi.fn<PluginServiceCronHost["status"]>(async () => ({
-      enabled: true,
-      triggersEnabled: true,
-      storePath: "/synthetic/openclaw.sqlite",
-      storage: "sqlite",
-      sqlitePath: "/synthetic/openclaw.sqlite",
-      jobs: 0,
-      nextWakeAtMs: null,
-    })),
-    list: vi.fn<PluginServiceCronHost["list"]>(),
-    add: vi.fn<PluginServiceCronHost["add"]>(),
-    update: vi.fn<PluginServiceCronHost["update"]>(),
-    remove: vi.fn<PluginServiceCronHost["remove"]>(),
-    removeStaleJobFamily: vi.fn<PluginServiceCronHost["removeStaleJobFamily"]>(),
-  } satisfies PluginServiceCronHost;
-}
+const createCronHost = (): PluginServiceCronHost => ({
+  enqueueRun: vi.fn<PluginServiceCronHost["enqueueRun"]>(),
+  status: vi.fn<PluginServiceCronHost["status"]>(async () => ({
+    enabled: true,
+    triggersEnabled: true,
+    storePath: "/synthetic/openclaw.sqlite",
+    storage: "sqlite",
+    sqlitePath: "/synthetic/openclaw.sqlite",
+    jobs: 0,
+    nextWakeAtMs: null,
+  })),
+  list: vi.fn<PluginServiceCronHost["list"]>(),
+  add: vi.fn<PluginServiceCronHost["add"]>(),
+  update: vi.fn<PluginServiceCronHost["update"]>(),
+  remove: vi.fn<PluginServiceCronHost["remove"]>(),
+  removeStaleJobFamily: vi.fn<PluginServiceCronHost["removeStaleJobFamily"]>(),
+});
 
 function createPostAttachRuntimeDeps(
   overrides: Partial<PostAttachRuntimeDeps> = {},

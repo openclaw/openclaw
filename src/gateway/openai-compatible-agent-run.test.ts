@@ -284,6 +284,58 @@ describe("OpenAI-compatible operator run authority", () => {
   );
 });
 
+describe("OpenAI-compatible command admission", () => {
+  it.each([false, true])(
+    "keeps authority until custody transfers (already admitted=%s)",
+    async (alreadyAdmitted) => {
+      const prepared = createDeferred();
+      const proceed = createDeferred();
+      const executed = vi.fn();
+      let current = true;
+      vi.mocked(agentCommandFromGatewayIngress).mockImplementationOnce(async (opts) => {
+        const context = {
+          operationalRunInstance: { runId: "http-run", instanceId: "http-instance" },
+        };
+        if (alreadyAdmitted) {
+          await opts.onAdmittedRunContext?.(context);
+        }
+        prepared.resolve();
+        await proceed.promise;
+        opts.assertSourceCurrent?.();
+        if (!alreadyAdmitted) {
+          await opts.onAdmittedRunContext?.(context);
+        }
+        executed();
+        return { payloads: [{ text: "settled", mediaUrl: null }], meta: { durationMs: 0 } };
+      });
+      const pending = runOpenAiCompatibleAgentCommand({
+        message: "probe",
+        sessionKey: "agent:main:main",
+        runId: "http-run",
+        messageChannel: "webchat",
+        senderIsOwner: true,
+        requestAuth: {
+          authMethod: "token",
+          trustDeclaredOperatorScopes: false,
+          operatorRoleActor: { kind: "system" },
+        },
+        operatorScopes: ["operator.admin"],
+        hasCurrentClientAuthority: () => current,
+      });
+      await prepared.promise;
+      current = false;
+      proceed.resolve();
+      if (alreadyAdmitted) {
+        await expect(pending).resolves.toMatchObject({ payloads: [{ text: "settled" }] });
+        expect(executed).toHaveBeenCalledOnce();
+      } else {
+        await expect(pending).rejects.toThrow("Gateway requester authority changed");
+        expect(executed).not.toHaveBeenCalled();
+      }
+    },
+  );
+});
+
 describe("OpenAI-compatible agent run terminal metadata", () => {
   it.each([undefined, null, "invalid", [], { pendingToolCalls: "invalid" }])(
     "treats malformed metadata as having no pending calls: %j",

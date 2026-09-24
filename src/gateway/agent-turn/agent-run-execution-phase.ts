@@ -185,11 +185,15 @@ export async function startAgentRunExecution(params: {
       leaseActive = false;
       mediaCleanup ??= discardPreparedInboundMedia(refsToDiscard, params.context.logGateway);
       if (prepared.userTurn.recorder && params.resolvedSessionKey) {
-        emitSessionsChanged(params.context, {
-          sessionKey: params.resolvedSessionKey,
-          agentId: params.activeSessionAgentId,
-          reason: "agent.input.settled",
-        });
+        emitSessionsChanged(
+          params.context,
+          {
+            sessionKey: params.resolvedSessionKey,
+            agentId: params.activeSessionAgentId,
+            reason: "agent.input.settled",
+          },
+          { accessChanged: false },
+        );
       }
     };
     const dispatchAdmittedAgentRun = (
@@ -318,11 +322,15 @@ export async function startAgentRunExecution(params: {
           });
         }
         if (!params.suppressVisibleSessionEffects && params.resolvedSessionKey) {
-          emitSessionsChanged(params.context, {
-            sessionKey: params.resolvedSessionKey,
-            agentId: params.activeSessionAgentId,
-            reason: "send",
-          });
+          emitSessionsChanged(
+            params.context,
+            {
+              sessionKey: params.resolvedSessionKey,
+              agentId: params.activeSessionAgentId,
+              reason: "send",
+            },
+            { accessChanged: false },
+          );
         }
 
         if (!params.isRawModelRun) {
@@ -555,11 +563,15 @@ export async function startAgentRunExecution(params: {
                   }
                   params.io.emitExecutionStarted?.();
                   if (params.resolvedSessionKey) {
-                    emitSessionsChanged(params.context, {
-                      sessionKey: params.resolvedSessionKey,
-                      agentId: params.agentId,
-                      reason: "agent.run.started",
-                    });
+                    emitSessionsChanged(
+                      params.context,
+                      {
+                        sessionKey: params.resolvedSessionKey,
+                        agentId: params.agentId,
+                        reason: "agent.run.started",
+                      },
+                      { accessChanged: false },
+                    );
                   }
                 },
                 onActiveModelSelected: createAgentRunModelSelectionHandler({

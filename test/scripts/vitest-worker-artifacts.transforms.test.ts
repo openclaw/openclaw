@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, vi } from "vitest";
 import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
@@ -12,9 +12,47 @@ import { workerTransformProbe } from "./vitest-worker-artifacts.transforms.test-
 
 const root = process.cwd();
 const it = createWorkerArtifactTest();
+
+function readCompilerEvidence(filename: string) {
+  try {
+    return {
+      contents: fs
+        .readFileSync(filename, "utf8")
+        .replaceAll(JSON.stringify(root).slice(1, -1), "<checkout>"),
+    };
+  } catch (error) {
+    return { readError: (error as NodeJS.ErrnoException).code ?? "unreadable" };
+  }
+}
+
 // Each sequence owns its cache and two generations; keep their observations ordered.
 // Full SQLite/archive/TUI/setup/KNN execution stays in worker-artifacts source/borrower tests.
 describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
+  it("keeps one lifetime identity when the fixture compiler runs twice in one process", ({
+    workerArtifacts,
+  }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const { runtime } = workerArtifacts.createFixtureCommands();
+      const directory = workerArtifacts.fixtureDirectory();
+      const controlled = createControlledWorkerCompiler(directory, process.env);
+      const [compiler, first, input, receipt] = controlled.args(path.join(directory, "first"));
+      const result = await runtime([
+        "--input-type=module",
+        "--eval",
+        `import {runWorkerFixtureCompiler} from ${JSON.stringify(pathToFileURL(compiler!).href)};
+        await runWorkerFixtureCompiler(${JSON.stringify(first)}, ${JSON.stringify(input)}, ${JSON.stringify(receipt)});
+        await runWorkerFixtureCompiler(${JSON.stringify(path.join(directory, "second"))}, ${JSON.stringify(input)}, ${JSON.stringify(receipt)});`,
+      ]);
+      expect(result.code, result.stderr + result.stdout).toBe(0);
+      const compilers = controlled.read();
+      expect(compilers).toHaveLength(2);
+      expect(compilers[0]!.processStartTime).toBeGreaterThan(0);
+      expect(compilers[1]).toMatchObject({
+        pid: compilers[0]!.pid,
+        processStartTime: compilers[0]!.processStartTime,
+      });
+    }));
+
   it.for((["single", "projects"] as const).map((layout) => ({ layout })))(
     "preserves filesystem transforms across fresh generations, source mode, and edits ($layout)",
     ({ layout }, { workerArtifacts }) =>
@@ -80,6 +118,40 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
                   root,
                   controlled.env,
                 );
+            if (result.code !== 0) {
+              // Read the fixture's existing evidence before its assertion unwinds cleanup.
+              // The inner owner may already have removed a joined compiler's generation.
+              const manifests = (() => {
+                try {
+                  return controlled.read().map(({ directory: generation, ...receipt }) => ({
+                    ...receipt,
+                    generation: path.basename(generation),
+                    manifest:
+                      path.dirname(generation) === path.join(root, ".artifacts", "vitest-workers")
+                        ? readCompilerEvidence(path.join(generation, "manifest.json"))
+                        : { readError: "outside-worker-root" },
+                  }));
+                } catch (error) {
+                  return { readError: (error as NodeJS.ErrnoException).code ?? "invalid-receipt" };
+                }
+              })();
+              console.error(
+                "Controlled compiler failure context",
+                JSON.stringify({
+                  layout,
+                  mode,
+                  reuse,
+                  code: result.code,
+                  runtime: {
+                    executable: path.basename(process.execPath),
+                    version: process.version,
+                    uv: process.versions.uv,
+                  },
+                  receipts: readCompilerEvidence(path.join(directory, "fixture-compilers.jsonl")),
+                  manifests,
+                }),
+              );
+            }
             expect(result.code, result.stderr + result.stdout).toBe(0);
             const generation: string = JSON.parse(readLines("generations.jsonl").at(-1)!);
             const observed = JSON.parse(readLines("observations.jsonl").at(-1)!);

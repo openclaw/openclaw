@@ -54,3 +54,16 @@ complete until `main` carries the actual shipped release state.
    closeout manifest to the GitHub release. The drill must be within 90 days;
    manual dispatch is only for repair/replay, and private rollback commands
    remain in the maintainer-only runbook.
+7. A macOS build pulled from Sparkle on purpose (for example a crashing
+   in-app update) is a third appcast state, not a contract failure. Withdraw
+   it with a `main` commit whose subject is exactly
+   `chore(release): withdraw the <version> macOS build from the Sparkle feed`
+   and a `Refs #NNN` body line naming the incident; the closeout looks that
+   marker up on `main` (`appcast.xml` history) only when the complete macOS
+   asset set is attached and the newest `appcast.xml` entry is an older
+   version than the release. It then records `appcast: withdrawn`,
+   `appPlatforms.macos: withdrawn`, `apps: pending`, and
+   `appcastWithdrawal: { commit, reason }` instead of the feed link checks;
+   replay preserves those fields byte-for-byte. Any other feed mismatch still
+   fails. The later hotfix release (for example `2026.9.7`) verifies its own
+   appcast at its own closeout; the withdrawn record is never rewritten.

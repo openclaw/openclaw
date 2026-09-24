@@ -28,8 +28,17 @@ import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage
 export type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
 export type { ProjectedAgentRunIndex } from "./agent-run-registry.types.js";
 
+const delegatedAuthorityFailures = new WeakMap<AgentRunDelegatedAuthority, { cause: unknown }>();
+
+/** Diagnostic only: a retained failure never restores a released claim. */
+export function readAgentRunDelegatedAuthorityFailure(
+  authority: AgentRunDelegatedAuthority,
+): { cause: unknown } | undefined {
+  return delegatedAuthorityFailures.get(authority);
+}
+
 /** Reads the process-local version of the active-run projection inputs. */
-function readAgentRunIndexVersion(): number {
+export function readAgentRunIndexVersion(): number {
   return getAgentRunRegistryState().version;
 }
 
@@ -466,7 +475,10 @@ export function getActiveAgentRunDelegatedAuthority(
       ) !== undefined
       ? authority
       : undefined;
-  } catch {
+  } catch (error) {
+    if (!delegatedAuthorityFailures.has(authority)) {
+      delegatedAuthorityFailures.set(authority, { cause: error });
+    }
     // A copied approval cannot outlive its source; retire the exact owner at detection.
     releaseAgentRunContext(operationalRunInstance.runId, authority.claimId);
     return undefined;

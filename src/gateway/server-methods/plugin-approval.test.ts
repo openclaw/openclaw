@@ -4,6 +4,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi, type TestContext } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
@@ -149,13 +150,14 @@ function expectResponseRejected(source: unknown, index = 0) {
   return responseError(source, index);
 }
 
-async function waitForAcceptedApproval(respond: unknown) {
-  await vi.waitFor(() => {
-    const accepted = acceptedResult(respond);
-    expect(accepted.status).toBe("accepted");
-    expect(accepted.id).toBeTypeOf("string");
+function createApprovalRequestResponder() {
+  const firstResponse = createDeferred();
+  const respond = vi.fn(() => firstResponse.resolve());
+  const accepted = firstResponse.promise.then(() => {
+    expectResponseOk(respond);
+    return acceptedApprovalId(respond);
   });
-  return acceptedApprovalId(respond);
+  return { respond, accepted };
 }
 
 function createOwnedClient(owner: "owner" | "other" = "owner") {
@@ -282,7 +284,7 @@ describe("createPluginApprovalHandlers", () => {
   describe("plugin.approval.request", () => {
     it("creates and registers approval with twoPhase", async () => {
       const handlers = createPluginApprovalHandlers(manager);
-      const respond = vi.fn();
+      const { respond, accepted } = createApprovalRequestResponder();
       const opts = createMockOptions(
         "plugin.approval.request",
         {
@@ -301,7 +303,7 @@ describe("createPluginApprovalHandlers", () => {
         'handlers["plugin.approval.request"] test invariant',
       )(opts);
 
-      const approvalId = await waitForAcceptedApproval(respond);
+      const approvalId = await accepted;
 
       const requestedBroadcast = broadcastCall(opts);
       expect(requestedBroadcast.event).toBe("plugin.approval.requested");
@@ -324,7 +326,7 @@ describe("createPluginApprovalHandlers", () => {
 
     it("sanitizes title/description/detail at creation so every surface gets safe text", async () => {
       const handlers = createPluginApprovalHandlers(manager);
-      const respond = vi.fn();
+      const { respond, accepted } = createApprovalRequestResponder();
       const opts = createMockOptions(
         "plugin.approval.request",
         {
@@ -347,7 +349,7 @@ describe("createPluginApprovalHandlers", () => {
         handlers["plugin.approval.request"],
         'handlers["plugin.approval.request"] test invariant',
       )(opts);
-      const approvalId = await waitForAcceptedApproval(respond);
+      const approvalId = await accepted;
       const stored = (await manager.getSnapshot(approvalId))?.request;
       expect(stored?.title).toBe("Deploy\\u{202E}yolped");
       expect(stored?.description).toBe("safe\\u{200B}text");
@@ -397,7 +399,7 @@ describe("createPluginApprovalHandlers", () => {
       const handlers = createPluginApprovalHandlers(manager, {
         iosPushDelivery,
       });
-      const respond = vi.fn();
+      const { respond, accepted } = createApprovalRequestResponder();
       const opts = createMockOptions(
         "plugin.approval.request",
         {
@@ -420,7 +422,7 @@ describe("createPluginApprovalHandlers", () => {
         handlers["plugin.approval.request"],
         'handlers["plugin.approval.request"] test invariant',
       )(opts);
-      const approvalId = await waitForAcceptedApproval(respond);
+      const approvalId = await accepted;
 
       expect(handleRequested).toHaveBeenCalledTimes(1);
       expect(handleRequested.mock.contexts).toEqual([iosPushDelivery]);
@@ -458,7 +460,7 @@ describe("createPluginApprovalHandlers", () => {
           handleExpired,
         },
       });
-      const respond = vi.fn();
+      const { respond, accepted } = createApprovalRequestResponder();
       const opts = createMockOptions(
         "plugin.approval.request",
         { title: "Sensitive action", description: "Desc", twoPhase: true },
@@ -469,7 +471,7 @@ describe("createPluginApprovalHandlers", () => {
         handlers["plugin.approval.request"],
         'handlers["plugin.approval.request"] test invariant',
       )(opts);
-      const approvalId = await waitForAcceptedApproval(respond);
+      const approvalId = await accepted;
       await manager.expire(approvalId, "timeout");
       await requestPromise;
 
@@ -524,7 +526,7 @@ describe("createPluginApprovalHandlers", () => {
       vi.useFakeTimers();
       try {
         const handlers = createPluginApprovalHandlers(manager);
-        const respond = vi.fn();
+        const { respond, accepted } = createApprovalRequestResponder();
         const opts = createMockOptions(
           "plugin.approval.request",
           {
@@ -544,7 +546,7 @@ describe("createPluginApprovalHandlers", () => {
           handlers["plugin.approval.request"],
           'handlers["plugin.approval.request"] test invariant',
         )(opts);
-        const approvalId = await waitForAcceptedApproval(respond);
+        const approvalId = await accepted;
         expect(acceptedResult(respond).deliveryRoute).toBe("turn-source");
         await manager.resolve(approvalId, "allow-once");
 
@@ -623,7 +625,7 @@ describe("createPluginApprovalHandlers", () => {
 
     it("stores scoped allowed decisions on plugin approval requests", async () => {
       const handlers = createPluginApprovalHandlers(manager);
-      const respond = vi.fn();
+      const { respond, accepted } = createApprovalRequestResponder();
       const opts = createMockOptions(
         "plugin.approval.request",
         {
@@ -639,7 +641,7 @@ describe("createPluginApprovalHandlers", () => {
         handlers["plugin.approval.request"],
         'handlers["plugin.approval.request"] test invariant',
       )(opts);
-      const approvalId = await waitForAcceptedApproval(respond);
+      const approvalId = await accepted;
       expect((await manager.getSnapshot(approvalId))?.request.allowedDecisions).toEqual([
         "allow-once",
         "deny",
@@ -669,7 +671,7 @@ describe("createPluginApprovalHandlers", () => {
             ? new Set([reviewerClient?.connId ?? "conn-tui-reviewer"])
             : new Set<string>(),
       } as unknown as GatewayRequestHandlerOptions["context"];
-      const respond = vi.fn();
+      const { respond, accepted } = createApprovalRequestResponder();
       const requestClient = createClient({
         connId: "conn-approval-runtime",
         clientId: "gateway-client",
@@ -692,7 +694,7 @@ describe("createPluginApprovalHandlers", () => {
         handlers["plugin.approval.request"],
         'handlers["plugin.approval.request"] test invariant',
       )(requestOpts);
-      const approvalId = await waitForAcceptedApproval(respond);
+      const approvalId = await accepted;
 
       expect((await manager.getSnapshot(approvalId))?.approvalReviewerDeviceIds).toEqual([
         "device-tui-reviewer",
@@ -735,7 +737,7 @@ describe("createPluginApprovalHandlers", () => {
 
     it("ignores reviewer devices from non-runtime plugin approval clients", async () => {
       const handlers = createPluginApprovalHandlers(manager);
-      const respond = vi.fn();
+      const { respond, accepted } = createApprovalRequestResponder();
       const requestOpts = createMockOptions(
         "plugin.approval.request",
         {
@@ -759,7 +761,7 @@ describe("createPluginApprovalHandlers", () => {
         handlers["plugin.approval.request"],
         'handlers["plugin.approval.request"] test invariant',
       )(requestOpts);
-      const approvalId = await waitForAcceptedApproval(respond);
+      const approvalId = await accepted;
 
       expect((await manager.getSnapshot(approvalId))?.approvalReviewerDeviceIds).toBeUndefined();
       await manager.resolve(approvalId, "deny");
@@ -770,7 +772,7 @@ describe("createPluginApprovalHandlers", () => {
   describe("plugin.approval.list", () => {
     it("lists pending plugin approvals", async () => {
       const handlers = createPluginApprovalHandlers(manager);
-      const respond = vi.fn();
+      const { respond, accepted } = createApprovalRequestResponder();
       const requestOpts = createMockOptions(
         "plugin.approval.request",
         {
@@ -786,7 +788,7 @@ describe("createPluginApprovalHandlers", () => {
         handlers["plugin.approval.request"],
         'handlers["plugin.approval.request"] test invariant',
       )(requestOpts);
-      const approvalId = await waitForAcceptedApproval(respond);
+      const approvalId = await accepted;
 
       const listRespond = vi.fn();
       await expectDefined(

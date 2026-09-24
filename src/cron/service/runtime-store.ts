@@ -64,7 +64,9 @@ export function commitCronRuntimeRows<T>(params: {
   const jobIds = new Set(params.jobIds);
   const committed = runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const rows = loadCronRows(db, storeKey, jobIds);
+      const rows = loadCronRows(db, storeKey, jobIds, {
+        includeGrantDefinitionProjection: true,
+      });
       const rowsByJobId = new Map(rows.map((row) => [row.job_id, row] as const));
       const loadedJobs = loadedCronStoreFromRows(rows).store.jobs;
       const { repairJobIds } = loadCronRuntimeAuthorities({ db, storeKey, jobs: loadedJobs });
@@ -91,7 +93,7 @@ export function commitCronRuntimeRows<T>(params: {
         const row = rowsByJobId.get(jobId);
         const job = jobs.get(jobId);
         if (row && job && !deleteJobIds.includes(jobId)) {
-          upsertCronJobRow(db, storeKey, job, row.sort_order);
+          upsertCronJobRow(db, storeKey, job, row.sort_order, { knownExistingRow: row });
         }
       }
       if (runHooks) {

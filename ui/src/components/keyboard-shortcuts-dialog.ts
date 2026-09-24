@@ -146,8 +146,11 @@ class KeyboardShortcutsDialog extends OpenClawLitElement {
       matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newSession, event) &&
       host &&
       !host.onboardingMode &&
-      readSessionMethodAccess(context?.gateway.snapshot, { method: "sessions.create", params: {} })
-        .allowed;
+      readSessionMethodAccess(context?.gateway.snapshot, {
+        method: "sessions.create",
+        params: {},
+        sessionScope: true,
+      }).allowed;
     if (!newSession && !matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.keyboardShortcuts, event)) {
       return;
     }
@@ -172,7 +175,9 @@ class KeyboardShortcutsDialog extends OpenClawLitElement {
     if (!this.open) {
       return nothing;
     }
-    const close = () => {
+    const close = (event: Event) => {
+      // Removal owns focus restoration; do not also queue Web Awesome's close callback.
+      event.preventDefault();
       this.open = false;
     };
     return html`

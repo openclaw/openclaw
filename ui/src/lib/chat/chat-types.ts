@@ -120,12 +120,14 @@ export type ToolApprovalReview = {
 
 export type ChatQueueItem = {
   id: string;
+  /** UI question associated with this input; delivery and retry stay outbox-owned. */
+  asyncQuestionItemId?: string;
   workContext?: ChatWorkContext;
   workContextUnavailable?: true;
   text: string;
   mentions?: readonly HumanMention[];
   createdAt: number;
-  /** Operator-owned queue position; absent means "wherever arrival put it". */
+  /** Stable arrival position; only an explicit reorder moves an existing input. */
   orderKey?: number;
   /** Immutable bytes belong to this queued input; routing belongs to the outbox metadata. */
   attachmentPayload?: { key: string; recoveryScope: string; tabId: string };
@@ -156,6 +158,8 @@ export type ChatQueueItem = {
     | "sending"
     | "waiting-reconnect"
     | "unconfirmed"
+    // Provider review requires a new operator decision even if delivery has prior attempts.
+    | "held"
     | "failed";
   sendSubmittedAtMs?: number;
   sendRequestStartedAtMs?: number;
@@ -166,7 +170,14 @@ export type ChatQueueItem = {
 
 /** Union type for items in the chat thread */
 export type ChatItem =
-  | { kind: "message"; key: string; message: unknown; duplicateCount?: number }
+  | {
+      kind: "message";
+      key: string;
+      message: unknown;
+      duplicateCount?: number;
+      /** A distinct input remains a presentation boundary before execution starts. */
+      startsTurn?: true;
+    }
   | {
       kind: "notice";
       key: string;

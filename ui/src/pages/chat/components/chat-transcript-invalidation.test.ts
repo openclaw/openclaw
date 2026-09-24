@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
 import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
@@ -53,12 +54,14 @@ describe("chat transcript invalidation", () => {
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
       const rerender = () => render(renderChatThread(props, transcript), container);
+      const previousBranding = currentThemeBranding();
       try {
+        setCurrentThemeBranding(props.branding);
         rerender();
         expect(container.querySelector(".identity-avatar--agent")).not.toBeNull();
         expect(container.querySelector(".identity-avatar__hat")).toBeNull();
         props.branding = branding;
-        document.documentElement.dataset.themeAvatarHat = "fedora";
+        setCurrentThemeBranding(branding);
         rerender();
         expect(container.querySelector(".identity-avatar__hat--fedora")).not.toBeNull();
         props.branding = { ...branding, avatarHat: undefined };
@@ -66,11 +69,11 @@ describe("chat transcript invalidation", () => {
           rerender();
           expect(container.querySelector(".identity-avatar__hat--fedora")).not.toBeNull();
         }
-        delete document.documentElement.dataset.themeAvatarHat;
+        setCurrentThemeBranding(props.branding);
         rerender();
         expect(container.querySelector(".identity-avatar__hat")).toBeNull();
       } finally {
-        delete document.documentElement.dataset.themeAvatarHat;
+        setCurrentThemeBranding(previousBranding);
         render(nothing, container);
         transcript.hostDisconnected();
       }
@@ -347,7 +350,7 @@ describe("chat transcript invalidation", () => {
       const transcript = createTestTranscript();
       const props = threadProps("pane-offscreen-history", sessionKey, messages);
       const project = () =>
-        transcript.renderSession(props.paneId, sessionKey, (session) => {
+        transcript.renderSession(sessionKey, (session) => {
           projectChatTranscript(props, session);
           return html``;
         });

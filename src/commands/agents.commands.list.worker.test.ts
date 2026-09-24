@@ -64,21 +64,23 @@ function instrumentProvenanceWorkerRequests() {
   const commands: string[] = [];
   // oxlint-disable-next-line typescript/unbound-method -- Every intercepted call supplies the original Worker receiver.
   const originalPostMessage = Worker.prototype.postMessage;
-  const spy = vi
-    .spyOn(Worker.prototype, "postMessage")
-    .mockImplementation(function (this: Worker, message, transferList) {
-      if (isRecord(message) && message.type === "execute" && message.input instanceof Uint8Array) {
-        const command: unknown = deserialize(message.input);
-        if (
-          isRecord(command) &&
-          typeof command.type === "string" &&
-          command.type.startsWith("agentProvenance.")
-        ) {
-          commands.push(command.type);
-        }
+  const spy = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    message,
+    transferList,
+  ) {
+    if (isRecord(message) && message.type === "execute" && message.input instanceof Uint8Array) {
+      const command: unknown = deserialize(message.input);
+      if (
+        isRecord(command) &&
+        typeof command.type === "string" &&
+        command.type.startsWith("agentProvenance.")
+      ) {
+        commands.push(command.type);
       }
-      originalPostMessage.call(this, message, transferList);
-    });
+    }
+    originalPostMessage.call(this, message, transferList);
+  });
   return { commands, restore: () => spy.mockRestore() };
 }
 

@@ -134,34 +134,34 @@ function renderChannelConfigForm(props: ChannelConfigFormProps) {
 
 export function renderChannelConfigSection(params: { channelId: string; props: ChannelsProps }) {
   const { channelId, props } = params;
-  const disabled = props.configSaving || props.configSchemaLoading;
-  if (props.configSchemaLoading) {
+  const disabled = props.config.configSaving || props.config.configSchemaLoading;
+  if (props.config.configSchemaLoading) {
     return renderSettingsLoadingSkeleton({ label: t("channels.config.loadingSchema"), rows: 2 });
   }
   return html`
     <div class="settings-row settings-row--stacked">
       ${renderChannelConfigForm({
         channelId,
-        configValue: props.configForm,
-        schema: props.configSchema,
-        uiHints: props.configUiHints,
+        configValue: props.config.configForm,
+        schema: props.config.configSchema,
+        uiHints: props.config.configUiHints,
         disabled,
         showAdvanced: props.showAdvancedSettings,
         onShowAdvanced: props.onShowAdvancedSettings,
         onPatch: props.onConfigPatch,
       })}
       ${
-        props.configError
-          ? html`<div class="callout danger" role="alert">${props.configError}</div>`
+        props.config.lastError
+          ? html`<div class="callout danger" role="alert">${props.config.lastError}</div>`
           : null
       }
       <div class="settings-row__control">
         <button
           class="btn primary"
-          ?disabled=${disabled || !props.configFormDirty}
+          ?disabled=${disabled || !props.config.configFormDirty}
           @click=${() => props.onConfigSave()}
         >
-          ${props.configSaving ? t("common.saving") : t("common.save")}
+          ${props.config.configSaving ? t("common.saving") : t("common.save")}
         </button>
         <button class="btn" ?disabled=${disabled} @click=${() => props.onConfigReload()}>
           ${t("common.reload")}

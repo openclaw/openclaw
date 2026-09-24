@@ -12,6 +12,8 @@ import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
   SQLITE_WORKER_PREPARE_COMMAND,
+  SQLITE_WORKER_CLOSE_RECEIPT,
+  type SqliteWorkerCloseReceipt,
   type SqliteWorkerPreparedBackend,
   type SqliteWorkerCommand,
   type SqliteWorkerOperations,
@@ -126,6 +128,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   let openNotEntered = false;
   try {
     let value: unknown;
+    let closeReceipt: SqliteWorkerCloseReceipt | undefined;
     if (request.type !== "result-next" && request.type !== "execute-frame") {
       if (request.lifecyclePreparation) {
         const databasePath = request.stateDatabasePath ?? actorPaths.get(request.actor);
@@ -214,8 +217,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         retire = false;
       }
     }
-    const executeCommand = async (command: unknown) => {
-      let coordinator: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
+    const prepareLifecycle = async () => {
       if (lifecyclePreparation) {
         const context = stateContexts.get(request.actor);
         if (lifecyclePreparation.actor !== request.actor || !context) {
@@ -226,18 +228,49 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         lifecycleReply = { actor: request.actor, port: preparation.port };
         const prepared = await acquireSqliteWorkerLifecycle({
           port: preparation.port,
+          actorId: `${request.actor}:${request.id}`,
           databasePath: preparation.databasePath,
           deadlineNs: preparation.deadlineNs,
-          runtime: context.coordinatorRuntime,
+          runtime:
+            request.type === "close"
+              ? { ...context.coordinatorRuntime, keepAlive: false }
+              : context.coordinatorRuntime,
           onUnsettled: () => {
             retire = true;
           },
         });
-        coordinator = prepared.coordinator;
         if (prepared.admission) {
           operationAdmission = { actor: request.actor, context: { port: prepared.admission } };
         }
+        if (prepared.delegate) {
+          lifecycle = { actor: request.actor, delegate: prepared.delegate };
+        }
+        return prepared.coordinator;
       }
+      return undefined;
+    };
+    const releaseLifecycle = (
+      coordinator: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined,
+    ) => {
+      // Unsettled work retains native custody until the broker joins worker exit.
+      if (coordinator && !retire) {
+        try {
+          coordinator.release();
+        } catch (error) {
+          if (request.type === "close") {
+            retire = true;
+            throw error;
+          }
+          // Preserve a settled command result while the broker retires failed cleanup.
+          const failure = error instanceof Error ? error : new Error(String(error));
+          nativeCleanupFailure = encodeOpenClawStateWorkerError(failure, {
+            includeOrdinary: true,
+          });
+        }
+      }
+    };
+    const executeCommand = async (command: unknown) => {
+      const coordinator = await prepareLifecycle();
       const backend = actors.get(request.actor);
       if (!backend) {
         throw new Error("SQLite worker actor is closed");
@@ -333,20 +366,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           );
         }
       } finally {
-        // No write-capable continuation may outlive this lease. A failed
-        // settlement retains the native owner until the broker joins worker exit.
-        if (coordinator && !retire) {
-          try {
-            coordinator.release();
-          } catch (error) {
-            // The operation already settled. Retain its result and this native
-            // custody until the host receives the complete reply and joins exit.
-            const failure = error instanceof Error ? error : new Error(String(error));
-            nativeCleanupFailure = encodeOpenClawStateWorkerError(failure, {
-              includeOrdinary: true,
-            });
-          }
-        }
+        releaseLifecycle(coordinator);
       }
     };
     if (request.type === "result-next") {
@@ -452,6 +472,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         }
         return factory(input, {
           databasePath: request.databasePath,
+          ...(request.preparation ? { preparation: deserialize(request.preparation) } : {}),
           ...(request.existingIdentity ? { existingIdentity: request.existingIdentity } : {}),
         });
       });
@@ -462,6 +483,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         (SQLITE_WORKER_PREPARE_COMMAND in backend &&
           backend[SQLITE_WORKER_PREPARE_COMMAND] !== undefined &&
           typeof backend[SQLITE_WORKER_PREPARE_COMMAND] !== "function") ||
+        (SQLITE_WORKER_CLOSE_RECEIPT in backend &&
+          backend[SQLITE_WORKER_CLOSE_RECEIPT] !== undefined &&
+          typeof backend[SQLITE_WORKER_CLOSE_RECEIPT] !== "function") ||
         (backend.assertSettled !== undefined && typeof backend.assertSettled !== "function") ||
         (backend.prepare !== undefined && typeof backend.prepare !== "function")
       ) {
@@ -475,7 +499,18 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       if (!backend) {
         throw new Error("SQLite worker actor is closed");
       }
-      await runInActorContext(request.actor, () => backend.close());
+      const coordinator = await prepareLifecycle();
+      try {
+        await runInActorContext(request.actor, () => backend.close());
+        closeReceipt = runInActorContext(request.actor, () =>
+          backend[SQLITE_WORKER_CLOSE_RECEIPT]?.(),
+        );
+      } catch (error) {
+        retire = true;
+        throw error;
+      } finally {
+        releaseLifecycle(coordinator);
+      }
       actors.delete(request.actor);
       actorPaths.delete(request.actor);
       stateContexts.delete(request.actor);
@@ -499,6 +534,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         id: request.id,
         ok: true,
         value: serialized,
+        ...(closeReceipt ? { closeReceipt } : {}),
         ...(request.type === "result-next" ? { transfer: "frame" } : {}),
         ...(inputNext ? { input: "next" } : {}),
       };

@@ -2,6 +2,7 @@ import { noteBackupDoctorHint } from "../commands/backup-health.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
+import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
 
 const loadDoctorStateIntegrityModule = async () =>
   await import("../commands/doctor-state-integrity.js");
@@ -159,6 +160,7 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
+    onWarnings: (warnings) => recordDoctorHealthWarnings(ctx, [], warnings),
     ...(ctx.configResult.postSessionPluginMigration
       ? { postSessionPluginMigration: ctx.configResult.postSessionPluginMigration }
       : {}),
@@ -201,7 +203,6 @@ export async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): P
   await noteSessionSnapshotHealth({
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
-    shouldRepair: ctx.prompter.shouldRepair,
   });
 }
 

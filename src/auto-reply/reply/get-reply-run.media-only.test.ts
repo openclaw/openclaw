@@ -63,6 +63,8 @@ import {
   createSessionBody,
   createSessionTurn,
   createProviderSurface,
+  ownerParams,
+  requireMockCallArg,
 } from "./get-reply-run.test-support.js";
 import { buildDirectChatContext, buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { finalizeInboundContext } from "./inbound-context.js";
@@ -385,29 +387,6 @@ async function useActualSystemEventDrain() {
     "./session-system-events.js",
   );
   vi.mocked(drainFormattedSystemEvents).mockImplementation(actual.drainFormattedSystemEvents);
-}
-
-function ownerParams(): Parameters<typeof runPreparedReply>[0] {
-  const params = baseParams();
-  params.command = {
-    ...(params.command as Record<string, unknown>),
-    senderIsOwner: true,
-  } as never;
-  return params;
-}
-
-type MockCallSource = {
-  mock: {
-    calls: ReadonlyArray<ReadonlyArray<unknown>>;
-  };
-};
-
-function requireMockCallArg(mock: MockCallSource, label: string, index = 0): unknown {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`${label} call ${index} missing`);
-  }
-  return call[0];
 }
 
 function requireRunReplyAgentCall(index = 0) {
@@ -5137,24 +5116,35 @@ describe("runPreparedReply media-only handling", () => {
     );
   });
 
-  it.each(["single", "mixed", "spoof", "internal"] as const)(
-    "binds personal bootstrap only to an unambiguous admitted profile: %s",
+  it.each(["creator", "assigned", "unowned", "internal", "session-internal"] as const)(
+    "selects the session personal profile, never the incoming participant: %s",
     async (kind) => {
       const params = ownerParams();
-      params.ctx.SenderId = "alice";
-      params.ctx.SenderName = "alice";
-      if (kind !== "spoof") {
-        prepareSessionParticipantInput(params.ctx, { type: "profile", id: "alice" });
-      }
-      if (kind === "mixed") {
-        prepareSessionParticipantInput(params.ctx, { type: "profile", id: "bob" });
+      params.sessionEntry = {
+        sessionId: "session-owner-profile",
+        updatedAt: 1,
+        ...(kind === "unowned"
+          ? {}
+          : { createdActor: { type: "human" as const, source: "profile" as const, id: "alice" } }),
+        ...(kind === "assigned"
+          ? { owner: { actor: { type: "human" as const, id: "carol" } } }
+          : {}),
+      };
+      prepareSessionParticipantInput(params.ctx, { type: "profile", id: "bob" });
+      params.ctx.SenderId = "bob";
+      if (kind === "session-internal") {
+        params.sessionCtx.InputProvenance = { kind: "internal_system", sourceTool: "fixture" };
       }
       if (kind === "internal") {
         params.ctx.InputProvenance = { kind: "internal_system", sourceTool: "fixture" };
       }
       await runPreparedReply(params);
       expect(requireRunReplyAgentCall().followupRun.run.bootstrapUserProfileId).toBe(
-        kind === "single" ? "alice" : undefined,
+        kind === "unowned" || kind === "internal" || kind === "session-internal"
+          ? undefined
+          : kind === "assigned"
+            ? "carol"
+            : "alice",
       );
     },
   );

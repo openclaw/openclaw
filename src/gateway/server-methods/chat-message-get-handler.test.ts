@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
@@ -11,6 +12,7 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   resolveOpenClawAgentSqlitePath,
@@ -18,6 +20,8 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
+import * as transcriptReaders from "../session-transcript-readers.js";
+import * as sessionUtils from "../session-utils.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
@@ -296,3 +300,95 @@ describe("durable tool output inspection", () => {
     });
   });
 });
+
+it.each([
+  { agentId: "retired", sessionKey: "agent:retired:global", explicitOwnerAllowed: false },
+  {
+    agentId: "codex",
+    sessionKey: "agent:codex:acp:11111111-1111-4111-8111-111111111111",
+    explicitOwnerAllowed: false,
+  },
+  { agentId: "main", sessionKey: "agent:main:message-get-owner", explicitOwnerAllowed: true },
+  {
+    agentId: "main",
+    sessionKey: "agent:main:acp:binding:slack:default:thread",
+    explicitOwnerAllowed: true,
+  },
+])(
+  "reads $sessionKey and validates explicit $agentId selection",
+  async ({ agentId, sessionKey, explicitOwnerAllowed }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const config: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+        session: { scope: "global" },
+      };
+      await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config, config);
+      const scope = {
+        agentId,
+        sessionKey,
+        sessionId: "retired-message-session",
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      await appendTranscriptMessage(scope, {
+        eventId: "retained-message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Retained retired-agent reply" }],
+          stopReason: "stop",
+        },
+      });
+      const context = createDirectChatContext({ getRuntimeConfig: () => config });
+      const request = { sessionKey: scope.sessionKey, messageId: "retained-message" };
+      const readEntry = vi.spyOn(sessionUtils, "loadGatewaySessionEntryReadOnly");
+      const readMessage = vi.spyOn(transcriptReaders, "readSessionMessageByIdAsync");
+      try {
+        for (const explicitOwner of [false, true]) {
+          readEntry.mockClear();
+          readMessage.mockClear();
+          const respond = vi.fn();
+          await expectDefined(
+            chatMessageGetHandlers["chat.message.get"],
+            "message handler",
+          )({
+            params: { ...request, ...(explicitOwner ? { agentId } : {}) },
+            context,
+            req: { type: "req", id: "retired-message", method: "chat.message.get" },
+            client: null,
+            isWebchatConnect: () => false,
+            respond,
+          });
+          expect(respond).toHaveBeenCalledOnce();
+          if (explicitOwner && !explicitOwnerAllowed) {
+            expect(respond).toHaveBeenCalledWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                code: "INVALID_REQUEST",
+                message: `Unknown agent id "${agentId}"`,
+              }),
+            );
+            expect(readEntry).not.toHaveBeenCalled();
+            expect(readMessage).not.toHaveBeenCalled();
+          } else {
+            expect(respond).toHaveBeenCalledWith(
+              true,
+              expect.objectContaining({
+                ok: true,
+                message: expect.objectContaining({
+                  role: "assistant",
+                  content: [{ type: "text", text: "Retained retired-agent reply" }],
+                }),
+              }),
+            );
+            expect(readEntry).toHaveBeenCalled();
+            expect(readMessage).toHaveBeenCalledOnce();
+          }
+        }
+      } finally {
+        readEntry.mockRestore();
+        readMessage.mockRestore();
+      }
+    });
+  },
+);

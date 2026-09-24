@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
@@ -9,6 +8,8 @@ import {
   upsertSessionEntryCore,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import { transcriptEventJsonSql } from "../../config/sessions/transcript-payload.js";
+import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -32,24 +33,20 @@ async function withHistory(
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const source = SessionManager.open(scope);
     const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
-    const fingerprint = () => {
-      const hash = createHash("sha256");
-      for (const row of database.db
-        .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
-        .iterate(scope.sessionId)) {
-        hash.update(String(row.event_json));
-      }
-      return hash.digest("hex");
-    };
+    const snapshot = () =>
+      database.db
+        .prepare(`SELECT seq, event_json, event_zstd, event_utf8_bytes, navigation_json, created_at
+          FROM transcript_events WHERE session_id = ? ORDER BY seq`)
+        .all(scope.sessionId);
     await run({
       scope,
       source,
       verifyRead: async (read) => {
-        const before = fingerprint();
+        const before = snapshot();
         try {
           await read();
         } finally {
-          expect(fingerprint()).toBe(before);
+          expect(snapshot()).toEqual(before);
         }
       },
     });
@@ -209,10 +206,21 @@ it("avoids text copies of omitted message objects when SQLite supports binary JS
   try {
     await withHistory("context-navigation-copies", async ({ scope, source, verifyRead }) => {
       const marker = "omitted-message-object:";
-      source.appendMessage(makeUserMessage(marker + "x".repeat(32_768), 1));
+      const omittedId = source.appendMessage(makeUserMessage(marker + "x".repeat(32_768), 1));
       source.appendMessage(makeUserMessage("latest request", 2));
       const expected = source.buildSessionContext().messages.slice(-1);
       const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
+      const payload = transcriptEventJsonSql(database.db).compile(getNodeSqliteKysely(database.db));
+      // Exercise native identity projection on both JSONB and SQLite 3.44.
+      expect(
+        database.db
+          .prepare(`UPDATE transcript_events SET event_json = ${payload.sql},
+            event_zstd = NULL, event_utf8_bytes = NULL, navigation_json = NULL
+            WHERE session_id = ? AND seq = (
+              SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?
+            )`)
+          .run(scope.sessionId, scope.sessionId, omittedId).changes,
+      ).toBe(1);
       let messageObjectCopies = 0;
       // Preserve SQLite extraction while observing whole-message text intermediates.
       database.db.function("json_extract", { deterministic: true }, (json, jsonPath) => {
@@ -543,8 +551,18 @@ it.each(["sync", "async"])(
         }),
       );
       const oversized = "oversized-tool-body:" + "x".repeat(32_768);
-      appendResult(source, "large", oversized);
+      const largeResultId = appendResult(source, "large", oversized);
       appendResult(source, "small", "completed operation receipt: synthetic-42");
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
+      expect(
+        database.db
+          .prepare(`SELECT event.event_json, event.event_zstd IS NOT NULL AS compressed
+            FROM transcript_events AS event
+            JOIN transcript_event_identities AS identity
+              ON identity.session_id = event.session_id AND identity.seq = event.seq
+            WHERE event.session_id = ? AND identity.event_id = ?`)
+          .get(scope.sessionId, largeResultId),
+      ).toEqual({ event_json: null, compressed: 1 });
       const full = source.buildSessionContext();
       await verifyRead(async () => {
         const limits = { maxBytes: 4096, maxEvents: 8 };

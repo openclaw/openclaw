@@ -4,10 +4,12 @@ import {
   formatUpdateActivationTimeoutGuidance,
   isVerifiedUpdateRollback,
   UPDATE_ACTIVATION_TIMEOUT_REASON,
+  UPDATE_FOREIGN_DESTINATION_REASON,
   UPDATE_INSTALL_SKIP_GUIDANCE,
 } from "../shared/update-outcome.js";
 import { formatDurationPrecise } from "./format-time/format-duration.ts";
 import type { RestartSentinelPayload } from "./restart-sentinel-store.js";
+import { UPDATE_DESTINATION_RECOVERY } from "./update-destination-failure.js";
 import { formatUpdateDoctorConfigWriteRefusal } from "./update-doctor-config.js";
 import {
   formatUpdateFailureFact,
@@ -180,6 +182,9 @@ function recoveryHints(run: ReportInput, nextAction?: string): string[] {
   if (run.reason === UPDATE_ACTIVATION_TIMEOUT_REASON) {
     return nextAction ? [] : [formatUpdateActivationTimeoutGuidance()];
   }
+  if (run.reason === UPDATE_FOREIGN_DESTINATION_REASON) {
+    return nextAction ? [] : [`Next step: ${UPDATE_DESTINATION_RECOVERY}`];
+  }
   const hints: string[] = [];
   if (run.reason === "preflight-insufficient-space") {
     hints.push(
@@ -307,10 +312,21 @@ export function renderUpdateRunReport(
   for (const step of selectUpdateFailureReportSteps(
     run.steps.filter((item) => item.status === "failed"),
   )) {
-    lines.push(bounded(`Failed: ${step.step}${step.detail ? ` — ${step.detail}` : ""}`, 300));
-    lines.push(...(step.failureFacts ?? []).slice(0, 5).map(formatUpdateFailureFact));
+    const failure = `Failed: ${step.step}${step.detail ? ` — ${step.detail}` : ""}`;
+    lines.push(bounded(failure, 300));
+    lines.push(
+      ...(step.failureFacts ?? []).slice(0, 5).map((fact) =>
+        formatUpdateFailureFact({
+          ...fact,
+          message:
+            failure.length <= 300 && fact.message && step.detail?.includes(fact.message)
+              ? undefined
+              : fact.message,
+        }),
+      ),
+    );
   }
-  for (const message of updateRunWarningMessages(run.steps).slice(-3)) {
+  for (const message of updateRunWarningMessages(run.steps, 3)) {
     lines.push(`Warning: ${bounded(message, 500)}`);
   }
   const verification: string[] = [];
@@ -391,7 +407,9 @@ export function renderUpdateRunReport(
   const hints = reconciled
     ? []
     : run.status === "running"
-      ? recoveryHints(run)
+      ? opts.nextAction
+        ? [opts.nextAction]
+        : recoveryHints(run)
       : repairHint
         ? [repairHint, ...(nextAction ? [nextAction] : [])]
         : [

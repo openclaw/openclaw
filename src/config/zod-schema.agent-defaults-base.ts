@@ -95,6 +95,8 @@ export const AgentDefaultsBaseSchema = z
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
     experimental: z
       .object({
+        /** Global opt-in for automatic Decision experiments; model selection is separate. */
+        decisionAssistance: z.boolean().optional(),
         localModelLean: z.boolean().optional(),
       })
       .strict()
@@ -273,7 +275,14 @@ export const AgentDefaultsBaseSchema = z
       .object({
         delegationMode: z.enum(["suggest", "prefer"]).optional(),
         allowAgents: z.array(z.string()).optional(),
-        maxConcurrent: z.number().int().positive().optional(),
+        maxConcurrent: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            "Maximum concurrent child-agent runs per immediate spawning/controller session (default: 8). Independent sessions have independent budgets.",
+          ),
         maxSpawnDepth: z
           .number()
           .int()

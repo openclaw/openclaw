@@ -60,7 +60,6 @@ type SidebarSessionListHost = SessionListHost & {
       | "sessionCatalogLive"
       | "loadingMoreSessionCatalogIds"
     >;
-  loadMoreSidebarSessions(): Promise<void>;
   projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession;
 };
 
@@ -238,17 +237,17 @@ export function renderSessionSection(params: {
       data-zone=${zone}
       @dragover=${
         sectionDropEnabled
-          ? (event: DragEvent) => host.sectionDragOver(event, section.id, group)
+          ? (event: DragEvent) => host.sessionOrganizer.sectionDragOver(event, section.id, group)
           : nothing
       }
       @dragleave=${
         sectionDropEnabled
-          ? (event: DragEvent) => host.sectionDragLeave(event, section.id, group)
+          ? (event: DragEvent) => host.sessionOrganizer.sectionDragLeave(event, section.id, group)
           : nothing
       }
       @drop=${
         sectionDropEnabled
-          ? (event: DragEvent) => host.sectionDrop(event, section.id, group)
+          ? (event: DragEvent) => host.sessionOrganizer.sectionDrop(event, section.id, group)
           : nothing
       }
     >
@@ -258,8 +257,13 @@ export function renderSessionSection(params: {
               sectionId: section.id,
               draggable: !derivedSection,
               disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
-              onStartDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
-              onFinishDrag: () => host.finishSidebarSectionDrag(),
+              onStartDrag: (sectionId) => host.sessionOrganizer.startSidebarSectionDrag(sectionId),
+              onFinishDrag: () => host.sessionOrganizer.finishSidebarSectionDrag(),
+              reorder: {
+                label,
+                onMove: (target, position) =>
+                  host.sessionOrganizer.reorderSidebarSection(section.id, target, position),
+              },
               onContextMenu: group
                 ? (event: MouseEvent) => {
                     event.preventDefault();
@@ -422,7 +426,7 @@ function renderRosterLoadMore(
           if (host.sessionData.sessionsLoading) {
             return;
           }
-          void host.loadMoreSidebarSessions().then(() => {
+          void host.sessionData.loadMoreSidebarSessions().then(() => {
             for (const section of sections) {
               host.setVisibleSessionLimit(
                 section.id,
@@ -526,11 +530,15 @@ function renderSessionCatalog(params: {
       onToggleSection: (sectionId) => host.toggleSection(sectionId),
       draggingSectionId: host.sessionOrganizer.draggingSidebarSection,
       sectionDropTarget: host.sessionOrganizer.sidebarSectionDropTarget,
-      onSectionDragOver: (event, sectionId) => host.sectionDragOver(event, sectionId),
-      onSectionDragLeave: (event, sectionId) => host.sectionDragLeave(event, sectionId),
-      onSectionDrop: (event, sectionId) => host.sectionDrop(event, sectionId),
-      onStartSectionDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
-      onFinishSectionDrag: () => host.finishSidebarSectionDrag(),
+      onSectionDragOver: (event, sectionId) =>
+        host.sessionOrganizer.sectionDragOver(event, sectionId),
+      onSectionDragLeave: (event, sectionId) =>
+        host.sessionOrganizer.sectionDragLeave(event, sectionId),
+      onSectionDrop: (event, sectionId) => host.sessionOrganizer.sectionDrop(event, sectionId),
+      onStartSectionDrag: (sectionId) => host.sessionOrganizer.startSidebarSectionDrag(sectionId),
+      onFinishSectionDrag: () => host.sessionOrganizer.finishSidebarSectionDrag(),
+      onReorderSection: (source, target, position) =>
+        host.sessionOrganizer.reorderSidebarSection(source, target, position),
       viewMenuOpenCatalogId: host.sidebarMenus.catalogViewMenuPosition?.catalogId ?? null,
       ownerFilterActive: host.sessionOwnerFilterActive,
       onOpenViewMenu: (catalogId, trigger, position) => {
@@ -549,8 +557,10 @@ function renderSessionCatalog(params: {
       catalogOpenTarget: snapshot.catalogOpenTarget,
       terminalAvailable: snapshot.terminalAvailable,
       onOpenTerminal: (key, agentId) => openCatalogSessionInTerminal(host, key, agentId),
-      onOpenMenu: (request, x, y, trigger) => host.openCatalogMenu(request, x, y, trigger),
-      onCatalogMenuTriggerRendered: (key, element) => host.retargetCatalogMenuTrigger(key, element),
+      onOpenMenu: (request, x, y, trigger) =>
+        host.sidebarMenus.catalogMenu.open(request, x, y, trigger),
+      onCatalogMenuTriggerRendered: (key, element) =>
+        host.sidebarMenus.catalogMenu.retargetTrigger(key, element),
       isMenuOpen: (key) => host.sidebarMenus.catalogMenu.isOpenFor(key),
     })}
   `;
@@ -605,11 +615,8 @@ function renderSessionListBody(params: {
               })
             : nothing;
         }
-        if (section.id === "work") {
-          if (section.totalRowCount === 0) {
-            return nothing;
-          }
-          return renderSessionSection({ host, section, personHeaders });
+        if (section.id === "work" && section.totalRowCount === 0) {
+          return nothing;
         }
         // Personal filters already omit empty sections in the projection.
         // Otherwise preserve the collaborator and drag destination behavior.
@@ -643,13 +650,7 @@ export function renderSessionList(params: {
     host,
     html`
       <div class="sidebar-recent-sessions">
-        ${renderSessionListBody({
-          host,
-          sections: params.sections,
-          nativeSessionsHaveMore: params.nativeSessionsHaveMore,
-          catalogs: params.catalogs,
-          catalogRenderer: params.catalogRenderer,
-        })}
+        ${renderSessionListBody(params)}
         ${renderRosterLoadMore(host, params.sections, params.nativeSessionsHaveMore, params.nativeSessionsLoading)}
         ${renderPersonalSessionEmpty(
           host,
@@ -685,9 +686,9 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: unkno
       class="sidebar-sessions ${
         host.sessionOrganizer.sessionListRemovalDrop ? "sidebar-sessions--removal-drop" : ""
       }"
-      @dragover=${(event: DragEvent) => host.handleSessionListDragOver(event)}
-      @dragleave=${(event: DragEvent) => host.handleSessionListDragLeave(event)}
-      @drop=${(event: DragEvent) => host.handleSessionListDrop(event)}
+      @dragover=${(event: DragEvent) => host.sessionOrganizer.handleSessionListDragOver(event)}
+      @dragleave=${(event: DragEvent) => host.sessionOrganizer.handleSessionListDragLeave(event)}
+      @drop=${(event: DragEvent) => host.sessionOrganizer.handleSessionListDrop(event)}
     >
       ${host.sidebarAgentsMode === "roster" ? nothing : renderSessionListToolbar(host)}
       ${homeLoadKeys.map((key) => renderChildSessionLoadError(host, key))}
@@ -704,7 +705,7 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: unkno
                   <button
                     class="callout__dismiss"
                     type="button"
-                    @click=${() => host.dismissSessionMutationError()}
+                    @click=${() => host.sessionData.dismissSessionMutationError()}
                     aria-label=${t("chat.actions.dismissError")}
                   >
                     ${icons.x}

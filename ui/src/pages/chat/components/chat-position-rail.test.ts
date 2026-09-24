@@ -3,6 +3,7 @@
 import { html, nothing, render } from "lit";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import { renderChatPositionRail } from "./chat-position-rail.ts";
 import { getTranscriptState } from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
@@ -83,7 +84,7 @@ describe("conversation position rail", () => {
         message: message(`message-${index}`, "user", `Checkpoint ${index}`, index + 1),
       }));
       render(
-        transcript.renderSession("rail-publication", "agent:main:rail-publication", (session) => {
+        transcript.renderSession("agent:main:rail-publication", (session) => {
           vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
           return html`<div class="chat-thread" tabindex="0">
             <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
@@ -161,16 +162,21 @@ describe("conversation position rail", () => {
     "boot-resize",
     "resize",
     "resize-jump",
+    "composer-resize-reversal",
+    "composer-resize-reversal-current",
     "end",
     "focus",
     "focus-resize",
     "pointer",
     "reader",
+    "composer-resize-reversal-navigation",
   ] as const;
 
   it.each(railUpdateScenarios)(
     "keeps the reader's rail position through %s updates",
-    async (scenario) => {
+    (scenario) => {
+      const navigatesBeforeResize = scenario === "composer-resize-reversal-navigation";
+      const flushFrame = stubAnimationFrames();
       const publishVisibility = stubRailVisibility();
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
@@ -192,17 +198,13 @@ describe("conversation position rail", () => {
         ),
       };
       render(
-        transcript.renderSession(
-          "rail-scroll-policy",
-          "agent:main:rail-scroll-policy",
-          (session) => {
-            vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
-            return html`<div class="chat-thread" tabindex="0">
-              <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
-              ${renderChatPositionRail({ positions, transcript: session, requestUpdate: () => {} })}
-            </div>`;
-          },
-        ),
+        transcript.renderSession("agent:main:rail-scroll-policy", (session) => {
+          vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
+          return html`<div class="chat-thread" tabindex="0">
+            <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
+            ${renderChatPositionRail({ positions, transcript: session, requestUpdate: () => {} })}
+          </div>`;
+        }),
         container,
       );
       const root = container.querySelector<HTMLElement>(".chat-thread")!;
@@ -228,46 +230,45 @@ describe("conversation position rail", () => {
         },
       });
       root.scrollTop = startsAtTop ? 0 : 8315;
-      const flush = async () => {
+      const flush = () => {
         marks.dispatchEvent(new Event("scroll"));
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        });
+        flushFrame();
+        flushFrame();
       };
       try {
-        await flush();
+        flush();
         expect(marks.scrollTop).toBe(startsAtTop ? 0 : 677);
         expect(marks.querySelectorAll(".chat-position-rail__marker").length).toBeLessThan(50);
         if (scenario === "boot" || scenario === "boot-resize") {
           height = 554;
           marksHeight = 240;
-          await flush();
+          flush();
           // The initial observer result can arrive after the composer claims its space.
           publishVisibility(root.querySelector(".chat-bubble")!);
           if (scenario === "boot-resize") {
             height = 543;
             marksHeight = 229;
           }
-          await flush();
+          flush();
           expect(marker(79).hasAttribute("data-visible")).toBe(true);
           const initialOffset = scenario === "boot-resize" ? 731 : 720;
           expect(marks.scrollTop).toBe(initialOffset);
           height = 512;
           marksHeight = 198;
-          await flush();
+          flush();
           expect(marks.scrollTop).toBe(initialOffset);
         } else if (scenario === "end") {
           // Initial row measurements settle at the end before later composer growth.
           height = 552;
           scrollHeight = 552;
           activeMessage.mockReturnValue("message-4");
-          await flush();
+          flush();
           expect(marks.scrollTop).toBe(0);
           height = 452;
           scrollHeight = 486;
           root.scrollTop = 34;
           marksHeight = 47;
-          await flush();
+          flush();
           expect(marker(4).getAttribute("aria-current")).toBe("true");
           expect(marks.scrollTop).toBe(0);
         } else if (scenario === "resize-jump") {
@@ -276,28 +277,80 @@ describe("conversation position rail", () => {
           marksHeight = 240;
           root.scrollTop = 8358;
           activeMessage.mockReturnValue("message-79");
-          await flush();
+          flush();
           expect(marker(79).getAttribute("aria-current")).toBe("true");
           expect(Number.parseFloat(marker(79).style.top)).toBeGreaterThanOrEqual(marks.scrollTop);
           expect(Number.parseFloat(marker(79).style.top) + 12).toBeLessThanOrEqual(
             marks.scrollTop + marks.clientHeight,
           );
+        } else if (scenario.startsWith("composer-resize-reversal")) {
+          publishVisibility(root.querySelector(".chat-bubble")!);
+          flush();
+          height = 512;
+          marksHeight = 198;
+          let readerOffset = 8400;
+          Object.defineProperty(root, "scrollTop", {
+            configurable: true,
+            get: () => Math.min(readerOffset, scrollHeight - height),
+            set: (value: number) => {
+              readerOffset = Math.max(0, Math.min(value, scrollHeight - height));
+            },
+          });
+          flush();
+          expect(marks.scrollTop).toBe(677);
+          container.classList.add("chat");
+          const textarea = container.appendChild(document.createElement("textarea"));
+          textarea.value = "/goal";
+          Object.defineProperties(textarea, {
+            clientHeight: { configurable: true, value: 32 },
+            scrollHeight: {
+              configurable: true,
+              get: () => {
+                // Measuring the replacement draft commits the expanded transcript.
+                height = 597;
+                marksHeight = 283;
+                return 32;
+              },
+            },
+          });
+          if (navigatesBeforeResize) {
+            root.scrollTop = 0;
+            activeMessage.mockReturnValue("message-0");
+          }
+          adjustTextareaHeight(textarea);
+          expect(root.scrollTop).toBe(navigatesBeforeResize ? 0 : 8315);
+          // The goal header regrows the composer before any observer or frame runs.
+          height = 576;
+          marksHeight = 262;
+          if (scenario === "composer-resize-reversal-current") {
+            activeMessage.mockReturnValue("message-76");
+          }
+          publishVisibility(root.querySelector(".chat-bubble")!);
+          flush();
+          if (navigatesBeforeResize) {
+            expect(marks.scrollTop).toBe(0);
+            return;
+          }
+          expect(marks.scrollTop).toBe(677);
+          root.scrollTop = scrollHeight - height;
+          flush();
+          expect(marks.scrollTop).toBe(677);
         } else if (scenario === "resize") {
           height = 554;
           marksHeight = 240;
           activeMessage.mockReturnValue("message-76");
-          await flush();
+          flush();
           expect(marks.scrollTop).toBe(677);
           root.scrollTop = 8319;
-          await flush();
+          flush();
           expect(marks.scrollTop).toBe(677);
           // A second resize retargets the same smooth compensation, including its last 6px.
           height = 512;
           marksHeight = 198;
-          await flush();
+          flush();
           for (const offset of [8323, 8394, 8400]) {
             root.scrollTop = offset;
-            await flush();
+            flush();
             expect(marks.scrollTop).toBe(677);
           }
           publishTranscriptScroll(root, {
@@ -307,16 +360,16 @@ describe("conversation position rail", () => {
           });
           root.scrollTop = 8000;
           activeMessage.mockReturnValue("message-40");
-          await flush();
+          flush();
           expect(marks.scrollTop).toBeLessThan(677);
         } else if (scenario === "focus") {
           marks.scrollTop = 60 * 12 - 100;
-          await flush();
+          flush();
           root.focus();
           document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
           marker(60).focus();
           expect(marker(60).matches(":focus-visible")).toBe(true);
-          await flush();
+          flush();
           expect(Number.parseFloat(marker(60).style.top)).toBeGreaterThanOrEqual(marks.scrollTop);
           expect(Number.parseFloat(marker(60).style.top) + 12).toBeLessThanOrEqual(
             marks.scrollTop + marks.clientHeight,
@@ -325,14 +378,17 @@ describe("conversation position rail", () => {
           activeMessage.mockReturnValue("message-77");
           publishVisibility(root.querySelector(".chat-bubble")!);
           expect([...marks.querySelectorAll('[tabindex="0"]')]).toEqual([marker(60)]);
-          await flush();
+          flush();
           expect(document.activeElement).toBe(marker(60));
           expect(marks.scrollTop).toBe(focusedOffset);
           marker(60).blur();
           activeMessage.mockReturnValue("message-79");
           publishVisibility(root.querySelector(".chat-bubble")!);
+          // Native Tab may arrive before the scheduled reader update commits.
+          const publishedMarker = marks.querySelector('[aria-current="true"]');
+          expect([...marks.querySelectorAll('[tabindex="0"]')]).toEqual([publishedMarker]);
           // Observer updates publish reader position and Tab entry in the same layout frame.
-          await flush();
+          flush();
           expect(marker(79).getAttribute("aria-current")).toBe("true");
           expect([...marks.querySelectorAll('[tabindex="0"]')]).toEqual([marker(79)]);
           expect(marks.scrollTop).toBe(677);
@@ -342,7 +398,7 @@ describe("conversation position rail", () => {
           expect(marker(79).matches(":focus-visible")).toBe(true);
           height = 554;
           marksHeight = 240;
-          await flush();
+          flush();
           expect(document.activeElement).toBe(marker(79));
           expect(marks.scrollTop).toBe(720);
         } else if (scenario === "pointer") {
@@ -351,13 +407,13 @@ describe("conversation position rail", () => {
           expect(marker(60).matches(":focus-visible")).toBe(false);
           expect(marks.scrollTop).toBe(677);
           activeMessage.mockReturnValue("message-0");
-          await flush();
+          flush();
           expect(document.activeElement).toBe(marker(60));
           expect(marks.scrollTop).toBe(0);
         } else {
           height = 554;
           marksHeight = 240;
-          await flush();
+          flush();
           expect(marks.scrollTop).toBe(677);
           publishTranscriptScroll(root, {
             type: "input",
@@ -365,7 +421,7 @@ describe("conversation position rail", () => {
             touching: false,
           });
           root.scrollTop = 8319;
-          await flush();
+          flush();
           expect(marker(79).getAttribute("aria-current")).toBe("true");
           expect(marks.scrollTop).toBe(720);
         }
@@ -484,12 +540,15 @@ describe("conversation position rail", () => {
   it("publishes consecutive reader offsets even when the virtual row range is unchanged", async () => {
     transcriptDomState.measuredRowHeight = 120;
     const requestUpdate = vi.fn();
-    const transcript = new ChatTranscriptController({
-      addController: () => undefined,
-      removeController: () => undefined,
-      requestUpdate,
-      updateComplete: Promise.resolve(true),
-    });
+    const transcript = new ChatTranscriptController(
+      {
+        addController: () => undefined,
+        removeController: () => undefined,
+        requestUpdate,
+        updateComplete: Promise.resolve(true),
+      },
+      () => "rail-notification",
+    );
     const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
       kind: "content",
       key: `row-${index}`,

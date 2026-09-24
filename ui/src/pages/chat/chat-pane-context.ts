@@ -202,6 +202,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     this.projectObservedSessionRow();
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
+    if (state.connected && state.pendingAbort) {
+      void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());
+    }
     this.refreshSwarmRoster();
     const selectedSession = selectedChatSessionRow(state);
     const outboxState = selectedSession

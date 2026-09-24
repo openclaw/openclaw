@@ -1,7 +1,11 @@
 import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
 import { it } from "vitest";
+import { admissionRetentionEntrypoint } from "./runtime.admission-retention-entrypoint.test-support.js";
 
 it.each(["initial", "after-reset"])(
   "collects failed %s admission owners while the runtime remains usable",
@@ -10,9 +14,7 @@ it.each(["initial", "after-reset"])(
       process.execPath,
       [
         "--expose-gc",
-        "--import",
-        "tsx",
-        fileURLToPath(new URL("./runtime.admission-retention.test-support.ts", import.meta.url)),
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(admissionRetentionEntrypoint)),
         scenario,
       ],
       { timeout: 20_000 },

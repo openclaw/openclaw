@@ -42,7 +42,10 @@ export function createSqliteTranscriptArchiveWorker(workerData: object): Worker 
   });
 }
 
-type TranscriptArchiveWorkerOperation<Result> = { assertCurrent?: () => void } & (
+type TranscriptArchiveWorkerOperation<Result> = {
+  assertCurrent?: () => void;
+  signal?: AbortSignal;
+} & (
   | { expectedMessageType: "done" | "published" | "sized"; workerData: object }
   | {
       expectedMessageType: "reclaimed";
@@ -167,11 +170,41 @@ const sqliteTranscriptArchiveWorkerQueue = resolveGlobalSingleton(
 );
 const SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY = "lifecycle-archive";
 
-export function runExclusiveSqliteTranscriptArchiveWorker<T>(run: () => Promise<T>): Promise<T> {
-  return sqliteTranscriptArchiveWorkerQueue.enqueue(
-    SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
-    run,
-  );
+export function runExclusiveSqliteTranscriptArchiveWorker<T>(
+  run: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) {
+    return sqliteTranscriptArchiveWorkerQueue.enqueue(
+      SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
+      run,
+    );
+  }
+  return new Promise<T>((resolve, reject) => {
+    let pending: (() => Promise<T>) | undefined = run;
+    const cancel = () => {
+      // Drop execution before releasing the caller's claim; its FIFO slot remains inert.
+      pending = undefined;
+      reject(toStringifiedError(signal.reason));
+    };
+    if (signal.aborted) {
+      cancel();
+      return;
+    }
+    signal.addEventListener("abort", cancel, { once: true });
+    void sqliteTranscriptArchiveWorkerQueue
+      .enqueue(SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY, () => {
+        signal.removeEventListener("abort", cancel);
+        const admitted = pending;
+        pending = undefined;
+        if (!admitted) {
+          throw toStringifiedError(signal.reason);
+        }
+        // Once admitted, even a revoked request must join its physical settlement.
+        return admitted();
+      })
+      .then(resolve, reject);
+  });
 }
 
 export function runSqliteTranscriptArchiveWorkerOperation<Result>(
@@ -180,7 +213,7 @@ export function runSqliteTranscriptArchiveWorkerOperation<Result>(
   return runExclusiveSqliteTranscriptArchiveWorker(() => {
     params.assertCurrent?.();
     return spawnSqliteTranscriptArchiveWorkerOperation<Result>(params);
-  });
+  }, params.signal);
 }
 
 function runSqliteTranscriptArchiveWorker(

@@ -39,7 +39,6 @@ const mocks = vi.hoisted(() => ({
   leaseActive: false,
   loadPluginRecords: vi.fn(),
   markSentinelFailure: vi.fn(async () => undefined),
-  prepareRestartScript: vi.fn(async () => null),
   printResult: vi.fn(),
   readConfig: vi.fn(),
   createServiceConfigIO: vi.fn(),
@@ -115,9 +114,6 @@ vi.mock("./update-command-fresh-doctor.js", () => ({
 vi.mock("./update-command-plugins.js", () => ({
   updatePluginsAfterCoreUpdate: mocks.updatePlugins,
 }));
-vi.mock("./restart-helper.js", () => ({
-  prepareRestartScript: mocks.prepareRestartScript,
-}));
 vi.mock("./update-command-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service.js")>()),
   maybeRestartService: mocks.restartService,
@@ -172,8 +168,8 @@ describe("successful update finalization ordering", () => {
     }));
     mocks.readConfig.mockResolvedValue(validConfigSnapshot);
     mocks.createServiceConfigIO.mockReturnValue({ readBestEffortConfig: async () => ({}) });
-    mocks.updatePlugins.mockResolvedValue(successfulPluginUpdate);
-    mocks.completePluginUpdate.mockResolvedValue({
+    mocks.updatePlugins.mockReset().mockResolvedValue(successfulPluginUpdate);
+    mocks.completePluginUpdate.mockReset().mockResolvedValue({
       pluginUpdate: successfulPluginUpdate,
       configSnapshot: validConfigSnapshot,
     });
@@ -184,6 +180,24 @@ describe("successful update finalization ordering", () => {
 
   registerForegroundFinalizationTests({ tempDirs, mocks });
   registerServiceInstallationConvergenceTests(() => tempDirs.make("update-install-drift-"), mocks);
+
+  it("refuses same-schema finalization after requester revocation", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("finalizer-revoked-requester-") };
+    const record = createUpdateRun({ trigger: "cli" }, { env });
+    await expect(
+      finishSuccessfulPackageSwitch({
+        run: {
+          runId: record.runId,
+          env,
+          executorFence: { assertCurrent() {} },
+          requesterAuthority: { requester: {}, isCurrent: () => false },
+        },
+      }),
+    ).rejects.toThrow("requester-revoked");
+    expect(mocks.updatePlugins).not.toHaveBeenCalled();
+    expect(mocks.restartService).not.toHaveBeenCalled();
+    expect(getUpdateRun(record.runId, { env })?.status).toBe("running");
+  });
 
   it("does not finalize or clean an active durable run without its live executor", async () => {
     const home = tempDirs.make("finalizer-pending-recovery-");
@@ -677,6 +691,7 @@ describe("successful update finalization ordering", () => {
         );
         vi.spyOn(rollbackModule, "rollbackFailedUpdate").mockImplementationOnce(
           async ({ result }): ReturnType<typeof rollbackModule.rollbackFailedUpdate> => {
+            expect(result.reason, JSON.stringify(result.steps)).toBe("restart-unhealthy");
             events.push("rollback");
             expect(getUpdateRun(run.runId, { env: serviceEnv })?.confirmedAtMs).toBeNull();
             clock.elapsed = 12_000;
@@ -823,11 +838,6 @@ describe("successful update finalization ordering", () => {
         refresh: !sealed,
       });
       if (!sealed) {
-        expect(mocks.prepareRestartScript).toHaveBeenCalledWith(
-          serviceEnv,
-          expected,
-          expect.any(Array),
-        );
         expect(mocks.createServiceConfigIO).not.toHaveBeenCalled();
       }
     });
@@ -857,7 +867,6 @@ describe("successful update finalization ordering", () => {
         );
 
         expect(mocks.restartService).not.toHaveBeenCalled();
-        expect(mocks.prepareRestartScript).not.toHaveBeenCalled();
         expect(defaultRuntime.error).toHaveBeenCalledWith(
           "Stopped gateway service could not be revalidated; inspect it before restarting manually.",
         );
@@ -912,7 +921,6 @@ describe("successful update finalization ordering", () => {
       }
 
       expect(mocks.restartService).toHaveBeenCalledOnce();
-      expect(mocks.prepareRestartScript).not.toHaveBeenCalled();
       expect(mocks.restartService).toHaveBeenCalledWith(
         expect.objectContaining({
           refreshServiceEnv: false,

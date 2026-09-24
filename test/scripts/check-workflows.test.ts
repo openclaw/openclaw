@@ -326,7 +326,9 @@ describe("check-workflows", () => {
       "blacksmith-16vcpu-windows-2025",
     );
     expect(native).not.toBe(probe);
-    expect(native.if).toBe("${{ inputs.run_windows_ci && !inputs.run_private_node_provisioning }}");
+    expect(native.if).toBe(
+      "${{ inputs.run_windows_ci && !inputs.run_private_node_provisioning && inputs.windows_ci_replay == '' }}",
+    );
     expect(native["runs-on"]).toBe("windows-2025");
     expect(probe.if).toBeUndefined();
     expect(probe["runs-on"]).toBe("${{ inputs.runner_label }}");
@@ -344,7 +346,9 @@ describe("check-workflows", () => {
     expect(probe.steps.some((step) => step.id?.startsWith("native_"))).toBe(false);
     expect(
       probe.steps.find((step) => step.name === "Keep runner alive for SSH inspection")?.if,
-    ).toBe("${{ always() && !cancelled() && !inputs.run_private_node_provisioning }}");
+    ).toBe(
+      "${{ always() && !cancelled() && !inputs.run_private_node_provisioning && inputs.windows_ci_replay == '' }}",
+    );
     expect(probe.steps.find((step) => step.name === "Enforce WSL2 requirement")?.if).toBe(
       "${{ always() && !cancelled() && inputs.require_wsl2 }}",
     );
@@ -358,7 +362,7 @@ describe("check-workflows", () => {
     });
     const preflight = native.steps[1]!;
     expect(preflight.name).toBe("Preflight native Scheduled Task session");
-    // The job excludes private proof before allocation; native steps retain the CI opt-in.
+    // The job excludes private proof and replay before allocation; native steps retain the CI opt-in.
     expect(preflight.if).toBe("${{ inputs.run_windows_ci }}");
     expect(preflight.run).toContain(
       'if (-not [Environment]::UserInteractive) {\n  throw "Native Scheduled Task proof requires an interactive Windows runner session."\n}',
@@ -390,7 +394,7 @@ describe("check-workflows", () => {
     });
     expect(native.steps.find((step) => step.name === "Setup Node.js")?.env).toMatchObject({
       REQUESTED_NODE_VERSION:
-        "${{ inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}",
+        "${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}",
     });
     expect(native.steps.find((step) => step.name === "Setup pnpm")?.uses).toBe(
       "./.github/actions/setup-pnpm-store-cache",

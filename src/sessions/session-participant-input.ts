@@ -27,25 +27,13 @@ export function readSessionInputProfileId(ctx: SessionParticipantInputContext): 
   return identity?.type === "profile" ? identity.id : undefined;
 }
 
-/** Personal bootstrap needs one unambiguous person, not the first contributor in a batch. */
-export function readSessionInputBootstrapProfileId(
-  ctx: SessionParticipantInputContext,
-): string | undefined {
-  if (
-    ctx.InternalTurnSource !== undefined ||
-    (ctx.InputProvenance && ctx.InputProvenance.kind !== "external_user")
-  ) {
-    return undefined;
-  }
-  const inputs = ctx[sessionParticipantInput];
-  const first = inputs?.[0]?.identity;
-  if (
-    first?.type !== "profile" ||
-    !inputs?.every(({ identity }) => identity.type === "profile" && identity.id === first.id)
-  ) {
-    return undefined;
-  }
-  return first.id;
+/** Only external turns may load the session's personal preferences; sender identity does not select them. */
+export function isSessionPersonalBootstrapTurn(ctx: SessionParticipantInputContext): boolean {
+  return (
+    ctx.InternalTurnSource === undefined &&
+    (!ctx.InputProvenance || ctx.InputProvenance.kind === "external_user") &&
+    Boolean(ctx[sessionParticipantInput]?.length)
+  );
 }
 
 /** An unqualified transport sender remains an observation, never a Gateway profile. */

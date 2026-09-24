@@ -77,12 +77,14 @@ export function restoreAsyncQuestionDrafts(session: AsyncQuestionDraftSession): 
     session.saved = JSON.stringify(stored);
     for (const draft of stored) {
       const current = session.drafts.get(draft.itemId);
+      const admitted = current?.status === "submitted" && current.admittedQueueId;
       // A user can type while storage opens. Hydration never replaces that newer intent,
-      // and a reused item ID never inherits answers to a different question.
+      // and a reused item ID never inherits answers to a different question. An outbox
+      // projection can precede hydration; restore its draft without retiring admission.
       if (
         session.resolved.has(draft.itemId) ||
         current?.edited ||
-        current?.status ||
+        (current?.status && !admitted) ||
         (current?.signature && current.signature !== draft.signature)
       ) {
         continue;
@@ -90,7 +92,8 @@ export function restoreAsyncQuestionDrafts(session: AsyncQuestionDraftSession): 
       session.drafts.set(draft.itemId, {
         signature: draft.signature,
         edited: draft.edited,
-        status: draft.dismissed ? "skipped" : undefined,
+        status: admitted ? "submitted" : draft.dismissed ? "skipped" : undefined,
+        admittedQueueId: current?.admittedQueueId,
         answers: new Map(
           draft.answers.map((answer, index) => [
             String(index),
@@ -100,7 +103,7 @@ export function restoreAsyncQuestionDrafts(session: AsyncQuestionDraftSession): 
             },
           ]),
         ),
-        reopenedAfterBoundary: draft.reopenedAfterBoundary,
+        reopenedAfterBoundary: current?.reopenedAfterBoundary ?? draft.reopenedAfterBoundary,
       });
     }
     session.loaded = true;

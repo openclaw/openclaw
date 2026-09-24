@@ -324,10 +324,8 @@ function renderCodexWorkspaceCollaborationDeveloperInstructions(
     header: "## OpenClaw Agent Soul",
     preamble:
       "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly." +
-      (files.some((file) =>
-        /(?:^|\/)users\/[^/]+\/user\.md$/.test(normalizeCodexContextFilePath(file.path)),
-      )
-        ? " The personal users/<profile-id>/USER.md applies only to the current requester and overrides conflicting shared USER.md preferences, not higher-priority rules."
+      (files.some((file) => file.personalUser === true)
+        ? " The personal users/<profile-id>/USER.md belongs to this session's selected person (assigned human owner, otherwise human creator). It supplements shared USER.md and overrides conflicting shared preferences, not higher-priority rules. Other participants do not change this personal context."
         : ""),
     wrapperTag: "AGENT_SOUL",
   });
@@ -494,6 +492,7 @@ function toCodexEmbeddedContextFile(file: CodexBootstrapFile): EmbeddedContextFi
   return {
     path: readNonEmptyString(file.path) ?? readNonEmptyString(file.name) ?? "",
     content: file.content ?? "",
+    ...(file.personalUser === true ? { personalUser: true } : {}),
   };
 }
 

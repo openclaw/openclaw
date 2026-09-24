@@ -134,19 +134,19 @@ function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable
   return config.test as NonNullable<T["test"]>;
 }
 
-function expectThreadedNonIsolatedRunner(config: {
+function expectDefaultNonIsolatedRunner(config: {
   test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
 }) {
   const testConfig = requireTestConfig(config);
-  expect(testConfig.pool).toBe("threads");
+  expect(testConfig.pool).toBe(process.platform === "win32" ? "forks" : "threads");
   expect(testConfig.isolate).toBe(false);
   expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
 }
-function expectThreadedIsolatedRunner(config: {
+function expectDefaultIsolatedRunner(config: {
   test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
 }) {
   const testConfig = requireTestConfig(config);
-  expect(testConfig.pool).toBe("threads");
+  expect(testConfig.pool).toBe(process.platform === "win32" ? "forks" : "threads");
   expect(testConfig.isolate).toBe(true);
   expect(testConfig.runner).toBeUndefined();
 }
@@ -617,17 +617,17 @@ describe("scoped vitest configs", () => {
       defaultToolingDockerConfig,
       defaultToolingConfig,
     ]) {
-      expectThreadedNonIsolatedRunner(config);
+      expectDefaultNonIsolatedRunner(config);
     }
 
     for (const config of [defaultGatewayConfig, defaultAgentsConfig]) {
-      expectThreadedNonIsolatedRunner(config);
+      expectDefaultNonIsolatedRunner(config);
     }
 
     expectForkedNonIsolatedRunner(defaultCommandsConfig);
 
-    expectThreadedNonIsolatedRunner(defaultUiConfig);
-    expectThreadedIsolatedRunner(defaultExtensionMemoryConfig);
+    expectDefaultNonIsolatedRunner(defaultUiConfig);
+    expectDefaultIsolatedRunner(defaultExtensionMemoryConfig);
     expectForkedIsolatedRunner(defaultInfraConfig, diagnosticForksPool);
     expectForkedIsolatedRunner(defaultCliProcessConfig);
   });
@@ -743,8 +743,8 @@ describe("scoped vitest configs", () => {
     expect(testConfig.exclude).not.toContain("chat/slash-command-executor.node.test.ts");
   });
 
-  it("defaults channel tests to threads with the non-isolated runner", () => {
-    expectThreadedNonIsolatedRunner(defaultChannelsConfig);
+  it("defaults channel tests to the platform pool with the non-isolated runner", () => {
+    expectDefaultNonIsolatedRunner(defaultChannelsConfig);
   });
 
   it("keeps the core channel lane limited to non-extension roots", () => {
@@ -779,14 +779,18 @@ describe("scoped vitest configs", () => {
     }
   });
 
-  it("serializes and isolates Telegram extension files with conflicting mocks", () => {
-    expectThreadedIsolatedRunner(defaultExtensionTelegramConfig);
-    expect(requireTestConfig(defaultExtensionTelegramConfig).fileParallelism).toBe(false);
+  it("isolates Telegram extension mocks while inheriting file scheduling", () => {
+    expectDefaultIsolatedRunner(defaultExtensionTelegramConfig);
+    expect(requireTestConfig(defaultExtensionTelegramConfig).fileParallelism).toBe(
+      sharedVitestConfig.test.fileParallelism,
+    );
   });
 
-  it("serializes Slack extension files that share process globals", () => {
+  it("keeps Slack file-local fixtures on reusable forks with inherited scheduling", () => {
     expectForkedNonIsolatedRunner(defaultExtensionSlackConfig, diagnosticForksPool);
-    expect(requireTestConfig(defaultExtensionSlackConfig).fileParallelism).toBe(false);
+    expect(requireTestConfig(defaultExtensionSlackConfig).fileParallelism).toBe(
+      sharedVitestConfig.test.fileParallelism,
+    );
   });
 
   it("normalizes split extension channel include patterns relative to the scoped dir", () => {
@@ -1038,6 +1042,8 @@ describe("scoped vitest configs", () => {
     expect(testConfig.dir).toBe(process.cwd());
     expect(testConfig.include).toEqual([
       "src/gateway/**/*.test.ts",
+      "test/plugins/browser-session-authority.gateway.test.ts",
+      "test/plugins/chat-abort-codex.gateway.test.ts",
       "test/plugins/codex-model-catalog.gateway.test.ts",
       "test/plugins/crabbox-allocation-authority.gateway.test.ts",
       "test/plugins/team-reports-http.gateway.test.ts",
@@ -1109,7 +1115,7 @@ describe("scoped vitest configs", () => {
         ).toBe(true);
         expect(projects.map((project) => project.name)).toEqual(names);
         expect(projects.map((project) => project.pool)).toEqual([
-          "threads",
+          process.platform === "win32" ? "forks" : "threads",
           diagnosticForksPool.name,
         ]);
         expect(projects[0]?.setupFiles).toEqual(owner.test?.setupFiles);
@@ -1309,11 +1315,29 @@ describe("scoped vitest configs", () => {
     expect(testConfig.include).toEqual(["**/*.test.ts"]);
   });
 
-  it("normalizes plugins include patterns relative to the scoped dir", () => {
+  it("keeps plugin source forks and native-loader forks on their own loaders", async () => {
     const testConfig = requireTestConfig(defaultPluginsConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "src", "plugins"));
     expect(testConfig.include).toEqual(["**/*.test.ts"]);
     expect(testConfig.exclude).toContain("contracts/**");
+    const resolved = await resolveConfig({ config: false }, defaultPluginsConfig);
+    const projects = resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig);
+    expect(
+      projects.map((project) => ({
+        name: project.name,
+        pool: project.pool,
+        execArgv: project.execArgv,
+      })),
+    ).toEqual([
+      {
+        name: "plugins",
+        pool: "forks",
+        execArgv: process.versions.bun
+          ? ["--tsconfig-override", path.join(process.cwd(), "tsconfig.json")]
+          : ["--import", expect.any(String)],
+      },
+      { name: "plugins-native-loader", pool: "forks", execArgv: [] },
+    ]);
   });
 
   it("normalizes ui include patterns relative to the scoped dir", () => {

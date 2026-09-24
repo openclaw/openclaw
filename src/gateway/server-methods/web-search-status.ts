@@ -97,7 +97,7 @@ export async function prepareWebSearchStatus(
       const manifest = metadata.byPluginId.get(entry.pluginId);
       const credential =
         manifest && entry.credentialPath
-          ? resolvePluginCredentialDescriptors(config, manifest).find(
+          ? resolvePluginCredentialDescriptors(manifest).find(
               (field) =>
                 JSON.stringify(field.path) ===
                 JSON.stringify(parseConcreteConfigPathTokens(entry.credentialPath)),

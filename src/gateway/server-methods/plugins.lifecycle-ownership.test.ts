@@ -60,7 +60,10 @@ type ManagedMutationOptions = Pick<
 async function callHandler(
   method: string,
   params: Record<string, unknown>,
-  invocation: Pick<GatewayRequestHandlerOptions, "signal" | "sessionMutationCommitGuard">,
+  invocation: Pick<
+    GatewayRequestHandlerOptions,
+    "signal" | "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
+  >,
 ) {
   let ok: boolean | null = null;
   let error: ErrorShape | undefined;
@@ -152,19 +155,24 @@ describe("plugin lifecycle invoker ownership", () => {
       await pending;
     }
   });
-  describe.each(["signal", "guard"] as const)("closed %s", (fence) => {
+  describe.each(["signal", "guard", "client"] as const)("closed %s", (fence) => {
     const createInvocation = () => {
       const controller = new AbortController();
       const failure = new Error(
-        fence === "signal" ? "plugin request aborted" : "plugin mutation owner closed",
+        fence === "signal"
+          ? "plugin request aborted"
+          : fence === "client"
+            ? "Plugin mutation authority is no longer active."
+            : "plugin mutation owner closed",
       );
       let open = true;
       return {
         failure,
         invocation: {
           signal: controller.signal,
+          hasCurrentClientAuthority: () => fence !== "client" || open,
           sessionMutationCommitGuard: () => {
-            if (!open) {
+            if (fence === "guard" && !open) {
               throw failure;
             }
           },

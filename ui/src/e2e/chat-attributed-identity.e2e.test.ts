@@ -498,7 +498,7 @@ suite.define(() => {
           return element.getAttribute("aria-label");
         }),
       );
-    expect(footerOrder).toEqual(["name", "time", "Reply to message", "Rewind"]);
+    expect(footerOrder).toEqual(["name", "time", "Reply to message", "Rewind", "Copy as markdown"]);
 
     await context.close();
   });
@@ -729,15 +729,18 @@ suite.define(() => {
       const status = group.locator(".chat-send-status");
       await expect(status.locator(".chat-send-status__discard")).toBeVisible();
       await expect(group.locator(".chat-sender-name")).toHaveCount(0);
-      const footerLineCenters = await status
-        .locator("span:not([aria-hidden]), button")
-        .evaluateAll((elements) =>
-          elements.map((element) => {
+      const footerLineCenters = await Promise.all(
+        [
+          status.getByText("Not sent", { exact: true }),
+          status.getByRole("button", { name: "Retry queued message" }),
+          status.getByRole("button", { name: "Discard", exact: true }),
+        ].map((label) =>
+          label.evaluate((element) => {
             const rect = element.getBoundingClientRect();
             return rect.top + rect.height / 2;
           }),
-        );
-      expect(footerLineCenters).toHaveLength(3);
+        ),
+      );
       expect(footerLineCenters[0]).toBeCloseTo(footerLineCenters[1] ?? 0, 0);
       expect(footerLineCenters[0]).toBeCloseTo(footerLineCenters[2] ?? 0, 0);
       expect(

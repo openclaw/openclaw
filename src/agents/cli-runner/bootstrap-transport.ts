@@ -19,9 +19,7 @@ export function resolveCliBootstrapPromptHash(params: {
   bootstrapTruncationNotice?: string;
   contextFiles: EmbeddedContextFile[];
 }): string | undefined {
-  const personal = params.contextFiles.filter((file) =>
-    /[\\/]users[\\/][^\\/]+[\\/]USER\.md$/.test(file.path),
-  );
+  const personal = params.contextFiles.filter((file) => file.personalUser);
   if (
     params.bootstrapMode === "none" &&
     params.bootstrapTruncationNotice === undefined &&
