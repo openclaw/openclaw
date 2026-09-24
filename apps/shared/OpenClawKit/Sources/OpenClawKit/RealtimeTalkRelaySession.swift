@@ -498,9 +498,12 @@ public final class RealtimeTalkRelaySession {
         if let voice = self.nonEmpty(self.options.voice) {
             payload["voice"] = AnyCodable(voice)
         }
-        if let language = TalkConfigParsing.explicitRealtimeTranscriptionLanguage(self.options.speechLocaleID) {
+        let language = TalkConfigParsing.explicitRealtimeTranscriptionLanguage(self.options.speechLocaleID)
+        if let language {
             payload["language"] = AnyCodable(language)
         }
+        // Requested language is not an acknowledgement that the provider applied it.
+        self.logger.info("talk realtime transcription requestedLanguage=\(language ?? "automatic", privacy: .public)")
         if self.options.provider == "openai", self.options.model == "gpt-realtime-2.1",
            let phrases = self.options.localStopPhrases, RealtimeTalkTranscriptionHints.accepts(phrases)
         {
