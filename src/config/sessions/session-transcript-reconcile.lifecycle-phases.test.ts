@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { once } from "node:events";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
@@ -26,6 +27,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -532,6 +534,89 @@ it.each(["phase", "service"] as const)(
           serviceReleases.forEach((release) => release());
           delegates.forEach((delegate) => delegate.release());
           parent?.release();
+        }
+      },
+    );
+  },
+);
+
+it.each([
+  { borrowed: false, replacement: false },
+  { borrowed: true, replacement: false },
+  { borrowed: false, replacement: true },
+])(
+  "settles interphase state drainage with borrowed=$borrowed, replacement=$replacement",
+  async ({ borrowed, replacement }) => {
+    await withOpenClawTestState(
+      { scenario: "external-service", label: "reconcile-interphase-drain" },
+      async (state) => {
+        const options = { agentId: "main", path: state.path("agent", "agent.sqlite") };
+        openOpenClawAgentDatabase(options);
+        closeOpenClawAgentDatabaseByPath(options.path);
+        closeOpenClawStateDatabaseForTest();
+        const context = captureOpenClawStateWorkerContext();
+        const identity = context.admission.identity.key;
+        const parent = borrowed
+          ? acquireStateDatabaseCoordinator({ databasePath: context.admission.databasePath })
+          : undefined;
+        const pool = createPool();
+        const ready = createDeferred<MessagePort>();
+        const leaseId = `interphase-drain-${borrowed}-${replacement}`;
+        const retainedPath = `${context.admission.databasePath}.retained`;
+        let replaced = false;
+        const task = releaseInRealWorker(pool, context, leaseId, undefined, {
+          ...options,
+          observe(message, port) {
+            if (message.type === "done") {
+              ready.resolve(port);
+            } else if (
+              ["plan-start", "active-chunk", "fts-chunk", "plan-finish"].includes(message.type)
+            ) {
+              port.postMessage({ type: "continue", accepted: true });
+            }
+          },
+        });
+        void task.catch(() => {});
+        let releasePort: MessagePort | undefined;
+        try {
+          releasePort = await Promise.race([
+            ready.promise,
+            task.then(() => {
+              throw new Error("Reconciliation settled before the interphase drainage witness");
+            }),
+          ]);
+          await closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
+          expect(readDatabasePathIdentitySync(context.admission.databasePath).key).toBe(identity);
+          expect(() => context.admission.assertCurrent()).toThrow();
+          if (replacement) {
+            renameSync(context.admission.databasePath, retainedPath);
+            replaced = true;
+            writeFileSync(context.admission.databasePath, "replacement must not be opened");
+          }
+          releasePort.postMessage({ type: "release" }, []);
+          if (replacement) {
+            await expect(task).rejects.toThrow();
+            expect(readFileSync(context.admission.databasePath, "utf8")).toBe(
+              "replacement must not be opened",
+            );
+            return;
+          }
+          await expect(task).resolves.toContainEqual({ type: "lease-released" });
+          expect(
+            openOpenClawStateDatabase()
+              .db.prepare("SELECT lease_id FROM agent_database_leases WHERE lease_id = ?")
+              .get(leaseId),
+          ).toBeUndefined();
+        } finally {
+          releasePort?.postMessage({ type: "release" }, []);
+          await task.catch(() => {});
+          await pool.close();
+          parent?.release();
+          if (replaced) {
+            rmSync(context.admission.databasePath);
+            renameSync(retainedPath, context.admission.databasePath);
+          }
+          releaseOpenClawAgentDatabaseLease(leaseId);
         }
       },
     );

@@ -107,6 +107,7 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
             }),
           );
     const identity = context.admission.identity.key;
+    let openAdmitted = false;
     const preparePhase = (phase: "open" | "close") => {
       const runtime =
         phase === "close"
@@ -115,7 +116,10 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
       const preparation = createSqliteWorkerLifecyclePreparation({
         signal: controller.signal,
         assertCurrent() {
-          context.admission.assertCurrent();
+          // Sealing new reads cannot revoke cleanup of this already-admitted native operation.
+          if (phase === "open" || !openAdmitted) {
+            context.admission.assertCurrent();
+          }
           assertExistingDatabaseIdentity(context.admission.databasePath, identity);
         },
         borrow: () =>
@@ -137,7 +141,11 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
             return phaseDelegate?.port;
           }),
         admit: () => undefined,
-        dispatch() {},
+        dispatch() {
+          if (phase === "open") {
+            openAdmitted = true;
+          }
+        },
         receiveResult() {
           throw new Error("Reconciliation lifecycle preparation received an unexpected result");
         },
