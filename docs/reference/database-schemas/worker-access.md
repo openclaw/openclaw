@@ -305,6 +305,14 @@ coordinator warnings include the caller stack as well as the operation label,
 captured only after a wait exceeds 100 ms. Schemas, retention, and update behavior
 are unchanged.
 
+Background exec registration and terminal writes use the existing task creation
+receipt and worker. A command that exits during registration joins its running
+and terminal publications in order. The process keeps its cleanup owner until
+task settlement and notification error recovery finish, so scope closure cannot
+restore or delete its environment while a write is pending. Registered synchronous
+V1 runtimes retain their captured adapter. Command redaction, task data, schemas,
+retention, and update behavior are unchanged.
+
 Worktree run-lease cleanup deletes the exact token and reads the Git unlock target
 through the shared-state worker. Failed deletions yield between bounded retries,
 retaining the original database admission and Git guard until deletion settles.

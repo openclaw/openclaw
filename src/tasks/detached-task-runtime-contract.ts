@@ -113,7 +113,10 @@ export type CreatedDetachedTaskRun = {
     assertCurrent: () => void,
   ) => Promise<TaskRunOwnerBinding>;
   finalizeActive: (
-    terminal: Pick<DetachedTaskTerminalState, "status" | "endedAt" | "error" | "terminalSummary">,
+    terminal: Pick<
+      DetachedTaskTerminalState,
+      "status" | "endedAt" | "error" | "terminalSummary" | "detail" | "clearError" | "lastEventAt"
+    >,
     canSettle: (task: TaskRecord) => boolean,
   ) => Promise<void>;
   settleUnstarted: (

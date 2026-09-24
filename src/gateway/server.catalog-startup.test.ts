@@ -27,7 +27,7 @@ describe("Gateway startup catalog", () => {
       bundle_json: JSON.stringify(bundle),
       generated_at: 200,
       min_version: null,
-      source_url: "https://catalog.openclaw.ai/models/v1/catalog.json",
+      source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
       etag: null,
       last_modified: null,
       checked_at: 200,
@@ -57,7 +57,13 @@ describe("Gateway startup catalog", () => {
       expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toEqual(
         absent ? undefined : bundle.providers.anthropic,
       );
-      expect(getRemoteModelCatalogPricing({})).toEqual(absent ? undefined : bundle.pricing);
+      expect(getRemoteModelCatalogPricing({})).toEqual(
+        absent
+          ? undefined
+          : {
+              "anthropic/startup-model": { cost: { input: 1, output: 2 }, explicit: false },
+            },
+      );
     } finally {
       pending.reject(stopped);
       const outcome = await startup;
