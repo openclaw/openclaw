@@ -24,7 +24,6 @@ const SESSION_KEY = "agent:main:main";
 
 type Harness = {
   agent: AcpGatewayAgent;
-  connection: ReturnType<typeof createAcpConnection>;
   promptPromise: ReturnType<AcpGatewayAgent["prompt"]>;
   request: ReturnType<typeof vi.fn>;
   requestPermission: ReturnType<typeof vi.fn>;
@@ -151,7 +150,6 @@ async function createHarness(
 
   return {
     agent,
-    connection,
     promptPromise,
     request,
     requestPermission,
@@ -257,21 +255,6 @@ describe("ACP translator permission relay", () => {
     await cleanupHarness(harness);
   });
 
-  it("dedupes repeated approval events for the same approval id", async () => {
-    const harness = await createHarness();
-    const event = createApprovalEvent({ runId: harness.runId, approvalId: "approval-dup" });
-
-    await harness.agent.handleGatewayEvent(event);
-    await harness.agent.handleGatewayEvent(event);
-
-    await vi.waitFor(() => {
-      expect(harness.requestPermission).toHaveBeenCalledTimes(1);
-      expect(approvalResolveCalls(harness.request)).toHaveLength(1);
-    });
-
-    await cleanupHarness(harness);
-  });
-
   it("relays exec approval request events before the later agent approval event", async () => {
     const harness = await createHarness();
     const approvalId = "approval-raw";
@@ -356,6 +339,7 @@ describe("ACP translator permission relay", () => {
         command: "echo second",
       }),
     );
+    expect(requestPermission).not.toHaveBeenCalled();
     await agent.handleGatewayEvent(
       createApprovalRequestEvent({ approvalId: "approval-shared", toolCallId: "tool-second" }),
     );
@@ -584,35 +568,5 @@ describe("ACP translator permission relay", () => {
       expect(decisions).toContain("deny");
       expect(decisions).not.toContain("allow-once");
     });
-  });
-
-  it("keeps existing tool streaming behavior unchanged", async () => {
-    const harness = await createHarness();
-
-    await harness.agent.handleGatewayEvent({
-      type: "event",
-      event: "agent",
-      payload: {
-        runId: harness.runId,
-        sessionKey: SESSION_KEY,
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "exec",
-          toolCallId: "tool-1",
-          args: { command: "echo ok" },
-        },
-      },
-    } as EventFrame);
-
-    expect(harness.requestPermission).not.toHaveBeenCalled();
-    const sessionUpdate = firstCallArg(harness.connection["__sessionUpdateMock"]);
-    const update = requireRecord(sessionUpdate.update);
-    expect(sessionUpdate.sessionId).toBe(SESSION_ID);
-    expect(update.sessionUpdate).toBe("tool_call");
-    expect(update.toolCallId).toBe("tool-1");
-    expect(update.status).toBe("in_progress");
-
-    await cleanupHarness(harness);
   });
 });

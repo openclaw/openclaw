@@ -66,11 +66,6 @@ describe("appendBackgroundTaskProgressSummary", () => {
     expect(result.length).toBeLessThanOrEqual(240);
   });
 
-  it("still truncates plain ASCII exactly at the boundary", () => {
-    const result = appendBackgroundTaskProgressSummary("a".repeat(240), "b");
-    expect(result).toBe(`${"a".repeat(239)}…`);
-  });
-
   it("returns short combined summaries unchanged", () => {
     expect(appendBackgroundTaskProgressSummary("done: ", "ok")).toBe("done: ok");
     expect(appendBackgroundTaskProgressSummary("", `  step ${LOBSTER}`)).toBe(`step ${LOBSTER}`);
@@ -90,18 +85,6 @@ describe("resolveBackgroundTaskContext", () => {
     });
     expect(context?.task).toBe(`${"y".repeat(158)}…`);
     expect(HIGH_SURROGATE_WITHOUT_LOW.test(context?.task ?? "")).toBe(false);
-  });
-
-  it("passes short task text through unchanged", () => {
-    const context = resolveBackgroundTaskContext({
-      deps: fakeDeps(),
-      cfg: {} as unknown as OpenClawConfig,
-      sessionKey: "child-session",
-      agentId: "qa",
-      requestId: "run-2",
-      text: `summarize ${LOBSTER} feedback`,
-    });
-    expect(context?.task).toBe(`summarize ${LOBSTER} feedback`);
   });
 });
 

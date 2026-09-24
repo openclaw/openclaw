@@ -218,6 +218,19 @@ export function readySessionMeta(overrides: Partial<SessionAcpMeta> = {}): Sessi
   };
 }
 
+export function installAcpRuntimeSession(
+  runtime: AcpRuntime,
+  acp = readySessionMeta(),
+  sessionKey = "agent:codex:acp:session-1",
+): void {
+  hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime });
+  hoisted.readAcpSessionEntryMock.mockReturnValue({
+    sessionKey,
+    storeSessionKey: sessionKey,
+    acp,
+  });
+}
+
 export function mockParentedAcpSessionEntries(params: {
   childSessionKey: string;
   parentSessionKey: string;

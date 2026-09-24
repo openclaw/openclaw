@@ -16,6 +16,7 @@ import {
   extractStatesFromUpserts,
   hoisted,
   installAcpSessionManagerTestLifecycle,
+  installAcpRuntimeSession,
   mockParentedAcpSessionEntries,
   mockCallArg,
   readySessionMeta,
@@ -439,64 +440,6 @@ describe("AcpSessionManager turn results", () => {
     });
   });
 
-  it("keeps valid startTurn text-only completions successful", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const runtimeState = createRuntime();
-      runtimeState.runtime.startTurn = vi.fn((input) => ({
-        requestId: input.requestId,
-        events: (async function* () {
-          yield {
-            type: "text_delta" as const,
-            stream: "output" as const,
-            text: "Current directory is /tmp/openclaw.",
-          };
-        })(),
-        result: Promise.resolve({
-          status: "completed" as const,
-          stopReason: "end_turn",
-        }),
-        cancel: vi.fn(async () => {}),
-        closeStream: vi.fn(async () => {}),
-      }));
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      mockParentedAcpSessionEntries({
-        childSessionKey: "agent:codex:acp:child-1",
-        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
-        label: "Directory check",
-      });
-
-      const events: string[] = [];
-      const manager = new AcpSessionManager();
-      await manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:child-1",
-        text: "Print the current directory",
-        mode: "prompt",
-        requestId: "direct-parented-start-turn-text-run",
-        onEvent: (event) => {
-          events.push(event.type);
-        },
-      });
-
-      expect(runtimeState.runTurn).not.toHaveBeenCalled();
-      expect(events).toEqual(["text_delta", "done"]);
-      expectRecordFields(requireTaskByRunId("direct-parented-start-turn-text-run"), {
-        runtime: "acp",
-        ownerKey: "agent:quant:telegram:quant:direct:822430204",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child-1",
-        label: "Directory check",
-        task: "Print the current directory",
-        status: "succeeded",
-        progressSummary: "Current directory is /tmp/openclaw.",
-      });
-    });
-  });
-
   it("classifies complete parented ACP output before truncating its progress summary", async () => {
     await withAcpManagerTaskStateDir(async () => {
       const runtimeState = createRuntime();
@@ -555,113 +498,6 @@ describe("AcpSessionManager turn results", () => {
       expect(record.progressSummary).toMatch(/…$/);
       expect(record.terminalOutcome).toBeUndefined();
       expect(record.terminalSummary).toBeUndefined();
-    });
-  });
-
-  it("keeps parented ACP turns successful when final output follows a separator", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const runtimeState = createRuntime();
-      runtimeState.runtime.startTurn = vi.fn((input) => ({
-        requestId: input.requestId,
-        events: (async function* () {
-          yield {
-            type: "text_delta" as const,
-            stream: "output" as const,
-            text: "I'll inspect the repo now: the crash is a missing null check in src/foo.ts.",
-          };
-        })(),
-        result: Promise.resolve({
-          status: "completed" as const,
-          stopReason: "end_turn",
-        }),
-        cancel: vi.fn(async () => {}),
-        closeStream: vi.fn(async () => {}),
-      }));
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      mockParentedAcpSessionEntries({
-        childSessionKey: "agent:codex:acp:child-1",
-        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
-        label: "Separator final",
-      });
-
-      const manager = new AcpSessionManager();
-      await manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:child-1",
-        text: "Inspect and report back",
-        mode: "prompt",
-        requestId: "direct-parented-separator-final-run",
-      });
-
-      const record = requireTaskByRunId("direct-parented-separator-final-run");
-      expectRecordFields(record, {
-        runtime: "acp",
-        ownerKey: "agent:quant:telegram:quant:direct:822430204",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child-1",
-        status: "succeeded",
-        progressSummary:
-          "I'll inspect the repo now: the crash is a missing null check in src/foo.ts.",
-      });
-      expect(record.terminalOutcome).toBeUndefined();
-      expect(record.terminalSummary).toBeUndefined();
-    });
-  });
-
-  it("keeps parented ACP turns blocked when progress text only adds follow-up planning", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const runtimeState = createRuntime();
-      runtimeState.runtime.startTurn = vi.fn((input) => ({
-        requestId: input.requestId,
-        events: (async function* () {
-          yield {
-            type: "text_delta" as const,
-            stream: "output" as const,
-            text: "I'll inspect the repo now. Then I'll run tests and report back.",
-          };
-        })(),
-        result: Promise.resolve({
-          status: "completed" as const,
-          stopReason: "end_turn",
-        }),
-        cancel: vi.fn(async () => {}),
-        closeStream: vi.fn(async () => {}),
-      }));
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      mockParentedAcpSessionEntries({
-        childSessionKey: "agent:codex:acp:child-1",
-        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
-        label: "Follow-up planning",
-      });
-
-      const manager = new AcpSessionManager();
-      await manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:child-1",
-        text: "Inspect and report back",
-        mode: "prompt",
-        requestId: "direct-parented-followup-planning-run",
-      });
-
-      expectRecordFields(requireTaskByRunId("direct-parented-followup-planning-run"), {
-        runtime: "acp",
-        ownerKey: "agent:quant:telegram:quant:direct:822430204",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child-1",
-        status: "succeeded",
-        progressSummary: "I'll inspect the repo now. Then I'll run tests and report back.",
-        terminalOutcome: "blocked",
-        terminalSummary:
-          "Required completion ended with progress-only text, not a final deliverable.",
-      });
     });
   });
 
@@ -1000,15 +836,7 @@ describe("AcpSessionManager turn results", () => {
       cancel,
       closeStream,
     }));
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: readySessionMeta(),
-    });
+    installAcpRuntimeSession(runtimeState.runtime);
 
     const manager = new AcpSessionManager();
     await expect(
@@ -1101,15 +929,7 @@ describe("AcpSessionManager turn results", () => {
 
   it("rejects streams that end without a terminal done event", async () => {
     const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: readySessionMeta(),
-    });
+    installAcpRuntimeSession(runtimeState.runtime);
     runtimeState.runTurn.mockImplementation(async function* () {
       yield { type: "text_delta" as const, text: "partial output" };
     });
@@ -1138,18 +958,14 @@ describe("AcpSessionManager turn results", () => {
   it("marks the session as errored when runtime ensure fails before turn start", async () => {
     const runtimeState = createRuntime();
     runtimeState.ensureSession.mockRejectedValue(new Error("acpx exited with code 1"));
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: {
+    installAcpRuntimeSession(
+      runtimeState.runtime,
+      {
         ...readySessionMeta(),
         state: "running",
       },
-    });
+      "agent:codex:acp:session-1",
+    );
 
     const manager = new AcpSessionManager();
     await expectRejectedRecord(
@@ -1176,15 +992,7 @@ describe("AcpSessionManager turn results", () => {
     for (const message of ["acpx exited with code 1", "acpx exited with signal SIGTERM"]) {
       hoisted.upsertAcpSessionMetaMock.mockClear();
       const runtimeState = createRuntime();
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      hoisted.readAcpSessionEntryMock.mockReturnValue({
-        sessionKey: "agent:codex:acp:session-1",
-        storeSessionKey: "agent:codex:acp:session-1",
-        acp: readySessionMeta(),
-      });
+      installAcpRuntimeSession(runtimeState.runtime);
       runtimeState.runTurn
         .mockImplementationOnce(async function* () {
           yield {

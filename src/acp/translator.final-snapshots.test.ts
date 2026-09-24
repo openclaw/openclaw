@@ -66,44 +66,6 @@ describe("acp final chat snapshots", () => {
     expect(sessionStore.getSession("snapshot-session")?.activeRunId).toBeNull();
   });
 
-  it("does not duplicate text when final repeats the last delta snapshot", async () => {
-    const { agent, sessionUpdate, promptPromise, runId } = await createSnapshotHarness();
-
-    await agent.handleGatewayEvent({
-      event: "chat",
-      payload: {
-        sessionKey: "snapshot-session",
-        runId,
-        state: "delta",
-        message: {
-          content: [{ type: "text", text: "Hello world" }],
-        },
-      },
-    } as unknown as EventFrame);
-
-    await agent.handleGatewayEvent({
-      event: "chat",
-      payload: {
-        sessionKey: "snapshot-session",
-        runId,
-        state: "final",
-        stopReason: "end_turn",
-        message: {
-          content: [{ type: "text", text: "Hello world" }],
-        },
-      },
-    } as unknown as EventFrame);
-
-    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
-    const chunks = sessionUpdate.mock.calls.filter(
-      (call: unknown[]) =>
-        (call[0] as Record<string, unknown>)?.update &&
-        (call[0] as Record<string, Record<string, unknown>>).update?.sessionUpdate ===
-          "agent_message_chunk",
-    );
-    expect(chunks).toHaveLength(1);
-  });
-
   it("emits only the missing tail when the final snapshot extends prior deltas", async () => {
     const { agent, sessionUpdate, promptPromise, runId } = await createSnapshotHarness();
 

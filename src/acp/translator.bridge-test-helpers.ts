@@ -132,9 +132,9 @@ export async function expectOversizedPromptRejected(params: { sessionId: string;
   expect(session?.abortController).toBeNull();
 }
 
-export type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
+type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
-export function requireAcpObject(value: unknown, label: string): Record<string, unknown> {
+function requireAcpObject(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error(`expected ${label}`);
   }

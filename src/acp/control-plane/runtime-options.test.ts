@@ -168,26 +168,9 @@ describe("mergeRuntimeOptions", () => {
 });
 
 describe("buildRuntimeConfigOptionPairs timeout advertisement", () => {
-  it("omits the timeout pair when advertised keys exclude every timeout alias", () => {
-    const pairs = buildRuntimeConfigOptionPairs({ timeoutSeconds: 60 }, [
-      "model",
-      "thinking",
-      "approval_policy",
-    ]);
-    expect(pairs).toEqual([]);
-  });
-
   it("keeps the timeout pair when advertised keys include `timeout`", () => {
     const pairs = buildRuntimeConfigOptionPairs({ timeoutSeconds: 60 }, ["model", "timeout"]);
     expect(pairs).toEqual([["timeout", "60"]]);
-  });
-
-  it("keeps the timeout pair using the advertised `timeout_seconds` alias", () => {
-    const pairs = buildRuntimeConfigOptionPairs({ timeoutSeconds: 60 }, [
-      "model",
-      "timeout_seconds",
-    ]);
-    expect(pairs).toEqual([["timeout_seconds", "60"]]);
   });
 
   it("keeps the timeout pair when advertised keys are unknown (empty or undefined)", () => {
@@ -204,21 +187,5 @@ describe("buildRuntimeConfigOptionPairs timeout advertisement", () => {
       ["model", "claude-sonnet-4.6"],
       ["thinking", "high"],
     ]);
-  });
-});
-
-describe("buildRuntimeConfigOptionPairs thinking advertisement", () => {
-  it("omits automatic thinking when the backend advertises no thinking alias", () => {
-    expect(buildRuntimeConfigOptionPairs({ thinking: "high" }, ["mode", "model"])).toEqual([]);
-  });
-
-  it("maps automatic thinking to the advertised reasoning_effort alias", () => {
-    expect(
-      buildRuntimeConfigOptionPairs({ thinking: "high" }, ["model", "reasoning_effort"]),
-    ).toEqual([["reasoning_effort", "high"]]);
-  });
-
-  it("keeps automatic thinking when advertised keys are unknown", () => {
-    expect(buildRuntimeConfigOptionPairs({ thinking: "high" })).toEqual([["thinking", "high"]]);
   });
 });

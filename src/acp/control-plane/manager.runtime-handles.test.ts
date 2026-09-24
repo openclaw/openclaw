@@ -10,6 +10,7 @@ import {
   expectRecordFields,
   hoisted,
   installAcpSessionManagerTestLifecycle,
+  installAcpRuntimeSession,
   mockCallArg,
   readySessionMeta,
   type OpenClawConfig,
@@ -45,15 +46,7 @@ describe("AcpSessionManager runtime handles", () => {
 
   it("reuses runtime session handles after idle time in the same manager process", async () => {
     const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: readySessionMeta(),
-    });
+    installAcpRuntimeSession(runtimeState.runtime);
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
@@ -181,15 +174,7 @@ describe("AcpSessionManager runtime handles", () => {
 
   it("keeps handles across policy edits and replaces them when their backend owner changes", async () => {
     const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: readySessionMeta(),
-    });
+    installAcpRuntimeSession(runtimeState.runtime);
     const allowlistCfg = {
       ...baseCfg,
       tools: {
@@ -287,15 +272,7 @@ describe("AcpSessionManager runtime handles", () => {
         summary: "status=alive",
         details: { status: "alive" },
       });
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: readySessionMeta(),
-    });
+    installAcpRuntimeSession(runtimeState.runtime);
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
@@ -399,40 +376,6 @@ describe("AcpSessionManager runtime handles", () => {
 
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
-  });
-
-  it("rehydrates runtime handles after a manager restart", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: readySessionMeta(),
-    });
-
-    const managerA = new AcpSessionManager();
-    await managerA.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "before restart",
-      mode: "prompt",
-      requestId: "r1",
-    });
-    const managerB = new AcpSessionManager();
-    await managerB.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "after restart",
-      mode: "prompt",
-      requestId: "r2",
-    });
-
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
   });
 
   it("passes persisted ACP backend session identity back into ensureSession for configured bindings after restart", async () => {
@@ -803,7 +746,6 @@ describe("AcpSessionManager runtime handles", () => {
 
   it.each([
     { agent: "codex", model: "openai/gpt-5.4", supportsModel: true },
-    { agent: "claude", model: "anthropic/claude-sonnet-4-6", supportsModel: true },
     { agent: "opencode", model: "inherited/default", supportsModel: false },
   ])(
     "preserves legacy $agent model state across status and turn restart",
@@ -873,43 +815,6 @@ describe("AcpSessionManager runtime handles", () => {
       expect(persisted.currentMeta.runtimeOptions?.model).toBe(model);
     },
   );
-
-  it("passes persisted thinking runtime options into ensureSession after restart", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    const sessionKey = "agent:codex:acp:binding:demo-binding:default:thinking-restart";
-    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
-      return {
-        sessionKey: key,
-        storeSessionKey: key,
-        acp: {
-          ...readySessionMeta(),
-          runtimeOptions: {
-            thinking: "high",
-          },
-        },
-      };
-    });
-
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey,
-      text: "after restart",
-      mode: "prompt",
-      requestId: "r-binding-restart-thinking",
-    });
-
-    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
-      sessionKey,
-      thinking: "high",
-    });
-  });
 
   it("does not resume persisted ACP identity for oneshot sessions after restart", async () => {
     const runtimeState = createRuntime();

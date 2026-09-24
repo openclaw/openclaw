@@ -17,49 +17,54 @@ vi.mock("./commands.js", () => ({
   getAvailableCommands: () => [],
 }));
 
+async function createSnapshotHarness() {
+  const sessionStore = createInMemorySessionStore();
+  const connection = createAcpConnection();
+  const sessionUpdate = connection["__sessionUpdateMock"];
+  const request = vi.fn(async (method: string) => {
+    if (method === "sessions.list") {
+      return {
+        ts: Date.now(),
+        path: "/tmp/sessions.json",
+        count: 1,
+        defaults: {
+          modelProvider: null,
+          model: null,
+          contextTokens: null,
+        },
+        sessions: [
+          {
+            key: "usage-session",
+            displayName: "Usage session",
+            kind: "direct",
+            updatedAt: 1_710_000_123_000,
+            thinkingLevel: "adaptive",
+            modelProvider: "openai",
+            model: "gpt-5.4",
+            totalTokens: 1200,
+            totalTokensFresh: true,
+            contextTokens: 4000,
+          },
+        ],
+      };
+    }
+    if (method === "chat.send") {
+      return new Promise(() => {});
+    }
+    return { ok: true };
+  }) as GatewayClient["request"];
+  const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
+    sessionStore,
+  });
+
+  await agent.loadSession(createLoadSessionRequest("usage-session"));
+  sessionUpdate.mockClear();
+  return { agent, sessionStore, sessionUpdate };
+}
+
 describe("acp session metadata and usage updates", () => {
   it("emits a fresh usage snapshot after prompt completion when gateway totals are available", async () => {
-    const sessionStore = createInMemorySessionStore();
-    const connection = createAcpConnection();
-    const sessionUpdate = connection["__sessionUpdateMock"];
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          ts: Date.now(),
-          path: "/tmp/sessions.json",
-          count: 1,
-          defaults: {
-            modelProvider: null,
-            model: null,
-            contextTokens: null,
-          },
-          sessions: [
-            {
-              key: "usage-session",
-              displayName: "Usage session",
-              kind: "direct",
-              updatedAt: 1_710_000_123_000,
-              thinkingLevel: "adaptive",
-              modelProvider: "openai",
-              model: "gpt-5.4",
-              totalTokens: 1200,
-              totalTokensFresh: true,
-              contextTokens: 4000,
-            },
-          ],
-        };
-      }
-      if (method === "chat.send") {
-        return new Promise(() => {});
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
-      sessionStore,
-    });
-
-    await agent.loadSession(createLoadSessionRequest("usage-session"));
-    sessionUpdate.mockClear();
+    const { agent, sessionUpdate } = await createSnapshotHarness();
 
     const promptPromise = agent.prompt(createPromptRequest("usage-session", "hello"));
     await agent.handleGatewayEvent(createChatFinalEvent("usage-session"));
@@ -92,47 +97,7 @@ describe("acp session metadata and usage updates", () => {
   });
 
   it("still resolves prompts when snapshot updates fail after completion", async () => {
-    const sessionStore = createInMemorySessionStore();
-    const connection = createAcpConnection();
-    const sessionUpdate = connection["__sessionUpdateMock"];
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          ts: Date.now(),
-          path: "/tmp/sessions.json",
-          count: 1,
-          defaults: {
-            modelProvider: null,
-            model: null,
-            contextTokens: null,
-          },
-          sessions: [
-            {
-              key: "usage-session",
-              displayName: "Usage session",
-              kind: "direct",
-              updatedAt: 1_710_000_123_000,
-              thinkingLevel: "adaptive",
-              modelProvider: "openai",
-              model: "gpt-5.4",
-              totalTokens: 1200,
-              totalTokensFresh: true,
-              contextTokens: 4000,
-            },
-          ],
-        };
-      }
-      if (method === "chat.send") {
-        return new Promise(() => {});
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
-      sessionStore,
-    });
-
-    await agent.loadSession(createLoadSessionRequest("usage-session"));
-    sessionUpdate.mockClear();
+    const { agent, sessionStore, sessionUpdate } = await createSnapshotHarness();
     sessionUpdate.mockRejectedValueOnce(new Error("session update transport failed"));
 
     const promptPromise = agent.prompt(createPromptRequest("usage-session", "hello"));
