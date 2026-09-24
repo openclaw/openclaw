@@ -1,4 +1,5 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
@@ -20,6 +21,7 @@ import {
 import type { InitializedUpdate } from "./update-command-initialization.js";
 import { admitUpdateRequesterContinuation } from "./update-command-managed-context.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { UpdateCommandFailure, withUpdateAdmissionReporting } from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
@@ -164,19 +166,45 @@ async function runAdmittedUpdate(
         resolveUpdateCommandAdmissionRoot(prepared),
         initialization?.target.managedServiceRoot ?? prepared.servicePlan?.serviceRoot,
       );
-      executionStarted = true;
-      return withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
-        updateCommandInternal(
-          opts,
-          recoveryState,
-          invocationCwd,
-          prepared,
-          presentation,
-          executor,
-          retainRuntime,
-          initialization,
-        ),
-      );
+      const execute = () => {
+        executionStarted = true;
+        return withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
+          updateCommandInternal(
+            opts,
+            recoveryState,
+            invocationCwd,
+            prepared,
+            presentation,
+            executor,
+            retainRuntime,
+            initialization,
+          ),
+        );
+      };
+      if (inputOpts.dryRun || !prepared.controlPlaneUpdateSentinelMeta?.handoffId) {
+        return execute();
+      }
+      // The admitted helper owns native stop and recovery for this invocation.
+      // A handoff tuple alone never grants authority to an ordinary service caller.
+      const fence =
+        run.executorFence ??
+        (await executor.enter(prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot, {
+          preflight: true,
+          serviceRoot: prepared.servicePlan?.serviceRoot,
+        }));
+      run.executorFence = fence;
+      const runId = run.runId;
+      const assertCurrent = () => {
+        if (opts.run !== run || run.runId !== runId || run.executorFence !== fence) {
+          throw new UpdateCommandRecoveryPendingError(
+            "Managed updater lost its admitted executor.",
+          );
+        }
+        captureUpdateCommandExecutorAuthority(fence, runId);
+      };
+      return withGatewayServiceUpdateAuthority(assertCurrent, execute, {
+        originalRoot: captureUpdateCommandExecutorAuthority(fence, runId).installKey,
+      });
     };
     const execute = initialization
       ? () => executeWith(initialization.executor)

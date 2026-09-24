@@ -15,6 +15,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
@@ -23,6 +24,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import { FULL_RELEASE_WAIT_TIMEOUT_MINUTES } from "../../scripts/full-release-validation-at-sha.mts";
+import { listRecordedFirstHopSourceVersions } from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
 import {
@@ -76,7 +78,6 @@ const CI_WORKFLOW = ".github/workflows/ci.yml";
 const PERFORMANCE_WORKFLOW = ".github/workflows/openclaw-performance.yml";
 const PUBLICATION_CONTRACT_FILES = [
   "scripts/full-release-publication-contract.mjs",
-  "scripts/full-release-flake-policy.mjs",
   "scripts/clawhub-prepared-artifact.mjs",
   "scripts/clawhub-parent-authorization.mjs",
   "scripts/plugin-publication-artifact.mjs",
@@ -207,10 +208,14 @@ const frozenAdmissionClosure = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/update-compat-inventory.json",
+  "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
   "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/release-version.mjs",
   "scripts/lib/frozen-target-compat.sh",
+  "scripts/lib/trusted-native-typescript.mjs",
+  "scripts/lib/native-typescript.mts",
   "scripts/resolve-frozen-codex-live-suite.mjs",
   "scripts/resolve-fs-safe-native-contract.mjs",
   "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
@@ -383,7 +388,14 @@ function frozenWorkflowFixture(
     return result;
   }
   function provisionParser() {
-    cpSync("node_modules/typescript", join(tooling, "node_modules/typescript"), {
+    const installedParser = createRequire(import.meta.url).resolve("typescript/package.json");
+    const nativeName = `@typescript/typescript-${process.platform}-${process.arch}`;
+    const installedNative = createRequire(installedParser).resolve(`${nativeName}/package.json`);
+    cpSync(dirname(installedParser), join(tooling, "node_modules/typescript"), {
+      recursive: true,
+      dereference: true,
+    });
+    cpSync(dirname(installedNative), join(tooling, "node_modules", nativeName), {
       recursive: true,
       dereference: true,
     });
@@ -952,6 +964,41 @@ describe("frozen admission workflow barriers", () => {
     expect(f.outputs.resolved_admission?.outputs.baseline_scope).toBe("all-scenarios");
   });
 
+  it("rejects a pre-June dist-tag before publishing resolved baseline admission", () => {
+    const f = packageAdmissionBaselineFixture({
+      docker_lanes: "published-upgrade-survivor",
+      published_upgrade_survivor_baseline: "openclaw@beta",
+    });
+    writeFileSync(join(f.f.root, "bin/npm"), "#!/bin/sh\nprintf '\"2026.5.31\"\\n'\n", {
+      mode: 0o755,
+    });
+    const result = f.resolveBaselines();
+    expect(result.failedStep).toBe("Pin published upgrade baseline versions");
+    expect(result.stderr).toContain("Upgrade pre-June installs through OpenClaw 2026.9.5");
+    expect(f.outputs.exact_baselines?.outputs).toEqual({});
+    expect(f.request().options.baselinesResolved).toBe(false);
+  });
+
+  it("rejects a pre-June inherited baseline at direct frozen preflight admission", () => {
+    const f = packageAdmissionBaselineFixture({ docker_lanes: "root-managed-vps-upgrade" });
+    const request = f.request();
+    Object.assign(request.options, {
+      baselinesResolved: true,
+      upgradeSurvivorBaseline: "openclaw@2026.5.31",
+      upgradeSurvivorBaselines: "",
+    });
+    const requestPath = join(f.f.root, "frozen-admission-request.json");
+    writeFileSync(requestPath, JSON.stringify(request));
+    const result = spawnSync(
+      process.execPath,
+      [join(f.f.tooling, "scripts/preflight-frozen-target-contracts.mjs"), "--plan", requestPath],
+      { encoding: "utf8", env: { PATH: process.env.PATH, HOME: f.f.root } },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Upgrade pre-June installs through OpenClaw 2026.9.5");
+    expect(result.stdout).toBe("");
+  });
+
   it.each(["onboard", "upgrade-survivor"])(
     "preserves unused multiline package baselines and scope for %s",
     (lane) => {
@@ -1050,7 +1097,9 @@ describe("frozen admission workflow barriers", () => {
         ],
       );
       const plan = f.selection();
-      expect(plan.docker).toHaveLength(71);
+      // One targeted group per recorded first-hop source joins the fixed lanes.
+      const firstHopLanes = listRecordedFirstHopSourceVersions().length;
+      expect(plan.docker).toHaveLength(70 + firstHopLanes);
       const planned = Date.now();
       const result = f.run("Admit frozen source contracts", {}, "", { timeout: 360_000 });
       console.info(
@@ -1067,9 +1116,9 @@ describe("frozen admission workflow barriers", () => {
       const bytes = readFileSync(join(f.root, "frozen-admission.json"));
       expect(bytes.length).toBeLessThanOrEqual(262_144);
       const record = JSON.parse(bytes.toString("utf8"));
-      expect(record.evaluations).toHaveLength(72);
+      expect(record.evaluations).toHaveLength(71 + firstHopLanes);
       const children = reconstructAdmissionEvaluations(record);
-      expect(children).toHaveLength(72);
+      expect(children).toHaveLength(71 + firstHopLanes);
       const { digest, provenance: _provenance, ...content } = record;
       expect(digest).toBe(createHash("sha256").update(JSON.stringify(content)).digest("hex"));
       expect(record.status).toBe("UNRESOLVED");
@@ -3576,12 +3625,10 @@ function fullReleaseChild(kind: string) {
 }
 
 function runPackageAcceptanceSummary(params: {
-  advisory?: boolean;
   dockerArtifactResult?: string;
   dockerRegistryResult?: string;
   npm12InstallResult?: string;
   suiteProfile?: string;
-  telegramAdvisory?: boolean;
   telegramEnabled: boolean;
   telegramResult: string;
 }) {
@@ -3593,7 +3640,6 @@ function runPackageAcceptanceSummary(params: {
   return spawnSync("bash", ["-c", script], {
     encoding: "utf8",
     env: {
-      ADVISORY: String(params.advisory ?? false),
       DOCKER_ARTIFACT_RESULT: params.dockerArtifactResult ?? "success",
       DOCKER_REGISTRY_RESULT: params.dockerRegistryResult ?? "skipped",
       PACKAGE_INTEGRITY_RESULT: "success",
@@ -3602,7 +3648,6 @@ function runPackageAcceptanceSummary(params: {
       PATH: process.env.PATH,
       RESOLVE_RESULT: "success",
       SUITE_PROFILE: params.suiteProfile ?? "package",
-      TELEGRAM_ADVISORY: String(params.telegramAdvisory ?? false),
       TELEGRAM_ENABLED: String(params.telegramEnabled),
     },
   });
@@ -5690,7 +5735,6 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
       version: "2026.8.1-beta.3",
     },
   ])("carries the $name artifact owner without replacing publication authority", async (mode) => {
-    const stableSoakWaiver = mode.fullReleasePreflight ? "Soak infrastructure unavailable" : "";
     const producerRunId = mode.independentProducer ? "333" : "111";
     const fullReleaseRunId = mode.fullReleasePreflight ? "111" : "222";
     const qualifiedName = `openclaw-npm-preflight-${"a".repeat(40)}`;
@@ -5720,7 +5764,6 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
     const target = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
     const expressions: Record<string, string> = {
       "${{ inputs.preflight_run_id }}": "111",
-      "${{ inputs.stable_soak_waiver }}": stableSoakWaiver,
       "${{ inputs.full_release_validation_run_id }}": fullReleaseRunId,
     };
     for (const [name, value] of Object.entries(target.outputs ?? {})) {
@@ -5803,7 +5846,6 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       JSON.stringify({
         openclawNpmTarball: "https://example.invalid/openclaw.tgz",
         openclawNpmIntegrity: "sha512-fixture",
-        ...(stableSoakWaiver ? { stableSoakWaiver } : {}),
         ...(mode.fullReleasePreflight ? { telegramWaiver: `${mode.version}-owner-approved` } : {}),
       }),
     );
@@ -5834,7 +5876,6 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     expect(dispatched.status, dispatched.stderr).toBe(0);
     const dispatch = fixture.events().find((event) => event.startsWith("dispatch:"));
     expect(dispatch).toContain("-f preflight_run_id=111");
-    expect(dispatch).toContain(`-f stable_soak_waiver=${stableSoakWaiver}`);
     expect(dispatch).toContain(`-f full_release_validation_run_id=${fullReleaseRunId}`);
 
     const proof = fixture.run(
@@ -5848,12 +5889,6 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     );
     expect(proof.status, proof.stderr).toBe(0);
     const proofText = readFileSync(join(fixture.root, "release-verification.md"), "utf8");
-    expect(proofText.includes("Stable soak waived by operator:")).toBe(Boolean(stableSoakWaiver));
-    if (stableSoakWaiver) {
-      expect(proofText).toContain(
-        `Stable soak waived by operator: ${JSON.stringify(stableSoakWaiver)}`,
-      );
-    }
     expect(proofText).toContain(
       mode.fullReleasePreflight
         ? `Telegram integration checks: waived by the release owner for ${mode.version} (source QA, Package Acceptance, published-package E2E); not run.`
@@ -6246,11 +6281,9 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     "keeps verifier success separate from postpublish %s completion",
     (outcome) => {
       const version = "2026.9.1";
-      const stableSoakWaiver = "Soak infrastructure unavailable: 100% blocked\nOperator approved";
       const fixture = createReleasePublishFixture(
         {
           RELEASE_TAG: `v${version}`,
-          STABLE_SOAK_WAIVER: stableSoakWaiver,
           PUBLISH_OPENCLAW_NPM: "false",
           CHILD_PLUGIN_CLAWHUB_RUN_ID: "",
           CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: "",
@@ -6347,7 +6380,6 @@ if (args[0] === "view") {
         expect(receipt).toMatchObject({
           version: 1,
           releasePublishRunId: "44",
-          stableSoakWaiver,
           workflowRuns: expect.arrayContaining([
             expect.objectContaining({
               id: "66",
@@ -6781,7 +6813,7 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
       'verify_child_run_sha "$workflow" "$run_id" "$expected_sha" || return 1',
       'approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}"',
       'dispatch_workflow_at_ref "${RELEASE_TAG}" "${TARGET_SHA}" android-release.yml',
-      'wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
+      'if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}" "" true "" true; then',
       'wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
       '-f release_publish_branch="${PARENT_WORKFLOW_BRANCH}"',
       '-f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}"',
@@ -7933,14 +7965,10 @@ test "$package_manager" = "pnpm@12.1.0"
     const dispatchInputs = parsedWorkflow.on?.workflow_dispatch?.inputs;
     const callInputs = parsedWorkflow.on?.workflow_call?.inputs;
     expect(dispatchInputs?.prepublish_plugin_registry_json).toBeUndefined();
-    expect(dispatchInputs?.advisory).toEqual(callInputs?.advisory);
-    expect(callInputs?.advisory).toEqual({
-      description: "Treat acceptance failures as advisory for the caller",
-      required: false,
-      default: false,
-      type: "boolean",
-    });
-    expect(Object.keys(dispatchInputs ?? {})).toHaveLength(25);
+    expect(dispatchInputs?.advisory).toBeUndefined();
+    expect(callInputs?.advisory).toBeUndefined();
+    expect(callInputs?.telegram_advisory).toBeUndefined();
+    expect(Object.keys(dispatchInputs ?? {})).toHaveLength(24);
     expect(parsedWorkflow.on?.workflow_dispatch?.inputs?.telegram_advisory).toBeUndefined();
     expect(parsedWorkflow.on?.workflow_call?.inputs?.suite_profile).toMatchObject({
       default: "package",
@@ -7949,12 +7977,9 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(workflow).toContain("published_upgrade_survivor_baseline:");
     expect(workflow).toContain("published_upgrade_survivor_baselines:");
     expect(workflow).toContain("last-stable-4");
-    expect(workflow).toContain("all-since-2026.4.23");
+    expect(workflow).toContain("all-since-2026.6.1");
     expect(workflow).toContain("published_upgrade_survivor_scenarios:");
     expect(workflow).toContain("scripts/resolve-upgrade-survivor-baselines.mts");
-    expect(workflow).toContain("--history-count 6");
-    expect(workflow).toContain("--include-version 2026.4.23");
-    expect(workflow).toContain("--pre-date 2026-03-15T00:00:00Z");
     expect(workflow).toContain('"last-stable-"');
     expect(workflow).toContain('"all-since-"');
     const smoke = runPackageAcceptanceProfile({ suiteProfile: "smoke" });
@@ -8014,9 +8039,7 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(packageTelegram.with?.scenario).toBe(
       "${{ needs.resolve_package.outputs.telegram_scenarios }}",
     );
-    expect(packageTelegram.with?.advisory).toBe(
-      "${{ inputs.advisory || inputs.telegram_advisory || false }}",
-    );
+    expect(packageTelegram.with?.advisory).toBeUndefined();
     expect(packageTelegram.with).not.toHaveProperty("allow_older_binary_destructive_actions");
     expect(workflow).toContain(
       "package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}",
@@ -8085,8 +8108,8 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(dockerAcceptance.with?.ref).toBe(
       "${{ needs.resolve_package.outputs.package_source_sha }}",
     );
-    expect(dockerAcceptance.with?.advisory).toBe("${{ inputs.advisory || false }}");
-    expect(dockerAcceptanceRegistry.with?.advisory).toBe("${{ inputs.advisory || false }}");
+    expect(dockerAcceptance.with?.advisory).toBeUndefined();
+    expect(dockerAcceptanceRegistry.with?.advisory).toBeUndefined();
     expect(dockerAcceptance.with?.prepublish_plugin_registry_artifact_name).toContain(
       "startsWith(",
     );
@@ -8441,7 +8464,6 @@ test "$package_manager" = "pnpm@12.1.0"
       expect(step.env).toMatchObject({
         RELEASE_TAG: "${{ inputs.tag }}",
         RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
-        STABLE_SOAK_WAIVER: "${{ inputs.stable_soak_waiver }}",
       });
     }
     expect(validationStep.env?.EXPECTED_RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
@@ -8660,30 +8682,18 @@ test "$package_manager" = "pnpm@12.1.0"
     const decisionDownloads = workflowStep(summary, "Download release decision attempts");
     const drainDownloads = workflowStep(summary, "Download diagnostic drain attempts");
 
-    expect(decision.needs).toEqual([
-      "resolve_target",
-      "release_execution_plan",
-      "automatic_flake_retry",
-    ]);
-    expect(drain.needs).toEqual([
-      "resolve_target",
-      "release_execution_plan",
-      "automatic_flake_retry",
-    ]);
+    expect(decision.needs).toEqual(["resolve_target", "release_execution_plan"]);
+    expect(drain.needs).toEqual(["resolve_target", "release_execution_plan"]);
     expect(decision.if).toBe("always()");
     expect(drain.if).toBe("always()");
     expect(decisionStep.run).toBe(drainStep.run);
     expect(decisionStep.env).toMatchObject({
       FAIL_FAST: "${{ inputs.fail_fast }}",
       FULL_RELEASE_STATE_MODE: "decision",
-      FULL_RELEASE_RETRY_RECORDS_PATH: "${{ runner.temp }}/full-release-flake-retry-records",
-      FULL_RELEASE_RETRY_OWNER_RESULT: "${{ needs.automatic_flake_retry.result }}",
     });
     expect(drainStep.env).toMatchObject({
       FAIL_FAST: "false",
       FULL_RELEASE_STATE_MODE: "drain",
-      FULL_RELEASE_RETRY_RECORDS_PATH: "${{ runner.temp }}/full-release-flake-retry-records",
-      FULL_RELEASE_RETRY_OWNER_RESULT: "${{ needs.automatic_flake_retry.result }}",
     });
     expectTextToIncludeAll(decisionStep.run, [
       'node scripts/full-release-validation-state.mjs "$FULL_RELEASE_STATE_MODE"',
@@ -8784,7 +8794,7 @@ test "$package_manager" = "pnpm@12.1.0"
         .map((step) => ({ jobId, step })),
     );
 
-    expect(downloadSteps).toHaveLength(12);
+    expect(downloadSteps).toHaveLength(8);
     expect(
       downloadSteps.map(({ jobId, step }) => [
         jobId,
@@ -8812,40 +8822,16 @@ test "$package_manager" = "pnpm@12.1.0"
         "${{ runner.temp }}/full-release-publication-admission",
       ],
       [
-        "automatic_flake_retry",
-        "Download immutable release execution plan",
-        "full-release-execution-plan-${{ github.run_id }}",
-        "${{ github.workspace }}/full-release-execution-plan",
-      ],
-      [
-        "automatic_flake_retry",
-        "Restore automatic retry intent artifact",
-        "full-release-flake-intent-${{ github.run_id }}-${{ matrix.child }}",
-        "${{ github.workspace }}/full-release-flake-intent",
-      ],
-      [
         "release_decision",
         "Download immutable release execution plan",
         "full-release-execution-plan-${{ github.run_id }}",
         "${{ runner.temp }}/full-release-execution-plan",
       ],
       [
-        "release_decision",
-        "Download automatic retry records",
-        "full-release-flake-retry-${{ github.run_id }}-*-${{ github.run_attempt }}",
-        "${{ runner.temp }}/full-release-flake-retry-records",
-      ],
-      [
         "diagnostic_drain",
         "Download immutable release execution plan",
         "full-release-execution-plan-${{ github.run_id }}",
         "${{ runner.temp }}/full-release-execution-plan",
-      ],
-      [
-        "diagnostic_drain",
-        "Download automatic retry records",
-        "full-release-flake-retry-${{ github.run_id }}-*-${{ github.run_attempt }}",
-        "${{ runner.temp }}/full-release-flake-retry-records",
       ],
       [
         "summary",
@@ -9227,7 +9213,6 @@ describe("package artifact reuse", () => {
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1");
     expect(packageJson).toContain("test:docker:update-restart-auth");
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth");
-    expect(publishedUpgradeSurvivor).toContain("validate_baseline_package_spec");
     expect(publishedUpgradeSurvivor).toContain("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE");
     expect(publishedUpgradeSurvivor).toContain("write_update_restart_service_env");
     expect(publishedUpgradeSurvivor).toContain("GATEWAY_AUTH_TOKEN_REF=%s");
@@ -9237,7 +9222,6 @@ describe("package artifact reuse", () => {
       "env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw",
     );
     expect(publishedUpgradeSurvivor).toContain("phase prepare-update-restart-probe");
-    expect(publishedUpgradeSurvivor).toContain("openclaw@(alpha|beta|latest|");
     expect(publishedUpgradeSurvivor).toContain("configure_watchos_tls_fixture");
     expect(publishedUpgradeSurvivor).toContain('"publicUrl":"wss://localhost:18789"');
     expect(publishedUpgradeSurvivor).toContain('export NODE_EXTRA_CA_CERTS="$WATCH_TLS_CA_CERT"');
@@ -9263,11 +9247,6 @@ describe("package artifact reuse", () => {
     );
     expect(publishedUpgradeSurvivor).toContain('"id": "opik-openclaw"');
     expect(publishedUpgradeSurvivor).toContain('"configSchema": {');
-    expect(
-      publishedUpgradeSurvivor.indexOf('validate_baseline_package_spec "$baseline_spec"'),
-    ).toBeLessThan(
-      publishedUpgradeSurvivor.indexOf('npm install -g --prefix "$npm_config_prefix"'),
-    );
   });
 
   it("reuses a content-addressed bare image for prepared E2E images", () => {
@@ -9941,7 +9920,6 @@ describe("package artifact reuse", () => {
 
   it("shards broad native live tests instead of one serial live-all job", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
-    const retryHelper = readFileSync("scripts/ci-live-command-retry.sh", "utf8");
     const nativeLiveJob = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
     const selection = workflowStep(nativeLiveJob, "Select native live suite");
 
@@ -9992,7 +9970,7 @@ describe("package artifact reuse", () => {
       admissionSteps.findIndex((step) => step.name === "Admit frozen source contracts"),
     );
     expect(workflow).toContain("LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}");
-    expect(workflow).toContain("live-cache attempt ${attempt}/2");
+    expect(workflow).toContain("timeout --foreground --kill-after=30s 8m pnpm test:live:cache");
     expect(workflow).toContain(
       "live_suite_filter '${LIVE_SUITE_FILTER}' does not match any runnable suite",
     );
@@ -10045,7 +10023,7 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain(
       'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","--skip-git-repo-check"]',
     );
-    expect(workflow).toContain("bash .release-harness/scripts/ci-live-command-retry.sh");
+    expect(workflow).toContain('bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"');
     expect(workflow).toContain("use_github_hosted_runners:");
     for (const [jobName, runner] of [
       ["validate_special_e2e", "blacksmith-32vcpu-ubuntu-2404"],
@@ -10093,9 +10071,6 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-5");
     expect(workflow).toContain("anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5");
     expect(workflow).toMatch(
-      /suite_id: native-live-src-gateway-profiles-fireworks[\s\S]*?advisory: true/u,
-    );
-    expect(workflow).toMatch(
       /suite_id: native-live-src-gateway-profiles-openai[\s\S]*?timeout_minutes: 60[\s\S]*?profiles: beta minimum stable full/u,
     );
     expect(workflow).toContain(
@@ -10108,7 +10083,7 @@ describe("package artifact reuse", () => {
       "OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2",
     );
     expect(workflow).toMatch(
-      /suite_id: native-live-src-gateway-profiles-fireworks[\s\S]*?timeout_minutes: 30[\s\S]*?advisory: true/u,
+      /suite_id: native-live-src-gateway-profiles-fireworks[\s\S]*?timeout_minutes: 30/u,
     );
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-deepseek");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-opencode-go");
@@ -10143,24 +10118,6 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-extensions-a-k");
     expect(workflow).toContain("suite_id: native-live-extensions-l-n");
     expect(workflow).toContain("suite_id: native-live-extensions-moonshot");
-    expect(workflow).toMatch(/suite_id: native-live-extensions-moonshot[\s\S]*?advisory: true/u);
-    expect(workflow).toContain("OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}");
-    expect(workflow).toContain("Advisory live suite failed with exit code");
-    expect(workflow).toMatch(
-      /validate_live_media_provider_suites:[\s\S]*?OPENCLAW_LIVE_SUITE_ADVISORY: \$\{\{ matrix\.advisory \}\}[\s\S]*?shell: bash[\s\S]*?Advisory live suite failed with exit code/u,
-    );
-    expect(dockerRows).toContainEqual(
-      expect.objectContaining({
-        suite_id: "live-gateway-advisory-docker-deepseek-fireworks",
-        advisory: true,
-      }),
-    );
-    expect(workflow).toMatch(
-      /validate_live_media_provider_suites:[\s\S]*?OPENCLAW_LIVE_SUITE_ADVISORY: \$\{\{ matrix\.advisory \}\}/u,
-    );
-    expect(workflow).toMatch(
-      /suite_id: native-live-extensions-media-video-d[\s\S]*?timeout_minutes: 30[\s\S]*?advisory: true/u,
-    );
     expect(workflow).toContain("suite_id: native-live-extensions-openai");
     expect(workflow).toContain("suite_id: native-live-extensions-o-z-other");
     expect(workflow).toContain("validate_live_media_provider_suites:");
@@ -10199,14 +10156,6 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("inputs.live_suite_filter == 'native-live-extensions-media-video'");
     expect(workflow).not.toContain("needs_ffmpeg: true");
-    expect(retryHelper).toContain("OPENCLAW_LIVE_COMMAND_ATTEMPTS:-2");
-    expect(retryHelper).toContain("ECONNRESET");
-    expect(retryHelper).toContain("fetch failed");
-    expect(retryHelper).toContain("gateway request timeout");
-    expect(retryHelper).toContain("model idle timeout");
-    expect(retryHelper).toContain("OPENCLAW_LIVE_COMMAND_RATE_LIMIT_RETRY_DELAY_SECONDS:-60");
-    expect(retryHelper).toContain("Rate limit reached");
-    expect(retryHelper).toContain("tokens per min");
     expect(
       workflow.match(/moonshot\) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;/gu),
     ).toHaveLength(2);
@@ -10225,7 +10174,6 @@ describe("package artifact reuse", () => {
     );
 
     expect(deepSeek).toMatchObject({
-      advisory: true,
       command:
         "OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek OPENCLAW_LIVE_GATEWAY_MODELS=deepseek/deepseek-v4-flash,deepseek/deepseek-v4-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
       profiles: "full",
@@ -10243,7 +10191,6 @@ describe("package artifact reuse", () => {
     );
 
     expect(mimo).toMatchObject({
-      advisory: true,
       command:
         "OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
       profiles: "full",
@@ -10753,7 +10700,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(setupNodeWith).not.toHaveProperty("sticky-disk");
     expect(setupNodeWith["cache-mode"]).toBe("restore");
     expect(checkTestboxJob["timeout-minutes"]).toBe(
-      "${{ fromJSON(inputs.timeout_minutes || '120') }}",
+      "${{ fromJSON(inputs.timeout_minutes || '240') }}",
     );
     for (const step of [runTestboxStep, runArmTestboxStep, runBuildArtifactsTestboxStep]) {
       expect(step.uses).toBe(RUN_TESTBOX_WITH_FAILURE_REPORTING);
@@ -10933,15 +10880,15 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it.each([
     { label: "canonical beta", scope: "npm-beta" },
-    { label: "Linux-only beta", crossOsSuiteFilter: "ubuntu", scope: "npm-beta" },
+    { label: "all-OS beta", crossOsSuiteFilter: "ubuntu,windows,macos", scope: "npm-beta" },
     { label: "beta soak", runReleaseSoak: "true", scope: "full" },
     { label: "focused beta CI", rerunGroup: "ci", scope: "full" },
     { label: "stable profile", releaseProfile: "stable", scope: "full" },
     { label: "stable version", version: "2026.8.1", scope: "full" },
     { label: "main beta profile", targetRef: "main", scope: "full" },
     {
-      label: "canonical stable with Windows omitted",
-      crossOsSuiteFilter: "ubuntu,macos",
+      label: "canonical stable with all OSes",
+      crossOsSuiteFilter: "ubuntu,windows,macos",
       releaseProfile: "stable",
       version: "2026.8.1",
       runReleaseSoak: "true",
@@ -10999,18 +10946,24 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     ["beta", "2026.8.1-beta.3", "false"],
     ["stable", "2026.8.1", "true"],
   ])(
-    "rejects %s qualification when the cross-OS selection omits Linux coverage",
+    "rejects %s qualification when the cross-OS selection omits required OS coverage",
     (releaseProfile, version, runReleaseSoak) => {
-      const result = runFullReleaseTargetIdentityValidation({
-        targetRef: "release/2026.8.1",
-        releaseProfile,
-        version,
-        runReleaseSoak,
-        crossOsSuiteFilter: "windows,macos,ubuntu/packaged-fresh",
-      });
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("Linux");
-      expect(result.output).not.toContain("coverage_policy=");
+      for (const crossOsSuiteFilter of [
+        "windows,macos,ubuntu/packaged-fresh",
+        "ubuntu,macos",
+        "ubuntu,windows",
+      ]) {
+        const result = runFullReleaseTargetIdentityValidation({
+          targetRef: "release/2026.8.1",
+          releaseProfile,
+          version,
+          runReleaseSoak,
+          crossOsSuiteFilter,
+        });
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("all Linux, Windows, and macOS cross-OS suites");
+        expect(result.output).not.toContain("coverage_policy=");
+      }
     },
   );
 
@@ -11803,9 +11756,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       telegram_mode:
         "${{ (needs.resolve_target.outputs.telegram_waiver != '' || needs.resolve_target.outputs.skip_package_telegram_e2e == 'true') && 'none' || 'mock-openai' }}",
     });
-    expect(packageAcceptanceJob.with).toMatchObject({
-      telegram_advisory: true,
-    });
+    expect(packageAcceptanceJob.with?.telegram_advisory).toBeUndefined();
     expect(workflow).not.toContain("telegram_scenarios:");
     expect(workflow).toContain("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}");
     expect(workflow).toContain("ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}");
@@ -11827,7 +11778,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       'RELEASE_FILTER_REPO_LIVE_SUITE_FILTER="$(IFS=,; printf \'%s\' "${repo_filter_tokens[*]-}")"',
     );
     expect(workflow).toContain("cross_os_suite_filter:");
-    expect(workflow).toContain("advisory: false");
+    expect(workflow).not.toContain("advisory:");
     expect(workflow).toContain(
       "suite_filter: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}",
     );
@@ -11959,9 +11910,40 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(workflowStep(matrixJob, "Run Matrix live lane").run).toContain(
       'matrix_args+=(--scenario "${scenario}")',
     );
-    expect(releaseTelegramWorkflow).toContain(
-      'echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2',
+    expect(releaseTelegramWorkflow).not.toContain("retrying once");
+  });
+
+  it.each([
+    ["discord", "Discord"],
+    ["whatsapp", "WhatsApp"],
+    ["slack", "Slack"],
+  ])("preserves the first failed %s release QA attempt", (channel, label) => {
+    const job = workflowJob(RELEASE_CHECKS_WORKFLOW, `qa_live_${channel}_release_checks`);
+    const run = workflowStep(job, `Run ${label} live lane`).run;
+    const workdir = tempDirs.make(`release-qa-${channel}-first-failure-`);
+    const attempts = join(workdir, "attempts");
+    const pnpm = join(workdir, "pnpm");
+    writeFileSync(
+      pnpm,
+      '#!/bin/sh\nif [ -f "$ATTEMPTS" ]; then printf "retried\\n" >> "$ATTEMPTS"; exit 0; fi\nprintf "first\\n" > "$ATTEMPTS"\nexit 17\n',
+      { mode: 0o755 },
     );
+    writeFileSync(join(workdir, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const result = spawnSync("bash", ["-c", run ?? ""], {
+      cwd: workdir,
+      encoding: "utf8",
+      env: {
+        ATTEMPTS: attempts,
+        GITHUB_OUTPUT: join(workdir, "outputs"),
+        GITHUB_RUN_ID: "123",
+        GITHUB_RUN_ATTEMPT: "1",
+        PATH: `${workdir}:${process.env.PATH}`,
+      },
+    });
+
+    expect(job["continue-on-error"]).toBeUndefined();
+    expect(result.status, result.stderr).toBe(17);
+    expect(readFileSync(attempts, "utf8")).toBe("first\n");
   });
 
   it("routes release Buzz through the QA Lab selector", () => {
@@ -12332,7 +12314,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(runtimePairRun).toContain("--runtime-parity-tier standard");
     expect(runtimePairRun).toContain("--runtime-parity-tier soak");
     expect(runtimePairRun).toContain("Frozen candidate cannot select runtime-pair lane");
-    expect(workflowStep(laneJob, "Run runtime-pair lane")["continue-on-error"]).toBe(true);
+    expect(workflowStep(laneJob, "Run runtime-pair lane")["continue-on-error"]).toBeUndefined();
     const runtimePairValidation = workflowStep(laneJob, "Validate runtime-pair lane").run;
     expect(runtimePairValidation).toContain("validator_args+=(--require-explicit-gap)");
     expect(runtimePairValidation).toContain('--target-sha "$RELEASE_CHECK_TARGET_SHA"');
@@ -12724,12 +12706,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         telegramResult: "success",
       },
     ],
-    [
-      "preserves advisory handling for an unexpectedly skipped Telegram lane",
-      "::warning::package_telegram ended with skipped; package acceptance is advisory for this caller.",
-      0,
-      { advisory: true, telegramEnabled: true, telegramResult: "skipped" },
-    ],
   ] as const)("%s", (_name, expectedOutput, expectedStatus, params) => {
     const result = runPackageAcceptanceSummary(params);
 
@@ -12741,23 +12717,19 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     }
   });
 
-  it("allows release callers to make only Telegram package acceptance advisory", () => {
+  it("keeps Telegram and Docker package acceptance failures blocking", () => {
     const telegramResult = runPackageAcceptanceSummary({
-      telegramAdvisory: true,
       telegramEnabled: true,
       telegramResult: "failure",
     });
     const dockerResult = runPackageAcceptanceSummary({
       dockerArtifactResult: "failure",
-      telegramAdvisory: true,
       telegramEnabled: true,
       telegramResult: "success",
     });
 
-    expect(telegramResult.status).toBe(0);
-    expect(telegramResult.stdout).toContain(
-      "::warning::package_telegram ended with failure; package acceptance is advisory for this caller.",
-    );
+    expect(telegramResult.status).toBe(1);
+    expect(telegramResult.stdout).toContain("::error::package_telegram ended with failure");
     expect(dockerResult.status).toBe(1);
     expect(dockerResult.stdout).toContain("::error::docker_acceptance ended with failure");
   });
@@ -12777,13 +12749,12 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         encoding: "utf8",
         env: {
           PATH: process.env.PATH,
-          ADVISORY: "true",
           GITHUB_STEP_SUMMARY: summary,
           LANE_OUTCOME: outcome,
         },
       });
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain(`::warning::Package Telegram attempt: ${outcome}`);
+      expect(result.stdout).toContain(`::error::Package Telegram attempt: ${outcome}`);
       expect(readFileSync(summary, "utf8")).toContain(`Telegram attempt: ${outcome}`);
       expect(readFileSync(summary, "utf8")).not.toContain("passed");
     },
@@ -13616,7 +13587,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
     for (const jobName of advisoryJobNames) {
       const job = workflowJob(RELEASE_CHECKS_WORKFLOW, jobName);
-      expect(job["continue-on-error"], jobName).toBe(true);
+      expect(job["continue-on-error"], jobName).toBeUndefined();
 
       const recordStep = workflowStep(job, "Record advisory status");
       expect(recordStep.if, jobName).toBe("always()");
@@ -13694,7 +13665,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(telegramDispatch.run).toContain('[[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]');
     expect(telegramDispatch.run).not.toContain("commits/main");
     expect(telegramDispatch.run).not.toContain("dispatch_attempt");
-    expect(telegramCaller["continue-on-error"]).toBe(true);
+    expect(telegramCaller["continue-on-error"]).toBeUndefined();
     expect(telegramCaller.outputs?.identity_verified).toBe(
       "${{ steps.dispatch.outputs.identity_verified }}",
     );
@@ -13769,7 +13740,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       'elif [[ "$fallback" == "success" ]]; then',
       "advisory_status_override_allowed()",
       'if advisory_status_override_allowed "$name"; then',
-      "::warning::${name} ended with ${result}; Tideclaw alpha treats non-package-safety release-check lanes as advisory.",
       "::error::${name} ended with ${result}",
       '"qa_live_release_checks=${QA_LIVE_RELEASE_CHECKS_RESULT}"',
       '"qa_live_buzz_release_checks=${QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT}"',
@@ -13810,12 +13780,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     },
     ...(["cancelled", "failure", "skipped"] as const).map((currentResult) => ({
       emptyStderr: false,
-      expected: [
-        `::warning::qa_live_telegram_release_checks ended with ${currentResult}; Telegram release testing is best effort and does not block release validation.`,
-      ],
-      name: `reports a ${currentResult} selected Telegram child without blocking release`,
+      expected: [`::error::qa_live_telegram_release_checks ended with ${currentResult}`],
+      name: `rejects a ${currentResult} selected Telegram child`,
       params: { currentAttempt: "2", currentResult, telegramSelected: true },
-      status: 0,
+      status: 1,
     })),
     {
       emptyStderr: false,
@@ -13827,7 +13795,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     {
       emptyStderr: false,
       expected: ["::error::Telegram dispatch identity was not verified"],
-      name: "rejects an unverified Telegram child identity despite advisory execution",
+      name: "rejects an unverified Telegram child identity",
       params: {
         currentAttempt: "2",
         currentResult: "failure",
@@ -13841,7 +13809,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         "qa_live_telegram_release_checks ended with failure",
         "::error::package_acceptance_release_checks ended with failure",
       ],
-      name: "keeps package failures blocking alongside an advisory Telegram failure",
+      name: "keeps package failures blocking alongside a Telegram failure",
       params: {
         currentAttempt: "2",
         currentResult: "failure",
@@ -13863,17 +13831,14 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     },
     {
       emptyStderr: false,
-      expected: [
-        "qa_live_telegram_release_checks ended with cancelled",
-        "Telegram release testing is best effort",
-      ],
-      name: "keeps a cancelled Telegram child non-blocking for Tideclaw alpha",
+      expected: ["qa_live_telegram_release_checks ended with cancelled"],
+      name: "rejects a cancelled Telegram child for Tideclaw alpha",
       params: {
         currentAttempt: "2",
         currentResult: "cancelled",
         workflowRef: "refs/heads/tideclaw/alpha/2026-07-10-1200Z",
       },
-      status: 0,
+      status: 1,
     },
   ] as const)("$name", ({ emptyStderr, expected, params, status }) => {
     const result = runReleaseChecksSummary(params);
@@ -14166,7 +14131,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     mkdirSync(join(root, "lib", "cross-os-release-checks"), { recursive: true });
     for (const source of [
       "scripts/release-ci-summary.mjs",
-      "scripts/full-release-flake-retry.mjs",
       "scripts/full-release-validation-policy.mjs",
       ...PUBLICATION_CONTRACT_FILES,
       "scripts/lib/release-changelog.mjs",
@@ -15135,7 +15099,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain(
       "timeout --foreground --kill-after=30s 8m pnpm test:live:cache",
     );
-    expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain("live-cache attempt ${attempt}/2");
   });
 
   it("keeps known bounded dominant child paths below the centralized drain owner", () => {

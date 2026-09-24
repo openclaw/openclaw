@@ -111,7 +111,7 @@ the job's uploaded artifacts.
 | `macos-swift`                    | Swift lint and build for the macOS app, plus tests for the app, shared OpenClawKit, and standalone Swabble package                                                                                                                                                                                       | macOS-relevant changes                                |
 | `ios-build`                      | Debug build and Swift lint smoke; full manual CI adds separate Release device and native test phases                                                                                                                                                                                                     | iOS/capture changes and full manual CI                |
 | `ios-screenshot-shard`           | Two device-family shards using the locked Ruby/Fastlane bundle: iPhone in one job, and 13-inch iPad plus Watch in the other; scenarios stay serial within each device                                                                                                                                    | Full manual CI only                                   |
-| `ios-screenshot-evidence`        | Hosted reducer that verifies exact artifact/family topology, digests, every OpenClaw-managed capture-attempt outcome (including failed invocations without an xcresult), and run provenance before publishing the canonical release screenshot artifact                                                  | After both screenshot shards                          |
+| `ios-screenshot-evidence`        | Hosted reducer that verifies exact artifact/family topology, digests, one successful OpenClaw-managed capture per screenshot, and run provenance before publishing the canonical release screenshot artifact; replacement attempts cannot turn failed captures into passing evidence                     | After both screenshot shards                          |
 | `android`                        | Phone and Wear unit tests, debug builds, Android lint, and Kotlin lint                                                                                                                                                                                                                                   | Android-relevant changes                              |
 | `openclaw/ci-gate`               | Final aggregate: requires preflight and security; rejects selected skips and every downstream failure or cancellation                                                                                                                                                                                    | Every non-draft CI run                                |
 | `openclaw-performance`           | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                         |
@@ -122,8 +122,11 @@ the job's uploaded artifacts.
 Linux test shards select Bun through `scripts/lib/ci-test-runtime.mts`. The
 ordinary and isolated unit-fast lanes partition their existing file inventories: files with known Bun
 failures or additional skips stay on Node, and the compatible remainder runs on
-Bun. Those Node files still execute; they are not excluded from CI. The complete
-fake-timer lane also supports Bun. Control UI retains two whole GC-sensitive
+Bun. Those Node files still execute; they are not excluded from CI.
+TypeScript compiler analysis suites also stay on Node because the synchronous
+native compiler API requires Node child-process pipe handles. This includes
+compiler assertions in mixed runtime suites; their cases remain enabled.
+The complete fake-timer lane also supports Bun. Control UI retains two whole GC-sensitive
 files on Node (`chat-pane-retained-presentation.test.ts` and
 `usage-page-details.test.ts`) and runs the remaining files on Bun.
 Other families retain Node until they pass on the pinned fork within their
@@ -381,7 +384,14 @@ If the PR head changes before or during evaluation, the obsolete run stops
 successfully without publishing approval for the replacement commit. The new
 head's automatic event owns its evaluation. Changes to approval-relevant metadata
 on the same head and real evaluation errors still fail; supersession does not hide
-an earlier guard error.
+an earlier guard error. During long read sequences, the review checks the live
+PR again before admitting another read after 30 seconds. Non-quota recovery waits
+check every 30 seconds too, so superseded work stops without finishing pagination
+or waiting out diff recovery. In-flight requests retain their 30-second deadline;
+writes and autoscrub cleanup are not interrupted. Server-directed rate-limit
+waits must finish before another API request is allowed. Checkout and runtime
+setup are outside these checkpoints. Per-head non-canceling publication
+serialization and all final approval checks remain unchanged.
 
 When GitHub returns a rate-limit response, the resolver and review scripts stop
 API requests, honor `Retry-After` and exhausted-quota reset times, and restart
@@ -403,7 +413,7 @@ use one-, two-, and four-second delays, sharing the three-restart limit and job
 deadline with rate-limit recovery. GitHub may have accepted the failed write, so
 the review rereads current PR, approval, role, and CI data instead of replaying an
 old decision. This recovery applies only to commit-status publication; other
-uncertain writes, cancellation, and request timeouts remain errors.
+uncertain writes, cancellation, and write request timeouts remain errors.
 
 Separately, read-only `GET` and `HEAD` requests retry HTTP `500`, `502`, `503`,
 and `504` responses and recognized transient connection failures before a
@@ -411,6 +421,13 @@ response arrives. They share one retry budget of one, two, and four seconds,
 within the original 30-second request timeout. These retries exclude writes,
 caller cancellation, certificate errors, and unrecognized errors. HTTP and
 connection errors identify the request method and endpoint.
+
+If a read-only request reaches its 30-second deadline, including while reading
+its response body, the script restarts the complete evaluation with fresh PR,
+approval, role, and CI data. These restarts use one-, two-, and four-second delays
+and share the existing three-restart limit and job deadline. A persistent read
+timeout fails the job. Write timeouts do not trigger this recovery because GitHub
+may already have accepted the mutation.
 
 If GitHub's changed-file count and file list disagree, or the count changes after
 validation, the script restarts the complete evaluation after one, two, and four
@@ -434,10 +451,11 @@ remove its review requirement.
 The **Dependency Guard** publishes `openclaw/dependency-review` and retains its
 dependency classification and lockfile autoscrub behavior. Dependency removals
 that already qualify as informational remain informational.
-If neither cleanup App can provide a write token, optional lockfile cleanup is
-skipped with an explanation in the workflow summary. The dependency review still
-requires maintainer approval or removal of the lockfile changes; unavailable
-cleanup credentials do not fail the Actions job.
+Automatic lockfile cleanup is best effort. If neither cleanup App can provide a
+write token, or GitHub explicitly denies the cleanup mutation's permissions, the
+dependency notice explains how to remove the remaining changes or request
+maintainer approval. These expected access limitations do not fail the Actions
+job or satisfy dependency review. Unexpected cleanup errors remain failures.
 
 Edit `.github/security-review-policy.yml` to change path classification. Its
 `categories` group product paths with descriptions and review guidance;

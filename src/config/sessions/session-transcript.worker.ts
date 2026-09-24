@@ -129,6 +129,30 @@ serveOwnedWorkerTasks(
       }
     }
     try {
+      if (request.kind === "historical-eviction-candidates") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { runSqliteDeferredTransactionSync } =
+          await import("../../infra/sqlite-transaction.js");
+        const { readHistoricalSessionIdsInDatabase } =
+          await import("./session-history-eviction-candidates.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, request.kind, () => {
+            const result = withOpenClawAgentDatabaseReadOnly(
+              (database) =>
+                runSqliteDeferredTransactionSync(database.db, () =>
+                  readHistoricalSessionIdsInDatabase({ ...request, database }),
+                ),
+              { ...request.database, env: request.env },
+            );
+            if (!result.found) {
+              throw new Error(`SQLite history eviction cannot read its database: ${result.reason}`);
+            }
+            return { kind: "historical-eviction-candidates" as const, sessionIds: result.value };
+          })),
+        };
+      }
       if (request.kind === "session-archive-pruning") {
         const { readSessionArchivePruningInWorker } =
           await import("./session-history-archive-pruning.worker.js");
@@ -172,8 +196,17 @@ serveOwnedWorkerTasks(
         };
       }
       if (request.kind === "session-store-target") {
-        const { readSessionStoreTarget } = await import("./session-store-target-inventory.js");
-        return { ok: true, value: readSessionStoreTarget(request.request) };
+        const { readSessionStoreTargetResult } =
+          await import("./session-store-target-inventory.js");
+        const read = readSessionStoreTargetResult(request.request);
+        if (!read.ok) {
+          const readError = encodeSessionTranscriptWorkerError(read.error);
+          if (!readError) {
+            throw read.error;
+          }
+          return { ok: true, value: { kind: "session-store-target", readError } };
+        }
+        return { ok: true, value: read.value };
       }
       if (request.kind === "session-exact-entries") {
         const { readExactSessionEntriesWithLifecycle } =
@@ -235,6 +268,42 @@ serveOwnedWorkerTasks(
                     : { status: "unknown", reason: result.reason },
                 );
             return { kind: "session-identity-evidence" as const, evidence };
+          })),
+        };
+      }
+      if (request.kind === "session-entry-read") {
+        const { loadSessionEntryReadOnlyResultInScope } =
+          await import("./session-accessor.sqlite-entry.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, request.kind, () => {
+            let source: SessionTranscriptWorkerValues["session-entry-read"]["source"];
+            const read = loadSessionEntryReadOnlyResultInScope(
+              {
+                ...request.scope,
+                env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
+              },
+              request.continuation,
+              (readSource) => {
+                if (typeof readSource.databaseIdentity !== "string") {
+                  throw new Error("Private session entry requires its process-held owner");
+                }
+                source = { ...readSource, databaseIdentity: readSource.databaseIdentity };
+              },
+            );
+            if (!read.ok) {
+              const readError = encodeSessionTranscriptWorkerError(read.error);
+              if (!readError || readError.kind === "fence") {
+                throw read.error;
+              }
+              return {
+                kind: "session-entry-read" as const,
+                entry: undefined,
+                source,
+                readError,
+              };
+            }
+            return { kind: "session-entry-read" as const, entry: read.value, source };
           })),
         };
       }
@@ -456,6 +525,25 @@ serveOwnedWorkerTasks(
                     deferProfileDisplay: true,
                     resolveCronJobName: () => undefined,
                   };
+                  if (request.request.kind === "message-by-id") {
+                    const { target, messageId, options: lookupOptions } = request.request.params;
+                    return {
+                      kind: "message-by-id",
+                      result: await options.readers.readSessionMessageByIdAsync(
+                        target,
+                        messageId,
+                        lookupOptions,
+                      ),
+                    };
+                  }
+                  if (request.request.kind === "message-count") {
+                    return {
+                      kind: "message-count",
+                      count: await options.readers.readSessionMessageCountAsync(
+                        request.request.params.target,
+                      ),
+                    };
+                  }
                   if (request.request.kind === "message-lookup") {
                     return {
                       kind: "message-lookup",
@@ -538,7 +626,9 @@ serveOwnedWorkerTasks(
       if (
         error instanceof SyntaxError &&
         request.kind === "history-page" &&
-        request.request.kind === "message-lookup"
+        (request.request.kind === "message-lookup" ||
+          request.request.kind === "message-by-id" ||
+          request.request.kind === "message-count")
       ) {
         return { ok: false, error: { kind: "syntax", message: error.message } };
       }

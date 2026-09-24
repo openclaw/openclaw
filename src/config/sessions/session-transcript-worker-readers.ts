@@ -1,5 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok } from "@openclaw/normalization-core/result";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
   type SessionHistoryWorkerDatabase,
@@ -21,6 +23,23 @@ export function createSessionHistoryWorkerReaders(
   runRequest: SessionHistoryWorkerRequestRunner,
 ): Omit<SessionHistoryWorkerDatabase, "generation" | "assertCurrent"> {
   return {
+    readHistoricalEvictionCandidates: async (input) =>
+      await runRequest(
+        () => ({ kind: "historical-eviction-candidates", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          if (
+            typeof value === "boolean" ||
+            Array.isArray(value) ||
+            value.kind !== "historical-eviction-candidates"
+          ) {
+            throw new Error(
+              "Session history worker returned another result instead of eviction candidates",
+            );
+          }
+          return value.sessionIds;
+        },
+      ),
     readArchivePruning: async (input) =>
       await runRequest(
         () => ({ kind: "session-archive-pruning", ...input }),
@@ -128,6 +147,8 @@ export function createSessionHistoryWorkerReaders(
             value.kind !== "http" &&
             value.kind !== "delta" &&
             value.kind !== "recent" &&
+            value.kind !== "message-by-id" &&
+            value.kind !== "message-count" &&
             value.kind !== "message-lookup")
         ) {
           throw new Error("Session history worker returned metadata instead of history");
@@ -258,7 +279,7 @@ export function createSessionHistoryWorkerReaders(
           return value;
         },
       ),
-    readExactEntries: async (input) =>
+    readExactEntries: async (input, signal) =>
       await runRequest(
         () => ({ kind: "session-exact-entries", ...input }),
         JSON.stringify(input).length * 2,
@@ -274,6 +295,7 @@ export function createSessionHistoryWorkerReaders(
           }
           return value;
         },
+        signal,
       ),
     readRowFacts: async (input) => {
       if (input.sessionKeys.length > MAX_SESSION_ROW_FACTS_KEYS) {
@@ -314,6 +336,23 @@ export function createSessionHistoryWorkerReaders(
             );
           }
           return value.card;
+        },
+      ),
+    readEntryResult: async (input) =>
+      await runRequest(
+        () => ({ kind: "session-entry-read", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          if (
+            typeof value === "boolean" ||
+            Array.isArray(value) ||
+            value.kind !== "session-entry-read"
+          ) {
+            throw new Error("Session history worker returned another result instead of an entry");
+          }
+          return value.readError
+            ? err(decodeSessionTranscriptWorkerReadError(value.readError))
+            : ok(value.entry);
         },
       ),
     readEntries: async (scope) =>

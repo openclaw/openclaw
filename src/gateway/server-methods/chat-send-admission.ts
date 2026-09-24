@@ -15,7 +15,6 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveActiveReplyRunOwnerForSignal } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
-import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -24,7 +23,6 @@ import {
   isProgressCardRefreshInputProvenance,
   progressCardRefreshRunProjection,
 } from "../../sessions/input-provenance.js";
-import { retireProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
 import {
   beginSessionWorkAdmission,
   interruptSessionWorkAdmissions,
@@ -35,7 +33,6 @@ import { registerChatAbortController, resolveChatRunExpiresAtMs } from "../chat-
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
-import { loadSessionEntry } from "../session-utils.js";
 import {
   buildAbortedChatSendPayload,
   readPreRegisteredRun,
@@ -59,10 +56,15 @@ import {
 } from "./chat-send-pre-admission.js";
 import { bindChatSendPreparedSession } from "./chat-send-session-binding.js";
 import { captureAdmittedChatSendSessionSettings } from "./chat-send-session-settings.js";
-import { prepareChatSendSessionEntry } from "./chat-send-session.js";
+import {
+  loadCurrentChatSendSession,
+  prepareChatSendSessionEntry,
+  type PreparedChatSendSession,
+} from "./chat-send-session.js";
 import {
   assertChatSendExclusiveAdmission,
   createChatSendWorkAdmission,
+  releaseChatSendCallerAuthority,
 } from "./chat-send-work-admission.js";
 import { normalizeOptionalChatText, normalizeUnknownChatText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -70,6 +72,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 /** Reserve the session lifecycle and register the abortable run before attachment work. */
 export async function admitChatSend(
   params: ChatSendPreAdmissionParams & {
+    session: PreparedChatSendSession;
     hasCurrentClientAuthority?: GatewayRequestHandlerOptions["hasCurrentClientAuthority"];
     onAdmissionOwned?: () => Promise<boolean>;
   },
@@ -80,15 +83,12 @@ export async function admitChatSend(
   const progressRefresh = isProgressCardRefreshInputProvenance(request.systemInputProvenance);
   const {
     rawSessionKey,
-    sessionLoadKey,
     clientRunId,
     pendingChatSendKey,
-    sessionLoadOptions,
     cfg,
     storePath,
     entry,
     sessionKey,
-    sessionRoutingChanged,
     selectedAgent,
     requestedSessionId,
     backingSessionId,
@@ -101,6 +101,7 @@ export async function admitChatSend(
     restartSafeRequest,
     expectedLeafEntryId,
   } = session;
+  const assertSessionTargetCurrent = session.assertSessionTargetCurrent;
   const chatSendTraceAttributes = {
     runId: clientRunId,
     sessionKey,
@@ -249,11 +250,7 @@ export async function admitChatSend(
       }
       return;
     }
-    // Admission only reads these entries; borrowing avoids cloning every unrelated session.
-    const latestSession = loadSessionEntry(sessionLoadKey, { ...sessionLoadOptions, clone: false });
-    if (sessionRoutingChanged(latestSession.cfg)) {
-      throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
-    }
+    const latestSession = loadCurrentChatSendSession(session);
     const latestEntry = latestSession.entry;
     const requestConflict = resolveChatSendRequestConflict({
       ...params,
@@ -348,6 +345,7 @@ export async function admitChatSend(
       admittedSessionId = initialSessionEntry.sessionId;
     }
     restartSafeAdmission = resolveRestartSafeChatAdmission({
+      activeRunScopeKey,
       agentId,
       cfg: latestSession.cfg,
       clientRunId,
@@ -551,18 +549,18 @@ export async function admitChatSend(
       runId: clientRunId,
       entry: activeRunAbort.entry,
     });
-    releaseCallerAuthority = () => {
-      try {
-        capturedOperator.release?.();
-      } finally {
-        if (request.providerReviewAcknowledgment) {
-          retireProviderReviewAcknowledgment(request.providerReviewAcknowledgment);
-        }
-      }
-    };
+    releaseCallerAuthority = () =>
+      releaseChatSendCallerAuthority({ operator: capturedOperator, request, session });
     params.assertCurrent?.();
     activeRunAbort.controller.signal.throwIfAborted();
     capturedOperator.authority?.assertCurrent();
+    try {
+      assertSessionTargetCurrent();
+    } catch (error) {
+      cleanupPreDispatchAdmission();
+      respondChatSendAdmissionError(error, respond);
+      return { ok: false as const };
+    }
     let interruptionSettled = true;
     if (runInterruptTarget) {
       interruptedActiveRun = true;
@@ -611,6 +609,13 @@ export async function admitChatSend(
       return { ok: false as const };
     }
     params.assertCurrent?.();
+    try {
+      assertSessionTargetCurrent();
+    } catch (error) {
+      cleanupPreDispatchAdmission();
+      respondChatSendAdmissionError(error, respond);
+      return { ok: false as const };
+    }
   } catch (error) {
     cleanupPreDispatchAdmission();
     throw error;
@@ -687,6 +692,7 @@ export async function admitChatSend(
       initialSessionEntry,
       chatSendTraceAttributes,
       assertInitialSkillSelection,
+      assertSessionTargetCurrent,
       cleanupAdmittedRun,
       finishAbortedChatSend,
       gatewayWorkAdmission,

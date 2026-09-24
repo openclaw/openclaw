@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
-import { afterEach, assert, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -53,47 +53,6 @@ function checkoutPath(checkout: Record<string, unknown>) {
   }
   return checkout.path;
 }
-
-describe("automatic release flake retry boundary", () => {
-  it("gates the sole retry writer on a durable intent and makes both collectors await it", () => {
-    const owner = workflow.jobs.automatic_flake_retry;
-    assert(owner);
-    const names = owner.steps.map((entry) => entry.name);
-    const order = [
-      "Prepare automatic retry intent",
-      "Upload automatic retry intent",
-      "Record automatic retry intent digest",
-      "Save automatic retry intent",
-      "Execute automatic retry",
-      "Record automatic retry rejection digest",
-      "Upload automatic retry record",
-    ];
-    expect(order.map((name) => names.indexOf(name))).toEqual(
-      order.map((name) => names.indexOf(name)).toSorted((a, b) => a - b),
-    );
-    expect(order.every((name) => names.includes(name))).toBe(true);
-    expect(step("automatic_flake_retry", "Upload automatic retry intent").with).toMatchObject({
-      overwrite: false,
-    });
-    expect(step("automatic_flake_retry", "Execute automatic retry").if).toBe(
-      "${{ (steps.prepare.outputs.prepared == 'true' && steps.intent_witness.outcome == 'success' && steps.intent_save.outcome == 'success') || steps.prepare.outputs.restored == 'true' }}",
-    );
-    expect(step("automatic_flake_retry", "Record automatic retry rejection digest")).toMatchObject({
-      if: "${{ always() && github.run_attempt == 1 && steps.record.outputs.exists == 'true' }}",
-      run: "node scripts/full-release-flake-retry.mjs witness",
-    });
-    for (const key of ["release_decision", "diagnostic_drain"]) {
-      expect(workflow.jobs[key]).toHaveProperty("needs", [
-        "resolve_target",
-        "release_execution_plan",
-        "automatic_flake_retry",
-      ]);
-      expect(step(key, "Download automatic retry records").with).toMatchObject({
-        pattern: "full-release-flake-retry-${{ github.run_id }}-*-${{ github.run_attempt }}",
-      });
-    }
-  });
-});
 
 describe("full release metadata checkouts", () => {
   it.each([

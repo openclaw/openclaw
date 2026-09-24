@@ -232,25 +232,17 @@ function classifyLegacyServices(legacyServices: ExtraGatewayService[]): {
   const failed: string[] = [];
 
   for (const svc of legacyServices) {
-    if (svc.platform === "darwin") {
-      if (svc.scope === "user") {
-        darwinUserServices.push(svc);
-      } else {
-        failed.push(`${svc.label} (${svc.scope})`);
-      }
-      continue;
+    const userServices =
+      svc.platform === "darwin"
+        ? darwinUserServices
+        : svc.platform === "linux"
+          ? linuxUserServices
+          : undefined;
+    if (userServices && svc.scope === "user") {
+      userServices.push(svc);
+    } else {
+      failed.push(`${svc.label} (${userServices ? svc.scope : svc.platform})`);
     }
-
-    if (svc.platform === "linux") {
-      if (svc.scope === "user") {
-        linuxUserServices.push(svc);
-      } else {
-        failed.push(`${svc.label} (${svc.scope})`);
-      }
-      continue;
-    }
-
-    failed.push(`${svc.label} (${svc.platform})`);
   }
 
   return { darwinUserServices, linuxUserServices, failed };
@@ -548,20 +540,18 @@ export async function maybeRepairGatewayServiceConfig(
   const hasEntrypointMismatch = audit.issues.some(
     (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
   );
-  const showSourceCheckoutWarning = sourceCheckoutWarning !== null && !hasEntrypointMismatch;
+  const sourceCheckoutWarningToShow = hasEntrypointMismatch ? null : sourceCheckoutWarning;
 
   if (audit.issues.length === 0 && !definitionRepair) {
-    if (sourceCheckoutWarning !== null && !hasEntrypointMismatch) {
-      note(sourceCheckoutWarning, "Gateway service config");
+    if (sourceCheckoutWarningToShow !== null) {
+      note(sourceCheckoutWarningToShow, "Gateway service config");
     }
     return cfg;
   }
 
   const consolidatedLines: string[] = [];
-  let emittedSourceCheckoutWarning = false;
-  if (sourceCheckoutWarning !== null && showSourceCheckoutWarning) {
-    consolidatedLines.push(sourceCheckoutWarning, "");
-    emittedSourceCheckoutWarning = true;
+  if (sourceCheckoutWarningToShow !== null) {
+    consolidatedLines.push(sourceCheckoutWarningToShow, "");
   }
   consolidatedLines.push(...formatServiceConfigIssues(audit.issues));
   note(consolidatedLines.join("\n"), "Gateway service config");
@@ -572,9 +562,8 @@ export async function maybeRepairGatewayServiceConfig(
     return cfg;
   }
 
-  const aggressiveIssues = audit.issues.filter((issue) => issue.level === "aggressive");
   const needsAggressive =
-    aggressiveIssues.length > 0 ||
+    audit.issues.some((issue) => issue.level === "aggressive") ||
     (installationDrift !== undefined &&
       (audit.definitionDriftError !== undefined ||
         audit.definitionDrift?.some((finding) => finding.kind === "unknown-edit") === true));
@@ -640,7 +629,7 @@ export async function maybeRepairGatewayServiceConfig(
       !(definitionRepair && !needsConfigWrite && isServiceDefinitionOnlyRepair(audit)),
   });
   if (!repair) {
-    if (!emittedSourceCheckoutWarning) {
+    if (sourceCheckoutWarningToShow === null) {
       note(
         "Run `openclaw gateway install --force` when you want to replace the gateway service definition.",
         "Gateway service config",

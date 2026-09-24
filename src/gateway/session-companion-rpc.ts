@@ -12,7 +12,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
-import { SessionCompanionAskError } from "./session-companion-ask.js";
+import { SessionCompanionAskError } from "./session-companion-errors.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { hiddenSessionNotFound } from "./session-sharing-policy.js";
 import { prepareSessionSharing, resolveSessionSharingTarget } from "./session-sharing.js";
@@ -83,7 +83,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, agentId, question } = params as SessionsCompanionAskParams;
+    const { sessionKey, agentId, question, attachments } = params as SessionsCompanionAskParams;
     if (!question.trim()) {
       respond(
         false,
@@ -115,6 +115,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
     }
     const companion = context.sessionCompanion;
     const connId = client.connId;
+    const originalAttachments = attachments?.length ? structuredClone(attachments) : undefined;
     const assertSourceCurrent = () => {
       signal?.throwIfAborted();
       if (
@@ -140,6 +141,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         sessionKey: target.sessionKey,
         agentId: target.agentId,
         question,
+        ...(originalAttachments ? { attachments: originalAttachments } : {}),
         connId,
         assertSourceCurrent,
         ...(capturedOperator ? { operatorAuthority: capturedOperator.authority } : {}),

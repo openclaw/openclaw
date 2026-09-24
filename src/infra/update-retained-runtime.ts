@@ -13,7 +13,7 @@ import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tre
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import { resolveNativePackageProjectRoot } from "./update-native-package-owner.js";
 import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
-import { relocateRuntimePath } from "./update-runtime-relocation.js";
+import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime-relocation.js";
 
 export type RetainUpdateRuntime = (params: {
   mutationRoots: readonly string[];
@@ -149,10 +149,12 @@ export async function withRetainedUpdateRuntime<T>(
             }),
         );
         assertCurrent();
-        const relocations = [
-          ...plan.relocations,
-          ...(root === sourceRoot ? [] : [{ sourceRoot: root, destinationRoot: candidateRoot }]),
-        ].map((entry) => Object.freeze({ ...entry }));
+        const relocations = prepareRuntimeRelocations(
+          [
+            ...plan.relocations,
+            ...(root === sourceRoot ? [] : [{ sourceRoot: root, destinationRoot: candidateRoot }]),
+          ].map((entry) => Object.freeze({ ...entry })),
+        );
         const resolve = (url: URL) =>
           pathToFileURL(relocateRuntimePath(fileURLToPath(url), relocations));
         bind(resolve);

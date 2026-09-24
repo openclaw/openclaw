@@ -173,7 +173,7 @@ const autoCleanupTempDirs = createTempDirTracker();
 
 afterEach(async () => {
   await disposeSessionReadContexts();
-  await releaseSessionTestDirectories(autoCleanupTempDirs.dirs, { settleSuiteProjection: true });
+  await releaseSessionTestDirectories(autoCleanupTempDirs.dirs);
   autoCleanupTempDirs.cleanup();
 });
 
@@ -306,7 +306,7 @@ function getDirectChatSessionWorkRelease(sessionKey = "agent:main:main") {
 
 async function resetDirectChatSession() {
   await disposeSessionReadContexts();
-  await releaseSessionTestDirectories(autoCleanupTempDirs.dirs, { settleSuiteProjection: true });
+  await releaseSessionTestDirectories(autoCleanupTempDirs.dirs);
   dispatchInboundMessageMock.mockReset();
   resetConfigRuntimeState();
 }

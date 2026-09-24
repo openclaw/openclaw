@@ -219,7 +219,8 @@ export type SidebarSessionHovercardRow = Pick<
   | "startedAt"
   | "updatedAt"
   | "workContext"
->;
+> &
+  Partial<Pick<SidebarRecentSession, "attention">>;
 
 export const enum RowVisibilityReason {
   Any = 0,

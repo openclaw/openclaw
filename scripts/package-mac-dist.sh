@@ -198,6 +198,51 @@ if [[ ! -d "$APP" ]]; then
   exit 1
 fi
 
+audit_app_async_frames() {
+  local executable="$1/Contents/MacOS/$PRODUCT" app_archs
+  app_archs="$(/usr/bin/lipo -archs "$executable")"
+  case " $app_archs " in
+    *" arm64 "*)
+      python3 "$ROOT_DIR/apps/macos/scripts/audit-async-sleep-frames.py" "$executable"
+      ;;
+    *)
+      # The audit understands arm64 frames only. An explicitly x86_64-only build variant
+      # ships no arm64 slice, so there is nothing to audit; every other variant must carry one.
+      if [[ "$BUILD_ARCHS" == "x86_64" ]]; then
+        echo "Async frame audit not applicable: x86_64-only build has no arm64 slice ($executable)" >&2
+        return 0
+      fi
+      echo "Error: release executable has no arm64 slice; audit cannot run: $executable" >&2
+      return 1
+      ;;
+  esac
+}
+
+audit_retained_dmg_async_frames() (
+  set -euo pipefail
+  mount_dir="$(mktemp -d "$ROOT_DIR/dist/.notary-dmg.XXXXXX")"
+  mounted=0
+  cleanup_audit_mount() {
+    local result=$?
+    if [[ "$mounted" == "1" ]]; then
+      hdiutil detach "$mount_dir" >/dev/null || result=1
+    fi
+    rmdir "$mount_dir" || result=1
+    exit "$result"
+  }
+  trap cleanup_audit_mount EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM HUP
+  hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$1" >/dev/null
+  mounted=1
+  audit_app_async_frames "$mount_dir/OpenClaw.app"
+)
+
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  # Recovery must recheck the retained bytes, including checkpoints made before this gate existed.
+  audit_app_async_frames "$APP"
+fi
+
 VERSION="$(plist_print_required "$APP/Contents/Info.plist" CFBundleShortVersionString)"
 BUNDLE_VERSION="$(plist_print_required "$APP/Contents/Info.plist" CFBundleVersion)"
 ACTUAL_BUNDLE_ID="$(plist_print_required "$APP/Contents/Info.plist" CFBundleIdentifier)"
@@ -358,6 +403,7 @@ if [[ "$SKIP_DMG" != "1" ]]; then
       if [[ -n "${EXPECTED_DEVELOPER_TEAM_ID:-}" ]]; then
         /usr/bin/codesign --verify --strict -R="anchor apple generic and certificate leaf[subject.OU] = \"${EXPECTED_DEVELOPER_TEAM_ID}\"" "$RETAINED_DMG"
       fi
+      audit_retained_dmg_async_frames "$RETAINED_DMG"
     fi
     "$ROOT_DIR/scripts/notarize-mac-artifact.sh" --submission-file "$RECOVERY_DIR/dmg-submission.json" "$RETAINED_DMG"
     cp "$RETAINED_DMG" "$DMG"

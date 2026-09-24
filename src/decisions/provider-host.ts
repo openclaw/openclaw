@@ -10,6 +10,11 @@ import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginRecord, PluginRegistry } from "../plugins/registry-types.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
+import {
+  decisionDebugEnabled,
+  logDecisionEvaluation,
+  type DecisionEvaluationFacts,
+} from "./diagnostics.js";
 import type {
   DecisionBatch,
   DecisionOutcome,
@@ -209,10 +214,50 @@ export class DecisionProviderHost {
     registry: PluginRegistry,
     consumerId?: string,
   ): Promise<DecisionOutcome> {
+    const started = performance.now();
+    const facts: DecisionEvaluationFacts = { dispatched: false };
+    let outcome: DecisionOutcome | undefined;
+    try {
+      outcome = await this.evaluateRequest(
+        submitted,
+        options,
+        model,
+        config,
+        registry,
+        facts,
+        consumerId,
+      );
+      return outcome;
+    } finally {
+      logDecisionEvaluation({
+        options,
+        providerId: this.provider.id,
+        model,
+        facts,
+        started,
+        outcome,
+      });
+    }
+  }
+
+  private async evaluateRequest(
+    submitted: DecisionBatch,
+    options: Options,
+    model: string,
+    config: OpenClawConfig,
+    registry: PluginRegistry,
+    facts: DecisionEvaluationFacts,
+    consumerId?: string,
+  ): Promise<DecisionOutcome> {
     options.signal.throwIfAborted();
     const instance = getPluginInstance(this.record);
     if (this.retired || this.reloadPause || !instance?.acceptingCalls || instance.owner?.revoked) {
       return this.unavailable("retiring");
+    }
+    if (decisionDebugEnabled()) {
+      // The runtime already admitted bounded, accessor-free JSON. Never retain its text.
+      facts.questionCount = Object.keys(submitted.questions).length;
+      facts.jsonInputBytes = Buffer.byteLength(JSON.stringify(submitted));
     }
     const health = this.generation(config);
     const readConfig = createRuntimeConfigReader(config);
@@ -276,14 +321,15 @@ export class DecisionProviderHost {
       try {
         // Preserve the offered questions even when the provider mutates its input.
         questions = structuredClone(submitted.questions);
-        outcome = await instance.runInRegistry(registry, () =>
-          this.provider.evaluate(submitted, {
+        outcome = await instance.runInRegistry(registry, () => {
+          facts.dispatched = true;
+          return this.provider.evaluate(submitted, {
             model,
             ...(options.agentId ? { agentId: options.agentId } : {}),
             signal,
             deadlineMonotonicMs,
-          }),
-        );
+          });
+        });
       } catch {
         const stopped = interrupted();
         if (stopped) {
@@ -302,7 +348,9 @@ export class DecisionProviderHost {
         return stopped;
       }
       if (outcome?.status === "ok") {
-        if (!validateDecisionResult({ questions }, outcome.result)) {
+        // Reuse the validated snapshot for usage and return projection as well.
+        const result = outcome.result;
+        if (!validateDecisionResult({ questions }, result)) {
           this.fail(health, "invalid-response");
           return this.unavailable("invalid-response");
         }
@@ -310,11 +358,11 @@ export class DecisionProviderHost {
         health.openUntil = 0;
         health.lastSuccessAt = Date.now();
         this.successCount++;
-        this.inputTokens += outcome.result.usage?.inputTokens ?? 0;
-        this.outputTokens += outcome.result.usage?.outputTokens ?? 0;
+        this.inputTokens += result.usage?.inputTokens ?? 0;
+        this.outputTokens += result.usage?.outputTokens ?? 0;
         return {
           status: "ok",
-          result: structuredClone(outcome.result),
+          result: structuredClone(result),
           provenance: {
             providerId: this.provider.id,
             rubricVersion: options.rubricVersion,
@@ -322,11 +370,16 @@ export class DecisionProviderHost {
           },
         };
       }
-      if (outcome?.status !== "unavailable" || !FAILURE_REASONS.has(outcome.reason)) {
+      if (outcome?.status !== "unavailable") {
         throw new DecisionContractError();
       }
-      this.fail(health, outcome.reason, outcome.retryAfterMs);
-      return this.unavailable(outcome.reason);
+      // Validate and publish the same primitives even if a provider envelope is executable.
+      const { reason, retryAfterMs } = outcome;
+      if (!FAILURE_REASONS.has(reason)) {
+        throw new DecisionContractError();
+      }
+      this.fail(health, reason, retryAfterMs);
+      return this.unavailable(reason);
     } catch (error) {
       options.signal.throwIfAborted();
       if (controller.signal.reason instanceof DecisionConsumerClosedError) {

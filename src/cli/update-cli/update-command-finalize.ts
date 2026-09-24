@@ -19,6 +19,7 @@ import {
   normalizeUpdatePostInstallDoctorWarnings,
 } from "../../infra/update-doctor-result.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
+import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
 import {
   acknowledgeAbandonedUpdateRun,
   getUpdateRun,
@@ -469,10 +470,11 @@ async function updateFinalizeCommandInternal(
           // Publish successful recovery only after convergence and the ledger's
           // transactional inactivity/driver check both finish.
           reconcileAbandonedUpdateRuns({ explicit: true, runIds: recoveryRunIds });
-          if (recoveryRunIds.some((runId) => getUpdateRun(runId)?.status === "running")) {
-            throw new Error(
-              "An update resumed while repair was running; wait for that update before retrying repair.",
-            );
+          const unresolved = recoveryRunIds
+            .map((runId) => getUpdateRun(runId))
+            .find((run) => run?.status === "running");
+          if (unresolved) {
+            throw new Error(formatUpdateRunOwnership(unresolved));
           }
           for (const runId of recoveryRunIds) {
             if (acknowledgeAbandonedUpdateRun(runId)) {

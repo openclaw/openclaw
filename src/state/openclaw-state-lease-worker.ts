@@ -71,29 +71,30 @@ function stageLeaseExpiryObservation(
   }
 }
 
+function readOwnedLeaseExpiry(
+  database: DatabaseSync,
+  identity: OpenClawStateLeaseIdentity,
+): number {
+  try {
+    const expiresAt = readOpenClawStateLeaseExpiry(database, identity);
+    if (expiresAt === undefined) {
+      throw new OpenClawStateLeaseError(`state lease ${identity.scope}/${identity.key} was lost`, {
+        code: "OPENCLAW_STATE_LEASE_LOST",
+      });
+    }
+    return expiresAt;
+  } catch (error) {
+    throw toOpenClawStateLeaseVerificationError(identity, error);
+  }
+}
+
 function assertOpenClawStateLeaseWorkerOwned(
   database: DatabaseSync,
   identity: OpenClawStateLeaseIdentity,
   purpose: "write" | "verify" | "renew" = "write",
   stage: "transaction" | "commit" = "transaction",
 ): number {
-  const readExpiry = () => {
-    try {
-      const expiresAt = readOpenClawStateLeaseExpiry(database, identity);
-      if (expiresAt === undefined) {
-        throw new OpenClawStateLeaseError(
-          `state lease ${identity.scope}/${identity.key} was lost`,
-          {
-            code: "OPENCLAW_STATE_LEASE_LOST",
-          },
-        );
-      }
-      return expiresAt;
-    } catch (error) {
-      throw toOpenClawStateLeaseVerificationError(identity, error);
-    }
-  };
-  const expiresAt = readExpiry();
+  const expiresAt = readOwnedLeaseExpiry(database, identity);
   requestSqliteWorkerOperationAdmission({
     stage,
     facts: {
@@ -103,7 +104,7 @@ function assertOpenClawStateLeaseWorkerOwned(
     },
   });
   // Host admission can wait; verify again before publishing the observed expiry.
-  return readExpiry();
+  return readOwnedLeaseExpiry(database, identity);
 }
 
 /** The live owner grants this exact transaction; the receipt alone grants nothing. */
@@ -117,6 +118,29 @@ export function assertOpenClawStateLeaseWorkerOwnedInTransaction(
     throw new Error("State lease worker ownership requires an active transaction");
   }
   return assertOpenClawStateLeaseWorkerOwned(database, identity, purpose, stage);
+}
+
+/** One grant covers the complete lease set held by this transaction. */
+export function assertOpenClawStateLeasesWorkerOwnedInTransaction(
+  database: DatabaseSync,
+  identities: readonly OpenClawStateLeaseIdentity[],
+  stage: "transaction" | "commit" = "transaction",
+): void {
+  if (!database.isTransaction) {
+    throw new Error("State lease worker ownership requires an active transaction");
+  }
+  const keys = new Set(identities.map(({ scope, key }) => JSON.stringify([scope, key])));
+  if (identities.length === 0 || keys.size !== identities.length) {
+    throw new Error("State lease worker transaction requires distinct live leases");
+  }
+  const leases = identities.map((identity) => ({
+    identity,
+    expiresAt: readOwnedLeaseExpiry(database, identity),
+  }));
+  requestSqliteWorkerOperationAdmission({ stage, facts: { kind: "state-leases", leases } });
+  for (const identity of identities) {
+    readOwnedLeaseExpiry(database, identity);
+  }
 }
 
 export function acquireOpenClawStateLeaseInWorker(

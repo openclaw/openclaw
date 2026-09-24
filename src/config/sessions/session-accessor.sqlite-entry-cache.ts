@@ -6,6 +6,10 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  runSqliteReadOperationSync,
+} from "../../infra/sqlite-schema-facts.js";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -27,7 +31,10 @@ import {
   sessionEntryCaches,
   type SqliteSessionEntryCache,
 } from "./session-accessor.sqlite-entry-cache-state.js";
-import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
+import type {
+  SessionEntryCacheReadOptions,
+  SessionEntryCacheSnapshot,
+} from "./session-accessor.sqlite-entry-cache.types.js";
 import {
   prepareExactSessionEntryRowReads,
   validateDeliveryCanonicalSessionEntry,
@@ -130,6 +137,7 @@ function readCachedExactSessionEntries(
       : undefined;
   } catch {
     // Cohort conversion/validation failures retain the exact reader's per-key errors.
+    sessionEntryCaches.delete(database.db);
     return undefined;
   }
 }
@@ -186,65 +194,59 @@ export function trackSessionEntryCacheWrite(
   database: OpenClawAgentDatabase,
   write: () => void,
 ): SqliteSessionEntryCacheWriteGeneration | undefined {
-  const before = sessionEntryCaches.has(database.db)
-    ? readSessionNodesGeneration(database.db)
-    : undefined;
+  const before =
+    sessionEntryCaches.has(database.db) && getAdmittedSqliteSchemaFacts(database.db)
+      ? readSessionNodesGeneration(database.db)
+      : undefined;
   write();
-  if (before === undefined) {
+  if (before === undefined || !getAdmittedSqliteSchemaFacts(database.db)) {
+    sessionEntryCaches.delete(database.db);
     return undefined;
   }
-  const generation = { before, after: readSessionNodesGeneration(database.db) };
-  return generation;
+  return { before, after: readSessionNodesGeneration(database.db) };
 }
 
 export function readSessionEntryCache(
   database: SessionEntryCacheDatabase,
-  options: {
-    cache: boolean;
-    latest?: boolean;
-    projection?: "full" | "list";
-    /** Uncached mixed snapshot: retain complete selected rows beside sibling metadata. */
-    fullEntryKeys?: readonly string[];
-    /** Stream full JSON once, retaining prompt snapshots only for selected rows. Never cached. */
-    retainFullEntry?: (sessionKey: string, entry: SessionEntry) => boolean;
-    /** Topology admits metadata first; its worker owns participant hydration. Never cache this view. */
-    deferParticipants?: true;
-  },
+  options: SessionEntryCacheReadOptions,
 ): SessionEntryCacheSnapshot {
-  const projection = options.retainFullEntry ? "full" : options.projection;
-  const prepared = assertCanonicalSqliteSessionKeysCurrent(
-    database,
-    projection !== "full" && !options.fullEntryKeys,
-  );
-  if (
-    !options.cache ||
-    options.deferParticipants ||
-    options.fullEntryKeys ||
-    options.retainFullEntry ||
-    options.latest ||
-    projection === "full" ||
-    database.db.isTransaction
-  ) {
-    return loadSessionEntrySnapshot(
+  return runSqliteReadOperationSync(database.db, () => {
+    const projection = options.retainFullEntry ? "full" : options.projection;
+    const prepared = assertCanonicalSqliteSessionKeysCurrent(
       database,
-      projection,
-      prepared,
-      options.fullEntryKeys ? new Set(options.fullEntryKeys) : undefined,
-      options.retainFullEntry,
-      options.deferParticipants,
+      projection !== "full" && !options.fullEntryKeys,
     );
-  }
-  const validityToken = readSessionEntryCacheValidityToken(database.db);
-  const cached = sessionEntryCaches.get(database.db);
-  if (cached && cacheValidityTokensEqual(cached.validityToken, validityToken)) {
-    return cached;
-  }
-  // Only tracked publications identify changed rows. A generation gap can contain
-  // same-timestamp or owner-only edits; updated_at cannot validate a partial reload.
-  const loaded = loadSessionEntrySnapshot(database, options.projection, prepared);
-  const next = { ...loaded, validityToken };
-  sessionEntryCaches.set(database.db, next);
-  return next;
+    if (
+      !options.cache ||
+      options.deferParticipants ||
+      options.fullEntryKeys ||
+      options.retainFullEntry ||
+      options.latest ||
+      projection === "full" ||
+      database.db.isTransaction ||
+      !getAdmittedSqliteSchemaFacts(database.db)
+    ) {
+      return loadSessionEntrySnapshot(
+        database,
+        projection,
+        prepared,
+        options.fullEntryKeys ? new Set(options.fullEntryKeys) : undefined,
+        options.retainFullEntry,
+        options.deferParticipants,
+      );
+    }
+    const validityToken = readSessionEntryCacheValidityToken(database.db, "cached");
+    const cached = sessionEntryCaches.get(database.db);
+    if (cached && cacheValidityTokensEqual(cached.validityToken, validityToken)) {
+      return cached;
+    }
+    // Only tracked publications identify changed rows. A generation gap can contain
+    // same-timestamp or owner-only edits; updated_at cannot validate a partial reload.
+    const loaded = loadSessionEntrySnapshot(database, options.projection, prepared);
+    const next = { ...loaded, validityToken };
+    sessionEntryCaches.set(database.db, next);
+    return next;
+  });
 }
 
 function advanceSessionEntryCacheGeneration(

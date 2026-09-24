@@ -351,6 +351,15 @@ autosave for new edits; an offline reload keeps the pending draft.
 Devices node-binding controls also pause while configuration reloads, so a pending
 read cannot overwrite a new selection.
 
+In an agent's **Files** editor, **Add file** opens a missing optional workspace
+document. Saving creates it only if it is still missing. If another editor or
+process creates it first, the editor keeps your draft and reports a conflict.
+**Reload** takes the current file; **Overwrite** reloads its current version and
+then saves your draft against that version. Drafts keep their original file
+version when you switch agents or refresh. If a remote workspace provider cannot
+create files exclusively, saving explains how to update it or create the file on
+that host and reload it; it does not overwrite a file silently.
+
 **Native embed mode.** Native hosts can inject `window.__OPENCLAW_NATIVE_EMBED__ = { platform: "ios", formFactor: "phone" }` at document start to show settings without Dashboard navigation chrome. Supported platforms are `ios`, `macos`, and `android`; form factors are `phone`, `pad`, and `desktop`. In this mode, `/settings` lists the same visible groups and destinations as the settings sidebar. Every embedded route outside the settings root provides a Back button and title, including pages reached through links or tabs such as Memory import, Plugins, and Skill Workshop. Back follows app navigation history; direct links fall back to the nearest settings parent (Memory for Memory import) or `/settings`. Layouts respect device safe areas and use touch controls at phone widths. The flag changes presentation only: Gateway scopes and the existing native device-settings capability still determine which settings are available. Ordinary browser loads keep their existing navigation.
 
 Choice fields that accept an explicit `null` value show it as a dropdown option. For optional fields, `null` remains distinct from clearing the setting or selecting its default. Rejected choices, such as a duplicate in a unique-value list, leave the previous selection in place.

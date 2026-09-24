@@ -700,6 +700,32 @@ describe("input file MIME sniffing", () => {
     ).rejects.toThrow("Unsupported file MIME type: application/zip");
   });
 
+  it.each([
+    { text: "雪🙂", maxChars: 4, expected: "雪🙂", truncated: false },
+    { text: "雪🙂!", maxChars: 4, expected: "雪🙂!", truncated: false },
+    { text: "雪🙂!tail", maxChars: 4, expected: "雪🙂!", truncated: true },
+    { text: "雪🙂tail", maxChars: 2, expected: "雪", truncated: true },
+    { text: "not empty", maxChars: 0, expected: "", truncated: true },
+  ])("labels incomplete PDF text at limit $maxChars for $text", async (testCase) => {
+    const images = [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }];
+    extractPdfContentMock.mockResolvedValueOnce({ text: testCase.text, images });
+    const result = await extractFileContentFromSource({
+      source: {
+        type: "base64",
+        data: Buffer.from("%PDF-1.4\n").toString("base64"),
+        mediaType: "application/pdf",
+        filename: "scan.pdf",
+      },
+      limits: { ...createFileSourceLimits(["application/pdf"]), maxChars: testCase.maxChars },
+    });
+    expect(result.text).toBe(testCase.expected);
+    expect(Boolean(result.metadata?.textTruncated)).toBe(testCase.truncated);
+    expect(result.images).toEqual(images);
+    expect(extractPdfContentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ maxPages: 1, maxPixels: 1, minTextChars: 1 }),
+    );
+  });
+
   it("times out local PDF extraction with the input file timeout", async () => {
     vi.useFakeTimers();
     try {

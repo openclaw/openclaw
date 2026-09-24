@@ -635,7 +635,7 @@ export async function handleSendChat(
       recordNonTranscriptInputHistory(host, userMessage);
     }
 
-    publishPendingSendMessage(host, queued);
+    queued = publishPendingSendMessage(host, queued);
     const admissionResult = admitQueuedMessageForSessionResult(
       host,
       submission.admission,

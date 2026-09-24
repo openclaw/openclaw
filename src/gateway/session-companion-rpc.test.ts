@@ -7,7 +7,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import * as profileReader from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { SessionCompanionAskError } from "./session-companion-ask.js";
+import { SessionCompanionAskError } from "./session-companion-errors.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import type { SessionCompanionService } from "./session-companion.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
@@ -97,7 +97,12 @@ describe("session companion RPC", () => {
           ...roleClient("view", `companion-await-${change}`),
           connId: "original-connection",
         };
-        const params = { sessionKey: "agent:main:original", question: "Original question" };
+        const attachment = { mimeType: "image/png", content: "b3JpZ2luYWw=" };
+        const params = {
+          sessionKey: "agent:main:original",
+          question: "Original question",
+          attachments: [attachment],
+        };
         const entered = createDeferredCore();
         const resume = createDeferredCore();
         const originalPrepare = profileReader.prepareUserProfileIdentity;
@@ -119,6 +124,7 @@ describe("session companion RPC", () => {
           if (change === "params") {
             params.sessionKey = "agent:main:replacement";
             params.question = "Replacement question";
+            attachment.content = "cmVwbGFjZW1lbnQ=";
           } else {
             client.connId = "replacement-connection";
           }
@@ -130,6 +136,7 @@ describe("session companion RPC", () => {
                 sessionKey: "agent:main:original",
                 question: "Original question",
                 connId: "original-connection",
+                attachments: [{ mimeType: "image/png", content: "b3JpZ2luYWw=" }],
               }),
             );
             expect(respond).toHaveBeenCalledWith(true, { answer: "Original answer", ts: 1 });
