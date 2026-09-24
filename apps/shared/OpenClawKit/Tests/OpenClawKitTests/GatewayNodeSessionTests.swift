@@ -2208,6 +2208,44 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
+    @Test
+    func `automatic reconnect recovers after a transient upgrade provider failure`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let headers = MutableHeaderValue(value: "current-grant")
+        let reconnected = AsyncGate()
+        let channel = try GatewayChannelActor(
+            url: testURL("wss://gateway.example.invalid"), token: nil,
+            session: WebSocketSessionBox(session: session),
+            pushHandler: { push, generation in
+                if case .snapshot = push, generation > 1 {
+                    await reconnected.markStarted()
+                }
+            },
+            connectOptions: nodeConnectOptions(),
+            extraHeadersProvider: {
+                let value = headers.get()
+                if headers.readCount() == 2 { throw URLError(.timedOut) }
+                return ["X-Test-Upgrade": value]
+            })
+        do {
+            try await channel.connect()
+            let first = try #require(session.latestTask())
+            first.emitReceiveFailure()
+            // Await the admitted replacement hello, not another explicit connect call.
+            // The five-second bound also excludes the thirty-second watchdog fallback.
+            try await reconnected.waitUntilStarted()
+            #expect(headers.readCount() == 3)
+            #expect(session.snapshotMakeCount() == 2)
+            #expect(session.snapshotResumeCount() == 2)
+            #expect(session.latestRequest()?.value(forHTTPHeaderField: "X-Test-Upgrade") == "current-grant")
+            #expect(await channel.currentConnectionGeneration() == 2)
+        } catch {
+            await channel.shutdown()
+            throw error
+        }
+        await channel.shutdown()
+    }
+
     enum ConnectEntryPoint: CaseIterable, Sendable {
         case connect, request, send
     }

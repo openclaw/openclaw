@@ -1299,8 +1299,13 @@ extension GatewayChannelActor {
             }
             let wrapped = self.wrap(error, context: "gateway reconnect")
             self.logger.error("gateway reconnect failed \(wrapped.localizedDescription, privacy: .public)")
-            // connect() transfers retry ownership to the generation that failed.
-            // This task must not start a second backoff loop for the same socket.
+            // A pre-socket provider failure leaves this generation owning retries.
+            // Once a new socket exists, its disconnect transition owns the next attempt.
+            if self.connectionGeneration == connectionGeneration {
+                Task { [weak self] in
+                    await self?.scheduleReconnect(after: connectionGeneration)
+                }
+            }
         }
     }
 
