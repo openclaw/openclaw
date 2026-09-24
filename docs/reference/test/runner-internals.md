@@ -14,6 +14,10 @@ with explicit process lifetimes. The package root exports version metadata,
 while AST, filesystem, and compiler APIs live under `typescript/unstable/*`.
 Packaged declaration builds run the same native compiler with semantic checking
 and validate its complete source and package-manifest receipts before bundling.
+The tsdown wrapper defaults declaration builds to one configuration at a time,
+bounding native compiler processes alongside the existing Node heap budget.
+Runtime-only builds keep their parallelism, and an explicit `--concurrency` value
+retains tsdown's own behavior.
 Code Mode executes JavaScript directly and does not use this compiler;
 its TypeScript-style tool declarations are model-facing documentation.
 
