@@ -124,7 +124,7 @@ describe("scheduled restart during gateway suspension", () => {
       admission?.release();
 
       expect(result).toEqual({ status: "emitted" });
-      expect(getGatewaySuspendStatus("suspension-targeted-restart")).toMatchObject({
+      expect(getGatewaySuspendStatus("suspension-targeted-restart", true)).toMatchObject({
         status: "draining",
         ownerId: "request-targeted-restart",
         phase: "interrupting",
@@ -161,7 +161,6 @@ describe("scheduled restart during gateway suspension", () => {
     expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
     expect(getGatewaySuspendStatus("suspension-failed-targeted-restart")).toEqual({
       status: "ready",
-      ownerId: "request-failed-targeted-restart",
       expiresAtMs: expect.any(Number),
       writeCustody: [],
     });

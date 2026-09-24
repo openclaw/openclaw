@@ -8252,15 +8252,19 @@ public struct GatewaySuspendStatusDrainingResult: Codable, Sendable {
 
 public struct GatewaySuspendStatusParams: Codable, Sendable {
     public let suspensionid: String
+    public let includelifecycle: Bool?
 
     public init(
-        suspensionid: String)
+        suspensionid: String,
+        includelifecycle: Bool? = nil)
     {
         self.suspensionid = suspensionid
+        self.includelifecycle = includelifecycle
     }
 
     private enum CodingKeys: String, CodingKey {
         case suspensionid = "suspensionId"
+        case includelifecycle = "includeLifecycle"
     }
 }
 

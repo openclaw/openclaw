@@ -550,7 +550,10 @@ export function markGatewaySuspendExiting(): void {
   }
 }
 
-export function getGatewaySuspendStatus(suspensionId: string): GatewaySuspendStatusResult {
+export function getGatewaySuspendStatus(
+  suspensionId: string,
+  includeLifecycle = false,
+): GatewaySuspendStatusResult {
   const retired = getRestartingSuspension();
   if (retired) {
     if (retired.suspensionId !== suspensionId) {
@@ -563,8 +566,7 @@ export function getGatewaySuspendStatus(suspensionId: string): GatewaySuspendSta
     });
     return {
       status: "draining",
-      ownerId: retired.requestId,
-      phase: retired.shutdown!.phase,
+      ...(includeLifecycle ? { ownerId: retired.requestId, phase: retired.shutdown!.phase } : {}),
       expiresAtMs: retired.expiresAtMs,
       activeCount: snapshot.counts.totalActive,
       blockers: snapshot.blockers,
@@ -588,13 +590,12 @@ export function getGatewaySuspendStatus(suspensionId: string): GatewaySuspendSta
   }
   const phase = refreshHeldSuspension(held);
   if (!phase) {
-    return getGatewaySuspendStatus(suspensionId);
+    return getGatewaySuspendStatus(suspensionId, includeLifecycle);
   }
   if (phase.status === "draining") {
     return {
       status: "draining",
-      ownerId: held.requestId,
-      phase: "draining",
+      ...(includeLifecycle ? { ownerId: held.requestId, phase: "draining" as const } : {}),
       expiresAtMs: held.expiresAtMs,
       activeCount: phase.snapshot.counts.totalActive,
       blockers: phase.snapshot.blockers,
@@ -604,7 +605,7 @@ export function getGatewaySuspendStatus(suspensionId: string): GatewaySuspendSta
   }
   return {
     status: "ready",
-    ownerId: held.requestId,
+    ...(includeLifecycle ? { ownerId: held.requestId } : {}),
     expiresAtMs: held.expiresAtMs,
     writeCustody: phase.snapshot.writeCustody,
   };

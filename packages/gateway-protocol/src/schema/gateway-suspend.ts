@@ -103,6 +103,7 @@ export const GatewaySuspendPrepareResultSchema = Type.Union([
 
 export const GatewaySuspendStatusParamsSchema = closedObject({
   suspensionId: SuspensionTokenSchema,
+  includeLifecycle: Type.Optional(Type.Boolean()),
 });
 
 export const GatewaySuspendStatusRunningResultSchema = closedObject({
@@ -135,7 +136,9 @@ export const GatewaySuspendStatusResultSchema = Type.Union([
   GatewaySuspendStatusReadyResultSchema,
 ]);
 
-export const GatewaySuspendResumeParamsSchema = GatewaySuspendStatusParamsSchema;
+export const GatewaySuspendResumeParamsSchema = closedObject({
+  suspensionId: SuspensionTokenSchema,
+});
 
 export const GatewaySuspendResumeResultSchema = closedObject({
   ok: Type.Literal(true),

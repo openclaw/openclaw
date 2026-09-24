@@ -104,7 +104,7 @@ export const suspendHandlers: GatewayRequestHandlers = {
       return;
     }
     const suspensionId = params.suspensionId.trim();
-    const result = getGatewaySuspendStatus(suspensionId);
+    const result = getGatewaySuspendStatus(suspensionId, params.includeLifecycle === true);
     if (result.status === "conflict") {
       respond(
         false,

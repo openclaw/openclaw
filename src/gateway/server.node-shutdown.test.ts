@@ -293,7 +293,10 @@ test.for(["direct", "restart"] as const)(
               scopes: ["operator.admin"],
             });
             await expect(
-              controller.request("gateway.suspend.status", { suspensionId }),
+              controller.request("gateway.suspend.status", {
+                suspensionId,
+                includeLifecycle: true,
+              }),
             ).resolves.toMatchObject({
               status: "draining",
               ownerId: "node-shutdown",
@@ -320,7 +323,7 @@ test.for(["direct", "restart"] as const)(
           void closing.then(closeSettled, closeSettled);
           await withTimeout(stopRequested.promise, 5_000, "worker stop dispatch");
           if (suspensionId) {
-            expect(getGatewaySuspendStatus(suspensionId)).toMatchObject({
+            expect(getGatewaySuspendStatus(suspensionId, true)).toMatchObject({
               status: "draining",
               ownerId: "node-shutdown",
               phase: "exiting",

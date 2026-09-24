@@ -160,8 +160,6 @@ describe("gateway suspend coordinator", () => {
     terminalSessions = 0;
     expect(getGatewaySuspendStatus("suspension-preserve-drain")).toEqual({
       status: "draining",
-      ownerId: "request-preserve-drain",
-      phase: "draining",
       expiresAtMs: 1_000 + SUSPEND_TTL_MS,
       retryAfterMs: SUSPEND_RETRY_AFTER_MS,
       activeCount: 1,
@@ -173,7 +171,6 @@ describe("gateway suspend coordinator", () => {
     pendingReplies = 0;
     expect(getGatewaySuspendStatus("suspension-preserve-drain")).toEqual({
       status: "ready",
-      ownerId: "request-preserve-drain",
       expiresAtMs: 1_000 + SUSPEND_TTL_MS,
       writeCustody: [],
     });
@@ -603,7 +600,7 @@ describe("gateway suspend coordinator", () => {
 
       markGatewayRestartDraining();
 
-      expect(getGatewaySuspendStatus("suspension-restart")).toMatchObject({
+      expect(getGatewaySuspendStatus("suspension-restart", true)).toMatchObject({
         status: "draining",
         ownerId: "request-restart",
         phase: "interrupting",

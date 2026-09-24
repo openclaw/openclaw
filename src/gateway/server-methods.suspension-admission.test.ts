@@ -155,7 +155,7 @@ describe("gateway request suspension admission", () => {
         const draining = await rpc("gateway.suspend.status", { suspensionId });
         expect(draining).toHaveBeenCalledWith(
           true,
-          expect.objectContaining({ ownerId: "release-update", phase: "draining" }),
+          expect.objectContaining({ status: "draining", activeCount: 200 }),
         );
         const blocked = Promise.allSettled(
           Array.from({ length: 200 }, () => beginGatewayRootWorkAdmissionWhenOpen()),
@@ -184,9 +184,22 @@ describe("gateway request suspension admission", () => {
           true,
           expect.objectContaining({
             status: "draining",
+            activeCount: 200,
+          }),
+        );
+        const legacy = expectDefined(owned.mock.calls[0], "legacy suspension status response")[1];
+        expect(legacy).not.toHaveProperty("ownerId");
+        expect(legacy).not.toHaveProperty("phase");
+        const lifecycle = await rpc("gateway.suspend.status", {
+          suspensionId,
+          includeLifecycle: true,
+        });
+        expect(lifecycle).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            status: "draining",
             ownerId: "release-update",
             phase: "interrupting",
-            activeCount: 200,
           }),
         );
         expect(
@@ -199,7 +212,10 @@ describe("gateway request suspension admission", () => {
           root?.release();
         }
         await vi.advanceTimersByTimeAsync(120_000);
-        const settled = await rpc("gateway.suspend.status", { suspensionId });
+        const settled = await rpc("gateway.suspend.status", {
+          suspensionId,
+          includeLifecycle: true,
+        });
         expect(settled).toHaveBeenCalledWith(
           true,
           expect.objectContaining({ phase: "interrupting", activeCount: 0, status: "draining" }),
@@ -227,7 +243,7 @@ describe("gateway request suspension admission", () => {
           value: false,
         });
         markGatewaySuspendExiting();
-        expect(getGatewaySuspendStatus(suspensionId)).toMatchObject({
+        expect(getGatewaySuspendStatus(suspensionId, true)).toMatchObject({
           status: "draining",
           ownerId: "release-update",
           phase: "exiting",
@@ -801,8 +817,6 @@ describe("gateway request suspension admission", () => {
         await pending.request;
         expect(pending.respond).toHaveBeenCalledWith(true, {
           status: "draining",
-          ownerId: "request-terminal-policy-drain",
-          phase: "draining",
           expiresAtMs: result.expiresAtMs,
           retryAfterMs: 20_000,
           activeCount: 1,
@@ -821,7 +835,6 @@ describe("gateway request suspension admission", () => {
         await ready.request;
         expect(ready.respond).toHaveBeenCalledWith(true, {
           status: "ready",
-          ownerId: "request-terminal-policy-drain",
           expiresAtMs: result.expiresAtMs,
           writeCustody: [],
         });
