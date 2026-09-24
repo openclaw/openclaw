@@ -98,7 +98,13 @@ describe("application gateway observer ownership", () => {
       current().opts.onEvent?.({
         type: "event",
         event: "chat.metadata.changed",
-        payload: { agentId, usageUpdatedAt, usageRefreshFailed },
+        payload: {
+          agentId,
+          usageUpdatedAt,
+          usageRefreshFailed,
+          modelCatalogChanged: false,
+          authChanged: false,
+        },
       });
     for (const usageUpdatedAt of [20, 20, 10]) {
       publish(usageUpdatedAt);
@@ -115,6 +121,7 @@ describe("application gateway observer ownership", () => {
     expect(gateway.snapshot.usagePublications?.main).toBe(failed);
     publish(23);
     expect(gateway.snapshot.usagePublications?.main?.usageRefreshFailed).toBeUndefined();
+    expect(failed).toMatchObject({ usageUpdatedAt: 21, usageRefreshFailed: true });
     current().opts.onClose?.({ code: 1001, reason: "restart", willRetry: true });
     expect(gateway.snapshot.usagePublications).toBeUndefined();
     current().opts.onHello?.(HELLO);
@@ -142,8 +149,8 @@ describe("application gateway observer ownership", () => {
     const count = () =>
       current().request.mock.calls.filter(([method]) => method === "cron.list").length;
     const [first, shared] = await Promise.all([load(), load()]);
-    expect(first.items).toEqual(shared.items);
-    expect(first.items).toContainEqual(expect.objectContaining({ label: "Automation" }));
+    expect(first).toEqual(shared);
+    expect(first).toContainEqual(expect.objectContaining({ label: "Automation" }));
     expect(count()).toBe(1);
     for (const event of ["cron", "config.changed"]) {
       let pending: ReturnType<typeof load> | undefined;

@@ -9,13 +9,6 @@ function buildLoadFailureMessage(error: unknown): string {
   ].join(" ");
 }
 
-function isUnsupportedNativePlatform(params: {
-  platform: NodeJS.Platform;
-  arch: NodeJS.Architecture;
-}): boolean {
-  return params.platform === "darwin" && params.arch === "x64";
-}
-
 function buildUnsupportedNativePlatformMessage(params: {
   platform: NodeJS.Platform;
   arch: NodeJS.Architecture;
@@ -35,7 +28,7 @@ export async function loadLanceDbModule(): Promise<LanceDbModule> {
   if (!loadPromise) {
     loadPromise = import("@lancedb/lancedb").catch((error: unknown) => {
       loadPromise = null;
-      if (isUnsupportedNativePlatform({ platform, arch })) {
+      if (platform === "darwin" && arch === "x64") {
         throw new Error(buildUnsupportedNativePlatformMessage({ platform, arch }), {
           cause: error,
         });

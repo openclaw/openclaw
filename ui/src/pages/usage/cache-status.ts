@@ -37,18 +37,20 @@ export function resolveUsagePublication(
   publications: ApplicationGatewaySnapshot["usagePublications"],
   agentId?: string,
 ) {
+  let updatedAt = 0;
   let committedAt = 0;
-  let failedAt = 0;
+  const failures: NonNullable<ApplicationGatewaySnapshot["usagePublications"]>[string][] = [];
   for (const publication of agentId
-    ? [publications?.[agentId]]
+    ? [publications && Object.hasOwn(publications, agentId) ? publications[agentId] : undefined]
     : Object.values(publications ?? {})) {
     if (!publication) {
       continue;
     }
+    updatedAt = Math.max(updatedAt, publication.usageUpdatedAt);
     committedAt = Math.max(committedAt, publication.committedAt);
     if (publication.usageRefreshFailed) {
-      failedAt = Math.max(failedAt, publication.usageUpdatedAt);
+      failures.push(publication);
     }
   }
-  return { updatedAt: Math.max(committedAt, failedAt), committedAt, failedAt };
+  return { updatedAt, committedAt, failures };
 }

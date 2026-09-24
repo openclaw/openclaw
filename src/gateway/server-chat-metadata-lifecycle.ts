@@ -11,7 +11,11 @@ type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 /** A committed auth change remains successful even if its best-effort UI notification fails. */
 export function broadcastChatMetadataChanged(
   context: Pick<GatewayRequestContext, "broadcast" | "logGateway">,
-  payload: Partial<SessionCostUsagePublication> & { modelSelectionChanged?: boolean } = {},
+  payload: Partial<SessionCostUsagePublication> & {
+    modelSelectionChanged?: boolean;
+    modelCatalogChanged?: boolean;
+    authChanged?: boolean;
+  } = {},
 ): void {
   try {
     context.broadcast("chat.metadata.changed", payload, { dropIfSlow: true });
@@ -28,8 +32,10 @@ export async function createGatewayChatMetadataLifecycle(params: {
   let context: GatewayRequestContext | undefined;
   let preparedModelRuntimeState: "unobserved" | "available" | "unavailable" = "unobserved";
   let preparedModelRuntimeEventVersion = 0;
-  const { ChatMetadataSnapshotUnavailableError, createGatewayChatMetadataRuntime } =
+  const { createGatewayChatMetadataRuntime } =
     await import("./server-methods/chat-metadata-runtime.js");
+  const { ChatMetadataSnapshotUnavailableError } =
+    await import("./server-methods/chat-metadata-facts.js");
   const runtime = createGatewayChatMetadataRuntime({
     getConfig: params.getConfig,
     getContext: () => {
@@ -52,9 +58,9 @@ export async function createGatewayChatMetadataLifecycle(params: {
           refreshOnRead: true,
         }
       : {}),
-    onChanged: () => {
+    onChanged: (change) => {
       if (context) {
-        broadcastChatMetadataChanged(context);
+        broadcastChatMetadataChanged(context, change);
       }
     },
     log: params.log,
@@ -141,7 +147,11 @@ export async function createGatewayChatMetadataLifecycle(params: {
       context = next;
       const unregister = await registerRefreshListeners();
       const unregisterUsage = onSessionCostUsageUpdated((publication) => {
-        broadcastChatMetadataChanged(next, publication);
+        broadcastChatMetadataChanged(next, {
+          ...publication,
+          modelCatalogChanged: false,
+          authChanged: false,
+        });
       });
       const unregisterRolePolicy = onOperatorRolePolicyChanged((change) => {
         if (change.kind === "config" && change.context === next && context === next) {

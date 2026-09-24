@@ -75,6 +75,10 @@ function requiredJob(definition: WorkflowDocument, name: string): WorkflowJob {
 // Direct dispatches build from the selected ref. Only trusted workflow callers
 // may provide the complete immutable package artifact tuple.
 const WORKFLOW_CALL_ONLY_INPUTS = new Set([
+  "runner_group",
+  "package_sha256",
+  "prepublish_plugin_registry_manifest_sha256",
+  "shared_image_archive_sha256",
   "published_upgrade_survivor_baseline_scope",
   "prepare_only",
   "emit_candidate_evidence",

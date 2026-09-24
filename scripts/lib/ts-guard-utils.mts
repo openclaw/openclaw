@@ -141,22 +141,33 @@ export async function collectFileViolations<Violation extends object>(
 
   const violations: Array<Violation & { path: string }> = [];
   using parser = createNativeTypeScriptParser({ cwd: params.repoRoot });
-  for (const filePath of files) {
-    if (params.skipFile?.(filePath)) {
-      continue;
+  // Native snapshots reload their root list. Bound retained trees while amortizing that reload.
+  const batchSize = 32;
+  for (let offset = 0; offset < files.length; offset += batchSize) {
+    const sources: Array<{ fileName: string; text: string }> = [];
+    let readFailure: { error: unknown } | undefined;
+    for (const filePath of files.slice(offset, offset + batchSize)) {
+      if (params.skipFile?.(filePath)) {
+        continue;
+      }
+      try {
+        sources.push({ fileName: filePath, text: await fs.readFile(filePath, "utf8") });
+      } catch (error) {
+        readFailure = { error };
+        break;
+      }
     }
-    const content = await fs.readFile(filePath, "utf8");
-    const fileViolations = params.findViolations(
-      content,
-      filePath,
-      parser.parseSourceFile(filePath, content),
-      parser,
-    );
-    for (const violation of fileViolations) {
-      violations.push({
-        path: path.relative(params.repoRoot, filePath),
-        ...violation,
-      });
+    for (const [index, sourceFile] of parser.parseSourceFiles(sources).entries()) {
+      const { fileName, text } = sources[index]!;
+      for (const violation of params.findViolations(text, fileName, sourceFile, parser)) {
+        violations.push({
+          path: path.relative(params.repoRoot, fileName),
+          ...violation,
+        });
+      }
+    }
+    if (readFailure) {
+      throw readFailure.error;
     }
   }
   return violations;

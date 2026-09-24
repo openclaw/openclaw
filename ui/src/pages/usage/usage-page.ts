@@ -98,7 +98,10 @@ class UsagePage extends OpenClawLightDomElement {
   // The client survives transport reconnects, so retry budgets need a separate epoch.
   private connectionEpoch: object = {};
   private usageUpdatedAt = 0;
-  private usageFailureAcknowledgedAt = 0;
+  // Publication and reconnect replace immutable receipts, retiring their acknowledgments.
+  private readonly acknowledgedUsageFailures = new WeakSet<
+    ReturnType<typeof resolveUsagePublication>["failures"][number]
+  >();
   private routeDataInitialized = false;
   private routeDataEnabled = true;
   private readonly refreshPolicy = new UsageRefreshPolicy({
@@ -106,7 +109,6 @@ class UsagePage extends OpenClawLightDomElement {
     reload: (reason) => {
       if (reason === "manual") {
         this.usageUpdatedAt = this.usagePublication.updatedAt;
-        this.usageFailureAcknowledgedAt = this.usageUpdatedAt;
       }
       this.clearDateDebounce();
       const sessionKey =
@@ -341,7 +343,9 @@ class UsagePage extends OpenClawLightDomElement {
   }
 
   private get usageRefreshFailed(): boolean {
-    return this.usagePublication.failedAt > this.usageFailureAcknowledgedAt;
+    return this.usagePublication.failures.some(
+      (receipt) => !this.acknowledgedUsageFailures.has(receipt),
+    );
   }
 
   private get usageCacheIncomplete(): boolean {
@@ -468,7 +472,6 @@ class UsagePage extends OpenClawLightDomElement {
     const usageCommitted = publication.committedAt > this.usageUpdatedAt;
     this.usageUpdatedAt = publication.updatedAt;
     if (change.identityChanged || change.becameConnected) {
-      this.usageFailureAcknowledgedAt = 0;
       this.connectionEpoch = {};
       if (this.routeDataInitialized) {
         this.refreshPolicy.request("reconnect");
@@ -616,7 +619,12 @@ class UsagePage extends OpenClawLightDomElement {
             this.clearSelectionsAndDetails();
             this.refreshPolicy.request("manual");
           },
-          onRefresh: () => this.refreshPolicy.request("manual"),
+          onRefresh: () => {
+            for (const receipt of this.usagePublication.failures) {
+              this.acknowledgedUsageFailures.add(receipt);
+            }
+            this.refreshPolicy.request("manual");
+          },
           onTimeZoneChange: (timeZone) => {
             this.usageTimeZone = timeZone;
             this.clearSelectionsAndDetails();

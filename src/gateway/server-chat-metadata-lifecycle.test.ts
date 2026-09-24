@@ -58,7 +58,7 @@ vi.mock("../skills/runtime/refresh.js", async (importOriginal) => ({
 
 const { createGatewayChatMetadataLifecycle } = await import("./server-chat-metadata-lifecycle.js");
 const { ChatMetadataSnapshotUnavailableError } =
-  await import("./server-methods/chat-metadata-runtime.js");
+  await import("./server-methods/chat-metadata-facts.js");
 const authSnapshots = await vi.importActual<
   typeof import("../agents/auth-profiles/runtime-snapshots.js")
 >("../agents/auth-profiles/runtime-snapshots.js");
@@ -120,6 +120,8 @@ it.each([false, true])(
       {
         agentId: "main",
         usageUpdatedAt: expect.any(Number),
+        modelCatalogChanged: false,
+        authChanged: false,
         ...(failed ? { usageRefreshFailed: true } : {}),
       },
       { dropIfSlow: true },
@@ -325,7 +327,7 @@ describe("gateway chat metadata lifecycle", () => {
       expect(harness.buildCommands).toHaveBeenCalledTimes(2);
       expect(harness.broadcast).toHaveBeenCalledExactlyOnceWith(
         "chat.metadata.changed",
-        {},
+        { modelCatalogChanged: false, authChanged: false },
         { dropIfSlow: true },
       );
     } finally {
@@ -429,7 +431,7 @@ describe("gateway chat metadata lifecycle", () => {
       expect(harness.refresh).toHaveBeenCalledOnce();
       expect(harness.broadcast).toHaveBeenCalledExactlyOnceWith(
         "chat.metadata.changed",
-        {},
+        { modelCatalogChanged: true, authChanged: true },
         { dropIfSlow: true },
       );
       await harness.lifecycle.read({ agentId: "main" });
@@ -726,7 +728,11 @@ describe("gateway chat metadata lifecycle", () => {
     await expect(lifecycle.read({ agentId: "main" })).rejects.toThrow("owner publication failed");
     expect(outcomes[6]).toBe("owner publication failed");
     expect(broadcast.mock.calls).toEqual(
-      Array.from({ length: 7 }, () => ["chat.metadata.changed", {}, { dropIfSlow: true }]),
+      Array.from({ length: 7 }, () => [
+        "chat.metadata.changed",
+        { modelCatalogChanged: true, authChanged: true },
+        { dropIfSlow: true },
+      ]),
     );
   });
 

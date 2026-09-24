@@ -30,10 +30,11 @@ export function modelCatalogEventInvalidation(
   }
   if (event.event === "chat.metadata.changed") {
     const payload = asNullableRecord(event.payload);
-    if (payload?.modelSelectionChanged === true) {
-      return "clear";
-    }
-    return typeof payload?.usageUpdatedAt === "number" ? undefined : "refresh";
+    return payload?.modelSelectionChanged === true
+      ? "clear"
+      : payload?.modelCatalogChanged === false
+        ? undefined
+        : "refresh";
   }
   return undefined;
 }

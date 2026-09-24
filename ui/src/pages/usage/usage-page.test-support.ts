@@ -46,6 +46,13 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
     lastErrorCode: null,
   } as ApplicationGatewaySnapshot;
   const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+  const selectionState: ApplicationContext["agentSelection"]["state"] = {
+    selectedId: null,
+    scopeId: null,
+  };
+  const selectionListeners = new Set<
+    Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0]
+  >();
   const setGatewaySnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
     snapshot = { ...snapshot, ...patch };
     for (const listener of listeners) {
@@ -87,10 +94,18 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
       subscribe,
     },
     agentSelection: {
-      state: { selectedId: null, scopeId: null },
+      state: selectionState,
       set: vi.fn(),
-      setScope: vi.fn(),
-      subscribe,
+      setScope: vi.fn((scopeId: string | null) => {
+        selectionState.scopeId = scopeId;
+        for (const listener of selectionListeners) {
+          listener(selectionState);
+        }
+      }),
+      subscribe: (listener: Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0]) => {
+        selectionListeners.add(listener);
+        return () => selectionListeners.delete(listener);
+      },
     },
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),

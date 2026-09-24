@@ -199,8 +199,15 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
       can proceed.
     </Note>
 
-    Doctor no longer repairs the pre-June agent `embeddedHarness`, `embeddedPi`,
-    `sandbox.perSession`, `agents.defaults.llm`, and top-level `heartbeat` keys.
+    Doctor no longer repairs these pre-June keys:
+
+    - Agent `embeddedHarness`, `embeddedPi`, `sandbox.perSession`, and `agents.defaults.llm`.
+    - Top-level `heartbeat`, `routing.allowFrom`, and `routing.groupChat`.
+    - `channels.telegram.requireMention`, `channels.feishu.accounts.<id>.botName`,
+      and retired `channels.webchat` / `gateway.webchat` sections.
+    - `session.threadBindings.ttlHours` and Discord/LINE/Matrix/Telegram `threadBindings.ttlHours`,
+      including per-account settings.
+
     Configs containing these keys must be repaired before current validation can
     succeed. Doctor preserves the config and stops with recovery guidance instead
     of stripping these settings or replacing them with a backup. For an older installation,
@@ -213,14 +220,6 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
     | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
     | `tools.codeMode.runtime: "quickjs-wasi"` (global and per-agent)                                | `tools.codeMode.executor: "quickjs"` (an existing executor selection wins) |
     | `tools.codeMode.languages`, `agents.entries.*.tools.codeMode.languages`                         | removed (Code Mode executes JavaScript; activation and limits are preserved) |
-    | `routing.allowFrom`                                                                              | `channels.whatsapp.allowFrom`                                                |
-    | `routing.groupChat.requireMention`                                                               | `channels.whatsapp/telegram/imessage.groups."*".requireMention`             |
-    | `routing.groupChat.historyLimit`                                                                 | `messages.groupChat.historyLimit`                                            |
-    | `routing.groupChat.mentionPatterns`                                                              | `messages.groupChat.mentionPatterns`                                         |
-    | `channels.telegram.requireMention`                                                               | `channels.telegram.groups."*".requireMention`                               |
-    | `channels.webchat`, `gateway.webchat`                                                            | removed (WebChat is retired)                                                 |
-    | `channels.feishu.accounts.<accountId>.botName`                                                   | `channels.feishu.accounts.<accountId>.name`                                 |
-    | `session.threadBindings.ttlHours`, `channels.<id>.threadBindings.ttlHours` (and per-account)      | `...threadBindings.idleHours`                                               |
     | legacy `talk.voiceId`/`talk.voiceAliases`/`talk.modelId`/`talk.outputFormat`/`talk.apiKey`        | `talk.provider` + `talk.providers.<provider>`                               |
     | legacy top-level realtime Talk selectors (`talk.mode`/`talk.transport`/`talk.brain`/`talk.model`/`talk.voice`) | `talk.realtime`                                                              |
     | `messages.tts`                                                                                  | top-level `tts`                                                              |

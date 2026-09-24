@@ -24,6 +24,7 @@ import type {
   ChatHistoryPage,
   ReadSessionMessageByIdResult,
   SessionHistoryDelta,
+  SessionHistoryTranscriptBinding,
   SessionHistorySnapshot,
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
@@ -128,6 +129,15 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       sessionEntry: target.sessionEntry ? { sessionId: target.sessionEntry.sessionId } : undefined,
       ...(target.env ? { env: captureSessionTranscriptStorageEnvironment(target.env) } : {}),
     };
+    if (request.kind === "transcript-binding") {
+      return {
+        kind: request.kind,
+        params: {
+          target: capturedTarget,
+          run: request.params.run ? { ...request.params.run } : undefined,
+        },
+      };
+    }
     if (request.kind === "message-count") {
       return { kind: request.kind, params: { target: capturedTarget } };
     }
@@ -209,6 +219,10 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
 }
 
 export function readSessionHistoryPageInWorker(
+  request: Extract<SessionHistoryWorkerRequest, { kind: "transcript-binding" }>,
+  signal?: AbortSignal,
+): Promise<SessionHistoryTranscriptBinding | undefined>;
+export function readSessionHistoryPageInWorker(
   request: Extract<SessionHistoryWorkerRequest, { kind: "message-by-id" }>,
   signal?: AbortSignal,
 ): Promise<ReadSessionMessageByIdResult>;
@@ -236,6 +250,8 @@ export async function readSessionHistoryPageInWorker(
   request: SessionHistoryWorkerRequest,
   signal?: AbortSignal,
 ): Promise<
+  | SessionHistoryTranscriptBinding
+  | undefined
   | ChatHistoryPage
   | SessionHistorySnapshot
   | AdmittedSessionHistoryDelta
@@ -422,6 +438,9 @@ export async function readSessionHistoryPageInWorker(
     const result = acquired.result;
     if (result.kind !== capturedRequest.kind) {
       throw new Error("Session history worker returned the wrong page type");
+    }
+    if (result.kind === "transcript-binding") {
+      return result.binding;
     }
     return result.kind === "rpc"
       ? result.page

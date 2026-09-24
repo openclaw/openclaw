@@ -140,7 +140,7 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
                         id: "denied",
                         name: code ? "exec" : toolName,
                         arguments: code
-                          ? { code }
+                          ? { title: "Inspect the denied catalog action", code }
                           : toolName === "sessions_spawn"
                             ? { task: "inspect" }
                             : { ids: ["child"] },

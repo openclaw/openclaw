@@ -25,7 +25,7 @@ export type ApplicationGatewaySnapshot = {
   hello: GatewayHelloOk | null;
   pluginCapabilities?: PluginsUiDescriptorsResult | null;
   usagePublications?: Readonly<
-    Record<string, Omit<SessionCostUsagePublication, "agentId"> & { committedAt: number }>
+    Record<string, Readonly<Omit<SessionCostUsagePublication, "agentId"> & { committedAt: number }>>
   >;
   canvasPluginSurfaceUrl: string | null;
   assistantAgentId: string | null;

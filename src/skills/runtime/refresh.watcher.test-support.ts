@@ -4,6 +4,7 @@ import path from "node:path";
 import type { FSWatcherEventMap } from "chokidar";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { trackSkillsWatcherClose } from "./refresh-watch-close.js";
 
 export function useSkillsWatcherFixture() {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -82,6 +83,34 @@ export function createSkillsWatcherMock() {
   });
   const nativeWatchMock = (watchRoot: string, ignored: WatchOptions["ignored"]) =>
     watchMock(watchRoot, { depth: 0, followSymlinks: false, usePolling: false, ignored });
+  const nativeContentWatchMock = (
+    watchRoot: string,
+    options: Pick<WatchOptions, "depth" | "ignored">,
+  ) => {
+    const watcher = watchMock(watchRoot, {
+      ...options,
+      followSymlinks: false,
+      usePolling: false,
+    });
+    const emit = watcher.emit;
+    watcher.emit = (event, ...args) => {
+      // Native producers fence callbacks before removing their public listeners.
+      // The Chokidar mock retains its separate late-scan error contract.
+      if (!watcher.closed) {
+        emit(event, ...args);
+      }
+    };
+    return {
+      get closed() {
+        return watcher.closed;
+      },
+      get directories() {
+        return new Set(Object.keys(watcher.getWatched()));
+      },
+      on: watcher.on,
+      close: () => trackSkillsWatcherClose(() => watcher.close()),
+    };
+  };
   function watchForSkillRoot(root: string) {
     // Existing roots have their own recursive watcher. Missing roots share a
     // shallow ancestor whose public traversal filter admits the logical path.
@@ -110,5 +139,5 @@ export function createSkillsWatcherMock() {
     return { watchRoot, options, watcher: createdWatchers[index]! };
   }
 
-  return { createdWatchers, watchMock, nativeWatchMock, watchForSkillRoot };
+  return { createdWatchers, watchMock, nativeWatchMock, nativeContentWatchMock, watchForSkillRoot };
 }

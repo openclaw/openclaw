@@ -124,7 +124,6 @@ async function readConfigSnapshotWithPreparation(
     const migrated = migratePersistedImplicitMainRoster({});
     const config = coerceConfig(migrated.config);
     const metadata = context.createValidationPluginMetadataSnapshotLoader({
-      effectiveConfigRaw: config,
       env: deps.env,
       allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
     });
@@ -263,9 +262,6 @@ async function readConfigSnapshotWithPreparation(
       ...rosterMigration.diagnostics.map((message) => ({ path: "agents.entries", message })),
     );
     const effectiveConfigRaw = rosterMigration.config;
-    const validationConfigRaw = effectiveConfigRaw;
-    const snapshotRaw = raw;
-    const snapshotParsed = effectiveParsed;
     // The write revision covers every authored input, without hashing runtime defaults or env.
     const snapshotHash = hashConfigRevision(
       raw,
@@ -275,7 +271,6 @@ async function readConfigSnapshotWithPreparation(
     fallbackHash = snapshotHash;
     fallbackSourceConfig = coerceConfig(effectiveConfigRaw);
     const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({
-      effectiveConfigRaw,
       env: deps.env,
       allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
     });
@@ -284,7 +279,7 @@ async function readConfigSnapshotWithPreparation(
       prepareValidation: options.prepareValidation,
       context,
       metadata: pluginMetadata,
-      raw: validationConfigRaw,
+      raw: effectiveConfigRaw,
       sourceRaw: effectiveParsed,
     };
     const { deferredPluginMigrations, validated } = await deps.measure(
@@ -298,7 +293,7 @@ async function readConfigSnapshotWithPreparation(
                 const pending = context.resolveDeferredPluginMigrations();
                 return {
                   deferredPluginMigrations: pending,
-                  validated: validateConfigObjectWithPlugins(validationConfigRaw, {
+                  validated: validateConfigObjectWithPlugins(effectiveConfigRaw, {
                     ...pathResolution,
                     pluginValidation: context.options.pluginValidation,
                     loadPluginMetadataSnapshot: pluginMetadata.load,
@@ -309,6 +304,23 @@ async function readConfigSnapshotWithPreparation(
                 };
               }),
     );
+    const snapshotSource = () => ({
+      path: configPath,
+      includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
+      exists: true,
+      raw,
+      parsed: effectiveParsed,
+      authoredConfig: coerceConfig(resolved),
+      includeProvenance,
+      agentRosterIncludeOwned,
+      bindingsIncludeOwned,
+      sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
+      sourceConfig: coerceConfig(effectiveConfigRaw),
+      hash: snapshotHash,
+      deferredPluginMigrations,
+      warnings: [...validated.warnings, ...envVarWarnings],
+      resolutionFacts: readResolution.resolutionFacts,
+    });
     if (!validated.ok) {
       const availableSnapshot = pluginMetadata.getSnapshot();
       const collect = () =>
@@ -331,24 +343,10 @@ async function readConfigSnapshotWithPreparation(
       });
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: createConfigFileSnapshot({
-          path: configPath,
-          includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
-          exists: true,
-          raw: snapshotRaw,
-          parsed: snapshotParsed,
-          authoredConfig: coerceConfig(resolved),
-          includeProvenance,
-          agentRosterIncludeOwned,
-          bindingsIncludeOwned,
-          sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
-          sourceConfig: coerceConfig(effectiveConfigRaw),
+          ...snapshotSource(),
           valid: false,
           runtimeConfig: coerceConfig(effectiveConfigRaw),
-          hash: snapshotHash,
           issues: validated.issues,
-          deferredPluginMigrations,
-          warnings: [...validated.warnings, ...envVarWarnings],
-          resolutionFacts: readResolution.resolutionFacts,
           legacyIssues,
         }),
         envSnapshotForRestore: readResolution.envSnapshotForRestore,
@@ -420,24 +418,10 @@ async function readConfigSnapshotWithPreparation(
         deps,
         {
           snapshot: createConfigFileSnapshot({
-            path: configPath,
-            includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
-            exists: true,
-            raw: snapshotRaw,
-            parsed: snapshotParsed,
-            authoredConfig: coerceConfig(resolved),
-            includeProvenance,
-            agentRosterIncludeOwned,
-            bindingsIncludeOwned,
-            sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
-            sourceConfig: coerceConfig(effectiveConfigRaw),
+            ...snapshotSource(),
             valid: true,
             runtimeConfig: snapshotConfig,
-            hash: snapshotHash,
             issues: [],
-            warnings: [...validated.warnings, ...envVarWarnings],
-            deferredPluginMigrations,
-            resolutionFacts: readResolution.resolutionFacts,
             legacyIssues: [],
           }),
           envSnapshotForRestore: readResolution.envSnapshotForRestore,
@@ -586,7 +570,6 @@ async function readConfigSnapshotWithPluginMetadata(
   let pluginMetadataSnapshot = result.pluginMetadataSnapshot;
   if (!pluginMetadataSnapshot && result.snapshot.valid) {
     const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({
-      effectiveConfigRaw: result.snapshot.sourceConfig,
       env: context.deps.env,
       allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
     });

@@ -232,6 +232,8 @@ suite.define(() => {
         agentId: "main",
         usageUpdatedAt: ++usageUpdatedAt,
         usageRefreshFailed: true,
+        modelCatalogChanged: false,
+        authChanged: false,
       });
       await expect
         .poll(() => page.locator(".usage-cache-warning.warning").textContent())
@@ -245,6 +247,8 @@ suite.define(() => {
       await gateway.emitGatewayEvent("chat.metadata.changed", {
         agentId: "other",
         usageUpdatedAt: ++usageUpdatedAt,
+        modelCatalogChanged: false,
+        authChanged: false,
       });
       expect((await gateway.getRequests("sessions.usage")).at(-1)?.params).toMatchObject({
         agentScope: "all",
@@ -273,7 +277,12 @@ suite.define(() => {
         const sessionsBefore = await requestCount(gateway, "sessions.usage");
         const catalogsBefore = await requestCount(gateway, "models.list");
         await gateway.setMethodResponse("sessions.usage", freshSessions);
-        const publication = { agentId: "main", usageUpdatedAt: ++usageUpdatedAt };
+        const publication = {
+          agentId: "main",
+          usageUpdatedAt: ++usageUpdatedAt,
+          modelCatalogChanged: false,
+          authChanged: false,
+        };
         await gateway.emitGatewayEvent("chat.metadata.changed", publication);
         await gateway.emitGatewayEvent("chat.metadata.changed", publication);
         await expect
