@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { hasMediaPayload, isImageWithMediaPayload } from "../media-payload.js";
 import {
   describeToolResultMediaPlaceholder,
   describeUnsupportedToolResultMedia,
   extractToolResultText,
   formatToolResultText,
-  hasMediaPayload,
-  isImageWithMediaPayload,
 } from "./tool-result-text.js";
 
 describe("formatToolResultText", () => {

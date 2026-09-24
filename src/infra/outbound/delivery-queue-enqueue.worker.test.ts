@@ -18,12 +18,12 @@ import {
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
 } from "./delivery-queue-namespaces.js";
-import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
 import {
   enqueueDelivery,
   enqueueDeliveryOnce,
   enqueuePreparedDeliveryOnce,
 } from "./delivery-queue-storage.js";
+import type { StableDeliveryPreparation } from "./delivery-queue-storage.types.js";
 import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
 
 const payload = { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "original" }] };

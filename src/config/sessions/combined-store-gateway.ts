@@ -484,12 +484,12 @@ export function resolveGatewaySessionStoreTargets(
     resolved = { ...resolved, durableTargets, physicalTargets, groupDiscovery };
   }
   const diagnostics = [...resolved.diagnostics];
-  const isRetained = createRetainedAgentDatabaseMatcher(process.env, () =>
-    resolveConfiguredAgentDatabaseTargets(cfg, { env: process.env }),
-  );
+  const env = process.env;
+  const readTargets = () => resolveConfiguredAgentDatabaseTargets(cfg, { env });
+  const deleted = createRetainedAgentDatabaseMatcher(env, readTargets, "database", "runtime");
   const admitted = (target: SessionStoreTarget, durable = false): boolean => {
     const physical = resolved.physicalTargets.get(storeTargetKey(target));
-    if (durable && isRetained(physical?.storePath ?? target.storePath, target.agentId)) {
+    if (durable && deleted(physical?.storePath ?? target.storePath, target.agentId)) {
       return false;
     }
     const refusal =

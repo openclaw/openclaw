@@ -212,7 +212,7 @@ async function createWorkerSessionToolTestFixture(
     throw new Error("Worker fixture could not admit its parent turn");
   }
   await rootAdmission.run(async () => {
-    bindWorkerTurnOwner(
+    await bindWorkerTurnOwner(
       placements,
       sourceClaim,
       options.collectExecutionIdentity !== false ? PARENT_EXECUTION_IDENTITY_TOKEN : undefined,

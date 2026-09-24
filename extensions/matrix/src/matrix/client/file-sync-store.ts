@@ -23,10 +23,6 @@ import {
 
 const PERSIST_DEBOUNCE_MS = 250;
 
-function cloneJson<T>(value: T): T {
-  return structuredClone(value);
-}
-
 function syncDataToSyncResponse(syncData: ISyncData): ISyncResponse {
   return {
     next_batch: syncData.nextBatch,
@@ -101,7 +97,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   }
 
   override getSavedSync(): Promise<ISyncData | null> {
-    return Promise.resolve(this.savedSync ? cloneJson(this.savedSync) : null);
+    return Promise.resolve(this.savedSync ? structuredClone(this.savedSync) : null);
   }
 
   override getSavedSyncToken(): Promise<string | null> {
@@ -120,7 +116,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
 
   override getClientOptions() {
     return Promise.resolve(
-      this.savedClientOptions ? cloneJson(this.savedClientOptions) : undefined,
+      this.savedClientOptions ? structuredClone(this.savedClientOptions) : undefined,
     );
   }
 
@@ -128,7 +124,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     if (this.frozen) {
       return Promise.resolve();
     }
-    this.savedClientOptions = cloneJson(options);
+    this.savedClientOptions = structuredClone(options);
     void super.storeClientOptions(options);
     this.markDirtyAndSchedulePersist();
     return Promise.resolve();
@@ -229,9 +225,11 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     this.dirty = false;
     const payload: PersistedMatrixSyncStore = {
       version: MATRIX_SYNC_CACHE_VERSION,
-      savedSync: this.savedSync ? cloneJson(this.savedSync) : null,
+      savedSync: this.savedSync ? structuredClone(this.savedSync) : null,
       cleanShutdown: this.cleanShutdown,
-      ...(this.savedClientOptions ? { clientOptions: cloneJson(this.savedClientOptions) } : {}),
+      ...(this.savedClientOptions
+        ? { clientOptions: structuredClone(this.savedClientOptions) }
+        : {}),
     };
     try {
       await writeMatrixSyncCacheStateToStore({

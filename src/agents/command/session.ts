@@ -34,7 +34,7 @@ import {
   type SessionEntrySummary,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import {
   resolvePersistedSessionStoreOwner,
   resolvePersistedSessionStoreOwnerForKey,

@@ -26,6 +26,7 @@ import { getFreePort } from "../test-utils/ports.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
+import { registerAgentConfigMutationTests } from "./server.config-agent-mutations.test-support.js";
 import {
   configRawPayload,
   configWithGatewayTokenSecretRef,
@@ -860,36 +861,12 @@ describe("gateway config methods", () => {
     }
   });
 
-  it("uses fresh revisions after agent create, update, and delete before reload applies", async () => {
-    const operations = [
-      {
-        method: "agents.create",
-        params: { name: "revision-worker", workspace: state.path("revision-workspace") },
-      },
-      { method: "agents.update", params: { agentId: "revision-worker", name: "Ready" } },
-      { method: "agents.delete", params: { agentId: "revision-worker", deleteFiles: false } },
-    ];
-    for (const operation of operations) {
-      const before = await getConfigHash();
-      const gate = createDeferredCore();
-      reloadBarrier.wait = gate.promise;
-      try {
-        const changed = await rpcReq(requireClient(), operation.method, operation.params);
-        expect(changed.ok, changed.error?.message).toBe(true);
-
-        const current = await getCurrentConfigObject();
-        gate.resolve();
-        const patched = await rpcReq(requireClient(), "config.patch", {
-          baseHash: current.hash,
-          raw: JSON.stringify({ agents: { entries: { main: { name: operation.method } } } }),
-        });
-        expect(patched.ok, patched.error?.message).toBe(true);
-        expect(current.hash).not.toBe(before);
-      } finally {
-        gate.resolve();
-        reloadBarrier.wait = undefined;
-      }
-    }
+  registerAgentConfigMutationTests({
+    getCurrentConfigObject,
+    getConfigHash,
+    rpc: (method, params) => rpcReq(requireClient(), method, params),
+    workspacePath: (name) => state.path(name),
+    reloadBarrier,
   });
 
   it("round-trips config.set and returns the live config path", async () => {

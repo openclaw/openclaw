@@ -1,6 +1,25 @@
 import path from "node:path";
 import { isWindowsDrivePath } from "./archive-path.js";
 
+/**
+ * Collapse drive and UNC spellings of `\\?\`, `\\.\`, `//?/`, and `//./` to the
+ * archive name those paths already use. Volume GUIDs and POSIX absolutes stay unchanged.
+ */
+export function normalizeWindowsNamespaceAlias(sourcePath: string): string {
+  const slashed = sourcePath.replaceAll("\\", "/");
+  const device = slashed.match(/^\/\/[?.]\/(.*)$/i);
+  if (!device) {
+    return sourcePath;
+  }
+  const rest = device[1] ?? "";
+  const unc = /^UNC\/(.*)$/i.exec(rest);
+  const portable = unc ? `//${unc[1] ?? ""}` : /^[A-Za-z]:\//.test(rest) ? rest : undefined;
+  if (!portable) {
+    return sourcePath;
+  }
+  return sourcePath.includes("\\") ? portable.replaceAll("/", "\\") : portable;
+}
+
 // Creation and verification must agree on which archive paths can be restored.
 function assertPortableRelativePathSyntax(
   value: string,

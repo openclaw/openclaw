@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
 const RELEASE_CHECKS_PATH = ".github/workflows/openclaw-release-checks.yml";
 const WORKFLOW_PATH = ".github/workflows/openclaw-release-telegram-qa.yml";
@@ -402,14 +403,14 @@ describe("release Telegram QA workflow", () => {
     expect(caller).toMatchObject({
       needs: ["resolve_target"],
       permissions: { actions: "write", contents: "read" },
-      "runs-on": "ubuntu-24.04",
       "timeout-minutes": 210,
     });
+    expect(evaluateWorkflowRunner(caller?.["runs-on"])).toBe("ubuntu-24.04");
     expect(caller?.environment).toBeUndefined();
     expect(caller?.outputs?.conclusion).toBe(
       "${{ steps.dispatch.outputs.conclusion || steps.dispatch.outcome }}",
     );
-    expect(caller?.["continue-on-error"]).toBe(true);
+    expect(caller?.["continue-on-error"]).toBeUndefined();
 
     const trusted = job("trusted_identity");
     expect(trusted).toMatchObject({

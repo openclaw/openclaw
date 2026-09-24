@@ -4,8 +4,10 @@ import {
   appendFileSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -13,11 +15,10 @@ import { dirname, join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { validateFullReleaseCandidateRequest } from "./full-release-candidate-contract.mjs";
 import {
-  normalizeKnownFlakyJobs,
-  validateReleaseFlakeRecords,
-} from "./full-release-flake-policy.mjs";
+  validateFullReleaseCandidateRequest,
+  validateRecordedFullReleaseCandidateRequest,
+} from "./full-release-candidate-contract.mjs";
 import {
   createPublicationAdmission,
   publicationObservationJson,
@@ -38,7 +39,9 @@ import {
   releaseWaivedJobs,
   validateReleaseLaneWaiverBinding,
   composeReleaseChildAttemptEvidence,
+  formatAdvisoryJobFailure,
   formatReleaseStateOutcome,
+  releaseAdvisoryJobFailures,
   releasePlanGateFailures,
   MAX_RELEASE_ARTIFACT_BYTES,
   serializeReleaseArtifact,
@@ -50,6 +53,9 @@ import {
   verifyReleaseStateArtifacts,
 } from "./full-release-validation-policy.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
+import { validateReusableReleaseChild } from "./lib/full-release-child-reuse.mjs";
+import { createReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
+import { downloadFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
 
 export * from "./full-release-validation-policy.mjs";
 
@@ -222,6 +228,9 @@ export async function readChild(child, previous, signal, options = {}) {
       ? await options.readRun(child.runId, signal)
       : await githubJson(`actions/runs/${child.runId}`, signal);
     const currentAttempt = positiveInteger(run.run_attempt, `${child.key} run attempt`);
+    if (options.reuseSelection && currentAttempt !== options.reuseSelection.runAttempt) {
+      throw new Error(`release child provenance changed: ${child.key} reused attempt is stale`);
+    }
     const plannedAttempt = positiveInteger(child.runAttempt, `${child.key} planned run attempt`);
     if (currentAttempt < plannedAttempt) {
       return validateChildBinding(child, run, {
@@ -348,6 +357,25 @@ export function parsePlanInputs(value) {
 }
 
 export function hydrateReusedPlan(plan, evidence) {
+  if (evidence.childReuse) {
+    return plan.map((child) => {
+      const selection = evidence.childReuse[child.key];
+      return child.selected && selection
+        ? {
+            ...child,
+            displayTitle: selection.displayTitle,
+            result: "success",
+            runAttempt: 1,
+            runId: selection.runId,
+            source: "reused",
+            sourceParentAttempt: selection.sourceParentAttempt,
+            url: selection.url,
+            workflowRef: selection.workflowRef,
+            workflowSha: selection.workflowSha,
+          }
+        : child;
+    });
+  }
   const byRole = new Map((evidence.children ?? []).map((child) => [child.role, child]));
   return plan.map((child) => {
     if (!child.selected) {
@@ -389,6 +417,37 @@ function changedPathsValue(value) {
 
 async function validateReuse(executionPlan, signal) {
   const { children: plan, evidenceReuse, trustedWorkflow } = executionPlan;
+  if (executionPlan.childReuse) {
+    const results = await Promise.allSettled(
+      Object.entries(executionPlan.childReuse).map(([role, selection]) =>
+        validateReusableReleaseChild(selection, {
+          repository: executionPlan.repository,
+          targetSha: executionPlan.targetSha,
+          role,
+          inputs: selection.inputs,
+        }),
+      ),
+    );
+    const issues = results.flatMap((result) => {
+      if (result.status === "fulfilled") {
+        return [];
+      }
+      const message =
+        result.reason instanceof Error ? result.reason.message : String(result.reason);
+      return [
+        {
+          child: "<evidence>",
+          kind: API_ERROR_PATTERN.test(message) ? "api_error" : "reused_evidence_invalid",
+          message,
+        },
+      ];
+    });
+    return {
+      blockers: issues.filter((entry) => entry.kind !== "api_error"),
+      children: plan,
+      errors: issues.filter((entry) => entry.kind === "api_error"),
+    };
+  }
   if (!evidenceReuse.requested) {
     return { blockers: [], children: plan, errors: [] };
   }
@@ -493,10 +552,6 @@ function writeExecutionPlan(path, payload) {
   writeArtifact(path, payload);
   if (process.env.GITHUB_OUTPUT) {
     appendFileSync(process.env.GITHUB_OUTPUT, `sha256=${payload.sha256}\n`);
-    appendFileSync(
-      process.env.GITHUB_OUTPUT,
-      `known_flaky_children=${JSON.stringify([...new Set((payload.knownFlakyJobs ?? []).map((selector) => selector.split(":", 1)[0]))])}\n`,
-    );
     appendFileSync(
       process.env.GITHUB_OUTPUT,
       `source_parent_attempt=${payload.parentRunAttempt}\n`,
@@ -614,9 +669,6 @@ function planExpected() {
     targetContextRef: process.env.TARGET_CONTEXT_REF || undefined,
     coveragePolicy: process.env.COVERAGE_POLICY || undefined,
     telegramWaiver: process.env.TELEGRAM_WAIVER ?? "",
-    ...(process.env.KNOWN_FLAKY_JOBS_JSON !== undefined
-      ? { knownFlakyJobs: normalizeKnownFlakyJobs(process.env.KNOWN_FLAKY_JOBS_JSON) }
-      : {}),
     laneWaiver: normalizeReleaseLaneWaiver(process.env.LANE_WAIVER),
     ...(process.env.TARGET_VERSION ? { targetVersion: process.env.TARGET_VERSION } : {}),
     parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
@@ -636,7 +688,6 @@ function manifestContextFromEnvironment(source) {
   for (const [key, variable, sourceKey] of [
     ["provider", "PROVIDER", "provider"],
     ["mode", "MODE", "mode"],
-    ["knownFlakyJobsJson", "KNOWN_FLAKY_JOBS_JSON", "known_flaky_jobs_json"],
     ["liveSuiteFilter", "LIVE_SUITE_FILTER", "live_suite_filter"],
     ["crossOsSuiteFilter", "CROSS_OS_SUITE_FILTER", "cross_os_suite_filter"],
     ["releasePackageSpec", "RELEASE_PACKAGE_SPEC", "release_package_spec"],
@@ -936,7 +987,7 @@ async function publicationMode(mode) {
   writeArtifact(admissionPath, record);
 }
 
-function writeManifestMode() {
+async function writeManifestMode() {
   const plan = readArtifact(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan");
   const drain = readArtifact(process.env.DIAGNOSTIC_DRAIN_PATH, "diagnostic drain");
   const manifest = buildReleaseValidationManifest({
@@ -944,6 +995,33 @@ function writeManifestMode() {
     drain,
     context: manifestContextFromEnvironment(plan.sourceAdmission),
   });
+  if (manifest.sourceAdmission?.validationPurpose === "publish" && manifest.rerunGroup === "all") {
+    const outputDir = mkdtempSync(
+      join(
+        requiredString(process.env.RUNNER_TEMP, "runner temporary directory"),
+        "sealed-npm-preflight-",
+      ),
+    );
+    try {
+      await downloadFullReleaseNpmPreflight({
+        manifest,
+        repository: manifest.sourceAdmission.repository,
+        runId: manifest.runId,
+        runAttempt: manifest.runAttempt,
+        sourceSha: manifest.targetSha,
+        toolingSha: manifest.workflowSha,
+        outputDir,
+        token: requiredString(process.env.GH_TOKEN, "GitHub token"),
+      });
+      manifest.publishInputs = await createReleasePublishInputs({
+        manifest,
+        npmManifest: JSON.parse(readFileSync(join(outputDir, "preflight-manifest.json"), "utf8")),
+        stableSoakWaiver: process.env.STABLE_SOAK_WAIVER ?? "",
+      });
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  }
   writeArtifact(
     join(
       requiredString(process.env.RUNNER_TEMP, "runner temporary directory"),
@@ -1021,7 +1099,13 @@ async function planMode() {
     const restored = validateReleaseExecutionPlanArtifact(restoredPayload, {
       ...expected,
       ...(restoredPayload.attemptEvidenceVersion !== undefined
-        ? { candidateRequest: candidateRequestFromEnvironment() }
+        ? {
+            candidateRequest: validateRecordedFullReleaseCandidateRequest(
+              JSON.parse(
+                requiredString(process.env.CANDIDATE_REQUEST_JSON, "candidate request JSON"),
+              ),
+            ),
+          }
         : {}),
       sourceParentRunAttempt: 1,
     });
@@ -1074,7 +1158,8 @@ async function planMode() {
     candidate,
     coveragePolicy: planInputs.coveragePolicy,
     knownFlakyJobs: planInputs.knownFlakyJobs,
-    children: built.children,
+    children: hydrateReusedPlan(built.children, { childReuse: planInputs.childReuse ?? {} }),
+    childReuse: planInputs.childReuse,
     evidenceReuse: evidenceReuseFromInputs(planInputs),
     expected: { ...expected, candidateRequest, parentRunAttempt: currentAttempt },
     gates: built.gates,
@@ -1099,8 +1184,8 @@ async function planMode() {
       blockers: plan.blockers,
       candidate: plan.candidate,
       coveragePolicy: plan.coveragePolicy,
-      knownFlakyJobs: plan.knownFlakyJobs,
       children: plan.children,
+      childReuse: plan.childReuse,
       errors: [
         ...plan.errors,
         {
@@ -1143,8 +1228,8 @@ async function planMode() {
     blockers: reuse.blockers,
     candidate,
     coveragePolicy: planInputs.coveragePolicy,
-    knownFlakyJobs: planInputs.knownFlakyJobs,
     children: reuse.children,
+    childReuse: planInputs.childReuse,
     errors: reuse.errors,
     evidenceReuse: evidenceReuseFromInputs(planInputs, reuse.sourceManifest),
     expected: { ...expected, candidateRequest, parentRunAttempt: currentAttempt },
@@ -1193,40 +1278,6 @@ async function collectMode(mode) {
     },
   );
   const plan = executionPlan.children;
-  const retryRoot = process.env.FULL_RELEASE_RETRY_RECORDS_PATH;
-  const automaticRetries = validateReleaseFlakeRecords(
-    retryRoot && existsSync(retryRoot)
-      ? readdirSync(retryRoot, { recursive: true })
-          .filter((path) => String(path).endsWith(".json"))
-          .map((path) => readArtifact(join(retryRoot, path), "automatic retry"))
-      : [],
-    executionPlan,
-  );
-  const retryErrors = [];
-  if (
-    (executionPlan.knownFlakyJobs?.length ?? 0) > 0 &&
-    process.env.FULL_RELEASE_RETRY_OWNER_RESULT !== "success"
-  ) {
-    retryErrors.push({
-      child: "<collector>",
-      kind: "automatic_retry_owner_failed",
-      message: "automatic retry owner did not finish; retain and reconcile its exact intent",
-    });
-  }
-  if (
-    automaticRetries.some(
-      (record) => !["observed", "not-attempted", "rejected"].includes(record.outcome),
-    ) ||
-    (executionPlan.knownFlakyJobs ?? []).some(
-      (selector) => !automaticRetries.some((record) => record.child === selector.split(":", 1)[0]),
-    )
-  ) {
-    retryErrors.push({
-      child: "<collector>",
-      kind: "automatic_retry_unresolved",
-      message: "automatic retry intent has no verified replacement attempt; never replay it",
-    });
-  }
   const policy = {
     laneWaiver: normalizeReleaseLaneWaiver(executionPlan.laneWaiver),
     releaseProfile,
@@ -1252,7 +1303,6 @@ async function collectMode(mode) {
 
   const writePayload = (decision, cancellation = {}) => {
     const payload = buildReleaseStateArtifact({
-      automaticRetries,
       cancellation,
       children: snapshots,
       decision,
@@ -1279,7 +1329,6 @@ async function collectMode(mode) {
       extraBlockers: executionPlan.blockers,
       extraErrors: [
         ...executionPlan.errors,
-        ...retryErrors,
         ...(transport.error ? [transport.error] : []),
         {
           child: "<collector>",
@@ -1297,7 +1346,7 @@ async function collectMode(mode) {
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
 
-  if (mode === "decision" && executionPlan.evidenceReuse.requested) {
+  if (executionPlan.childReuse || (mode === "decision" && executionPlan.evidenceReuse.requested)) {
     decisionReuse = await validateReuse(executionPlan, abortController.signal);
     const exactPlan = JSON.stringify(
       plan.map(({ key, runAttempt, runId }) => ({ key, runAttempt, runId })),
@@ -1344,19 +1393,18 @@ async function collectMode(mode) {
   while (!finished) {
     ghRetryDeadline = transport.deadlineMonotonicMs;
     snapshots = await Promise.all(
-      plan.map((child, index) => readChild(child, snapshots[index], abortController.signal)),
+      plan.map((child, index) =>
+        readChild(child, snapshots[index], abortController.signal, {
+          reuseSelection: executionPlan.childReuse?.[child.key],
+        }),
+      ),
     );
     transport = updateReleaseTransportEpisode(transport, snapshots);
     const transportReadErrors = transport.error ? [transport.error] : [];
     let decision = classifyReleaseSnapshot({
       children: snapshots,
       extraBlockers: [...executionPlan.blockers, ...decisionReuse.blockers],
-      extraErrors: [
-        ...transportReadErrors,
-        ...executionPlan.errors,
-        ...decisionReuse.errors,
-        ...retryErrors,
-      ],
+      extraErrors: [...transportReadErrors, ...executionPlan.errors, ...decisionReuse.errors],
       localFailures: gateFailures,
       ...policy,
     });
@@ -1383,7 +1431,6 @@ async function collectMode(mode) {
             ...transportReadErrors,
             ...executionPlan.errors,
             ...decisionReuse.errors,
-            ...retryErrors,
             ...cancellationErrors,
           ],
           localFailures: gateFailures,
@@ -1391,19 +1438,18 @@ async function collectMode(mode) {
         });
       }
     }
-    const fatalCollectorError = decision.errors.some(
-      (error) =>
-        !["automatic_retry_owner_failed", "automatic_retry_unresolved"].includes(error.kind),
-    );
     const done =
       mode === "decision"
         ? decision.state !== "qualifying" &&
           !(decision.state === "passed" && transport.status === "uncertain")
         : transport.status !== "uncertain" &&
-          ((decision.state === "orchestration_error" && fatalCollectorError) ||
+          (decision.state === "orchestration_error" ||
             (decision.state !== "qualifying" && decision.activeRunIds.length === 0));
     if (done) {
       const payload = writePayload(decision, { cancelledRunIds, requested: false });
+      for (const failure of releaseAdvisoryJobFailures(payload)) {
+        console.log(`::warning title=Advisory lane failed::${formatAdvisoryJobFailure(failure)}`);
+      }
       finished = true;
       process.exitCode =
         payload.state === "passed" ? 0 : payload.state === "orchestration_error" ? 2 : 1;
@@ -1513,14 +1559,6 @@ async function validateManifestMode() {
   validateReleaseTelegramWaiverBinding(executionPlan, manifest.validationInputs);
   validateReleaseLaneWaiverBinding(executionPlan, manifest.validationInputs);
   validateReleaseCoveragePolicyBinding(executionPlan, manifest.validationInputs);
-  if (
-    JSON.stringify(rawManifest.knownFlakyJobs ?? []) !==
-      JSON.stringify(executionPlan.knownFlakyJobs ?? []) ||
-    JSON.stringify(rawManifest.automaticRetries ?? []) !==
-      JSON.stringify(drain?.automaticRetries ?? [])
-  ) {
-    throw new Error("release manifest automatic retries differ from verified collector evidence");
-  }
   const expectedChildRunIds = Object.fromEntries(
     executionPlan.children.map((child) => [
       child.key,
@@ -1651,7 +1689,7 @@ async function main() {
     return;
   }
   if (mode === "write-manifest") {
-    writeManifestMode();
+    await writeManifestMode();
     return;
   }
   if (mode === "plan") {

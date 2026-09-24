@@ -27,7 +27,7 @@ import type {
 } from "./restart-health.types.js";
 import { allListenersOwnedByRuntimePid } from "./restart-port-ownership.js";
 
-const GATEWAY_RESTART_PROBE_TIMEOUT_MS = 3_000;
+export const GATEWAY_RESTART_PROBE_TIMEOUT_MS = 3_000;
 
 export async function readGatewayStartupPhase(params: {
   configuredProbe: ConfiguredGatewayLocalProbe;

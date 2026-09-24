@@ -8,16 +8,14 @@ import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
-import { complete } from "../../llm/stream.js";
 import type { Context } from "../../llm/types.js";
+import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
-import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import {
   AsyncWorkScope,
   getAsyncWorkSignal,
@@ -32,17 +30,18 @@ import {
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import { abortable } from "../embedded-agent-runner/run/abortable.js";
-import { applySecretRefHeaderSentinels } from "../model-auth.js";
+import { requireApiKey } from "../model-auth.js";
 import { resolveAllowedImageFallbackCandidates } from "../model-fallback-image.js";
+import type { ModelRef } from "../model-selection.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.js";
 import { retainPreparedModelRuntimeSnapshotResources } from "../prepared-model-runtime.resources.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
-import { registerProviderStreamForModel } from "../provider-stream.js";
 import { optionalFiniteNumberSchema } from "../schema/typebox.js";
-import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
+import { completeWithPreparedSimpleCompletionModel } from "../simple-completion-execution.js";
+import { prepareSimpleCompletionModel } from "../simple-completion-runtime.js";
 import { readFiniteNumberParam, ToolInputError } from "./common.js";
 import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {
@@ -51,7 +50,6 @@ import {
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveMediaToolSandboxConfig,
   resolveMediaToolReferenceAccess,
-  resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
   resolveRemoteMediaSsrfPolicy,
   type MediaToolSandbox,
@@ -59,6 +57,7 @@ import {
 import { hasToolModelConfig } from "./model-config.helpers.js";
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
 import {
+  buildPdfExtractionContext,
   coercePdfAssistantText,
   coercePdfModelConfig,
   parsePageRange,
@@ -92,7 +91,7 @@ const PdfToolSchema = Type.Object({
   ),
   pages: Type.Optional(
     Type.String({
-      description: 'Pages, e.g. "1-5", "1,3,5-7"; default all.',
+      description: 'Pages, e.g. "1-5", "1,3,5-7"; default all, up to configured limit.',
     }),
   ),
   password: Type.Optional(Type.String({ description: "Password for encrypted PDFs." })),
@@ -105,45 +104,6 @@ function hasExplicitPdfToolModelConfig(config?: OpenClawConfig): boolean {
     hasToolModelConfig(coercePdfModelConfig(config)) ||
     hasToolModelConfig(coerceImageModelConfig(config))
   );
-}
-
-// ---------------------------------------------------------------------------
-// Build context for extraction fallback path
-// ---------------------------------------------------------------------------
-
-const CODEX_PDF_INSTRUCTIONS =
-  "Analyze the provided PDF content and answer the user's request accurately.";
-
-function buildPdfExtractionContext(
-  prompt: string,
-  extractions: PdfExtractedContent[],
-  model?: { api?: string },
-): Context {
-  const content: Array<
-    { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
-  > = [];
-
-  // Add extracted text and images
-  for (const [i, extraction] of extractions.entries()) {
-    if (extraction.text.trim()) {
-      const label = extractions.length > 1 ? `[PDF ${i + 1} text]\n` : "[PDF text]\n";
-      content.push({ type: "text", text: label + extraction.text });
-    }
-    for (const img of extraction.images) {
-      content.push({ type: "image", data: img.data, mimeType: img.mimeType });
-    }
-  }
-
-  // Add the user prompt
-  content.push({ type: "text", text: prompt });
-
-  const systemPrompt =
-    model?.api === "openai-chatgpt-responses" ? CODEX_PDF_INSTRUCTIONS : undefined;
-
-  return {
-    ...(systemPrompt ? { systemPrompt } : {}),
-    messages: [{ role: "user", content, timestamp: Date.now() }],
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +124,7 @@ async function runPdfPrompt(params: {
   pdfBuffers: Array<{ buffer: Buffer; filename: string }>;
   password?: string;
   pageNumbers?: number[];
+  explicitSelectionLimit?: number;
   getExtractions: () => Promise<PdfExtractedContent[]>;
   signal?: AbortSignal;
   work: AsyncWorkScope;
@@ -175,6 +136,7 @@ async function runPdfPrompt(params: {
   provider: string;
   model: string;
   native: boolean;
+  extractions: PdfExtractedContent[];
   attempts: Array<{ provider: string; model: string; error: string }>;
 }> {
   const requestedCfg = applyImageModelConfigDefaults(params.cfg, params.pdfModelConfig);
@@ -203,7 +165,6 @@ async function runPdfPrompt(params: {
   params.assertResourcesOpen?.();
   const runtimeAgentDir = preparedRuntime.agentDir;
   const runtimeWorkspaceDir = preparedRuntime.workspaceDir ?? params.workspaceDir;
-  const preparedStores = preparedRuntime.createStores();
   const committedPdfModelConfig = resolvePdfModelConfigForTool({
     cfg: preparedRuntime.config,
     agentDir: runtimeAgentDir,
@@ -217,13 +178,6 @@ async function runPdfPrompt(params: {
     committedPdfModelConfig,
   );
   let nativePdfs: Array<{ base64: string; filename: string }> | undefined;
-  let extractionCache: PdfExtractedContent[] | null = null;
-  const getExtractions = async (): Promise<PdfExtractedContent[]> => {
-    if (!extractionCache) {
-      extractionCache = await params.getExtractions();
-    }
-    return extractionCache;
-  };
 
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
@@ -232,55 +186,73 @@ async function runPdfPrompt(params: {
     operatorAuthority: params.operatorAuthority,
     abortSignal: params.signal,
     run: async (provider, modelId) => {
-      // Static snapshots serve configured models through prepared facts; a fresh registry can be empty.
-      const resolved = await resolveModelAsync(provider, modelId, runtimeAgentDir, effectiveCfg, {
-        abortSignal: params.signal,
-        assertCurrent: params.assertResourcesOpen,
-        modelIdSource: "selected",
-        allowBundledStaticCatalogFallback: true,
-        ...preparedStores,
-        preparedModelRuntime: preparedRuntime,
-        skipAgentDiscovery: true,
-        ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
-      });
-      if (resolved.error || !resolved.model) {
-        throw new Error(resolved.error ?? `Unknown model: ${provider}/${modelId}`);
-      }
-      const modelExecution = bindOperatorModelExecution(
-        params.operatorAuthority,
-        resolved.logicalRef,
-      );
-      if (modelExecution) {
-        params.onAcquired({
-          async [Symbol.asyncDispose]() {
-            modelExecution.release();
-          },
-        });
-      }
-      const modelSignal = modelExecution
-        ? params.signal
-          ? AbortSignal.any([params.signal, modelExecution.signal])
-          : modelExecution.signal
-        : params.signal;
+      let modelForAuthorization: ModelRef | undefined;
+      let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
+      let modelSignal = params.signal;
       const assertModelCurrent = () => {
         modelSignal?.throwIfAborted();
         params.assertResourcesOpen?.();
         modelExecution?.assertCurrent();
-        assertOperatorModelAllowed(params.operatorAuthority, resolved.logicalRef);
+        if (modelForAuthorization) {
+          assertOperatorModelAllowed(params.operatorAuthority, modelForAuthorization);
+        }
       };
-      assertModelCurrent();
-      const modelRuntime = getModelRegistryRuntime(resolved.modelRegistry);
-      const model = bindModelLlmRuntime(
-        applySecretRefHeaderSentinels(resolved.model, effectiveCfg),
-        modelRuntime.llmRuntime,
+      const resolveAuthorizedModel: typeof resolveModelAsync = async (...args) => {
+        const resolved = await resolveModelAsync(...args);
+        if (resolved.model) {
+          const logicalRef = resolved.logicalRef;
+          if (
+            !modelForAuthorization ||
+            modelForAuthorization.provider !== logicalRef?.provider ||
+            modelForAuthorization.model !== logicalRef?.model
+          ) {
+            modelExecution?.release();
+            modelForAuthorization = logicalRef;
+            const execution = bindOperatorModelExecution(params.operatorAuthority, logicalRef);
+            modelExecution = execution;
+            if (execution) {
+              params.onAcquired({
+                async [Symbol.asyncDispose]() {
+                  execution.release();
+                },
+              });
+            }
+            modelSignal = execution
+              ? params.signal
+                ? AbortSignal.any([params.signal, execution.signal])
+                : execution.signal
+              : params.signal;
+          }
+          assertModelCurrent();
+        }
+        return resolved;
+      };
+      const prepared = await prepareSimpleCompletionModel(
+        {
+          cfg: effectiveCfg,
+          agentId: params.agentId,
+          provider,
+          modelId,
+          modelIdSource: "selected",
+          allowBundledStaticCatalogFallback: true,
+          skipAgentDiscovery: true,
+          allowMissingApiKeyModes: ["aws-sdk"],
+          preparedModelRuntime: preparedRuntime,
+          workspaceDir: runtimeWorkspaceDir,
+          modelResolver: resolveAuthorizedModel,
+          signal: params.signal,
+        },
+        assertModelCurrent,
       );
-      const apiKey = await resolveModelRuntimeApiKey({
-        model,
-        cfg: effectiveCfg,
-        agentDir: runtimeAgentDir,
-        authStorage: resolved.authStorage,
-      });
       assertModelCurrent();
+      if (!("model" in prepared)) {
+        throw new Error(prepared.error);
+      }
+      const { model, auth } = prepared;
+      const apiKey =
+        auth.mode === "aws-sdk" && model.api === "bedrock-converse-stream"
+          ? (auth.apiKey ?? "")
+          : requireApiKey(auth, model.provider);
 
       if (providerSupportsNativePdf(provider)) {
         if (params.password) {
@@ -316,7 +288,7 @@ async function runPdfPrompt(params: {
             signal: modelSignal,
           });
           assertModelCurrent();
-          return { text, provider, model: modelId, native: true };
+          return { text, provider, model: modelId, native: true, extractions: [] };
         }
 
         if (provider === "google") {
@@ -333,41 +305,32 @@ async function runPdfPrompt(params: {
             signal: modelSignal,
           });
           assertModelCurrent();
-          return { text, provider, model: modelId, native: true };
+          return { text, provider, model: modelId, native: true, extractions: [] };
         }
       }
 
-      // Provider hooks may own request preparation such as managed preset reloads.
-      // Registration alone is insufficient when a built-in API already owns dispatch.
-      const providerStreamFn = withPluginRuntimeGenerationScope(preparedRuntime, () =>
-        registerProviderStreamForModel({
-          model,
-          cfg: effectiveCfg,
-          agentDir: runtimeAgentDir,
-          wrapProviderStream: true,
-          apiRegistry: modelRuntime.apiRegistry,
-          ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
-        }),
-      );
-
-      const extractions = await getExtractions();
+      const extractions = await params.getExtractions();
       const completeExtraction = async (context: Context) => {
         // A run cancelled mid-dispatch must not buy another provider call.
         assertModelCurrent();
-        const streamOptions = {
-          apiKey,
-          maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
-          signal: modelSignal,
-        };
         const completion = params.work.track(() =>
-          providerStreamFn
-            ? (async () => await (await providerStreamFn(model, context, streamOptions)).result())()
-            : complete(model, context, streamOptions, assertModelCurrent),
+          completeWithPreparedSimpleCompletionModel({
+            model,
+            auth,
+            context,
+            cfg: effectiveCfg,
+            options: {
+              maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
+              signal: modelSignal,
+            },
+            assertCurrent: assertModelCurrent,
+          }),
         );
         const message = modelSignal ? await abortable(modelSignal, completion) : await completion;
         assertModelCurrent();
         return message;
       };
+      let effectiveExtractions = extractions;
       const hasImages = extractions.some((e) => e.images.length > 0);
       if (hasImages && !model.input?.includes("image")) {
         const hasText = extractions.some((e) => e.text.trim().length > 0);
@@ -376,20 +339,30 @@ async function runPdfPrompt(params: {
             `Model ${provider}/${modelId} does not support images and PDF has no extractable text.`,
           );
         }
-        const textOnlyExtractions: PdfExtractedContent[] = extractions.map((e) => ({
-          text: e.text,
-          images: [],
-        }));
-        const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions, model);
-        const message = await completeExtraction(context);
-        const text = coercePdfAssistantText({ message, provider, model: modelId });
-        return { text, provider, model: modelId, native: false };
+        effectiveExtractions = extractions.map((extraction) =>
+          extraction.images.length > 0
+            ? {
+                text: extraction.text,
+                images: [],
+                metadata: {
+                  ...extraction.metadata,
+                  textTruncated: extraction.metadata?.textTruncated ?? false,
+                  imagesTruncated: true,
+                },
+              }
+            : extraction,
+        );
       }
 
-      const context = buildPdfExtractionContext(params.prompt, extractions, model);
+      const context = buildPdfExtractionContext(
+        params.prompt,
+        effectiveExtractions,
+        params.explicitSelectionLimit,
+        model,
+      );
       const message = await completeExtraction(context);
       const text = coercePdfAssistantText({ message, provider, model: modelId });
-      return { text, provider, model: modelId, native: false };
+      return { text, provider, model: modelId, native: false, extractions: effectiveExtractions };
     },
   });
 
@@ -398,6 +371,7 @@ async function runPdfPrompt(params: {
     provider: result.result.provider,
     model: result.result.model,
     native: result.result.native,
+    extractions: result.result.extractions,
     attempts: result.attempts.map((a) => ({
       provider: a.provider,
       model: a.model,
@@ -464,7 +438,7 @@ export function createPdfTool(options?: {
       : DEFAULT_MAX_PAGES;
 
   const description =
-    'Analyze PDF(s): Anthropic/Google native when supported, else text/image extraction. pdf one; pdfs max 10; prompt says inspection. `pages` selects a page range ("1-5", "1,3,5-7"); `password` opens encrypted PDFs (both non-native only).';
+    'Analyze PDF(s): Anthropic/Google native when supported, else text/image extraction. pdf one; pdfs max 10; prompt says inspection. `pages` selects up to the configured page limit from a range ("1-5", "1,3,5-7"); `password` opens encrypted PDFs (both non-native only).';
   const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
   const executePdf = async (
@@ -511,7 +485,8 @@ export function createPdfTool(options?: {
 
     // Parse page range
     const pagesRaw = normalizeOptionalString(record.pages);
-    const pageNumbers = pagesRaw ? parsePageRange(pagesRaw, configuredMaxPages) : undefined;
+    const pageSelection = pagesRaw ? parsePageRange(pagesRaw, configuredMaxPages) : undefined;
+    const pageNumbers = pageSelection?.pages;
     const password = typeof record.password === "string" ? record.password : undefined;
 
     const pdfModelConfig =
@@ -616,7 +591,11 @@ export function createPdfTool(options?: {
       });
     }
 
+    let extractionCache: PdfExtractedContent[] | undefined;
     const getExtractions = async (): Promise<PdfExtractedContent[]> => {
+      if (extractionCache) {
+        return extractionCache;
+      }
       const extractedAll: PdfExtractedContent[] = [];
       for (const pdf of loadedPdfs) {
         // Extraction is sequential and can be CPU-heavy. Do not start the next
@@ -634,12 +613,13 @@ export function createPdfTool(options?: {
         });
         extractedAll.push(extracted);
       }
-      return extractedAll;
+      extractionCache = extractedAll;
+      return extractionCache;
     };
 
     // Do not issue a paid PDF-model call for an already-aborted run.
     signal?.throwIfAborted();
-    const result = await runPdfPrompt({
+    const { extractions: completedExtractions, ...result } = await runPdfPrompt({
       work,
       onAcquired,
       assertResourcesOpen,
@@ -658,6 +638,7 @@ export function createPdfTool(options?: {
       pdfBuffers: loadedPdfs,
       ...(password ? { password } : {}),
       pageNumbers,
+      ...(pageSelection?.truncated ? { explicitSelectionLimit: pageSelection.pages.length } : {}),
       getExtractions,
     });
 
@@ -676,7 +657,17 @@ export function createPdfTool(options?: {
           ),
         };
 
-    return buildTextToolResult(result, { native: result.native, ...pdfDetails });
+    const truncationNotices = result.native
+      ? []
+      : completedExtractions.flatMap((extraction, index) => {
+          const notice = renderDocumentTruncationNotice(
+            extraction.metadata,
+            pageSelection?.truncated ? pageSelection.pages.length : undefined,
+          );
+          return notice ? (loadedPdfs.length > 1 ? `PDF ${index + 1}: ${notice}` : notice) : [];
+        });
+    const text = [...truncationNotices, result.text].join("\n");
+    return buildTextToolResult({ ...result, text }, { native: result.native, ...pdfDetails });
   };
 
   return {

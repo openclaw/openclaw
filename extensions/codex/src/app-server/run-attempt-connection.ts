@@ -7,12 +7,14 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { prepareAgentWorkspaceAttachments } from "openclaw/plugin-sdk/agent-workspace-runtime";
 import {
   createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
   resolveDiagnosticModelContentCapturePolicy,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { createStageTimingTracker } from "openclaw/plugin-sdk/time-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import {
@@ -35,7 +37,6 @@ import {
   resolveOpenClawExecPolicyForCodexAppServer,
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
-import { createCodexDynamicToolBuildStageTracker } from "./dynamic-tool-build.js";
 import { resolveCodexNativeHookRelayEvents } from "./native-hook-relay.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { ensureCodexWorkspaceDirOnce } from "./run-attempt-lifecycle.js";
@@ -76,7 +77,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     offAnnounced: false,
     resetAnnounced: false,
   };
-  const preDynamicStartupStages = createCodexDynamicToolBuildStageTracker();
+  const preDynamicStartupStages = createStageTimingTracker();
   const runtimeArtifactRequest =
     params.captureRuntimeArtifact || params.expectedRuntimeArtifact
       ? params.expectedRuntimeArtifact
@@ -502,6 +503,54 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     // Host capabilities are identity-keyed; carry generation proof separately.
     return {
       params,
+      prepareInputAttachments: async (
+        request: Omit<
+          Parameters<NonNullable<typeof params.hostCapabilities.prepareInputAttachments>>[0],
+          "placement"
+        >,
+      ) => {
+        const assertPreparationCurrent = () => {
+          assertCurrent();
+          request.signal?.throwIfAborted();
+          request.assertCurrent();
+        };
+        assertPreparationCurrent();
+        if (request.turn) {
+          const remoteNote = await prepareAgentWorkspaceAttachments({
+            workspaceDir: params.workspaceDir,
+            turn: {
+              ...request.turn,
+              config: params.config,
+              timeoutMs: params.timeoutMs,
+              abortSignal: request.signal,
+            },
+            assertCurrent: assertPreparationCurrent,
+          });
+          assertPreparationCurrent();
+          if (remoteNote) {
+            return remoteNote;
+          }
+        }
+        if (
+          sandbox?.enabled ||
+          params.disableTools ||
+          params.toolsAllow?.length === 0 ||
+          params.toolExecutionAllow?.length === 0 ||
+          remoteExec ||
+          appServer.start.transport !== "stdio" ||
+          appServer.remoteWorkspaceRoot ||
+          (params.permissionMode && params.permissionMode !== "full")
+        ) {
+          return undefined;
+        }
+        const note = await params.hostCapabilities.prepareInputAttachments?.({
+          ...request,
+          placement: "local-host",
+          assertCurrent: assertPreparationCurrent,
+        });
+        assertPreparationCurrent();
+        return note;
+      },
       assertCurrent,
       assertModelExecutionCurrent,
       bindModelExecution,

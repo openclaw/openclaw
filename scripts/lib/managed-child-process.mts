@@ -165,7 +165,8 @@ export function hasUnjoinedWork(value: unknown): boolean {
     if ("processTreeState" in current && current.processTreeState !== "terminated") {
       return true;
     }
-    if (current instanceof AggregateError) {
+    // Rolldown preserves plugin failures in a plain Error.errors array.
+    if ("errors" in current && Array.isArray(current.errors)) {
       for (const error of current.errors) {
         pending.push(error);
       }

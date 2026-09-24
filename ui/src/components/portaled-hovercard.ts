@@ -255,7 +255,9 @@ export class PortaledHovercardController {
     this.clearCard();
     this.anchor = anchor;
     this.card = card;
-    this.attachCardHoldListeners(card);
+    card.addEventListener("pointerenter", this.handleCardPointerEnter);
+    card.addEventListener("focusin", this.handleCardFocusIn);
+    card.addEventListener("focusout", this.handleCardFocusOut);
     this.placement = placement;
     this.unmountContents = unmountContents ?? null;
     this.stopPositioning = mountPortaledHovercard({
@@ -265,12 +267,6 @@ export class PortaledHovercardController {
       placement,
       observeVisualViewport,
     });
-  }
-
-  private attachCardHoldListeners(card: HTMLDivElement): void {
-    card.addEventListener("pointerenter", this.handleCardPointerEnter);
-    card.addEventListener("focusin", this.handleCardFocusIn);
-    card.addEventListener("focusout", this.handleCardFocusOut);
   }
 
   clearCard(exitDurationMs = 0): void {
@@ -374,18 +370,16 @@ function mountPortaledHovercard(params: {
 }): () => void {
   // A modal drawer makes body siblings inert. Keep its card inside the same
   // dialog, then use the existing menu top layer to escape clipping and stacking.
-  let ancestor: Element | null = params.anchor;
   let owner: Element = document.body;
-  while (ancestor) {
+  for (
+    let ancestor: Element | null = params.anchor;
+    ancestor;
+    ancestor = composedParent(ancestor)
+  ) {
     if (ancestor.localName === "openclaw-modal-dialog") {
       owner = ancestor;
       break;
     }
-    const root = ancestor.getRootNode();
-    ancestor =
-      ancestor.assignedSlot ??
-      ancestor.parentElement ??
-      (root instanceof ShadowRoot ? root.host : null);
   }
   owner.append(params.card);
   promoteToPopoverTopLayer(params.card);

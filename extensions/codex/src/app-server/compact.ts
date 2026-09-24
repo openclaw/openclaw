@@ -339,21 +339,6 @@ async function runExclusiveCodexNativeCompaction<T>(
   }
 }
 
-/**
- * Starts native Codex compaction for a manually requested bound session, or
- * reports why Codex-owned automatic compaction should handle the trigger.
- */
-export async function maybeCompactCodexAppServerSession(
-  params: CompactEmbeddedAgentSessionParams,
-  options: CodexAppServerCompactOptions,
-): Promise<EmbeddedAgentCompactResult | undefined> {
-  warnIfIgnoringOpenClawCompactionOverrides(params);
-  // Codex owns automatic context-pressure compaction for Codex runtime sessions.
-  // This entry point starts native Codex compaction for the bound thread and
-  // retains the lease until Codex reports the context-compaction item complete.
-  return compactCodexNativeThread(params, options);
-}
-
 function warnIfIgnoringOpenClawCompactionOverrides(
   params: CompactEmbeddedAgentSessionParams,
 ): void {
@@ -383,10 +368,17 @@ function readIgnoredCompactionOverridePaths(params: CompactEmbeddedAgentSessionP
   });
 }
 
-async function compactCodexNativeThread(
+/**
+ * Starts native Codex compaction for a manually requested bound session, or
+ * reports why Codex-owned automatic compaction should handle the trigger.
+ */
+export async function maybeCompactCodexAppServerSession(
   params: CompactEmbeddedAgentSessionParams,
   options: CodexAppServerCompactOptions,
 ): Promise<EmbeddedAgentCompactResult | undefined> {
+  warnIfIgnoringOpenClawCompactionOverrides(params);
+  // Codex owns automatic context-pressure compaction for Codex runtime sessions.
+  // Retain the lease until Codex reports the context-compaction item complete.
   if (params.trigger !== "manual" && !options.allowNonManualNativeRequest) {
     embeddedAgentLog.info("skipping codex app-server compaction for non-manual trigger", {
       sessionId: params.sessionId,

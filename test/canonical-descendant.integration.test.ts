@@ -78,7 +78,12 @@ import {
 } from "../src/sessions/user-turn-transcript.js";
 import { runOpenClawAgentWriteTransaction } from "../src/state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
+import { useCanonicalDescendantState } from "./helpers/canonical-descendant-state.js";
+
+// Native transport mocks own the source graph, so discovery must use that graph.
+const withState = useCanonicalDescendantState({
+  OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../extensions", import.meta.url)),
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -164,13 +169,10 @@ async function withFixture(
     sessionMutationAuthorization?: GatewayRequestHandlerOptions["sessionMutationAuthorization"];
     transcript?: { display?: false; excludeFromContext?: true };
     mcpResolver?: OpenClawPluginMcpServerConnectionResolver;
+    isolatedState?: boolean;
   } = {},
 ) {
-  // The native fixture owns source-module transport mocks, so discovery must use that graph.
-  const env = {
-    OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../extensions", import.meta.url)),
-  };
-  await withOpenClawTestState({ label: "canonical-descendant", env }, async (state) => {
+  await withState(async (state) => {
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
@@ -537,7 +539,7 @@ async function withFixture(
     } finally {
       await fixture.dispose();
     }
-  });
+  }, options.isolatedState);
 }
 
 describe("canonical descendant lifecycle through real owners", () => {
@@ -780,52 +782,55 @@ describe("canonical descendant lifecycle through real owners", () => {
   )(
     "fences a supervised policy handoff after run authority is $reason at $phase",
     async ({ reason, phase }) => {
-      await withFixture(async (fixture) => {
-        const source = await fixture.adopt();
-        await fixture.turn(source.sessionKey, "accepted");
-        const before = fixture.bindingStore.read(fixture.identity(source.sessionKey));
-        const offset = fixture.native.calls.length;
-        let restore: (() => void) | undefined;
-        try {
-          await expect(
-            fixture.turn(source.sessionKey, "revoked", {
-              workerOwned: reason === "claim",
-              beforeStartup: async (invalidate) => {
-                if (phase === "overload") {
-                  fixture.native.rejectNext("thread/inject_items", () => invalidate(reason));
-                } else if (phase === "acknowledged") {
-                  fixture.native.setAfterPolicyWrite(() => invalidate(reason));
-                } else {
-                  await fixture.withClient(async (client) => {
-                    const request = client.request.bind(client);
-                    const spy = vi
-                      .spyOn(client, "request")
-                      .mockImplementation(async (method, input, options) => {
-                        if (method === "thread/inject_items") {
-                          await invalidate(reason);
-                        }
-                        return request(method, input, options);
-                      });
-                    restore = () => spy.mockRestore();
-                  });
-                }
-              },
-            }),
-          ).rejects.toThrow(
-            reason === "aborted" ? "codex app-server startup aborted" : /policy handoff/,
+      await withFixture(
+        async (fixture) => {
+          const source = await fixture.adopt();
+          await fixture.turn(source.sessionKey, "accepted");
+          const before = fixture.bindingStore.read(fixture.identity(source.sessionKey));
+          const offset = fixture.native.calls.length;
+          let restore: (() => void) | undefined;
+          try {
+            await expect(
+              fixture.turn(source.sessionKey, "revoked", {
+                workerOwned: reason === "claim",
+                beforeStartup: async (invalidate) => {
+                  if (phase === "overload") {
+                    fixture.native.rejectNext("thread/inject_items", () => invalidate(reason));
+                  } else if (phase === "acknowledged") {
+                    fixture.native.setAfterPolicyWrite(() => invalidate(reason));
+                  } else {
+                    await fixture.withClient(async (client) => {
+                      const request = client.request.bind(client);
+                      const spy = vi
+                        .spyOn(client, "request")
+                        .mockImplementation(async (method, input, options) => {
+                          if (method === "thread/inject_items") {
+                            await invalidate(reason);
+                          }
+                          return request(method, input, options);
+                        });
+                      restore = () => spy.mockRestore();
+                    });
+                  }
+                },
+              }),
+            ).rejects.toThrow(
+              reason === "aborted" ? "codex app-server startup aborted" : /policy handoff/,
+            );
+          } finally {
+            restore?.();
+          }
+          const calls = fixture.native.calls.slice(offset);
+          expect(calls.filter((call) => call.method === "thread/inject_items")).toHaveLength(
+            phase === "prewrite" ? 0 : 1,
           );
-        } finally {
-          restore?.();
-        }
-        const calls = fixture.native.calls.slice(offset);
-        expect(calls.filter((call) => call.method === "thread/inject_items")).toHaveLength(
-          phase === "prewrite" ? 0 : 1,
-        );
-        expect(
-          calls.some((call) => call.method === "turn/start" || call.method === "thread/start"),
-        ).toBe(false);
-        expect(fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(before);
-      });
+          expect(
+            calls.some((call) => call.method === "turn/start" || call.method === "thread/start"),
+          ).toBe(false);
+          expect(fixture.bindingStore.read(fixture.identity(source.sessionKey))).toEqual(before);
+        },
+        { isolatedState: reason === "claim" },
+      );
     },
     180_000,
   );

@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { findLaneByName } from "../../scripts/lib/docker-e2e-plan.mts";
@@ -13,12 +14,14 @@ import {
   createPluginPrereleaseTestPlan,
 } from "../../scripts/lib/plugin-prerelease-test-plan.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
 const CHECKOUT_V6 = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type WorkflowStep = {
+  id?: string;
   env?: Record<string, string>;
   name?: string;
   run?: string;
@@ -239,8 +242,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       live: false,
       name: "kitchen-sink-plugin",
       resources: ["npm"],
-      retryPatterns: [],
-      retries: 0,
       stateScenario: "empty",
       weight: 3,
     });
@@ -307,8 +308,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       live: false,
       name: "kitchen-sink-rpc",
       resources: ["service", "npm"],
-      retryPatterns: [],
-      retries: 0,
       stateScenario: "empty",
       timeoutMs: 1_500_000,
       weight: 3,
@@ -346,8 +345,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       live: false,
       name: "plugins",
       resources: ["npm", "service"],
-      retryPatterns: [],
-      retries: 0,
       stateScenario: "empty",
       weight: 6,
     });
@@ -410,11 +407,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(securityPlanStepNames.indexOf("Install trusted scanner dependencies")).toBeLessThan(
       securityPlanStepNames.indexOf("Checkout candidate as inert data"),
     );
+    expect(evaluateWorkflowRunner(securityScan["runs-on"])).toBe("ubuntu-24.04");
     expect(securityScan).toMatchObject({
       name: "plugin-npm-security-scan",
       needs: ["resolve_target", "plugin-npm-security-plan"],
       permissions: { contents: "read" },
-      "runs-on": "ubuntu-24.04",
+      "runs-on": expect.any(String),
       "timeout-minutes": 45,
     });
     const securityScanStepNames = securityScan.steps.map((step: WorkflowStep) => step.name);
@@ -597,6 +595,10 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(preflight.outputs).not.toHaveProperty("run_plugin_prerelease_suite");
     expect(preflight.outputs).not.toHaveProperty("run_checks_node_extensions");
     expect(buildDistStep.env).toEqual({ NODE_OPTIONS: "--max-old-space-size=8192" });
+    expect(evaluateWorkflowRunner(staticShard["runs-on"])).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(staticShard["runs-on"], { eventName: "push" })).toBe(
+      "blacksmith-8vcpu-ubuntu-2404",
+    );
     expect(staticShard).toEqual({
       if: "needs.preflight.outputs.run_plugin_prerelease_static == 'true'",
       name: "${{ matrix.check_name || 'plugin-prerelease-static-shard' }}",
@@ -604,8 +606,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       permissions: {
         contents: "read",
       },
-      "runs-on":
-        "${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}",
+      "runs-on": expect.any(String),
       steps: [
         {
           name: "Checkout",
@@ -849,14 +850,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(extensionShard.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}",
     );
-    expect(
-      extensionShard.steps.find((step: WorkflowStep) => step.name === "Run extension shard").run,
-    ).toContain("--retry=1");
     expect(inspector.name).toBe("plugin-prerelease-inspector");
     expect(inspector.needs).toEqual(["resolve_target", "preflight"]);
     expect(inspector.if).toBe("needs.preflight.outputs.run_plugin_prerelease_inspector == 'true'");
     expect(inspector["continue-on-error"]).toBe(true);
-    expect(inspector["runs-on"]).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(inspector["runs-on"])).toBe("ubuntu-24.04");
     expect(inspector["timeout-minutes"]).toBe(30);
     expect(
       inspector.steps.find((step: WorkflowStep) => step.name === "Setup Node environment").with,
@@ -1130,9 +1128,15 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(resolveTargetStep.run).toContain('--expected-sha "$EXPECTED_SHA"');
     expect(targetSummaryStep.run).toContain("- Validation SHA:");
     expect(targetSummaryStep.run).not.toContain("- Code SHA:");
-    expect(releaseChecksWorkflow.jobs.resolve_target["runs-on"]).toBe("ubuntu-24.04");
-    expect(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]).toBe("ubuntu-24.04");
-    expect(releaseChecksWorkflow.jobs.summary["runs-on"]).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(releaseChecksWorkflow.jobs.resolve_target["runs-on"])).toBe(
+      "ubuntu-24.04",
+    );
+    expect(
+      evaluateWorkflowRunner(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]),
+    ).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(releaseChecksWorkflow.jobs.summary["runs-on"])).toBe(
+      "ubuntu-24.04",
+    );
     for (const jobName of [
       "docker_runtime_assets_preflight",
       "normal_ci",
@@ -1141,7 +1145,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       "npm_telegram",
       "summary",
     ]) {
-      expect(fullReleaseWorkflow.jobs[jobName]["runs-on"]).toBe("ubuntu-24.04");
+      expect(evaluateWorkflowRunner(fullReleaseWorkflow.jobs[jobName]["runs-on"])).toBe(
+        "ubuntu-24.04",
+      );
     }
     expect(fullReleaseWorkflow.jobs.normal_ci["timeout-minutes"]).toBe(15);
     expect(fullReleaseWorkflow.jobs.normal_ci.needs).toEqual([
@@ -1200,7 +1206,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       ["release_checks_candidate", "release-checks"],
       ["npm_telegram", "npm-telegram"],
     ] as const) {
-      const dispatch: WorkflowStep = fullReleaseWorkflow.jobs[jobName].steps[0];
+      const dispatch = expectDefined(
+        fullReleaseWorkflow.jobs[jobName].steps.find(
+          (step: WorkflowStep) => step.id === "dispatch",
+        ) as WorkflowStep | undefined,
+        `${jobName} dispatch step`,
+      );
       expect(dispatch.env?.CHILD_WORKFLOW_KIND).toBe(kind);
       if (jobName.startsWith("release_checks_")) {
         expect(dispatch.env?.FAIL_FAST).toBe("${{ inputs.fail_fast }}");
@@ -1209,7 +1220,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         expect(dispatch.env).not.toHaveProperty("FAIL_FAST");
       }
     }
-    expect(fullReleaseWorkflow.jobs.performance.steps[0].env).not.toHaveProperty("FAIL_FAST");
+    expect(
+      fullReleaseWorkflow.jobs.performance.steps.find(
+        (step: WorkflowStep) => step.id === "dispatch",
+      )?.env,
+    ).not.toHaveProperty("FAIL_FAST");
     expect(fullReleaseSource).toContain('-f fail_fast="$FAIL_FAST"');
     expect(fullReleaseSource).not.toContain(
       "has failed child jobs before the workflow completed; cancelling the remaining run.",

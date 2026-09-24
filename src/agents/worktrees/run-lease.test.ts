@@ -9,10 +9,9 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { lockState, unlockWorktree } from "./git-lock.js";
 import * as registryRead from "./registry-read.js";
-import * as registry from "./registry.js";
 import {
   admitWorktreeRunLeaseRow,
   getRegistryWorktree,
@@ -163,7 +162,7 @@ describe("worktree run lease", () => {
   it("acquires a Git guard after a previous acquisition failed to read the registry", async () => {
     const created = await createSessionWorktree();
     const record = getRegistryWorktree(env, created.id)!;
-    vi.spyOn(registry, "getRegistryWorktree").mockImplementationOnce(() => {
+    vi.spyOn(registryRead, "readRegistryWorktree").mockImplementationOnce(async () => {
       throw new Error("simulated registry read failure");
     });
 
