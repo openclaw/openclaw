@@ -355,6 +355,12 @@ operation outcomes. Placement
 writes, current-authority checks, and workspace retention retain their existing
 owners; these reporting snapshots grant no execution or deletion authority.
 
+Machine-catalog notifications coalesce pending profile changes and select their
+correlated placements through the same read worker. The Gateway publishes keyed
+session invalidations after the read and drains pending reporting on shutdown.
+Each batch reads current placement and environment facts; it retains no placement
+cache and does not scan the placement inventory on the main thread.
+
 This execution cutover does not change schemas, stored bytes, retention, config,
 or update behavior. A change to those contracts follows the
 [storage review checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes).
