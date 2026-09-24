@@ -3971,7 +3971,10 @@ class ChatComposerLayoutTest {
     val direction = mutableStateOf(LayoutDirection.Ltr)
     showChat(viewportWidth = 360.dp, viewportHeight = { 640.dp }, layoutDirection = { direction.value })
 
-    fun publishEffort(level: String) {
+    fun publishEffort(
+      level: String,
+      fastMode: Boolean = true,
+    ) {
       composeRule.runOnIdle {
         controller.handleGatewayEvent(
           "sessions.changed",
@@ -3980,7 +3983,7 @@ class ChatComposerLayoutTest {
             "key":"${AndroidScreenshotFixture.mainSessionKey}",
             "thinkingLevel":"$level",
             "thinkingLevels":[{"id":"off","label":"off"},{"id":"high","label":"high"}],
-            "fastMode":true,"effectiveFastMode":true
+            "fastMode":$fastMode,"effectiveFastMode":$fastMode
           }}
           """.trimIndent(),
         )
@@ -3997,18 +4000,27 @@ class ChatComposerLayoutTest {
       }
     }
 
-    fun assertFastBadgePlacement() {
+    fun assertFastBoltInsideWedge() {
       val gauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-      val badge = composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-      assertTrue("Fast bolt should sit to the left of the red sector", badge.center.x > gauge.center.x && badge.center.x < gauge.left + gauge.width * 0.75f)
-      assertTrue("Fast bolt should remain below the arc and needle", badge.top >= gauge.top + gauge.height * 0.75f)
+      val bolt = composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+      val pixelsPerDp = gauge.width / 22f
+      val pivotX = gauge.center.x
+      val pivotY = gauge.top + gauge.height * 0.72f
+      val innerArcRadius = gauge.width * 0.43f - pixelsPerDp // Half the 2dp stroke sits inside the red arc.
+      val dx = bolt.right - pivotX
+      val dy = pivotY - bolt.top
+      assertTrue("Fast bolt must be fully inside the dial", bolt.left > gauge.left && bolt.right < gauge.right && bolt.top > gauge.top && bolt.bottom < gauge.bottom)
+      assertTrue("Fast bolt must clear the needle pivot", bolt.left > pivotX + 1.5f * pixelsPerDp)
+      assertTrue("Fast bolt must sit in the upper-right wedge", bolt.top < pivotY && bolt.bottom < pivotY + 1.5f * pixelsPerDp)
+      assertTrue("Fast bolt must not cover the red arc", dx * dx + dy * dy < innerArcRadius * innerArcRadius)
+      assertTrue("Fast marker must be an icon, not a covering badge disk", bolt.width <= 5f * pixelsPerDp)
     }
 
     publishEffort("off")
     val offGaugeImage = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage()
     val offGauge = offGaugeImage.asAndroidBitmap()
     capture("off")
-    assertFastBadgePlacement()
+    assertFastBoltInsideWedge()
     val pixels = offGaugeImage.toPixelMap()
     // The bolt sits below this quadrant; only the original Fast red-zone arc paints it red.
     val redZonePixels =
@@ -4034,7 +4046,16 @@ class ChatComposerLayoutTest {
     composeRule.runOnIdle { direction.value = LayoutDirection.Rtl }
     publishEffort("off")
     capture("rtl-off")
-    assertFastBadgePlacement()
+    assertFastBoltInsideWedge()
+    publishEffort("off", fastMode = false)
+    capture("rtl-fast-off")
+    composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).assertDoesNotExist()
+    composeRule.onNodeWithContentDescription(nativeString("Thinking")).assert(
+      SemanticsMatcher.expectValue(
+        SemanticsProperties.StateDescription,
+        chatThinkingChipStateDescription(false, "off", listOf(ChatThinkingLevelOption("off", "off"), ChatThinkingLevelOption("high", "high"))),
+      ),
+    )
   }
 
   @Test

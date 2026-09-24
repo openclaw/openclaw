@@ -3596,18 +3596,17 @@ private fun ChatThinkingLevelPicker(
           }
         }
         if (fastMode) {
-          Box(
+          Icon(
+            Icons.Default.Bolt,
+            contentDescription = null,
             modifier =
               Modifier
-                .align(AbsoluteAlignment.BottomRight)
-                .absoluteOffset(x = (-4).dp, y = 5.dp)
-                .size(10.dp)
-                .background(ClawTheme.colors.surface, CircleShape)
+                .align(AbsoluteAlignment.TopLeft)
+                .absoluteOffset(x = 13.5.dp, y = 12.5.dp)
+                .size(4.5.dp)
                 .testTag("chat-fast-mode-badge"),
-            contentAlignment = Alignment.Center,
-          ) {
-            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(8.dp), tint = ClawTheme.colors.danger)
-          }
+            tint = ClawTheme.colors.danger,
+          )
         }
       }
     }
