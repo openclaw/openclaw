@@ -199,7 +199,8 @@ export async function runUpdateLeaseChild(): Promise<void> {
     process.stdout.write("doctor fixture output\n");
     process.stderr.write("doctor fixture diagnostic\n");
     if (scenario.failDoctor === phase) {
-      throw new Error("doctor fixture failure");
+      process.stderr.write("doctor fixture failure\n");
+      process.exitCode = 1;
     }
     if (scenario.runDoctorConfigFlow) {
       const { loadAndMaybeMigrateDoctorConfig } =
