@@ -111,6 +111,36 @@ is unverified. Do not delete them during the run or infer settlement from a
 zero process status. Preserve that diagnostic, inspect final runner cleanup,
 and report any missing teardown evidence separately from the test result.
 
+#### Installed repair-worker compatibility and cleanup
+
+Set `installed_repair_worker=true` with one `installed_startup_package` binding,
+`runner_label=windows-2025`, and `keepalive_minutes=0`. Pin `target_ref` to the
+same reviewed commit as the dispatched workflow. Leave other proof modes off.
+The existing package owner installs and verifies the exact candidate artifact;
+the native admission gate requires a fresh hosted runner without credentials,
+operator mounts, Tailnet attachment, or managed identity.
+
+The probe authenticates and installs npm versions 2026.9.4 and 2026.9.5, then
+calls their unchanged published repair controllers against the installed candidate
+worker. Version 2026.9.4 delegates its verifying phase; 2026.9.5 also delegates
+validation. Each must receive the deferred unavailable result without provider
+requests, validation calls, or changes to synthetic state. This proves controller
+compatibility, not a complete installed-updater upgrade.
+
+Separate cells use the candidate's packaged executor and ledger owners to admit
+real delegated work against a loopback model fixture and reject a wrong receiver.
+A real tool starts descendant processes. Both normal and forced worker exits must
+remove them before the parent executor settles, while the outer observer and its
+Windows Job launcher remain alive. Parent or outer cleanup cannot satisfy that
+assertion. Original 90-second worker,
+60-second turn, 120-second cell, and two-second extinction deadlines remain fixed.
+
+The `windows-installed-startup-<runId>-<attempt>` artifact retains
+`repair-results.json`, the failed or completed cells, native Job observations,
+PID/start identities, exact package/controller/runtime/tooling hashes, synthetic
+provider counts, state effects, and final cleanup. The probe stops after a failed
+cell and never substitutes successful runner teardown for worker qualification.
+
 #### Installed Gateway startup measurements
 
 The same workflow can measure one immutable npm package on the selected Windows

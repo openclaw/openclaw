@@ -2,6 +2,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
 import { guardSessionManager } from "../../agents/session-tool-result-guard-wrapper.js";
 import {
@@ -14,6 +15,10 @@ import {
 } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import type { AgentSessionEvent } from "../../agents/sessions/agent-session-types.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
+import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
+import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import {
   listSessionPendingInputs,
   loadExactSessionEntryReadOnly,
@@ -23,9 +28,16 @@ import {
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import {
+  createDispatchTestHarness,
+  createOperatorWsClient,
+} from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
+import { handleChatSend } from "./chat-send-handler.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
+import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
 import type { RespondFn } from "./types.js";
 installGatewayTestHooks();
@@ -33,6 +45,198 @@ registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 describe("steering input custody", () => {
+  it.each(["same grant", "changed grant", "revoked grant"] as const)(
+    "preserves authenticated chat.send steering authority after reconnect (%s)",
+    async (scenario) => {
+      const fixture = await createBrowserFollowupFixture({ preserveContent: true });
+      const profile = ensureProfileForEmail("reconnect-steering@example.test");
+      const originalGrant = new AbortController();
+      const incomingGrant = new AbortController();
+      const client = (connId: string, controller: AbortController, grantId: string) => ({
+        ...createOperatorWsClient({ connId, scopes: fixture.client.connect.scopes }),
+        authenticatedUserId: "reconnect-steering@example.test",
+        authenticatedUserProfile: {
+          profileId: profile.id,
+          displayName: null,
+          avatarRevision: "synthetic-avatar",
+          hasAvatar: false,
+          updatedAt: profile.updatedAt,
+        },
+        connect: { ...fixture.client.connect, caps: ["ui-commands"] },
+        internal: {
+          operatorAccessAuthority: {
+            gatewayAccessGrant: { pluginId: "test-access-policy", grantId },
+            signal: controller.signal,
+            assertCurrent: () => controller.signal.throwIfAborted(),
+          },
+        },
+      });
+      const originalClient = client("original-browser", originalGrant, "original-grant");
+      const reconnectedClient = client(
+        "reconnected-browser",
+        incomingGrant,
+        scenario === "changed grant" ? "replacement-grant" : "original-grant",
+      );
+      const captured = captureGatewayOperatorRunAuthority({
+        client: originalClient,
+        context: fixture.context,
+      });
+      let backingRun: Promise<void> | undefined;
+      let releaseProvider = () => {};
+      try {
+        if (!captured || !fixture.activeRun) {
+          throw new Error("Expected original operator and active run ownership");
+        }
+        const operation = fixture.activeRun;
+        const run = createQueueTestRun({
+          prompt: "Continue the original work",
+          originatingChannel: "webchat",
+        });
+        const cfg = fixture.context.getRuntimeConfig();
+        run.operatorAuthority = captured.authority;
+        run.run = {
+          ...run.run,
+          config: cfg,
+          agentId: fixture.scope.agentId,
+          sessionId: fixture.scope.sessionId,
+          sessionKey: fixture.scope.sessionKey,
+          messageProvider: "webchat",
+          chatType: "direct",
+          clientCaps: ["ui-commands"],
+          gatewayUiCommandTarget: { connId: originalClient.connId, profileId: profile.id },
+          traceAuthorized: true,
+          senderIsOwner: resolveCommandAuthorization({
+            cfg,
+            ctx: resolveChatSendCallerContext(originalClient),
+            commandAuthorized: true,
+          }).senderIsOwner,
+        };
+        operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+        const fingerprint = operation.bindToolAuthorityRoute(run.run);
+        operation.setPhase("running");
+        const sessionManager = SessionManager.open(
+          fixture.scope,
+          path.dirname(fixture.scope.storePath),
+        );
+        guardSessionManager(sessionManager, { ...fixture.scope, runId: "original-backing-run" });
+        const { session } = await createTestSession({ sessionManager });
+        const providerStarted = createDeferred();
+        const response = createAssistantMessageEventStream();
+        streamMocks.streamSimple
+          .mockImplementationOnce(() => {
+            providerStarted.resolve();
+            return response;
+          })
+          .mockImplementation((model) =>
+            createAssistantResultStream(
+              createAssistant(model, [{ type: "text", text: "Steering consumed" }]),
+            ),
+          );
+        let released = false;
+        releaseProvider = () => {
+          if (!released) {
+            released = true;
+            response.push({
+              type: "done",
+              reason: "stop",
+              message: createAssistant(testModel, [{ type: "text", text: "Original work" }]),
+            });
+            response.end();
+          }
+        };
+        backingRun = session.prompt("Continue the original work");
+        await providerStarted.promise;
+        fixture.beforeApprove.mockClear();
+        const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
+          async (text, options, assertCurrent) =>
+            steerActiveSessionWithOptionalDeliveryWait(
+              session,
+              text,
+              options,
+              fixture.scope.sessionKey,
+              () => {
+                assertCurrent();
+                return true;
+              },
+            ),
+        );
+        operation.attachBackend({
+          kind: "embedded",
+          runId: "original-backing-run",
+          toolAuthorityFingerprint: fingerprint,
+          cancel: vi.fn(),
+          messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+        });
+        const dispatch = createDispatchTestHarness({
+          connId: reconnectedClient.connId,
+          buildRequestContext: () => fixture.context,
+          extraHandlers: { "chat.send": handleChatSend },
+        });
+        if (scenario === "revoked grant") {
+          fixture.beforeApprove.mockImplementation(() =>
+            incomingGrant.abort(new Error("Access grant ended")),
+          );
+        }
+        await dispatch.dispatcher.dispatch(
+          {
+            type: "req",
+            id: "reconnected-input",
+            method: "chat.send",
+            params: { ...fixture.params, queueMode: "steer" },
+          },
+          reconnectedClient,
+        );
+        if (scenario === "same grant") {
+          expect(session.getSteeringMessages()).toEqual([fixture.params.message]);
+          expect(queueMessage).toHaveBeenCalledOnce();
+          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        } else {
+          expect(session.getSteeringMessages()).toEqual([]);
+          expect(queueMessage).not.toHaveBeenCalled();
+          if (scenario === "changed grant") {
+            expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+            expect(dispatchInboundMessageMock.mock.calls[0]?.[0]).toMatchObject({
+              replyOptions: { messageInjectionDisposition: "rejected" },
+            });
+          } else {
+            expect(fixture.beforeApprove).toHaveBeenCalledOnce();
+            expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+          }
+        }
+        releaseProvider();
+        await backingRun;
+        await fixture.finishDispatch();
+        const input = loadTranscriptEventsSync(fixture.scope).find(
+          (event) =>
+            isRecord(event) &&
+            isRecord(event.message) &&
+            event.message.idempotencyKey === `${fixture.params.idempotencyKey}:user`,
+        );
+        if (scenario === "same grant") {
+          expect(input).toMatchObject({
+            message: {
+              content: fixture.params.message,
+              __openclaw: { steerTargetRunId: "original-backing-run" },
+            },
+          });
+          expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
+        } else if (scenario === "changed grant") {
+          expect(input).toMatchObject({ message: { content: fixture.params.message } });
+          expect(input).not.toHaveProperty("message.__openclaw.steerTargetRunId");
+          expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+        } else {
+          expect(input).toBeUndefined();
+          expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+        }
+      } finally {
+        releaseProvider();
+        await backingRun;
+        await fixture.cleanup();
+        captured?.release();
+      }
+    },
+  );
+
   it.each([
     "internal fresh",
     "native custody",

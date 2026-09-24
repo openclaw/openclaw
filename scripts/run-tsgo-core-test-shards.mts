@@ -81,7 +81,12 @@ async function runTsgoCoreTestShards(
 }
 
 /** Owns one changed-check execution; plans never retain compiler inventories. */
-export function createChangedCoreTestCheck(paths: readonly string[], env: NodeJS.ProcessEnv) {
+export function createChangedCoreTestCheck(
+  paths: readonly string[],
+  env: NodeJS.ProcessEnv,
+  stripeShards?: readonly { name: string; config: string }[],
+) {
+  const stripeConfigs = stripeShards && new Set(stripeShards.map((shard) => shard.config));
   let graphs: CoreTsgoGraph[] | undefined;
   return {
     async checkBoundary(): Promise<number> {
@@ -103,7 +108,10 @@ export function createChangedCoreTestCheck(paths: readonly string[], env: NodeJS
       const inspected = graphs;
       graphs = undefined;
       const shards = inspected && selectChangedTsgoCoreTestShards(paths, inspected);
-      const selected = shards ?? TSGO_CORE_TEST_SHARDS;
+      const candidates = shards ?? TSGO_CORE_TEST_SHARDS;
+      const selected = stripeConfigs
+        ? candidates.filter((shard) => stripeConfigs.has(shard.config))
+        : candidates;
       console.error(
         `[check:changed] core test graphs: ${selected.map((shard) => shard.name).join(", ")}`,
       );
@@ -127,6 +135,18 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     }
   }
 
+  // Stripe ownership is defined by the complete registry, before consumer narrowing.
+  const stripeFlagIndex = process.argv.indexOf("--stripe");
+  let stripeShards;
+  if (stripeFlagIndex >= 0) {
+    const stripeSpec = process.argv[stripeFlagIndex + 1] ?? "";
+    stripeShards = selectTsgoCoreTestStripe(stripeSpec);
+    if (!stripeShards) {
+      console.error(`Invalid core test stripe (expected i/n or first-last/n): ${stripeSpec}`);
+      process.exit(1);
+    }
+  }
+
   const changedPathsIndex = process.argv.indexOf("--changed-paths-json");
   if (changedPathsIndex >= 0) {
     const paths: unknown = JSON.parse(process.argv[changedPathsIndex + 1] ?? "null");
@@ -137,21 +157,13 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     ) {
       throw new Error("--changed-paths-json requires a nonempty JSON string array");
     }
-    const check = createChangedCoreTestCheck(paths, process.env);
+    const check = createChangedCoreTestCheck(paths, process.env, stripeShards);
     process.exitCode = (await check.checkBoundary()) || (await check.checkTypes(concurrency));
   } else {
     // CI stripes split the serial shard sequence across parallel jobs; the
     // stripe union is exactly the full shard list, so coverage is unchanged.
-    const stripeFlagIndex = process.argv.indexOf("--stripe");
-    let shards;
-    if (stripeFlagIndex >= 0) {
-      const stripeSpec = process.argv[stripeFlagIndex + 1] ?? "";
-      shards = selectTsgoCoreTestStripe(stripeSpec);
-      if (!shards) {
-        console.error(`Invalid core test stripe (expected i/n or first-last/n): ${stripeSpec}`);
-        process.exit(1);
-      }
-    } else {
+    let shards = stripeShards;
+    if (!shards) {
       const requestedGroup = process.argv[2];
       shards = selectTsgoCoreTestShards(requestedGroup);
       if (!shards) {

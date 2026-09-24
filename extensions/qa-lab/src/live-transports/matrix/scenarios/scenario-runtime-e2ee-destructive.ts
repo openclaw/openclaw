@@ -53,12 +53,10 @@ type MatrixQaDestructiveSetup = {
   encodedRecoveryKey: string;
   owner: MatrixQaE2eeScenarioClient;
   ownerAccessToken: string;
-  ownerDeviceId: string;
   ownerPassword: string;
   ownerUserId: string;
   recoveryKeyId: string | null;
   roomId: string;
-  roomKey: string;
   seededEventId: string;
 };
 
@@ -147,7 +145,6 @@ async function createMatrixQaDestructiveOwnerClient(params: {
 }
 
 async function ensureMatrixQaOwnerReady(params: {
-  allowCrossSigningResetOnRepair?: boolean;
   client: MatrixQaE2eeScenarioClient;
   label: string;
 }) {
@@ -161,15 +158,6 @@ async function ensureMatrixQaOwnerReady(params: {
         allowAutomaticCrossSigningReset: false,
       });
     }
-  }
-  if (
-    !bootstrap.success &&
-    params.allowCrossSigningResetOnRepair === true &&
-    isMatrixQaRepairableBackupBootstrapError(bootstrap.error)
-  ) {
-    bootstrap = await params.client.bootstrapOwnDeviceVerification({
-      forceResetCrossSigning: true,
-    });
   }
   if (
     !bootstrap.success ||
@@ -216,7 +204,6 @@ async function prepareMatrixQaDestructiveSetup(
     accessToken: account.accessToken,
     baseUrl: context.baseUrl,
   });
-  const roomKey = buildMatrixQaE2eeScenarioRoomKey(scenarioId);
   const roomId = await setupClient.createPrivateRoom({
     encrypted: true,
     inviteUserIds: [],
@@ -234,12 +221,10 @@ async function prepareMatrixQaDestructiveSetup(
       encodedRecoveryKey: ready.encodedRecoveryKey,
       owner,
       ownerAccessToken: account.accessToken,
-      ownerDeviceId: account.deviceId,
       ownerPassword: account.password,
       ownerUserId: account.userId,
       recoveryKeyId: ready.recoveryKeyId,
       roomId,
-      roomKey,
       seededEventId,
     };
   } catch (error) {

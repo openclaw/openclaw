@@ -1,4 +1,16 @@
+import { aroundEach, vi } from "vitest";
 import type { SystemdServiceReadBinding } from "../daemon/service-types.js";
+import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
+import * as tmpOpenClawDir from "../infra/tmp-openclaw-dir.js";
+
+/** Synthetic services keep both native and SQLite locks in their owned fixture root. */
+export function useDoctorMaintenanceRuntimeDirectory(createDirectory: () => string) {
+  aroundEach((runTest) => {
+    const directory = createDirectory();
+    vi.spyOn(tmpOpenClawDir, "resolvePreferredOpenClawTmpDir").mockReturnValue(directory);
+    return withStateDatabaseCoordinatorRuntimeDirectory(directory, runTest);
+  });
+}
 
 export function stoppedSystemdBinding(onPassiveRead: () => void): SystemdServiceReadBinding {
   const unit = "openclaw-gateway.service";

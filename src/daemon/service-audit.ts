@@ -33,10 +33,13 @@ export type {
   ServiceDefinitionDrift,
 } from "./service-audit-types.js";
 
-export type ServiceConfigAudit = (
-  | { ok: true; issues: ServiceConfigIssue[]; runtimeNote?: string }
-  | { ok: false; issues: ServiceConfigIssue[]; runtimeNote?: string }
-) & { definitionDrift?: ServiceDefinitionDrift[]; definitionDriftError?: string };
+export type ServiceConfigAudit = {
+  ok: boolean;
+  issues: ServiceConfigIssue[];
+  runtimeNote?: string;
+  definitionDrift?: ServiceDefinitionDrift[];
+  definitionDriftError?: string;
+};
 export const SERVICE_AUDIT_CODES = {
   ...SERVICE_RUNTIME_AUDIT_CODES,
   ...SYSTEMD_SERVICE_AUDIT_CODES,
@@ -66,17 +69,12 @@ export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean
   );
 }
 
-function hasGatewaySubcommand(programArguments?: string[]): boolean {
-  return Boolean(programArguments?.some((arg) => arg === "gateway"));
-}
-
 const POSIX_SERVICE_INLINE_COMMAND_FLAGS = new Set(["-c"]);
-const POSIX_SERVICE_SHELL_WRAPPERS: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
 
 function isOpaquePosixShellInlineCommand(programArguments: string[]): boolean {
   const executable = programArguments[0]?.trim();
   const shellName = executable ? path.posix.basename(executable).toLowerCase() : "";
-  if (!POSIX_SERVICE_SHELL_WRAPPERS.has(shellName)) {
+  if (!POSIX_SHELL_WRAPPERS.has(shellName)) {
     return false;
   }
   return (
@@ -90,10 +88,7 @@ function auditGatewayCommand(programArguments: string[] | undefined, issues: Ser
   if (!programArguments || programArguments.length === 0) {
     return;
   }
-  if (
-    !hasGatewaySubcommand(programArguments) &&
-    !isOpaquePosixShellInlineCommand(programArguments)
-  ) {
+  if (!programArguments.includes("gateway") && !isOpaquePosixShellInlineCommand(programArguments)) {
     issues.push({
       code: SERVICE_AUDIT_CODES.gatewayCommandMissing,
       message: "Service command does not include the gateway subcommand",
@@ -102,39 +97,20 @@ function auditGatewayCommand(programArguments: string[] | undefined, issues: Ser
   }
 }
 
-type GatewayServiceCommandPort =
-  | { kind: "missing" }
-  | { kind: "valid"; port: number }
-  | { kind: "invalid"; raw: string };
-
-function parseGatewayPortArg(value: string | undefined): GatewayServiceCommandPort {
-  const raw = value?.trim() ?? "";
-  const port = parseTcpPort(raw);
-  if (port !== null) {
-    return { kind: "valid", port };
-  }
-  return raw ? { kind: "invalid", raw } : { kind: "missing" };
-}
-
-function readGatewayServiceCommandPortState(
-  programArguments?: string[],
-): GatewayServiceCommandPort {
-  if (!programArguments || programArguments.length === 0) {
-    return { kind: "missing" };
-  }
-  let latest: GatewayServiceCommandPort = { kind: "missing" };
+function readGatewayServiceCommandPort(programArguments: string[] = []): string {
+  let latest: string | undefined;
   for (let index = 0; index < programArguments.length; index += 1) {
     const arg = programArguments[index];
     if (arg === "--port") {
-      latest = parseGatewayPortArg(programArguments[index + 1]);
+      latest = programArguments[index + 1];
       index += 1;
       continue;
     }
     if (arg?.startsWith("--port=")) {
-      latest = parseGatewayPortArg(arg.slice("--port=".length));
+      latest = arg.slice("--port=".length);
     }
   }
-  return latest;
+  return latest?.trim() ?? "";
 }
 
 function auditGatewayServicePort(params: {
@@ -150,21 +126,18 @@ function auditGatewayServicePort(params: {
   ) {
     return;
   }
-  const servicePort = readGatewayServiceCommandPortState(params.programArguments);
-  if (servicePort.kind === "missing") {
+  const rawPort = readGatewayServiceCommandPort(params.programArguments);
+  if (!rawPort) {
     return;
   }
-  if (servicePort.kind === "valid" && servicePort.port === params.expectedPort) {
+  const servicePort = parseTcpPort(rawPort);
+  if (servicePort === params.expectedPort) {
     return;
   }
-  const detail =
-    servicePort.kind === "valid"
-      ? `${servicePort.port} -> ${params.expectedPort}`
-      : `${servicePort.raw} -> ${params.expectedPort}`;
   params.issues.push({
     code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
     message: "Gateway service port does not match current gateway config.",
-    detail,
+    detail: `${servicePort ?? rawPort} -> ${params.expectedPort}`,
     level: "recommended",
   });
 }
@@ -465,5 +438,5 @@ export async function auditGatewayServiceConfig(params: {
     ...(definitionDrift.length ? { definitionDrift } : {}),
     ...(definitionDriftError ? { definitionDriftError } : {}),
   };
-  return issues.length === 0 ? { ok: true, issues, ...notes } : { ok: false, issues, ...notes };
+  return { ok: issues.length === 0, issues, ...notes };
 }

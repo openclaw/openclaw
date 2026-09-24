@@ -350,6 +350,21 @@ def main():`,
                     "observe", os.environ["TMPDIR"], "linux:configured", "backoff"], check=True)`,
           );
         }
+        if (action === "git-owner" && options.cancelDuringBackoff && !options.performance) {
+          if (!options.realClock || options.virtualBackoff) {
+            throw new Error("Backoff cancellation requires the real owner clock");
+          }
+          const boundary = "    while time.monotonic() < retry_at:\n        check_cancelled()";
+          if (source.split(boundary).length !== 2) {
+            throw new Error("Missing unique Git owner backoff cancellation boundary");
+          }
+          source = source.replace(
+            boundary,
+            `${boundary}
+        subprocess.run([${JSON.stringify(process.execPath)}, ${JSON.stringify(ciCheckoutFixture)},
+                        "observe", os.environ["TMPDIR"], "linux:configured", "backoff-ready"], check=True)`,
+          );
+        }
         writeFileSync(path.join(actions, action, name), source);
       }
       if (publisher) {

@@ -10044,10 +10044,22 @@ describe("package artifact reuse", () => {
         "steps.selection.outputs.run == 'true'",
       );
     }
-    expect(workflowStep(nativeLiveJob, "Setup trusted release harness")).toMatchObject({
-      uses: "./.release-harness/.github/actions/setup-release-harness",
-      with: { "node-version": "${{ env.NODE_VERSION }}" },
-    });
+    for (const job of [
+      nativeLiveJob,
+      workflowJob(LIVE_E2E_WORKFLOW, "validate_live_media_provider_suites"),
+    ]) {
+      const setup = workflowStep(job, "Setup trusted release harness");
+      expect(setup).toMatchObject({
+        uses: "./.release-harness/.github/actions/setup-release-harness",
+        if: workflowStep(job, "Run ${{ matrix.label }}").if,
+        with: { "node-version": "${{ env.NODE_VERSION }}" },
+      });
+      const names = job.steps?.map((step) => step.name) ?? [];
+      expect(names.indexOf(setup.name)).toBeGreaterThan(names.indexOf("Setup Node environment"));
+      expect(names.indexOf(setup.name)).toBeLessThan(
+        names.indexOf("Hydrate live auth/profile inputs"),
+      );
+    }
     expect(
       workflowMatrixEntry(
         LIVE_E2E_WORKFLOW,
@@ -12324,20 +12336,22 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         "persist-credentials": false,
         ref: "${{ github.workflow_sha }}",
         path: ".release-qa-tooling-trusted",
-        "sparse-checkout": "extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts",
+        "sparse-checkout":
+          "extensions/qa-lab/src/providers/mock-openai/mock-anthropic-messages.ts\nextensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts\n",
         "sparse-checkout-cone-mode": false,
       },
     });
     expect(installTooling.if).toBe(eligibilityCondition);
     expect(installTooling.run).toContain("trap 'rm -rf -- \"$trusted_checkout\"' EXIT");
     const installLines = (installTooling.run ?? "").split("\n").map((line) => line.trim());
-    const sourceArgument =
-      '"$trusted_checkout/extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts" \\';
-    const sourceArgumentIndex = installLines.indexOf(sourceArgument);
-    expect(sourceArgumentIndex).toBeGreaterThanOrEqual(0);
-    expect(installLines[sourceArgumentIndex + 1]).toBe(
-      "extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts",
-    );
+    for (const file of ["mock-anthropic-messages.ts", "mock-anthropic-wire.ts"]) {
+      const sourceArgument = `"$trusted_checkout/extensions/qa-lab/src/providers/mock-openai/${file}" \\`;
+      const sourceArgumentIndex = installLines.indexOf(sourceArgument);
+      expect(sourceArgumentIndex).toBeGreaterThanOrEqual(0);
+      expect(installLines[sourceArgumentIndex + 1]).toBe(
+        `extensions/qa-lab/src/providers/mock-openai/${file}`,
+      );
+    }
     expect(installTooling.run).toContain('rm -rf -- "$trusted_checkout"');
     expect(stepNames.indexOf("Checkout selected ref")).toBeLessThan(
       stepNames.indexOf("Checkout trusted QA Anthropic mock tooling"),
