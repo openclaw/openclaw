@@ -127,6 +127,7 @@ function normalizeGoogleTtsModel(model: unknown): string {
 }
 
 function isGoogleInteractionsTtsModel(model: string): boolean {
+  // SAFETY: widening a readonly literal tuple to readonly string[] so includes() accepts any model id.
   return (GOOGLE_TTS_INTERACTIONS_MODELS as readonly string[]).includes(model);
 }
 

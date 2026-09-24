@@ -34,11 +34,12 @@ installProviderHttpMockCleanup();
 function googleTtsResponse(audio: Buffer | string = Buffer.from([1, 0, 2, 0])) {
   const data = typeof audio === "string" ? audio : audio.toString("base64");
   return Response.json({
-    output_audio: {
-      type: "audio",
-      mime_type: "audio/l16",
-      data,
-    },
+    steps: [
+      {
+        type: "model_output",
+        content: [{ type: "audio", mime_type: "audio/l16", data }],
+      },
+    ],
     candidates: [
       {
         content: {
@@ -925,11 +926,12 @@ describe("Google speech provider", () => {
     wav.writeUInt32LE(wav.length - 8, 4);
     postJsonRequestMock.mockImplementation(async () => ({
       response: Response.json({
-        output_audio: {
-          type: "audio",
-          mime_type: "audio/wav",
-          data: wav.toString("base64"),
-        },
+        steps: [
+          {
+            type: "model_output",
+            content: [{ type: "audio", mime_type: "audio/wav", data: wav.toString("base64") }],
+          },
+        ],
       }),
       release: vi.fn(async () => {}),
     }));
