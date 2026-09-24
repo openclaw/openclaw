@@ -513,6 +513,7 @@ describe("exec settlement recovery", () => {
       if (boundary === "stdin") {
         run.session.stdin = {
           write: vi.fn(),
+          end: vi.fn(),
           destroy() {
             observed.push("stdin");
             throw failure;
