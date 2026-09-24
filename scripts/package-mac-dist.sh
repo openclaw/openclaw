@@ -206,6 +206,12 @@ audit_app_async_frames() {
       python3 "$ROOT_DIR/apps/macos/scripts/audit-async-sleep-frames.py" "$executable"
       ;;
     *)
+      # The audit understands arm64 frames only. An explicitly x86_64-only build variant
+      # ships no arm64 slice, so there is nothing to audit; every other variant must carry one.
+      if [[ "$BUILD_ARCHS" == "x86_64" ]]; then
+        echo "Async frame audit not applicable: x86_64-only build has no arm64 slice ($executable)" >&2
+        return 0
+      fi
       echo "Error: release executable has no arm64 slice; audit cannot run: $executable" >&2
       return 1
       ;;

@@ -99,7 +99,7 @@ Path(__file__).resolve().parents[3].joinpath("async-frame-audit.log").write_text
     root,
     auditScript,
     expectedUUIDs,
-    run: (options: { resume?: boolean; notarize?: boolean; dmg?: boolean } = {}) =>
+    run: (options: { resume?: boolean; notarize?: boolean; dmg?: boolean; archs?: string } = {}) =>
       spawnSync(
         "bash",
         [
@@ -115,7 +115,7 @@ Path(__file__).resolve().parents[3].joinpath("async-frame-audit.log").write_text
             APP_VERSION: "2026.8.2",
             APP_BUILD: "2608000290",
             BUILD_CONFIG: "release",
-            BUILD_ARCHS: "all",
+            BUILD_ARCHS: options.archs ?? "all",
             SKIP_NOTARIZE: options.notarize ? "0" : "1",
             NOTARYTOOL_PROFILE: "test-profile",
             SKIP_DMG: options.dmg ? "0" : "1",
@@ -731,6 +731,20 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
     ]) {
       expect(existsSync(path.join(fixture.root, "dist", artifact))).toBe(false);
     }
+  });
+
+  it("packages an x86_64-only build without the arm64 audit", () => {
+    const fixture = makeDistributionFixture("native");
+    copyFileSync(
+      path.join(fixture.root, "apps/macos/.build/x86_64/release/OpenClaw"),
+      path.join(fixture.root, "dist/OpenClaw.app/Contents/MacOS/OpenClaw"),
+    );
+    rmSync(fixture.auditScript);
+
+    const result = fixture.run({ archs: "x86_64" });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("Async frame audit not applicable: x86_64-only build");
   });
 
   it("refuses a universal archive when one architecture has no symbols", () => {
