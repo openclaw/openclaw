@@ -317,9 +317,8 @@ export async function startCodexAttemptThread(params: {
               config: params.config,
             });
             const turnRouter = getCodexAppServerTurnRouter(activeStartupClient);
-            let computerUseTools: string[] = [];
             try {
-              const computerUseStatus = await ensureCodexComputerUse({
+              await ensureCodexComputerUse({
                 client: activeStartupClient,
                 pluginConfig: params.pluginConfig,
                 config: params.config,
@@ -327,7 +326,6 @@ export async function startCodexAttemptThread(params: {
                 timeoutMs: params.appServer.requestTimeoutMs,
                 signal: startupAbandonController.signal,
               });
-              computerUseTools = computerUseStatus.tools;
             } catch (error) {
               if (
                 startupAbandonController.signal.aborted ||
@@ -335,9 +333,15 @@ export async function startCodexAttemptThread(params: {
               ) {
                 throw error;
               }
-              throw new AgentHarnessPreflightError(
-                `Codex Computer Use readiness failed: ${formatErrorMessage(error)}`,
-                { cause: error, scope: "harness" },
+              if (params.computerUseConfig.strictReadiness) {
+                throw new AgentHarnessPreflightError(
+                  `Codex Computer Use readiness failed: ${formatErrorMessage(error)}`,
+                  { cause: error, scope: "harness" },
+                );
+              }
+              embeddedAgentLog.warn(
+                "codex Computer Use setup unavailable; continuing non-strict ordinary turn",
+                { error: formatErrorMessage(error) },
               );
             }
             const startupRuntimeIdentity = activeStartupClient.getRuntimeIdentity();
@@ -559,7 +563,6 @@ export async function startCodexAttemptThread(params: {
               startCodexComputerUseHealthMonitor({
                 client: activeStartupClient,
                 config: params.computerUseConfig,
-                tools: computerUseTools,
               });
               startupAttemptSucceeded = true;
               return {

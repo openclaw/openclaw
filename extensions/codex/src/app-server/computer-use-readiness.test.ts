@@ -3,11 +3,7 @@ import {
   runCodexComputerUseLiveTest,
   type CodexComputerUseRequest,
 } from "./computer-use-readiness.js";
-import {
-  ensureCodexComputerUse,
-  installCodexComputerUse,
-  readCodexComputerUseStatus,
-} from "./computer-use.js";
+import { installCodexComputerUse, readCodexComputerUseStatus } from "./computer-use.js";
 import {
   createComputerUseRequest,
   expectRequestMethodNotCalled,
@@ -67,16 +63,27 @@ describe("Codex Computer Use readiness", () => {
     void peer.catch(() => undefined);
     try {
       const peerStart = await waitForHarnessRequest(harness, "turn/start");
-      const readiness = ensureCodexComputerUse({
+      const readiness = runCodexComputerUseLiveTest({
         client: harness.client,
-        pluginConfig: {
-          computerUse: {
-            enabled: true,
-            marketplaceName: "desktop-tools",
-            strictReadiness: true,
-            liveTestTimeoutMs: 1_000,
+        request: <T>(
+          method: string,
+          params?: unknown,
+          options?: { timeoutMs?: number; signal?: AbortSignal },
+        ) =>
+          harness.client.request<T>(method, params, {
+            ...options,
+            signal: options?.signal ?? controller.signal,
+          }),
+        config: resolveCodexComputerUseConfig({
+          pluginConfig: {
+            computerUse: {
+              enabled: true,
+              marketplaceName: "desktop-tools",
+              strictReadiness: true,
+              liveTestTimeoutMs: 1_000,
+            },
           },
-        },
+        }),
         signal: controller.signal,
       });
       const rejected = expect(readiness).rejects.toThrow("aborted");
@@ -122,16 +129,27 @@ describe("Codex Computer Use readiness", () => {
         },
       });
       try {
-        const readiness = ensureCodexComputerUse({
+        const readiness = runCodexComputerUseLiveTest({
           client: harness.client,
-          pluginConfig: {
-            computerUse: {
-              enabled: true,
-              marketplaceName: "desktop-tools",
-              autoRepair: true,
-              strictReadiness: true,
+          request: <T>(
+            method: string,
+            params?: unknown,
+            options?: { timeoutMs?: number; signal?: AbortSignal },
+          ) =>
+            harness.client.request<T>(method, params, {
+              ...options,
+              signal: options?.signal ?? controller.signal,
+            }),
+          config: resolveCodexComputerUseConfig({
+            pluginConfig: {
+              computerUse: {
+                enabled: true,
+                marketplaceName: "desktop-tools",
+                autoRepair: true,
+                strictReadiness: true,
+              },
             },
-          },
+          }),
           signal: controller.signal,
         });
         const rejected = expect(readiness).rejects.toThrow(
@@ -446,7 +464,7 @@ describe("Codex Computer Use readiness", () => {
       const request = createComputerUseRequest({ installed: true, mcpToolsAvailable: false });
 
       await expectSetupErrorStatus(
-        ensureCodexComputerUse({
+        installCodexComputerUse({
           pluginConfig: {
             computerUse: {
               enabled: true,
@@ -508,10 +526,10 @@ describe("Codex Computer Use readiness", () => {
       mcpServerAvailable: true,
     });
     expect(status.warnings).toContain(
-      "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to fail closed.",
+      "Computer Use live test failed, but ordinary Codex turns remain available until a Computer Use tool is invoked.",
     );
     expect(status.message).toContain(
-      "Startup is allowed because computerUse.strictReadiness is false.",
+      "Ordinary Codex turns remain available; Computer Use will report this failure if invoked.",
     );
     expect(status.repair).toBeUndefined();
     expectRequestMethodNotCalled(request, "config/mcpServer/reload");
@@ -555,61 +573,5 @@ describe("Codex Computer Use readiness", () => {
     expect(
       requestCalls(request).filter(([method]) => method === "config/mcpServer/reload"),
     ).toHaveLength(1);
-  });
-
-  it.each([false, true])(
-    "skips live probes for non-strict startup (autoInstall: %s)",
-    async (autoInstall) => {
-      const request = createComputerUseRequest({ installed: !autoInstall, liveTestFailures: 2 });
-      const status = await ensureCodexComputerUse({
-        pluginConfig: {
-          computerUse: { enabled: true, autoInstall, marketplaceName: "desktop-tools" },
-        },
-        request,
-      });
-
-      expectStatusFields(status, {
-        ready: true,
-        reason: "ready",
-        installed: true,
-        pluginEnabled: true,
-        mcpServerAvailable: true,
-      });
-      expect(status.liveTest).toMatchObject({ status: "skipped", ok: false, attempted: false });
-      expectRequestMethodNotCalled(request, "thread/start");
-      expectRequestMethodNotCalled(request, "mcpServer/tool/call");
-      if (autoInstall) {
-        expect(request).toHaveBeenCalledWith("plugin/install", {
-          marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
-          pluginName: "computer-use",
-        });
-      } else {
-        expectRequestMethodNotCalled(request, "plugin/install");
-      }
-    },
-  );
-
-  it("fails startup closed when strictReadiness is enabled", async () => {
-    const request = createComputerUseRequest({ installed: true, liveTestFailures: 2 });
-
-    await expectSetupErrorStatus(
-      ensureCodexComputerUse({
-        pluginConfig: {
-          computerUse: {
-            enabled: true,
-            marketplaceName: "desktop-tools",
-            strictReadiness: true,
-          },
-        },
-        request,
-      }),
-      {
-        ready: false,
-        reason: "live_test_failed",
-        installed: true,
-        pluginEnabled: true,
-        mcpServerAvailable: true,
-      },
-    );
   });
 });

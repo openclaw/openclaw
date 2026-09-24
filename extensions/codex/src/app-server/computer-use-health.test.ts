@@ -62,7 +62,6 @@ describe("Codex Computer Use periodic health", () => {
         mcpServerName: "cua_repl",
         pluginName: "unified-computer-use",
       }),
-      tools: ["js", "js_reset", "turn_ended"],
     });
 
     await vi.advanceTimersByTimeAsync(30 * 60_000);
@@ -212,6 +211,15 @@ function createClient(options: { liveTestFailures?: number } = {}) {
         thread: { id: `health-probe-thread-${threadStarts}` },
         model: "gpt-5.1",
         modelProvider: "openai",
+      };
+    }
+    if (method === "mcpServerStatus/list") {
+      return {
+        data: [
+          { name: "computer-use", tools: { list_apps: {} } },
+          { name: "cua_repl", tools: { js: {}, js_reset: {}, turn_ended: {} } },
+        ],
+        nextCursor: null,
       };
     }
     if (method === "mcpServer/tool/call") {

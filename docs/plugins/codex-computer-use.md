@@ -10,11 +10,13 @@ read_when:
 
 Computer Use is a Codex-native MCP plugin for local desktop control. OpenClaw
 does not vendor the desktop app, execute desktop actions itself, or bypass
-Codex permissions. The bundled `codex` plugin only prepares Codex app-server:
-it enables Codex plugin support, finds or installs the configured Computer Use
-plugin, checks that the configured MCP server is available, and then lets Codex
-own the native MCP tool calls during Codex-mode turns. Ordinary non-strict
-turns check installation and tool availability without running a live probe.
+Codex permissions. The bundled `codex` plugin prepares Codex app-server: it can
+enable Codex plugin support, find or install the configured Computer Use plugin,
+and check its MCP server before a Codex-mode turn. Ordinary non-strict turns do
+not fail when that optional setup is unavailable, so unrelated text or image
+work can still start. Configured auto-install remains active, and explicit
+`strictReadiness` still makes successful readiness a startup requirement.
+
 Explicit status/install commands, strict-readiness startup, and enabled periodic
 health checks run live probes. These use
 `list_apps` when the server exposes the legacy Computer Use surface. A newer
@@ -37,8 +39,7 @@ Codex Computer Use does not call through the PeekabooBridge socket.
 
 Use [Peekaboo bridge](/platforms/mac/peekaboo) when you want OpenClaw.app to be
 a permission-aware host for Peekaboo CLI automation. Use this page when a
-Codex-mode OpenClaw agent should have Codex's native `computer-use` MCP plugin
-available before the turn starts.
+Codex-mode OpenClaw agent should use Codex's native `computer-use` MCP plugin.
 
 ## iOS app
 
@@ -85,9 +86,9 @@ bypass the upstream driver's safety model.
 
 ## Quick setup
 
-Set `plugins.entries.codex.config.computerUse` when Codex-mode turns must have
-Computer Use available before a thread starts. `autoInstall: true` opts
-Computer Use in and lets OpenClaw install or re-enable it before the turn:
+Set `plugins.entries.codex.config.computerUse` when Codex-mode turns should have
+Computer Use available. `autoInstall: true` opts Computer Use in and lets
+OpenClaw install or re-enable it before the turn:
 
 ```json5
 {
@@ -111,11 +112,12 @@ Computer Use in and lets OpenClaw install or re-enable it before the turn:
 }
 ```
 
-With this config, OpenClaw checks Codex app-server before each Codex-mode
-turn. If Computer Use is missing but Codex app-server has already discovered
-an installable marketplace, OpenClaw asks Codex app-server to install or
-re-enable the plugin and reload MCP servers. Before starting an isolated
-Codex app-server on macOS, auto-install also provisions the official signed
+With this config, OpenClaw checks Codex app-server before each Codex-mode turn.
+If Computer Use is missing but Codex app-server has already discovered an
+installable marketplace, OpenClaw asks Codex app-server to install or re-enable
+the plugin and reload MCP servers. Setup failure remains non-blocking unless
+`strictReadiness` is true. Before starting an isolated Codex app-server on
+macOS, auto-install also provisions the official signed
 Computer Use service app from the selected desktop app bundle into that
 Codex home's `computer-use` directory. OpenClaw verifies the outer service and
 nested client signatures, bundle identities, versions, builds, and code hashes.
@@ -133,17 +135,15 @@ through a real, isolated-home-owned wrapper at
 `$CODEX_HOME/.tmp/bundled-marketplaces/openai-bundled`. Codex reserves that
 path for the `openai-bundled` marketplace; the wrapper links only the manifest
 and plugin directory from the selected standard desktop app. OpenClaw then asks
-Codex app-server to register the wrapper. If setup still cannot make the MCP
-server available, the turn fails before the thread starts.
-With the default `strictReadiness: false`, startup does not create a temporary
-probe thread or wait for a readiness tool call. Use `/codex computer-use status`
-to verify live desktop access, or enable `healthCheckEnabled` for periodic
-checks owned by the active app-server client. Set `strictReadiness: true` when
-every turn must wait for a successful live probe before its thread starts.
-Strict readiness failures are harness preflight failures, so model fallback
-does not repeat the same local readiness sequence for every Codex candidate.
-A candidate resolved to another harness remains eligible and enters that
-runtime through its normal policy checks.
+Codex app-server to register the wrapper. With the default
+`strictReadiness: false`, startup checks installation and MCP exposure but does
+not create a temporary probe thread or fail the ordinary turn when optional
+setup is unavailable. Use `/codex computer-use status` to verify live desktop
+access, or enable `healthCheckEnabled` for periodic checks owned by the active
+app-server client. Set `strictReadiness: true` when every turn must wait for a
+successful live probe before its thread starts. Strict readiness failures are
+harness preflight failures, so model fallback does not repeat the same local
+readiness sequence for every Codex candidate.
 
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
@@ -303,7 +303,7 @@ install plugins or modify Codex configuration.
 
 | Field                           | Default        | Meaning                                                                        |
 | ------------------------------- | -------------- | ------------------------------------------------------------------------------ |
-| `enabled`                       | inferred       | Require Computer Use. Defaults to true when another Computer Use field is set. |
+| `enabled`                       | inferred       | Enable Computer Use. Defaults to true when another Computer Use field is set.  |
 | `autoInstall`                   | false          | Provision the native client and install or re-enable the plugin at turn start. |
 | `marketplaceDiscoveryTimeoutMs` | 60000          | How long install waits for Codex app-server marketplace discovery.             |
 | `liveTestTimeoutMs`             | 60000          | Timeout for the temporary readiness thread and its cleanup requests.           |
@@ -323,9 +323,8 @@ Turn-start auto-install intentionally refuses configured `marketplaceSource`
 values. Adding a new source is an explicit setup operation, so use
 `/codex computer-use install --source <marketplace-source>` once, then let
 `autoInstall` handle future re-enables from discovered local or remote
-marketplaces.
-Turn-start auto-install can use a configured `marketplacePath`, because that
-is already a local path on the host.
+marketplaces. Turn-start auto-install can use a configured `marketplacePath`,
+because that is already a local path on the host.
 
 Each field also accepts an environment variable override, checked when the
 matching config key is unset:
@@ -360,7 +359,7 @@ user-facing status for chat:
 | `plugin_not_installed` | Marketplace exists, but the plugin is not installed.   | Run install or enable `autoInstall`.         |
 | `plugin_disabled`      | Plugin is installed but disabled in Codex config.      | Run install to re-enable it.                 |
 | `mcp_missing`          | Plugin is enabled, but the MCP server is unavailable.  | Check Codex Computer Use and OS permissions. |
-| `ready`                | Plugin and MCP tools are available.                    | Start the Codex-mode turn.                   |
+| `ready`                | Plugin and MCP tools are available.                    | Invoke Computer Use or continue the turn.    |
 | `check_failed`         | A Codex app-server request failed during status check. | Check app-server connectivity and logs.      |
 | `auto_install_blocked` | Turn-start setup would need to add a new source.       | Run explicit install first.                  |
 
@@ -383,10 +382,11 @@ verify the Codex-side Computer Use setup first:
 - macOS has granted the required permissions for the desktop-control app.
 - The current host session can access the desktop being controlled.
 
-When `computerUse.enabled` is true, OpenClaw fails closed if the plugin or its
-MCP tools are missing. Live desktop readiness gates startup only when
-`computerUse.strictReadiness` is true. Non-strict startup does not guarantee that
-the desktop bridge will answer; actual tool calls still report failures.
+When `computerUse.enabled` is true, missing plugin or MCP exposure does not
+block an ordinary non-strict Codex thread. Live desktop readiness gates startup
+only when `computerUse.strictReadiness` is true. Non-strict startup does not
+guarantee that the desktop bridge will answer; actual tool calls still report
+failures through the normal native approval path.
 
 ## Troubleshooting
 
@@ -398,8 +398,9 @@ again. Codex app-server install writes the plugin config back to enabled.
 
 **A discovered remote plugin cannot be installed.** Confirm Codex reports the
 marketplace and the plugin's opaque remote ID, then run `/codex computer-use
-install`. Add a new `marketplaceSource` only through explicit install; turn-start
-`autoInstall` uses remote marketplaces that Codex has already discovered.
+install`. Add a new `marketplaceSource` only through explicit install;
+turn-start `autoInstall` uses remote marketplaces that Codex has already
+discovered.
 
 **Status says the MCP server is unavailable.** Re-run install once so MCP
 servers reload. If it remains unavailable, fix the Codex Computer Use app,

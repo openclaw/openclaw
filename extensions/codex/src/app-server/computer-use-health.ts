@@ -4,6 +4,7 @@ import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
 import { runCodexComputerUseLiveTest } from "./computer-use-readiness.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
+import type { CodexListMcpServerStatusResponse } from "./protocol.js";
 
 type ComputerUseHealthMonitor = {
   fingerprint: string;
@@ -91,10 +92,11 @@ async function runCodexComputerUseHealthProbe(
   }
   monitor.running = true;
   try {
+    const probeTools = await readComputerUseTools(client, config, tools);
     const { liveTest, repair } = await runCodexComputerUseLiveTest({
       client,
       config,
-      tools,
+      tools: probeTools,
       request: async <T>(
         method: string,
         requestParams?: unknown,
@@ -128,6 +130,30 @@ async function runCodexComputerUseHealthProbe(
   } finally {
     monitor.running = false;
   }
+}
+
+async function readComputerUseTools(
+  client: CodexAppServerClient,
+  config: ResolvedCodexComputerUseConfig,
+  knownTools: readonly string[] | undefined,
+): Promise<readonly string[] | undefined> {
+  if (knownTools) {
+    return knownTools;
+  }
+  let cursor: string | null | undefined;
+  do {
+    const response = await client.request<CodexListMcpServerStatusResponse>(
+      "mcpServerStatus/list",
+      { cursor, limit: 100, detail: "toolsAndAuthOnly" },
+      { timeoutMs: config.liveTestTimeoutMs },
+    );
+    const server = response.data.find((candidate) => candidate.name === config.mcpServerName);
+    if (server) {
+      return Object.keys(server.tools ?? {}).toSorted();
+    }
+    cursor = response.nextCursor;
+  } while (cursor);
+  return undefined;
 }
 
 function clearComputerUseHealthMonitor(

@@ -227,8 +227,9 @@ export async function readCodexComputerUseStatus(
 }
 
 /**
- * Ensures installation and MCP exposure before a turn, optionally installing when
- * config allows safe auto-install. Only strict startup waits for a live probe.
+ * Ensures installation and MCP exposure before a turn when configured. Only
+ * strict startup waits for a live probe; callers decide whether non-strict
+ * setup failures may leave the optional capability unavailable for that turn.
  */
 export async function ensureCodexComputerUse(
   params: CodexComputerUseSetupParams = {},
@@ -669,7 +670,7 @@ async function readComputerUseTools(params: {
     config: params.config,
     tools,
   });
-  const compatibilityStartupAllowed = !liveTest.ok && !params.config.strictReadiness;
+  const ordinaryTurnAvailable = !liveTest.ok && !params.config.strictReadiness;
   return {
     ...status,
     ready: liveTest.ok,
@@ -679,16 +680,16 @@ async function readComputerUseTools(params: {
     warnings: [
       ...status.warnings,
       ...(repair?.warnings ?? []),
-      ...(compatibilityStartupAllowed
+      ...(ordinaryTurnAvailable
         ? [
-            "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to fail closed.",
+            "Computer Use live test failed, but ordinary Codex turns remain available until a Computer Use tool is invoked.",
           ]
         : []),
     ],
     message: liveTest.ok
       ? "Computer Use is ready."
-      : compatibilityStartupAllowed
-        ? `${liveTest.message} Startup is allowed because computerUse.strictReadiness is false.`
+      : ordinaryTurnAvailable
+        ? `${liveTest.message} Ordinary Codex turns remain available; Computer Use will report this failure if invoked.`
         : liveTest.message,
   };
 }

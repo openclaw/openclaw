@@ -3492,10 +3492,10 @@ describe("codex command", () => {
         error: "list_apps timed out",
       },
       warnings: [
-        "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to fail closed.",
+        "Computer Use live test failed, but ordinary Codex turns remain available until a Computer Use tool is invoked.",
       ],
       message:
-        "Computer Use live test failed after 2 attempts: list_apps timed out Startup is allowed because computerUse.strictReadiness is false.",
+        "Computer Use live test failed after 2 attempts: list_apps timed out Ordinary Codex turns remain available; Computer Use will report this failure if invoked.",
     }));
 
     const result = await runCommand("computer-use status", { readCodexComputerUseStatus });

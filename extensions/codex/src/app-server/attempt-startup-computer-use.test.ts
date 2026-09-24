@@ -192,114 +192,117 @@ describe("Computer Use attempt startup", () => {
     },
   );
 
-  it.each([false, true])(
-    "does not await optional live probes at turn startup (strictReadiness: %s)",
-    async (strictReadiness) => {
-      vi.useFakeTimers();
-      const probeStarts: number[] = [];
-      const userStarts: number[] = [];
-      const harness = createInferenceReadyClientHarness({
-        onWrite: (line, send) => {
-          const request = JSON.parse(line) as {
-            id: number;
-            method: string;
-            params?: { ephemeral?: boolean };
-          };
-          switch (request.method) {
-            case "configRequirements/read":
-              send({ id: request.id, result: { requirements: null } });
-              break;
-            case "plugin/read":
-              send({
-                id: request.id,
-                result: { plugin: { summary: { installed: true, enabled: true } } },
-              });
-              break;
-            case "mcpServerStatus/list":
-              send({
-                id: request.id,
-                result: {
-                  data: [{ name: "computer-use", tools: { list_apps: {} } }],
-                  nextCursor: null,
-                },
-              });
-              break;
-            case "thread/start":
-              (request.params?.ephemeral ? probeStarts : userStarts).push(Date.now());
-              send({ id: request.id, result: threadStartResult() });
-              break;
-            case "thread/unsubscribe":
-              send({ id: request.id, result: { status: "unsubscribed" } });
-              break;
-            // Leave mcpServer/tool/call unanswered to exercise the real 60s timeout.
-          }
+  it("starts an ordinary non-strict turn when Computer Use is unavailable", async () => {
+    const harness = createMissingMarketplaceHarness();
+    const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      harness,
+      pluginConfig: {
+        ...pluginConfig,
+        computerUse: {
+          enabled: true,
+          marketplaceName: "missing-marketplace",
+          strictReadiness: false,
         },
-      });
-      const { run } = startThreadWithHarness(180_000, new AbortController().signal, {
-        harness,
-        pluginConfig: {
-          ...pluginConfig,
-          computerUse: {
-            enabled: true,
-            marketplacePath: "/marketplaces/desktop-tools/marketplace.json",
-            strictReadiness,
-            autoRepair: false,
-          },
+      },
+    });
+
+    await answerInitialize(harness);
+    const result = await run;
+
+    expect(readHarnessRequestMethods(harness)).toContain("plugin/list");
+    expect(readHarnessRequestMethods(harness)).not.toContain("mcpServerStatus/list");
+    expect(readHarnessRequestMethods(harness)).toContain("thread/start");
+    result.turnRoute.release();
+    result.releaseSharedClientLease();
+  });
+
+  it("preserves strict readiness as an explicit startup gate", async () => {
+    const harness = createMissingMarketplaceHarness();
+    const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      harness,
+      pluginConfig: {
+        ...pluginConfig,
+        computerUse: {
+          enabled: true,
+          marketplaceName: "missing-marketplace",
+          strictReadiness: true,
         },
-      });
-      let settled = false;
-      const outcome = run
-        .then(
-          (result) => ({ result, error: undefined }),
-          (error: unknown) => ({ result: undefined, error }),
-        )
-        .finally(() => {
-          settled = true;
-        });
-      await answerInitialize(harness);
-      if (strictReadiness) {
-        await waitForRequest(harness, "mcpServer/tool/call");
-        const firstProbeStart = probeStarts[0];
-        if (firstProbeStart === undefined) {
-          throw new Error("The strict readiness probe did not start");
+      },
+    });
+
+    await answerInitialize(harness);
+
+    await expect(run).rejects.toBeInstanceOf(AgentHarnessPreflightError);
+    expect(readHarnessRequestMethods(harness)).toContain("plugin/list");
+    expect(readHarnessRequestMethods(harness)).not.toContain("thread/start");
+  });
+
+  it("preserves configured auto-install before a non-strict ordinary turn", async () => {
+    const fixture = createComputerUseRequest({ installed: false });
+    const harness = createInferenceReadyClientHarness({
+      onWrite: (line, send) => {
+        const request = JSON.parse(line) as { id: number; method: string; params?: unknown };
+        if (request.method === "initialize") {
+          return;
         }
-        await vi.advanceTimersByTimeAsync(firstProbeStart + 59_999 - Date.now());
-        expect(settled).toBe(false);
-        expect(probeStarts).toHaveLength(1);
-        await vi.advanceTimersByTimeAsync(60_000);
-        expect(settled).toBe(false);
-        expect(probeStarts).toHaveLength(2);
-        await vi.advanceTimersByTimeAsync(1);
-        await vi.waitFor(() => expect(settled).toBe(true), { interval: 1, timeout: 1_000 });
-        const { error } = await outcome;
-        expect(error).toBeInstanceOf(AgentHarnessPreflightError);
-        expect(error).toMatchObject({
-          cause: {
-            status: {
-              reason: "live_test_failed",
-              liveTest: { attempts: 2, durationMs: 120_000 },
-            },
-          },
-        });
-        expect(userStarts).toHaveLength(0);
-        expect(
-          readHarnessRequestMethods(harness).filter((method) => method === "thread/unsubscribe"),
-        ).toHaveLength(2);
-      } else {
-        await vi.waitFor(() => expect(settled).toBe(true), { interval: 1, timeout: 1_000 });
-        const { result, error } = await outcome;
-        expect(error).toBeUndefined();
-        expect(userStarts).toHaveLength(1);
-        expect(probeStarts).toHaveLength(0);
-        expect(readHarnessRequestMethods(harness)).not.toContain("mcpServer/tool/call");
-        result?.turnRoute.release();
-        result?.releaseSharedClientLease();
-      }
-      expect(readHarnessRequestMethods(harness)).not.toContain("thread/archive");
-      expect(readHarnessRequestMethods(harness)).not.toContain("config/mcpServer/reload");
-    },
-  );
+        if (request.method === "configRequirements/read") {
+          send({ id: request.id, result: { requirements: null } });
+          return;
+        }
+        if (request.method === "thread/start") {
+          send({ id: request.id, result: threadStartResult() });
+          return;
+        }
+        void fixture(request.method, request.params).then(
+          (result) => send({ id: request.id, result: result ?? null }),
+          (error: unknown) =>
+            send({ id: request.id, error: { code: -32000, message: String(error) } }),
+        );
+      },
+    });
+    const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      harness,
+      pluginConfig: {
+        ...pluginConfig,
+        computerUse: {
+          enabled: true,
+          autoInstall: true,
+          marketplaceName: "desktop-tools",
+          strictReadiness: false,
+        },
+      },
+    });
+
+    await answerInitialize(harness);
+    const result = await run;
+
+    expect(fixture).toHaveBeenCalledWith("plugin/install", {
+      marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+      pluginName: "computer-use",
+    });
+    expect(readHarnessRequestMethods(harness)).toContain("thread/start");
+    result.turnRoute.release();
+    result.releaseSharedClientLease();
+  });
 });
+
+function createMissingMarketplaceHarness() {
+  return createInferenceReadyClientHarness({
+    onWrite: (line, send) => {
+      const request = JSON.parse(line) as { id: number; method: string };
+      if (request.method === "configRequirements/read") {
+        send({ id: request.id, result: { requirements: null } });
+      } else if (request.method === "plugin/list") {
+        send({
+          id: request.id,
+          result: { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] },
+        });
+      } else if (request.method === "thread/start") {
+        send({ id: request.id, result: threadStartResult() });
+      }
+    },
+  });
+}
 
 function createStatusClient(afterResponse?: (method: string) => void) {
   const fixture = createComputerUseRequest({ installed: true });
