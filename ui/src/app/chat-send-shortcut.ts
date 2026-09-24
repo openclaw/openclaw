@@ -1,13 +1,18 @@
-import { normalizeChatSendShortcut, type ChatSendShortcut } from "./settings.ts";
+import { normalizeChatSendShortcutOverride, type ChatSendShortcut } from "./settings.ts";
 
-// Any mouse or trackpad, including one paired with a tablet, keeps the synced pref.
+// Any mouse or trackpad, including one paired with a tablet, keeps Enter to send.
 const TOUCH_ONLY_QUERY = "(pointer: coarse) and (any-hover: none)";
 
-// The synced pref is shared across devices, but on-screen keyboards have no
-// Shift+Enter, so Return must insert a new line there; Send and Ctrl/Cmd+Enter
-// still submit. jsdom lacks matchMedia and keeps the synced pref.
+// jsdom lacks matchMedia and reports a pointer device.
+export function isTouchOnlyInput(): boolean {
+  return globalThis.matchMedia?.(TOUCH_ONLY_QUERY).matches ?? false;
+}
+
+// On-screen keyboards have no Shift+Enter, so an unset shortcut makes Return
+// insert a new line there; Send and Ctrl/Cmd+Enter still submit. An explicit
+// choice from Settings or the synced pref applies on every device.
 export function resolveChatSendShortcut(value: unknown): ChatSendShortcut {
-  return globalThis.matchMedia?.(TOUCH_ONLY_QUERY).matches
-    ? "modifier-enter"
-    : normalizeChatSendShortcut(value);
+  return (
+    normalizeChatSendShortcutOverride(value) ?? (isTouchOnlyInput() ? "modifier-enter" : "enter")
+  );
 }

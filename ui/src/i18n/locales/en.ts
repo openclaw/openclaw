@@ -3595,6 +3595,8 @@ export const en: TranslationMap & {
     sendShortcut: "Send shortcut",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    sendShortcutTouchNewLine:
+      "On this touch device, Return adds a new line. Send or ⌘/Ctrl+Enter sends.",
     followUpMode: "Follow-ups while the agent is working",
     followUpModeQueue: "Queue until the run ends",
     followUpModeServer: "Server default ({mode})",

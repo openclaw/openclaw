@@ -1931,6 +1931,30 @@ describe("config view", () => {
     expect(setThemeMode).toHaveBeenCalledWith("system", expect.any(Object));
   });
 
+  it("describes the touch-only send shortcut default", () => {
+    const sendShortcutText = (overridden: boolean) => {
+      const { container } = renderConfigView({
+        activeSection: "__appearance__",
+        includeSections: ["__appearance__"],
+        chatSendShortcut: overridden ? "enter" : "modifier-enter",
+        chatSendShortcutOverridden: overridden,
+        chatSendShortcutTouchDefault: true,
+      });
+      const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+        (candidate) =>
+          candidate.querySelector(".settings-row__title")?.textContent?.trim() === "Send shortcut",
+      );
+      return normalizedText(row ?? container);
+    };
+
+    expect(sendShortcutText(false)).toContain(
+      "On this touch device, Return adds a new line. Send or ⌘/Ctrl+Enter sends.",
+    );
+    expect(sendShortcutText(true)).toContain(
+      "Default: On this touch device, Return adds a new line",
+    );
+  });
+
   it("renders rejected theme and locale edits as browser-only fallbacks", () => {
     const setTheme = vi.fn();
     const { container } = renderConfigView({

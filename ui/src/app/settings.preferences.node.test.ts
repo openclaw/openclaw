@@ -155,17 +155,17 @@ describe("settings preference persistence", () => {
     }
   });
 
-  it("defaults the chat send shortcut to enter", () => {
+  it("leaves the chat send shortcut unset by default", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
       pathname: "/",
     });
 
-    expect(loadSettings().chatSendShortcut).toBe("enter");
+    expect(loadSettings().chatSendShortcut).toBeUndefined();
   });
 
-  it("persists only the non-default chat send shortcut", () => {
+  it("persists explicit chat send shortcuts and drops unset or invalid ones", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -181,6 +181,10 @@ describe("settings preference persistence", () => {
     expect(loadSettings().chatSendShortcut).toBe("modifier-enter");
 
     saveSettings({ ...loadSettings(), chatSendShortcut: "enter" });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatSendShortcut).toBe("enter");
+    expect(loadSettings().chatSendShortcut).toBe("enter");
+
+    saveSettings({ ...loadSettings(), chatSendShortcut: undefined });
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
       "chatSendShortcut",
     );
@@ -189,7 +193,7 @@ describe("settings preference persistence", () => {
       scopedKey,
       JSON.stringify({ gatewayUrl: gwUrl, chatSendShortcut: "unsupported" }),
     );
-    expect(loadSettings().chatSendShortcut).toBe("enter");
+    expect(loadSettings().chatSendShortcut).toBeUndefined();
   });
 
   it("persists only explicit chat follow-up overrides", () => {

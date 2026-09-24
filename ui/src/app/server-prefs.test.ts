@@ -118,10 +118,12 @@ describe("server pref extraction", () => {
       resetValue: "system",
       value: "system",
     });
+    // The send shortcut stores explicit choices, so its mirror holds the applied value.
+    applyServerUiPrefs(config, { onApplied: vi.fn() });
     expect(resolveServerUiPrefState(config, "chatSendShortcut")).toEqual({
       overridden: true,
       provenance: "synced",
-      resetValue: "enter",
+      resetValue: undefined,
       value: "enter",
     });
   });
@@ -445,7 +447,7 @@ describe("clearable pref removal from the server", () => {
       themeMode: "system",
     });
     expect(reset.accent).toBeUndefined();
-    expect(reset.chatSendShortcut).toBe("enter");
+    expect(reset.chatSendShortcut).toBeUndefined();
     const persisted = JSON.parse(
       localStorage.getItem(`openclaw.control.settings.v1:${reset.gatewayUrl}`) ?? "{}",
     ) as Record<string, unknown>;

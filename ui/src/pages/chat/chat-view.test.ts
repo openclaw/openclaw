@@ -4709,13 +4709,13 @@ describe("chat slash menu accessibility", () => {
     );
   });
 
-  it("inserts a new line on Enter with a touch-only on-screen keyboard", () => {
+  it("inserts a new line on Enter by default with a touch-only on-screen keyboard", () => {
     vi.stubGlobal("matchMedia", (query: string) => ({
       matches: query === "(pointer: coarse) and (any-hover: none)",
     }));
     onTestFinished(() => vi.unstubAllGlobals());
     const onSend = vi.fn();
-    const container = renderChatView({ onSend, sendShortcut: "enter" });
+    const container = renderChatView({ onSend, sendShortcut: undefined });
 
     inputDraft(container, "first line");
     const plainEnter = keydownComposer(container, "Enter");
@@ -4729,6 +4729,21 @@ describe("chat slash menu accessibility", () => {
     keydownComposer(container, "Enter", { ctrlKey: true });
 
     expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an explicit Enter-to-send choice on a touch-only device", () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(pointer: coarse) and (any-hover: none)",
+    }));
+    onTestFinished(() => vi.unstubAllGlobals());
+    const onSend = vi.fn();
+    const container = renderChatView({ onSend, sendShortcut: "enter" });
+
+    inputDraft(container, "send from enter");
+    keydownComposer(container, "Enter");
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("textarea")?.getAttribute("aria-keyshortcuts")).toBe("Enter");
   });
 
   it("does not send a modifier shortcut during IME composition", () => {

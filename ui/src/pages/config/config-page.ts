@@ -13,6 +13,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
+import { isTouchOnlyInput, resolveChatSendShortcut } from "../../app/chat-send-shortcut.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
@@ -24,7 +25,6 @@ import {
   loadSettings,
   normalizeCatalogOpenTarget,
   normalizeTextScale,
-  normalizeChatSendShortcut,
   patchSettings,
   UI_APPEARANCE_DEFAULTS,
   type UiSettings,
@@ -1144,7 +1144,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       setLobsterPetSounds: (enabled) => this.applySettings({ lobsterPetSounds: enabled }),
       lobsterdexHref: pathForRoute("lobsterdex", this.context.basePath),
       onOpenLobsterdex: () => this.context.navigate("lobsterdex"),
-      chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
+      chatSendShortcut: resolveChatSendShortcut(this.settings.chatSendShortcut),
+      chatSendShortcutTouchDefault: isTouchOnlyInput(),
       chatSendShortcutOverridden: chatSendShortcutPref.overridden,
       chatSendShortcutProvenance: chatSendShortcutPref.provenance,
       chatSendShortcutResetValue:

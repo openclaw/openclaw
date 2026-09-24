@@ -121,6 +121,9 @@ function normalizeChoice<T extends string>(
 
 export const normalizeChatSendShortcut = normalizeChoice(CHAT_SEND_SHORTCUTS, "enter");
 
+export const normalizeChatSendShortcutOverride = (value: unknown): ChatSendShortcut | undefined =>
+  CHAT_SEND_SHORTCUTS.includes(value as ChatSendShortcut) ? (value as ChatSendShortcut) : undefined;
+
 const CHAT_FOLLOW_UP_MODES = ["queue", "steer"] as const;
 export type ChatFollowUpMode = (typeof CHAT_FOLLOW_UP_MODES)[number];
 
@@ -475,7 +478,6 @@ export function loadUiPreferences(
     chatPersistCommentary: true,
     chatShowTaskProgress: UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
     chatCollapseTaskProgress: UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
-    chatSendShortcut: UI_APPEARANCE_DEFAULTS.chatSendShortcut,
     catalogOpenTarget: UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
@@ -549,7 +551,7 @@ export function loadUiPreferences(
         typeof parsed.chatCollapseTaskProgress === "boolean"
           ? parsed.chatCollapseTaskProgress
           : defaults.chatCollapseTaskProgress,
-      chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
+      chatSendShortcut: normalizeChatSendShortcutOverride(parsed.chatSendShortcut),
       chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
@@ -704,9 +706,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     chatPersistCommentary: next.chatPersistCommentary ?? true,
     ...(next.chatShowTaskProgress === false ? { chatShowTaskProgress: false } : {}),
     ...(next.chatCollapseTaskProgress === true ? { chatCollapseTaskProgress: true } : {}),
-    ...(normalizeChatSendShortcut(next.chatSendShortcut) === "modifier-enter"
-      ? { chatSendShortcut: "modifier-enter" as const }
-      : {}),
+    chatSendShortcut: normalizeChatSendShortcutOverride(next.chatSendShortcut),
     ...(chatFollowUpMode ? { chatFollowUpMode } : {}),
     ...(normalizeCatalogOpenTarget(next.catalogOpenTarget) === "terminal"
       ? { catalogOpenTarget: "terminal" as const }
