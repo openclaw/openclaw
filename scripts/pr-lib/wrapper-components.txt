@@ -1221,6 +1221,7 @@ src/state/openclaw-state-db-open.ts
 src/state/openclaw-state-db-operator-approval-migration.ts
 src/state/openclaw-state-db-permissions.ts
 src/state/openclaw-state-db-read-connection.ts
+src/state/openclaw-state-db-readonly-reuse.ts
 src/state/openclaw-state-db-readonly.ts
 src/state/openclaw-state-db-repair.ts
 src/state/openclaw-state-db-runtime-failure.ts
