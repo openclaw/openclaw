@@ -1,5 +1,5 @@
 // Builds compact plugin health summaries for chat status surfaces.
-import type { PluginDiagnosticCode } from "../plugins/manifest-types.js";
+import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 
 type StatusPluginDependencyStatus = {
@@ -17,12 +17,10 @@ export type PluginHealthRecord = {
   failurePhase?: string;
 };
 
-export type PluginDiagnosticRecord = {
-  level: "warn" | "error";
-  message: string;
-  pluginId?: string;
-  code?: PluginDiagnosticCode;
-};
+export type PluginDiagnosticRecord = Pick<
+  PluginDiagnostic,
+  "level" | "message" | "pluginId" | "code"
+>;
 
 type ContextEngineQuarantineRecord = {
   engineId: string;

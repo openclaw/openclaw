@@ -95,7 +95,7 @@ const InstalledPluginIndexRecordSchema = z.object({
 });
 
 const PluginDiagnosticSchema = z.object({
-  level: z.union([z.literal("warn"), z.literal("error")]),
+  level: z.union([z.literal("info"), z.literal("warn"), z.literal("error")]),
   message: z.string(),
   pluginId: z.string().optional(),
   source: z.string().optional(),
