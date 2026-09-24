@@ -14,6 +14,7 @@ import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.
 import { PluginInstance } from "./plugin-instance.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
+import { packagedDiscoveryProbePath } from "./provider-discovery.packaged.test-support.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import { resolveSyntheticAuthWithProvider } from "./provider-synthetic-auth.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -48,7 +49,7 @@ it("resolves host SDK imports in a packaged discovery hook after leaving its inv
     [
       "--import",
       pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
-      path.resolve("src/plugins/provider-discovery.packaged.test-support.ts"),
+      packagedDiscoveryProbePath,
       root,
     ],
     {
