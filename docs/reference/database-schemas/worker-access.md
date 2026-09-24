@@ -186,6 +186,14 @@ history worker, with foreground priority and row-generation checks before
 publication. The host evaluates fallback notices using its current runtime plugin
 aliases; configuration and model policy do not travel to the read worker.
 
+Catalog-only replacement reuses complete accepted database facts for live resident
+rows while rebuilding their model presentation. Stored-data, configuration,
+physical-store, and lifecycle invalidations revoke those facts. Transcript updates
+revoke watermarks immediately even inside a coalesced presentation window. Cold
+archives retain no complete snapshot; exact archive reads remain bounded by the
+existing materialization cache. Schema, persisted data, and update behavior are
+unchanged.
+
 Durable keyed RPCs prepare only their selected dirty or archived rows through the
 worker before synchronous presentation; placement waits recheck that preparation.
 `sessions.get` selects session metadata from the row projection and reads raw
