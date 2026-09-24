@@ -147,29 +147,49 @@ Current-runner targets use three native shards and three workers per row,
 including exact-target Full Release Validation dispatches. Historical
 compatibility targets retain their unsharded package command.
 The UI runtime partition is applied after Vitest selects each native shard, so
-files keep their original shard ownership. A shard with no Node-only files
-finishes that partition without running other UI files. Dual validation runs
+files keep their original shard ownership. Compatible PR selections run Bun
+first and record Vitest's original shard inventory. After successful, joined
+completion, a shard with no Node-only files omits that Node process. Missing or
+invalid inventory evidence retains the Node run. Dual validation runs
 the complete UI selection on Node, then excludes only those two files from Bun;
 their assertions remain required on Node, with no added skips.
+Partitions without browser files retain browser discovery for native sharding
+but omit Chromium version probing and Playwright's speculative browser startup.
 
-The nonbrowser Control UI projects load `bun-css-tokenizer.setup.ts`. On Bun,
-this setup resolves jsdom's native CSS tokenizer and prevents inlining only its
-`endOfFile` predicate. The pinned fork can otherwise
-enter an unbounded CSS-tokenizer loop after an ordered sequence of UI files.
-Baseline, DFG, and FTL JIT remain enabled; Node and Chromium are unaffected.
+On both runtimes, non-isolated UI projects without cached test results group
+files by environment and options after native sharding. The sequencer targets
+96-file batches and spreads smaller environments across the same rounds to
+reduce restarts without keeping every compatible file in one long worker run.
+Native ordering within each environment, project order, coverage, isolation, and
+worker budgets remain unchanged. The batch target is a scheduling heuristic,
+not a worker-lifetime or memory limit; the native pool still decides reuse.
+Cached projects retain Vitest's failure/duration ordering, and explicit file
+shuffling retains its native seeded order.
+
 The UI runtime owner delays FTL compilation with warmup/soon thresholds of
 512000/8000. These short-lived workers benefit from less compilation work;
 the protected cache publisher uses the same policy when collecting its seven
 canonical UI seed files on Bun. PR jobs restore that Bun seed alongside the
 Node seed, with separate transform-cache leaves.
-The setup leaves tokenizer exports and CSS behavior unchanged. Remove it
-only after a corrected pinned runtime passes the original ordered reproduction,
-the complete UI config, and all three native shards within their existing memory
-budgets.
+The same owner sets `MIMALLOC_PURGE_HOLES_MIN_INTERVAL=1000` to reduce allocator
+scavenger work between short UI updates; normal reclamation and default heaps remain enabled.
 
 The test-runtime setup action installs a checksum-pinned build of the Bun fork
 only for jobs that need it. The source commit, archive checksum, and executable
 checksum live together in `.github/actions/setup-test-bun/action.yml`.
+The fork owns the backing storage of `node:vm` cached bytecode, so compiled
+functions remain valid after the original cache buffer is garbage-collected.
+It also keeps allocator ownership during zero-time event-loop polls, while
+retaining the idle handoff for polls that can block.
+
+The pinned build pairs Bun `ddfce5d01f6a436203a8f41fc8bff074f9b09614` with WebKit
+`4429d11361a5f1680a9e57884ebc1941c2cc7e48`, containing the
+`caa5d805b646edc59ca0d12b49a7a574f942dedb` FTL backport.
+The backport preserves string bounds checks through FTL dead-code elimination,
+fixing the CSS tokenizer's end-of-input loop.
+Its prerelease tag includes both source revisions because `Bun.revision` alone
+does not distinguish builds linked against different WebKit revisions.
+
 Node continues to own orchestration, builds, compiler preparation, and cleanup;
 Vitest and its workers use the selected runtime. Bun and Node have separate
 transform-cache directories and timing identities. Either runtime failing fails

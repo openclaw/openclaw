@@ -68,8 +68,10 @@ prevents cached UI imports from mixing separate projects' Lit instances when a
 focused run and a full run share the persistent cache.
 
 Linux PR tests use Bun for the measured compatible unit lanes and Control UI
-Vitest job, with a targeted CSS-tokenizer optimizer workaround. Full Release Validation
-keeps their Node coverage and runs them on Bun too; see [test runtime selection](/ci/pipeline#test-runtime-selection).
+Vitest job. Full Release Validation keeps their Node coverage and runs them on Bun
+too; see [test runtime selection](/ci/pipeline#test-runtime-selection).
+Both runtimes group uncached, non-isolated UI files by environment in batches
+to reduce worker restarts while retaining native shard ownership and worker budgets.
 
 Full Release Validation's exact-target UI job retains the current three native
 shards for both runtimes. Historical compatibility targets keep their original
