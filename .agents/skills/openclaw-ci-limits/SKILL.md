@@ -92,6 +92,8 @@ Read:
 - `.github/workflows/codeql-critical-quality.yml`
 - `docs/ci.md`
 - `test/scripts/ci-workflow-guards.test.ts`
+- `test/scripts/ci-workflow-planning.test.ts`
+- `test/scripts/ci-workflow-evidence.test.ts`
 - touched planner files under `scripts/lib/*ci*`, `scripts/lib/*test-plan*`, or
   `scripts/ci-changed-scope.mjs`
 
@@ -189,7 +191,8 @@ Do not:
 
 ## Current OpenClaw Knobs
 
-These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
+These are intentionally guarded by the `ci-workflow-guards`,
+`ci-workflow-planning`, and `ci-workflow-evidence` tests under `test/scripts/`:
 
 - `CI` concurrency key version, PR cancellation, and canonical `main`'s two
   non-canceling parity slots, each with one coalesced pending tip.
@@ -354,7 +357,7 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   plugin row, including the five added QA/provider rows, in the burst envelope.
 - Precise and fallback plugin groups retain separate child processes, including process-bounded
   configs. Compatible envelopes, including repeated configs, run one at a time
-  within 240 predicted seconds without a pair-count limit; expanded serial compact
+  within 300 predicted seconds without a pair-count limit; expanded serial compact
   jobs use 210. The rebased 124-envelope inventory emits 50 extension rows and
   125/119/130 PR Node rows on Blacksmith/hybrid/GitHub; push Node rows are
   57/46/55 and compact PR rows are 77/71/82. These fit the landed 130/70/90
@@ -548,10 +551,10 @@ the current circuit breaker.
 For workflow-only or docs/skill-only changes in a Codex worktree:
 
 ```bash
-node scripts/run-vitest.mjs test/scripts/ci-workflow-guards.test.ts
+node scripts/run-vitest.mjs test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts
 node --import tsx scripts/check-workflows.mts
 node scripts/docs-list.js
-./node_modules/.bin/oxfmt --check .github/workflows/ci.yml .github/workflows/codeql-critical-quality.yml docs/ci.md test/scripts/ci-workflow-guards.test.ts .agents/skills/openclaw-ci-limits/SKILL.md .agents/skills/openclaw-ci-limits/agents/openai.yaml
+./node_modules/.bin/oxfmt --check .github/workflows/ci.yml .github/workflows/codeql-critical-quality.yml docs/ci.md test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/ci-workflow.test-support.ts .agents/skills/openclaw-ci-limits/SKILL.md .agents/skills/openclaw-ci-limits/agents/openai.yaml
 git diff --check
 ```
 

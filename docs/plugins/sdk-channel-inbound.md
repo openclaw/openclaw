@@ -48,6 +48,19 @@ import {
 - `dispatchChannelInboundReply(...)`: records and dispatches an already
   assembled inbound reply with a delivery adapter.
 
+Native command adapters must authorize the sender before preparing a configured
+binding. `resolveCommandAuthorization(...)` from
+`openclaw/plugin-sdk/command-auth-native` returns an optional `assertOwnerCurrent`
+callback carrying the host's admitted owner check. It cannot grant ownership;
+the callback is absent when no owner check was bound. Capture the authorization
+result before awaited preparation, combine its callback with current channel and
+command-policy checks, and pass the resulting callback as `assertActive` to
+`ensureConfiguredBindingRouteReady`. ACP preparation checks it before later
+backend effects, including queued controls, handle reopening, and session
+replacement. Accepted control and close results still settle after revocation;
+revocation blocks the next effect. The optional callback preserves existing
+callers that do not carry channel-request authority.
+
 For intentional skips, `logInboundDrop({ log, channel, reason, target?, onceKey?, hint? })`
 formats a diagnostic through the supplied logger. Use a default-level logger and
 an actionable `hint` for mention-gated groups. Set `onceKey` to an account/conversation

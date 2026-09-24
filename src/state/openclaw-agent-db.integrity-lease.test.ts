@@ -15,13 +15,15 @@ import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
-import { executeAgentDatabaseCleanupCommand } from "./openclaw-agent-execution-cleanup.worker.js";
+import { cleanupRetiredAgentDatabaseLease } from "./openclaw-agent-execution-cleanup.js";
 import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const children = new Set<ChildProcess>();
@@ -135,11 +137,14 @@ it.each(["forced cleanup", "stale admission"])(
     child.kill("SIGKILL");
     await exited;
     if (recovery === "forced cleanup") {
-      executeAgentDatabaseCleanupCommand(
-        { type: "agentDatabases.releaseExitedLease", input: receipt },
-        state,
-        owner.env,
-      );
+      await cleanupRetiredAgentDatabaseLease({
+        context: captureOpenClawStateWorkerContext({ env: owner.env }),
+        stopped: exited.then(() => {}),
+        assertOwned() {
+          expect(child.signalCode).toBe("SIGKILL");
+        },
+        lease: receipt,
+      });
       expect(owner.record()).toBeUndefined();
       closeOpenClawAgentDatabaseByPath(owner.database.path);
       expect(owner.record()).toBeUndefined();
@@ -194,4 +199,19 @@ it("does not certify a last read-only release without a writer checkpoint", () =
     releaseOpenClawAgentDatabaseLease(lease, { env: owner.env }, "read-only");
   }
   expect(owner.record()?.clean_close).toBe(0);
+});
+
+it("records a full check while another lease belongs to the same process", () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-peer-") };
+  const options = { agentId: "integrity-lease", env };
+  const pathname = resolveOpenClawAgentSqlitePath(options);
+  const lease = claimOpenClawAgentDatabaseLease({ ...options, path: pathname });
+  try {
+    const database = openOpenClawAgentDatabase(options);
+    expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
+    closeOpenClawAgentDatabaseByPath(database.path);
+    expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
+  } finally {
+    releaseOpenClawAgentDatabaseLease(lease, { env }, "read-only");
+  }
 });

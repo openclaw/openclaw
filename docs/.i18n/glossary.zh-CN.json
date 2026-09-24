@@ -3252,6 +3252,10 @@
     "target": "CI 运行器类型"
   },
   {
+    "source": "CI routing costs",
+    "target": "CI 路由成本"
+  },
+  {
     "source": "CI capacity and shard weights",
     "target": "CI 容量与分片权重"
   },
@@ -3808,6 +3812,10 @@
     "target": "代码模式快速上手"
   },
   {
+    "source": "Code Mode executors",
+    "target": "代码模式执行器"
+  },
+  {
     "source": "Code Mode configuration",
     "target": "代码模式配置"
   },
@@ -3882,6 +3890,10 @@
   {
     "source": "Remote and hosted browsers",
     "target": "远程与托管浏览器"
+  },
+  {
+    "source": "Lightweight browsers",
+    "target": "轻量级浏览器"
   },
   {
     "source": "Browser security",

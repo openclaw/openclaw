@@ -1,6 +1,7 @@
 // Tests get-reply message hooks before and after agent execution.
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -14,6 +15,7 @@ import {
   buildGetReplyGroupCtx,
   createGetReplyContinueDirectivesResult,
   createGetReplySessionState,
+  createLockedReplyPreprocessingState,
   registerGetReplyBaselineBypass,
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
@@ -358,21 +360,16 @@ describe("getReplyFromConfig message hooks", () => {
     "preprocesses model-locked $label before dispatch",
     async ({ harness, mime, configuredAudio, mode }) => {
       const sessionKey = `agent:main:harness:${harness}:locked-media`;
-      const sessionEntry = {
+      const preprocessingState = createLockedReplyPreprocessingState({
+        sessionKey,
         sessionId: "locked-session",
-        updatedAt: 1,
         agentHarnessId: harness,
-        modelSelectionLocked: true,
-      };
+      });
       const preparedText =
         mime === "text/plain"
           ? "Pasted diagnostic: synthetic connection refused"
           : "voice transcript";
-      mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce({
-        sessionEntry,
-        sessionKey,
-        storePath: "/tmp/sessions.json",
-      });
+      mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce(preprocessingState);
       mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
         const { ctx } = args[0] as { ctx: MsgContext };
         ctx.agentText = preparedText;
@@ -402,16 +399,13 @@ describe("getReplyFromConfig message hooks", () => {
 
   it("does not infer locked-harness audio from its filename when MIME metadata is missing", async () => {
     const sessionKey = "agent:main:harness:claude-cli:locked-audio-filename";
-    mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce({
-      sessionEntry: {
+    mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce(
+      createLockedReplyPreprocessingState({
+        sessionKey,
         sessionId: "locked-filename-session",
-        updatedAt: 1,
         agentHarnessId: "claude-cli",
-        modelSelectionLocked: true,
-      },
-      sessionKey,
-      storePath: "/tmp/sessions.json",
-    });
+      }),
+    );
 
     await getReplyFromConfig(
       buildCtx({
@@ -592,30 +586,35 @@ describe("getReplyFromConfig message hooks", () => {
   it("skips utility link understanding for a model-locked harness session", async () => {
     const sessionKey = "agent:main:harness:codex:supervision:locked-link";
     const body = "read https://example.test/page";
-    const sessionEntry = {
-      sessionId: "locked-link-session",
-      updatedAt: 1,
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-    };
-    mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce({
-      sessionEntry,
+    const preprocessingState = createLockedReplyPreprocessingState({
       sessionKey,
-      storePath: "/tmp/sessions.json",
+      sessionId: "locked-link-session",
+      agentHarnessId: "codex",
+    });
+    const preprocessing = createDeferred<typeof preprocessingState>();
+    const started = createDeferred();
+    mocks.resolveReplySessionPreprocessingState.mockImplementationOnce(() => {
+      started.resolve();
+      return preprocessing.promise;
     });
     mocks.initSessionState.mockResolvedValueOnce(
       createGetReplySessionState({
         sessionCtx: { BodyForAgent: body, SessionKey: sessionKey },
-        sessionEntry,
+        sessionEntry: preprocessingState.sessionEntry,
         sessionKey,
       }),
     );
 
-    await getReplyFromConfig(
+    const reply = getReplyFromConfig(
       buildTextCtx(body, { SessionKey: sessionKey }),
       undefined,
       withFastReplyConfig({}),
     );
+    await started.promise;
+    expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    preprocessing.resolve(preprocessingState);
+    await reply;
 
     expect(mocks.resolveReplySessionPreprocessingState).toHaveBeenCalledOnce();
     expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
@@ -1022,33 +1021,46 @@ describe("getReplyFromConfig message hooks", () => {
     );
   });
 
-  it.each([false, true])("stops canceled replies when link work resolves: %s", async (resolves) => {
-    const controller = new AbortController();
-    const reason = resolves ? new Error("reply canceled") : undefined;
-    mocks.applyLinkUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
-      const { signal } = args[0] as { signal?: AbortSignal };
-      controller.abort(reason);
-      if (!resolves) {
-        signal?.throwIfAborted();
+  it.each([
+    { phase: "link", resolves: false },
+    { phase: "link", resolves: true },
+    { phase: "binding", resolves: true },
+  ])(
+    "stops canceled replies during $phase work (resolves: $resolves)",
+    async ({ phase, resolves }) => {
+      const controller = new AbortController();
+      const reason = resolves ? new Error("reply canceled") : undefined;
+      if (phase === "binding") {
+        mocks.resolveReplySessionPreprocessingState.mockImplementationOnce(async () => {
+          controller.abort(reason);
+          return { sessionKey: "agent:main:telegram:-100123", storePath: "/tmp/sessions.json" };
+        });
       }
-    });
+      mocks.applyLinkUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
+        const { signal } = args[0] as { signal?: AbortSignal };
+        controller.abort(reason);
+        if (!resolves) {
+          signal?.throwIfAborted();
+        }
+      });
 
-    await expect
-      .soft(
-        getReplyFromConfig(
-          buildTextCtx("read https://example.test/page"),
-          { abortSignal: controller.signal },
-          withFastReplyConfig({}),
-        ),
-      )
-      .rejects.toMatchObject({ name: "AbortError", ...(reason ? { cause: reason } : {}) });
+      await expect
+        .soft(
+          getReplyFromConfig(
+            buildTextCtx("read https://example.test/page"),
+            { abortSignal: controller.signal },
+            withFastReplyConfig({}),
+          ),
+        )
+        .rejects.toMatchObject({ name: "AbortError", ...(reason ? { cause: reason } : {}) });
 
-    expect(mocks.applyLinkUnderstanding).toHaveBeenCalledOnce();
-    expect.soft(mocks.initSessionState).not.toHaveBeenCalled();
-    expect.soft(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
-    expect.soft(mocks.createInternalHookEvent).not.toHaveBeenCalled();
-    expect.soft(mocks.triggerInternalHook).not.toHaveBeenCalled();
-  });
+      expect(mocks.applyLinkUnderstanding).toHaveBeenCalledTimes(phase === "binding" ? 0 : 1);
+      expect.soft(mocks.initSessionState).not.toHaveBeenCalled();
+      expect.soft(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+      expect.soft(mocks.createInternalHookEvent).not.toHaveBeenCalled();
+      expect.soft(mocks.triggerInternalHook).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])("keeps URL input after link failure (literal: %s)", async (suppressed) => {
     const ctx = buildTextCtx("read https://example.test/page", {

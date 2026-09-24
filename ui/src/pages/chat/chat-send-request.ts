@@ -4,6 +4,7 @@ import type {
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import {
   isUiGlobalSessionKey,
@@ -12,6 +13,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { normalizeChatSendAck, type ChatSendAck } from "./chat-send-ack.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 
@@ -33,6 +35,9 @@ export async function requestChatSend(
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
+  if (chatProviderReviewRow(state, routing.sessionKey, routing.selectedAgentId)?.providerReview) {
+    throw new Error(t("chat.providerReview.pausedBody"));
+  }
   const sessionId = params.sessionId ?? (params.intent ? undefined : routing.sessionId);
   const controlUiReconnectResume = Boolean(
     !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,

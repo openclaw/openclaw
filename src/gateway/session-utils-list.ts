@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import { runSynchronousWork, type SynchronousWork } from "../shared/synchronous-work.js";
+import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./server-methods/session-model-selection-policy.js";
@@ -17,6 +18,7 @@ import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js
 import {
   filterSessionCandidateEntries,
   filterSessionEntries,
+  projectSessionListCandidateOptions,
   type SessionListFilteredEntries,
   type SessionListFilterParams,
 } from "./session-list-filters.js";
@@ -110,18 +112,33 @@ function buildSessionsListResult(
   params: Pick<SessionListFilterParams, "cfg" | "opts" | "modelCatalog">,
   list: SessionEntrySelection & { now: number; storePath: string },
   sessions: GatewaySessionRow[],
+  policyConfig: OpenClawConfig,
+  client?: GatewayClient | null,
 ): SessionsListResult {
   const { cfg, opts, modelCatalog } = params;
   // The defaults projection uses the same agent identity as getSessionDefaults:
   // the requested agent when scoped, otherwise the legacy compatibility agent.
   // Legacy plain-array catalogs (direct list callers) pass through
   // unchanged; per-agent maps resolve by the same identity.
+  const defaultsAgentId = resolveSessionsListDefaultsAgentId(cfg, opts.agentId);
   const preparedDefaultsCatalog =
-    modelCatalog instanceof Map
-      ? modelCatalog.get(resolveSessionsListDefaultsAgentId(cfg, opts.agentId))
-      : undefined;
+    modelCatalog instanceof Map ? modelCatalog.get(defaultsAgentId) : undefined;
   const defaultsCatalog =
     modelCatalog instanceof Map ? preparedDefaultsCatalog?.entries : modelCatalog;
+  const metadataSnapshot = readPreparedGatewayModelCatalogMetadata(preparedDefaultsCatalog);
+  const defaults = getSessionDefaults(cfg, defaultsCatalog, {
+    ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    allowPluginNormalization: false,
+    providerPolicySource: preparedDefaultsCatalog?.pluginRegistry,
+    metadataSnapshot,
+  });
+  const policy =
+    client === undefined
+      ? undefined
+      : prepareOperatorModelPresentation({ cfg, policyConfig, client, metadataSnapshot })?.forAgent(
+          defaultsAgentId,
+          defaultsCatalog,
+        );
   return {
     ts: list.now,
     path: list.storePath,
@@ -140,12 +157,7 @@ function buildSessionsListResult(
           peopleSessionCount: list.peopleSessionCount,
         }
       : {}),
-    defaults: getSessionDefaults(cfg, defaultsCatalog, {
-      ...(opts.agentId ? { agentId: opts.agentId } : {}),
-      allowPluginNormalization: false,
-      providerPolicySource: preparedDefaultsCatalog?.pluginRegistry,
-      metadataSnapshot: readPreparedGatewayModelCatalogMetadata(preparedDefaultsCatalog),
-    }),
+    defaults: policy ? policy.defaults(defaults) : defaults,
     sessions,
   };
 }
@@ -162,16 +174,16 @@ function resolveSessionsListDefaultsAgentId(
 type RecordRow = ReturnType<SessionRowProjection["selectEntries"]>[number];
 const sentinel = (key: string) => key === "global" || key === "unknown";
 
+type SessionRowSelection = {
+  winners: Map<string, RecordRow>;
+  entries: SessionEntryPair[];
+};
+
 // Publications release the token and stale row graphs without waiting for another list.
-// Retain one broad selection per revision; keyed reads never displace it.
+// Retain broad selections per topology scope; keyed reads never displace them.
 const sessionRowSelections = new WeakMap<
   SessionRowProjection["state"]["revision"],
-  {
-    scope: ReturnType<SessionRowProjection["state"]["scope"]>;
-    activeOnly: boolean;
-    winners: Map<string, RecordRow>;
-    entries: SessionEntryPair[];
-  }
+  WeakMap<ReturnType<SessionRowProjection["state"]["scope"]>, Map<boolean, SessionRowSelection>>
 >();
 
 /** Preserve federation before caller visibility and activity filters. */
@@ -192,8 +204,10 @@ export function prepareSessionRowSelection(
   };
   const keyed = prepared?.key !== undefined || prepared?.sessionIdOrKey !== undefined;
   const activeOnly = opts.activeOnly === true;
-  let selection = keyed ? undefined : sessionRowSelections.get(revision);
-  if (!selection || selection.scope !== selectedScope || selection.activeOnly !== activeOnly) {
+  let selection = keyed
+    ? undefined
+    : sessionRowSelections.get(revision)?.get(selectedScope)?.get(activeOnly);
+  if (!selection) {
     const rows = projection
       .selectEntries({
         agentId: selectedScope.agentId,
@@ -239,9 +253,20 @@ export function prepareSessionRowSelection(
         entries.push([key, row.entry]);
       }
     }
-    selection = { scope: selectedScope, activeOnly, winners, entries };
+    selection = { winners, entries };
     if (!keyed) {
-      sessionRowSelections.set(projection.state.revision, selection);
+      const currentRevision = projection.state.revision;
+      let scopes = sessionRowSelections.get(currentRevision);
+      if (!scopes) {
+        scopes = new WeakMap();
+        sessionRowSelections.set(currentRevision, scopes);
+      }
+      let variants = scopes.get(selectedScope);
+      if (!variants) {
+        variants = new Map();
+        scopes.set(selectedScope, variants);
+      }
+      variants.set(activeOnly, selection);
     }
   }
   const { winners, entries } = selection;
@@ -324,13 +349,15 @@ export function prepareProjectedSessionList(params: {
   let candidates: SessionEntryPair[] | undefined;
   // Person references resolve against the full visible roster before candidate filtering.
   if (!opts.spawnedBy && !opts.involvingProfileId) {
-    const { limit: _limit, offset: _offset, ...candidateOptions } = opts;
+    const candidateOptions = projectSessionListCandidateOptions(opts);
     const key = JSON.stringify([exactKey, candidateOptions]);
     let cached = sessionListCandidates.get(prepared.entries);
     if (cached?.key !== key) {
       cached = {
         key,
-        entries: runSynchronousWork(filterSessionCandidateEntries(prepared)),
+        entries: runSynchronousWork(
+          filterSessionCandidateEntries({ ...prepared, opts: candidateOptions }),
+        ),
       };
       sessionListCandidates.set(prepared.entries, cached);
     }
@@ -417,7 +444,9 @@ export async function listProjectedSessions(params: {
       page = selectPage();
       return page.selection.entries.flatMap(([key]) => {
         const target = page.prepared.getTarget(key);
-        return target ? [{ ...target, storePath: target.storeTarget.storePath }] : [];
+        return target
+          ? [{ agentId: target.agentId, key: target.key, storePath: target.storeTarget.storePath }]
+          : [];
       });
     },
     () => {
@@ -434,7 +463,12 @@ export async function listProjectedSessions(params: {
         const sessions = selection.entries.flatMap(([key], index) => {
           const target = getTarget(key);
           const record =
-            target && projection.describe({ ...target, storePath: target.storeTarget.storePath });
+            target &&
+            projection.describe({
+              agentId: target.agentId,
+              key: target.key,
+              storePath: target.storeTarget.storePath,
+            });
           if (!record) {
             return [];
           }
@@ -462,6 +496,8 @@ export async function listProjectedSessions(params: {
           prepared,
           { ...selection, now, storePath: prepared.storePath },
           sessions,
+          context?.getCommittedRuntimeConfig?.() ?? cfg,
+          client,
         );
         if (client !== undefined) {
           result.defaults.modelSelectionTarget = resolveGatewayModelSelectionPolicy({

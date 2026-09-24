@@ -13,6 +13,7 @@ import {
   buildVitestRunPlans,
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
   CONTRACTS_PLUGIN_VITEST_CONFIG,
+  E2E_VITEST_CONFIG,
   findUnmatchedExplicitTestTargets,
   hasImportGraphConsumers,
   hasImportGraphImpactOnTargets,
@@ -33,6 +34,7 @@ import {
   resolvePolicyTestTargets,
   RELEASE_ONLY_TOOLING_CONFIGS,
   isReleaseOnlyToolingTestFile,
+  isRuntimeTestFileIncluded,
   type NodeTestShardGroup,
 } from "./ci-node-test-plan.mts";
 import { isCiProofTestFile } from "./ci-proof-test-inventory.mts";
@@ -52,9 +54,6 @@ import {
   type VitestPretestBuildMode,
 } from "./vitest-build-prerequisites.mts";
 import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
-
-// The trusted CI harness loads this export from the selected target revision.
-export { resolveChangedDockerSeedLanes } from "./ci-docker-seed-plan.mts";
 
 type ChangedNodeTestShard = {
   checkName: string;
@@ -104,7 +103,9 @@ const MAX_CHANGED_NODE_TEST_TARGETS = 96;
 // Each target runs in its own child process (isolation contract), so bound the
 // serial tail per job; the shard runner overlaps two children at a time.
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
-const CHANGED_EXTENSION_JOB_SECONDS = 240;
+// Share the 45–60s runner setup across more unchanged serial envelopes.
+// Runtime preparation and native-worker file ceilings remain separate admission limits.
+const CHANGED_EXTENSION_JOB_SECONDS = 300;
 const MAX_CHANGED_EXTENSION_FALLBACK_JOBS = 50;
 // Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
 // processes starve each other on 4-vCPU runners and push otherwise healthy
@@ -670,6 +671,7 @@ export function createChangedNodeTestShards(
   options: CwdOptions & {
     runnerBackend?: string;
     includeReleaseOnlyToolingShards?: boolean;
+    includeReleaseOnlyRuntimeTests?: boolean;
     dedicatedContractShards?: readonly { task: string; includePatterns: readonly string[] }[];
     dedicatedUiE2e?: boolean;
     dedicatedMaxLinesRatchet?: boolean;
@@ -700,6 +702,9 @@ export function createChangedNodeTestShards(
       (file) =>
         file === "config/ci-test-timings.json" ||
         file === "scripts/lib/ci-node-test-plan.mts" ||
+        file === "scripts/lib/ci-measured-compact-packing.mts" ||
+        file === "scripts/lib/ci-test-timings.mts" ||
+        file === "scripts/lib/vitest-shard-metadata.mts" ||
         file === "test/scripts/ci-node-test-plan.test.ts",
     )
   ) {
@@ -774,49 +779,58 @@ export function createChangedNodeTestShards(
     )
       ? regularPaths.filter((file) => isControlUiSourcePath(file) && !documentationPaths.has(file))
       : [];
-  const uiConsumerPlans = uiPaths.length
-    ? resolveControlUiTestConsumers(uiPaths, cwd).flatMap((target) =>
-        buildVitestRunPlans([target], cwd),
-      )
-    : [];
-  const uiShards = uiPaths.length
+  const uiCanonicalShards = uiPaths.length
     ? createNodeTestShardBundles({
         changedPaths,
         includeReleaseOnlyPluginShards: false,
-        // Explicit UI consumers retain their complete canonical host-contract rows.
         includeReleaseOnlyToolingShards: true,
+        includeReleaseOnlyRuntimeTests: options.includeReleaseOnlyRuntimeTests,
         compactMode: "pull-request",
         runnerBackend: options.runnerBackend,
       })
-        .filter((shard) =>
-          shard.groups?.some(
-            (group) =>
-              group.configs.some((config) => UI_NODE_TEST_CONFIGS.has(config)) ||
-              uiConsumerPlans.some(
-                (plan) =>
-                  group.configs.includes(plan.config) &&
-                  plan.includePatterns?.some(
-                    (target) =>
-                      !group.includePatterns ||
-                      group.includePatterns.some((pattern) => path.matchesGlob(target, pattern)),
-                  ),
-              ),
-          ),
-        )
-        .map((shard) =>
+    : [];
+  const uiConsumerPlans = (uiPaths.length ? resolveControlUiTestConsumers(uiPaths, cwd) : []).map(
+    (target) => ({ target, plans: buildVitestRunPlans([target], cwd) }),
+  );
+  if (
+    uiConsumerPlans.some(({ plans }) => plans.length === 0) ||
+    findUnmatchedExplicitTestTargets(
+      uiConsumerPlans.map(({ target }) => target),
+      cwd,
+    ).length > 0
+  ) {
+    return fallback("unresolved UI host consumer");
+  }
+  // General E2E consumers retain their separate owners outside the Node matrix.
+  const uiConsumers = new Set(
+    uiConsumerPlans
+      .filter(({ plans }) => !plans.every((plan) => plan.config === E2E_VITEST_CONFIG))
+      .map(({ target }) => target),
+  );
+  const uiShards = uiCanonicalShards.flatMap((shard) => {
+    const groups = shard.groups.filter((group) =>
+      group.configs.some((config) => UI_NODE_TEST_CONFIGS.has(config)),
+    );
+    return groups.length
+      ? [
           Object.assign({}, shard, {
+            groups,
             configs: [],
             checkName: `checks-node-changed-ui-${shard.shardName}`,
             shardName: `changed-ui-${shard.shardName}`,
           }),
-        )
-    : [];
+        ]
+      : [];
+  });
   const resolvedTargetPlans = resolvePreciseChangedTargets(
     regularPaths.filter((file) => !uiPaths.includes(file)),
     cwd,
     documentationPaths,
     [
       ...[...policyTargetsByPath.values()].flat(),
+      // Host consumers use the same exact-file owner as other precise targets;
+      // a packed tooling neighbor is not part of the UI area contract.
+      ...uiConsumers,
       // Plugin changes normally select only extension suites. This host-owned
       // proof also exercises the real Copilot entrypoint and manifest discovery.
       ...(livePaths.some((changedPath) => changedPath.startsWith("extensions/copilot/"))
@@ -830,7 +844,8 @@ export function createChangedNodeTestShards(
   }
   const targetPlans = resolvedTargetPlans.filter(
     ({ target, plans }) =>
-      (options.includeReleaseOnlyToolingShards !== false ||
+      (uiConsumers.has(target) ||
+        options.includeReleaseOnlyToolingShards !== false ||
         (!isReleaseOnlyToolingTestFile(target) &&
           !plans.every((plan) => RELEASE_ONLY_TOOLING_CONFIGS.has(plan.config)))) &&
       !plans.every(({ config }) =>
@@ -846,7 +861,14 @@ export function createChangedNodeTestShards(
   );
   // Resolve every changed source first, then defer only named complete proofs.
   // Filtering inputs earlier would hide an unresolved companion or helper.
-  const prTargetPlans = targetPlans.filter(({ target }) => !isCiProofTestFile(target));
+  const runtimeSelection = {
+    changedPaths: livePaths,
+    includeReleaseOnlyRuntimeTests: options.includeReleaseOnlyRuntimeTests,
+  };
+  const prTargetPlans = targetPlans.filter(
+    ({ target }) =>
+      !isCiProofTestFile(target) && isRuntimeTestFileIncluded(target, runtimeSelection, cwd),
+  );
   const onlyDeferredProofTargets = targetPlans.length > 0 && prTargetPlans.length === 0;
   const canonicalTargets = prTargetPlans
     .filter(({ plans }) =>
@@ -859,6 +881,7 @@ export function createChangedNodeTestShards(
     ? path.resolve(cwd) === process.cwd()
       ? createSelectedNodeTestShardBundles(canonicalTargets, {
           runnerBackend: options.runnerBackend,
+          ...runtimeSelection,
         })
       : null
     : [];

@@ -4,8 +4,8 @@ import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinato
 
 describe("automatic session refresh pacing", () => {
   it.each([
-    { duration: 100, cooldown: 1_000 },
-    { duration: 1_000, cooldown: 3_000 },
+    { duration: 100, cooldown: 5_000 },
+    { duration: 2_000, cooldown: 6_000 },
     { duration: 6_000, cooldown: 15_000 },
   ])(
     "waits $cooldown ms after a $duration ms refresh and debounces after idle",
@@ -20,7 +20,7 @@ describe("automatic session refresh pacing", () => {
       const coordinator = createSessionEventRefreshCoordinator({ active: true, refresh });
       try {
         coordinator.schedule();
-        await vi.advanceTimersByTimeAsync(199);
+        await vi.advanceTimersByTimeAsync(4_999);
         expect(refresh).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
         coordinator.schedule();
@@ -30,7 +30,7 @@ describe("automatic session refresh pacing", () => {
         expect(refresh).toHaveBeenCalledTimes(2);
         await vi.advanceTimersByTimeAsync(duration + cooldown + 1);
         coordinator.schedule();
-        await vi.advanceTimersByTimeAsync(199);
+        await vi.advanceTimersByTimeAsync(4_999);
         expect(refresh).toHaveBeenCalledTimes(2);
         await vi.advanceTimersByTimeAsync(1);
         expect(refresh).toHaveBeenCalledTimes(3);

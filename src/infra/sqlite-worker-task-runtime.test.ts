@@ -388,6 +388,7 @@ describe("registered tasks.async runtime", () => {
       }
       return originalPost.call(this, request, transferList);
     });
+    const inspector = new (requireNodeSqlite().DatabaseSync)(database.path);
     try {
       database.db.exec("PRAGMA user_version = 999999");
       await expect(
@@ -395,18 +396,25 @@ describe("registered tasks.async runtime", () => {
           scope.execute({ type: "flows.createManaged", input: { flow: stagedFlow } }),
         ),
       ).rejects.toBeInstanceOf(SqliteSchemaVersionError);
+      expect(database.db.isOpen).toBe(false);
       expect(frames.filter((kind) => kind === "execute-start")).toHaveLength(1);
       expect(receivedEof).toBe(true);
       expect(
-        database.db
-          .prepare("SELECT flow_id FROM flow_runs WHERE flow_id = ?")
-          .get(stagedFlow.flowId),
+        inspector.prepare("SELECT flow_id FROM flow_runs WHERE flow_id = ?").get(stagedFlow.flowId),
       ).toBeUndefined();
-      await expect(managed.createManaged(input)).rejects.toThrow("TaskFlow persistence failed.");
-      expect(database.db.prepare("SELECT COUNT(*) AS count FROM flow_runs").get()?.count).toBe(0);
+      await expect(managed.createManaged(input)).rejects.toMatchObject({
+        message: expect.stringContaining("uses newer schema version 999999"),
+        cause: expect.any(SqliteSchemaVersionError),
+      });
+      expect(frames.filter((kind) => kind === "execute-start")).toHaveLength(1);
+      expect(inspector.prepare("SELECT COUNT(*) AS count FROM flow_runs").get()?.count).toBe(0);
     } finally {
       post.mockRestore();
-      database.db.exec(`PRAGMA user_version = ${version}`);
+      try {
+        inspector.exec(`PRAGMA user_version = ${version}`);
+      } finally {
+        inspector.close();
+      }
     }
   });
 

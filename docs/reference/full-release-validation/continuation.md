@@ -15,28 +15,55 @@ when the run ID, workflow path, workflow ref, Tooling SHA, dispatch title, and
 event are unchanged. For each logical job, the newest observed attempt wins,
 including a newer failure; a job absent from a newer attempt carries forward
 from the last attempt that included it. Duplicate job names within one attempt,
-missing attempts, or provenance drift fail closed.
+missing attempts, or provenance drift fail closed. During GitHub's rerun-attempt
+materialization window, `status` and `continue` re-read duplicate identities in
+the newest retry attempt for up to 60 seconds. The run identity and attempt stay
+pinned throughout; request timeouts, pagination, and transport backoff share
+the retry deadline. Persistent duplicates, duplicates in an earlier attempt, and
+changed identities still fail closed; ambiguous rows never become evidence.
 
 Inspect or continue an existing parent:
 
 ```bash
-pnpm frv status --run <parent-run-id>
+pnpm frv status --run <parent-run-id> --json
+pnpm frv rerun --run <parent-run-id> --job "normalCi:checks-node-agentic-control-plane-agent-chat"
 pnpm frv continue --failed --run <parent-run-id>
 pnpm frv verify --run <successful-parent-run-id>
+pnpm frv prioritize --run <parent-run-id> [--out <record>] [--dry-run]
+pnpm frv prioritize --restore <record> [--dry-run]
 ```
 
-`continue --failed` waits for active child attempts instead of starting a
-duplicate. Once every active attempt is terminal, it reruns failed child jobs
-in parallel, leaves green child workflows untouched, and reruns the parent
-once. The parent restores its immutable execution plan and independent artifact
-producers, observes the effective child attempts, and writes the final all-group manifest. The manifest records
-the planned and effective attempt, accepted attempt for every logical job, and
-a digest of the composite job evidence.
+`prioritize` gives an active parent hosted-runner priority (see
+[Release priority](/reference/RELEASING#release-priority)); `continue --failed`
+and `verify` release it once the parent seals.
+
+`rerun --job` selects an exact executed, terminal job name inside a child key shown by
+`status --json` (for example, `normalCi`, `pluginPrerelease`, or
+`releaseChecksIndependent`). It waits only for that child to become terminal,
+then uses GitHub's job-rerun API on the job's accepted attempt. GitHub also
+reruns dependent jobs. Other failures stay visible and require their own retry;
+a targeted retry never declares the parent recovered while blockers remain.
+
+`continue --failed` reruns each failed child's jobs as soon as that child is
+terminal, while sibling children and the original parent may still run. It
+adopts active attempts without duplicating them and leaves green child
+workflows untouched. After the resulting child evidence is green and the
+original parent finishes, it reruns the parent once. The original Decision and
+Drain may disagree after an early retry; the final parent attempt restores the
+same immutable execution plan and seals the updated evidence. Existing plan
+and attempt-binding checks remain mandatory.
+
+The final manifest records the planned and effective child attempt, accepted
+attempt for every logical job, and composite evidence digest. The controller's
+JSON result additionally lists requested reruns with their source and observed
+attempts; targeted entries include the job name and Actions job ID. Keep the
+command in a long-running shell: its default operation budget is 12 hours,
+including final collection and strict verification.
 
 Npm qualification participates in the same failed-job recovery: the controller
 retries its failed jobs on the original producer run, without rerunning
 successful diagnostic children.
-It waits for active attempts and diagnostic drain, adopts verified newer
+It waits for each producer attempt, adopts verified newer
 npm producer attempts, then reruns the parent collector once. Successful package
 preparation jobs and their exact artifact descriptors carry forward; a retry
 must not substitute rebuilt bytes for the candidate already tested.
@@ -57,6 +84,9 @@ Each child or parent rerun mutation is sent exactly once. If GitHub returns an
 ambiguous transient error, the controller performs read-only reconciliation
 until the newer attempt becomes visible or the bounded reconciliation deadline
 expires. It never repeats the mutation, and provenance drift fails closed.
+After a timeout or an interrupted command, inspect `frv status` and the exact
+GitHub attempts before deciding on another retry; the local process cannot
+prove that an unobserved mutation was rejected.
 
 The command stores no continuation ledger or local journal. GitHub run
 attempts, the immutable execution plan, producer dispatch records and receipts,
@@ -96,6 +126,84 @@ not declare the current release-isolation contract or the `expected_sha`
 dispatch input; it never silently substitutes newer tooling. The workflow never
 creates or updates repository refs itself.
 
+### Automatic retries for declared flakes
+
+`known_flaky_jobs_json` accepts exact `child:job name` selectors, such as
+`normalCi:checks-node-agentic-control-plane-agent-chat`. An empty array disables
+automatic retries. Declare only diagnosed intermittent failures before dispatch;
+the immutable execution plan binds the allowance to the selected child and its
+original attempt.
+
+One retry owner per declared child waits for that child to finish. Exactly one
+declared failed or timed out job uses GitHub's targeted job-rerun API; other
+undeclared blockers remain. With multiple declared failures, the owner
+uses the failed-jobs API only when every failed job is declared. A mixture of
+multiple declared failures and undeclared failures records no automatic attempt
+for that child; required failures remain blockers.
+
+Automatic recovery permits at most one wave from child attempt 1 to attempt 2.
+Any earlier child rerun consumes that budget, including a manual or dependent
+rerun that did not execute the listed job. GitHub reruns dependent jobs and has
+no atomic operation for an arbitrary subset of failed jobs, so the controller
+never starts a third execution under this allowance. Release Decision and
+Diagnostic Drain wait for the retry owners to collect stable terminal
+replacement attempts and bind their records into the final validation evidence.
+Explicit operator retries remain separate and can run further attempts; they
+never replenish the automatic allowance.
+
+Manual retries wait for active automatic owners. If the child remains on
+attempt one after its owner finishes, the controller requires verified
+`not-attempted` evidence or an authenticated original rejection witness before another
+POST. A terminal owner alone does not prove rejection. Missing or unknown
+outcomes remain read-only until the original witness or a newer child attempt
+resolves them; explicit retries after an observed second attempt remain
+available.
+
+After claiming the intent, a failed final pre-dispatch read or authority check
+records a confirmed rejection because no POST was sent. An ambiguous POST
+response keeps an unknown outcome and permits only reconciliation.
+
+A dedicated step on parent attempt one records the rejected intent's digest.
+Manual admission, later-parent recovery, and final verification authenticate
+that original step and its log interval. This proof survives loss of the
+original outcome artifact. A recovered rejection stays `rejected`; an operator
+may repair separate jobs in attempts two and three, and normal composite child
+evidence must still prove the final result.
+
+The hosted retry owner shares one 5.5-hour deadline across the original attempt
+and its retry, leaving 30 minutes for setup and artifact cleanup within the
+hosted six-hour job limit. An unusually long child can exhaust this automatic
+budget; retain any claim and use explicit continuation. A later parent attempt
+gets a fresh bounded read-only reconciliation window, never renewed mutation
+authority. Manual `frv` operations retain their existing 12-hour budget.
+
+Before sending a retry request, the owner uploads an immutable intent, records
+its digest after the successful upload, and saves the same bytes under an exact
+parent-run-and-child cache key. Each mutation is sent once. An uncertain API
+response triggers bounded read-only reconciliation, never another POST. The
+retry record reports the exact source jobs, requested operation, and observed
+replacement attempt in the manifest. A null `not-attempted` record means the
+original guarded mutation steps were explicitly skipped. Recovery revalidates
+selectors against the exact child attempt history before accepting that record;
+a failed preparation never renews mutation authority.
+
+`observed` means an authenticated replacement matches the original frozen
+intent. A later explicit operator retry may have produced it; this outcome does
+not assert that the automatic POST caused it. Child attempt provenance records
+the actor authority. Original attempt-one receipts retain their historical
+disposition while available.
+
+A parent rerun restores the intent from its cache or surviving artifact and
+authenticates it against the original upload witness. Recovery only reconciles
+the recorded operation; it cannot renew an allowance or replay a request. Missing
+or contradictory intent, changed child identity, and unobserved outcomes remain
+explicit recovery failures. Retain the original job logs and intent cache until
+validation is verified. Use explicit operator recovery for an exhausted or
+uncertain allowance. Retry-owner errors remain visible immediately in Release
+Decision while Diagnostic Drain keeps collecting independent children to
+terminal; existing API, provenance, and cancellation failures retain their
+original stopping rules.
+
 ### Read publication observations
 
 An optional publication selector adds a read-only view beside validation status:
@@ -105,7 +213,7 @@ pnpm frv status --run <parent-run-id> --publication-run <publish-parent-run-id>
 pnpm frv status --run <parent-run-id> --publication-run <publish-parent-run-id> --json
 ```
 
-The JSON response retains the validation fields and adds `publication`. The
+The JSON response keeps the compact validation summary and adds `publication`. The
 selector is valid only on `status`; it does not change `continue` or `verify`.
 The FRV root still needs an attempt-aware, all-group immutable plan.
 
@@ -182,7 +290,8 @@ Use the non-release `FRV Proof Broker` and `FRV Proof Fixture` workflows only
 after the reviewed SHA lands on protected `main`. The fixture contains one
 fixed no-op job that intentionally fails on attempt one and passes on attempt
 two. The broker validates the exact maintainer, merged pull request, protected
-main SHA, fixture workflow, and run tuple before rerunning only that failed job.
+main SHA, fixture workflow, and run tuple before selecting the exact failed Actions job ID and invoking
+GitHub's job-rerun endpoint.
 Supply the merged pull request number and its exact landed commit. The broker
 requires the pull request to be merged into `main`, requires its recorded merge
 commit to equal that landed commit, and requires the landed commit to be
@@ -193,7 +302,7 @@ fixture rerun.
 Accept the hosted mutation proof only when the exact fixture run advances to
 attempt two and passes. The broker emits a receipt and must create no release
 candidate, release artifact, publication, repository ref, replacement parent,
-or other workflow mutation. This proves the GitHub failed-job rerun boundary;
+or other workflow mutation. This proves the GitHub targeted-job rerun boundary;
 the focused controller tests prove plan eligibility, green-attempt
 preservation, same-parent collection, and strict-verifier invocation. Do not
 use a real Full Release Validation run for this proof.

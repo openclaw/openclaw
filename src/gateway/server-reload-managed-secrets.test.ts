@@ -16,6 +16,7 @@ import {
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayConfigReloadTransactionOwnership } from "./config-reload.js";
 import { createManagedReloadSecretHandlers } from "./server-reload-managed-secrets.js";
+import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { createRuntimeSecretsActivator } from "./server-startup-config.js";
 
 vi.mock("../agents/context.js", () => ({ refreshContextWindowCache: vi.fn() }));
@@ -86,7 +87,10 @@ async function createReload(commit: () => Promise<void>, beforePublication?: () 
   const params = {
     activateRuntimeSecrets,
     resolveSharedGatewaySessionGenerationForConfig: () => undefined,
-    sharedGatewaySessionGenerationState: { current: undefined, required: null },
+    sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+      current: undefined,
+      required: null,
+    }),
     clients: [],
     commitRuntimePolicy: vi.fn(),
     reconcileRuntimePolicy: vi.fn(),

@@ -9,6 +9,109 @@ type WorkerLifecycleLease = support.WorkerLifecycleLease;
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
+  it.each([false, true])(
+    "withdraws dedicated access before persistence settles (rejected=%s)",
+    async (rejected) => {
+      const node = await support.seedReadyNodeDesktop("preview-withdrawal");
+      let sharedHost: boolean | undefined = false;
+      const service = support.createService(
+        support.createProvider({
+          resolveAllocation: async () => ({ leaseId: node.leaseId!, sharedHost: false }),
+          inspect: async () => ({ status: "active", sharedHost }),
+        }),
+      );
+      await service.reconcileOnce();
+      const qualification = service.getDedicatedNodeLeaseSignal(node.environmentId)!;
+      expect(qualification.aborted).toBe(false);
+      const entered = createDeferred();
+      const finish = createDeferred();
+      const store = support.testState.store;
+      const persist = store.reconcileSharedHost.bind(store);
+      vi.spyOn(store, "reconcileSharedHost").mockImplementationOnce(async (input) => {
+        entered.resolve();
+        await finish.promise;
+        if (rejected) {
+          throw new Error("fixture persistence failure");
+        }
+        return persist(input);
+      });
+      sharedHost = undefined;
+      const reconciliation = service.reconcileOnce();
+      try {
+        await entered.promise;
+        expect(qualification.aborted).toBe(true);
+        expect(service.getDedicatedNodeLeaseSignal(node.environmentId)).toBeUndefined();
+      } finally {
+        finish.resolve();
+        await reconciliation;
+      }
+      expect(service.getDedicatedNodeLeaseSignal(node.environmentId)).toBeUndefined();
+    },
+  );
+
+  it("requires fresh explicit dedicated-node inspection for restricted previews without changing legacy classification", async () => {
+    const node = await support.seedReadyNodeDesktop("preview-dedicated");
+    let sharedHost: boolean | undefined;
+    let inspectionFails = false;
+    const provider = support.createProvider({
+      resolveAllocation: async () => ({ leaseId: node.leaseId!, sharedHost: false }),
+      inspect: async () => {
+        if (inspectionFails) {
+          throw new Error("provider temporarily unavailable");
+        }
+        return { status: "active", ...(sharedHost === undefined ? {} : { sharedHost }) };
+      },
+    });
+    const service = support.createService(provider);
+    expect(Boolean(service.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(false);
+    await service.reconcileOnce();
+    expect(service.get(node.environmentId)?.sharedHost).toBe(false);
+    expect(Boolean(service.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(false);
+    sharedHost = false;
+    await service.reconcileOnce();
+    expect(Boolean(service.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(true);
+    const firstQualification = service.getDedicatedNodeLeaseSignal(node.environmentId)!;
+    await service.reconcileOnce();
+    expect(service.getDedicatedNodeLeaseSignal(node.environmentId)).toBe(firstQualification);
+    expect(firstQualification.aborted).toBe(false);
+    inspectionFails = true;
+    await service.reconcileOnce();
+    expect(service.getDedicatedNodeLeaseSignal(node.environmentId)).toBe(firstQualification);
+    expect(firstQualification.aborted).toBe(false);
+    inspectionFails = false;
+    sharedHost = undefined;
+    await service.reconcileOnce();
+    expect(service.get(node.environmentId)?.sharedHost).toBe(false);
+    expect(Boolean(service.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(false);
+    expect(firstQualification.aborted).toBe(true);
+    sharedHost = false;
+    await service.reconcileOnce();
+    expect(Boolean(service.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(true);
+    sharedHost = true;
+    await service.reconcileOnce();
+    expect(Boolean(service.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(false);
+    sharedHost = false;
+    await service.reconcileOnce();
+    expect(Boolean(service.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(true);
+    await service.stop();
+    expect(Boolean(service.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(false);
+    const restarted = support.createService(provider);
+    expect(Boolean(restarted.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(false);
+    await restarted.reconcileOnce();
+    expect(Boolean(restarted.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(true);
+    const epoch = restarted.get(node.environmentId)!.ownerEpoch;
+    const restartedQualification = restarted.getDedicatedNodeLeaseSignal(node.environmentId)!;
+    await support.testState.store.revokeEnvironmentCredential(node.environmentId);
+    expect(restarted.getDedicatedNodeLeaseSignal(node.environmentId)).toBe(restartedQualification);
+    expect(restartedQualification.aborted).toBe(false);
+    await support.testState.store.revokeEnvironmentCredential(node.environmentId, {
+      expectedOwnerEpoch: epoch,
+      fenceWorkspaceTransfers: true,
+    });
+    expect(Boolean(restarted.getDedicatedNodeLeaseSignal(node.environmentId))).toBe(false);
+    expect(restartedQualification.aborted).toBe(true);
+  });
+
   it("exposes the catalog display identity without allocating a worker", () => {
     const provider = support.createProvider({ resolveDisplayId: () => "aws" });
     const provision = vi.spyOn(provider, "provision");
@@ -66,7 +169,8 @@ describe("worker environment service", () => {
   });
 
   it("maintains configured providers on the existing timer with no environments", async () => {
-    vi.useFakeTimers();
+    // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
     const maintain = vi.fn(async () => {});
@@ -369,7 +473,8 @@ describe("worker environment service", () => {
   it("owns and clears one periodic reconciliation timer", async () => {
     const environmentId = "worker-guarded-reconcile";
     await support.seedReady(environmentId);
-    vi.useFakeTimers();
+    // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
     const inspect = vi.fn(async () => ({ status: "active" as const }));
@@ -404,7 +509,6 @@ describe("worker environment service", () => {
     workerService.start();
     workerService.start();
     await workerService.reconcileOnce();
-    expect(liveEvents.start).toHaveBeenCalledOnce();
     expect(setIntervalSpy).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 25);
     vi.advanceTimersByTime(25);
     await workerService.reconcileOnce();

@@ -228,8 +228,13 @@ describe("test-projects args", () => {
     },
     {
       title: "routes fake-timer unit-fast targets to the serial fake-timer config",
-      target: "src/acp/control-plane/manager.test.ts",
+      target: "src/acp/translator.stop-reason.test.ts",
       config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+    },
+    {
+      title: "routes ACP session signals to their host broker owner",
+      target: "src/acp/control-plane/manager.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
     },
     {
       title: "routes process targets to the process config",
@@ -249,6 +254,11 @@ describe("test-projects args", () => {
     {
       title: "routes the worker-backed task registry to the infra config",
       target: "src/tasks/task-registry.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
+    },
+    {
+      title: "routes disk-budget worker lifecycle fixtures to the isolated infra owner",
+      target: "src/config/sessions/disk-budget.physical-usage.test.ts",
       config: "test/vitest/vitest.infra.config.ts",
     },
     {
@@ -484,12 +494,13 @@ describe("test-projects args", () => {
 
     const firstEnv = specs[0]?.env;
     expect(firstEnv?.KEEP_ME).toBe("1");
-    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
-      "/repo/.cache/vitest/0-test-vitest-vitest.gateway.config.ts",
-    );
-    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
-      "/repo/.cache/vitest/1-test-vitest-vitest.gateway-server.config.ts",
-    );
+    const paths = specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH);
+    expect(new Set(paths).size).toBe(2);
+    for (const cachePath of paths) {
+      expect(cachePath?.replaceAll("\\", "/")).toMatch(
+        /^\/repo\/\.cache\/vitest\/slots\/[a-f\d]+\/0$/u,
+      );
+    }
   });
 
   it("routes plugin targets to the plugins config", () => {

@@ -1,6 +1,7 @@
 ---
 summary: "Code Mode implementation layout, the validation checklist, and the E2E test plan"
 title: "Code Mode maintainer notes"
+doc-schema-version: 1
 read_when:
   - You are changing Code Mode source and need the file layout
   - You are validating a Code Mode change before landing it
@@ -12,15 +13,18 @@ read_when:
 - config contract: `tools.codeMode`
 - catalog builder: effective tools to compact entries and id map
 - model-surface adapter: replace visible tools with control/direct tools
-- QuickJS-WASI runtime adapter: load, eval, snapshot, restore, dispose
+- executor contract: evaluate, continue, dispose
+- Node executor: worker and VM context retained across waits
+- QuickJS executor: WASM loading, evaluation, snapshot, restore, dispose
 - worker supervisor: timeout, abort, crash isolation
 - bridge adapter: JSON-safe host callbacks and result delivery
-- snapshot store: TTL, size caps, run/session scoping
+- continuation owner: TTL, capacity, run/session scoping, executor pinning
 - trajectory projection for nested tool calls
 - telemetry counters and diagnostics
 
-The implementation reuses catalog and executor concepts from Tool Search, but
-does not use a `node:vm` child as the sandbox.
+The shared catalog and tool bridge retain policy ownership. Executors
+own JavaScript execution and continuation state. Node's `node:vm` is trusted
+execution, not a sandbox security boundary.
 
 ## Validation checklist
 
@@ -33,6 +37,10 @@ Code mode coverage should prove:
   fallback-model selection, and limits from the enclosing options
 - enabled config exposes `exec`, `wait`, and only required direct-only tools to
   the model when tools are active for the run
+- omitted executor selects Node; explicit QuickJS selects the bundled plugin,
+  and unavailable executors fail without fallback
+- explicit legacy `runtime: "quickjs-wasi"` migrates to `executor: "quickjs"`
+- global and per-agent executor selection stays fixed through every `wait`
 - raw no-tool runs, `disableTools`, and empty allowlists do not trigger
   code-mode payload enforcement
 - every catalog-eligible effective non-MCP name has one callable winner
@@ -57,18 +65,20 @@ Code mode coverage should prove:
 - executable cells accept plain JavaScript while typed discovery remains available
 - TypeScript-only syntax and retired `language`/`typecheck` arguments fail before
   any nested tool dispatch
-- `import`, `require`, filesystem, network, and environment access fail
+- intended guest APIs omit `import`, `require`, filesystem, network, and
+  environment access; QuickJS isolation is tested separately from Node's
+  programming constraints
 - infinite loops time out and cannot block the Gateway
-- memory cap failures terminate the guest VM
-- output and snapshot caps are enforced for completed and suspended calls
-- `wait` resumes a suspended snapshot and returns the final value
+- executor memory failures terminate execution
+- output caps apply to both executors; serialized snapshot caps apply to QuickJS
+- `wait` resumes the executor continuation and returns the final value
 - expired, aborted, wrong-session, and unknown `runId` values fail
 - transcript replay and persistence preserve code-mode control calls
 - transcript and telemetry show nested tool calls clearly
 
 ## E2E test plan
 
-Run these as integration or end-to-end tests when changing the runtime:
+Run these against both executors when changing the runtime:
 
 1. Start a Gateway with `tools.codeMode.enabled: false`.
 2. Send an agent turn with a small direct tool set.
@@ -90,9 +100,9 @@ Run these as integration or end-to-end tests when changing the runtime:
     `catalog.all()` must remain native after search.
 11. Assert denied tools are absent and cannot be called by guessed id.
 12. Start a nested tool call that resolves after `exec` returns `waiting`.
-13. Call `wait` and assert the restored VM receives the tool result.
-14. Assert the final answer contains output produced after restore.
-15. Assert timeout, abort, and snapshot expiry clean up runtime state.
+13. Call `wait` and assert the continued context receives the tool result.
+14. Assert the final answer contains output produced after resume without replay.
+15. Assert timeout, abort, and continuation expiry clean up runtime state.
 16. Export trajectory and assert nested calls are visible under the parent
     code-mode call.
 

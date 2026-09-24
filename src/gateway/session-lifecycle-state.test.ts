@@ -62,46 +62,15 @@ function cronSessionEntry(
   };
 }
 
-async function persistExactCronLifecycle(options: {
-  entry: SessionEntry;
-  eventRunId: string;
-  eventSessionId?: string;
-}): Promise<SessionEntry | undefined> {
-  let currentEntry = structuredClone(options.entry);
-  persistenceMocks.loadSessionEntry.mockReset().mockReturnValue({
-    storePath: "/tmp/sessions.json",
-    canonicalKey: exactCronSessionKey,
-    entry: currentEntry,
-  });
-  persistenceMocks.updateSessionEntry
-    .mockReset()
-    .mockImplementation(async (...args: Parameters<UpdateSessionEntry>) => {
-      const [, update] = args;
-      const patch = await update(structuredClone(currentEntry), {
-        existingEntry: structuredClone(currentEntry),
-      });
-      if (patch) {
-        currentEntry = { ...currentEntry, ...patch };
-      }
-      return currentEntry;
-    });
-  await persistGatewaySessionLifecycleEvent({
-    sessionKey: exactCronSessionKey,
-    event: {
-      ts: 2_000,
-      sessionId: options.eventSessionId ?? "cron-session-id",
-      runId: options.eventRunId,
-      data: { phase: "end", startedAt: 1_300, endedAt: 1_950 },
-    },
-  });
-  return currentEntry;
-}
-
-async function persistLifecycle(entry: SessionEntry, event: LifecycleEvent): Promise<SessionEntry> {
+async function persistLifecycle(
+  entry: SessionEntry,
+  event: LifecycleEvent,
+  sessionKey = "agent:main:main",
+): Promise<SessionEntry> {
   let currentEntry = structuredClone(entry);
   persistenceMocks.loadSessionEntry.mockReset().mockReturnValue({
     storePath: "/tmp/sessions.json",
-    canonicalKey: "agent:main:main",
+    canonicalKey: sessionKey,
     entry: currentEntry,
   });
   persistenceMocks.updateSessionEntry
@@ -117,13 +86,111 @@ async function persistLifecycle(entry: SessionEntry, event: LifecycleEvent): Pro
       return currentEntry;
     });
   await persistGatewaySessionLifecycleEvent({
-    sessionKey: "agent:main:main",
+    sessionKey,
     event,
   });
   return currentEntry;
 }
 
 describe("session lifecycle state", () => {
+  const goalEntry: SessionEntry = {
+    sessionId: "goal-session",
+    updatedAt: 1_000,
+    startedAt: 1_000,
+    status: "running",
+    lifecycleRunId: "goal-run",
+    goal: {
+      schemaVersion: 1,
+      id: "goal-1",
+      objective: "Finish the work",
+      status: "active",
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      tokenStart: 0,
+      tokensUsed: 12,
+      continuationTurns: 0,
+    },
+  };
+  const goalFailure: LifecycleEvent = {
+    sessionId: "goal-session",
+    runId: "goal-run",
+    ts: 2_000,
+    data: {
+      phase: "error",
+      startedAt: 1_000,
+      endedAt: 2_000,
+      error: "stream disconnected before completion",
+    },
+  };
+
+  it.each([
+    { phase: "error", stopReason: undefined, status: "failed" },
+    { phase: "end", stopReason: "error", status: "failed" },
+    { phase: "end", stopReason: "timeout", status: "timeout" },
+  ])("pauses an active goal when its run settles as $status via $phase", async (terminal) => {
+    const stopped = await persistLifecycle(goalEntry, {
+      ...goalFailure,
+      data: { ...goalFailure.data, phase: terminal.phase, stopReason: terminal.stopReason },
+    });
+    expect(stopped.status).toBe(terminal.status);
+    expect(stopped.goal).toMatchObject({
+      id: "goal-1",
+      objective: "Finish the work",
+      status: "paused",
+      pausedAt: 2_000,
+      updatedAt: 2_000,
+      tokensUsed: 12,
+      lastStatusNote: expect.stringContaining("stream disconnected before completion"),
+    });
+    const next = await persistLifecycle(stopped, {
+      ...goalFailure,
+      runId: "next-run",
+      ts: 3_000,
+      data: { phase: "start", startedAt: 3_000 },
+    });
+    expect(next.goal).toEqual(stopped.goal);
+  });
+
+  it.each(["paused", "blocked", "complete", "budget_limited", "usage_limited"] as const)(
+    "preserves an already %s goal on run failure",
+    async (status) => {
+      const entry = { ...goalEntry, goal: { ...goalEntry.goal!, status } };
+      expect((await persistLifecycle(entry, goalFailure)).goal).toEqual(entry.goal);
+    },
+  );
+
+  it.each([
+    { phase: "start", startedAt: 1_000 },
+    { phase: "end", endedAt: 2_000 },
+    { phase: "end", yielded: true, livenessState: "waiting", endedAt: 2_000 },
+    { phase: "error", aborted: true, stopReason: "restart", endedAt: 2_000 },
+  ])("keeps the goal active for non-failure lifecycle $phase / $stopReason", async (data) => {
+    expect((await persistLifecycle(goalEntry, { ...goalFailure, data })).goal).toEqual(
+      goalEntry.goal,
+    );
+  });
+
+  it("does not pause the goal for a stale run or session failure", async () => {
+    for (const event of [
+      { ...goalFailure, sessionId: "old-session" },
+      { ...goalFailure, runId: "old-run", data: { ...goalFailure.data, startedAt: 500 } },
+    ]) {
+      expect((await persistLifecycle(goalEntry, event)).goal).toEqual(goalEntry.goal);
+    }
+  });
+
+  it.each(["goal-1", "replacement-goal"])(
+    "preserves newer goal intent for %s when a terminal write is delayed",
+    async (id) => {
+      const entry = {
+        ...goalEntry,
+        lifecycleRunId: undefined,
+        goal: { ...goalEntry.goal!, id, updatedAt: 3_000 },
+      };
+      expect((await persistLifecycle(entry, goalFailure)).goal).toEqual(entry.goal);
+    },
+  );
+
   it("treats a pre-reset run's lifecycle event as stale once the row's sessionId rotated (#88538)", () => {
     expect(
       isStaleLifecycleEventForSession({
@@ -400,6 +467,34 @@ describe("session lifecycle state", () => {
       abortedLastRun,
     });
   });
+
+  it.each([
+    { name: "visible run", controlUiVisible: true, isHeartbeat: false, lastActivityAt: 1_800 },
+    { name: "heartbeat", controlUiVisible: true, isHeartbeat: true, lastActivityAt: 1_000 },
+    { name: "hidden run", controlUiVisible: false, isHeartbeat: false, lastActivityAt: 1_000 },
+  ])(
+    "records unread-worthy completion activity for a $name",
+    async ({ controlUiVisible, isHeartbeat, lastActivityAt }) => {
+      const persisted = await persistLifecycle(
+        {
+          sessionId: "session-id",
+          updatedAt: 1_000,
+          lastActivityAt: 1_000,
+          startedAt: 1_050,
+          status: "running",
+        },
+        {
+          ts: 2_000,
+          sessionId: "session-id",
+          controlUiVisible,
+          isHeartbeat,
+          data: { phase: "end", endedAt: 1_800 },
+        },
+      );
+
+      expect(persisted.lastActivityAt).toBe(lastActivityAt);
+    },
+  );
 
   it("persists a compact failure reason and clears it when a new run starts", async () => {
     const failed = await persistLifecycle(
@@ -874,7 +969,16 @@ describe("session lifecycle state", () => {
       expectedStatus: "running",
     },
   ])("direct persistence $name", async (testCase) => {
-    const persisted = await persistExactCronLifecycle(testCase);
+    const persisted = await persistLifecycle(
+      testCase.entry,
+      {
+        ts: 2_000,
+        sessionId: testCase.eventSessionId ?? "cron-session-id",
+        runId: testCase.eventRunId,
+        data: { phase: "end", startedAt: 1_300, endedAt: 1_950 },
+      },
+      exactCronSessionKey,
+    );
 
     expect(persisted?.status).toBe(testCase.expectedStatus);
     // One exact-row write only. Continuation settlement owns base projection.

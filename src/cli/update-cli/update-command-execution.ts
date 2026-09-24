@@ -96,11 +96,18 @@ export async function executeMutableUpdate(
   const {
     assertCurrent: assertExecutionCurrent,
     assertBoundChildCurrent,
+    onStateHandoff,
     admitExecutor,
   } = createUpdateCommandExecutionGuards(opts, params.root);
+  let retentionInstallTarget = params.packageInstallTarget;
   const prepareMutableUpdate = async (env?: NodeJS.ProcessEnv, activationTimeoutMs?: number) => {
     assertExecutionCurrent();
-    await params.prepareMutableUpdate(env, activationTimeoutMs, admitExecutor);
+    await params.prepareMutableUpdate(
+      env,
+      activationTimeoutMs,
+      admitExecutor,
+      retentionInstallTarget,
+    );
     assertExecutionCurrent();
   };
   const mode: UpdateRunResult["mode"] =
@@ -182,6 +189,7 @@ export async function executeMutableUpdate(
       changes: doctorConfigChanges,
       assertCurrent: assertExecutionCurrent,
       assertBoundChildCurrent,
+      onStateHandoff,
     });
   const originalRecovery = () =>
     params.installKind === "git"
@@ -358,6 +366,10 @@ export async function executeMutableUpdate(
               await tryReadJson<unknown>(path.join(root, "package.json")),
             ) ?? admittedTargetSchemaVersions,
           );
+        } else {
+          // Git builds can outlive admission; reject drift before copying state and
+          // rehearsing migrations against a configuration activation cannot accept.
+          await recheckSchemas(admittedTargetSchemaVersions);
         }
         if (stagedPluginAdmission) {
           // Explicit artifacts acquire their version before rehearsal or activation.
@@ -567,10 +579,10 @@ export async function executeMutableUpdate(
         startedAt: params.startedAt,
         progress: params.progress,
         channel: params.channel,
-        tag: params.tag,
         devTarget: params.devTarget,
         assertCurrent: assertExecutionCurrent,
-        inspectGitTarget: async (target) => {
+        inspectGitTarget: async (target, installTarget) => {
+          retentionInstallTarget = installTarget;
           recordInspectedGitTarget(opts.run, target, assertExecutionCurrent);
           await recheckSchemas(target.schemaVersions);
           if (!gitContextPrepared) {
@@ -605,16 +617,11 @@ export async function executeMutableUpdate(
             );
           }
         },
-        beforeGitMutation:
-          params.updateInstallKind === "git"
-            ? async (target) => {
-                assertReadableGitTarget(target);
-                admittedTargetSchemaVersions = target.schemaVersions;
-                await beforeActivate(gitMutationRoots ?? [params.root]);
-              }
-            : undefined,
-        allowGatewayServiceRepair: false,
-        allowGatewayActivation: false,
+        beforeGitMutation: async (target) => {
+          assertReadableGitTarget(target);
+          admittedTargetSchemaVersions = target.schemaVersions;
+          await beforeActivate(gitMutationRoots ?? [params.root]);
+        },
       });
     }
   } catch (err) {
@@ -628,7 +635,7 @@ export async function executeMutableUpdate(
       mode,
       root: params.root,
       originalRecovery,
-      run: params.opts.run,
+      run: mutationStarted ? undefined : params.opts.run,
     }));
   }
 

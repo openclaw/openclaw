@@ -91,13 +91,13 @@
   gap: 0;
 }
 
-.installed-plugins-card__identity h3,
+.installed-plugins-card__identity :is(h2, h3),
 .installed-plugins-card__summary {
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.installed-plugins-card__identity h3 {
+.installed-plugins-card__identity :is(h2, h3) {
   margin: 0;
   color: var(--text-strong);
   font-size: var(--control-ui-text-md);
@@ -112,7 +112,7 @@
   gap: 6px;
 }
 
-.plugin-card-title-row h3 {
+.plugin-card-title-row :is(h2, h3) {
   min-width: 0;
 }
 
@@ -135,6 +135,9 @@
   z-index: 3;
   width: max-content;
   max-width: 100%;
+  min-width: 24px;
+  min-height: 24px;
+  align-content: center;
   justify-self: start;
   text-decoration: none;
 }
@@ -874,11 +877,6 @@ h3.settings-row__title {
 
 /* ---------- plugin settings ---------- */
 
-.plugins-settings-title {
-  margin: 0;
-  font: inherit;
-}
-
 /* The inventory header is already inside the padded settings page. Remove the
    shared outer-header inset so its title aligns with this page's rows. */
 .settings-page.oc-app-surface:has(> .plugins-settings-content) > .content-header--settings {
@@ -1078,7 +1076,7 @@ h3.settings-row__title {
   height: 16px;
 }
 
-.plugin-catalog-detail__hero main {
+.plugin-catalog-detail__heading {
   min-width: 0;
 }
 

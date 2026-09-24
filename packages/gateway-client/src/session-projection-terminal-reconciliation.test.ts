@@ -24,6 +24,56 @@ function createAssistantMessage(text: string, metadata?: Record<string, unknown>
 }
 
 describe("terminal snapshot reconciliation", () => {
+  it("adopts a durable answer when its live terminal also carries a status notice", () => {
+    const runId = "fallback-status-run";
+    const answer = "The workspace check is complete.";
+    const user = {
+      role: "user",
+      content: [{ type: "text", text: "Check the workspace." }],
+      __openclaw: { id: "fallback-user", seq: 1, idempotencyKey: `${runId}:user` },
+    };
+    const streamed = {
+      role: "assistant",
+      content: [{ type: "text", text: answer }],
+      openclawStreamFallback: {
+        itemId: "fallback-answer-item",
+        replacementText: answer,
+        runId,
+        source: "segment",
+      },
+    };
+    const terminal = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Model Fallback: backup/model", openclawStatusNotice: true },
+        { type: "text", text: answer },
+      ],
+    };
+    const durable = createAssistantMessage(answer, {
+      id: "fallback-answer",
+      seq: 2,
+      runId,
+      runTerminal: true,
+    });
+    let state = createSessionProjection(scope, [user, streamed]);
+    state = reduceSessionProjection(state, {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: terminal,
+    });
+    state = projectLiveSessionMessage(state, terminal, { runId });
+
+    expect(state.messages).toEqual([user, streamed, terminal]);
+    expect(
+      reduceSessionProjection(state, {
+        type: "messagePersisted",
+        message: durable,
+        envelope: { runId },
+      }).messages,
+    ).toEqual([user, streamed, durable]);
+  });
+
   it.each([
     ["live", "toolUse"],
     ["snapshot", "toolUse"],

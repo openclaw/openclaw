@@ -17,7 +17,7 @@ import {
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
-import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
+import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-inventory.js";
 import {
   listDurableSqliteTargetOwnersForSessionStorePath,
   listSqliteTargetCandidatePathsForSessionStorePath,

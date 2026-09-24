@@ -1,11 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sql } from "kysely";
-import {
-  getNodeSqliteKysely,
-  prepareSqliteQuerySync,
-  prepareSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
+import { getNodeSqliteKysely, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { SESSION_OWNER_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { SessionActor } from "./session-entry-provenance.js";
@@ -22,11 +19,6 @@ export type SqliteSessionOwnerRow = {
 function prepareOwnerColumnReads(database: DatabaseSync) {
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
   return {
-    schemaVersion: prepareSqliteQueryTakeFirstSync(database, () =>
-      db
-        .selectFrom(sql`pragma_schema_version`.as("pragma_schema"))
-        .select(sql`schema_version`.as("schema_version")),
-    ),
     columns: prepareSqliteQuerySync(database, () =>
       db
         .selectFrom(sql`pragma_table_info('session_nodes')`.as("pragma_columns"))
@@ -38,7 +30,7 @@ function prepareOwnerColumnReads(database: DatabaseSync) {
 const ownerColumnAvailability = new WeakMap<
   DatabaseSync,
   ReturnType<typeof prepareOwnerColumnReads> & {
-    availability?: { available: boolean; schemaVersion: number };
+    availability?: { available: boolean; revision: number };
   }
 >();
 
@@ -79,10 +71,9 @@ export function hasSqliteSessionOwnerColumns(database: DatabaseSync): boolean {
     reads = prepareOwnerColumnReads(database);
     ownerColumnAvailability.set(database, reads);
   }
-  const schema = reads.schemaVersion(undefined);
-  const schemaVersion = typeof schema?.schema_version === "number" ? schema.schema_version : -1;
+  const revision = getAdmittedSqliteSchemaFacts(database)?.revision;
   const cached = reads.availability;
-  if (cached?.schemaVersion === schemaVersion) {
+  if (revision !== undefined && cached?.revision === revision) {
     return cached.available;
   }
   const tableInfoRows = reads.columns(undefined).rows;
@@ -92,6 +83,7 @@ export function hasSqliteSessionOwnerColumns(database: DatabaseSync): boolean {
   const available = SESSION_OWNER_COLUMN_DEFINITIONS.every(({ columnName }) =>
     columns.has(columnName),
   );
-  reads.availability = { available, schemaVersion };
+  // Raw maintenance handles and dynamic authorizers cannot lend retained schema facts.
+  reads.availability = revision === undefined ? undefined : { available, revision };
   return available;
 }

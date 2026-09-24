@@ -426,6 +426,8 @@ describe("chat history delta display budget", () => {
         throw new Error("Expected the exact-limit delta");
       }
       const serialized = JSON.stringify(result.messages);
+      expect(result.messagesBytes).toBe(Buffer.byteLength(serialized, "utf8"));
+      expect(result.activityBytes).toBe(chatHistoryActivityBytes(result.activity));
       expect(
         Buffer.byteLength(serialized, "utf8") + chatHistoryActivityBytes(result.activity),
       ).toBe(byteLimit);
@@ -539,6 +541,8 @@ describe("chat history custom reports", () => {
     expect(await readDelta(scope, delta.deltaCursor)).toMatchObject({
       kind: "delta",
       messages: [],
+      messagesBytes: 2,
+      activityBytes: 0,
     });
   });
 });

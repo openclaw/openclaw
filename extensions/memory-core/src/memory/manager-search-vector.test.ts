@@ -11,25 +11,40 @@ import {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runVectorKnnQuery } from "./manager-search-knn.js";
-import { searchVector } from "./manager-search-vector.js";
+import { searchChunksByEmbedding, searchVector } from "./manager-search-vector.js";
 import { runMemorySearchWithDeadline } from "./search-deadline.js";
 import { vectorToBlob } from "./vector-blob.js";
 
-type VectorSearchOptions = Omit<Parameters<typeof searchVector>[0], "db">;
+type VectorSearchOptions = Omit<Parameters<typeof searchVector>[0], "runFallback"> & {
+  sourceFilterChunks: Parameters<typeof searchChunksByEmbedding>[0]["sourceFilter"];
+};
 
 function searchVectorFixture(db: DatabaseSync, options: Partial<VectorSearchOptions> = {}) {
-  return searchVector({
-    db,
+  const { sourceFilterChunks = { sql: "", params: [] }, ...overrides } = options;
+  const request: Omit<Parameters<typeof searchVector>[0], "runFallback"> = {
     vectorTable: "memory_index_chunks_vec",
     providerModel: "target-model",
     queryVec: [1, 0],
     limit: 5,
     snippetMaxChars: 200,
     ensureVectorReady: async () => false,
-    runVectorKnn: async (request) => runVectorKnnQuery(db, request),
+    runVectorKnn: async (knnRequest) => runVectorKnnQuery(db, knnRequest),
     sourceFilterVec: { sql: "", params: [] },
-    sourceFilterChunks: { sql: "", params: [] },
-    ...options,
+    ...overrides,
+  };
+  return searchVector({
+    ...request,
+    runFallback: () =>
+      searchChunksByEmbedding({
+        db,
+        providerModel: request.providerModel,
+        providerModelAliases: request.providerModelAliases,
+        sourceFilter: sourceFilterChunks,
+        queryVec: request.queryVec,
+        limit: request.limit,
+        snippetMaxChars: request.snippetMaxChars,
+        signal: request.signal,
+      }),
   });
 }
 

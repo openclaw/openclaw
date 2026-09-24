@@ -366,6 +366,10 @@ export function createDispatchReplyOperationCoordinator(params: {
     const admitCurrentReplyTurn = async () => {
       try {
         return await admitReplyTurn({
+          runId: params.replyOptions?.runId,
+          stateAcquisitionDeadline: params.replyOptions?.stateAcquisitionDeadline,
+          assertRequestCurrent: () => params.replyOptions?.operatorAuthority?.assertCurrent(),
+          providerReviewAcknowledgment: params.replyOptions?.providerReviewAcknowledgment,
           agentId: params.agentId,
           sessionKey: dispatchOperationSessionKey,
           resolveGatewayContext:

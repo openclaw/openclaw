@@ -23,6 +23,7 @@ import {
   deferSqlitePostCommitPublication,
   withSqlitePostCommitPublications,
 } from "../infra/sqlite-post-commit.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
@@ -67,6 +68,7 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import {
   agentDatabaseLifecycle as cache,
+  assertAgentDatabaseTerminalOpenAllowed,
   startAgentDatabaseOpenTiming,
   closeCachedOpenClawAgentDatabase,
   closeMaintenanceAgentDatabase,
@@ -75,6 +77,7 @@ import {
   closeOpenClawAgentDatabases,
   refreshAgentDatabaseIdleTimer,
   retainAgentDatabase,
+  retainIncognitoSharedState,
   retainFailedAgentDatabaseClose,
   revokePendingAgentDatabaseOpen,
   type PendingAgentDatabaseOpen,
@@ -116,8 +119,7 @@ import { runOpenClawAgentWriteAdmission } from "./openclaw-agent-write-admission
 import { requestOpenClawAgentDatabaseQuickCheck } from "./openclaw-database-verify.js";
 import {
   clearOpenClawDatabaseQuarantine,
-  createOpenClawDatabaseVerificationError,
-  readOpenClawDatabaseQuarantine,
+  readOpenClawDatabaseQuarantineFailure,
   type OpenClawAgentIntegrityVerification,
 } from "./openclaw-quarantine-store.js";
 import {
@@ -255,12 +257,14 @@ function* openOpenClawAgentDatabaseSteps(
       synchronous: "NORMAL",
     });
     ensureOpenClawAgentSchema(db, agentId, pathname);
+    admitSqliteSchema(db);
     registerOpenClawAgentDatabaseIdentity(db);
     const database = { agentId, db, path: pathname, walMaintenance };
     cache.incognito.add(database);
     cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
     cache.databases.set(pathname, database);
     cache.generation += 1;
+    retainIncognitoSharedState(db, options.env);
     getOpenClawDatabaseMaintenanceScope()?.own(database.db, "agent-handles", () =>
       closeMaintenanceAgentDatabase(database),
     );
@@ -269,24 +273,10 @@ function* openOpenClawAgentDatabaseSteps(
   quarantineOrphanedSqliteSidecars(pathname);
   // Latched paths are quarantined; every fresh open fails fast here until
   // doctor repairs the file and clears the latch plus the persisted row.
-  const terminalFailure = cache.terminal.get(pathname);
-  if (terminalFailure) {
-    throw terminalFailure;
-  }
-  let persistedFailure: Error | undefined;
-  try {
-    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env: databaseOptions.env });
-    if (quarantine) {
-      persistedFailure = createOpenClawDatabaseVerificationError(
-        "agent",
-        pathname,
-        quarantine.reason,
-      );
-    }
-  } catch {
-    // A broken quarantine store must not brick every agent open.
-    // The process latch and daily verifier still cover known damage.
-  }
+  assertAgentDatabaseTerminalOpenAllowed(pathname);
+  const persistedFailure = readOpenClawDatabaseQuarantineFailure("agent", pathname, {
+    env: databaseOptions.env,
+  });
   if (persistedFailure) {
     recordOpenClawAgentDatabaseOpenFailure(pathname, persistedFailure);
     throw persistedFailure;
@@ -312,9 +302,18 @@ function* openOpenClawAgentDatabaseSteps(
   }
   let verification: OpenClawAgentIntegrityVerification | undefined;
   let hasLiveLease = false;
-  const captureVerification: OpenClawAgentIntegrityVerificationReceiver = (record, liveLease) => {
+  const validation = pending?.validation ?? preparedLease?.validation;
+  const captureVerification: OpenClawAgentIntegrityVerificationReceiver = (
+    record,
+    liveLease,
+    invalidated,
+  ) => {
     verification = record;
     hasLiveLease = liveLease;
+    if (invalidated && validation) {
+      // Stale-peer cleanup precedes adoption of proof already transferred by the host.
+      Atomics.store(new Int32Array(validation.valid), 0, 0);
+    }
   };
   const leaseId = preparedLease
     ? preparedLease.claim(captureVerification)
@@ -359,7 +358,6 @@ function* openOpenClawAgentDatabaseSteps(
     // Eviction churn must avoid migration/convergence and registry busy waits.
     // Version and owner can change while evicted, so their read-only gates run on every open.
     const validationDatabase = { db, path: pathname, agentId };
-    const validation = pending?.validation ?? preparedLease?.validation;
     if (validation) {
       adoptOpenClawAgentDatabaseValidation(validationDatabase, validation);
     }
@@ -372,7 +370,7 @@ function* openOpenClawAgentDatabaseSteps(
         const existingSchema = readExistingAgentSchemaMeta(db);
         assertExistingAgentSchemaOwner(existingSchema, agentId, pathname);
         // Live owners may lend runtime proof; cold opens require clean-close proof.
-        // Both remain subject to durable invalidation and schema convergence.
+        // Runtime proof carries owner revocation; every open still checks schema convergence.
         const requiresCurrentVersionConvergence = yield* agentDatabaseIntegrityBeforeMutationSteps(
           db,
           agentId,
@@ -425,6 +423,7 @@ function* openOpenClawAgentDatabaseSteps(
       }
     })();
     ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
+    admitSqliteSchema(db);
     const database = { agentId, db, path: pathname, walMaintenance };
     openedDatabase = database;
     if (hasAgentDatabaseMaintenanceAuthority()) {

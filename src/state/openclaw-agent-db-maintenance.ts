@@ -5,6 +5,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
+import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cache.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
@@ -98,6 +99,7 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
   invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname, env);
   const database = openNodeSqliteDatabase(pathname);
   try {
+    configureSqliteMaintenanceCache(database);
     enableNodeSqliteKyselyStatementCache(database);
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     const metadata = readExistingAgentSchemaMeta(database);

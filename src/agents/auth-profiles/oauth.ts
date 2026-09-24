@@ -37,8 +37,13 @@ import {
 } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
-import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
-import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
+import { createOAuthManager } from "./oauth-manager.js";
+import {
+  OAuthManagerRefreshError,
+  isSettledOAuthRefreshFailure,
+  markOAuthRefreshFailureSettled,
+  OAuthRefreshFailureError,
+} from "./oauth-refresh-failure.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -554,6 +559,7 @@ export async function resolveApiKeyForProfile(
     });
   } catch (error) {
     params.signal?.throwIfAborted();
+    let settlementComplete = isSettledOAuthRefreshFailure(error);
     let refreshedStore =
       error instanceof OAuthManagerRefreshError
         ? error.getRefreshedStore()
@@ -574,6 +580,7 @@ export async function resolveApiKeyForProfile(
         });
         clearedLastGood = true;
       } catch (cleanupError) {
+        settlementComplete = false;
         // The refresh failure owns the operator diagnosis; stale last-good cleanup is secondary.
         authProfilesLog.warn("failed to clear stale OAuth last-good state after refresh failure", {
           error: formatErrorMessage(cleanupError),
@@ -633,7 +640,7 @@ export async function resolveApiKeyForProfile(
       provider: cred.provider,
       profileId,
     });
-    throw new OAuthRefreshFailureError({
+    const failure = new OAuthRefreshFailureError({
       provider: cred.provider,
       profileId,
       message:
@@ -642,5 +649,9 @@ export async function resolveApiKeyForProfile(
         (hint ? `\n\n${hint}` : ""),
       cause: error,
     });
+    if (settlementComplete) {
+      markOAuthRefreshFailureSettled(failure);
+    }
+    throw failure;
   }
 }

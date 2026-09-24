@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { fork } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -11,19 +12,17 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/config.js";
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import { isDefaultInstallIdentity } from "../../config/paths.js";
-import type { OpenClawConfig } from "../../config/types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../../infra/file-lock.js";
+import { runPackagePostInstallVerification } from "../../infra/package-update-verification-step.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
-import {
-  captureUpdateDoctorConfigWrites,
-  writeUpdatePostInstallDoctorResult,
-} from "../../infra/update-doctor-result.js";
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import * as processRunner from "../../process/exec.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
@@ -62,7 +61,7 @@ import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import {
   expectActiveRollbackIdentity,
   expectDoctorRollback,
-  writeWithRefreshFailure,
+  writeDoctorRollbackReceipt,
 } from "./update-command-rollback.test-support.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
@@ -380,6 +379,12 @@ describe("verified package rollback", () => {
           { change: "readonly-config", previousVerified: true, restored: true, service: "stopped" },
         ]),
     { change: "doctor", previousVerified: true, restored: true, service: "stopped" },
+    {
+      change: "doctor-settled-exception",
+      previousVerified: true,
+      restored: true,
+      service: "stopped",
+    },
     { change: "doctor-unchanged", previousVerified: true, restored: true, service: "stopped" },
     { change: "doctor-compensated", previousVerified: true, restored: true, service: "stopped" },
     { change: "doctor-missing-input", previousVerified: true, restored: false, service: "stopped" },
@@ -438,7 +443,7 @@ describe("verified package rollback", () => {
         pluginValidation: "skip",
       }).readConfigFileSnapshot();
       const config = configSnapshot.sourceConfigBeforeMigrations ?? configSnapshot.sourceConfig;
-      let activationConfig: { path: string; raw: string | null; hash: string } | undefined;
+      let activationConfig: UpdateConfigSnapshot | undefined;
       const shared = path.join(stateDir, "state/openclaw.sqlite");
       const agent = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
       if (change !== "new-shared-deferred") {
@@ -490,75 +495,65 @@ describe("verified package rollback", () => {
         fs.appendFileSync(configPath, "\n// Operator edit after activation.\n");
       if (change.startsWith("doctor")) {
         fs.writeFileSync(path.join(candidateRoot, "dist/entry.js"), "export {};\n");
-        vi.spyOn(updateShared, "runUpdateStep").mockImplementationOnce(async (step) => {
-          let doctorError: Error | undefined;
-          if (change === "doctor-input-edit") {
-            fs.writeFileSync(
-              configPath,
-              JSON.stringify({ ...authored, logging: { level: "debug" } }),
-            );
-          }
-          await captureUpdateDoctorConfigWrites(configPath, async (capture) => {
-            const io = createConfigIO({ env: process.env, pluginValidation: "skip" });
-            const input = await io.readConfigFileSnapshot();
-            if (change !== "doctor-unchanged") {
-              const nextConfig: OpenClawConfig = {
-                ...(input.sourceConfigBeforeMigrations ?? input.sourceConfig),
-                meta: {
-                  migrations: { modelPolicyAllowlist: true },
-                  lastTouchedVersion: "2026.9.3",
-                },
-                agents: {
-                  defaults: {
-                    ...authored.agents.defaults,
-                    modelPolicy: { allow: ["openai/gpt-5.6-luna"] },
-                  },
-                },
-                wizard: { lastRunVersion: "2026.9.3", lastRunCommand: "doctor" },
-              };
-              const writeOptions = {
-                baseSnapshot: input,
-                lastTouchedVersionOverride: "2026.9.3",
-                skipPluginValidation: true,
-              };
-              if (change === "doctor-compensated") {
-                doctorError = await writeWithRefreshFailure(nextConfig, writeOptions, originalRaw);
-              } else {
-                await io.writeConfigFile(nextConfig, writeOptions);
-              }
-            }
-            if (change === "doctor-capture-edit") {
-              operatorEdit();
-            }
-            await writeUpdatePostInstallDoctorResult({
-              resultPath: step.env!.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH!,
-              result: {
-                status: doctorError ? "error" : "ok",
-                configHash: capture.hash,
-                ...(change === "doctor-missing-input"
-                  ? {}
-                  : { configInputHash: capture.inputHash }),
-              },
-            });
+        const writeDoctorReceipt = (resultPath: string) =>
+          writeDoctorRollbackReceipt({
+            change,
+            configPath,
+            resultPath,
+            authored,
+            originalRaw,
+            operatorEdit,
           });
-          return {
-            name: "openclaw doctor",
-            command: "doctor",
-            cwd: candidateRoot,
-            durationMs: 1,
-            exitCode: doctorError ? 1 : 0,
-            ...(doctorError ? { stderrTail: doctorError.message } : {}),
-          };
-        });
-        const doctorStep = await packageModule.runPackageUpdateDoctor({
-          root: candidateRoot,
-          timeoutMs: 1_000,
-          progress: {},
-          managedServiceEnv: process.env,
-          onConfigSnapshot: (snapshot) => {
-            activationConfig = snapshot;
-          },
-        });
+        const settledFailure = new Error("Doctor command failed after its config write settled.");
+        if (change === "doctor-settled-exception") {
+          vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementationOnce(
+            async (_argv, options) => {
+              assert(typeof options === "object");
+              const resultPath = options.env?.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+              assert(resultPath);
+              await writeDoctorReceipt(resultPath);
+              throw settledFailure;
+            },
+          );
+        } else {
+          vi.spyOn(updateShared, "runUpdateStep").mockImplementationOnce(async (step) => {
+            const resultPath = step.env?.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+            assert(resultPath);
+            const doctorError = await writeDoctorReceipt(resultPath);
+            return {
+              name: "openclaw doctor",
+              command: "doctor",
+              cwd: candidateRoot,
+              durationMs: 1,
+              exitCode: doctorError ? 1 : 0,
+              ...(doctorError ? { stderrTail: doctorError.message } : {}),
+            };
+          });
+        }
+        const runDoctor = () =>
+          packageModule.runPackageUpdateDoctor({
+            root: candidateRoot,
+            timeoutMs: 1_000,
+            progress: {},
+            managedServiceEnv: process.env,
+            onConfigSnapshot: (snapshot) => {
+              activationConfig = snapshot;
+            },
+          });
+        const doctorStep =
+          change === "doctor-settled-exception"
+            ? await runPackagePostInstallVerification(candidateRoot, runDoctor)
+            : await runDoctor();
+        if (change === "doctor-settled-exception") {
+          assert(doctorStep);
+          expect(doctorStep).toMatchObject({
+            name: "post-install-verify",
+            exitCode: 1,
+            stderrTail: expect.stringContaining(settledFailure.message),
+          });
+          result.reason = "runtime-verification-failed";
+          result.steps.push(doctorStep);
+        }
         if (change === "doctor-compensated") {
           if (!doctorStep) {
             throw new Error("Doctor compensation did not return an update step");
@@ -729,6 +724,7 @@ describe("verified package rollback", () => {
       }
       if (
         change === "doctor" ||
+        change === "doctor-settled-exception" ||
         change === "doctor-unchanged" ||
         change === "doctor-compensated" ||
         change === "doctor-include"
@@ -755,6 +751,7 @@ describe("verified package rollback", () => {
         change === "none" ||
           change === "readonly-config" ||
           change === "doctor" ||
+          change === "doctor-settled-exception" ||
           change === "doctor-unchanged" ||
           change === "doctor-compensated" ||
           change === "doctor-include" ||
@@ -783,8 +780,16 @@ describe("verified package rollback", () => {
         expect(outcome.result).toMatchObject({
           root: previousRoot,
           after: result.before,
-          reason: change === "doctor-compensated" ? "doctor-failed" : "version-mismatch",
+          reason:
+            change === "doctor-settled-exception"
+              ? "runtime-verification-failed"
+              : change === "doctor-compensated"
+                ? "doctor-failed"
+                : "version-mismatch",
         });
+        if (change === "doctor-settled-exception") {
+          expect(activationConfig).toMatchObject({ raw: originalRaw, doctorOwned: true });
+        }
         if (change === "doctor-compensated") {
           expectDoctorRollback(activationConfig, outcome.result, configPath, originalRaw);
         }

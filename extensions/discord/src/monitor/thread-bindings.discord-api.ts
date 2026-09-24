@@ -6,6 +6,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import { createDiscordRestClient } from "../client.js";
 import { createChannelWebhook, getChannel } from "../internal/discord.js";
+import { withDiscordRequestAuthority } from "../internal/request-authority.js";
 import { canFallbackDiscordWebhookSend } from "../retry.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { createThreadDiscord } from "../send.messages.js";
@@ -134,21 +135,27 @@ export async function maybeSendBindingMessage(params: {
   record: ThreadBindingRecord;
   text: string;
   preferWebhook?: boolean;
+  assertCurrent?: () => void;
 }) {
+  const assertCurrent = params.assertCurrent;
   const text = params.text.trim();
   if (!text) {
     return;
   }
   const record = params.record;
-  if (params.preferWebhook !== false && record.webhookId && record.webhookToken) {
+  const { webhookId, webhookToken } = record;
+  if (params.preferWebhook !== false && webhookId && webhookToken) {
     try {
-      await sendWebhookMessageDiscord(text, {
-        cfg: params.cfg,
-        webhookId: record.webhookId,
-        webhookToken: record.webhookToken,
-        accountId: record.accountId,
-        threadId: record.threadId,
-        username: resolveThreadBindingPersonaFromRecord(record),
+      await withDiscordRequestAuthority(assertCurrent, () => {
+        assertCurrent?.();
+        return sendWebhookMessageDiscord(text, {
+          cfg: params.cfg,
+          webhookId,
+          webhookToken,
+          accountId: record.accountId,
+          threadId: record.threadId,
+          username: resolveThreadBindingPersonaFromRecord(record),
+        });
       });
       return;
     } catch (err) {
@@ -163,9 +170,12 @@ export async function maybeSendBindingMessage(params: {
     }
   }
   try {
-    await sendMessageDiscord(buildThreadTarget(record.threadId), text, {
-      cfg: params.cfg,
-      accountId: record.accountId,
+    await withDiscordRequestAuthority(assertCurrent, () => {
+      assertCurrent?.();
+      return sendMessageDiscord(buildThreadTarget(record.threadId), text, {
+        cfg: params.cfg,
+        accountId: record.accountId,
+      });
     });
   } catch (err) {
     logVerbose(`discord thread binding fallback send failed: ${summarizeDiscordError(err)}`);
@@ -177,17 +187,22 @@ export async function createWebhookForChannel(params: {
   accountId: string;
   token?: string;
   channelId: string;
+  assertCreateAllowed?: () => void;
 }): Promise<{ webhookId?: string; webhookToken?: string }> {
+  const assertCreateAllowed = params.assertCreateAllowed;
   try {
     const rest = createDiscordRestClient({
       cfg: params.cfg,
       accountId: params.accountId,
       token: params.token,
     }).rest;
-    const created = await createChannelWebhook(rest, params.channelId, {
-      body: {
-        name: "OpenClaw Agents",
-      },
+    const created = await withDiscordRequestAuthority(assertCreateAllowed, () => {
+      assertCreateAllowed?.();
+      return createChannelWebhook(rest, params.channelId, {
+        body: {
+          name: "OpenClaw Agents",
+        },
+      });
     });
     const webhookId = normalizeOptionalString(created?.id) ?? "";
     const webhookToken = normalizeOptionalString(created?.token) ?? "";
@@ -283,7 +298,9 @@ export async function createThreadForBinding(params: {
   token?: string;
   channelId: string;
   threadName: string;
+  assertCreateAllowed?: () => void;
 }): Promise<string | null> {
+  const assertCreateAllowed = params.assertCreateAllowed;
   try {
     const created = await createThreadDiscord(
       params.channelId,
@@ -294,6 +311,7 @@ export async function createThreadForBinding(params: {
         cfg: params.cfg,
         accountId: params.accountId,
         token: params.token,
+        ...(assertCreateAllowed ? { assertCreateAllowed } : {}),
       },
     );
     const createdId = normalizeOptionalString(created?.id) ?? "";

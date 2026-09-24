@@ -24,24 +24,39 @@ import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { createControlUiAttachmentFacts } from "./control-ui-attachment-fixtures.ts";
 import { createControlUiE2eBuildPublication } from "./control-ui-e2e-build-publication.ts";
+import type {
+  ControlUiMockGateway,
+  ControlUiMockRequestHandler,
+  MockGatewayControls,
+  MockGatewayRequest,
+  MockGatewayWindow,
+} from "./control-ui-e2e-contract.ts";
+import { createMockGatewayControls } from "./control-ui-e2e-controls.ts";
 import {
   defaultControlUiFeatureMethods,
   createControlUiThemeResponses,
 } from "./control-ui-e2e-defaults.ts";
 import {
-  captureControlUiE2eFailureDiagnostics,
   installControlUiE2ePageDiagnosticRing,
   installControlUiE2eUnhandledRejectionRing,
-  type ControlUiE2eDiagnosticEvent,
 } from "./control-ui-e2e-diagnostics.ts";
 import { resolveAvailableLoopbackPort } from "./control-ui-e2e-port.ts";
 import { controlUiE2eWaitTimeoutMs } from "./control-ui-e2e-readiness.ts";
+import { getSharedControlUiE2ePreview } from "./control-ui-e2e-shared-preview.ts";
 import { createControlUiMockResponses } from "./control-ui-mock-responses.ts";
 import type { NativeControlUiPluginFixture } from "./control-ui-plugin-fixture.ts";
 import {
   createControlUiSessionFixtures,
   type ControlUiSessionFixture,
 } from "./control-ui-session-fixtures.ts";
+
+export type {
+  ControlUiMockGateway,
+  ControlUiMockRequestHandler,
+  MockGatewayControls,
+  MockGatewayRequest,
+  MockGatewayWindow,
+} from "./control-ui-e2e-contract.ts";
 
 export {
   captureControlUiE2eFailureDiagnostics,
@@ -384,12 +399,6 @@ const json5BrowserSource = readFileSync(require.resolve("json5/dist/index.min.js
 
 export { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
 
-export type MockGatewayRequest = {
-  id: string;
-  method: string;
-  params?: unknown;
-};
-
 export type ControlUiMockGatewayScenario = {
   nativePlugins?: readonly NativeControlUiPluginFixture[];
   pluginAssetsRequireAuth?: boolean;
@@ -554,53 +563,6 @@ const DEFAULT_CONTROL_UI_E2E_BUILD_INFO: ControlUiBuildInfo = {
   buildId: "e2e",
 };
 
-let sharedControlUiE2eServerBaseUrl: string | null = null;
-
-export function setSharedControlUiE2eServerBaseUrl(baseUrl: string | null): void {
-  sharedControlUiE2eServerBaseUrl = baseUrl;
-}
-
-type MockSessionsListResponse = { sessions: unknown[]; [field: string]: unknown };
-
-export type MockGatewayControls = {
-  closeLatest: (code?: number, reason?: string) => Promise<void>;
-  deliverLatest: (frame: unknown) => Promise<void>;
-  deferNext: (method: string, match?: Record<string, unknown>) => Promise<void>;
-  emitChatFinal: (params: { runId: string; sessionKey?: string; text: string }) => Promise<void>;
-  emitGatewayEvent: (event: string, payload?: unknown) => Promise<void>;
-  getRequests: (method?: string, match?: Record<string, unknown>) => Promise<MockGatewayRequest[]>;
-  getSocketCount: () => Promise<number>;
-  getSocketUrls: () => Promise<string[]>;
-  rejectDeferred: (
-    method: string,
-    error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
-  ) => Promise<void>;
-  resolveDeferred: (method: string, payload?: unknown) => Promise<void>;
-  suspendLatest: () => Promise<void>;
-  setOnline: (online: boolean) => Promise<void>;
-  setGatewayBootId: (bootId: string) => Promise<void>;
-  setServerBuildId: (buildId: string) => Promise<void>;
-  setOperatorScopes: (scopes: string[]) => Promise<void>;
-  setHistoryMessages: (messages: unknown[]) => Promise<void>;
-  setMethodResponse: (method: string, payload: unknown) => Promise<void>;
-  setSessionsListResponse: (payload: MockSessionsListResponse) => Promise<void>;
-  setSessionSharingPolicy: (policy: {
-    allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
-    hasMultipleSessionSharingIdentities: boolean;
-  }) => Promise<void>;
-  /**
-   * Resolves with a captured request for `method`. Without `after` this is
-   * satisfied by ANY prior request of the method (and returns the latest), so
-   * a second same-method wait can return a stale earlier request on slow
-   * runners; pass `after` = the pre-action count from `getRequests(method, match)`
-   * to wait for and return the next new request in that same parameter scope.
-   */
-  waitForRequest: (
-    method: string,
-    options?: { after?: number; match?: Record<string, unknown> },
-  ) => Promise<MockGatewayRequest>;
-};
-
 export async function reconnectMockGateway(
   page: Page,
   gateway: MockGatewayControls,
@@ -697,13 +659,10 @@ export async function startControlUiE2eServer(
 ): Promise<ControlUiE2eServer> {
   // Ordinary E2E files exercise the shipped bundle. Source-module and custom
   // build-info tests retain a private Vite server through the same lease API.
-  if (
-    sharedControlUiE2eServerBaseUrl !== null &&
-    buildInfo === undefined &&
-    options.source !== true
-  ) {
+  const sharedPreview = getSharedControlUiE2ePreview();
+  if (sharedPreview && buildInfo === undefined && options.source !== true) {
     return {
-      baseUrl: sharedControlUiE2eServerBaseUrl,
+      baseUrl: sharedPreview.baseUrl,
       close: async () => {},
     };
   }
@@ -880,7 +839,7 @@ async function runProductionControlUiBuild(outDir: string): Promise<void> {
   });
 }
 
-async function startBuiltControlUiE2eServer(
+export async function startBuiltControlUiE2eServer(
   outDir: string,
   bootstrapConfig?: Record<string, unknown>,
 ): Promise<ControlUiE2eProductionServer> {
@@ -949,6 +908,7 @@ function resolveServerBaseUrl(server: ViteDevServer | PreviewServer): string {
 function normalizeScenario(
   scenario: ControlUiMockGatewayScenario,
 ): NormalizedControlUiMockGatewayScenario {
+  const sharedBuildInfo = getSharedControlUiE2ePreview()?.buildInfo;
   const defaultAgentId = normalizeAgentId(scenario.defaultAgentId);
   const mainSessionKey =
     scenario.mainSessionKey?.trim() ||
@@ -996,13 +956,13 @@ function normalizeScenario(
     deferredMethods: scenario.deferredMethods ?? [],
     heldMethods: scenario.heldMethods ?? [],
     devGitBranch: scenario.devGitBranch?.trim() || "",
-    serverBuildId: scenario.serverBuildId?.trim() || "e2e",
+    serverBuildId: scenario.serverBuildId?.trim() || sharedBuildInfo?.buildId || "e2e",
     gatewayBootId: scenario.gatewayBootId?.trim() || "e2e-gateway-boot",
     gatewaySuspensionPhase: scenario.gatewaySuspensionPhase ?? "accepting",
     updateAvailable: scenario.updateAvailable ?? null,
     updateSchedule: scenario.updateSchedule ?? null,
     controlUiBuildSource: scenario.controlUiBuildSource ?? "bundled",
-    serverVersion: scenario.serverVersion?.trim() || "e2e",
+    serverVersion: scenario.serverVersion?.trim() || sharedBuildInfo?.version || "e2e",
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
     authMethod: scenario.authMethod ?? "token",
     authMode: scenario.authMode ?? null,
@@ -1097,46 +1057,6 @@ export function createControlUiMockGatewayInitScript(
   };
   return `${json5BrowserSource}\n;(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}, globalThis.JSON5.parse, ${createControlUiSessionFixtures.toString()}, ${createControlUiAttachmentFacts.toString()}, ${createControlUiMockResponses.toString()}); })();`;
 }
-
-export type ControlUiMockRequestHandler = (request: {
-  params: unknown;
-  respond: (payload: unknown) => void;
-  emit: (event: string, payload: unknown) => void;
-}) => void;
-
-export type ControlUiMockGateway = {
-  closeLatest: (code?: number, reason?: string) => void;
-  deliverLatest: (frame: unknown) => void;
-  deferNext: (method: string, match?: Record<string, unknown>) => void;
-  emit: (event: string, payload?: unknown) => void;
-  findRequests: (method?: string, match?: Record<string, unknown>) => MockGatewayRequest[];
-  rejectDeferred: (
-    method: string,
-    error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
-  ) => void;
-  requests: MockGatewayRequest[];
-  resolveDeferred: (method: string, payload?: unknown) => void;
-  suspendLatest: () => void;
-  setOnline: (online: boolean) => void;
-  setGatewayBootId: (bootId: string) => void;
-  setServerBuildId: (buildId: string) => void;
-  setOperatorScopes: (scopes: string[]) => void;
-  setHistoryMessages: (messages: unknown[]) => void;
-  setMethodResponse: (method: string, payload: unknown) => void;
-  setSessionsListResponse: (payload: MockSessionsListResponse) => void;
-  setRequestHandler: (method: string, handler: ControlUiMockRequestHandler) => void;
-  setSessionSharingPolicy: (policy: {
-    allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
-    hasMultipleSessionSharingIdentities: boolean;
-  }) => void;
-  socketCount: () => number;
-  socketStates: () => Array<{ readyState: number; state: string; url: string }>;
-  socketUrls: () => string[];
-};
-type MockGatewayWindow = Window & {
-  __OPENCLAW_CONTROL_UI_BASE_PATH__?: string;
-  openclawControlUiE2eGateway?: ControlUiMockGateway;
-};
 
 function installControlUiMockGateway(
   input: {
@@ -1692,9 +1612,7 @@ function installControlUiMockGateway(
       return sessions.abortRuns(
         params.sessionKey,
         typeof params.runId === "string" ? params.runId : undefined,
-        Array.isArray(response.runIds)
-          ? response.runIds.filter((id): id is string => typeof id === "string")
-          : undefined,
+        response,
       );
     }
     if (
@@ -2355,21 +2273,10 @@ function installControlUiMockGateway(
         return response;
       }
       case "sessions.list":
-        return sessions.listResponse(
-          {
-            count: sessions.list().length,
-            defaults: {
-              contextTokens: null,
-              model: "gpt-5.5",
-              modelProvider: "openai",
-            },
-            path: "",
-            sessions: sessions.list(),
-            ts: Date.now(),
-          },
-          params,
-          { renames: groupsState.renames, archiveFiltering: scenario.sessionArchiveFiltering },
-        );
+        return sessions.listResponse(responseFixtures.sessionList(), params, {
+          renames: groupsState.renames,
+          archiveFiltering: scenario.sessionArchiveFiltering,
+        });
       case "sessions.search":
         return { results: [] };
       case "sessions.patchMany":
@@ -2851,6 +2758,13 @@ function installControlUiMockGateway(
     setOperatorScopes(scopes) {
       scenario.operatorScopes = [...scopes];
     },
+    getSessionRow(key) {
+      const row = sessions.sessionInfo(key);
+      if (!row) {
+        throw new Error(`Mock Gateway did not return session ${key}`);
+      }
+      return row;
+    },
     setRequestHandler(method, handler) {
       requestHandlers.set(method, handler);
     },
@@ -2883,7 +2797,7 @@ function installControlUiMockGateway(
       } catch {
         // The current document still observes the canonical replacement.
       }
-      this.setMethodResponse("sessions.list", payload);
+      this.setMethodResponse("sessions.list", responseFixtures.sessionList(payload));
     },
     setSessionSharingPolicy(policy) {
       scenario.allowedSessionVisibilities = policy.allowedSessionVisibilities;
@@ -3007,253 +2921,6 @@ export async function installMockGateway(
     diagnosticEvents,
     normalizedScenario.methodResponses,
   );
-}
-
-function createMockGatewayControls(
-  page: Page,
-  defaultSessionKey: string,
-  diagnosticEvents: ControlUiE2eDiagnosticEvent[],
-  methodResponses: Record<string, unknown>,
-): MockGatewayControls {
-  const emitGatewayEvent = async (event: string, payload?: unknown) => {
-    await page.evaluate(
-      ({ eventName, eventPayload }) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.emit(eventName, eventPayload);
-      },
-      { eventName: event, eventPayload: payload },
-    );
-  };
-
-  const deliverLatest = async (frame: unknown) => {
-    await page.evaluate((payload) => {
-      const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-      if (!gateway) {
-        throw new Error("Mock Gateway is not installed");
-      }
-      gateway.deliverLatest(payload);
-    }, frame);
-  };
-
-  const getRequests = async (method?: string, match?: Record<string, unknown>) =>
-    page.evaluate(
-      ({ targetMethod, requestMatch }) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        return gateway?.findRequests(targetMethod, requestMatch) ?? [];
-      },
-      { targetMethod: method, requestMatch: match },
-    );
-
-  return {
-    async closeLatest(code, reason) {
-      await page.evaluate(
-        ({ closeCode, closeReason }) => {
-          const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-          if (!gateway) {
-            throw new Error("Mock Gateway is not installed");
-          }
-          gateway.closeLatest(closeCode, closeReason);
-        },
-        { closeCode: code, closeReason: reason },
-      );
-    },
-    deliverLatest,
-    async deferNext(method, match) {
-      await page.evaluate(
-        ({ targetMethod, requestMatch }) => {
-          const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-          if (!gateway) {
-            throw new Error("Mock Gateway is not installed");
-          }
-          gateway.deferNext(targetMethod, requestMatch);
-        },
-        { targetMethod: method, requestMatch: match },
-      );
-    },
-    async emitChatFinal(params) {
-      await emitGatewayEvent("chat", {
-        message: {
-          content: [{ text: params.text, type: "text" }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-        runId: params.runId,
-        sessionKey: params.sessionKey ?? defaultSessionKey,
-        state: "final",
-      });
-    },
-    emitGatewayEvent,
-    getRequests,
-    async getSocketCount() {
-      return await page.evaluate(() => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        return gateway?.socketCount() ?? 0;
-      });
-    },
-    async getSocketUrls() {
-      return await page.evaluate(() => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        return gateway?.socketUrls() ?? [];
-      });
-    },
-    async rejectDeferred(method, error) {
-      await page.evaluate(
-        ({ targetMethod, responseError }) => {
-          const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-          if (!gateway) {
-            throw new Error("Mock Gateway is not installed");
-          }
-          gateway.rejectDeferred(targetMethod, responseError);
-        },
-        { targetMethod: method, responseError: error },
-      );
-    },
-    async resolveDeferred(method, payload) {
-      await page.evaluate(
-        ({ targetMethod, responsePayload }) => {
-          const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-          if (!gateway) {
-            throw new Error("Mock Gateway is not installed");
-          }
-          gateway.resolveDeferred(targetMethod, responsePayload);
-        },
-        { targetMethod: method, responsePayload: payload },
-      );
-    },
-    async suspendLatest() {
-      await page.evaluate(() => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.suspendLatest();
-      });
-    },
-    async setOnline(online) {
-      await page.evaluate((nextOnline) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.setOnline(nextOnline);
-      }, online);
-    },
-    async setGatewayBootId(bootId) {
-      await page.evaluate((nextBootId) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.setGatewayBootId(nextBootId);
-      }, bootId);
-    },
-    async setServerBuildId(buildId) {
-      await page.evaluate((nextBuildId) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.setServerBuildId(nextBuildId);
-      }, buildId);
-    },
-    async setOperatorScopes(scopes) {
-      await page.evaluate((nextScopes) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.setOperatorScopes(nextScopes);
-      }, scopes);
-    },
-    async setHistoryMessages(messages) {
-      await page.evaluate((nextMessages) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.setHistoryMessages(nextMessages);
-      }, messages);
-    },
-    async setMethodResponse(method, payload) {
-      methodResponses[method] = payload;
-      await page.evaluate(
-        ({ targetMethod, responsePayload }) => {
-          const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-          if (!gateway) {
-            throw new Error("Mock Gateway is not installed");
-          }
-          gateway.setMethodResponse(targetMethod, responsePayload);
-        },
-        { targetMethod: method, responsePayload: payload },
-      );
-    },
-    async setSessionsListResponse(payload) {
-      await page.evaluate((responsePayload) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.setSessionsListResponse(responsePayload);
-      }, payload);
-    },
-    async setSessionSharingPolicy(policy) {
-      await page.evaluate((nextPolicy) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.setSessionSharingPolicy(nextPolicy);
-      }, policy);
-    },
-    async waitForRequest(method, options) {
-      const deadline = Date.now() + controlUiE2eWaitTimeoutMs;
-      const after = options?.after;
-      const match = options?.match;
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-          await page.waitForFunction(
-            ({ targetMethod, priorCount, requestMatch }) => {
-              const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-              const matching = gateway?.findRequests(targetMethod, requestMatch) ?? [];
-              return matching.length > (priorCount ?? 0);
-            },
-            { targetMethod: method, priorCount: after ?? 0, requestMatch: match },
-            // Request capture is non-rendering state. Interval polling avoids background-page
-            // requestAnimationFrame throttling when CI runs several headless pages concurrently.
-            { polling: 25, timeout: Math.max(1, deadline - Date.now()) },
-          );
-          const matching = await getRequests(method, match);
-          // With an `after` cursor, return the first NEW request; otherwise keep
-          // the historical latest-match behavior existing callers rely on.
-          const request = after === undefined ? matching.at(-1) : matching.at(after);
-          if (request) {
-            return request;
-          }
-        } catch (error) {
-          const contextReset =
-            error instanceof Error &&
-            (error.message.includes("Execution context was destroyed") ||
-              error.message.includes("Cannot find context with specified id"));
-          // Intentional stale-build reloads replace the page context once while connecting.
-          if (contextReset && attempt === 0 && !page.isClosed()) {
-            continue;
-          }
-          if (error instanceof Error && error.name === "TimeoutError") {
-            await captureControlUiE2eFailureDiagnostics(page, {
-              error,
-              label: method,
-              pageEvents: diagnosticEvents,
-            });
-          }
-          throw error;
-        }
-      }
-      throw new Error(`No mock Gateway request found for ${method}`);
-    },
-  };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

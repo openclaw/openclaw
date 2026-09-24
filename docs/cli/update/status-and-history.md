@@ -167,6 +167,12 @@ catalog-confirmed public check and plugin IDs are included; unknown IDs and code
 remain complete locally and are redacted publicly. Older runs cannot recover facts that their updater did not record. Existing history
 and report size limits still apply.
 
+npm failure records keep the first five sanitized error lines in order. Lines over
+200 UTF-8 bytes retain a prefix followed by a space and an explicit `…[truncated]`
+marker within that budget. A failed package baseline scan records
+`baseline-scan-failed` with the scan's original cause, including when its identity
+fallback also fails. A timeout with a successful fallback remains a warning.
+
 When a managed-service handoff cannot start or transfer ownership, the Gateway
 records the refusal on the failed `requested` step. Status includes the recorded
 diagnostic after the reason code; chat and failure reports use the same facts.
@@ -291,6 +297,19 @@ serving builds match that recorded target and the Gateway is ready. This also
 allows a matching `abandoned` outcome to be corrected, with the reconciliation
 recorded in history. Live or unobservable drivers, retained recovery work, and
 recorded repair, failure, or rollback evidence remain protected.
+
+Interrupted completion checks share one 50.5-second deadline across setup,
+service and port inspection, health settlement, and final identity checks. The
+report and warning log record settlement, timeout with elapsed time and phase,
+or an unverified observation. A timeout is a warning and leaves the run eligible
+for later reconciliation; repeated diagnostics do not renew its abandonment timer.
+Runs without a recorded completed managed-service restart skip the probe and
+record that skip. No fresh service-status read can permanently exclude a managed run.
+If native probe cleanup is still pending at the deadline, completion remains
+unknown. Later cleanup confirmation preserves the original timeout; cleanup
+failure records both facts and names the failure in the report and warning log.
+Unknown cleanup never records success. Inspect `openclaw update status` before
+recovery; repeated diagnostics do not extend the abandonment timer.
 
 Older interrupted runs may lack the target build identity needed for that check.
 Doctor names the abandoned run and explains why it cannot settle it; a matching

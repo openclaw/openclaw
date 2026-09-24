@@ -969,6 +969,15 @@ enum class GatewayMethod(
   ProgressCardRefresh("progressCard.refresh"),
   WebSearchStatus("webSearch.status"),
   WebSearchTest("webSearch.test"),
+  SessionsProviderReviewContinue("sessions.providerReview.continue"),
+  UsersLinkChannelIdentity("users.linkChannelIdentity"),
+  UsersUnlinkChannelIdentity("users.unlinkChannelIdentity"),
+  UsersListChannelIdentities("users.listChannelIdentities"),
+  UsersPersonalFileGet("users.personalFile.get"),
+  UsersPersonalFileSet("users.personalFile.set"),
+  PortalSessionList("portal.session.list"),
+  PortalSessionOpen("portal.session.open"),
+  PortalSessionClose("portal.session.close"),
 }
 
 enum class GatewayEvent(

@@ -1,5 +1,3 @@
-// Restart sentinel tests protect queued post-restart delivery recovery and the
-// session/channel context used when the gateway resumes an interrupted run.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -900,7 +898,7 @@ describe("scheduleRestartSentinelWake", () => {
       expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
       expect(mocks.clearSentinel).toHaveBeenCalledWith(123, queueContext.environment);
       expect(mocks.logWarn).toHaveBeenCalledWith(
-        expect.stringContaining("target is not a configured command owner"),
+        expect.stringContaining("target is not a current command owner"),
         expect.objectContaining({ runId: run?.runId }),
       );
       if (run) {
@@ -1202,8 +1200,8 @@ describe("scheduleRestartSentinelWake", () => {
       try {
         if (updateRun) {
           const { createUpdateRunNotifier } = await import("./update-run-notice.runtime.js");
-          const ack = await createUpdateRunNotifier(updateRun, () => ({}), {})(updateRun, "ack");
-          expect.soft(ack).toEqual({ delivered: true, owned: true });
+          const notify = await createUpdateRunNotifier(updateRun, () => ({}), {});
+          expect.soft(await notify(updateRun, "ack")).toEqual({ delivered: true, owned: true });
           expect
             .soft(getUpdateRun(updateRun.runId)?.steps)
             .toContainEqual(expect.objectContaining({ step: "notice:ack", status: "completed" }));

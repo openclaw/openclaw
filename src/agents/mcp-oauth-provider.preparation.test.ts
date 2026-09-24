@@ -2,9 +2,14 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { McpOAuthStore } from "./mcp-oauth-store.js";
 
-const { read, update, context } = vi.hoisted(() => ({
+const { read, update, context, lease } = vi.hoisted(() => ({
   read: vi.fn(),
   update: vi.fn(),
+  lease: {
+    signal: new AbortController().signal,
+    async assertOwned() {},
+    async renew() {},
+  },
   context: {
     admission: {
       databasePath: "/synthetic/mcp/state.sqlite",
@@ -18,10 +23,7 @@ const { read, update, context } = vi.hoisted(() => ({
 
 vi.mock("./mcp-oauth-store.js", () => ({
   readMcpOAuthStore: read,
-  updateMcpOAuthStore: update,
-}));
-vi.mock("../state/openclaw-state-worker-context.js", () => ({
-  captureOpenClawStateWorkerContext: () => context,
+  mutateMcpOAuthStore: update,
 }));
 
 import { createMcpOAuthClientProvider } from "./mcp-oauth-provider.js";
@@ -42,6 +44,8 @@ it("keeps acknowledged metadata when an earlier read completes later", async () 
   } satisfies McpOAuthStore;
   read.mockResolvedValueOnce(original);
   const provider = await createMcpOAuthClientProvider({
+    lease,
+    storeContext: context,
     identity: {
       principal: "operator",
       storeKey: "synthetic-provider",
@@ -52,7 +56,7 @@ it("keeps acknowledged metadata when an earlier read completes later", async () 
   const earlier = createDeferred<McpOAuthStore>();
   read.mockReturnValueOnce(earlier.promise);
   const clientInformation = provider.clientInformation();
-  update.mockReturnValueOnce(committed);
+  update.mockResolvedValueOnce({ store: committed, applied: true });
   await provider.saveClientInformation?.(committed.clientInformation);
   expect(provider.redirectUrl).toBe(committed.redirectUrl);
 
@@ -67,6 +71,8 @@ it("requires an acknowledged read after a write reports an uncertain result", as
   const committed = { redirectUrl: "https://callback.example.test/committed" };
   read.mockResolvedValueOnce(original);
   const provider = await createMcpOAuthClientProvider({
+    lease,
+    storeContext: context,
     identity: {
       principal: "operator",
       storeKey: "synthetic-provider",
@@ -78,10 +84,8 @@ it("requires an acknowledged read after a write reports an uncertain result", as
   read.mockReturnValueOnce(earlier.promise);
   const information = provider.clientInformation();
   const failure = new Error("The write committed, but coordinator release failed");
-  update.mockImplementationOnce(() => {
-    throw failure;
-  });
-  expect(() => provider.saveClientInformation?.({ client_id: "committed-client" })).toThrow(
+  update.mockRejectedValueOnce(failure);
+  await expect(provider.saveClientInformation?.({ client_id: "committed-client" })).rejects.toBe(
     failure,
   );
   earlier.resolve(original);
@@ -102,6 +106,8 @@ it.each(["state", "clientInformation", "tokens", "codeVerifier", "discoveryState
     read.mockResolvedValueOnce(original);
     const controller = new AbortController();
     const provider = await createMcpOAuthClientProvider({
+      lease,
+      storeContext: context,
       identity: {
         principal: "operator",
         storeKey: "synthetic-provider",
@@ -148,6 +154,7 @@ it.each([
     const login = new AbortController();
     let leaseLive = true;
     const provider = await createMcpOAuthClientProvider({
+      storeContext: context,
       identity: {
         principal: "operator",
         storeKey: "synthetic-provider",
@@ -158,12 +165,12 @@ it.each([
       suppressStoredTokens: operation === "tokens",
       lease: {
         signal: new AbortController().signal,
-        assertOwned() {
+        async assertOwned() {
           if (!leaseLive) {
             throw failure;
           }
         },
-        assertOwnedInTransaction() {},
+        async renew() {},
       },
       login:
         owner === "login"

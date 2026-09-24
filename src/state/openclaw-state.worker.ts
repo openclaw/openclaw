@@ -15,11 +15,19 @@ import {
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
-import { acquireOpenClawStateLeaseInWorker } from "./openclaw-state-lease-worker.js";
+import {
+  acquireOpenClawStateLeaseInWorker,
+  executeOpenClawStateLeaseCommand,
+} from "./openclaw-state-lease-worker.js";
 import type {
   OpenClawStateWorkerBackend,
   OpenClawStateWorkerOpenPreparation,
 } from "./openclaw-state-worker-contract.js";
+
+const loadAgentCleanup = createLazyRuntimeModule(
+  () => import("./openclaw-agent-execution-cleanup.worker.js"),
+);
+let agentCleanup: typeof import("./openclaw-agent-execution-cleanup.worker.js") | undefined;
 
 const loadRuntime = createLazyRuntimeModule(() => import("./openclaw-state-worker-runtime.js"));
 let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
@@ -80,12 +88,23 @@ function createSharedStateWorkerBackend(
   };
   return {
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
+      if (commandType === "agentDatabases.releaseExitedLease") {
+        if (agentCleanup) {
+          return undefined;
+        }
+        return loadAgentCleanup().then((loaded) => {
+          agentCleanup = loaded;
+        });
+      }
       if (
         commandType === "plugins.metadata.read" ||
         commandType === "database.inspectIdle" ||
         commandType === "stateLease.acquire" ||
         commandType === "deviceIdentity.read" ||
-        commandType === "deviceIdentity.load"
+        commandType === "deviceIdentity.load" ||
+        commandType === "stateLease.verify" ||
+        commandType === "stateLease.renew" ||
+        commandType === "stateLease.release"
       ) {
         return undefined;
       }
@@ -96,6 +115,9 @@ function createSharedStateWorkerBackend(
         runtime = loaded;
         return runtime.prepareSharedStateCommand(commandType);
       });
+    },
+    prepare() {
+      return openClawStateDatabaseCache.waitForCachedOpenClawStateSchemaProbe(context.databasePath);
     },
     execute(command) {
       if (closed) {
@@ -126,8 +148,25 @@ function createSharedStateWorkerBackend(
           }
         }
       }
+      if (command.type === "agentDatabases.releaseExitedLease") {
+        if (!agentCleanup) {
+          throw new Error("Agent database cleanup runtime is not prepared");
+        }
+        return agentCleanup.executeAgentDatabaseCleanupCommand(
+          command,
+          open(),
+          getSqliteWorkerStateContext().environment,
+        );
+      }
       if (command.type === "stateLease.acquire") {
         return acquireOpenClawStateLeaseInWorker(command.input, context.databasePath, open);
+      }
+      if (
+        command.type === "stateLease.verify" ||
+        command.type === "stateLease.renew" ||
+        command.type === "stateLease.release"
+      ) {
+        return executeOpenClawStateLeaseCommand(command, open());
       }
       if (command.type === "plugins.metadata.read") {
         return readPluginMetadataStateRowSync(

@@ -12,6 +12,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { getGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import {
   collectActiveSessionWorkAdmissions,
@@ -25,13 +26,16 @@ import {
   listOpenClawRegisteredAgentDatabases,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
+import { drainOpenClawAgentWriteQueuesForTest } from "../../state/openclaw-agent-write-admission.test-support.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   registerOpenClawStateDatabaseLifecycleListener,
 } from "../../state/openclaw-state-db.js";
 import { gatewayFixtureLifetime } from "../gateway-fixture-lifetime.test-support.js";
+import { getGatewayRecoveryRuntime } from "../server-recovery-runtime-context.js";
 import type { GatewayServerHarness } from "../server.e2e-ws-harness.js";
 import { removeSessionFixtureDirectory } from "../session-fixture-directory.test-support.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { testState } from "../test-helpers.runtime-state.js";
 import { installGatewayTestHooks } from "../test-helpers.server.js";
 
@@ -61,6 +65,17 @@ export async function releaseGatewaySessionStoreFixture(dir: string) {
     }
     await Promise.all(releases);
   }
+  // Participant persistence outlives request roots; retain selectors until its FIFO settles.
+  await drainOpenClawAgentWriteQueuesForTest(ownsPath);
+  const runtime = getGatewayRecoveryRuntime();
+  const projection = getSessionRowProjection(runtime && getGatewayContextResolver(runtime)?.());
+  if (projection) {
+    await waitForSessionTranscriptIndexReconcilesInStateDir(root);
+    await drainOpenClawAgentWriteQueuesForTest(ownsPath);
+    // Suite Gateways keep this projection alive across stores. Settle its readers
+    // before unregistration invalidates their canonical admission.
+    await projection.ensureMaterialized();
+  }
   if (testState.sessionStorePath && ownsPath(testState.sessionStorePath)) {
     testState.sessionStorePath = undefined;
   }
@@ -70,12 +85,17 @@ export async function releaseGatewaySessionStoreFixture(dir: string) {
     delete session.store;
     setRuntimeConfigSnapshot({ ...cfg, session });
   }
-  await waitForSessionTranscriptIndexReconcilesInStateDir(root);
+  if (!projection) {
+    await waitForSessionTranscriptIndexReconcilesInStateDir(root);
+    await drainOpenClawAgentWriteQueuesForTest(ownsPath);
+  }
   for (const database of listOpenClawRegisteredAgentDatabases()) {
     if (isPathInside(root, database.path)) {
       unregisterOpenClawAgentDatabase(database);
     }
   }
+  // Join topology publication before closing readers retained by the old store.
+  await projection?.ensureMaterialized();
   await closeOpenClawAgentDatabasesAsync(root);
 
   // Client identity fixtures use shared-state SQLite, even with legacy .json names.

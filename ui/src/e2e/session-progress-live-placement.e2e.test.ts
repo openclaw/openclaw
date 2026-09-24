@@ -133,7 +133,7 @@ suite.define(() => {
         .locator(".settings-row")
         .filter({
           has: page.locator(".settings-row__title", {
-            hasText: "Collapse task progress by default",
+            hasText: "Collapse task progress by default on desktop",
           }),
         })
         .first();

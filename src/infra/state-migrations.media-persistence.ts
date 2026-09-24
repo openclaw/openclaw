@@ -51,6 +51,7 @@ import {
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { replaceFileAtomicSync } from "./replace-file.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
+import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
@@ -135,6 +136,7 @@ async function migrateAgentDatabase(params: {
       transformContent: transformMediaArchiveContent,
     });
   try {
+    configureSqliteMaintenanceCache(database);
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     enableNodeSqliteKyselyStatementCache(database);
     let metadata = assertOpenClawAgentDatabaseOwner(database, {
@@ -199,26 +201,31 @@ async function migrateAgentDatabase(params: {
     assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaMode);
     const legacyTextStorage = userVersion < AGENT_STORAGE_SCHEMA_VERSION;
     if (!mediaSchemaUpgrade) {
-      const detected = runSqliteDeferredTransactionSync(
+      const needsRepair = runSqliteDeferredTransactionSync(
         database,
-        () => ({
-          rewrittenSessions: scanTranscriptRows({
+        () =>
+          scanTranscriptRows({
             database,
             pathname: params.pathname,
             legacyTextStorage,
-          }),
-          rewrittenTrajectoryRows: scanTrajectoryRows({
+          }) > 0 ||
+          scanTrajectoryRows({
             database,
             pathname: params.pathname,
             rewrite: false,
-          }),
-        }),
+          }) > 0,
         { databaseLabel: params.pathname, operationLabel: "media-persistence-detection" },
       );
-      if (detected.rewrittenSessions === 0 && detected.rewrittenTrajectoryRows === 0) {
+      if (!needsRepair) {
         const rewrittenArchives = await migrateArchives();
         refreshAgentDatabasePlannerStatistics(database);
-        return { ...detected, rewrittenArchives, initialVersion, finalVersion: userVersion };
+        return {
+          rewrittenSessions: 0,
+          rewrittenTrajectoryRows: 0,
+          rewrittenArchives,
+          initialVersion,
+          finalVersion: userVersion,
+        };
       }
     }
 

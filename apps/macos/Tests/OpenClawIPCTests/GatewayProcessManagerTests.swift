@@ -144,12 +144,13 @@ struct GatewayProcessManagerTests {
         let environment: [String: String?] = [
             "OPENCLAW_CONFIG_PATH": configPath,
             "OPENCLAW_GATEWAY_PORT": nil,
-            "HOME": isolatedHome.path,
-            "CFFIXED_USER_HOME": isolatedHome.path,
         ]
-        return try await TestIsolation.withEnvValues(environment) {
+        return try await TestIsolation.withIsolatedState(
+            launchAgentHomeDirectory: isolatedHome,
+            env: environment)
+        {
             // Service ownership reads must stay inside this fixture's home, even without an explicit plist.
-            try #require(FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL == isolatedHome
+            try #require(LaunchAgentPlist.homeDirectoryURL.standardizedFileURL == isolatedHome
                 .standardizedFileURL)
             return try await body()
         }

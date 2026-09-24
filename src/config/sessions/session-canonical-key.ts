@@ -12,6 +12,7 @@ import {
   stageSqliteTransactionState,
   withSqlitePostCommitPublications,
 } from "../../infra/sqlite-post-commit.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import {
@@ -354,18 +355,7 @@ export function readCanonicalSessionMainKey(database: { db: DatabaseSync }): str
   return normalizeMainKey(read()?.main_key);
 }
 
-function assertCanonicalSessionMainKeyWrite(sessionKey: string, mainKey: string): void {
-  if (parseAgentSessionKey(sessionKey)?.rest === "main" && mainKey !== "main") {
-    throw canonicalSessionKeyMigrationRequiredError(
-      `refusing non-canonical session key write ${sessionKey}`,
-    );
-  }
-}
-
-export function assertCanonicalSessionEntryLineageWrite(
-  database: { db: DatabaseSync },
-  entry: SessionEntry,
-): void {
+export function assertCanonicalSessionEntryLineageWrite(entry: SessionEntry): void {
   const sessionKeys = [
     entry.parentSessionKey,
     entry.spawnedBy,
@@ -374,21 +364,9 @@ export function assertCanonicalSessionEntryLineageWrite(
   if (sessionKeys.length === 0) {
     return;
   }
-  const mainKey = readCanonicalSessionMainKey(database);
   for (const sessionKey of sessionKeys) {
     assertCanonicalSessionKeyWrite(sessionKey);
-    assertCanonicalSessionMainKeyWrite(sessionKey, mainKey);
   }
-}
-
-export function assertCanonicalSessionKeyWriteMatchesDatabase(
-  database: { agentId: string; db: DatabaseSync; path?: string },
-  sessionKey: string,
-): void {
-  // Exact SQLite locators are shared stores; the outer resolved scope already enforces
-  // logical agent ownership before this database-level shape check.
-  assertCanonicalSessionKeyWrite(sessionKey);
-  assertCanonicalSessionMainKeyWrite(sessionKey, readCanonicalSessionMainKey(database));
 }
 
 /** Query shape shared by complete inventories and bounded canonical validation. */
@@ -431,7 +409,9 @@ export function canonicalSessionValidationQuery(
 
 /** Older supported maintenance readers keep their existing full-validation path. */
 export function hasCanonicalSessionValidationProjection(database: { db: DatabaseSync }): boolean {
-  if (readSqliteUserVersion(database.db) < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
+  const version =
+    getAdmittedSqliteSchemaFacts(database.db)?.userVersion ?? readSqliteUserVersion(database.db);
+  if (version < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
     return false;
   }
   assertCanonicalSessionValidationSchema(database.db);
@@ -441,16 +421,9 @@ export function hasCanonicalSessionValidationProjection(database: { db: Database
 export function scanCanonicalSqliteSessionEntries(
   database: { agentId: string; db: DatabaseSync; path?: string },
   visit?: (summary: { entry: SessionEntry; sessionKey: string }) => void,
-  mainKey?: string,
   metadata?: CanonicalSessionMetadata,
 ): number {
   // Doctor visitors and full inventories retain complete validation and source JSON semantics.
-  const db = getNodeSqliteKysely<CanonicalSessionDatabase>(database.db);
-  const storedMainKey = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db.selectFrom("session_key_contract").select("main_key").where("id", "=", 1),
-  )?.main_key;
-  const canonicalMainKey = normalizeMainKey(mainKey ?? storedMainKey);
   let count = 0;
   for (const row of iterateSqliteQuerySync(
     database.db,
@@ -461,7 +434,7 @@ export function scanCanonicalSqliteSessionEntries(
   )) {
     // Retained windows have no entry, but their keys remain part of a listing snapshot.
     metadata?.keys.push(row.session_key);
-    const entry = validateCanonicalSessionRow(row, canonicalMainKey);
+    const entry = validateCanonicalSessionRow(row);
     if (!entry) {
       continue;
     }
@@ -479,10 +452,9 @@ export function scanCanonicalSqliteSessionEntries(
 
 export function assertCanonicalSqliteSessionKeysCurrent(
   database: { agentId: string; db: DatabaseSync; path?: string },
-  mainKey?: string,
   collectMetadata = false,
 ): ValidatedSessionMetadata | undefined {
-  return validateCanonicalSqliteSessionKeys(database, mainKey, collectMetadata).metadata;
+  return validateCanonicalSqliteSessionKeys(database, collectMetadata).metadata;
 }
 
 /** Validate the root's database and key together within its synchronous writer transaction. */
@@ -490,21 +462,14 @@ export function assertCanonicalSqliteSessionRootWrite(
   database: { agentId: string; db: DatabaseSync },
   sessionKey: string,
 ): void {
-  const { validatedMainKey } = validateCanonicalSqliteSessionKeys(database);
+  validateCanonicalSqliteSessionKeys(database);
   assertCanonicalSessionKeyWrite(sessionKey);
-  // Warm validation just read this policy. Cold or changed-policy scans retain
-  // their original post-scan read and error order.
-  assertCanonicalSessionMainKeyWrite(
-    sessionKey,
-    validatedMainKey ?? readCanonicalSessionMainKey(database),
-  );
 }
 
 function validateCanonicalSqliteSessionKeys(
   database: { agentId: string; db: DatabaseSync; path?: string },
-  mainKey?: string,
   collectMetadata = false,
-): { validatedMainKey?: string; metadata?: ValidatedSessionMetadata } {
+): { metadata?: ValidatedSessionMetadata } {
   const incremental = hasCanonicalSessionValidationProjection(database);
   const identity = findOpenClawAgentDatabaseIdentity(database);
   const pathname = database.path ?? identity?.filename;
@@ -524,7 +489,7 @@ function validateCanonicalSqliteSessionKeys(
     matchesReaderContinuationDatabase(database, continuation)
   ) {
     readScope.usedContinuation = true;
-    return { validatedMainKey: storedMainKey };
+    return {};
   }
   const admitted = readerAdmissions.get(database.db)?.proof;
   // Preserve admitted-reader parsing for raw metadata edits; new handles and
@@ -534,7 +499,7 @@ function validateCanonicalSqliteSessionKeys(
     admitted.physicalValidation === physicalValidation &&
     admitted.canonicalReady === canonicalReady
   ) {
-    return { validatedMainKey: storedMainKey };
+    return {};
   }
   if (readScope?.database === database.db && !database.db.isTransaction) {
     readScope.snapshotRequired ??= new Error(
@@ -556,7 +521,7 @@ function validateCanonicalSqliteSessionKeys(
       const metadata: ValidatedSessionMetadata | undefined = collectMetadata
         ? { dataVersion: readSqliteDataVersion(database.db), entries: new Map(), keys: [] }
         : undefined;
-      scanCanonicalSqliteSessionEntries(database, undefined, mainKey, metadata);
+      scanCanonicalSqliteSessionEntries(database, undefined, metadata);
       markOpenClawAgentCanonicalValidation(database);
       remember();
       return { metadata };
@@ -575,22 +540,17 @@ function validateCanonicalSqliteSessionKeys(
         entries: new Map(),
         keys: [],
       };
-      scanCanonicalSqliteSessionEntries(database, undefined, mainKey, metadata);
+      scanCanonicalSqliteSessionEntries(database, undefined, metadata);
       remember();
       return { metadata };
     }
-    const query = canonicalSessionValidationQuery(database)
-      .where("session_nodes.session_key", "in", pending)
-      .select((eb) =>
-        eb
-          .selectFrom("session_key_contract")
-          .select("main_key")
-          .where("id", "=", 1)
-          .as("validation_main_key"),
-      );
+    const query = canonicalSessionValidationQuery(database).where(
+      "session_nodes.session_key",
+      "in",
+      pending,
+    );
     for (const row of iterateSqliteQuerySync(database.db, query)) {
-      // Policy and pending rows belong to the same statement's committed snapshot.
-      validateCanonicalSessionRow(row, normalizeMainKey(mainKey ?? row.validation_main_key));
+      validateCanonicalSessionRow(row);
     }
     remember();
     return {};
@@ -598,7 +558,7 @@ function validateCanonicalSqliteSessionKeys(
   const metadata: ValidatedSessionMetadata | undefined = collectMetadata
     ? { dataVersion: readSqliteDataVersion(database.db), entries: new Map(), keys: [] }
     : undefined;
-  scanCanonicalSqliteSessionEntries(database, undefined, mainKey, metadata);
+  scanCanonicalSqliteSessionEntries(database, undefined, metadata);
   remember();
   return { metadata };
 }

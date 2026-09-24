@@ -2205,8 +2205,8 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("think max");
-    expect(normalized).not.toContain("think ultra");
+    expect(normalized).toContain("think ultra");
+    expect(normalized).not.toContain("think max");
   });
 
   it("clamps off to the active provider's always-thinking level", async () => {

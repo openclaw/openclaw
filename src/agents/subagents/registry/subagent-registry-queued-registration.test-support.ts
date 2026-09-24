@@ -1,13 +1,10 @@
 import { vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { RegisterSubagentRunParams } from "./subagent-registry-run-launch-record.js";
 import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
-import type {
-  RegisterSubagentRunParams,
-  SubagentRegistrationScope,
-  SubagentRunRecord,
-} from "./subagent-registry.types.js";
+import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function createQueuedRegistrationFixture(mocks: {
   register: Mock<SubagentLaunchManager["registerSubagentRun"]>;

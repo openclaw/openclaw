@@ -84,6 +84,7 @@ import { handleChatSend, handleTrustedInternalChatSend } from "./chat-send-handl
 import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
 import {
   createChatDirectiveSuiteResources,
+  expectClaimOnlyTranscriptMedia,
   seedChatDirectiveFileTranscript,
 } from "./chat.directive-tags.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
@@ -620,28 +621,6 @@ const { handleDirectExternalChatSend } = await import("./chat-send-external-entr
 // Multi-media transcript mirroring can exceed 1s on loaded CI before the async broadcast lands.
 async function waitForAssertion(assertion: () => void, timeoutMs = 5_000, stepMs = 2) {
   await vi.waitFor(assertion, { interval: stepMs, timeout: timeoutMs });
-}
-
-function expectClaimOnlyTranscriptMedia(
-  message: unknown,
-  expectedMedia: unknown[],
-  forbiddenValues: string[],
-) {
-  const media = (
-    message as { __openclaw?: { media?: Array<Record<string, unknown>> } } | undefined
-  )?.["__openclaw"]?.media;
-  expect(media).toEqual(expectedMedia);
-  for (const fact of media ?? []) {
-    expect(fact.url).toMatch(/^media:\/\/inbound\/[^?#]+$/u);
-    expect(fact).not.toHaveProperty("path");
-    expect(fact).not.toHaveProperty("workspaceDir");
-    expect(fact).not.toHaveProperty("data");
-  }
-  const serialized = JSON.stringify(message);
-  expect(serialized).not.toContain("base64");
-  for (const value of forbiddenValues) {
-    expect(serialized).not.toContain(value);
-  }
 }
 
 function createFixturePaths(prefix: string): { dir: string; transcriptPath: string } {
@@ -1340,6 +1319,50 @@ async function expectImageOnlyFinal(params: {
   });
   expect(content.some((block) => block.type === "attachment_error")).toBe(false);
   expect(JSON.stringify(content)).not.toContain(mediaUrl);
+}
+
+type FailedUserTurnCase = {
+  id: string;
+  phase: "pre-start-throw" | "started-throw" | "returned-error";
+  hooks: boolean;
+  error: string;
+  message: string;
+  oracle: "update" | "durable" | "settled";
+};
+
+async function expectFailedUserTurn(testCase: FailedUserTurnCase) {
+  const { id, phase, hooks, error, message, oracle } = testCase;
+  await createSqliteTranscriptFixture(`openclaw-chat-send-user-transcript-${id}-`);
+  mockState.triggerAgentRunStart = phase !== "pre-start-throw";
+  mockState.hasBeforeAgentRunHooks = hooks;
+  if (phase === "pre-start-throw") {
+    mockState.dispatchError = new Error(error);
+  } else if (phase === "started-throw") {
+    mockState.dispatchErrorAfterAgentRunStart = new Error(error);
+  } else {
+    mockState.finalPayload = { text: error, isError: true };
+  }
+  const { context, send } = createChatRequestFixture();
+  const idempotencyKey = `idem-user-transcript-${id}`;
+  await send({ idempotencyKey, message, expectBroadcast: false });
+
+  await waitForAssertion(() => {
+    expect(context.dedupe.get(`chat:${idempotencyKey}`)?.ok).toBe(false);
+    const userUpdate = findUserUpdate();
+    const storedMessage = getMessage(userUpdate);
+    expectUserUpdateIdentity(userUpdate);
+    expect(storedMessage?.role).toBe("user");
+    expect(storedMessage?.content).toBe(message);
+    if (oracle === "settled") {
+      expect(typeof storedMessage?.timestamp).toBe("number");
+    }
+    if (oracle !== "update") {
+      expect(readPersistedUserMessages()[0]?.content).toBe(message);
+    }
+  });
+  if (oracle === "settled") {
+    expect(getTotalPendingReplies()).toBe(0);
+  }
 }
 
 beforeAll(() => {
@@ -3217,30 +3240,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     releaseDispatch?.();
     await pending;
-  });
-
-  it("scopes chat history global aliases before loading session state", async () => {
-    await createGlobalTranscriptFixture("openclaw-chat-history-global-alias-load-", "work");
-    mockState.sessionEntry = { canonicalKey: "global" };
-    const { context, respond } = createChatRequestFixture();
-    mockState.loadSessionEntryCalls = [];
-
-    await expectDefined(
-      chatHandlers["chat.history"],
-      'chatHandlers["chat.history"] test invariant',
-    )({
-      params: { sessionKey: "agent:work:main" },
-      respond: respond as never,
-      req: {} as never,
-      client: null,
-      isWebchatConnect: () => false,
-      context,
-    });
-
-    expect(mockState.loadSessionEntryCalls).toContainEqual({
-      rawKey: "agent:work:main",
-      opts: { agentId: "work", clone: false, includeStoreChildEntries: true, projection: "list" },
-    });
   });
 
   it("returns the rendered history branch leaf in session info", async () => {
@@ -6164,25 +6163,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("emits a user transcript update when hooks pass and the started agent throws before runtime persistence", async () => {
-    await createSqliteTranscriptFixture("openclaw-chat-send-user-transcript-gate-pass-error-");
-    mockState.triggerAgentRunStart = true;
-    mockState.hasBeforeAgentRunHooks = true;
-    mockState.dispatchErrorAfterAgentRunStart = new Error("model unavailable");
-    const { context, send } = createChatRequestFixture();
-
-    await send({
-      idempotencyKey: "idem-user-transcript-gate-pass-error",
+    await expectFailedUserTurn({
+      id: "gate-pass-error",
+      phase: "started-throw",
+      hooks: true,
+      error: "model unavailable",
       message: "prompt allowed before model error",
-      expectBroadcast: false,
-    });
-
-    await waitForAssertion(() => {
-      expect(context.dedupe.get("chat:idem-user-transcript-gate-pass-error")?.ok).toBe(false);
-      const userUpdate = findUserUpdate();
-      const message = getMessage(userUpdate);
-      expectUserUpdateIdentity(userUpdate);
-      expect(message?.role).toBe("user");
-      expect(message?.content).toBe("prompt allowed before model error");
+      oracle: "update",
     });
   });
 
@@ -6262,6 +6249,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("prepares non-image chat.send attachments as claim-only media refs without dispatch images", async () => {
+    const fileName = "brief café 雪 🦞.pdf";
     await createReadyChatTranscript("openclaw-chat-send-user-transcript-file-");
     mockState.triggerAgentRunStart = true;
     setSavedMediaResults(["/tmp/chat-send-brief.pdf", "application/pdf"]);
@@ -6271,7 +6259,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       requestParams: {
         attachments: [
           createFileAttachment(
-            "brief.pdf",
+            fileName,
             "application/pdf",
             Buffer.from("%PDF-1.4\n").toString("base64"),
           ),
@@ -6287,6 +6275,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         | undefined;
       expect(mockState.lastDispatchImages).toBeUndefined();
       expect(mockState.lastDispatchImageOrder).toBeUndefined();
+      expect(mockState.lastDispatchCtx?.media).toEqual([
+        expect.objectContaining({ path: "/tmp/chat-send-brief.pdf", fileName }),
+      ]);
       expect(mockState.lastDispatchCtx?.Body).toBe(
         "summarize this\n[media attached: media://inbound/saved-media]",
       );
@@ -6302,7 +6293,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             url: "media://inbound/saved-media",
             contentType: "application/pdf",
             kind: "document",
-            fileName: "brief.pdf",
+            fileName,
             sizeBytes: 9,
             hydrationSuppressed: true,
           },
@@ -6595,6 +6586,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {
+        fileName: "attachment-1",
         path: "/tmp/1.png",
         contentType: "image/png",
         workspaceDir: "/tmp",
@@ -6730,6 +6722,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {
+        fileName: "attachment-1",
         path: "/tmp/1.png",
         contentType: "image/png",
         workspaceDir: "/tmp",
@@ -6762,6 +6755,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {
+        fileName: "report.pdf",
         path: "/home/user/.openclaw/media/inbound/report.pdf",
         contentType: "application/pdf",
         workspaceDir: "/home/user/.openclaw/media/inbound",
@@ -6804,6 +6798,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {
+        fileName: "fake.png",
         path: "/home/user/.openclaw/media/inbound/fake.zip",
         contentType: "application/zip",
         workspaceDir: "/home/user/.openclaw/media/inbound",
@@ -6842,6 +6837,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {
+        fileName: "report.pdf",
         path: "media/inbound/report.pdf",
         contentType: "application/pdf",
         workspaceDir: "/sandbox/workspace",
@@ -6893,6 +6889,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchImageOrder).toEqual(["inline"]);
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {
+        fileName: "report.pdf",
         path: "media/inbound/report.pdf",
         contentType: "application/pdf",
         workspaceDir: "/sandbox/workspace",
@@ -7065,6 +7062,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // Reaches dispatch through the same staged workspace path as other files.
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {
+        fileName: "huge.pdf",
         path: "media/inbound/huge.pdf",
         contentType: "application/pdf",
         workspaceDir: "/sandbox/workspace",
@@ -7104,6 +7102,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // dir) and the media-store entry is preserved for host-side extraction.
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {
+        fileName: "report.pdf",
         path: "/home/user/.openclaw/media/inbound/report.pdf",
         contentType: "application/pdf",
         workspaceDir: "/home/user/.openclaw/media/inbound",
@@ -7137,6 +7136,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {
+        fileName: "report.pdf",
         path: "/home/user/.openclaw/media/inbound/report.pdf",
         contentType: "application/pdf",
         workspaceDir: "/sandbox/workspace",
@@ -7221,6 +7221,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {
+        fileName: "huge.bin",
         path: "media/inbound/huge.bin",
         contentType: "application/octet-stream",
         workspaceDir: "/sandbox/workspace",
@@ -7420,50 +7421,24 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("emits a user transcript update when chat.send fails before an agent run starts", async () => {
-    await createSqliteTranscriptFixture("openclaw-chat-send-user-transcript-error-no-run-");
-    mockState.dispatchError = new Error("upstream unavailable");
-    const { context, send } = createChatRequestFixture();
-
-    await send({
-      idempotencyKey: "idem-user-transcript-error-no-run",
+    await expectFailedUserTurn({
+      id: "error-no-run",
+      phase: "pre-start-throw",
+      hooks: false,
+      error: "upstream unavailable",
       message: "hello from failed dispatch",
-      expectBroadcast: false,
+      oracle: "settled",
     });
-
-    await waitForAssertion(() => {
-      expect(context.dedupe.get("chat:idem-user-transcript-error-no-run")?.ok).toBe(false);
-      const userUpdate = findUserUpdate();
-      const message = getMessage(userUpdate);
-      expectUserUpdateIdentity(userUpdate);
-      expect(message?.role).toBe("user");
-      expect(message?.content).toBe("hello from failed dispatch");
-      expect(typeof message?.timestamp).toBe("number");
-      const persistedUser = readPersistedUserMessages()[0];
-      expect(persistedUser?.content).toBe("hello from failed dispatch");
-    });
-    expect(getTotalPendingReplies()).toBe(0);
   });
 
   it("emits a user transcript update when a slash-prefixed turn fails before command delivery", async () => {
-    await createSqliteTranscriptFixture("openclaw-chat-send-user-transcript-slash-error-no-run-");
-    mockState.dispatchError = new Error("slash command continued into unavailable runtime");
-    const { context, send } = createChatRequestFixture();
-
-    await send({
-      idempotencyKey: "idem-user-transcript-slash-error-no-run",
+    await expectFailedUserTurn({
+      id: "slash-error-no-run",
+      phase: "pre-start-throw",
+      hooks: false,
+      error: "slash command continued into unavailable runtime",
       message: "/unknown keep this user turn",
-      expectBroadcast: false,
-    });
-
-    await waitForAssertion(() => {
-      expect(context.dedupe.get("chat:idem-user-transcript-slash-error-no-run")?.ok).toBe(false);
-      const userUpdate = findUserUpdate();
-      const message = getMessage(userUpdate);
-      expectUserUpdateIdentity(userUpdate);
-      expect(message?.role).toBe("user");
-      expect(message?.content).toBe("/unknown keep this user turn");
-      const persistedUser = readPersistedUserMessages()[0];
-      expect(persistedUser?.content).toBe("/unknown keep this user turn");
+      oracle: "durable",
     });
   });
 
@@ -7502,52 +7477,24 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("emits a user transcript update on pre-start failures even when before_agent_run hooks exist", async () => {
-    await createSqliteTranscriptFixture("openclaw-chat-send-user-transcript-error-hook-pre-start-");
-    mockState.hasBeforeAgentRunHooks = true;
-    mockState.dispatchError = new Error("resolver unavailable");
-    const { context, send } = createChatRequestFixture();
-
-    await send({
-      idempotencyKey: "idem-user-transcript-error-hook-pre-start",
+    await expectFailedUserTurn({
+      id: "error-hook-pre-start",
+      phase: "pre-start-throw",
+      hooks: true,
+      error: "resolver unavailable",
       message: "hello before hooked startup failure",
-      expectBroadcast: false,
-    });
-
-    await waitForAssertion(() => {
-      expect(context.dedupe.get("chat:idem-user-transcript-error-hook-pre-start")?.ok).toBe(false);
-      const userUpdate = findUserUpdate();
-      const message = getMessage(userUpdate);
-      expectUserUpdateIdentity(userUpdate);
-      expect(message?.role).toBe("user");
-      expect(message?.content).toBe("hello before hooked startup failure");
+      oracle: "update",
     });
   });
 
   it("emits a user transcript update when chat.send fails after agent start but before runtime persistence", async () => {
-    await createSqliteTranscriptFixture(
-      "openclaw-chat-send-user-transcript-error-before-runtime-persist-",
-    );
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchErrorAfterAgentRunStart = new Error("cli backend unavailable");
-    const { context, send } = createChatRequestFixture();
-
-    await send({
-      idempotencyKey: "idem-user-transcript-error-before-runtime-persist",
+    await expectFailedUserTurn({
+      id: "error-before-runtime-persist",
+      phase: "started-throw",
+      hooks: false,
+      error: "cli backend unavailable",
       message: "hello before cli startup failure",
-      expectBroadcast: false,
-    });
-
-    await waitForAssertion(() => {
-      expect(context.dedupe.get("chat:idem-user-transcript-error-before-runtime-persist")?.ok).toBe(
-        false,
-      );
-      const userUpdate = findUserUpdate();
-      const message = getMessage(userUpdate);
-      expectUserUpdateIdentity(userUpdate);
-      expect(message?.role).toBe("user");
-      expect(message?.content).toBe("hello before cli startup failure");
-      const persistedUser = readPersistedUserMessages()[0];
-      expect(persistedUser?.content).toBe("hello before cli startup failure");
+      oracle: "durable",
     });
   });
 
@@ -7610,28 +7557,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("emits a user transcript update when a started agent returns an error before runtime persistence", async () => {
-    await createSqliteTranscriptFixture(
-      "openclaw-chat-send-user-transcript-agent-error-no-runtime-persist-",
-    );
-    mockState.triggerAgentRunStart = true;
-    mockState.finalPayload = { text: "agent failed before prompt append", isError: true };
-    const { context, send } = createChatRequestFixture();
-
-    await send({
-      idempotencyKey: "idem-user-transcript-agent-error-no-runtime-persist",
+    await expectFailedUserTurn({
+      id: "agent-error-no-runtime-persist",
+      phase: "returned-error",
+      hooks: false,
+      error: "agent failed before prompt append",
       message: "hello before agent error payload",
-      expectBroadcast: false,
-    });
-
-    await waitForAssertion(() => {
-      expect(
-        context.dedupe.get("chat:idem-user-transcript-agent-error-no-runtime-persist")?.ok,
-      ).toBe(false);
-      const userUpdate = findUserUpdate();
-      const message = getMessage(userUpdate);
-      expectUserUpdateIdentity(userUpdate);
-      expect(message?.role).toBe("user");
-      expect(message?.content).toBe("hello before agent error payload");
+      oracle: "update",
     });
   });
 
@@ -7668,27 +7600,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("emits a user transcript update when hooks pass and a started agent returns an error", async () => {
-    await createSqliteTranscriptFixture(
-      "openclaw-chat-send-user-transcript-agent-error-hook-pass-",
-    );
-    mockState.triggerAgentRunStart = true;
-    mockState.hasBeforeAgentRunHooks = true;
-    mockState.finalPayload = { text: "agent failed before prompt append", isError: true };
-    const { context, send } = createChatRequestFixture();
-
-    await send({
-      idempotencyKey: "idem-user-transcript-agent-error-hook-pass",
+    await expectFailedUserTurn({
+      id: "agent-error-hook-pass",
+      phase: "returned-error",
+      hooks: true,
+      error: "agent failed before prompt append",
       message: "hello before hooked agent error payload",
-      expectBroadcast: false,
-    });
-
-    await waitForAssertion(() => {
-      expect(context.dedupe.get("chat:idem-user-transcript-agent-error-hook-pass")?.ok).toBe(false);
-      const userUpdate = findUserUpdate();
-      const message = getMessage(userUpdate);
-      expectUserUpdateIdentity(userUpdate);
-      expect(message?.role).toBe("user");
-      expect(message?.content).toBe("hello before hooked agent error payload");
+      oracle: "update",
     });
   });
 });

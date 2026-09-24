@@ -4,6 +4,7 @@ import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
 import {
   createWorkerTaskControl,
   observeWorkerTaskCancellation,
+  withWorkerTaskNativeSectionScope,
   type WorkerTaskControl,
 } from "./worker-task-native-sections.js";
 
@@ -201,7 +202,11 @@ export function serveOwnedWorkerTasks<Output>(
           try {
             await precedingClosures;
             control.throwIfCancelled();
-            return await handler(message.input, channel, control);
+            return await withWorkerTaskNativeSectionScope(
+              nativeSections,
+              () => active === task,
+              () => handler(message.input, channel, control),
+            );
           } finally {
             await stopObserving?.();
             active = undefined;

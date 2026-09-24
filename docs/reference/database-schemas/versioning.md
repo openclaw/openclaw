@@ -21,6 +21,23 @@ Changes may stay at the same schema version only when downgraded readers remain 
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
+Admitted agent and cached shared-state handles retain their schema version and
+table facts. The handle owner revokes these facts after local DDL, transaction
+rollback, or a foreign commit; it checks `PRAGMA data_version` at most once per
+event-loop turn for cache freshness. Canonical session validation uses the same
+schema revision. A migration by another process is detected on the next turn.
+Shared-state worker admission waits for a preceding probe to expire before
+starting a new operation, so requests do not reuse an earlier freshness result.
+Migration and snapshot before/after consistency checks remain fresh reads.
+This changes no stored schema, migration, durability, or update behavior.
+
+The nullable requester-authority columns on GitHub publication lifecycle and
+repository receipts require [state schema 18](/reference/database-schemas/state-schema-history#state-schema-18).
+Shipped readers validate these optional tables exactly and reject additional
+columns even when bare and nullable. Migration preserves historical rows with
+unknown requester authority; the version bump also prevents older publishers
+from reopening requests without the new authority checks.
+
 Session label lookups use a nonunique partial index on
 `session_nodes(label, session_key)` for non-null labels, without changing agent
 schema 20. The existing writable schema owner installs and repairs the index;
@@ -84,6 +101,29 @@ version: `session_watch_cursors.watcher_store_path`,
 Their writers ensure them idempotently on first use; reads do not install them.
 Older readers ignore the columns. NULL remains unknown, so Gateway notification
 delivery does not assign historical records to a current parent by key alone.
+
+Cron standing-grant definition generations use three bare nullable projections on
+`cron_jobs`: `grant_definition_revision`, `grant_definition_generation`, and
+`grant_definition_updated_at`. The canonical job remains `job_json`. Current
+writers update the projections atomically with it, advance the generation for a
+substantive definition change (including edit-and-restore), and preserve the
+generation across disable and re-enable.
+
+The released `operator_approval_standing_grants` table keeps its exact shape. A
+first-use companion table, `operator_approval_standing_grant_generations`, binds
+each newly minted grant to its job generation and cascades with the grant. Older
+same-version readers ignore the companion and the bare nullable job columns, so
+they can reopen the database. After re-upgrade, a grant without a companion row
+is treated as legacy and requires approval again; it is never assigned a
+generation retroactively. A job recreation advances past retained companion
+generations, including when an older writer deleted the job row.
+
+An older writer does not maintain these projections. Its edits make the
+projection stale, so a current reader fails closed after re-upgrade. While the
+older build is running it cannot enforce generation binding, and changes that
+preserve every observable job value and timestamp cannot be reconstructed later.
+No backfill or schema-version bump is required. The accepted design and rollback
+contract are recorded in [#142153](https://github.com/openclaw/openclaw/pull/142153).
 
 Retained ACP imports use the same-version additive-column exception for the bare
 nullable `session_nodes.legacy_acp_migration_json TEXT` column. Legacy session

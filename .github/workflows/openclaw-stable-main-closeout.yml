@@ -41,6 +41,7 @@ jobs:
       full_release_validation_run_attempt: ${{ steps.inputs.outputs.full_release_validation_run_attempt }}
       release_publish_run_id: ${{ steps.inputs.outputs.release_publish_run_id }}
       stable_soak_waiver: ${{ steps.inputs.outputs.stable_soak_waiver }}
+      lane_waiver: ${{ steps.inputs.outputs.lane_waiver }}
       rollback_drill_date: ${{ steps.inputs.outputs.rollback_drill_date }}
       rollback_drill_id: ${{ steps.inputs.outputs.rollback_drill_id }}
       evidence_tag: ${{ steps.inputs.outputs.evidence_tag }}
@@ -340,11 +341,13 @@ jobs:
             exit 1
           fi
           stable_soak_waiver="$(jq -c '.stableSoakWaiver // "" | if type == "string" then . else error("Invalid stable soak waiver") end' "$evidence_path")"
+          lane_waiver="$(jq -c '.laneWaiver // "" | if type == "string" then . else error("Invalid lane waiver") end' "$evidence_path")"
           {
             echo "full_release_validation_run_id=$full_release_validation_run_id"
             echo "full_release_validation_run_attempt=$full_release_validation_run_attempt"
             echo "release_publish_run_id=$release_publish_run_id"
             echo "stable_soak_waiver=$stable_soak_waiver"
+            echo "lane_waiver=$lane_waiver"
             echo "rollback_drill_date=$ROLLBACK_DRILL_DATE"
             echo "rollback_drill_id=$ROLLBACK_DRILL_ID"
             echo "evidence_tag=$evidence_source_tag"
@@ -433,7 +436,7 @@ jobs:
 
       - name: Set up Docker verification for manual recovery
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_failed_publish_recovery }}
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
 
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -444,6 +447,7 @@ jobs:
       - name: Verify release workflow evidence
         env:
           STABLE_SOAK_WAIVER: ${{ fromJSON(needs.resolve.outputs.stable_soak_waiver) }}
+          LANE_WAIVER: ${{ fromJSON(needs.resolve.outputs.lane_waiver) }}
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_TAG: ${{ needs.resolve.outputs.evidence_tag }}

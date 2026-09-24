@@ -86,7 +86,8 @@ describe("renderAbout", () => {
 
     const facts = container.querySelector(".settings-kv");
     const values = facts?.querySelectorAll("dd");
-    expect(facts?.getAttribute("role")).toBe("group");
+    expect(facts?.tagName).toBe("DL");
+    expect(facts?.hasAttribute("role")).toBe(false);
     expect(facts?.getAttribute("aria-label")).toBe("Control UI build details");
     expect(facts?.classList.contains("about-build-grid")).toBe(true);
     expect(values).toHaveLength(4);

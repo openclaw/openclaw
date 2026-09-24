@@ -115,9 +115,14 @@ import { abortPendingChannelReloads } from "./server-reload-generation.js";
 import {
   captureConfigWriteListener,
   createConfigWriteListenerRef,
+  createManagedRestartSequenceConfigs,
   createConfigWriteNotification,
+  createCronRestartPlan,
   createDirectConfigWriteFixture,
   createDefaultGatewayReloadState,
+  createGatewayRestartPlan,
+  createHotTailPlan,
+  createPluginReloadPlan,
   createTestCronState,
   createValidConfigSnapshot,
   publishConfigWrite,
@@ -125,7 +130,10 @@ import {
 import { createGatewayReloadHandlers as createGatewayReloadHandlersImpl } from "./server-reload-hot.js";
 import { createManagedReloadSecretHandlers } from "./server-reload-managed-secrets.js";
 import { startManagedGatewayConfigReloader as startManagedGatewayConfigReloaderImpl } from "./server-reload-managed.js";
-import { enforceSharedGatewaySessionGenerationForConfigWrite } from "./server-shared-auth-generation.js";
+import {
+  enforceSharedGatewaySessionGenerationForConfigWrite,
+  SharedGatewaySessionGenerationState,
+} from "./server-shared-auth-generation.js";
 import { createRuntimeSecretsActivator } from "./server-startup-config.js";
 import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
@@ -263,7 +271,10 @@ function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
     } as never,
     activateRuntimeSecrets: params.activateRuntimeSecrets ?? createMockRuntimeSecretsActivator(),
     resolveSharedGatewaySessionGenerationForConfig: () => undefined,
-    sharedGatewaySessionGenerationState: { current: undefined, required: null },
+    sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+      current: undefined,
+      required: null,
+    }),
     clients: [],
     reconcileRuntimePolicy: vi.fn(),
     commitRuntimePolicy: vi.fn(),
@@ -634,49 +645,6 @@ function createTestCronReconciliation() {
   };
 }
 
-function createCronRestartPlan(): GatewayReloadPlan {
-  return createHotTailPlan({
-    changedPaths: ["cron"],
-    hotReasons: ["cron"],
-    restartCron: true,
-  });
-}
-
-function createHotTailPlan(overrides: Partial<GatewayReloadPlan> = {}): GatewayReloadPlan {
-  return {
-    changedPaths: ["logging.level"],
-    restartGateway: false,
-    restartReasons: [],
-    hotReasons: ["logging.level"],
-    reloadHooks: false,
-    restartGmailWatcher: false,
-    restartCron: false,
-    restartHeartbeat: false,
-    reloadPlugins: false,
-    restartChannels: new Set(),
-    disposeMcpRuntimes: false,
-    noopPaths: [],
-    ...overrides,
-  };
-}
-
-function createGatewayRestartPlan(changedPath = "gateway.port"): GatewayReloadPlan {
-  return createHotTailPlan({
-    changedPaths: [changedPath],
-    restartGateway: true,
-    restartReasons: [changedPath],
-    hotReasons: [],
-  });
-}
-
-function createPluginReloadPlan(): GatewayReloadPlan {
-  return createHotTailPlan({
-    changedPaths: ["plugins.enabled"],
-    hotReasons: ["plugins.enabled"],
-    reloadPlugins: true,
-  });
-}
-
 function createReloadHandlersForTest(
   logReload = { info: vi.fn(), warn: vi.fn() },
   channels?: {
@@ -752,78 +720,16 @@ function createReloadHandlersForTest(
 async function createManagedRestartSequenceHarness(
   options: { invalidateGenerationOnReconcile?: boolean } = {},
 ) {
-  const initialConfig = {
-    gateway: {
-      port: 18789,
-      reload: {},
-      terminal: { enabled: true },
-    },
-  } as OpenClawConfig;
+  const {
+    initialConfig,
+    deferredConfig,
+    invalidConfig,
+    invalidHotConfig,
+    invalidNoopConfig,
+    replacementConfig,
+  } = createManagedRestartSequenceConfigs();
   setRuntimeConfigSnapshot(initialConfig, initialConfig);
   activateSecretsRuntimeSnapshot(makePreparedSecretsSnapshot(initialConfig));
-  const deferredConfig = {
-    gateway: {
-      port: 18790,
-      reload: {},
-      terminal: { enabled: true },
-      auth: {
-        mode: "token",
-        token: {
-          source: "env",
-          provider: "default",
-          id: "RESTART_A_TOKEN",
-        },
-      },
-    },
-  } as OpenClawConfig;
-  const invalidConfig = {
-    gateway: {
-      ...deferredConfig.gateway,
-      port: 18791,
-      auth: {
-        mode: "token",
-        token: {
-          source: "env",
-          provider: "default",
-          id: "MISSING_RESTART_TOKEN",
-        },
-      },
-      terminal: { enabled: false },
-    },
-  } as OpenClawConfig;
-  const missingHotSecret = {
-    source: "env" as const,
-    provider: "default",
-    id: "MISSING_HOT_TOKEN",
-  };
-  const invalidHotConfig = {
-    ...deferredConfig,
-    models: {
-      providers: {
-        test: {
-          baseUrl: "https://example.com",
-          apiKey: missingHotSecret,
-          models: [],
-        },
-      },
-    },
-  } as OpenClawConfig;
-  const invalidNoopConfig = {
-    ...deferredConfig,
-    plugins: {
-      entries: {
-        brave: {
-          config: { webSearch: { apiKey: missingHotSecret } },
-        },
-      },
-    },
-  } as OpenClawConfig;
-  const replacementConfig = {
-    gateway: {
-      ...deferredConfig.gateway,
-      bind: "lan",
-    },
-  } as OpenClawConfig;
   const terminalPolicy = createTerminalLaunchPolicy(initialConfig);
   const writeListenerRef = createConfigWriteListenerRef();
   let snapshotConfig = initialConfig;
@@ -883,7 +789,10 @@ async function createManagedRestartSequenceHarness(
     }
     return makePreparedSecretsSnapshot(config);
   });
-  const sharedGatewaySessionGenerationState = { current: undefined, required: null };
+  const sharedGatewaySessionGenerationState = new SharedGatewaySessionGenerationState({
+    current: undefined,
+    required: null,
+  });
   let generationInvalidated = false;
   const reloader = startManagedGatewayConfigReloader({
     initialConfig,
@@ -1112,10 +1021,10 @@ async function runManagedOwnershipScenario(params: {
     : initialConfig;
   const generation = (token: string | undefined) =>
     resolveSharedGatewaySessionGeneration({ mode: "token", token, allowTailscale: false });
-  const sharedState = {
+  const sharedState = new SharedGatewaySessionGenerationState({
     current: generation(params.sharedAuthRotation ? "old-shared-token" : undefined),
     required: null,
-  };
+  });
   const staleClose = vi.fn();
   const currentClose = vi.fn();
   const nonSharedClose = vi.fn();
@@ -1717,7 +1626,10 @@ describe("managed reload transaction ownership", () => {
     expect(result.staleClose).toHaveBeenCalledExactlyOnceWith(4001, "gateway auth changed");
     expect(result.currentClose).not.toHaveBeenCalled();
     expect(result.nonSharedClose).not.toHaveBeenCalled();
-    expect(result.sharedState).toEqual({ current: result.expectedGeneration, required: null });
+    expect({ current: result.sharedState.current, required: result.sharedState.required }).toEqual({
+      current: result.expectedGeneration,
+      required: null,
+    });
     expect(result.startChannel).not.toHaveBeenCalled();
     expect(result.stopChannel).not.toHaveBeenCalled();
     expect(result.reloadPlugins).not.toHaveBeenCalled();
@@ -1950,6 +1862,15 @@ describe("prepared provider auth reload invalidation", () => {
 });
 
 describe("gateway hot reload model state", () => {
+  function expectPreparedModelRefresh(config: OpenClawConfig, agentIds?: Set<string>) {
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(config, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+      joinSupersedingPublication: true,
+      ...(agentIds ? { agentIds } : {}),
+    });
+  }
+
   it.each([
     {
       reconciliationResult: "converged" as const,
@@ -2234,11 +2155,7 @@ describe("gateway hot reload model state", () => {
       "prepared model runtime owner is stale before config publication",
       { waitForReplacement: true, agentIds: new Set(["alpha"]) },
     );
-    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
-      allowGatewaySubagentBinding: true,
-      catalogMode: "static",
-      agentIds: new Set(["alpha"]),
-    });
+    expectPreparedModelRefresh(nextConfig, new Set(["alpha"]));
   });
 
   it.each([
@@ -2265,10 +2182,7 @@ describe("gateway hot reload model state", () => {
     await applyHotReload(buildGatewayReloadPlan([changedPath]), nextConfig);
 
     expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledOnce();
-    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
-      allowGatewaySubagentBinding: true,
-      catalogMode: "static",
-    });
+    expectPreparedModelRefresh(nextConfig);
     expect(heartbeatRunner.updateConfig).not.toHaveBeenCalled();
     expect(cron.stop).not.toHaveBeenCalled();
     expect(channels.start).not.toHaveBeenCalled();
@@ -2464,7 +2378,10 @@ describe("gateway hot reload model state", () => {
         params: {
           activateRuntimeSecrets: createMockRuntimeSecretsActivator(),
           clients: [],
-          sharedGatewaySessionGenerationState: { current: undefined, required: null },
+          sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+            current: undefined,
+            required: null,
+          }),
           resolveSharedGatewaySessionGenerationForConfig: () => undefined,
           commitRuntimePolicy: vi.fn(),
           reconcileRuntimePolicy: async () => {
@@ -2637,7 +2554,10 @@ describe("gateway hot reload model state", () => {
         params: {
           activateRuntimeSecrets: createMockRuntimeSecretsActivator(),
           clients: [],
-          sharedGatewaySessionGenerationState: { current: undefined, required: null },
+          sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+            current: undefined,
+            required: null,
+          }),
           resolveSharedGatewaySessionGenerationForConfig: () => undefined,
           commitRuntimePolicy: vi.fn(),
           reconcileRuntimePolicy: vi.fn(),
@@ -2930,10 +2850,7 @@ describe("gateway hot reload model state", () => {
       "prepared model runtime owner is stale before config publication",
       { waitForReplacement: true },
     );
-    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
-      allowGatewaySubagentBinding: true,
-      catalogMode: "static",
-    });
+    expectPreparedModelRefresh(nextConfig);
   });
 
   it("reconciles cached MCP owners on MCP config hot reloads", async () => {
@@ -5940,7 +5857,10 @@ describe("gateway Gmail hot reload handlers", () => {
         "config restart failed: GatewayHotReloadStaleSecretsError: runtime secrets changed while config hot reload was deferred",
       );
       expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
-      expect(harness.sharedGatewaySessionGenerationState).toEqual({
+      expect({
+        current: harness.sharedGatewaySessionGenerationState.current,
+        required: harness.sharedGatewaySessionGenerationState.required,
+      }).toEqual({
         current: "concurrent-generation",
         required: null,
       });

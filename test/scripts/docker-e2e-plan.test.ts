@@ -16,7 +16,6 @@ import {
   RELEASE_PATH_PROFILE,
   findLaneByName,
   parseLaneSelection,
-  requiredPrepublishPluginPackagesForLanes,
   resolveDockerE2ePlan,
 } from "../../scripts/lib/docker-e2e-plan.mts";
 import {
@@ -25,6 +24,10 @@ import {
   mainLanes,
 } from "../../scripts/lib/docker-e2e-scenarios.mts";
 import { createFrozenTargetSource } from "../../scripts/lib/frozen-target-source.mjs";
+import {
+  listRecordedFirstHopSourceVersions,
+  updateFirstHopCompatLaneName,
+} from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -65,6 +68,9 @@ function copyCurrentScenarioMetadata(targetRoot: string) {
     catalogFile: join(targetRoot, paths[2]!),
   };
 }
+
+const firstHopSourceVersions = listRecordedFirstHopSourceVersions();
+const firstHopLaneNames = firstHopSourceVersions.map(updateFirstHopCompatLaneName);
 
 function planFor(
   overrides: Partial<Parameters<typeof resolveDockerE2ePlan>[0]> = {},
@@ -363,13 +369,33 @@ describe("scripts/lib/docker-e2e-plan", () => {
         `throw new Error("must not execute target");\n${source}`,
       );
       const plan = planFor({
-        selectedLaneNames: ["update-first-hop-compat"],
+        selectedLaneNames: parseLaneSelection("update-first-hop-compat"),
         upgradeSurvivorTargetRoot: targetRoot,
       });
-      expect(plan.lanes.map((lane) => lane.name)).toEqual(["update-first-hop-compat"]);
+      expect(plan.lanes.map((lane) => lane.name)).toEqual(firstHopLaneNames);
       expect(plan.omittedUnsupportedLanes).toEqual([]);
     },
   );
+
+  it("omits only the first-hop sources a target's own inventory does not record", () => {
+    const targetRoot = tempDirs.make("openclaw-partial-first-hop-target-");
+    mkdirSync(join(targetRoot, "scripts/lib"), { recursive: true });
+    writeFileSync(
+      join(targetRoot, "scripts/runtime-postbuild.mts"),
+      readFileSync("scripts/runtime-postbuild.mts", "utf8"),
+    );
+    const [oldest, ...newer] = firstHopSourceVersions;
+    writeFileSync(
+      join(targetRoot, "scripts/lib/update-compat-inventory.json"),
+      JSON.stringify({ schemaVersion: 1, releases: [{ version: oldest }] }),
+    );
+    const plan = planFor({
+      selectedLaneNames: parseLaneSelection("update-first-hop-compat"),
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([updateFirstHopCompatLaneName(oldest)]);
+    expect(plan.omittedUnsupportedLanes).toEqual(newer.map(updateFirstHopCompatLaneName));
+  });
 
   it.each([
     ["literal", "shared-Y6bNiw2w.js"],
@@ -397,11 +423,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
         );
       }
       const plan = planFor({
-        selectedLaneNames: ["update-first-hop-compat"],
+        selectedLaneNames: parseLaneSelection("update-first-hop-compat"),
         upgradeSurvivorTargetRoot: targetRoot,
       });
       expect(plan.lanes).toEqual([]);
-      expect(plan.omittedUnsupportedLanes).toEqual(["update-first-hop-compat"]);
+      expect(plan.omittedUnsupportedLanes).toEqual(firstHopLaneNames);
     },
   );
 
@@ -564,7 +590,13 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     }
 
     mkdirSync(dirname(nestedModule), { recursive: true });
-    copyFileSync("scripts/lib/docker-e2e-scenarios.mts", nestedModule);
+    for (const fileName of [
+      "docker-e2e-scenarios.mts",
+      "update-compat-inventory.json",
+      "update-first-hop-lanes.mjs",
+    ]) {
+      copyFileSync(join("scripts/lib", fileName), join(dirname(nestedModule), fileName));
+    }
 
     const laneJson = execFileSync(
       testNodeExecPath,
@@ -1077,28 +1109,16 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
         timeoutMs: 1_200_000,
         weight: 3,
       },
-      {
-        command:
-          "OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat",
+      ...firstHopSourceVersions.map((version) => ({
+        command: `OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_UPDATE_FIRST_HOP_SOURCE_VERSIONS=${version} OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat`,
         imageKind: "bare",
         live: false,
-        name: "update-first-hop-compat",
+        name: updateFirstHopCompatLaneName(version),
         resources: ["docker", "npm", "service"],
         stateScenario: "upgrade-survivor",
-        timeoutMs: 2_700_000,
-        weight: 3,
-      },
-      {
-        command:
-          "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade",
-        imageKind: "bare",
-        live: false,
-        name: "update-run-package-self-upgrade",
-        resources: ["docker", "npm", "service"],
-        stateScenario: "upgrade-survivor",
-        timeoutMs: 2_700_000,
-        weight: 3,
-      },
+        timeoutMs: 1_500_000,
+        weight: 1,
+      })),
     ]);
     expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).toEqual(["plugins"]);
     expect(pluginsRuntimeServices.lanes.map(summarizeLane)).toEqual([
@@ -1230,8 +1250,12 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       ].map((releaseChunk) => planFor({ ...options, releaseChunk }));
       const lanes = partitions.flatMap((partition) => partition.lanes);
 
-      expect(partitions.map((partition) => partition.lanes.length)).toEqual([5, 2, 3]);
-      expect(new Set(lanes.map((lane) => lane.name)).size).toBe(10);
+      expect(partitions.map((partition) => partition.lanes.length)).toEqual([
+        5,
+        2,
+        1 + firstHopLaneNames.length,
+      ]);
+      expect(new Set(lanes.map((lane) => lane.name)).size).toBe(8 + firstHopLaneNames.length);
       expect(lanes.map(summarizeLane)).toEqual(aggregate.lanes.map(summarizeLane));
       const complete = planFor({ ...options, planReleaseAll: true });
       const packageNames = new Set(lanes.map((lane) => lane.name));
@@ -1276,8 +1300,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       "update-channel-switch",
       "published-upgrade-survivor",
       "upgrade-survivor",
-      "update-first-hop-compat",
-      "update-run-package-self-upgrade",
+      ...firstHopLaneNames,
     ]);
     expect(pluginsRuntime.lanes.map((lane) => lane.name)).toEqual([
       "plugins",
@@ -2453,9 +2476,6 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       "@openclaw/discord",
       "@openclaw/whatsapp",
     ]);
-    const selfUpgradeLane = findLaneByName("update-run-package-self-upgrade");
-    expect(selfUpgradeLane).toBeDefined();
-    expect(requiredPrepublishPluginPackagesForLanes([selfUpgradeLane!])).toEqual([]);
   });
 
   it.each([

@@ -4,6 +4,7 @@
  */
 import fsPromises from "node:fs/promises";
 import { toUSVString } from "node:util";
+import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import {
   asNullableRecord,
   normalizeStringEntries,
@@ -51,7 +52,6 @@ import {
 } from "../control-service.js";
 import { describeBrowserControlUnavailable } from "../plugin-enabled.js";
 import { withTimeout } from "../sdk-node-runtime.js";
-import { detectMime } from "../sdk-setup-tools.js";
 
 type BrowserProxyParams = {
   method?: string;

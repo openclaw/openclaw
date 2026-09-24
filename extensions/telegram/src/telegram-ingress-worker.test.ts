@@ -7,7 +7,9 @@ const workerHarness = vi.hoisted(() => ({
 
 vi.mock("node:worker_threads", async () => {
   const { EventEmitter } = await vi.importActual<typeof import("node:events")>("node:events");
+  const actual = await vi.importActual<typeof import("node:worker_threads")>("node:worker_threads");
   return {
+    ...actual,
     Worker: class extends EventEmitter {
       postMessage = vi.fn();
       terminate = vi.fn(async () => 1);

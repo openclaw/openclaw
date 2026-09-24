@@ -11,6 +11,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import { ensureAgentDeletionJournalSchema } from "../state/openclaw-state-db-schema-additive.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -145,14 +146,15 @@ it.each(["canonical", "custom-json", "shared-sqlite", "registered-shared-sqlite"
     }
     fs.mkdirSync(path.dirname(agentPath), { recursive: true });
     const { DatabaseSync } = requireNodeSqlite();
+    const registry = new DatabaseSync(fixture.databasePath);
+    ensureAgentDeletionJournalSchema(registry);
     if (layout === "registered-shared-sqlite") {
       fixture.config.agents!.entries!.ops = {};
-      const registry = new DatabaseSync(fixture.databasePath);
       registry
         .prepare("INSERT INTO agent_databases VALUES (?, ?, ?, ?, ?)")
         .run("ops", agentPath, OPENCLAW_AGENT_SCHEMA_VERSION, 1, null);
-      registry.close();
     }
+    registry.close();
     const agent = new DatabaseSync(agentPath);
     agent.exec(`
       PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};

@@ -201,12 +201,69 @@ describe("Gateway matrix transcript evidence", () => {
         content: [],
         isError: false,
         parentId: "read",
+        eventIndex: 3,
       },
     ]);
     expect(trace.outcomes).toHaveLength(1);
     expect(expectDefined(trace.outcomes[0], "recorded tool outcome").eventIndex).toBe(4);
     expect(trace.models).toEqual(["openai/gpt-5.6-sol"]);
   });
+
+  it.each(
+    (["direct", "tool-search", "code-mode"] as const).flatMap((surface) =>
+      [false, true].map((isError) => ({ surface, isError })),
+    ),
+  )(
+    "counts one underlying shell outcome through $surface with error=$isError",
+    ({ surface, isError }) => {
+      const input = { command: "node ./process-probe.mjs" };
+      const result = {
+        status: isError ? "failed" : "completed",
+        exitCode: isError ? 1 : 0,
+        aggregated: isError ? "synthetic process failure" : "synthetic process complete",
+      };
+      const name = surface === "tool-search" ? "tool_call" : "exec";
+      const invocation = {
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "invoke",
+              name,
+              arguments:
+                surface === "direct"
+                  ? input
+                  : surface === "tool-search"
+                    ? { id: "openclaw:core:exec", input }
+                    : { code: `return await exec(${JSON.stringify(input)});` },
+            },
+          ],
+        },
+      };
+      const trace = collectGatewayMatrixTrace([
+        invocation,
+        ...(surface === "direct" ? [] : [nestedActivity("invoke", "exec", input, result, isError)]),
+        toolOutcome(
+          "invoke",
+          surface === "direct" ? result : { status: "completed", value: result },
+          isError,
+          name,
+        ),
+      ]);
+      expect(trace.activities).toHaveLength(1);
+      expect(trace.activities[0]).toMatchObject({
+        name: "exec",
+        input,
+        result,
+        isError,
+        eventIndex: 1,
+      });
+      expect(trace.activities[0]?.parentId).toBe(surface === "direct" ? undefined : "invoke");
+      expect(trace.calls.map((call) => call.name)).toEqual([name]);
+      expect(trace.outcomes.map((outcome) => outcome.name)).toEqual([name]);
+    },
+  );
 
   it("does not turn missing usage or cost observations into zero-valued measurements", () => {
     const withUsage = {
@@ -1014,8 +1071,8 @@ function configReadEvidence() {
       path: "tools.codeMode",
       config: {
         enabled: true,
-        timeoutMs: 20_000,
-        maxOutputBytes: 16_384,
+        timeoutMs: 10_000,
+        maxOutputBytes: 65_536,
       },
     },
   };
@@ -1653,7 +1710,7 @@ function comparisonRow() {
     workload: {
       promptSha256: "fixed-prompt",
       fixtureSha256: "fixed-fixture",
-      settings: { thinking: "off", timeoutSeconds: 120 },
+      settings: { executor: "node", thinking: "off", timeoutSeconds: 120 },
     },
     gateway: {
       upstreamCalls: 1,
@@ -1687,7 +1744,7 @@ it("includes the exact process-helper bytes in the fixed workload fingerprint", 
 });
 
 describe("fixed Gateway matrix comparisons", () => {
-  it.each(["prompt", "fixture", "thinking", "timeout"] as const)(
+  it.each(["prompt", "fixture", "thinking", "timeout", "executor"] as const)(
     "rejects a changed %s instead of comparing different workloads",
     (field) => {
       const baseline = comparisonRow();
@@ -1698,8 +1755,10 @@ describe("fixed Gateway matrix comparisons", () => {
         candidate.workload.fixtureSha256 = "changed";
       } else if (field === "thinking") {
         candidate.workload.settings.thinking = "high";
-      } else {
+      } else if (field === "timeout") {
         candidate.workload.settings.timeoutSeconds = 240;
+      } else {
+        candidate.workload.settings.executor = "quickjs";
       }
       expect(() => compareCodeModeMatrixResults([baseline], [candidate])).toThrow(
         "workload changed",

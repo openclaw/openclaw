@@ -137,8 +137,11 @@ export function createBlockReplyDeliveryHandler(params: {
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   directBlockDeliveries: DirectBlockDelivery[];
-}): (payload: ReplyPayload) => Promise<void> {
-  return async (payload) => {
+}): (
+  payload: ReplyPayload,
+  options?: BlockReplyContext & { completed?: boolean },
+) => Promise<void> {
+  return async (payload, options) => {
     // Suppressed display lanes must not enter delivery bookkeeping: callers use
     // that evidence to decide whether an otherwise empty turn needs a fallback.
     if (
@@ -194,7 +197,10 @@ export function createBlockReplyDeliveryHandler(params: {
       params.applyReplyToMode(mediaNormalizedPayload),
     );
     if (blockPayload.text?.trim() !== payload.text?.trim()) {
-      setReplyPayloadMetadata(blockPayload, { blockSourceText: undefined });
+      setReplyPayloadMetadata(blockPayload, {
+        blockSourceText: undefined,
+        blockSourceRange: undefined,
+      });
     }
     const blockHasNonTextContent = hasOutboundReplyContent({ ...blockPayload, text: undefined });
 
@@ -211,9 +217,18 @@ export function createBlockReplyDeliveryHandler(params: {
 
     // Use pipeline if available (block streaming enabled), otherwise send directly.
     if (params.blockStreamingEnabled && params.blockReplyPipeline) {
+      if (options?.completed) {
+        // A completed answer is a delivery boundary, not another streaming chunk.
+        // Keep prior commentary separate and do not wait for a size/idle threshold.
+        await params.blockReplyPipeline.flush({ force: true });
+      }
       params.blockReplyPipeline.enqueue(blockPayload);
+      if (options?.completed) {
+        await params.blockReplyPipeline.flush({ force: true });
+      }
     } else if (
       params.blockStreamingEnabled ||
+      options?.completed === true ||
       blockHasNonTextContent ||
       blockPayload.isReasoning === true ||
       blockPayload.isCommentary === true

@@ -22,11 +22,9 @@ import type {
 import type { GroupKeyResolution } from "../../config/sessions/types.js";
 import type { DmScope } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { OutboundPayloadDeliverySuppressionReason } from "../../infra/outbound/deliver-types.js";
 import type {
   DeliverOutboundPayloadsParams,
   DurableFinalDeliveryRequirements,
-  OutboundDeliveryQueuePolicy,
 } from "../../infra/outbound/deliver.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import type { MediaFact } from "../../media/media-facts.js";
@@ -35,7 +33,7 @@ import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
 import type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
-import type { ChannelDeliveryOutcome } from "./delivery-outcome.js";
+import type { ChannelDeliveryResult } from "./delivery-outcome.js";
 
 export type { SupplementalContextFacts } from "../../auto-reply/templating.js";
 
@@ -173,28 +171,7 @@ type ChannelProviderOwnedDeliveryInfo = ChannelDeliveryInfo & {
   onPlatformSendDispatch: () => Promise<void>;
 };
 
-/** Durable delivery queue intent recorded when a reply is deferred. */
-export type ChannelDeliveryIntent = {
-  id: string;
-  kind: "outbound_queue";
-  queuePolicy: OutboundDeliveryQueuePolicy;
-};
-
-/** Provider-accepted outcome for one logical channel reply payload. */
-/** Result returned after delivering one channel reply payload. */
-export type ChannelDeliveryResult = ChannelDeliveryOutcome & {
-  deliveryIntent?: ChannelDeliveryIntent;
-  /** Intentional no-send outcome after payload policy or modifying hooks settle. */
-  suppression?: {
-    reason: OutboundPayloadDeliverySuppressionReason | "channel_transform" | "no_visible_result";
-    cancelReason?: string;
-    metadata?: Record<string, unknown>;
-  };
-  /** Same-payload native settlement; resolved fields override this result before observation. */
-  finalization?: Promise<ChannelDeliveryOutcome>;
-};
-
-export type { ChannelDeliveryOutcome } from "./delivery-outcome.js";
+export type { ChannelDeliveryOutcome, ChannelDeliveryResult } from "./delivery-outcome.js";
 
 /** Durable outbound delivery options available to channel turn delivery adapters. */
 type ChannelTurnDurableDeliveryOptions = Pick<
@@ -432,12 +409,8 @@ export type ChannelTurnResolved<
 > =
   | ChannelTurnPlan<TDelivery>
   | PreparedChannelTurnPlan<TDispatchResult>
-  | (AssembledChannelTurn & {
-      admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
-    })
-  | (InboundPreparedChannelTurn<TDispatchResult> & {
-      admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
-    });
+  | AssembledChannelTurn
+  | InboundPreparedChannelTurn<TDispatchResult>;
 
 /** Ordered lifecycle stage names emitted to channel turn log hooks. */
 type ChannelTurnStage =
@@ -489,24 +462,17 @@ type ChannelTurnAdapter<
   TDispatchResult = DispatchFromConfigResult,
   TDelivery extends ChannelTurnDeliveryAdapter = ChannelCoreManagedTurnDeliveryAdapter,
 > = {
-  ingest: (raw: TRaw) => Promise<NormalizedTurnInput | null> | NormalizedTurnInput | null;
-  classify?: (input: NormalizedTurnInput) => Promise<ChannelEventClass> | ChannelEventClass;
+  ingest: (raw: TRaw) => MaybePromise<NormalizedTurnInput | null>;
+  classify?: (input: NormalizedTurnInput) => MaybePromise<ChannelEventClass>;
   preflight?: (
     input: NormalizedTurnInput,
     eventClass: ChannelEventClass,
-  ) =>
-    | Promise<PreflightFacts | ChannelTurnAdmission | null | undefined>
-    | PreflightFacts
-    | ChannelTurnAdmission
-    | null
-    | undefined;
+  ) => MaybePromise<PreflightFacts | ChannelTurnAdmission | null | undefined>;
   resolveTurn: (
     input: NormalizedTurnInput,
     eventClass: ChannelEventClass,
     preflight: PreflightFacts,
-  ) =>
-    | Promise<ChannelTurnResolved<TDispatchResult, TDelivery>>
-    | ChannelTurnResolved<TDispatchResult, TDelivery>;
+  ) => MaybePromise<ChannelTurnResolved<TDispatchResult, TDelivery>>;
   onFinalize?: (result: ChannelTurnResult<TDispatchResult>) => Promise<void> | void;
 };
 

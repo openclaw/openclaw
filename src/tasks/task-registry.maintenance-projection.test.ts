@@ -33,7 +33,6 @@ import {
   configureTaskRegistryMaintenance,
   previewTaskRegistryMaintenance,
   reconcileInspectableTasks,
-  resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import { getTaskRegistryStore, onTaskRegistryChange } from "./task-registry.store.js";
@@ -66,7 +65,7 @@ async function withMaintenanceState(
 afterEach(async () => {
   vi.restoreAllMocks();
   resetDetachedTaskLifecycleRuntimeForTests();
-  resetTaskRegistryMaintenanceRuntimeForTests();
+  configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   await drainGlobalSingletonLifecycleState("close");

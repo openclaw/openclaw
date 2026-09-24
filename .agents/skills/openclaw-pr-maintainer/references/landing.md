@@ -151,8 +151,21 @@ A failed or timed-out merge response can still mean GitHub merged it. Reconcile
 remote state and ancestry before retrying. Verify the final merge commit is on
 current main; do not count a draft, pending check, or local summary as landing.
 After `merge-run` removes its worktree, switch command execution back to a
-persistent checkout. Clean only task-owned state and return the task checkout to
-current main, detached if another checkout owns the branch.
+persistent checkout. Once the requested outcome and required verification are
+complete, remove task-owned test logs, receipts, proof archives, and scratch.
+This includes `.crabbox` outputs and task-owned archives under `.local` or
+temporary directories. Existing published PR evidence needs no local duplicate.
+
+Remove any remaining finished task worktree through its advertised native
+closeout after checking ownership and holders. Do not require an archive,
+export, evidence handoff, or replacement cleanup receipt. Use a supported native
+finalized-task option when ordinary removal rejects disposable proof.
+Preserve native guard refusals, unrelated or unknown files, requested
+deliverables, explicit retention requests, unfinished source, recovery state needed
+by unfinished operations, active owners, credentials, agent state, and shared
+dependencies. Never force removal, clear locks, or sign off for another owner.
+Report `removed` only after verifying path
+and registration absence. Otherwise report the retained path and exact blocker.
 
 If reconciliation confirms a merge but leaves completion pending, verify and
 finish ownership-scoped cleanup first. Then use the exact current receipt OID:

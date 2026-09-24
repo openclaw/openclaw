@@ -35,9 +35,6 @@ it("prints bounded readiness receipts from the quota failure hook before Gateway
   const gateway = {
     ...instance,
     readiness: [diagnostic],
-    cli: vi
-      .fn<typeof instance.cli>()
-      .mockResolvedValue({ code: 0, signal: null, stdout: "", stderr: "" }),
     startGateway: vi.fn<typeof instance.startGateway>().mockRejectedValue(failure),
   };
   instance.stdout.push("quota fixture stdout");

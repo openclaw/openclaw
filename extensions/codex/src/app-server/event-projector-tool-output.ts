@@ -2,10 +2,7 @@ import {
   formatToolAggregate,
   formatToolProgressOutput,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  asNonArrayRecord,
-  readStringField as readString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 
@@ -103,10 +100,6 @@ export function toolOutputRawEchoSignature(
     rawLength: trimmed.length,
     rawPrefix: trimmed.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS),
   };
-}
-
-export function normalizeToolTranscriptArguments(value: unknown): Record<string, unknown> {
-  return asNonArrayRecord(value);
 }
 
 export function collectDynamicToolContentText(

@@ -110,10 +110,6 @@ export function getSessionWorkspace(state: SessionWorkspaceHost): SessionWorkspa
   return next;
 }
 
-export function requestWorkspaceUpdate(state: SessionWorkspaceHost) {
-  state.requestUpdate?.();
-}
-
 export function setSessionWorkspaceError(
   workspace: SessionWorkspaceState,
   message: string | null,
@@ -195,7 +191,7 @@ export function loadSessionWorkspace(
       if (isCurrentSessionWorkspace(state, workspace)) {
         workspace.loading = false;
       }
-      requestWorkspaceUpdate(state);
+      state.requestUpdate?.();
     }
   })();
 }
@@ -234,7 +230,7 @@ export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost) {
   clearWorkspaceTimer(current);
   const next = createSessionWorkspaceState(state, current);
   state.sessionWorkspaceState = next;
-  requestWorkspaceUpdate(state);
+  state.requestUpdate?.();
 }
 
 /** File tabs are transient workspace presentation, scoped by this controller's lifecycle. */
@@ -253,7 +249,7 @@ export function openSessionWorkspacePreview(
     workspace.previews = [...workspace.previews, preview];
   }
   workspace.activePreviewId = preview.id;
-  requestWorkspaceUpdate(state);
+  state.requestUpdate?.();
   return preview;
 }
 
@@ -261,7 +257,7 @@ export function selectSessionWorkspacePreview(state: SessionWorkspaceHost, id: s
   const workspace = getSessionWorkspace(state);
   if (id === null || workspace.previews.some((entry) => entry.id === id)) {
     workspace.activePreviewId = id;
-    requestWorkspaceUpdate(state);
+    state.requestUpdate?.();
   }
 }
 
@@ -276,7 +272,7 @@ export function closeSessionWorkspacePreview(state: SessionWorkspaceHost, id: st
     workspace.activePreviewId =
       workspace.previews[Math.min(index, workspace.previews.length - 1)]?.id ?? null;
   }
-  requestWorkspaceUpdate(state);
+  state.requestUpdate?.();
 }
 
 export function clearSessionWorkspacePreviews(state: SessionWorkspaceHost) {
@@ -284,6 +280,6 @@ export function clearSessionWorkspacePreviews(state: SessionWorkspaceHost) {
   if (workspace) {
     workspace.previews = [];
     workspace.activePreviewId = null;
-    requestWorkspaceUpdate(state);
+    state.requestUpdate?.();
   }
 }

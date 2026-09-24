@@ -42,8 +42,8 @@ const directory: UsersListResult = {
 
 suite.define(() => {
   it.each([
-    { width: 1280, colorScheme: "light" as const, scale: 1 },
-    { width: 390, colorScheme: "dark" as const, scale: 1.5 },
+    { width: 1280, colorScheme: "light" as const, scale: 1, font: "var(--font-body)" },
+    { width: 390, colorScheme: "dark" as const, scale: 1.5, font: "Georgia, serif" },
   ])("keeps mention avatars aligned across image outcomes at $width px", async (viewport) => {
     await suite.withPage(
       { viewport: { width: viewport.width, height: 900 }, colorScheme: viewport.colorScheme },
@@ -76,10 +76,11 @@ suite.define(() => {
           await page.goto(suite.server.baseUrl + "chat");
           const references = page.locator(".markdown-person-reference");
           await expect.poll(() => references.count()).toBe(2);
-          await page.evaluate(async (scale) => {
+          await page.evaluate(async ({ scale, font }) => {
             document.documentElement.style.setProperty("--control-ui-text-scale", String(scale));
+            document.documentElement.style.setProperty("--font-chat", font);
             await document.fonts.ready;
-          }, viewport.scale);
+          }, viewport);
           const geometry = () =>
             references.evaluateAll((elements) =>
               elements.map((element) => {
@@ -94,7 +95,11 @@ suite.define(() => {
                   throw new Error("Expected a rendered mention label");
                 }
                 const box = avatar.getBoundingClientRect();
-                return { offset: box.top - textBox.top, width: box.width, height: box.height };
+                return {
+                  offset: box.top + box.height / 2 - (textBox.top + textBox.height / 2),
+                  width: box.width,
+                  height: box.height,
+                };
               }),
             );
           await expect
@@ -106,6 +111,10 @@ suite.define(() => {
           await references.locator('[data-avatar-state="failed"]').waitFor();
           // Images and generated initials must not change the inline box's alignment.
           expect(await geometry()).toEqual(pending);
+          for (const { offset } of pending) {
+            // Stable image outcomes alone can all be equally misaligned with the name.
+            expect(Math.abs(offset)).toBeLessThanOrEqual(1);
+          }
           expect(await references.allTextContents()).toEqual([label, label]);
         } finally {
           response.resolve();

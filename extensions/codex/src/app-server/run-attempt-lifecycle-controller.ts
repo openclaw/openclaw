@@ -1,3 +1,4 @@
+import { createAgentHarnessAttemptLifecycle } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   embeddedAgentLog,
   FAST_MODE_AUTO_PROGRESS_KIND,
@@ -5,7 +6,6 @@ import {
   formatFastModeAutoProgressText,
   resolveAgentRunAbortLifecycleFields,
   resolveFastModeForElapsed,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { reportCodexExecutionNotification } from "./attempt-notification-state.js";
 import {
@@ -120,37 +120,16 @@ export function createCodexAttemptLifecycleController(
     state.pendingTerminalDynamicToolRelease = value;
     scheduleTerminalDynamicToolReleaseCheck();
   };
-  const emitLifecycleStart = (model: { provider: string; model: string }) => {
-    void emitCodexAppServerEvent(params, {
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: attemptStartedAt },
+  const { emitLifecycleStart, emitLifecycleTerminal, emitExecutionPhaseOnce } =
+    createAgentHarnessAttemptLifecycle({
+      attempt: params,
+      backend: "codex-app-server",
+      startedAtMs: attemptStartedAt,
+      state,
+      emitEvent: (event) => emitCodexAppServerEvent(params, event),
+      shouldSuppressTerminal: () =>
+        Boolean(state.permissionChangeRestart || params.pluginRuntimeRefreshPending?.()),
     });
-    void emitCodexAppServerEvent(params, {
-      stream: "lifecycle",
-      data: { phase: "model", ...model },
-    });
-    state.lifecycleStarted = true;
-  };
-  const emitLifecycleTerminal = (data: Record<string, unknown> & { phase: "end" | "error" }) => {
-    if (
-      !state.lifecycleStarted ||
-      state.lifecycleTerminalEmitted ||
-      state.permissionChangeRestart ||
-      params.pluginRuntimeRefreshPending?.()
-    ) {
-      return;
-    }
-    void emitCodexAppServerEvent(params, {
-      stream: "lifecycle",
-      data: {
-        startedAt: attemptStartedAt,
-        endedAt: Date.now(),
-        ...data,
-        ...(params.deferTerminalLifecycle ? { phase: "finishing" } : {}),
-      },
-    });
-    state.lifecycleTerminalEmitted = true;
-  };
   const buildLifecycleTerminalMeta = (input: {
     aborted: boolean;
     timedOut: boolean;
@@ -162,22 +141,6 @@ export function createCodexAttemptLifecycleController(
     return buildCodexLifecycleTerminalMeta({
       ...input,
       abortStopReason: abortFields?.stopReason,
-    });
-  };
-  const executionPhaseKeys = new Set<string>();
-  const emitExecutionPhaseOnce = (
-    key: string,
-    info: Parameters<NonNullable<EmbeddedRunAttemptParams["onExecutionPhase"]>>[0],
-  ) => {
-    if (executionPhaseKeys.has(key)) {
-      return;
-    }
-    executionPhaseKeys.add(key);
-    params.onExecutionPhase?.({
-      provider: params.provider,
-      model: params.modelId,
-      backend: "codex-app-server",
-      ...info,
     });
   };
   const reportExecutionNotification = (notification: CodexServerNotification) => {

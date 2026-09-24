@@ -12,6 +12,7 @@ import {
   ensureStandalonePluginToolRegistryLoaded,
   resolvePluginTools,
 } from "../../plugins/tools.js";
+import * as userProfileList from "../../state/user-profile-list.js";
 import { toolsCatalogHandlers } from "./tools-catalog.js";
 
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
@@ -414,3 +415,20 @@ describe("tools.catalog handler", () => {
     );
   });
 });
+
+it.each([false, true])(
+  "advertises personal instructions only for multiple people (%s)",
+  async (multipleProfiles) => {
+    const policy = vi
+      .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
+      .mockReturnValue(multipleProfiles);
+    try {
+      const { respond, invoke } = createInvokeParams({ includePlugins: false });
+      await invoke();
+      const tools = expectCatalogPayload(respond).groups.flatMap((group) => group.tools);
+      expect(tools.some((tool) => tool.id === "personal_instructions")).toBe(multipleProfiles);
+    } finally {
+      policy.mockRestore();
+    }
+  },
+);

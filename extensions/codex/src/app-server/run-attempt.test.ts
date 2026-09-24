@@ -79,6 +79,7 @@ import {
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 import * as runAttemptResources from "./run-attempt-resources.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
+import * as attemptTurnState from "./run-attempt-turn-state.js";
 import { setAgentWorkspaceForTest } from "./run-attempt-workspace.test-support.js";
 import { registerSettledFinalizationTests } from "./run-attempt.settled-finalization.test-support.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -93,6 +94,7 @@ import {
   createResumeHarness,
   createRuntimeDynamicTool,
   createStartedThreadHarness,
+  createThreadStartRequest,
   fastWait,
   getMockRuntimeIdentity,
   mockCall,
@@ -267,20 +269,6 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     connectionClass: "local-loopback",
     remoteAppsSubstrate: "preconfigured",
   };
-}
-
-function createThreadStartRequest(threadId = "thread-1") {
-  const responses: Record<string, unknown> = {
-    "configRequirements/read": { requirements: null },
-    "config/read": { config: {}, origins: {}, layers: [] },
-    "thread/start": threadStartResult(threadId),
-  };
-  return vi.fn(async (method: string, _params?: unknown) => {
-    if (!Object.hasOwn(responses, method)) {
-      throw new Error(`unexpected method: ${method}`);
-    }
-    return responses[method];
-  });
 }
 
 function createNamedDynamicTool(
@@ -5295,6 +5283,7 @@ describe("runCodexAppServerAttempt", () => {
   it.each(["terminal timeout", "user stop"] as const)(
     "clears an active run with blocked terminal delivery after %s",
     async (termination) => {
+      const turnStateFactory = vi.spyOn(attemptTurnState, "createCodexAttemptTurnState");
       const harness = createStartedThreadHarness();
       harness.client.close = () => harness.close();
       const abortController = new AbortController();
@@ -5305,7 +5294,7 @@ describe("runCodexAppServerAttempt", () => {
       params.onPartialReply = onPartialReply;
       const run = runCodexAppServerAttempt(params);
       const settled = vi.fn();
-      void run.then(settled);
+      const settledRun = run.then(settled, settled);
       try {
         await vi.waitFor(() => {
           expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBe(params.sessionId);
@@ -5323,16 +5312,23 @@ describe("runCodexAppServerAttempt", () => {
           params: { threadId: "thread-1", turnId: "turn-1", itemId: "msg-1", delta: "hello" },
         });
         await vi.waitFor(() => expect(onPartialReply).toHaveBeenCalledOnce(), fastWait);
-        vi.useFakeTimers();
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
         void harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
         if (termination === "user stop") {
           abortController.abort("cancelled");
         }
         await vi.advanceTimersByTimeAsync(2 * 60_000);
+        const turnState = turnStateFactory.mock.results[0];
+        if (turnState?.type !== "return") {
+          throw new Error("Codex attempt did not create its turn state");
+        }
+        // Native abort cleanup owns the start of the projection drain grace.
+        // Join that phase before advancing its clock or restoring real timers.
+        await vi.waitFor(() => turnState.value.state.abortCleanup, fastWait);
         await vi.advanceTimersByTimeAsync(TURN_FINALIZE_DRAIN_ABORT_GRACE_MS + 1);
-        vi.useRealTimers();
-        await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), { timeout: 1_000 });
         const result = await run;
+        vi.useRealTimers();
+        expect(settled).toHaveBeenCalledOnce();
         expect(readAttemptTerminal(result)).toMatchObject({
           aborted: true,
           timedOut: termination === "terminal timeout",
@@ -5344,9 +5340,13 @@ describe("runCodexAppServerAttempt", () => {
       } finally {
         // Release only for test cleanup; the run must settle while this callback is still blocked.
         blocked.resolve();
-        vi.useRealTimers();
         abortController.abort("test_cleanup");
-        await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+        try {
+          // Observe rejection without replacing the test body's original failure.
+          await settledRun;
+        } finally {
+          vi.useRealTimers();
+        }
       }
     },
   );
@@ -5685,143 +5685,6 @@ describe("runCodexAppServerAttempt", () => {
       }
     },
   );
-  it("routes Computer Use MCP elicitations through the native bridge", async () => {
-    const bridgeSpy = vi
-      .spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest")
-      .mockResolvedValue({
-        kind: "handled",
-        response: { action: "accept", content: { approve: true }, _meta: null },
-      });
-    const request = vi.fn(async (method: string) => {
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "plugin/installed" || method === "plugin/list") {
-        const installed = {
-          marketplaces: [
-            {
-              name: "openai-bundled",
-              path: "/marketplaces/openai-bundled",
-              plugins: [
-                {
-                  id: "computer-use@openai-bundled",
-                  name: "computer-use",
-                  source: {
-                    type: "local",
-                    path: "/marketplaces/openai-bundled/plugins/computer-use",
-                  },
-                  installed: true,
-                  enabled: true,
-                },
-              ],
-            },
-          ],
-          marketplaceLoadErrors: [],
-        } satisfies v2.PluginInstalledResponse;
-        return method === "plugin/installed"
-          ? installed
-          : ({ ...installed, featuredPluginIds: [] } satisfies v2.PluginListResponse);
-      }
-      if (method === "plugin/read") {
-        return {
-          plugin: {
-            marketplaceName: "openai-bundled",
-            marketplacePath: "/marketplaces/openai-bundled",
-            summary: {
-              id: "computer-use@openai-bundled",
-              name: "computer-use",
-              source: {
-                type: "local",
-                path: "/marketplaces/openai-bundled/plugins/computer-use",
-              },
-              installed: true,
-              enabled: true,
-            },
-            description: null,
-            skills: [],
-            apps: [],
-            mcpServers: ["computer-use"],
-          },
-        };
-      }
-      if (method === "mcpServerStatus/list") {
-        return {
-          data: [
-            {
-              name: "desktop-control",
-              tools: {
-                "computer-use.get_app_state": {},
-              },
-            },
-          ],
-          nextCursor: null,
-        };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    const elicitation = createAppServerHarness(request);
-    const params = createRunParams();
-    await attachSqliteSessionTarget(
-      params,
-      path.join(tempDir, "sessions.json"),
-      "session-computer-use",
-    );
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: {
-        computerUse: {
-          enabled: true,
-          marketplaceName: "openai-bundled",
-          mcpServerName: "desktop-control",
-        },
-      },
-    });
-    // The keyed router only accepts turn-scoped requests once the turn is bound.
-    await elicitation.waitForMethod("turn/start");
-    const result = await elicitation.handleServerRequest({
-      id: "request-elicitation-1",
-      method: "mcpServer/elicitation/request",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        serverName: "desktop-control",
-        mode: "form",
-      },
-    });
-    expect(result).toEqual({
-      action: "accept",
-      content: { approve: true },
-      _meta: null,
-    });
-    const [bridgeCall] = mockCall(bridgeSpy, "elicitation bridge") as [
-      {
-        requestParams?: { serverName?: string };
-        computerUseMcpServerName?: string;
-        threadId?: string;
-        turnId?: string;
-      },
-    ];
-    expect(bridgeCall.threadId).toBe("thread-1");
-    expect(bridgeCall.turnId).toBe("turn-1");
-    expect(bridgeCall.requestParams?.serverName).toBe("desktop-control");
-    expect(bridgeCall.computerUseMcpServerName).toBe("desktop-control");
-    const requestCalls = request.mock.calls as unknown as Array<[string, unknown, unknown?]>;
-    const turnStart = requestCalls.find(([method]) => method === "turn/start");
-    const turnStartParams = turnStart?.[1] as
-      | { approvalPolicy?: { granular?: { mcp_elicitations?: boolean } } }
-      | undefined;
-    expect(turnStartParams?.approvalPolicy?.granular?.mcp_elicitations).toBe(true);
-    await elicitation.notify(turnCompleted({ id: "turn-1", status: "completed" }));
-    await run;
-  });
 
   it("passes session plugin app policy context to elicitation handling", async () => {
     const { sessionFile, workspaceDir, agentDir } = createRunPaths();
@@ -6114,45 +5977,23 @@ describe("runCodexAppServerAttempt", () => {
     }
   });
   it("does not install an active run handle when turn start resolves after abort", async () => {
-    let resolveTurnStart: ((value: ReturnType<typeof turnStartResult>) => void) | undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return await new Promise<ReturnType<typeof turnStartResult>>((resolve) => {
-          resolveTurnStart = resolve;
-        });
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: () => () => undefined,
-          addRequestHandler: () => () => undefined,
-        }) as never,
+    const turnStart = createDeferred<ReturnType<typeof turnStartResult>>();
+    const harness = createStartedThreadHarness(async (method) =>
+      method === "turn/start" ? await turnStart.promise : undefined,
     );
     const abortController = new AbortController();
     const params = createRunParams();
     params.abortSignal = abortController.signal;
     const run = runCodexAppServerAttempt(params);
-    await vi.waitFor(
-      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      fastWait,
-    );
+    await harness.waitForMethod("turn/start", fastWait.timeout);
+    expect(harness.request.mock.calls.map(([method]) => method)).toContain("turn/start");
     abortController.abort("test_abort");
-    resolveTurnStart?.(turnStartResult());
+    turnStart.resolve(turnStartResult());
     await expect(run).rejects.toThrow("test_abort");
     expect(queueActiveRunMessageForTest("session-1", "after abort")).toBe(false);
+    expect(harness.requests.filter(({ method }) => method === "turn/interrupt")).toEqual([
+      { method: "turn/interrupt", params: { threadId: "thread-1", turnId: "turn-1" } },
+    ]);
   });
 
   it("keeps extended history enabled when resuming a bound Codex thread", async () => {

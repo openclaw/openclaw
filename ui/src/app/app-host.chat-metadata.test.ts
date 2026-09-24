@@ -215,9 +215,13 @@ it.each(["automatic", "explicit", "remounted startup"])(
   },
 );
 
-it.each(["config.changed", "chat.metadata.changed"])(
-  "refreshes the retained pane after repair without changing conversation state (%s)",
-  async (event) => {
+it.each([
+  { event: "config.changed", payload: {}, clearsChoices: true },
+  { event: "chat.metadata.changed", payload: { modelSelectionChanged: true }, clearsChoices: true },
+  { event: "chat.metadata.changed", payload: {}, clearsChoices: false },
+])(
+  "refreshes the retained pane without changing conversation state ($event, clears: $clearsChoices)",
+  async ({ event, payload, clearsChoices }) => {
     const model = { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" };
     let ready = false;
     const catalogRequest = vi.fn(async (): Promise<ModelCatalogResult> => ({
@@ -273,8 +277,8 @@ it.each(["config.changed", "chat.metadata.changed"])(
         models: typeof state.chatModelCatalog;
       }>();
       catalogRequest.mockImplementationOnce(() => pending.promise);
-      shell.handleGatewayEvent({ event, payload: {} });
-      expect(state.chatModelCatalog[0]?.available).toBe(false);
+      shell.handleGatewayEvent({ event, payload });
+      expect(state.chatModelCatalog[0]?.available).toBe(clearsChoices ? undefined : false);
       pending.resolve({
         commands: [],
         models: [{ ...model, available: false, unavailableReason: "auth-failed" }],
@@ -283,13 +287,13 @@ it.each(["config.changed", "chat.metadata.changed"])(
         expect(state.chatModelCatalog[0]?.unavailableReason).toBe("auth-failed"),
       );
       catalogRequest.mockRejectedValueOnce(new Error("metadata transport failed"));
-      shell.handleGatewayEvent({ event, payload: {} });
+      shell.handleGatewayEvent({ event, payload });
       await vi.waitFor(() =>
         expect(state.chatModelCatalogError).toContain("metadata transport failed"),
       );
-      expect(state.chatModelCatalog[0]?.available).toBe(false);
+      expect(state.chatModelCatalog[0]?.available).toBe(clearsChoices ? undefined : false);
       ready = true;
-      shell.handleGatewayEvent({ event, payload: {} });
+      shell.handleGatewayEvent({ event, payload });
       await vi.waitFor(() => expect(state.chatModelCatalog[0]?.available).toBe(true));
       expect(state.chatMessage).toBe("Keep this draft");
       expect(state.chatError).toBe("No route-compatible authentication source is configured");
@@ -344,6 +348,7 @@ it("retires chat metadata through config.changed and the Gateway close callback"
 describe.each(["auth", "catalog"] as const)("%s read lifecycle", (kind) => {
   it.each([
     "config.changed",
+    "model selection changed",
     "chat.metadata.changed",
     "same-client reconnect",
     "same-client hello",
@@ -384,7 +389,7 @@ describe.each(["auth", "catalog"] as const)("%s read lifecycle", (kind) => {
       kind === "auth"
         ? loadModelAuthStatus(client, { agentId: "main" })
         : loadModelCatalog(client, { agentId: "main" });
-    const before = read();
+    const before = read().catch((error: unknown) => error);
     if (transition === "same-client reconnect") {
       current().opts.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
       current().opts.onHello?.(gatewayHelloForMethods([]));
@@ -398,12 +403,21 @@ describe.each(["auth", "catalog"] as const)("%s read lifecycle", (kind) => {
           presence: [{ instanceId: current().instanceId, user: { id: "replacement" } }],
         },
       });
+    } else if (transition === "model selection changed") {
+      shell.handleGatewayEvent({
+        event: "chat.metadata.changed",
+        payload: { modelSelectionChanged: true },
+      });
     } else {
       shell.handleGatewayEvent({ event: transition, payload: {} });
     }
     const replacement = read();
     stale.resolve(staleResult);
-    expect(await before).toEqual(staleResult);
+    if (kind === "catalog" && transition !== "chat.metadata.changed") {
+      expect(await before).toHaveProperty("name", "AbortError");
+    } else {
+      expect(await before).toEqual(staleResult);
+    }
     const follower = read();
     fresh.resolve(freshResult);
 

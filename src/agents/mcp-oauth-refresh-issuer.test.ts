@@ -8,8 +8,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
-import { createMcpOAuthClientProvider } from "./mcp-oauth-provider.js";
 import { readMcpOAuthStore } from "./mcp-oauth-store.js";
+import { withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
 
 const SERVER_NAME = "Remote Docs";
 const SERVER_URL = "https://mcp.example.com/mcp";
@@ -104,27 +104,26 @@ async function seedAuthorizedStore(
   order: "discovery-then-tokens" | "tokens-then-discovery",
   expiresIn = 3600,
 ) {
-  const provider = await createMcpOAuthClientProvider({
-    identity: IDENTITY,
+  await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
+    const discoveryState = {
+      authorizationServerUrl: ORIGINAL_ISSUER,
+      resourceMetadataUrl: ORIGINAL_METADATA_URL,
+    };
+    const tokens = {
+      access_token: STORED_ACCESS,
+      refresh_token: STORED_REFRESH,
+      token_type: "Bearer",
+      expires_in: expiresIn,
+    };
+    await provider.saveClientInformation?.({ client_id: "stored-client-id" });
+    if (order === "discovery-then-tokens") {
+      await provider.saveDiscoveryState?.(discoveryState);
+      await provider.saveTokens(tokens);
+    } else {
+      await provider.saveTokens(tokens);
+      await provider.saveDiscoveryState?.(discoveryState);
+    }
   });
-  const discoveryState = {
-    authorizationServerUrl: ORIGINAL_ISSUER,
-    resourceMetadataUrl: ORIGINAL_METADATA_URL,
-  };
-  const tokens = {
-    access_token: STORED_ACCESS,
-    refresh_token: STORED_REFRESH,
-    token_type: "Bearer",
-    expires_in: expiresIn,
-  };
-  await provider.saveClientInformation?.({ client_id: "stored-client-id" });
-  if (order === "discovery-then-tokens") {
-    await provider.saveDiscoveryState?.(discoveryState);
-    await provider.saveTokens(tokens);
-  } else {
-    await provider.saveTokens(tokens);
-    await provider.saveDiscoveryState?.(discoveryState);
-  }
 }
 
 function buildOAuthFetch(fetchFn: FetchLike) {
@@ -222,15 +221,19 @@ describe("MCP OAuth refresh issuer binding", () => {
       await withTempHome(
         async () => {
           await seedAuthorizedStore("discovery-then-tokens");
-          const provider = await createMcpOAuthClientProvider({
-            identity: IDENTITY,
-          });
-          await provider.saveDiscoveryState?.({
-            authorizationServerUrl: issuer,
-            resourceMetadataUrl: REPLACEMENT_METADATA_URL,
-          });
+          await withMcpOAuthProviderForTest(
+            {
+              identity: IDENTITY,
+            },
+            async (provider) => {
+              await provider.saveDiscoveryState?.({
+                authorizationServerUrl: issuer,
+                resourceMetadataUrl: REPLACEMENT_METADATA_URL,
+              });
 
-          expect(await provider.tokens()).toBeUndefined();
+              expect(await provider.tokens()).toBeUndefined();
+            },
+          );
           expect((await readStore()).tokens).toMatchObject({
             access_token: STORED_ACCESS,
             refresh_token: STORED_REFRESH,
@@ -324,16 +327,20 @@ describe("MCP OAuth refresh issuer binding", () => {
   it("fails closed for a token-only legacy store with no recoverable issuer", async () => {
     await withTempHome(
       async () => {
-        const provider = await createMcpOAuthClientProvider({
-          identity: IDENTITY,
-        });
-        await provider.saveClientInformation?.({ client_id: "stored-client-id" });
-        await provider.saveTokens({
-          access_token: STORED_ACCESS,
-          refresh_token: STORED_REFRESH,
-          token_type: "Bearer",
-          expires_in: 3600,
-        });
+        await withMcpOAuthProviderForTest(
+          {
+            identity: IDENTITY,
+          },
+          async (provider) => {
+            await provider.saveClientInformation?.({ client_id: "stored-client-id" });
+            await provider.saveTokens({
+              access_token: STORED_ACCESS,
+              refresh_token: STORED_REFRESH,
+              token_type: "Bearer",
+              expires_in: 3600,
+            });
+          },
+        );
         expect((await readStore()).discoveryState).toBeUndefined();
         expect((await readStore()).tokensAuthorizationServerUrl).toBeUndefined();
         const network = createOAuthNetwork({

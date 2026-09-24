@@ -1,5 +1,7 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
+import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -7,7 +9,7 @@ import { VERSION } from "../../version.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   confirmUpdateDowngrade,
-  tryResolveInvocationCwd,
+  resolveGitInstallDir,
   type UpdateCommandOptions,
 } from "./shared.js";
 import {
@@ -16,6 +18,7 @@ import {
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
 import type { InitializedUpdate } from "./update-command-initialization.js";
+import { admitUpdateRequesterContinuation } from "./update-command-managed-context.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import { UpdateCommandFailure, withUpdateAdmissionReporting } from "./update-command-result.js";
 import {
@@ -43,7 +46,17 @@ import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 type PreparedUpdate = NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>;
 
 export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<void> {
-  const invocationCwd = tryResolveInvocationCwd();
+  const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");
+  return await withRetainedUpdateRuntime(import.meta.url, (retainRuntime) =>
+    updateCommandWithRuntime(inputOpts, retainRuntime),
+  );
+}
+
+async function updateCommandWithRuntime(
+  inputOpts: UpdateCommandOptions,
+  retainRuntime: RetainUpdateRuntime,
+): Promise<void> {
+  const invocationCwd = tryProcessCwd();
   const recoveryState: UpdateCommandRecoveryState = {
     triageTarget: { env: resolveServiceRefreshEnv(process.env, invocationCwd) },
   };
@@ -84,10 +97,23 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
         invocationCwd,
         env,
         (initialization) =>
-          runAdmittedUpdate(inputOpts, prepared, recoveryState, invocationCwd, initialization),
+          runAdmittedUpdate(
+            inputOpts,
+            prepared,
+            recoveryState,
+            invocationCwd,
+            retainRuntime,
+            initialization,
+          ),
       );
     }
-    return await runAdmittedUpdate(inputOpts, prepared, recoveryState, invocationCwd);
+    return await runAdmittedUpdate(
+      inputOpts,
+      prepared,
+      recoveryState,
+      invocationCwd,
+      retainRuntime,
+    );
   });
 }
 
@@ -96,6 +122,7 @@ async function runAdmittedUpdate(
   prepared: PreparedUpdate,
   recoveryState: UpdateCommandRecoveryState,
   invocationCwd: string | undefined,
+  retainRuntime: RetainUpdateRuntime,
   initialization?: InitializedUpdate,
 ): Promise<void> {
   const run = await admitUpdateCommandRun({
@@ -130,7 +157,13 @@ async function runAdmittedUpdate(
     }
     const presentation = createUpdateProgress(!opts.json, run);
     disposePresentation = presentation.dispose;
-    const executeWith = (executor: UpdateCommandExecutor) => {
+    const executeWith = async (executor: UpdateCommandExecutor) => {
+      await admitUpdateRequesterContinuation(
+        run,
+        executor,
+        resolveUpdateCommandAdmissionRoot(prepared),
+        initialization?.target.managedServiceRoot ?? prepared.servicePlan?.serviceRoot,
+      );
       executionStarted = true;
       return withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
         updateCommandInternal(
@@ -140,6 +173,7 @@ async function runAdmittedUpdate(
           prepared,
           presentation,
           executor,
+          retainRuntime,
           initialization,
         ),
       );
@@ -174,6 +208,7 @@ async function updateCommandInternal(
   prepared: NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>,
   presentation: ReturnType<typeof createUpdateProgress>,
   executor: UpdateCommandExecutor,
+  retainRuntime: RetainUpdateRuntime,
   initialization?: InitializedUpdate,
 ): Promise<void> {
   const {
@@ -383,7 +418,7 @@ async function updateCommandInternal(
   let mutableUpdatePrepared = false;
   const prepareMutableUpdate: Parameters<
     typeof executeMutableUpdate
-  >[0]["prepareMutableUpdate"] = async (env, activationTimeoutMs, admitExecutor) => {
+  >[0]["prepareMutableUpdate"] = async (env, activationTimeoutMs, admitExecutor, installTarget) => {
     if (!mutableUpdatePrepared) {
       assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
     }
@@ -403,6 +438,28 @@ async function updateCommandInternal(
     const installKey = captureUpdateCommandExecutorAuthority(fence).installKey;
     assertUpdatePackageActivationAdmission(installKey, { serviceRoot: managedServiceRoot });
     preUpdatePluginInstallRecords = await prepareMutableUpdateRuntime(env, fence);
+    // Retention can walk the full dependency tree before the first staging step.
+    // Record that work so the completed capacity check does not look stalled.
+    const retentionStep = {
+      name: "updater-runtime-retention",
+      command: "retain running updater runtime",
+      index: 0,
+      total: 0,
+    };
+    const retentionStartedAt = Date.now();
+    progress.onStepStart?.(retentionStep);
+    await retainRuntime({
+      mutationRoots: [root, ...(switchToGit ? [resolveGitInstallDir()] : [])],
+      installTarget,
+      env,
+      timeoutMs: updateStepTimeoutMs,
+      assertCurrent: () => fence.assertCurrent(),
+    });
+    progress.onStepComplete?.({
+      ...retentionStep,
+      durationMs: Date.now() - retentionStartedAt,
+      exitCode: 0,
+    });
     mutableUpdatePrepared = true;
   };
 

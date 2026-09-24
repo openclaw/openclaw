@@ -1,4 +1,7 @@
 /** Parent cancellation survives an unreadable descendant partition without hiding failure. */
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -41,7 +44,6 @@ import { finishFailedGatewayHttpResponse } from "../http-common.js";
 import { handleSessionKillHttpRequest } from "../session-kill-http.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import { handleChatSend } from "./chat-send-handler.js";
-import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import {
   createActiveRun,
   createChatAbortContext,

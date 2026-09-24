@@ -6,7 +6,6 @@ import {
   createSessionCapabilityFixture,
 } from "../chat-pane.test-support.ts";
 import {
-  gatewayHello,
   loadedSidebarContent,
   createSidebarContentRecorder,
 } from "./chat-session-workspace.test-support.ts";
@@ -202,7 +201,7 @@ describe("session workspace state", () => {
       connected: true,
       connectionEpoch: 1,
       handleOpenSidebar: vi.fn(),
-      hello: gatewayHello(["sessions.diff"]),
+      hello: gatewayHelloForMethods(["sessions.diff"]),
       agentsList: { agents: [] },
       requestUpdate: vi.fn(),
       sessionKey: "agent:main:current",
@@ -293,7 +292,7 @@ describe("session workspace state", () => {
       connected: true,
       connectionEpoch: 1,
       handleOpenSidebar: vi.fn(),
-      hello: gatewayHello(["sessions.diff"]),
+      hello: gatewayHelloForMethods(["sessions.diff"]),
       agentsList: { agents: [] },
       requestUpdate: vi.fn(),
       sessionKey: "agent:main:current",
@@ -425,7 +424,7 @@ describe("openSessionWorkspaceFile", () => {
       client,
       connected,
       handleOpenSidebar,
-      hello: gatewayHello([]),
+      hello: gatewayHelloForMethods([]),
       sessionKey: "agent:main:current",
       sidebarContent: existingContent,
       sessions: { getFile },
@@ -457,7 +456,7 @@ describe("openSessionWorkspaceFile", () => {
       client: {},
       connected: true,
       handleOpenSidebar,
-      hello: gatewayHello(["sessions.files.set"]),
+      hello: gatewayHelloForMethods(["sessions.files.set"]),
       sessionKey: "agent:main:current",
       sessionWorkspaceDraftScope: "pane-left",
       settings: { gatewayUrl: "wss://gateway-a.example" },
@@ -477,6 +476,88 @@ describe("openSessionWorkspaceFile", () => {
     });
   });
 
+  it.each(["current", "replaced", "refresh-error"] as const)(
+    "refreshes saved file metadata only for its %s workspace",
+    async (scope) => {
+      const saved = Promise.withResolvers<{ file: { hash: string } }>();
+      const state = {
+        client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
+        connected: true,
+        connectionEpoch: 1,
+        handleOpenSidebar: createSidebarContentRecorder(),
+        hello: gatewayHelloForMethods(["sessions.files.set", "sessions.diff"]),
+        sessionKey: "agent:main:current",
+        sidebarContent: null,
+        requestUpdate: vi.fn(),
+        sessions: {
+          getFile: vi.fn().mockResolvedValue({
+            sessionKey: "agent:main:current",
+            root: "/workspace",
+            file: { path: "notes.md", name: "notes.md", content: "before", hash: "old" },
+          }),
+          setFile: vi.fn(() => saved.promise),
+          listFiles: vi.fn(async () => {
+            if (scope === "refresh-error") {
+              throw new Error("Listing unavailable");
+            }
+            return {
+              sessionKey: "agent:main:current",
+              files: [{ path: "notes.md", name: "notes.md", kind: "modified", size: 130 }],
+            };
+          }),
+        },
+      } as unknown as SessionWorkspaceHost;
+      const opened = Promise.withResolvers<void>();
+      state.requestUpdate = () => {
+        if (state.sessionWorkspaceState?.previews[0]?.content.kind === "file") {
+          opened.resolve();
+        }
+      };
+      openSessionWorkspaceFile(state, { path: "notes.md" });
+      await opened.promise;
+      const file = await loadedSidebarContent(state);
+      if (file.kind !== "file" || !file.edit) {
+        throw new Error("Expected an editable workspace file");
+      }
+      const workspace = state.sessionWorkspaceState!;
+      workspace.browserSearch = "notes";
+      const oldDiff = resolveSessionDiffSidebarContent(state);
+      state.sidebarContent = oldDiff;
+      const savedUpdate = Promise.withResolvers<void>();
+      state.requestUpdate = () => {
+        if (!workspace.loading) {
+          savedUpdate.resolve();
+        }
+      };
+      const saving = file.edit.save({ content: "after — café 雪 🦞", expectedHash: "old" });
+      if (scope === "replaced") {
+        state.connectionEpoch += 1;
+        createSessionWorkspaceProps(state);
+      }
+      saved.resolve({ file: { hash: "new" } });
+      await expect(saving).resolves.toMatchObject({ ok: true, hash: "new" });
+      if (scope === "replaced") {
+        expect(state.sessions.listFiles).not.toHaveBeenCalled();
+        expect(state.sessionWorkspaceState?.list).toBeNull();
+      } else {
+        expect(state.sessions.listFiles).toHaveBeenCalledWith(state.sessionKey, {
+          path: "",
+          search: "notes",
+          agentId: "main",
+        });
+        await savedUpdate.promise;
+        expect(state.sidebarContent).not.toBe(oldDiff);
+        expect(state.handleOpenSidebar).toHaveBeenCalledOnce();
+        expect(state.sessionWorkspaceState).toBe(workspace);
+        if (scope === "refresh-error") {
+          expect(workspace.error).toBe("Listing unavailable");
+        } else {
+          expect(workspace.list?.files[0]?.size).toBe(130);
+        }
+      }
+    },
+  );
+
   it.each([
     { label: "the method is not advertised", methods: [], scopes: ["operator.admin"] },
     {
@@ -490,7 +571,7 @@ describe("openSessionWorkspaceFile", () => {
       client: {},
       connected: true,
       handleOpenSidebar,
-      hello: gatewayHello(methods, scopes),
+      hello: gatewayHelloForMethods(methods, scopes),
       sessionKey: "agent:main:current",
       sidebarContent: null,
       sessions: {
@@ -563,7 +644,7 @@ describe("openSessionWorkspaceFile", () => {
         client: { request },
         connected: true,
         handleOpenSidebar: vi.fn(),
-        hello: gatewayHello([]),
+        hello: gatewayHelloForMethods([]),
         agentsList: [],
         sessionKey: "agent:main:current",
         sidebarContent: null,
@@ -634,7 +715,7 @@ describe("openSessionWorkspaceFile", () => {
       client: {},
       connected: true,
       handleOpenSidebar,
-      hello: gatewayHello([]),
+      hello: gatewayHelloForMethods([]),
       sessionKey: "agent:main:current",
       sidebarContent: null,
       sessions: {
@@ -673,7 +754,7 @@ describe("openSessionWorkspaceFile", () => {
       client: {},
       connected: true,
       handleOpenSidebar,
-      hello: gatewayHello([]),
+      hello: gatewayHelloForMethods([]),
       sessionKey: "agent:main:current",
       sidebarContent: null,
       sessions: {
@@ -713,7 +794,7 @@ describe("openSessionWorkspaceFile", () => {
       client: {},
       connected: true,
       handleOpenSidebar,
-      hello: gatewayHello([]),
+      hello: gatewayHelloForMethods([]),
       sessionKey: "agent:main:current",
       sidebarContent: null,
       sessions: {
@@ -777,7 +858,7 @@ describe("openSessionWorkspaceFile", () => {
       client: {},
       connected: true,
       handleOpenSidebar,
-      hello: gatewayHello([]),
+      hello: gatewayHelloForMethods([]),
       sessionKey: "agent:main:current",
       sidebarContent: null,
       sessions: {
@@ -815,7 +896,7 @@ describe("openSessionWorkspaceFile", () => {
       client: {},
       connected: true,
       handleOpenSidebar,
-      hello: gatewayHello([]),
+      hello: gatewayHelloForMethods([]),
       sessionKey: "agent:main:current",
       sidebarContent: null,
       sessions: {

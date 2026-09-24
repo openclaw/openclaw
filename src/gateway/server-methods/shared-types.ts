@@ -198,6 +198,7 @@ type GatewayKernelContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  channelAdmissionAudit?: import("../../channels/message-access/admission-evidence.js").ChannelAdmissionAudit;
   /** Last serving policy committed by this Gateway, excluding tentative secret activation. */
   getCommittedRuntimeConfig?: () => OpenClawConfig;
   sessionRowProjectionOwner?: object;
@@ -472,9 +473,19 @@ export type GatewayRequestOptions = {
 /** Commit-time guard captured by the pre-dispatch session participation check. */
 export type SessionMutationAuthorization = {
   talkSessionTarget?: import("../talk/session-target.types.js").PreparedTalkSessionTarget;
+  /** Original materialized target; Stop must match producer facts, not a later row lookup. */
+  admittedTarget?: Readonly<{ agentId: string; sessionKey: string; sessionId: string }>;
   assertCurrent: () => void;
   /** Original host/session authority for committed input custody, without the selection precondition. */
   assertAdmittedInputCurrent?: () => void;
+  /** Creation-owner notification after COMMIT; binds only this request's previously absent row. */
+  recordCreatedSession?: (target: {
+    agentId: string;
+    sessionKey: string;
+    storePath: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+  }) => void;
   assertTargetCurrent: (target: {
     sessionKey: string;
     agentId?: string;
@@ -493,6 +504,8 @@ export type GatewayRequestHandlerOptions = {
   context: GatewayRequestContext;
   sessionMutationCommitGuard?: () => void;
   sessionMutationAuthorization?: SessionMutationAuthorization;
+  /** Host-prepared session resource authority; services explicitly retain their own borrow. */
+  sessionAccessAuthority?: import("../session-access-authority.js").GatewaySessionAccessAuthority;
   /** In-process caller lifetime; absent for ordinary transport requests. */
   signal?: AbortSignal;
   /** Live transport authority; in-process only and never derived from request data. */

@@ -1,5 +1,5 @@
 import type {
-  AgentHarnessSessionForkParams,
+  AgentHarnessV2,
   AgentHarnessSessionForkResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -34,7 +34,7 @@ function readConnectionFingerprint(ref: unknown): string | undefined {
 }
 
 export async function forkCodexUpstreamSession(
-  params: AgentHarnessSessionForkParams,
+  params: Parameters<NonNullable<AgentHarnessV2["sessionForkV2"]>["fork"]>[0],
   options: {
     bindingStore: CodexAppServerBindingStore;
     controlFactory: CodexSessionCatalogControlFactory;
@@ -135,12 +135,15 @@ export async function forkCodexUpstreamSession(
       let threadId: string;
       try {
         // beforeTurnId is experimental; the initialized shared client explicitly negotiates it.
-        const rawResponse = await control.forkThread({
-          threadId: sourceThreadId,
-          beforeTurnId: resolved.boundary.beforeTurnId,
-          ...(params.sandbox === "required" ? { sandbox: "workspace-write" as const } : {}),
-          excludeTurns: true,
-        });
+        const rawResponse = await control.forkThread(
+          {
+            threadId: sourceThreadId,
+            beforeTurnId: resolved.boundary.beforeTurnId,
+            ...(params.sandbox === "required" ? { sandbox: "workspace-write" as const } : {}),
+            excludeTurns: true,
+          },
+          params.assertCurrent,
+        );
         // Malformed responses do not establish ownership of any purported orphan id.
         response = assertCodexThreadForkResponse(rawResponse);
         threadId = response.thread.id.trim();

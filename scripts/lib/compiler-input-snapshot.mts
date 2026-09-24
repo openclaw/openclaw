@@ -15,10 +15,18 @@ type CompilerInputPolicy = {
   isGeneratorInput?: (file: string) => boolean;
   assertInput?: (file: string) => string;
 };
-type TopologyEntry = { name: string; directory: string; file?: string };
+type TopologyEntry = { id: string; name: string; directory: string; file?: string };
 type NamespaceDirectory = { directory: string; realDirectory: string; installed: boolean };
 const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 const PREPARATION_CONCURRENCY = 16;
+
+function diagnosticJson(value: object) {
+  // JSON escapes C0 controls but leaves terminal controls and bidi formatting literal.
+  return JSON.stringify(value).replace(
+    /[\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/gu,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
 
 function skipNamespaceEntry(id: string, name: string, installed: boolean) {
   return (
@@ -299,8 +307,6 @@ export class CompilerInputSnapshot {
       // Upgrade that traversal once; active ancestors still fence link cycles.
       visited.set(realDirectory, installed);
       active.add(realDirectory);
-      const add = (name: string, file?: string) =>
-        names.push({ name, directory: realDirectory, file });
       const entries = (yield { directory, realDirectory, installed }).toSorted((left, right) =>
         left.name < right.name ? -1 : 1,
       );
@@ -308,6 +314,8 @@ export class CompilerInputSnapshot {
         const file = path.join(directory, entry.name);
         const canonicalFile = path.join(realDirectory, entry.name);
         const id = portableRelativePath(rootDir, file);
+        const add = (name: string, contentFile?: string) =>
+          names.push({ id, name, directory: realDirectory, file: contentFile });
         if (skipNamespaceEntry(id, entry.name, installed)) {
           continue;
         }
@@ -398,6 +406,54 @@ export class CompilerInputSnapshot {
     return [...this.policy.toolchainFiles, ...this.generatorInputs];
   }
 
+  private namespaceChanges(before: CompilerInputSnapshot, outputRoot?: string) {
+    const identities = (entries: TopologyEntry[]) => {
+      const result = new Map<string, string[]>();
+      for (const { id, name, directory } of entries) {
+        if (
+          outputRoot &&
+          (directory === outputRoot || directory.startsWith(`${outputRoot}${path.sep}`))
+        ) {
+          continue;
+        }
+        const names = result.get(id) ?? [];
+        names.push(name);
+        result.set(id, names);
+      }
+      return result;
+    };
+    // Compare captured topology only. Decorated names contain link targets;
+    // diagnostics must emit the separately captured logical identity instead.
+    const previous = identities(before.topology ?? []);
+    const current = identities(this.topology ?? []);
+    const changes: { change: string; path: string }[] = [];
+    let omitted = 0;
+    for (const id of [...new Set([...previous.keys(), ...current.keys()])].toSorted()) {
+      if (JSON.stringify(previous.get(id)) === JSON.stringify(current.get(id))) {
+        continue;
+      }
+      if (
+        changes.length >= 16 ||
+        path.posix.isAbsolute(id) ||
+        path.win32.isAbsolute(id) ||
+        id.split(/[\\/]/u).includes("..")
+      ) {
+        omitted++;
+        continue;
+      }
+      changes.push({
+        change: !previous.has(id) ? "added" : !current.has(id) ? "removed" : "changed",
+        path: id.length > 160 ? `${id.slice(0, 157)}...` : id,
+      });
+      // Leave room for category and omission count even with JSON escaping or UTF-8.
+      if (Buffer.byteLength(diagnosticJson(changes)) > 4000) {
+        changes.pop();
+        omitted++;
+      }
+    }
+    return { changes, omitted };
+  }
+
   private toolchain() {
     this.tools ??= digest(
       JSON.stringify([
@@ -476,13 +532,24 @@ export class CompilerInputSnapshot {
     outputRoot?: string,
   ) {
     const signature = this.signature(config, args, inputs, outputRoot);
-    if (
-      before.namespace(outputRoot) !== this.namespace(outputRoot) ||
-      before.toolchain() !== this.toolchain() ||
-      JSON.stringify(before.config(config)) !== JSON.stringify(this.config(config)) ||
-      before.config(config).files.some((file) => before.hash(file) !== this.hash(file))
-    ) {
-      throw new Error("Boundary configuration or resolution topology changed during compilation");
+    const category =
+      before.namespace(outputRoot) !== this.namespace(outputRoot)
+        ? "namespace"
+        : before.toolchain() !== this.toolchain()
+          ? "toolchain"
+          : JSON.stringify(before.config(config)) !== JSON.stringify(this.config(config))
+            ? "config"
+            : before.config(config).files.some((file) => before.hash(file) !== this.hash(file))
+              ? "config-bytes"
+              : undefined;
+    if (category) {
+      const diagnostic = {
+        category,
+        ...(category === "namespace" ? this.namespaceChanges(before, outputRoot) : {}),
+      };
+      throw new Error(
+        `Boundary configuration or resolution topology changed during compilation: ${diagnosticJson(diagnostic)}`,
+      );
     }
     for (const file of [...inputs, ...this.config(config).files, ...this.toolInputs()]) {
       const current = this.read(file);

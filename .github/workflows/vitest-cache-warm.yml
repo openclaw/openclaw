@@ -10,7 +10,7 @@ on:
   repository_dispatch:
     types: [vitest-cache-warm]
   schedule:
-    - cron: "17 8 * * *"
+    - cron: "17 * * * *"
 
 permissions:
   contents: read
@@ -19,11 +19,11 @@ jobs:
   dependencies:
     # Shared CI cache publication is isolated from pull-request execution.
     # Trusted release/proof workflows may save only through the same authority contract.
-    if: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && (github.event_name != 'push' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
     runs-on: ${{ matrix.platform == 'macos' && 'macos-15' || ((matrix.platform == 'linux-hosted' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'github') && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
     timeout-minutes: 20
     concurrency:
-      group: ${{ format('vitest-cache-warm-dependencies-{0}-{1}', matrix.platform == 'linux' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'linux-hosted' || matrix.platform, github.ref) }}
+      group: ${{ format('vitest-cache-warm-dependencies-{0}-{1}', matrix.platform == 'linux' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'linux-hosted' || matrix.platform, format('{0}-{1}', github.event_name, github.ref)) }}
       cancel-in-progress: false
     strategy:
       # Each platform publishes its own cache namespace independently.
@@ -77,11 +77,11 @@ jobs:
           key: ${{ steps.setup-node-env.outputs.pnpm-store-cache-key }}
 
   warm:
-    if: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && (github.event_name != 'push' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
     runs-on: ${{ (matrix.platform == 'linux-hosted' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'github') && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     concurrency:
-      group: ${{ format('vitest-cache-warm-code-{0}-{1}', matrix.platform == 'linux' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'linux-hosted' || matrix.platform, github.ref) }}
+      group: ${{ format('vitest-cache-warm-code-{0}-{1}', matrix.platform == 'linux' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'linux-hosted' || matrix.platform, format('{0}-{1}', github.event_name, github.ref)) }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
@@ -104,6 +104,9 @@ jobs:
           node-compile-cache: "true"
           vitest-fs-cache: "true"
           vitest-worker-cache: ${{ matrix.platform == 'linux' && 'true' || 'false' }}
+
+      - name: Setup pinned Bun test runtime
+        uses: ./.github/actions/setup-test-bun
 
       # Match source-only shards before SDK/runtime builds change resolution topology.
       - name: Prepare compiled Vitest workers
@@ -185,27 +188,6 @@ jobs:
             extensions/*/src/host/**/*.bundle.js
           key: ${{ runner.os }}-dist-build-v3-${{ github.sha }}
 
-      - name: Select cache seed
-        if: ${{ matrix.platform == 'linux' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --import tsx --input-type=module <<'EOF'
-          import { appendFileSync } from "node:fs";
-          import { createVitestCacheWarmGroups } from "./scripts/lib/ci-node-test-plan.mts";
-
-          // Preserve the selected backend's consumer configs and include patterns.
-          const groups = createVitestCacheWarmGroups();
-          appendFileSync(
-            process.env.GITHUB_ENV,
-            [
-              `OPENCLAW_NODE_TEST_GROUPS_JSON=${JSON.stringify(groups)}`,
-              "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1",
-              "OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE=1",
-            ].join("\n") + "\n",
-          );
-          EOF
-
       - name: Warm transform and compile caches
         id: warm-caches
         continue-on-error: true
@@ -219,15 +201,7 @@ jobs:
           # Only the publisher prunes restored entries before saving a new seed.
           OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: "1"
           OPENCLAW_NODE_COMPILE_CACHE_WRITER: "1"
-          # Keep compiled imports and per-file cleanup in the normal runner;
-          # ordinary CI owns test-body validation.
-          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--testNamePattern=(?!)"]'
-        run: |
-          if [[ "$CACHE_WARM_PLATFORM" == "linux-hosted" ]]; then
-            node --import tsx scripts/ci-warm-hosted-vitest-caches.mts
-          else
-            node --import tsx scripts/ci-run-node-test-shard.mts
-          fi
+        run: node --import tsx scripts/ci-warm-vitest-caches.mts
 
       - name: Save Vitest transform cache
         if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.vitest-cache-key != '' }}

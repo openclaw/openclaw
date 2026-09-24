@@ -10,9 +10,30 @@ import {
   UpdateDoctorConfigChangeSchema,
   UpdateDoctorConfigWriteRefusalSchema,
 } from "./update-doctor-config-schema.js";
+import { updateRecoveryCaptureStateSchema } from "./update-recovery-receipt-schema.js";
 import { updateRecoverySchema } from "./update-recovery.js";
+import { UpdateRunDriverSchema as driver } from "./update-run-driver-schema.js";
 import { UPDATE_RUN_TEXT_LIMIT, UPDATE_RUN_DIAGNOSTIC_LIMIT } from "./update-run-limits.js";
 import { UpdateSnapshotCapacitySchema } from "./update-snapshot-capacity-schema.js";
+
+const destinationPath = z.string().max(240);
+export const UpdateDestinationFailureSchema = z.strictObject({
+  ownership: z.enum(["foreign", "unknown"]),
+  cause: z.enum([
+    "package-mismatch",
+    "launcher-mismatch",
+    "permission",
+    "probe-failure",
+    "unreadable-layout",
+  ]),
+  destinationKind: z.enum(["npm-global", "unknown"]),
+  prefix: destinationPath.nullable(),
+  packageRoot: destinationPath.nullable(),
+  runningRoot: destinationPath,
+  runningPrefix: destinationPath.nullable(),
+  launcher: destinationPath.nullable(),
+  launcherTarget: destinationPath.nullable(),
+});
 
 export const UpdateFailureFactSchema = z.object({
   check: z.string().max(128),
@@ -22,6 +43,7 @@ export const UpdateFailureFactSchema = z.object({
   pluginId: z.string().max(80).optional(),
   errorName: z.string().max(80).nullable().optional(),
   location: z.string().max(160).nullable().optional(),
+  destination: UpdateDestinationFailureSchema.optional(),
 });
 
 const UpdateRollbackOutcomeSchema = z.object({
@@ -74,12 +96,6 @@ const UpdateRunStepSchema = z.object({
   }).optional(),
 });
 
-const driver = z.object({
-  host: z.string().min(1).max(255),
-  pid: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  startIdentity: z.string().max(128).regex(/^\d+$/),
-});
-
 export const UpdateRunRecordSchema = z.object({
   runId: z.uuid(),
   createdAtMs: timestamp,
@@ -89,13 +105,19 @@ export const UpdateRunRecordSchema = z.object({
   status: z.enum(UPDATE_RUN_STATUSES),
   reason: text.nullable(),
   origin: z.object({
+    updateRecoveryCapture: updateRecoveryCaptureStateSchema.optional(),
     driver: driver.optional(),
     previousDrivers: z
       .array(driver)
       .max(UPDATE_RUN_DRIVER_LIMIT - 1)
       .optional(),
     requester: z
-      .object({ channel: text.optional(), accountId: text.optional(), senderId: text.optional() })
+      .object({
+        channel: text.optional(),
+        accountId: text.optional(),
+        senderId: text.optional(),
+        authorizationSource: text.optional(),
+      })
       .optional(),
     sessionKey: text.optional(),
     deliveryContext: z

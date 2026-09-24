@@ -23,6 +23,12 @@ import {
 } from "./docker-e2e-scenarios.mts";
 import officialExternalChannelCatalog from "./official-external-channel-catalog.json" with { type: "json" };
 import {
+  UPDATE_FIRST_HOP_COMPAT_LANE,
+  isUpdateFirstHopCompatLane,
+  listRecordedFirstHopSourceVersions,
+  updateFirstHopCompatLaneName,
+} from "./update-first-hop-lanes.mjs";
+import {
   isTrustedHarnessOwnedUpgradeSurvivorScenario,
   normalizeUpgradeSurvivorBaselineSpec,
   parseUpgradeSurvivorBaselineSpecs,
@@ -69,6 +75,8 @@ const UPDATE_FIRST_HOP_COMPAT_CATALOGS = new Set([
   // Node-runner aliases for newer releases moved to the recorded package inventory.
   "0a12e16a5b6a2d723472cff04a05b356751da92a54c7b9a19cbb539c94190bb6",
   "2cb55271610aae5578175cf1587574231e9a72f9420a544d73370a8d3b8531ec",
+  // Current outputs retire pre-June memory teardown stubs.
+  "dfa812490cac8f09a274d698eb54c7c4a4b8474f3e264fbd38008af70b013cb3",
 ]);
 const IOS_WATCH_RELAY_COMMANDS = ['"watch.status"', '"watch.notify"'];
 type DockerE2ePlanOptions = {
@@ -94,6 +102,10 @@ export function parseLaneSelection(raw: string | undefined): string[] {
   }
   const laneAliases = new Map([
     ["install-e2e", ["install-e2e-openai", "install-e2e-anthropic"]],
+    [
+      UPDATE_FIRST_HOP_COMPAT_LANE,
+      listRecordedFirstHopSourceVersions().map(updateFirstHopCompatLaneName),
+    ],
     [
       "bundled-plugin-install-uninstall",
       Array.from(
@@ -413,11 +425,26 @@ function readTargetMetadata(
 }
 
 function supportsUpdateFirstHopCompatForTarget(
+  laneName: string,
   targetRoot: string | undefined,
   frozenTarget?: InertTargetContract,
 ): boolean {
   if (!targetRoot && !frozenTarget) {
     return true;
+  }
+  // A target that records its own inventory only proves the hops it lists.
+  const inventory = readTargetMetadata(
+    targetRoot,
+    "scripts/lib/update-compat-inventory.json",
+    frozenTarget,
+  );
+  if (
+    inventory !== null &&
+    !(JSON.parse(inventory).releases as { version: string }[]).some(
+      (release) => updateFirstHopCompatLaneName(release.version) === laneName,
+    )
+  ) {
+    return false;
   }
   const source = readTargetMetadata(targetRoot, "scripts/runtime-postbuild.mts", frozenTarget);
   if (source === null) {
@@ -964,9 +991,10 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
   if (options.allowFrozenTargetScenarioOmissions) {
     const unsupportedLaneRules = [
       {
-        matches: (lane: DockerE2eLane) => lane.name === "update-first-hop-compat",
-        supported: () =>
+        matches: (lane: DockerE2eLane) => isUpdateFirstHopCompatLane(lane.name),
+        supported: (lane: DockerE2eLane) =>
           supportsUpdateFirstHopCompatForTarget(
+            lane.name,
             options.upgradeSurvivorTargetRoot,
             options.frozenTarget,
           ),
@@ -988,18 +1016,14 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
           ),
       },
     ];
-    for (const rule of unsupportedLaneRules) {
-      if (!configuredLanes.some(rule.matches) || rule.supported()) {
-        continue;
+    configuredLanes = configuredLanes.filter((lane) => {
+      const rule = unsupportedLaneRules.find((entry) => entry.matches(lane));
+      if (!rule || rule.supported(lane)) {
+        return true;
       }
-      const retainedLanes = configuredLanes.filter((lane) => !rule.matches(lane));
-      if (retainedLanes.length !== configuredLanes.length) {
-        for (const lane of configuredLanes.filter(rule.matches)) {
-          omittedUnsupportedLaneNames.add(lane.name);
-        }
-        configuredLanes = retainedLanes;
-      }
-    }
+      omittedUnsupportedLaneNames.add(lane.name);
+      return false;
+    });
   }
   if (omittedUnsupportedLaneNames.size > 0 && !options.allowFrozenTargetScenarioOmissions) {
     throw new Error("unsupported frozen target lanes require authorized scenario omissions");

@@ -1,25 +1,14 @@
 import type { AnyChunk } from "@slack/types";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { appendSlackStream, startSlackStream } from "../../streaming.js";
-import { resolveSlackStreamRecipientTeamId } from "./dispatch-helpers.js";
+import { appendSlackStream } from "../../streaming.js";
 import type { SlackDispatchSetup } from "./dispatch-setup.js";
 import type { SlackStreamingDeliveryRuntime } from "./dispatch-streaming.js";
 
 export function createSlackNativeProgressTransport(params: {
-  setup: Pick<
-    SlackDispatchSetup,
-    | "ctx"
-    | "message"
-    | "replyPlan"
-    | "slackClient"
-    | "slackClientOptions"
-    | "slackIdentity"
-    | "slackStreamFallbackTeamId"
-  >;
+  setup: Pick<SlackDispatchSetup, "replyPlan">;
   delivery: SlackStreamingDeliveryRuntime;
 }) {
-  const { ctx, message, replyPlan, slackClient, slackIdentity, slackStreamFallbackTeamId } =
-    params.setup;
+  const { replyPlan } = params.setup;
   const { delivery } = params;
 
   const markDelivered = (threadTs?: string) => {
@@ -29,7 +18,6 @@ export function createSlackNativeProgressTransport(params: {
     }
     delivery.observedReplyDelivery = true;
     if (threadTs) {
-      delivery.usedReplyThreadTs ??= threadTs;
       delivery.rememberDeliveredThreadTs("block", threadTs);
     }
     return true;
@@ -58,33 +46,15 @@ export function createSlackNativeProgressTransport(params: {
       return false;
     }
     delivery.nativeProgressStreamThreadTs = streamThreadTs;
-    const startPromise = (async () => {
-      const session = await startSlackStream({
-        client: slackClient,
-        clientOptions: params.setup.slackClientOptions,
-        channel: message.channel,
-        threadTs: streamThreadTs,
-        ...(update.text ? { text: update.text } : {}),
-        ...(update.chunks?.length ? { chunks: update.chunks } : {}),
-        taskDisplayMode: "plan",
-        ...(slackIdentity ? { identity: slackIdentity } : {}),
-        teamId: await resolveSlackStreamRecipientTeamId({
-          client: slackClient,
-          token: ctx.botToken,
-          userId: message.user,
-          fallbackTeamId: slackStreamFallbackTeamId,
-        }),
-        userId: message.user,
-      });
-      delivery.streamSession = session;
-      return session;
-    })();
+    const startPromise = delivery.startStream({
+      threadTs: streamThreadTs,
+      ...(update.text ? { text: update.text } : {}),
+      ...(update.chunks?.length ? { chunks: update.chunks } : {}),
+      taskDisplayMode: "plan",
+    });
     delivery.nativeProgressStreamStartPromise = startPromise;
     try {
-      const session = await startPromise;
-      if (!session) {
-        return false;
-      }
+      await startPromise;
       const delivered = markDelivered(streamThreadTs);
       return update.chunks?.length ? delivered : true;
     } finally {

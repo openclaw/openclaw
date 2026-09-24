@@ -173,13 +173,18 @@ vi.mock("../plugins/update.js", async (importOriginal) => {
 });
 
 vi.mock("../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
-  runPostCorePluginConvergence: vi.fn(async (params: { baselineInstallRecords?: unknown }) => ({
-    changes: [],
-    warnings: [],
-    errored: false,
-    smokeFailures: [],
-    installRecords: params.baselineInstallRecords ?? {},
-  })),
+  runPostCorePluginConvergence: vi.fn(
+    async (params: { cfg: OpenClawConfig; baselineInstallRecords?: unknown }) => ({
+      config: params.cfg,
+      configChanges: [],
+      installedPluginIdRecovery: new Map(),
+      changes: [],
+      warnings: [],
+      errored: false,
+      smokeFailures: [],
+      installRecords: params.baselineInstallRecords ?? {},
+    }),
+  ),
 }));
 
 const nodeSqlite = await import("../infra/node-sqlite.js");
@@ -333,6 +338,8 @@ export function installDeferredCompletionFixture() {
       errored: boolean;
     }> = {},
   ) => ({
+    configChanges: [],
+    installedPluginIdRecovery: new Map(),
     changes: [],
     warnings: [],
     errored: false,

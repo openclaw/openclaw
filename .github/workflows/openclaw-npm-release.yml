@@ -34,6 +34,11 @@ on:
         required: false
         default: ""
         type: string
+      lane_waiver:
+        description: Operator acknowledgement (reason) for publishing from Full Release Validation evidence sealed under an operator lane waiver; required when the manifest carries one.
+        required: false
+        default: ""
+        type: string
       release_evidence_mode:
         description: Publication evidence contract
         required: true
@@ -883,6 +888,7 @@ jobs:
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
         env:
           STABLE_SOAK_WAIVER: ${{ inputs.stable_soak_waiver }}
+          LANE_WAIVER: ${{ inputs.lane_waiver }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |

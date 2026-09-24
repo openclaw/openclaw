@@ -23,6 +23,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import { FULL_RELEASE_WAIT_TIMEOUT_MINUTES } from "../../scripts/full-release-validation-at-sha.mts";
+import { listRecordedFirstHopSourceVersions } from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
 import {
@@ -76,6 +77,7 @@ const CI_WORKFLOW = ".github/workflows/ci.yml";
 const PERFORMANCE_WORKFLOW = ".github/workflows/openclaw-performance.yml";
 const PUBLICATION_CONTRACT_FILES = [
   "scripts/full-release-publication-contract.mjs",
+  "scripts/full-release-flake-policy.mjs",
   "scripts/clawhub-prepared-artifact.mjs",
   "scripts/clawhub-parent-authorization.mjs",
   "scripts/plugin-publication-artifact.mjs",
@@ -195,6 +197,10 @@ const RUN_TESTBOX_WITH_FAILURE_REPORTING =
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
 const toolingTemplates = new Map<string, { directory: string; sha: string }>();
+let packageToolingTemplate:
+  | { directory: string; capturedSha: string; advancedSha: string }
+  | undefined;
+let fixtureGitPath: string | undefined;
 
 const frozenAdmissionClosure = [
   "scripts/preflight-frozen-target-contracts.mjs",
@@ -202,6 +208,8 @@ const frozenAdmissionClosure = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/update-compat-inventory.json",
+  "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
   "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/release-version.mjs",
@@ -218,6 +226,60 @@ const frozenAdmissionClosure = [
   "scripts/plan-targeted-docker-lane-groups.mjs",
   "scripts/lib/numeric-options.mjs",
 ];
+
+function frozenFixtureGit(directory: string, ...args: string[]) {
+  return execFileSync(
+    "git",
+    [
+      "-c",
+      "maintenance.auto=false",
+      "-c",
+      "gc.auto=0",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.test",
+      "-C",
+      directory,
+      ...args,
+    ],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  ).trim();
+}
+
+function frozenToolingFixture(root: string, toolingPaths: string[]) {
+  const tooling = join(root, "tooling");
+  const templateKey = JSON.stringify(toolingPaths);
+  let template = toolingTemplates.get(templateKey);
+  if (!template) {
+    const directory = templateDirs.make("frozen-workflow-tooling-template-");
+    // The acquisition step also uses the existing npm-output parser.
+    for (const path of [...frozenAdmissionClosure, "scripts/lib/npm-json-output.mts"]) {
+      mkdirSync(dirname(join(directory, path)), { recursive: true });
+      copyFileSync(path, join(directory, path));
+    }
+    const recipes = "scripts/e2e/lib/upgrade-survivor/config-recipe";
+    cpSync(recipes, join(directory, recipes), { recursive: true });
+    for (const path of toolingPaths) {
+      mkdirSync(dirname(join(directory, path)), { recursive: true });
+      cpSync(path, join(directory, path), { recursive: true });
+    }
+    frozenFixtureGit(directory, "init", "-q");
+    frozenFixtureGit(directory, "add", ".");
+    frozenFixtureGit(directory, "commit", "-qm", "candidate tooling fixture");
+    // Pack the immutable source once; fault cases create their own loose blobs afterward.
+    frozenFixtureGit(directory, "repack", "-ad");
+    template = { directory, sha: frozenFixtureGit(directory, "rev-parse", "HEAD") };
+    toolingTemplates.set(templateKey, template);
+  }
+  // Fault cases remove objects and change config; never share mutable Git stores.
+  cpSync(template.directory, tooling, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
+  return { tooling, toolingSha: template.sha };
+}
 
 function frozenWorkflowFixture(
   file: string,
@@ -237,60 +299,13 @@ function frozenWorkflowFixture(
     mkdirSync(dirname(join(target, path)), { recursive: true });
     writeFileSync(join(target, path), value);
   }
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "maintenance.auto=false",
-        "-c",
-        "gc.auto=0",
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.test",
-        "-C",
-        target,
-        ...args,
-      ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
+  const git = (...args: string[]) => frozenFixtureGit(target, ...args);
   git("init", "-q");
   git("add", ".");
   git("commit", "-qm", "fixture");
   const sha = git("rev-parse", "HEAD");
-  const tooling = join(root, "tooling");
-  const templateKey = JSON.stringify(toolingPaths);
-  let template = toolingTemplates.get(templateKey);
-  if (!template) {
-    const directory = templateDirs.make("frozen-workflow-tooling-template-");
-    // The acquisition step also uses the existing npm-output parser.
-    for (const path of [...frozenAdmissionClosure, "scripts/lib/npm-json-output.mts"]) {
-      mkdirSync(dirname(join(directory, path)), { recursive: true });
-      copyFileSync(path, join(directory, path));
-    }
-    const recipes = "scripts/e2e/lib/upgrade-survivor/config-recipe";
-    cpSync(recipes, join(directory, recipes), { recursive: true });
-    for (const path of toolingPaths) {
-      mkdirSync(dirname(join(directory, path)), { recursive: true });
-      cpSync(path, join(directory, path), { recursive: true });
-    }
-    git("-C", directory, "init", "-q");
-    git("-C", directory, "add", ".");
-    git("-C", directory, "commit", "-qm", "candidate tooling fixture");
-    // Pack the immutable source once; fault cases create their own loose blobs afterward.
-    git("-C", directory, "repack", "-ad");
-    template = { directory, sha: git("-C", directory, "rev-parse", "HEAD") };
-    toolingTemplates.set(templateKey, template);
-  }
-  // Fault cases remove objects and change config; never share mutable Git stores.
-  cpSync(template.directory, tooling, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
-  const toolingGit = (...args: string[]) => git("-C", tooling, ...args);
-  const toolingSha = template.sha;
+  const { tooling, toolingSha } = frozenToolingFixture(root, toolingPaths);
+  const toolingGit = (...args: string[]) => frozenFixtureGit(tooling, ...args);
   const job = workflowJob(file, jobName);
   const plan = workflowStep(job, "Plan frozen source admission");
   const env = {
@@ -348,7 +363,7 @@ function frozenWorkflowFixture(
       { mode: 0o755 },
     );
   }
-  const gitPath = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const gitPath = (fixtureGitPath ??= execFileSync("which", ["git"], { encoding: "utf8" }).trim());
   writeFileSync(
     join(bin, "git"),
     `#!/bin/sh\nfor arg in "$@"; do\ncase "$arg" in fetch|clone) printf 'hydration\\n' >> '${forbidden}'; exit 97;; esac\ndone\nexec '${gitPath}' "$@"\n`,
@@ -622,19 +637,31 @@ function packageToolingCheckoutFixture() {
       ],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     ).trim();
-  git("init", "-q", "--initial-branch=main");
-  mkdirSync(join(repository, ".github/workflows"), { recursive: true });
-  copyFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, join(repository, PACKAGE_ACCEPTANCE_WORKFLOW));
-  git("add", ".");
-  git("commit", "-qm", "captured workflow");
-  const capturedSha = git("rev-parse", "HEAD");
-  git("branch", "release/candidate", capturedSha);
-  git("branch", "alias", capturedSha);
-  git("tag", "release-candidate", capturedSha);
-  writeFileSync(join(repository, "advanced.txt"), "main advanced after dispatch\n");
-  git("add", ".");
-  git("commit", "-qm", "advance main");
-  const advancedSha = git("rev-parse", "HEAD");
+  if (!packageToolingTemplate) {
+    const directory = templateDirs.make("package-tooling-history-template-");
+    const templateGit = (...args: string[]) => git("-C", directory, ...args);
+    templateGit("init", "-q", "--initial-branch=main", "--template=");
+    mkdirSync(join(directory, ".github/workflows"), { recursive: true });
+    copyFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, join(directory, PACKAGE_ACCEPTANCE_WORKFLOW));
+    templateGit("add", ".");
+    templateGit("commit", "-qm", "captured workflow");
+    const capturedSha = templateGit("rev-parse", "HEAD");
+    templateGit("branch", "release/candidate", capturedSha);
+    templateGit("branch", "alias", capturedSha);
+    templateGit("tag", "release-candidate", capturedSha);
+    writeFileSync(join(directory, "advanced.txt"), "main advanced after dispatch\n");
+    templateGit("add", ".");
+    templateGit("commit", "-qm", "advance main");
+    const advancedSha = templateGit("rev-parse", "HEAD");
+    templateGit("repack", "-ad");
+    packageToolingTemplate = { directory, capturedSha, advancedSha };
+  }
+  // Checkout and ref mutations stay local to each invocation of the workflow steps.
+  cpSync(packageToolingTemplate.directory, repository, {
+    recursive: true,
+    mode: fsConstants.COPYFILE_FICLONE,
+  });
+  const { capturedSha, advancedSha } = packageToolingTemplate;
   const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
   const checkout = workflowStep(job, "Checkout package workflow ref");
   const validate = workflowStep(job, "Validate exact package tooling checkout");
@@ -1026,7 +1053,9 @@ describe("frozen admission workflow barriers", () => {
         ],
       );
       const plan = f.selection();
-      expect(plan.docker).toHaveLength(71);
+      // One targeted group per recorded first-hop source joins the fixed lanes.
+      const firstHopLanes = listRecordedFirstHopSourceVersions().length;
+      expect(plan.docker).toHaveLength(70 + firstHopLanes);
       const planned = Date.now();
       const result = f.run("Admit frozen source contracts", {}, "", { timeout: 360_000 });
       console.info(
@@ -1043,9 +1072,9 @@ describe("frozen admission workflow barriers", () => {
       const bytes = readFileSync(join(f.root, "frozen-admission.json"));
       expect(bytes.length).toBeLessThanOrEqual(262_144);
       const record = JSON.parse(bytes.toString("utf8"));
-      expect(record.evaluations).toHaveLength(72);
+      expect(record.evaluations).toHaveLength(71 + firstHopLanes);
       const children = reconstructAdmissionEvaluations(record);
-      expect(children).toHaveLength(72);
+      expect(children).toHaveLength(71 + firstHopLanes);
       const { digest, provenance: _provenance, ...content } = record;
       expect(digest).toBe(createHash("sha256").update(JSON.stringify(content)).digest("hex"));
       expect(record.status).toBe("UNRESOLVED");
@@ -2943,6 +2972,7 @@ function runFullReleaseInputValidation(
       RELEASE_PROFILE: releaseProfile,
       SKIP_PACKAGE_TELEGRAM_E2E: skipTelegram,
       TELEGRAM_WAIVER: options.telegramWaiver ?? "",
+      LANE_WAIVER: "",
       RERUN_GROUP: options.rerunGroup ?? "all",
       LIVE_SUITE_FILTER: options.liveSuiteFilter ?? "",
       TARGET_CONTEXT_REF: "",
@@ -3054,6 +3084,7 @@ printf '%s\\n' "$value"
       GITHUB_OUTPUT: outputPath,
       PATH: `${fakeBin}:${process.env.PATH}`,
       RELEASE_PROFILE: params.releaseProfile ?? "beta",
+      LANE_WAIVER: "",
       RUN_RELEASE_SOAK: params.runReleaseSoak ?? "false",
       RERUN_GROUP: params.rerunGroup ?? "all",
       CROSS_OS_SUITE_FILTER: params.crossOsSuiteFilter ?? "",
@@ -3086,7 +3117,8 @@ function runReleaseChecksInputValidation(
     workflowJob(RELEASE_CHECKS_WORKFLOW, "resolve_target"),
     "Capture selected inputs",
   );
-  const fixture = frozenWorkflowFixture(RELEASE_CHECKS_WORKFLOW, "resolve_target", {}, {}, {}, [
+  const workdir = tempDirs.make("release-checks-input-validation-");
+  const fixture = frozenToolingFixture(workdir, [
     "scripts/full-release-validation-policy.mjs",
     ...PUBLICATION_CONTRACT_FILES,
     "scripts/lib/release-changelog.mjs",
@@ -3095,7 +3127,6 @@ function runReleaseChecksInputValidation(
     "scripts/lib/canonical-json.mjs",
     "scripts/lib/record-shared.mjs",
   ]);
-  const workdir = fixture.root;
   const outputPath = resolve(workdir, "github-output");
   mkdirSync(resolve(workdir, "waiver-target"));
   writeFileSync(
@@ -3133,6 +3164,7 @@ function runReleaseChecksInputValidation(
       RELEASE_RUN_RELEASE_SOAK_INPUT: runReleaseSoak,
       RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: skipTelegram,
       TELEGRAM_WAIVER: options.telegramWaiver ?? "",
+      LANE_WAIVER: "",
     },
   });
   return { outputPath, result };
@@ -3244,6 +3276,7 @@ function runFullReleaseCandidateRequest(packagePublished: boolean) {
       UPGRADE_SURVIVOR_BASELINE: "openclaw@latest",
       UPGRADE_SURVIVOR_BASELINES: "",
       UPGRADE_SURVIVOR_SCENARIOS: "",
+      LANE_WAIVER: "",
     },
   });
   const output = Object.fromEntries(
@@ -3395,6 +3428,7 @@ function runFullReleaseChildDispatch(
     CI_RELEASE_SCOPE: "full",
     CODEX_PLUGIN_SPEC: "",
     CROSS_OS_SUITE_FILTER: "",
+    EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
     FAIL_FAST: "false",
     GH_TOKEN: "fixture-token",
     LIVE_SUITE_FILTER: "",
@@ -3418,6 +3452,7 @@ function runFullReleaseChildDispatch(
     SCENARIO: "",
     SKIP_PACKAGE_TELEGRAM_E2E: "false",
     TELEGRAM_WAIVER: "",
+    LANE_WAIVER: "",
     TARGET_CONTEXT_REF: "",
     TARGET_REF: "main",
     TARGET_SHA: "b".repeat(40),
@@ -3594,8 +3629,8 @@ function runPackageAcceptanceProfile(params: {
   if (!script) {
     throw new Error("Expected package acceptance profile script");
   }
-  const fixture = frozenWorkflowFixture(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", {});
-  const workdir = fixture.root;
+  const workdir = tempDirs.make("package-acceptance-profile-");
+  const fixture = frozenToolingFixture(workdir, []);
   const outputPath = resolve(workdir, "github-output");
   const result = spawnSync("bash", ["-c", script], {
     cwd: fixture.tooling,
@@ -5666,6 +5701,7 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
     },
   ])("carries the $name artifact owner without replacing publication authority", async (mode) => {
     const stableSoakWaiver = mode.fullReleasePreflight ? "Soak infrastructure unavailable" : "";
+    const laneWaiver = mode.fullReleasePreflight ? "Telegram lane blocked: operator approved" : "";
     const producerRunId = mode.independentProducer ? "333" : "111";
     const fullReleaseRunId = mode.fullReleasePreflight ? "111" : "222";
     const qualifiedName = `openclaw-npm-preflight-${"a".repeat(40)}`;
@@ -5696,6 +5732,7 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
     const expressions: Record<string, string> = {
       "${{ inputs.preflight_run_id }}": "111",
       "${{ inputs.stable_soak_waiver }}": stableSoakWaiver,
+      "${{ inputs.lane_waiver }}": laneWaiver,
       "${{ inputs.full_release_validation_run_id }}": fullReleaseRunId,
     };
     for (const [name, value] of Object.entries(target.outputs ?? {})) {
@@ -5810,6 +5847,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     const dispatch = fixture.events().find((event) => event.startsWith("dispatch:"));
     expect(dispatch).toContain("-f preflight_run_id=111");
     expect(dispatch).toContain(`-f stable_soak_waiver=${stableSoakWaiver}`);
+    expect(dispatch).toContain(`-f lane_waiver=${laneWaiver}`);
     expect(dispatch).toContain(`-f full_release_validation_run_id=${fullReleaseRunId}`);
 
     const proof = fixture.run(
@@ -6756,7 +6794,9 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
       'verify_child_run_sha "$workflow" "$run_id" "$expected_sha" || return 1',
       'approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}"',
       'dispatch_workflow_at_ref "${RELEASE_TAG}" "${TARGET_SHA}" android-release.yml',
-      'wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
+      'wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}" "" true "" false',
+      "if ! wait_for_plugin_npm_release; then",
+      'printf \'%s\\0\' "${npm_args[@]}" > "${RUNNER_TEMP}/plugin-npm-dispatch-args"',
       'wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
       '-f release_publish_branch="${PARENT_WORKFLOW_BRANCH}"',
       '-f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}"',
@@ -8417,6 +8457,7 @@ test "$package_manager" = "pnpm@12.1.0"
         RELEASE_TAG: "${{ inputs.tag }}",
         RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
         STABLE_SOAK_WAIVER: "${{ inputs.stable_soak_waiver }}",
+        LANE_WAIVER: "${{ inputs.lane_waiver }}",
       });
     }
     expect(validationStep.env?.EXPECTED_RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
@@ -8635,18 +8676,30 @@ test "$package_manager" = "pnpm@12.1.0"
     const decisionDownloads = workflowStep(summary, "Download release decision attempts");
     const drainDownloads = workflowStep(summary, "Download diagnostic drain attempts");
 
-    expect(decision.needs).toEqual(["resolve_target", "release_execution_plan"]);
-    expect(drain.needs).toEqual(["resolve_target", "release_execution_plan"]);
+    expect(decision.needs).toEqual([
+      "resolve_target",
+      "release_execution_plan",
+      "automatic_flake_retry",
+    ]);
+    expect(drain.needs).toEqual([
+      "resolve_target",
+      "release_execution_plan",
+      "automatic_flake_retry",
+    ]);
     expect(decision.if).toBe("always()");
     expect(drain.if).toBe("always()");
     expect(decisionStep.run).toBe(drainStep.run);
     expect(decisionStep.env).toMatchObject({
       FAIL_FAST: "${{ inputs.fail_fast }}",
       FULL_RELEASE_STATE_MODE: "decision",
+      FULL_RELEASE_RETRY_RECORDS_PATH: "${{ runner.temp }}/full-release-flake-retry-records",
+      FULL_RELEASE_RETRY_OWNER_RESULT: "${{ needs.automatic_flake_retry.result }}",
     });
     expect(drainStep.env).toMatchObject({
       FAIL_FAST: "false",
       FULL_RELEASE_STATE_MODE: "drain",
+      FULL_RELEASE_RETRY_RECORDS_PATH: "${{ runner.temp }}/full-release-flake-retry-records",
+      FULL_RELEASE_RETRY_OWNER_RESULT: "${{ needs.automatic_flake_retry.result }}",
     });
     expectTextToIncludeAll(decisionStep.run, [
       'node scripts/full-release-validation-state.mjs "$FULL_RELEASE_STATE_MODE"',
@@ -8741,50 +8794,95 @@ test "$package_manager" = "pnpm@12.1.0"
 
   it("pins every Full Release Validation artifact download to the canonical action", () => {
     const workflow = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
-    const downloadSteps = Object.values(workflow.jobs ?? {}).flatMap((job) =>
-      (job.steps ?? []).filter((step) => step.uses?.startsWith("actions/download-artifact@")),
+    const downloadSteps = Object.entries(workflow.jobs ?? {}).flatMap(([jobId, job]) =>
+      (job.steps ?? [])
+        .filter((step) => step.uses?.startsWith("actions/download-artifact@"))
+        .map((step) => ({ jobId, step })),
     );
 
-    expect(downloadSteps).toHaveLength(8);
+    expect(downloadSteps).toHaveLength(12);
     expect(
-      downloadSteps.map((step) => [
+      downloadSteps.map(({ jobId, step }) => [
+        jobId,
         step.name,
         step.with?.name ?? step.with?.pattern,
         step.with?.path,
       ]),
     ).toEqual([
       [
+        "evidence_reuse",
         "Download publication admission for reuse budgeting",
         "full-release-publication-admission-${{ github.run_id }}-1",
         "${{ runner.temp }}/full-release-publication-admission",
       ],
       [
+        "release_execution_plan",
         "Restore immutable release execution plan artifact",
         "full-release-execution-plan-${{ github.run_id }}",
         "${{ github.workspace }}/full-release-execution-plan",
       ],
       [
+        "release_execution_plan",
         "Download immutable publication admission",
         "full-release-publication-admission-${{ github.run_id }}-1",
         "${{ runner.temp }}/full-release-publication-admission",
       ],
-      ...Array.from({ length: 3 }, () => [
+      [
+        "automatic_flake_retry",
+        "Download immutable release execution plan",
+        "full-release-execution-plan-${{ github.run_id }}",
+        "${{ github.workspace }}/full-release-execution-plan",
+      ],
+      [
+        "automatic_flake_retry",
+        "Restore automatic retry intent artifact",
+        "full-release-flake-intent-${{ github.run_id }}-${{ matrix.child }}",
+        "${{ github.workspace }}/full-release-flake-intent",
+      ],
+      [
+        "release_decision",
         "Download immutable release execution plan",
         "full-release-execution-plan-${{ github.run_id }}",
         "${{ runner.temp }}/full-release-execution-plan",
-      ]),
+      ],
       [
+        "release_decision",
+        "Download automatic retry records",
+        "full-release-flake-retry-${{ github.run_id }}-*-${{ github.run_attempt }}",
+        "${{ runner.temp }}/full-release-flake-retry-records",
+      ],
+      [
+        "diagnostic_drain",
+        "Download immutable release execution plan",
+        "full-release-execution-plan-${{ github.run_id }}",
+        "${{ runner.temp }}/full-release-execution-plan",
+      ],
+      [
+        "diagnostic_drain",
+        "Download automatic retry records",
+        "full-release-flake-retry-${{ github.run_id }}-*-${{ github.run_attempt }}",
+        "${{ runner.temp }}/full-release-flake-retry-records",
+      ],
+      [
+        "summary",
+        "Download immutable release execution plan",
+        "full-release-execution-plan-${{ github.run_id }}",
+        "${{ runner.temp }}/full-release-execution-plan",
+      ],
+      [
+        "summary",
         "Download release decision attempts",
         "full-release-decision-${{ github.run_id }}-*",
         "${{ runner.temp }}/full-release-decision-attempts",
       ],
       [
+        "summary",
         "Download diagnostic drain attempts",
         "full-release-diagnostics-${{ github.run_id }}-*",
         "${{ runner.temp }}/full-release-diagnostic-attempts",
       ],
     ]);
-    for (const step of downloadSteps) {
+    for (const { step } of downloadSteps) {
       expect(step.uses).toBe(DOWNLOAD_ARTIFACT_V8);
     }
   });
@@ -9222,7 +9320,11 @@ describe("package artifact reuse", () => {
     const qualify = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "qualify_npm_package");
     const candidate = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "candidate_acquisition");
     for (const job of [prepare, docker]) {
-      expect(jobNeeds(job)).toEqual(["resolve_target", "evidence_reuse"]);
+      expect(jobNeeds(job)).toEqual([
+        "resolve_target",
+        "plugin_compatibility_readiness",
+        "evidence_reuse",
+      ]);
     }
     expect(jobNeeds(qualify)).toEqual(["resolve_target", "prepare_npm_package"]);
     expect(qualify.if).toBe(
@@ -12709,7 +12811,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       for (const [jobName, job] of Object.entries(jobs)) {
         for (const step of job.steps ?? []) {
           if (step.run === "pnpm build") {
-            expect(step.env, `${workflowPath}:${jobName}:${step.name}`).toEqual({
+            expect(step.env, `${workflowPath}:${jobName}:${step.name}`).toMatchObject({
               NODE_OPTIONS: "--max-old-space-size=8192",
             });
           }
@@ -12736,6 +12838,18 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const targetManifestCheckout = workflowStep(
       resolveTargetJob,
       "Checkout target package manifest",
+    );
+    const detectPluginCompatibility = workflowStep(
+      resolveTargetJob,
+      "Detect target plugin compatibility gate",
+    );
+    const pluginCompatibilityJob = workflowJob(
+      FULL_RELEASE_VALIDATION_WORKFLOW,
+      "plugin_compatibility_readiness",
+    );
+    const enforcePluginCompatibility = workflowStep(
+      pluginCompatibilityJob,
+      "Enforce target compatibility readiness",
     );
     const toolingIdentity = workflowStep(resolveTargetJob, "Resolve trusted workflow identity");
     const releaseInputValidation = workflowStep(resolveTargetJob, "Validate release inputs");
@@ -12774,6 +12888,68 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(resolveTargetSteps.indexOf(targetManifestCheckout)).toBeLessThan(
       resolveTargetSteps.indexOf(releaseInputValidation),
     );
+    expect(resolveTargetSteps.indexOf(targetManifestCheckout)).toBeLessThan(
+      resolveTargetSteps.indexOf(detectPluginCompatibility),
+    );
+    expect(detectPluginCompatibility.run).toContain('.scripts["plugins:boundary-report:ci"]');
+    expect(detectPluginCompatibility.run).toContain("38ba27834dd3f98c19d5833e0598dfef3abb7587");
+    expect(detectPluginCompatibility.run).toContain("Current target is missing");
+    expect(detectPluginCompatibility.run).toContain("required=false");
+    expect(resolveTargetJob.outputs?.plugin_compatibility_required).toBe(
+      "${{ steps.plugin_compatibility.outputs.required }}",
+    );
+    expect(pluginCompatibilityJob.needs).toEqual(["resolve_target"]);
+    expect(pluginCompatibilityJob.if).toBe(
+      "needs.resolve_target.outputs.plugin_compatibility_required == 'true'",
+    );
+    expect(enforcePluginCompatibility.run).toBe("pnpm plugins:boundary-report:ci");
+    for (const jobName of [
+      "docker_runtime_assets_preflight",
+      "normal_ci",
+      "plugin_prerelease_independent",
+      "release_checks_independent",
+      "release_checks_candidate",
+      "npm_telegram",
+      "performance",
+      "prepare_npm_package",
+      "prepare_docker_release",
+    ]) {
+      const job = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, jobName);
+      expect(jobNeeds(job), jobName).toContain("plugin_compatibility_readiness");
+      expect(String(job.if), jobName).toContain("needs.plugin_compatibility_readiness.result");
+    }
+    const candidateCondition = String(releaseChecksJob.if).replace(
+      /^\$\{\{\s*([\s\S]*?)\s*\}\}$/u,
+      "$1",
+    );
+    for (const [compatibilityResult, admitted] of [
+      ["success", true],
+      ["skipped", true],
+      ["failure", false],
+      ["cancelled", false],
+    ] as const) {
+      const result = runInNewContext(candidateCondition, {
+        github: { run_attempt: 1 },
+        inputs: { release_package_spec: "openclaw@next", rerun_group: "cross-os" },
+        needs: {
+          resolve_target: {
+            result: "success",
+            outputs: { live_suite_filter: "", release_candidate_artifact_required: "false" },
+          },
+          plugin_compatibility_readiness: { result: compatibilityResult },
+          evidence_reuse: { result: "success", outputs: { reuse: "false" } },
+          candidate_acquisition: { result: "skipped", outputs: {} },
+        },
+        always: () => true,
+        contains: (values: string | string[], value: string) => values.includes(value),
+        fromJSON: JSON.parse,
+      });
+      expect(Boolean(result), compatibilityResult).toBe(admitted);
+    }
+    expect(jobNeeds(evidenceReuseJob)).toContain("plugin_compatibility_readiness");
+    expect(evidenceReuseJob.if).toContain("always()");
+    expect(evidenceReuseJob.if).toContain("needs.resolve_target.result == 'success'");
+    expect(evidenceReuseJob.if).toContain("needs.plugin_compatibility_readiness.result");
     expect(resolveTargetJob.outputs?.trusted_workflow_json).toBe(
       "${{ steps.tooling_identity.outputs.json }}",
     );
@@ -12798,7 +12974,11 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "target_context_ref must be a canonical OpenClaw release branch or tag.",
     ]);
     expect(npmTelegramJob.name).toBe("Run package Telegram E2E");
-    expect(npmTelegramJob.needs).toEqual(["resolve_target", "evidence_reuse"]);
+    expect(npmTelegramJob.needs).toEqual([
+      "resolve_target",
+      "plugin_compatibility_readiness",
+      "evidence_reuse",
+    ]);
     expect(npmTelegramJob["timeout-minutes"]).toBe(15);
     expect(performanceJob["timeout-minutes"]).toBe(15);
     expect(npmTelegramJob.if).toContain(
@@ -14002,6 +14182,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     mkdirSync(join(root, "lib", "cross-os-release-checks"), { recursive: true });
     for (const source of [
       "scripts/release-ci-summary.mjs",
+      "scripts/full-release-flake-retry.mjs",
       "scripts/full-release-validation-policy.mjs",
       ...PUBLICATION_CONTRACT_FILES,
       "scripts/lib/release-changelog.mjs",
@@ -15329,6 +15510,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const candidateBinding = workflowJob(FULL_RELEASE_CANDIDATE_WORKFLOW, "resolve_candidate");
     expect(jobNeeds(workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "evidence_reuse"))).toEqual([
       "resolve_target",
+      "plugin_compatibility_readiness",
     ]);
     expect(jobNeeds(candidateAcquisition)).toEqual([
       "resolve_target",
@@ -15340,6 +15522,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(jobNeeds(candidateBinding)).toEqual(["discover", "prepare"]);
     expect(jobNeeds(releaseChecksParent)).toEqual([
       "resolve_target",
+      "plugin_compatibility_readiness",
       "evidence_reuse",
       "candidate_acquisition",
     ]);
@@ -15348,6 +15531,10 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     );
     const fullParentPath = [
       timeoutForProfile(fullRelease.jobs?.resolve_target?.["timeout-minutes"], "full"),
+      timeoutForProfile(
+        fullRelease.jobs?.plugin_compatibility_readiness?.["timeout-minutes"],
+        "full",
+      ),
       timeoutForProfile(fullRelease.jobs?.evidence_reuse?.["timeout-minutes"], "full"),
       timeoutForProfile(fullReleaseCandidate.jobs?.discover?.["timeout-minutes"], "full"),
       timeoutForProfile(liveE2e.jobs?.validate_selected_ref?.["timeout-minutes"], "full"),
@@ -15359,9 +15546,9 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       timeoutForProfile(candidateBinding["timeout-minutes"], "full"),
       timeoutForProfile(releaseChecksParent["timeout-minutes"], "full"),
     ];
-    expect(fullParentPath).toEqual([10, 10, 10, 30, 90, 15, 5, 15]);
+    expect(fullParentPath).toEqual([10, 10, 10, 10, 30, 90, 15, 5, 15]);
     const fullParentTimeoutFloor = fullParentPath.reduce((total, timeout) => total + timeout, 0);
-    expect(fullParentTimeoutFloor).toBe(185);
+    expect(fullParentTimeoutFloor).toBe(195);
     expect(FULL_RELEASE_WAIT_TIMEOUT_MINUTES).toBe(diagnosticDrainTimeout);
   });
 

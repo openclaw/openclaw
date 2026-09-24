@@ -1,0 +1,161 @@
+title: Slack agent E2E native fixtures and Gateway reply lifecycle
+scenario:
+  id: slack-e2e-lifecycle
+  surface: channels
+  coverage:
+    secondary:
+      - slack.socket
+      - slack.actions
+  objective: Separate native fixture/API evidence from an actual Gateway/model reply, preserving exact message, thread, and uploaded file identities.
+  execution:
+    kind: flow
+    channel: slack
+    timeoutMs: 180000
+    retryCount: 0
+    config:
+      agentE2e: true
+    suiteIsolation: isolated
+    isolationReason: Owns native fixture receipts, an isolated Gateway, and one credential lease.
+    summary: Opt-in via --scenario-file; requires existing driver reactions:read/write and files:read/write. Fixture operations do not prove the model called message tools. Cleanup runs after Gateway stop.
+flow:
+  steps:
+    - name: checks current lease and quiet fixture ingress
+      actions:
+        - call: channelE2e.doctor
+          saveAs: doctor
+        - assert:
+            expr: doctor.ok
+            message:
+              expr: "`Slack lifecycle prerequisite failed: ${JSON.stringify(doctor.checks)}`"
+        - set: marker
+          value:
+            expr: "`QA-SLACK-E2E-${randomUUID()}`"
+        - call: channelE2e.send
+          saveAs: root
+          args:
+            - text: { expr: "'Reply exactly: ' + marker" }
+              mention: false
+        - call: channelE2e.read
+          saveAs: storedRoot
+          args:
+            - messageId: { expr: root.id }
+        - assert:
+            expr: "storedRoot.some((message) => message.id === root.id && message.actor === 'driver' && message.text === 'Reply exactly: ' + marker)"
+            message: Native quiet ingress was not stored under the exact driver receipt
+        - call: sleep
+          args: [1500]
+        - call: channelE2e.read
+          saveAs: quietMessages
+          args:
+            - after: { expr: root.id }
+        - assert:
+            expr: "!quietMessages.some((message) => message.actor === 'sut' && message.text.includes(marker))"
+            message: SUT replied to the unmentioned marker during the bounded quiet window
+        - call: channelE2e.read
+          saveAs: quietThread
+          args:
+            - threadId: { expr: root.id }
+        - assert:
+            expr: "!quietThread.some((message) => message.actor === 'sut')"
+            message: SUT replied in the unmentioned fixture thread during the bounded quiet window
+      detailsExpr: "'Quiet ingress stored; no marker-bearing SUT reply during 1500ms observation (not a typing or rendering claim)'"
+    - name: observes an actual Gateway model reply in the owned thread
+      actions:
+        - call: channelE2e.thread
+          saveAs: thread
+          args:
+            - name: { ref: marker }
+              messageId: { expr: root.id }
+        - call: channelE2e.send
+          saveAs: ingress
+          args:
+            - text: { expr: "`Reply exactly: ${marker}-REPLY`" }
+              threadId: { expr: thread.threadId }
+        - call: channelE2e.waitForReply
+          saveAs: reply
+          args:
+            - afterMessageId: { expr: ingress.id }
+              threadId: { expr: thread.threadId }
+              textIncludes: { expr: "`${marker}-REPLY`" }
+              timeoutMs: 60000
+        - call: channelE2e.read
+          saveAs: storedReply
+          args:
+            - messageId: { expr: reply.id }
+              threadId: { expr: thread.threadId }
+        - assert:
+            expr: "storedReply.some((message) => message.id === reply.id && message.actor === 'sut' && message.threadId === root.id && message.text.includes(`${marker}-REPLY`))"
+            message: Reply was not stored with the correlated SUT/thread identity
+      detailsExpr: "JSON.stringify({ evidence: 'stored Gateway/model reply; not model tool invocation', messageId: reply.id, threadId: reply.threadId })"
+    - name: exercises owned native edit reaction and delete fixtures
+      actions:
+        - call: channelE2e.send
+          saveAs: scratch
+          args:
+            - text: { expr: "`${marker}-SCRATCH`" }
+              mention: false
+        - call: channelE2e.edit
+          args:
+            - messageId: { expr: scratch.id }
+              text: { expr: "`${marker}-EDITED`" }
+        - call: channelE2e.read
+          saveAs: edited
+          args:
+            - messageId: { expr: scratch.id }
+        - assert:
+            expr: "edited.some((message) => message.id === scratch.id && message.text === `${marker}-EDITED`)"
+            message: Accepted edit was not reflected in stored message state
+        - call: channelE2e.react
+          args:
+            - messageId: { expr: scratch.id }
+              emoji: eyes
+        - call: channelE2e.react
+          args:
+            - messageId: { expr: scratch.id }
+              emoji: eyes
+              remove: true
+        - call: channelE2e.delete
+          args:
+            - messageId: { expr: scratch.id }
+        - call: channelE2e.read
+          saveAs: deleted
+          args:
+            - messageId: { expr: scratch.id }
+        - assert:
+            expr: "deleted.length === 0"
+            message: Accepted deletion left the exact owned message in stored history
+      detailsExpr: "'Native fixture/API operations: stored edit, reactions.get add/remove verification, stored deletion; no model message-tool claim'"
+    - name: uploads and reads back the exact native media identity
+      actions:
+        - set: fileName
+          value:
+            expr: "`${marker}.txt`"
+        - set: filePath
+          value:
+            expr: "path.join(env.gateway.workspaceDir, fileName)"
+        - try:
+            actions:
+              - call: fs.writeFile
+                args:
+                  - ref: filePath
+                  - expr: "`${marker}\nSynthetic Slack E2E fixture.\n`"
+              - call: channelE2e.upload
+                saveAs: media
+                args:
+                  - path: { ref: filePath }
+                    fileName: { ref: fileName }
+                    text: { expr: "`${marker}-FILE`" }
+                    mention: false
+              - call: channelE2e.read
+                saveAs: storedMedia
+                args:
+                  - messageId: { expr: media.id }
+              - assert:
+                  expr: "media.attachments?.length === 1 && storedMedia.some((message) => message.id === media.id && message.actor === 'driver' && message.attachments?.some((file) => file.id === media.attachments[0].id && file.name === fileName))"
+                  message: Stored upload lost the exact file ID or filename
+            finally:
+              - call: fs.rm
+                args:
+                  - ref: filePath
+                  - force: true
+      detailsExpr: "JSON.stringify({ evidence: 'native stored media identity, not visual rendering or model upload', messageId: media.id, fileId: media.attachments[0].id, fileName })"

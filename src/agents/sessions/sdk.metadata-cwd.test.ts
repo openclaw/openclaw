@@ -103,8 +103,9 @@ it.each(["SDK initialization", "model transition"] as const)(
         expect(intercepted).toHaveBeenCalledOnce();
         expect(completed.records).toBeDefined();
         expect(process.cwd()).toBe(secondDir);
-        expect.soft(capturedTarget).toEqual(first);
-        expect.soft(manager.getSessionTarget()).toEqual(first);
+        const expectedTarget = { ...first, env: { OPENCLAW_STATE_DIR: state.stateDir } };
+        expect.soft(capturedTarget).toEqual(expectedTarget);
+        expect.soft(manager.getSessionTarget()).toEqual(expectedTarget);
         expect(manager.getSessionId()).toBe(relativeTarget.sessionId);
         const firstAfter = await loadTranscriptEvents(first);
         expect(firstAfter.slice(0, completed.records?.length)).toEqual(completed.records);

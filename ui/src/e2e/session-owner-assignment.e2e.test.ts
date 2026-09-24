@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { LitElement } from "lit";
 import type { Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { beforeEach, expect, it } from "vitest";
@@ -292,6 +293,8 @@ suite.define(() => {
       await row.click({ button: "right" });
 
       const menu = page.locator("openclaw-session-menu");
+      // The context-menu event can return before the lazy renderer mounts the menu.
+      await menu.evaluate((element) => (element as LitElement).updateComplete);
       const rootAssignmentLabels = await menu
         .locator(":scope > wa-dropdown > wa-dropdown-item > .session-menu__text")
         .allTextContents();

@@ -204,6 +204,100 @@ describe("node worker transfer client", () => {
     }
   });
 
+  it.each(["download", "next entry cleanup"] as const)(
+    "keeps mutations inside staging after parent replacement during %s",
+    async (replacement) => {
+      const root = tempDirs.make("node-worker-transfer-parent-swap-");
+      const workspaceDir = path.join(root, "workspace");
+      const outside = path.join(root, "outside");
+      await fs.mkdir(workspaceDir);
+      await fs.writeFile(path.join(workspaceDir, "sentinel.txt"), "keep me\n");
+      await fs.mkdir(outside);
+      const outsideFile = path.join(outside, "result.txt");
+      if (replacement === "next entry cleanup") {
+        await fs.writeFile(outsideFile, "outside sentinel\n");
+      }
+      const body = Buffer.from("downloaded workspace content\n");
+      const sha256 = createHash("sha256").update(body).digest("hex");
+      const entry = {
+        path: "nested/result.txt",
+        type: "file" as const,
+        mode: 0o644,
+        size: body.byteLength,
+        sha256,
+      };
+      const rawManifest = serializeWorkerWorkspaceManifest({
+        version: 1,
+        baseCommit: null,
+        directories: ["nested"],
+        entries: [
+          ...(replacement === "next entry cleanup" ? [{ ...entry, path: "a-trigger.bin" }] : []),
+          entry,
+        ],
+      });
+      const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+      let substituted = false;
+      const server = createHttpServer((req, res) => {
+        void (async () => {
+          if (req.url?.endsWith("/manifest")) {
+            res.writeHead(200).end(rawManifest);
+            return;
+          }
+          if (req.url?.endsWith(`/blobs/${sha256}`)) {
+            if (!substituted) {
+              const staging = (await fs.readdir(root)).find((name) =>
+                name.startsWith(".workspace.workspace-transfer-"),
+              );
+              if (!staging) {
+                throw new Error("test transfer has no staging directory");
+              }
+              const nested = path.join(root, staging, "nested");
+              await fs.rmdir(nested);
+              await fs.symlink(outside, nested, "junction");
+              substituted = true;
+            }
+            res.writeHead(200).end(body);
+            return;
+          }
+          res.writeHead(404).end();
+        })().catch((error: unknown) => {
+          res.destroy(error instanceof Error ? error : new Error(String(error)));
+        });
+      });
+      const gatewayUrl = await listen(server);
+      try {
+        await expect(
+          runNodeWorkerWorkspaceTransfer({
+            gatewayUrl,
+            environmentId: "environment-parent-swap",
+            workspaceDir,
+            manifestHome: root,
+            transfer: { direction: "download", token: "test-token", manifestRef },
+          }),
+        ).rejects.toThrow("workspace-transfer-failed");
+        expect(substituted).toBe(true);
+        if (replacement === "next entry cleanup") {
+          expect(await fs.readFile(outsideFile, "utf8")).toBe("outside sentinel\n");
+        } else {
+          expect(await fs.readdir(outside)).toEqual([]);
+        }
+        expect(await fs.readFile(path.join(workspaceDir, "sentinel.txt"), "utf8")).toBe(
+          "keep me\n",
+        );
+        expect(
+          (await fs.readdir(root)).filter((name) =>
+            name.startsWith(".workspace.workspace-transfer-"),
+          ),
+        ).toEqual([]);
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
+    },
+  );
+
   it("restores one interrupted workspace backup before the next transfer", async () => {
     const root = tempDirs.make("node-worker-transfer-recover-");
     const workspaceDir = path.join(root, "workspace");
@@ -249,7 +343,7 @@ describe("node worker transfer client", () => {
     }
   });
 
-  it("reuses the validated TLS pin for a pooled socket", async () => {
+  it("reuses the validated TLS pin for a pooled socket and downloads literal tilde paths", async () => {
     const root = tempDirs.make("node-worker-transfer-tls-");
     const workspaceDir = path.join(root, "workspace");
     const body = Buffer.from("pinned transfer\n");
@@ -257,10 +351,10 @@ describe("node worker transfer client", () => {
     const rawManifest = serializeWorkerWorkspaceManifest({
       version: 1,
       baseCommit: null,
-      directories: ["nested"],
+      directories: ["~"],
       entries: [
         {
-          path: "nested/result.txt",
+          path: "~/result.txt",
           type: "file",
           mode: 0o644,
           size: body.byteLength,
@@ -332,9 +426,9 @@ describe("node worker transfer client", () => {
           transfer: { direction: "download", token: "test-token", manifestRef },
         }),
       ).resolves.toBe(manifestRef);
-      await expect(
-        fs.readFile(path.join(workspaceDir, "nested", "result.txt"), "utf8"),
-      ).resolves.toBe("pinned transfer\n");
+      await expect(fs.readFile(path.join(workspaceDir, "~", "result.txt"), "utf8")).resolves.toBe(
+        "pinned transfer\n",
+      );
       expect(requestCount).toBe(2);
       expect(connectionCount).toBe(1);
       expect(hidPeerCertificate).toBe(true);
@@ -796,7 +890,7 @@ describe("node worker transfer client", () => {
     }
   });
 
-  it("cleans up error listeners across repeated download and upload backpressure", async () => {
+  it("downloads complete files and cleans up upload backpressure listeners", async () => {
     const root = tempDirs.make("node-worker-transfer-backpressure-");
     const workspaceDir = path.join(root, "workspace");
     const body = Buffer.alloc(2 * 1024 * 1024, "a");
@@ -829,9 +923,6 @@ describe("node worker transfer client", () => {
           return;
         }
         if (req.method === "POST" && req.url?.includes("/reconciliations/")) {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 50);
-          });
           for await (const chunk of req) {
             void chunk;
           }
@@ -848,14 +939,7 @@ describe("node worker transfer client", () => {
         res.destroy(error instanceof Error ? error : new Error(String(error)));
       });
     });
-    const outputProbes: DrainProbe[] = [];
     const requestProbes: DrainProbe[] = [];
-    const createWriteStream = fsSync.createWriteStream.bind(fsSync);
-    const writeStreamSpy = vi.spyOn(fsSync, "createWriteStream").mockImplementation((...args) => {
-      const stream = createWriteStream(...args);
-      outputProbes.push(observeDrainListeners(stream));
-      return stream;
-    });
     const request = http.request.bind(http);
     const requestSpy = vi.spyOn(http, "request").mockImplementation(((
       url: URL,
@@ -876,6 +960,7 @@ describe("node worker transfer client", () => {
           transfer: { direction: "download", token: "download-token", manifestRef },
         }),
       ).resolves.toBe(manifestRef);
+      await expect(fs.readFile(path.join(workspaceDir, "large.bin"))).resolves.toEqual(body);
 
       await fs.writeFile(path.join(workspaceDir, "large.bin"), Buffer.alloc(body.byteLength, "b"));
       uploadManifestRef = (
@@ -896,24 +981,16 @@ describe("node worker transfer client", () => {
         }),
       ).resolves.toBe(uploadManifestRef);
 
-      const outputProbe = outputProbes.find((probe) => probe.drains > 10);
       const requestProbe = requestProbes.find((probe) => probe.drains > 10);
       if (!process.versions.bun) {
-        expect(outputProbe).toBeDefined();
         expect(requestProbe).toBeDefined();
-      }
-      if (outputProbe) {
-        expect(outputProbe.drains).toBeGreaterThan(10);
-        expect(outputProbe.maxErrorListeners).toBeLessThanOrEqual(1);
       }
       if (requestProbe) {
         expect(requestProbe.drains).toBeGreaterThan(10);
         expect(requestProbe.maxErrorListeners).toBeLessThanOrEqual(2);
       }
-      expect(outputProbes.every((probe) => probe.emitter.listenerCount("error") === 0)).toBe(true);
       expect(requestProbes.every((probe) => probe.emitter.listenerCount("error") === 0)).toBe(true);
     } finally {
-      writeStreamSpy.mockRestore();
       requestSpy.mockRestore();
       server.closeAllConnections();
       await new Promise<void>((resolve) => {

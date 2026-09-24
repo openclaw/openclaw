@@ -146,6 +146,7 @@ export function createSessionRowProjectionFixture(params: {
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
+    readPreparedRowContext: () => rowContext,
     capture: describe,
     findBySessionId: (query) =>
       [...rows.values()].filter(
@@ -186,16 +187,55 @@ export function createSessionRowProjectionFixture(params: {
       return row;
     },
     ensureMaterialized: () => Promise.resolve(),
+    prepareMembership: () => Promise.resolve(),
+    needsMembershipPreparation: () => false,
+    sessionGroupTargets: () => {
+      const groups = new Map<string, { agentId: string; sessionKey: string }[]>();
+      for (const row of rows.values()) {
+        const name = row.entry.category?.trim();
+        if (name) {
+          const targets = groups.get(name) ?? [];
+          targets.push({ agentId: row.agentId, sessionKey: row.key });
+          groups.set(name, targets);
+        }
+      }
+      return groups;
+    },
+    sharingTarget(query) {
+      const row = describe(query);
+      return row
+        ? {
+            agentId: row.agentId,
+            generation: row.generation,
+            canonicalKey: row.key,
+            entry: row.entry,
+            storeKey: row.key,
+            storeKeys: [row.key],
+            storePath: row.storeTarget.storePath,
+          }
+        : null;
+    },
+    sharingTargetState(query) {
+      const target = projection.sharingTarget(query);
+      return target ? { status: "ready", target } : { status: "missing" };
+    },
+    hasMembership: (path, key, identity) =>
+      [...rows.values()].some(
+        (row) =>
+          row.storeTarget.storePath === path && row.key === key && row.membership.has(identity),
+      ),
     get materializedCount() {
       return revision;
     },
     dirtyRowCount: 0,
     needsMaterialization: false,
+    getPolicyConfig: () => cfg,
     state: {
       get revision() {
         return revisionToken;
       },
       cfg,
+      policyConfig: cfg,
       modelCatalog,
       rowContext,
       scope: (options) => ({
