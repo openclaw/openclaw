@@ -191,7 +191,7 @@ export class ShellGatewayOwner {
     }
     if (event.event === "session.run.completed") {
       const context = this.host.context;
-      const client = context?.gateway.snapshot.client;
+      const completionClient = context?.gateway.snapshot.client;
       const hello = context?.gateway.snapshot.hello;
       const profileId = context?.gateway.snapshot.selfUser?.id;
       const revision = context?.gateway.connectionRevision;
@@ -204,7 +204,7 @@ export class ShellGatewayOwner {
           sessionKey: pane.sessionKey,
           agentId: pane.agentId,
         }));
-      if (context && client) {
+      if (context && completionClient) {
         void import("./background-session-tracker.ts").then(({ handleSessionCompletionEvent }) => {
           if (
             context.gateway.connectionRevision !== revision ||
@@ -213,7 +213,12 @@ export class ShellGatewayOwner {
           ) {
             return;
           }
-          handleSessionCompletionEvent({ context, client, payload: event.payload, visiblePanes });
+          handleSessionCompletionEvent({
+            context,
+            client: completionClient,
+            payload: event.payload,
+            visiblePanes,
+          });
         });
       }
       return;
