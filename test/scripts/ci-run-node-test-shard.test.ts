@@ -374,6 +374,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       const nodeFiles = [
         skippedOnBun,
         v8HeapTest,
+        "src/agents/code-mode-node.test.ts",
         nodeHistoryBenchmark,
         nativeCompilerTest,
         compilerGraphTest,
