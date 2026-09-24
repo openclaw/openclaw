@@ -3136,7 +3136,7 @@ src/plugins/provider-auth-choice-helpers.ts	12
 src/plugins/provider-catalog-result.ts	8
 src/plugins/provider-discovery.runtime.ts	2
 src/plugins/provider-discovery.ts	2
-src/plugins/provider-model-compat.ts	7
+src/plugins/provider-model-compat.ts	6
 src/plugins/provider-model-primary.ts	1
 src/plugins/provider-openai-chatgpt-oauth.ts	1
 src/plugins/provider-policy-surface.ts	1

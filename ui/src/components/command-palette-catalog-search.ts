@@ -1,6 +1,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { AgentsListResult, GatewaySessionRow, SkillStatusReport } from "../api/types.ts";
+import type {
+  AgentsListResult,
+  GatewaySessionRow,
+  ModelCatalogResult,
+  SkillStatusReport,
+} from "../api/types.ts";
 import {
   SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
   settingsNavigationLabelForRoute,
@@ -13,7 +18,6 @@ import { t } from "../i18n/index.ts";
 import { registerAppsEnglish } from "../i18n/locales/en-apps.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
 import { loadCronCatalog } from "../lib/cron/catalog.ts";
-import { loadModelCatalog, modelCatalogRefreshError } from "../lib/model-catalog-store.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import type { IconName } from "./icons.ts";
@@ -42,6 +46,8 @@ type CommandPaletteCatalogItem = {
   agentId?: string;
   description?: string;
   searchText?: string;
+  /** Searchable only while the current model catalog permits unrestricted selection. */
+  primaryModel?: string;
 };
 
 export type CommandPaletteItem = Omit<CommandPaletteCatalogItem, "routeId" | "category"> & {
@@ -153,6 +159,7 @@ export function filterCommandPaletteItems(params: {
   catalogItems: readonly CommandPaletteItem[];
   desktopAvailable: boolean;
   custodianAvailable: boolean;
+  primaryModelSearch?: boolean;
 }): CommandPaletteItem[] {
   const baseItems = getCommandPaletteBaseItems(
     params.desktopAvailable,
@@ -172,7 +179,9 @@ export function filterCommandPaletteItems(params: {
     }
     return label.includes(query) ||
       normalizeLowercaseStringOrEmpty(item.description).includes(query) ||
-      normalizeLowercaseStringOrEmpty(item.searchText).includes(query)
+      normalizeLowercaseStringOrEmpty(item.searchText).includes(query) ||
+      (params.primaryModelSearch &&
+        normalizeLowercaseStringOrEmpty(item.primaryModel).includes(query))
       ? 1
       : 0;
   };
@@ -202,6 +211,7 @@ export function toCommandPaletteItems(
     agentId: item.agentId,
     description: item.description,
     searchText: item.searchText,
+    primaryModel: item.primaryModel,
   }));
 }
 
@@ -268,11 +278,7 @@ export async function loadCommandPaletteCatalogItems(params: {
   agentId: string;
   agents: () => Promise<AgentsListResult | null>;
   methodAvailable: (method: string) => boolean;
-}): Promise<{
-  items: CommandPaletteCatalogItem[];
-  modelRequestFailed: boolean;
-  modelSearchError: string | null;
-}> {
+}): Promise<CommandPaletteCatalogItem[]> {
   const requestIfAvailable = async <T>(
     method: string,
     requestParams: unknown,
@@ -280,15 +286,14 @@ export async function loadCommandPaletteCatalogItems(params: {
     params.methodAvailable(method)
       ? params.client.request<T>(method, requestParams).catch(() => null)
       : null;
-  const [agents, automations, skills, plugins, models] = await Promise.all([
+  const [agents, automations, skills, plugins] = await Promise.all([
     params.agents().catch(() => null),
     params.methodAvailable("cron.list") ? loadCronCatalog(params.client).catch(() => null) : null,
     requestIfAvailable<SkillStatusReport>("skills.status", { agentId: params.agentId }),
     requestIfAvailable<PluginListResult>("plugins.list", {}),
-    loadModelCatalog(params.client, { agentId: params.agentId }).catch(() => null),
   ]);
 
-  const items: CommandPaletteCatalogItem[] = [
+  return [
     ...(agents?.agents ?? []).map((agent) => ({
       id: `agent-${agent.id}`,
       label: agent.identity?.name ?? agent.name ?? agent.id,
@@ -297,14 +302,8 @@ export async function loadCommandPaletteCatalogItems(params: {
       routeId: "agents" as const,
       agentId: agent.id,
       description: agent.id,
-      searchText: [
-        agent.id,
-        agent.workspace,
-        models && !models.modelSelectionPolicy?.restricted ? agent.model?.primary : undefined,
-        agent.identity?.theme,
-      ]
-        .filter(Boolean)
-        .join(" "),
+      searchText: [agent.id, agent.workspace, agent.identity?.theme].filter(Boolean).join(" "),
+      primaryModel: agent.model?.primary,
     })),
     ...(automations?.jobs ?? []).map((job) => ({
       id: `automation-${job.id}`,
@@ -334,22 +333,22 @@ export async function loadCommandPaletteCatalogItems(params: {
         .filter(Boolean)
         .join(" "),
     })),
-    ...(models?.models ?? []).map((model) => ({
-      // Both IDs can contain separators; selection needs a lossless pair.
-      id: `model-${JSON.stringify([model.provider, model.id])}`,
-      label: model.name || model.id,
-      icon: "brain" as const,
-      category: "models" as const,
-      routeId: "model-providers" as const,
-      description: model.provider,
-      searchText: [model.id, model.provider, model.alias, model.tags?.join(" ")]
-        .filter(Boolean)
-        .join(" "),
-    })),
   ];
-  return {
-    items,
-    modelRequestFailed: models === null,
-    modelSearchError: models ? modelCatalogRefreshError(models) : t("palette.modelSearchFailed"),
-  };
+}
+
+export function getCommandPaletteModelItems(
+  catalog: Pick<ModelCatalogResult, "models">,
+): CommandPaletteCatalogItem[] {
+  return catalog.models.map((model) => ({
+    // Both IDs can contain separators; selection needs a lossless pair.
+    id: `model-${JSON.stringify([model.provider, model.id])}`,
+    label: model.name || model.id,
+    icon: "brain" as const,
+    category: "models" as const,
+    routeId: "model-providers" as const,
+    description: model.provider,
+    searchText: [model.id, model.provider, model.alias, model.tags?.join(" ")]
+      .filter(Boolean)
+      .join(" "),
+  }));
 }

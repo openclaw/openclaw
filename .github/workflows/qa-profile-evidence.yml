@@ -32,6 +32,11 @@ on:
         type: boolean
   workflow_call:
     inputs:
+      runner_group:
+        description: Optional dedicated release runner group; empty retains the current labels
+        required: false
+        default: ""
+        type: string
       ref:
         description: OpenClaw branch, tag, or SHA to run
         required: true
@@ -109,7 +114,7 @@ env:
 jobs:
   authorize_actor:
     name: Authorize workflow actor
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || ('blacksmith-8vcpu-ubuntu-2404') }}
     outputs:
       authorized: ${{ steps.permission.outputs.authorized }}
     steps:
@@ -159,7 +164,7 @@ jobs:
     name: Validate selected ref
     needs: authorize_actor
     if: needs.authorize_actor.outputs.authorized == 'true'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || ('blacksmith-8vcpu-ubuntu-2404') }}
     outputs:
       protocol_base_revision: ${{ steps.validate.outputs.protocol_base_revision }}
       selected_revision: ${{ steps.validate.outputs.selected_revision }}
@@ -297,7 +302,7 @@ jobs:
   plan_qa_profile:
     name: Plan QA profile shards
     needs: validate_selected_ref
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || ('blacksmith-8vcpu-ubuntu-2404') }}
     # Selected-revision code requires the protected QA environment before runner allocation.
     environment: qa-live-shared
     outputs:
@@ -464,7 +469,7 @@ jobs:
   run_qa_profile_shard:
     name: Generate QA profile evidence (${{ matrix.id }})
     needs: [validate_selected_ref, plan_qa_profile]
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || ('blacksmith-8vcpu-ubuntu-2404') }}
     timeout-minutes: 150
     permissions:
       contents: read
@@ -783,7 +788,7 @@ jobs:
     name: Aggregate QA profile evidence
     needs: [validate_selected_ref, plan_qa_profile, run_qa_profile_shard]
     if: ${{ always() && needs.validate_selected_ref.result == 'success' && needs.plan_qa_profile.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || ('blacksmith-8vcpu-ubuntu-2404') }}
     # Selected-revision code requires the protected QA environment before runner allocation.
     environment: qa-live-shared
     timeout-minutes: 30

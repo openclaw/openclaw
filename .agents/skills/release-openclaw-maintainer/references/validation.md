@@ -20,9 +20,10 @@ pnpm test:install:smoke
 ```
 
 Use existing equivalent exact-SHA release evidence; do not repeat successful
-checks solely because this list mentions them. Required source CI includes
-`pnpm check` and `pnpm check:test-types`. Root Dockerfile/install-smoke and Linux
-cross-OS proof must pass before tagging. Code SHA and Release SHA may be the
+checks solely because this list mentions them. Source CI, including `pnpm check`,
+`pnpm check:test-types`, and cross-OS outcomes, is advisory for npm/ClawHub.
+Artifact, install-smoke, survivor, first-hop, pack/npm qualification, target,
+and provenance proofs remain required. Code SHA and Release SHA may be the
 same commit when it contains final notes; the same successful full parent
 qualifies that source and its exact publication bytes. Only a later
 CHANGELOG-only descendant may reuse earlier product evidence through the
@@ -61,27 +62,33 @@ uses `--video-providers fal`. Full transform modes require intentional
 credentialed tests. Local live model/Parallels rosters require both OpenAI and
 Anthropic keys; missing either blocks those lanes, never print their values.
 
-## Beta-publish
+## Beta-publish and the stable fast path
 
-Use `release_profile=beta`, `run_release_soak=false` for beta. A qualifying `all` run for
+Use `release_profile=beta`, `run_release_soak=false` for beta. Stable-publish
+defaults to `release_profile=stable`; the beta profile is a stable's explicit
+operator fast path only with `stable_soak_waiver`. A qualifying `all` run for
 an actual beta on its canonical branch/tag records `npm-beta-v1`. Native app
-CI, performance, and published-package Telegram move to confidence. Required
-Node, Control UI, plugin, package, install/update, Linux/Windows/macOS cross-OS, QA parity,
-runtime-pair/restart and tool-coverage gates remain. Beta `all` without soak
+CI, performance, and published-package Telegram move to confidence. Node,
+Control UI, plugin, cross-OS, QA parity, runtime-pair/restart, and tool coverage
+remain selected but advisory; required package/install/update proofs remain
+enforced. Beta `all` without soak
 also defers Package Acceptance Telegram, broad live/E2E, QA-live and Parallels.
 Package Telegram deferral applies to beta-profile main/alpha too, but those do
 not qualify for `npm-beta-v1`.
 
-Native app publishers run separately from npm/ClawHub publication. Selected
-macOS Swift and Windows Node CI lanes remain required; repair and rerun failed
-lanes before publication.
+Native app lanes (macos-swift, platform publishers) are advisory for the
+npm/ClawHub decision: record their conclusion and fix them in parallel.
+Windows node-test outcomes are also advisory for npm/ClawHub; repair their
+owner in parallel without holding publication for a green rerun.
 
-Linux, Windows, and macOS Gateway cross-OS install and upgrade suites block
-beta/stable/full validation. All-group `cross_os_suite_filter` selections must
-retain `packaged-fresh`, `installer-fresh`, and `packaged-upgrade` on all three
-OSes: all nine pairs are required for `npm-beta-v1` and `npm-stable-v1`. Focused
-`cross-os` reruns may select individual lanes. Retain each conclusion in the
-manifest and `release-ci-summary`.
+Linux Gateway cross-OS lanes are required proof; Windows/macOS variants are
+recorded as advisory. Coverage is never reduced: all-group
+`cross_os_suite_filter` selections must retain `packaged-fresh`,
+`installer-fresh`, and `packaged-upgrade` on all three OSes (nine pairs).
+Focused `cross-os` reruns may select individual lanes. Publishing a stable with
+a failed advisory lane requires `lane_waiver` (RELEASING.md "Publication
+modes"). Read required versus advisory conclusions in the manifest and
+`release-ci-summary`.
 
 ## Postpublish confidence
 
@@ -111,22 +118,28 @@ admit a confirmed product fix only to a new operator-approved candidate.
 
 ## Stable-publish and bounded execution
 
-Stable publication requires `release_profile=stable` or `full`, its required
-roster, soak, and successful blocking performance evidence. Beta-profile
-validation cannot authorize stable publication. Matching beta confidence may
-support the promotion roster in [regular release](regular-release.md), but does
-not waive a required gate.
+The default stable publishes from beta-profile evidence with the recorded soak
+waiver (precedent 2026.9.5 and 2026.9.6); soak, live/E2E, Telegram, QA-live
+and Parallels run as postpublish confidence. Opt-in `release_profile=stable` or
+`full` selects its stable roster and soak; performance and ordinary tests remain
+advisory. Matching beta confidence may support the light promotion
+roster in [regular release](regular-release.md), not waive a required gate.
 
-Retain each child's first failure. Diagnose and fix the owning defect before
-focused validation; automatic retries and passing replays do not establish a
-fix. Preserve the candidate unless a confirmed product defect requires a new
-Code SHA, and record changes and proof in the release handoff.
+Preserve the validation parent and successful children when continuation is
+eligible; parents that produced sealed candidate artifacts need a new parent
+with verified evidence reuse. Diagnose failures and retry only the affected
+surface within the controller's budget. Flaky tests never hold publication
+through advisory suites; an untouched test or passing replay alone proves
+neither a flake nor a fix. Change Code SHA only for a confirmed defect in
+required proof or publication bytes. Aim to seal within approximately 20 minutes
+and publish within an hour; report observed blockers and timing rather than
+claiming those objectives as measured guarantees.
 
 Native publication retains separate signing/notarization/promotion gates under
-[platform publication](platform-publication.md). Platform publisher failures
-are repaired in parallel. Selected macOS Swift and Windows Node shards inside
-the `ci.yml` aggregate remain required checks; repair and rerun failed lanes
-before publication.
+[platform publication](platform-publication.md). Native app lanes stay
+advisory for the npm/ClawHub decision and are fixed in parallel. Native publication
+never gates npm/ClawHub, GitHub finalization, or main closeout; report each
+platform's readiness separately.
 
 Local proof is targeted: never mirror Full Release Validation locally. Run a
 lane locally only after it failed in CI, to separate flake from defect, bounded

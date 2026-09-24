@@ -3705,6 +3705,10 @@ export const en: TranslationMap & {
         label: "System · restart recovery",
         summary:
           "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+        interrupted:
+          "The Gateway restarted. Automatic recovery was interrupted before the agent could resume. Send a message to continue.",
+        cancelled:
+          "The Gateway restarted. Automatic recovery was cancelled before the agent could resume. Send a message to continue.",
       },
       gatewayRestarted: {
         label: "System · gateway restarted",
