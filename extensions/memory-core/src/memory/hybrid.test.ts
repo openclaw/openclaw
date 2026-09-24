@@ -17,6 +17,14 @@ describe("memory hybrid helpers", () => {
     expect(buildFtsQuery("   ")).toBeNull();
   });
 
+  it("collapses only canonical forms that unicode61 tokenizes identically", () => {
+    const decomposedAe = "ǽ".normalize("NFD");
+    const decomposedMixedScript = "café東京".normalize("NFD");
+
+    expect(buildFtsQuery(decomposedAe, "unicode61")).toBe(`("${decomposedAe}" OR "ǽ")`);
+    expect(buildFtsQuery(decomposedMixedScript, "unicode61")).toBe(`"${decomposedMixedScript}"`);
+  });
+
   it("bm25RankToScore is monotonic and clamped", () => {
     expect(bm25RankToScore(0)).toBeCloseTo(1);
     expect(bm25RankToScore(1)).toBeCloseTo(0.5);
