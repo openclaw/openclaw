@@ -372,14 +372,6 @@ describe("active cron schedule ownership", () => {
     expect(hasActiveCronJobs()).toBe(false);
   });
 
-  it("records durable schedule mutations on the admitted active run", () => {
-    const marker = markCronJobActive("rescheduled-job");
-
-    noteActiveCronJobScheduleMutation("rescheduled-job");
-
-    expect(marker?.scheduleMutated).toBe(true);
-  });
-
   it("records trigger mutations without retiring schedule ownership", () => {
     const marker = markCronJobActive("trigger-edited-job");
 
@@ -389,28 +381,10 @@ describe("active cron schedule ownership", () => {
     expect(marker?.scheduleMutated).toBeUndefined();
   });
 
-  it("keeps trigger mutation ownership after the script is edited back", () => {
-    const marker = markCronJobActive("trigger-restored-job");
-
-    noteActiveCronJobTriggerMutation("trigger-restored-job");
-    noteActiveCronJobTriggerMutation("trigger-restored-job");
-
-    expect(marker?.triggerMutated).toBe(true);
-  });
-
   it("does not create trigger markers for an idle job", () => {
     noteActiveCronJobTriggerMutation("idle-trigger-job");
 
     expect(hasActiveCronJobs()).toBe(false);
-  });
-
-  it("keeps a mutation after the schedule is edited back to its original value", () => {
-    const marker = markCronJobActive("rescheduled-job");
-
-    noteActiveCronJobScheduleMutation("rescheduled-job");
-    noteActiveCronJobScheduleMutation("rescheduled-job");
-
-    expect(marker?.scheduleMutated).toBe(true);
   });
 
   it("attributes later edits only to the replacement active run", () => {

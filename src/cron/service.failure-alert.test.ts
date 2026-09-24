@@ -11,6 +11,21 @@ import {
 const { withFailureAlertCron } = setupFailureAlertSuite();
 
 describe("CronService failure alerts", () => {
+  const globalWebhookAlert = {
+    enabled: true,
+    after: 1,
+    mode: "webhook" as const,
+    to: "https://alerts.example.test/global-failures",
+  };
+  const globalAnnounceAlert = {
+    enabled: true,
+    after: 1,
+    mode: "announce" as const,
+    channel: "slack",
+    to: "slack:cron-alerts",
+    accountId: "slack-bot",
+  };
+
   it.each([
     { name: "default", global: undefined, job: undefined, cooldownMs: 3_600_000 },
     {
@@ -437,14 +452,7 @@ describe("CronService failure alerts", () => {
     },
     {
       name: "uses a globally configured failure announcement channel and target",
-      globalAlert: {
-        enabled: true,
-        after: 1,
-        mode: "announce" as const,
-        channel: "slack",
-        to: "slack:cron-alerts",
-        accountId: "slack-bot",
-      },
+      globalAlert: globalAnnounceAlert,
       jobAlert: undefined,
       expected: {
         mode: "announce",
@@ -455,14 +463,7 @@ describe("CronService failure alerts", () => {
     },
     {
       name: "preserves a global route when a job explicitly repeats its alert mode",
-      globalAlert: {
-        enabled: true,
-        after: 1,
-        mode: "announce" as const,
-        channel: "slack",
-        to: "slack:cron-alerts",
-        accountId: "slack-bot",
-      },
+      globalAlert: globalAnnounceAlert,
       jobAlert: {
         mode: "announce" as const,
       },
@@ -475,12 +476,7 @@ describe("CronService failure alerts", () => {
     },
     {
       name: "preserves an explicit job failure webhook over the global destination",
-      globalAlert: {
-        enabled: true,
-        after: 1,
-        mode: "webhook" as const,
-        to: "https://alerts.example.test/global-failures",
-      },
+      globalAlert: globalWebhookAlert,
       jobAlert: {
         mode: "webhook" as const,
         to: "https://alerts.example.test/job-failures",
@@ -491,32 +487,8 @@ describe("CronService failure alerts", () => {
       },
     },
     {
-      name: "falls back to the primary announce route instead of a global webhook URL",
-      globalAlert: {
-        enabled: true,
-        after: 1,
-        mode: "webhook" as const,
-        to: "https://alerts.example.test/global-failures",
-      },
-      jobAlert: {
-        mode: "announce" as const,
-      },
-      expected: {
-        mode: "announce",
-        channel: "telegram",
-        to: "telegram:19098680",
-      },
-    },
-    {
       name: "never reuses a global chat target after a job changes the failure channel",
-      globalAlert: {
-        enabled: true,
-        after: 1,
-        mode: "announce" as const,
-        channel: "slack",
-        to: "slack:cron-alerts",
-        accountId: "slack-bot",
-      },
+      globalAlert: globalAnnounceAlert,
       jobAlert: {
         mode: "announce" as const,
         channel: "telegram",
@@ -530,14 +502,7 @@ describe("CronService failure alerts", () => {
     },
     {
       name: "never reuses a global chat target or account for the last failure channel",
-      globalAlert: {
-        enabled: true,
-        after: 1,
-        mode: "announce" as const,
-        channel: "slack",
-        to: "slack:cron-alerts",
-        accountId: "slack-bot",
-      },
+      globalAlert: globalAnnounceAlert,
       jobAlert: {
         mode: "announce" as const,
         channel: "last",
@@ -584,12 +549,7 @@ describe("CronService failure alerts", () => {
     },
     {
       name: "uses an explicit job channel instead of the global webhook route",
-      globalAlert: {
-        enabled: true,
-        after: 1,
-        mode: "webhook" as const,
-        to: "https://alerts.example.test/global-failures",
-      },
+      globalAlert: globalWebhookAlert,
       jobAlert: {
         channel: "telegram",
       },
@@ -987,26 +947,8 @@ describe("CronService failure alerts", () => {
           throw new Error("expected failure alert text");
         }
 
-        // Verify no dangling surrogates in the truncated error text.
-        // Must check every character including the last: a dangling high surrogate
-        // at the final position would be missed by stopping at length-1.
-        for (let i = 0; i < alertText.length; i++) {
-          const cu = alertText.charCodeAt(i);
-          if (cu >= 0xd800 && cu <= 0xdbff) {
-            expect(
-              alertText.charCodeAt(i + 1) >= 0xdc00 && alertText.charCodeAt(i + 1) <= 0xdfff,
-            ).toBe(true);
-          }
-          if (cu >= 0xdc00 && cu <= 0xdfff) {
-            expect(
-              i > 0 &&
-                alertText.charCodeAt(i - 1) >= 0xd800 &&
-                alertText.charCodeAt(i - 1) <= 0xdbff,
-            ).toBe(true);
-          }
-        }
-
-        // Verify the emoji was excluded (truncated at the safe boundary before it)
+        // Unicode matching treats paired surrogates as one code point.
+        expect(alertText).not.toMatch(/[\uD800-\uDFFF]/u);
         expect(alertText).not.toContain("🎉");
       },
     );

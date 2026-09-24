@@ -91,6 +91,22 @@ afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
 });
 
+async function createCleanupHarness() {
+  const { storePath } = await makeStorePath();
+  const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
+  const cron = new CronService({
+    storePath,
+    cronEnabled: true,
+    defaultAgentId: "main",
+    resolveSessionStorePath: () => sessionStorePath,
+    log: logger,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+  });
+  return { cron, sessionStorePath };
+}
+
 describe("CronService.remove session cleanup", () => {
   let cleanupInFlight: Promise<unknown> | undefined;
 
@@ -103,18 +119,7 @@ describe("CronService.remove session cleanup", () => {
   });
 
   it("does not materialize a session database when the deleted job never ran", async () => {
-    const { storePath } = await makeStorePath();
-    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
-    const cron = new CronService({
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      resolveSessionStorePath: () => sessionStorePath,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
+    const { cron, sessionStorePath } = await createCleanupHarness();
     const job = await cron.add({
       id: "never-ran",
       name: "never ran",
@@ -142,18 +147,7 @@ describe("CronService.remove session cleanup", () => {
   });
 
   it("removes only the deleted isolated job's base session", async () => {
-    const { storePath } = await makeStorePath();
-    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
-    const cron = new CronService({
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      resolveSessionStorePath: () => sessionStorePath,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
+    const { cron, sessionStorePath } = await createCleanupHarness();
     const job = await cron.add({
       id: "deleted-job",
       name: "deleted job",
@@ -193,18 +187,7 @@ describe("CronService.remove session cleanup", () => {
   });
 
   it("releases the cron lock before waiting for the session lifecycle writer", async () => {
-    const { storePath } = await makeStorePath();
-    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
-    const cron = new CronService({
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      resolveSessionStorePath: () => sessionStorePath,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
+    const { cron, sessionStorePath } = await createCleanupHarness();
     const job = await cron.add({
       id: "contended-session-writer",
       name: "contended session writer",
@@ -267,18 +250,7 @@ describe("CronService.remove session cleanup", () => {
   });
 
   it("reports failed session cleanup after removal and preserves the session for retry", async () => {
-    const { storePath } = await makeStorePath();
-    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
-    const cron = new CronService({
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      resolveSessionStorePath: () => sessionStorePath,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
+    const { cron, sessionStorePath } = await createCleanupHarness();
     const job = await cron.add({
       id: "cleanup-transport-failure",
       name: "cleanup transport failure",
@@ -304,18 +276,7 @@ describe("CronService.remove session cleanup", () => {
   });
 
   it("removes a base session recreated by an already-admitted run", async ({ signal }) => {
-    const { storePath } = await makeStorePath();
-    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
-    const cron = new CronService({
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      resolveSessionStorePath: () => sessionStorePath,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
+    const { cron, sessionStorePath } = await createCleanupHarness();
     const job = await cron.add({
       id: "active-deleted-job",
       name: "active deleted job",
@@ -365,18 +326,7 @@ describe("CronService.remove session cleanup", () => {
   });
 
   it("preserves the session of a replacement job with the same id", async () => {
-    const { storePath } = await makeStorePath();
-    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
-    const cron = new CronService({
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      resolveSessionStorePath: () => sessionStorePath,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
+    const { cron, sessionStorePath } = await createCleanupHarness();
     const original = await cron.add({
       id: "reused-job-id",
       name: "original job",
@@ -495,18 +445,7 @@ describe("CronService.remove session cleanup", () => {
   });
 
   it("does not delete a shared main session", async () => {
-    const { storePath } = await makeStorePath();
-    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
-    const cron = new CronService({
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      resolveSessionStorePath: () => sessionStorePath,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
+    const { cron, sessionStorePath } = await createCleanupHarness();
     const job = await cron.add({
       id: "main-session-job",
       name: "main session job",

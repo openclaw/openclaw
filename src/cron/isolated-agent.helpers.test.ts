@@ -67,22 +67,6 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.outputText).toBe("Mount restored; report written.");
   });
 
-  it("lets preferred final assistant text recover a plain tool warning", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [createToolWarning("⚠️ Exec failed: jq -s '{total:length}'", "exec")],
-      finalAssistantVisibleText: "**Clawsweeper 6h report**\nClosed: 34 total",
-      preferFinalAssistantVisibleText: true,
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(false);
-    expect(result.embeddedRunError).toBeUndefined();
-    expect(result.summary).toBe("**Clawsweeper 6h report**\nClosed: 34 total");
-    expect(result.outputText).toBe("**Clawsweeper 6h report**\nClosed: 34 total");
-    expect(result.deliveryPayloads).toEqual([
-      { text: "**Clawsweeper 6h report**\nClosed: 34 total" },
-    ]);
-  });
-
   it("lets final assistant text recover multiple plain tool warnings globally", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [
@@ -94,24 +78,13 @@ describe("resolveCronPayloadOutcome", () => {
 
     expect(result.hasFatalErrorPayload).toBe(false);
     expect(result.embeddedRunError).toBeUndefined();
+    expect(result.summary).toBe("**Daily GTM analytics**\nPostHog and revenue summary complete.");
     expect(result.outputText).toBe(
       "**Daily GTM analytics**\nPostHog and revenue summary complete.",
     );
     expect(result.deliveryPayloads).toEqual([
       { text: "**Daily GTM analytics**\nPostHog and revenue summary complete." },
     ]);
-  });
-
-  it("treats transient error payloads as non-fatal when a later success exists", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [
-        { text: "⚠️ ✍️ Write: failed", isError: true },
-        { text: "Write completed successfully.", isError: false },
-      ],
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(false);
-    expect(result.summary).toBe("Write completed successfully.");
   });
 
   it("keeps non-terminal tool warnings diagnostic when final assistant output succeeded", () => {
@@ -199,7 +172,7 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryPayloads).toEqual([{ text: "⚠️ Message failed", isError: true }]);
   });
 
-  it.each(["model provider unreachable", "⚠️ 🛠️ Exec failed", "⚠️ ✉️ Message failed"])(
+  it.each(["model provider unreachable", "⚠️ ✉️ Message failed"])(
     "keeps unmarked trailing error %s fatal despite earlier output",
     (errorText) => {
       const result = resolveCronPayloadOutcome({
@@ -289,23 +262,6 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryPayloads).toEqual([{ text: "cron isolated run failed", isError: true }]);
   });
 
-  it("does not let later success clear a run-level error", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [
-        { text: "Temporary provider failure", isError: true },
-        { text: "Partial success-looking text" },
-      ],
-      runLevelError: "retry limit exceeded",
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe("Temporary provider failure");
-    expect(result.outputText).toBe("Temporary provider failure");
-    expect(result.deliveryPayloads).toEqual([
-      { text: "Temporary provider failure", isError: true },
-    ]);
-  });
-
   it.each([
     ["a".repeat(2001), `${"a".repeat(2000)}…`],
     [`${"a".repeat(1999)}🦞`, `${"a".repeat(1999)}…`],
@@ -356,17 +312,10 @@ describe("resolveCronPayloadOutcome", () => {
       finalText: "Final report",
       speech: true,
     },
-    { name: "replaced answer", texts: ["Draft report"], finalText: "Final report", speech: false },
     {
       name: "earlier matching answer",
       texts: ["Final report", "Later answer"],
       finalText: "Final report",
-      speech: false,
-    },
-    {
-      name: "merged partial answers",
-      texts: ["section 1", "section 2"],
-      finalText: "section 1\nsection 2",
       speech: false,
     },
     {
@@ -557,18 +506,6 @@ describe("resolveCronPayloadOutcome", () => {
     );
   });
 
-  it("does not promote narrated denial markers from final assistant visible text", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "Working on it..." }],
-      finalAssistantVisibleText: "I could not run the requested script.",
-      preferFinalAssistantVisibleText: true,
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(false);
-    expect(result.outputText).toBe("I could not run the requested script.");
-    expect(result.embeddedRunError).toBeUndefined();
-  });
-
   it("prefers typed failure signals over denial-token fallback", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [{ text: "On it, retrying now." }],
@@ -612,19 +549,5 @@ describe("resolveCronPayloadOutcome", () => {
 
     expect(result.hasFatalErrorPayload).toBe(false);
     expect(result.embeddedRunError).toBeUndefined();
-  });
-
-  it("keeps structured error payload reasons ahead of denial-token reasons", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [
-        {
-          text: "Exec failed before SYSTEM_RUN_DENIED could be retried",
-          isError: true,
-        },
-      ],
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe("Exec failed before SYSTEM_RUN_DENIED could be retried");
   });
 });

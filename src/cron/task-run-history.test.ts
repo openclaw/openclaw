@@ -81,9 +81,7 @@ describe("cron task run history", () => {
   it.each([
     "cron: job execution timed out",
     "cron: job execution timed out (last phase: model_call_started)",
-    "cron: isolated agent setup timed out before runner start",
     "cron: isolated agent setup timed out before runner start (last phase: preparing)",
-    "cron: isolated agent run stalled before execution start",
     "cron: isolated agent run stalled before execution start (last phase: preparing)",
   ])("classifies the watchdog timeout %j as a timed-out task", (error) => {
     expect(

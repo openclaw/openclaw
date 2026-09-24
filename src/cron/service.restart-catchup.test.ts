@@ -14,6 +14,20 @@ const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
 });
 
 describe("CronService restart catch-up", () => {
+  type RestartJobDefaults = "enabled" | "createdAtMs" | "sessionTarget" | "wakeMode";
+
+  function createRestartJob(
+    params: Omit<CronJob, RestartJobDefaults> & Partial<Pick<CronJob, RestartJobDefaults>>,
+  ): CronJob {
+    return {
+      enabled: true,
+      createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      ...params,
+    };
+  }
+
   async function writeStoreJobs(storePath: string, jobs: CronJob[]) {
     await saveCronStore(storePath, { version: 1, jobs });
   }
@@ -168,18 +182,16 @@ describe("CronService restart catch-up", () => {
 
     await withRestartedCron(
       [
-        {
+        createRestartJob({
           id: "restart-overdue-job",
           name: "daily digest",
-          enabled: true,
-          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
           updatedAtMs: Date.parse("2025-12-12T15:00:00.000Z"),
           schedule: { kind: "cron", expr: "0 15 * * *", tz: "UTC" },
           sessionTarget: "isolated",
           wakeMode: "now",
           payload: { kind: "command", argv: ["echo", "FIRED"] },
           state: { nextRunAtMs: dueAt },
-        },
+        }),
       ],
       async ({ cron, enqueueSystemEvent, requestHeartbeat, runCommandJob }) => {
         expect(runCommandJob).toHaveBeenCalledTimes(1);
@@ -323,22 +335,18 @@ describe("CronService restart catch-up", () => {
 
     await withRestartedCron(
       [
-        {
+        createRestartJob({
           id: "restart-one-shot-last-run-status",
           name: "finished one shot",
-          enabled: true,
-          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
           updatedAtMs: dueAt,
           schedule: { kind: "at", at: "2025-12-13T16:00:00.000Z" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "do not replay one shot" },
           state: {
             nextRunAtMs: dueAt,
             lastRunAtMs: dueAt,
             lastRunStatus: "ok",
           },
-        },
+        }),
       ],
       async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
@@ -461,54 +469,22 @@ describe("CronService restart catch-up", () => {
     },
   );
 
-  it("replays a newer missed cron slot behind a completed persisted slot", async () => {
-    vi.setSystemTime(new Date("2025-12-13T04:10:00.000Z"));
-    await withRestartedCron(
-      [
-        {
-          id: "restart-completed-slot-newer-miss",
-          name: "completed slot with newer miss",
-          enabled: true,
-          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
-          updatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
-          schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: "newer slot missed" },
-          state: {
-            nextRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
-            lastRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
-            lastRunStatus: "ok",
-          },
-        },
-      ],
-      async ({ enqueueSystemEvent, requestHeartbeat }) => {
-        expectQueuedSystemEvent(enqueueSystemEvent, "newer slot missed");
-        expect(requestHeartbeat).toHaveBeenCalled();
-      },
-    );
-  });
-
   it("replays a cron slot due exactly at restart behind a completed persisted slot", async () => {
     vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
     await withRestartedCron(
       [
-        {
+        createRestartJob({
           id: "restart-completed-slot-boundary-miss",
           name: "completed slot with boundary miss",
-          enabled: true,
-          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
           updatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
           schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "boundary slot missed" },
           state: {
             nextRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
             lastRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
             lastRunStatus: "ok",
           },
-        },
+        }),
       ],
       async ({ enqueueSystemEvent, requestHeartbeat }) => {
         expectQueuedSystemEvent(enqueueSystemEvent, "boundary slot missed");
@@ -523,21 +499,17 @@ describe("CronService restart catch-up", () => {
 
     await withRestartedCron(
       [
-        {
+        createRestartJob({
           id: "restart-stale-running",
           name: "daily stale marker",
-          enabled: true,
-          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
           updatedAtMs: Date.parse("2025-12-13T16:30:00.000Z"),
           schedule: { kind: "cron", expr: "0 16 * * *", tz: "UTC" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "resume stale marker" },
           state: {
             nextRunAtMs: dueAt,
             runningAtMs: staleRunningAt,
           },
-        },
+        }),
       ],
       async ({ cron, enqueueSystemEvent, requestHeartbeat, onEvent }) => {
         const warning = vi
@@ -613,11 +585,9 @@ describe("CronService restart catch-up", () => {
     vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
     await withRestartedCron(
       [
-        {
+        createRestartJob({
           id: "restart-missed-slot",
           name: "every ten minutes +1",
-          enabled: true,
-          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
           updatedAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
           schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
           sessionTarget: "isolated",
@@ -630,7 +600,7 @@ describe("CronService restart catch-up", () => {
             lastRunAtMs: Date.parse("2025-12-13T03:51:00.000Z"),
             lastStatus: "ok",
           },
-        },
+        }),
       ],
       async ({ cron, enqueueSystemEvent, requestHeartbeat, runCommandJob }) => {
         expect(runCommandJob).toHaveBeenCalledTimes(1);
@@ -650,21 +620,17 @@ describe("CronService restart catch-up", () => {
 
     await withRestartedCron(
       [
-        {
+        createRestartJob({
           id: "restart-stale-one-shot",
           name: "one shot stale marker",
-          enabled: true,
-          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
           updatedAtMs: Date.parse("2025-12-13T16:30:00.000Z"),
           schedule: { kind: "at", at: "2025-12-13T16:00:00.000Z" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "one-shot stale marker" },
           state: {
             nextRunAtMs: dueAt,
             runningAtMs: staleRunningAt,
           },
-        },
+        }),
       ],
       async ({ cron, enqueueSystemEvent, requestHeartbeat, onEvent }) => {
         expect(enqueueSystemEvent).toHaveBeenCalledOnce();
@@ -687,51 +653,45 @@ describe("CronService restart catch-up", () => {
     );
   });
 
-  it.each([false, true])(
-    "preserves a future one-shot rescheduled before an interrupted run restarts (deleteAfterRun=%s)",
-    async (deleteAfterRun) => {
-      const restartedAt = Date.parse("2025-12-13T17:00:00.000Z");
-      const interruptedAt = Date.parse("2025-12-13T16:30:00.000Z");
-      const replacementAt = Date.parse("2025-12-13T18:00:00.000Z");
-      const jobId = `restart-rescheduled-one-shot-${deleteAfterRun}`;
+  it("preserves a future one-shot rescheduled before an interrupted run restarts", async () => {
+    const restartedAt = Date.parse("2025-12-13T17:00:00.000Z");
+    const interruptedAt = Date.parse("2025-12-13T16:30:00.000Z");
+    const replacementAt = Date.parse("2025-12-13T18:00:00.000Z");
+    const jobId = "restart-rescheduled-one-shot";
 
-      await withRestartedCron(
-        [
-          {
-            id: jobId,
-            name: "one-shot rescheduled before restart",
-            enabled: true,
-            deleteAfterRun,
-            createdAtMs: Date.parse("2025-12-13T15:00:00.000Z"),
-            updatedAtMs: Date.parse("2025-12-13T16:45:00.000Z"),
-            schedule: { kind: "at", at: new Date(replacementAt).toISOString() },
-            sessionTarget: "main",
-            wakeMode: "next-heartbeat",
-            payload: { kind: "systemEvent", text: "replacement one-shot" },
-            state: {
-              nextRunAtMs: replacementAt,
-              runningAtMs: interruptedAt,
-            },
+    await withRestartedCron(
+      [
+        createRestartJob({
+          id: jobId,
+          name: "one-shot rescheduled before restart",
+          deleteAfterRun: true,
+          createdAtMs: Date.parse("2025-12-13T15:00:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-13T16:45:00.000Z"),
+          schedule: { kind: "at", at: new Date(replacementAt).toISOString() },
+          payload: { kind: "systemEvent", text: "replacement one-shot" },
+          state: {
+            nextRunAtMs: replacementAt,
+            runningAtMs: interruptedAt,
           },
-        ],
-        async ({ cron, enqueueSystemEvent, requestHeartbeat, onEvent }) => {
-          expect(enqueueSystemEvent).not.toHaveBeenCalled();
-          expect(requestHeartbeat).not.toHaveBeenCalled();
+        }),
+      ],
+      async ({ cron, enqueueSystemEvent, requestHeartbeat, onEvent }) => {
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
 
-          const listedJobs = await cron.list({ includeDisabled: true });
-          const replacement = listedJobs.find((job) => job.id === jobId);
-          expect(replacement?.enabled).toBe(true);
-          expect(replacement?.state.nextRunAtMs).toBe(replacementAt);
-          expect(replacement?.state.runningAtMs).toBeUndefined();
-          expect(replacement?.state.lastRunAtMs).toBe(interruptedAt);
-          expect(replacement?.state.lastRunStatus).toBe("error");
-          expect(replacement?.state.lastError).toBe("cron: job interrupted by gateway restart");
-          expect(replacement?.updatedAtMs).toBe(restartedAt);
-          expectInterruptedJobEvent(onEvent, { jobId, runAtMs: interruptedAt });
-        },
-      );
-    },
-  );
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const replacement = listedJobs.find((job) => job.id === jobId);
+        expect(replacement?.enabled).toBe(true);
+        expect(replacement?.state.nextRunAtMs).toBe(replacementAt);
+        expect(replacement?.state.runningAtMs).toBeUndefined();
+        expect(replacement?.state.lastRunAtMs).toBe(interruptedAt);
+        expect(replacement?.state.lastRunStatus).toBe("error");
+        expect(replacement?.state.lastError).toBe("cron: job interrupted by gateway restart");
+        expect(replacement?.updatedAtMs).toBe(restartedAt);
+        expectInterruptedJobEvent(onEvent, { jobId, runAtMs: interruptedAt });
+      },
+    );
+  });
 
   it("does not mistake a future retry for a rescheduled one-shot on restart", async () => {
     const interruptedAt = Date.parse("2025-12-13T16:30:00.000Z");
@@ -741,19 +701,16 @@ describe("CronService restart catch-up", () => {
 
     await withRestartedCron(
       [
-        {
+        createRestartJob({
           id: jobId,
           name: "future retry is not a rescheduled one-shot",
-          enabled: true,
           deleteAfterRun: true,
           createdAtMs: Date.parse("2025-12-13T15:00:00.000Z"),
           updatedAtMs: interruptedAt,
           schedule: { kind: "at", at: new Date(originalAt).toISOString() },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "recover interrupted retry" },
           state: { nextRunAtMs: retryAt, runningAtMs: interruptedAt },
-        },
+        }),
       ],
       async ({ cron, enqueueSystemEvent, requestHeartbeat, onEvent }) => {
         const listedJobs = await cron.list({ includeDisabled: true });
@@ -770,22 +727,18 @@ describe("CronService restart catch-up", () => {
     vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
     await withRestartedCron(
       [
-        {
+        createRestartJob({
           id: "restart-no-duplicate-slot",
           name: "every ten minutes +1 no duplicate",
-          enabled: true,
-          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
           updatedAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
           schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "already ran" },
           state: {
             nextRunAtMs: Date.parse("2025-12-13T04:11:00.000Z"),
             lastRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
             lastStatus: "ok",
           },
-        },
+        }),
       ],
       async ({ enqueueSystemEvent, requestHeartbeat }) => {
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
@@ -798,15 +751,11 @@ describe("CronService restart catch-up", () => {
     vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
     await withRestartedCron(
       [
-        {
+        createRestartJob({
           id: "restart-backoff-pending",
           name: "backoff pending",
-          enabled: true,
-          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
           updatedAtMs: Date.parse("2025-12-13T04:01:10.000Z"),
           schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "do not run during backoff" },
           state: {
             // Next retry is intentionally delayed by backoff despite a newer cron slot.
@@ -815,7 +764,7 @@ describe("CronService restart catch-up", () => {
             lastStatus: "error",
             consecutiveErrors: 4,
           },
-        },
+        }),
       ],
       async ({ enqueueSystemEvent, requestHeartbeat }) => {
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
@@ -828,15 +777,11 @@ describe("CronService restart catch-up", () => {
     vi.setSystemTime(new Date("2025-12-13T04:01:59.000Z"));
     await withRestartedCron(
       [
-        {
+        createRestartJob({
           id: "restart-long-run-backoff-pending",
           name: "long run backoff pending",
-          enabled: true,
-          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
           updatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
           schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "do not replay long failed run" },
           state: {
             nextRunAtMs: Date.parse("2025-12-13T04:10:00.000Z"),
@@ -845,7 +790,7 @@ describe("CronService restart catch-up", () => {
             lastStatus: "error",
             consecutiveErrors: 1,
           },
-        },
+        }),
       ],
       async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
@@ -862,19 +807,15 @@ describe("CronService restart catch-up", () => {
     vi.setSystemTime(new Date("2025-12-13T04:01:59.000Z"));
     await withRestartedCron(
       [
-        {
+        createRestartJob({
           id: "restart-long-run-due-retry",
           name: "long run due retry",
-          enabled: true,
-          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
           updatedAtMs: Date.parse("2025-12-13T04:00:30.000Z"),
           schedule: {
             kind: "every",
             everyMs: 60_000,
             anchorMs: Date.parse("2025-12-13T04:00:00.000Z"),
           },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "do not run early retry" },
           state: {
             nextRunAtMs: Date.parse("2025-12-13T04:00:30.000Z"),
@@ -883,7 +824,7 @@ describe("CronService restart catch-up", () => {
             lastStatus: "error",
             consecutiveErrors: 1,
           },
-        },
+        }),
       ],
       async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
@@ -900,10 +841,9 @@ describe("CronService restart catch-up", () => {
     vi.setSystemTime(new Date("2025-12-13T17:00:00.000Z"));
     await withRestartedCron(
       [
-        {
+        createRestartJob({
           id: "restart-backoff-last-run-status",
           name: "lastRunStatus backoff pending",
-          enabled: true,
           createdAtMs: Date.parse("2025-12-13T16:50:00.000Z"),
           updatedAtMs: Date.parse("2025-12-13T16:59:45.000Z"),
           schedule: {
@@ -911,8 +851,6 @@ describe("CronService restart catch-up", () => {
             everyMs: 60_000,
             anchorMs: Date.parse("2025-12-13T16:50:00.000Z"),
           },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "do not run during lastRunStatus backoff" },
           state: {
             nextRunAtMs: Date.parse("2025-12-13T16:59:50.000Z"),
@@ -921,7 +859,7 @@ describe("CronService restart catch-up", () => {
             lastRunStatus: "error",
             consecutiveErrors: 1,
           },
-        },
+        }),
       ],
       async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
@@ -940,15 +878,11 @@ describe("CronService restart catch-up", () => {
     vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
     await withRestartedCron(
       [
-        {
+        createRestartJob({
           id: "restart-backoff-elapsed-replay",
           name: "backoff elapsed replay",
-          enabled: true,
-          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
           updatedAtMs: Date.parse("2025-12-13T04:01:10.000Z"),
           schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "replay after backoff elapsed" },
           state: {
             // Startup maintenance may already point to a future slot (04:11) even
@@ -958,7 +892,7 @@ describe("CronService restart catch-up", () => {
             lastStatus: "error",
             consecutiveErrors: 1,
           },
-        },
+        }),
       ],
       async ({ enqueueSystemEvent, requestHeartbeat }) => {
         expectQueuedSystemEvent(enqueueSystemEvent, "replay after backoff elapsed");

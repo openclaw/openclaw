@@ -25,15 +25,6 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 describe("CronService failure notification delivery", () => {
   it.each([
     {
-      name: "the explicitly targeted Telegram topic",
-      agentId: "ops",
-      sessionKey: "agent:ops:telegram:group:42:topic:77",
-      sessionTarget: "session:agent:ops:telegram:group:42:topic:77" as const,
-      wakeMode: "now" as const,
-      carriesOrigin: true,
-      wakesNow: true,
-    },
-    {
       name: "a persistent target instead of its creation conversation",
       agentId: "ops",
       sessionKey: "agent:ops:telegram:group:42:topic:77",

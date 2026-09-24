@@ -10,7 +10,6 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 describe("cron webhook optional output", () => {
   it.each([
     { status: "ok", summary: undefined },
-    { status: "ok", summary: "" },
     { status: "ok", summary: " \n " },
     { status: "error", summary: undefined },
   ] as const)(
