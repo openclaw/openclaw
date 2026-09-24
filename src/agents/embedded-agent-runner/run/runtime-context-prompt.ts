@@ -3,6 +3,7 @@
  */
 import type { Context, UserMessage } from "../../../llm/types.js";
 import {
+  escapeInternalRuntimeContextDelimiters,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
@@ -89,7 +90,18 @@ export function resolveRuntimeContextPromptParts(params: {
 
 export function buildRuntimeContextMessageContent(runtimeContext: string): string {
   // The stable system prompt explains the markers once; leak strippers use the delimiters.
-  return [INTERNAL_RUNTIME_CONTEXT_BEGIN, runtimeContext, INTERNAL_RUNTIME_CONTEXT_END].join("\n");
+  //
+  // The body carries attacker-controlled inbound context (sender names, group
+  // subjects, quoted messages, chat history), so it must be escaped like every
+  // other delimited-block producer. An unescaped END marker inside that text
+  // terminates the block early, leaving the remainder outside the protected
+  // span: it survives stripInternalRuntimeContext on echo, and on the wire it
+  // reads as runtime-owned context in the tail carrier.
+  return [
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
+    escapeInternalRuntimeContextDelimiters(runtimeContext),
+    INTERNAL_RUNTIME_CONTEXT_END,
+  ].join("\n");
 }
 
 /** Creates a non-displayed custom transcript message for runtime context, if any exists. */
