@@ -131,6 +131,7 @@ export function prepareGitHubPublicationOptionsRead(
           sessionKey: loaded.canonicalKey,
           agentId: loaded.agentId,
           lifecycleRevision: loaded.entry.lifecycleRevision ?? null,
+          archivedAt: loaded.entry.archivedAt ?? null,
         }
       : null;
   };
