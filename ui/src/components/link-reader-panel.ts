@@ -80,9 +80,6 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
       this.tabs.length >= TAB_LIMIT || !this.available || !this.readers.length,
     );
   }
-  selectHostedTab(id: string): void {
-    this.selectTab(id);
-  }
   async closeHostedTab(id: string): Promise<void> {
     this.closeTab(id);
     await this.updateComplete;
@@ -127,10 +124,7 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
     }
   }
   override disconnectedCallback(): void {
-    this.abortRequest();
-    for (const tab of this.tabs) {
-      this.setTabView(tab, { status: "idle" });
-    }
+    this.resetTabViews();
     this.tabs = [];
     this.activeId = null;
     this.returnFocus = null;
@@ -145,10 +139,7 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
       }
     }
     if (changed.has("sessionKey") && changed.get("sessionKey") !== undefined) {
-      this.abortRequest();
-      for (const tab of this.tabs) {
-        this.setTabView(tab, { status: "idle" });
-      }
+      this.resetTabViews();
       this.tabs = [];
       this.activeId = null;
       this.urlDraft = "";
@@ -173,11 +164,8 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
       changed.has("agentId") ||
       readersChanged
     ) {
-      this.abortRequest();
       // Cached documents belong to this connection epoch, never a replacement gateway.
-      for (const tab of this.tabs) {
-        this.setTabView(tab, { status: "idle" });
-      }
+      this.resetTabViews();
     }
     if (readersChanged && this.available) {
       // Disabled or replaced contributions cannot retain old data or request authority.
@@ -284,7 +272,13 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
     }
     tab.view = view;
   }
-  private selectTab(id: string): void {
+  private resetTabViews(): void {
+    this.abortRequest();
+    for (const tab of this.tabs) {
+      this.setTabView(tab, { status: "idle" });
+    }
+  }
+  selectHostedTab(id: string): void {
     if (id === this.activeId || !this.tabs.some((tab) => tab.id === id)) {
       return;
     }
@@ -342,7 +336,7 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
       this.activeId = null;
       const fallback = this.tabs[Math.min(index, this.tabs.length - 1)];
       if (fallback) {
-        this.selectTab(fallback.id);
+        this.selectHostedTab(fallback.id);
       }
     }
     this.requestUpdate();
@@ -410,7 +404,7 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
             })
           : undefined;
       if (existing) {
-        this.selectTab(existing.id);
+        this.selectHostedTab(existing.id);
         this.navigate(target);
       } else if (detail?.newTab === false || (this.activeTab && !this.target)) {
         this.navigate(target);
@@ -583,7 +577,7 @@ class OpenClawLinkReaderPanel extends OpenClawLitElement implements PanelHostedT
                 })),
                 activeId: this.activeId,
                 ariaControls: "link-reader-tab-panel",
-                onSelect: (id) => this.selectTab(id),
+                onSelect: (id) => this.selectHostedTab(id),
                 onClose: (id) => this.closeTab(id),
                 onNew: () => this.createTab(),
                 newLabel: t("linkReader.newTab"),

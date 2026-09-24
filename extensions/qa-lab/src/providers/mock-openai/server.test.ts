@@ -154,12 +154,17 @@ function expectOpenAiStreamingResponses(server: MockServer, body: Record<string,
   return expectStreamingResponses(server, { model: "gpt-5.6-luna", ...body });
 }
 
-function postAnthropicMessages(server: MockServer, body: Record<string, unknown>) {
-  return postJson(server, "/v1/messages", {
-    model: "claude-opus-4-8",
-    max_tokens: 256,
-    ...body,
-  });
+function postAnthropicMessages(
+  server: MockServer,
+  body: Record<string, unknown>,
+  sessionId?: string,
+) {
+  return postJson(
+    server,
+    "/v1/messages",
+    { model: "claude-opus-4-8", max_tokens: 256, ...body },
+    sessionId ? { "x-session-affinity": sessionId } : undefined,
+  );
 }
 
 function expectAnthropicMessages(server: MockServer, body: Record<string, unknown>) {
@@ -2213,7 +2218,7 @@ describe("qa mock openai server", () => {
     const runtimeSessionId = "compaction-below-threshold";
 
     await expectOpenAiNonStreamingResponsesJson(server, {
-      instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
+      client_metadata: { session_id: runtimeSessionId },
       input: [makeUserInput(QA_COMPACTION_RETRY_PROMPT)],
     });
 
@@ -2237,7 +2242,7 @@ describe("qa mock openai server", () => {
     const runtimeSessionId = "compaction-one-shot";
     const body = {
       model: "gpt-5.6-luna",
-      instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
+      client_metadata: { session_id: runtimeSessionId },
       input: [
         makeUserInput(`${QA_COMPACTION_RETRY_PROMPT}\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}`),
       ],
@@ -2281,7 +2286,7 @@ describe("qa mock openai server", () => {
     for (const runtimeSessionId of ["compaction-session-a", "compaction-session-b"]) {
       const response = await postNonStreamingResponses(server, {
         model: "gpt-5.6-luna",
-        instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
+        client_metadata: { session_id: runtimeSessionId },
         input: [
           makeUserInput(`${QA_COMPACTION_RETRY_PROMPT}\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}`),
         ],
@@ -2299,8 +2304,7 @@ describe("qa mock openai server", () => {
 
   it("injects one Anthropic overflow per session before planning the logical write", async () => {
     const server = await startMockServer();
-    const bodyFor = (sessionId: string) => ({
-      system: `Runtime: embedded | sessionId=${sessionId}`,
+    const body = {
       tools: [
         {
           name: "exec",
@@ -2326,9 +2330,9 @@ describe("qa mock openai server", () => {
           `${QA_COMPACTION_RETRY_PROMPT}\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}`,
         ),
       ],
-    });
+    };
 
-    const first = await postAnthropicMessages(server, bodyFor("anthropic-overflow-a"));
+    const first = await postAnthropicMessages(server, body, "anthropic-overflow-a");
     expect(first.status).toBe(400);
     expect(await first.json()).toEqual({
       type: "error",
@@ -2339,7 +2343,7 @@ describe("qa mock openai server", () => {
       },
     });
 
-    const second = await postAnthropicMessages(server, bodyFor("anthropic-overflow-a"));
+    const second = await postAnthropicMessages(server, body, "anthropic-overflow-a");
     expect(second.status).toBe(200);
     const content = requireArray(
       requireRecord(await second.json(), "Anthropic response").content,
@@ -2351,7 +2355,7 @@ describe("qa mock openai server", () => {
       plannedWireToolName: "exec",
     });
 
-    const independent = await postAnthropicMessages(server, bodyFor("anthropic-overflow-b"));
+    const independent = await postAnthropicMessages(server, body, "anthropic-overflow-b");
     expect(independent.status).toBe(400);
   });
 
@@ -2359,7 +2363,7 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
     const initial = await postNonStreamingResponses(server, {
       model: "gpt-5.6-luna",
-      instructions: "Runtime: embedded | sessionId=compaction-summary",
+      client_metadata: { session_id: "compaction-summary" },
       input: [
         makeUserInput(`${QA_COMPACTION_RETRY_PROMPT}\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}`),
       ],
@@ -2411,7 +2415,7 @@ describe("qa mock openai server", () => {
       const server = await startMockServer();
       const body = {
         model: "gpt-5.6-luna",
-        instructions: `Runtime: embedded | sessionId=compaction-output-${markerPrefix}`,
+        client_metadata: { session_id: `compaction-output-${markerPrefix}` },
         input: [makeUserInput(`${markerPrefix}-http\n${"x".repeat(100_000)}`)],
       };
 
@@ -2703,7 +2707,7 @@ Update and merge these partial structured summaries.`,
     const runtimeSessionId = "compaction-openclaw-retry";
     const initial = await postNonStreamingResponses(server, {
       model: "gpt-5.6-luna",
-      instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
+      client_metadata: { session_id: runtimeSessionId },
       input: [
         makeUserInput(`${QA_COMPACTION_RETRY_PROMPT}\n${QA_COMPACTION_RETRY_OVERFLOW_PADDING}`),
       ],
@@ -2725,7 +2729,7 @@ Update and merge these partial structured summaries.`,
 
     const writePlan = await expectOpenAiStreamingResponsesText(server, {
       model: "gpt-5.6-luna",
-      instructions: `Runtime: embedded | sessionId=${runtimeSessionId}`,
+      client_metadata: { session_id: runtimeSessionId },
       input: [
         makeUserInput(compactedSummary),
         makeUserInput("Continue from the compacted context."),
@@ -4698,79 +4702,6 @@ Update and merge these partial structured summaries.`,
     expect(await firstB.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
   });
 
-  it("isolates interleaved session state while preserving cross-provider ownership", async () => {
-    const server = await startMockServer();
-    const handoffPrompt =
-      "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.";
-    const fanoutPrompt =
-      "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
-    const sessions = ["qa-session-alpha", "qa-session-beta"] as const;
-    const runtimePrompt = (sessionId: string) =>
-      `Runtime: agent=main | sessionId=${sessionId} | channel=qa`;
-    const postSession = (sessionId: string, input: unknown[], cacheBoundary = 0) =>
-      expectOpenAiNonStreamingResponsesJson(server, {
-        prompt_cache_key: `${sessionId}:${cacheBoundary}`,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [makeDeveloperInput(runtimePrompt(sessionId)), ...input],
-      });
-
-    const handoffs = await Promise.all(
-      sessions.map((sessionId) => postSession(sessionId, [makeUserInput(handoffPrompt)])),
-    );
-    for (const handoff of handoffs) {
-      expect(outputToolArgsFromItem(outputToolCall(handoff, "sessions_spawn"))).toMatchObject({
-        label: "qa-sidecar",
-      });
-    }
-
-    const crossProviderContinuation = await expectAnthropicMessages(server, {
-      system: [{ type: "text", text: runtimePrompt(sessions[0]) }],
-      tools: [{ name: "sessions_spawn", input_schema: { type: "object", properties: {} } }],
-      messages: [makeAnthropicUserText(handoffPrompt)],
-    });
-    const continued = requireRecord(
-      await crossProviderContinuation.json(),
-      "cross-provider handoff continuation",
-    );
-    expect(continued.stop_reason).toBe("end_turn");
-
-    const anthropicHandoff = await expectAnthropicMessages(server, {
-      system: [{ type: "text", text: runtimePrompt("qa-session-anthropic") }],
-      tools: [{ name: "sessions_spawn", input_schema: { type: "object", properties: {} } }],
-      messages: [makeAnthropicUserText(handoffPrompt)],
-    });
-    expect(
-      requireRecord(await anthropicHandoff.json(), "independent Anthropic handoff"),
-    ).toMatchObject({ stop_reason: "tool_use" });
-
-    const firstFanoutCalls = await Promise.all(
-      sessions.map((sessionId) => postSession(sessionId, [makeUserInput(fanoutPrompt)], 1)),
-    );
-    for (const fanout of firstFanoutCalls) {
-      expect(outputToolArgsFromItem(outputToolCall(fanout, "sessions_spawn"))).toMatchObject({
-        label: "qa-fanout-alpha",
-      });
-    }
-
-    const secondFanoutCalls = await Promise.all(
-      sessions.map((sessionId) =>
-        postSession(
-          sessionId,
-          [
-            makeUserInput(fanoutPrompt),
-            makeToolOutput('{"status":"accepted","childSessionKey":"alpha","note":"ALPHA-OK"}'),
-          ],
-          2,
-        ),
-      ),
-    );
-    for (const fanout of secondFanoutCalls) {
-      expect(outputToolArgsFromItem(outputToolCall(fanout, "sessions_spawn"))).toMatchObject({
-        label: "qa-fanout-beta",
-      });
-    }
-  });
-
   it.each([
     {
       name: "legacy workspace heartbeat",
@@ -4819,36 +4750,6 @@ Update and merge these partial structured summaries.`,
     });
 
     expect(outputText(await response.json())).toBe("NEW_TOKEN");
-  });
-
-  it("requires both WhatsApp batched markers before returning the final batched marker", async () => {
-    const server = await startMockServer();
-
-    const standalone = await expectNonStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          "Second batched WhatsApp QA message. Reply with only this exact marker: " +
-            "WHATSAPP_QA_BATCHED_FINAL_TEST only if the previous queued message is visible " +
-            "in this same run context.",
-        ),
-      ],
-    });
-    expect(outputText(await standalone.json())).toBe("WHATSAPP_QA_BATCHED_MISSING_CONTEXT_TEST");
-
-    const batched = await expectNonStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          "First batched WhatsApp QA message WHATSAPP_QA_BATCHED_FIRST_TEST. " +
-            "Wait for the next message before replying.",
-        ),
-        makeUserInput(
-          "Second batched WhatsApp QA message. Reply with only this exact marker: " +
-            "WHATSAPP_QA_BATCHED_FINAL_TEST only if the previous queued message is visible " +
-            "in this same run context.",
-        ),
-      ],
-    });
-    expect(outputText(await batched.json())).toBe("WHATSAPP_QA_BATCHED_FINAL_TEST");
   });
 
   it("lets the latest exact marker prompt beat stale Telegram session_status history", async () => {

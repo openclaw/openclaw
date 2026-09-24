@@ -204,6 +204,14 @@ type PolicyTestWatch = {
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
 const policyTestWatches = [
+  ...["test/scripts/android-app-i18n.test.ts", "test/scripts/apple-app-i18n.test.ts"].map(
+    (testFile): PolicyTestWatch => ({
+      // Both suites read this inventory by filename, not through the import graph.
+      testFile,
+      ownerGlobs: ["apps/.i18n/native-source.json"],
+      watchGlobs: ["apps/.i18n/native-source.json"],
+    }),
+  ),
   {
     testFile: "test/scripts/tsgo-core-test-shards.test.ts",
     watchGlobs: [
@@ -288,12 +296,18 @@ const policyTestWatches = [
   },
 ] satisfies readonly PolicyTestWatch[];
 
-/** Resolve policy tests whose scanned source surface intersects this diff. */
-export function resolvePolicyTestTargets(changedPaths: readonly string[]): string[] {
+/** Resolve watched tests, optionally restricting to complete owners of the changed input. */
+export function resolvePolicyTestTargets(
+  changedPaths: readonly string[],
+  options: { completeOwnersOnly?: boolean } = {},
+): string[] {
   return policyTestWatches
-    .filter(({ watchGlobs }) =>
-      changedPaths.some((changedPath) =>
-        watchGlobs.some((watchGlob) => matchesGlob(changedPath, watchGlob)),
+    .filter(({ watchGlobs, ownerGlobs }) =>
+      changedPaths.some(
+        (changedPath) =>
+          watchGlobs.some((watchGlob) => matchesGlob(changedPath, watchGlob)) &&
+          (!options.completeOwnersOnly ||
+            ownerGlobs?.some((ownerGlob) => matchesGlob(changedPath, ownerGlob))),
       ),
     )
     .map(({ testFile }) => testFile);

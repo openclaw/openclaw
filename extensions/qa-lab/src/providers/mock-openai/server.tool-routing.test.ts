@@ -61,6 +61,54 @@ function catalogResult(name: string, details: Record<string, unknown>) {
 }
 
 describe("mock scenario tool routing", () => {
+  it.each([
+    { group: false, action: "react" },
+    { group: true, action: "react" },
+    { group: false, action: "upload-file" },
+    { group: true, action: "upload-file" },
+  ])(
+    "routes WhatsApp $action (group=$group) through the catalog once",
+    async ({ group, action }) => {
+      const server = await startMockServer();
+      const token = `WHATSAPP_QA_${group ? "GROUP_" : ""}AGENT_${action === "react" ? "REACT" : "UPLOAD"}_TEST`;
+      const prompt =
+        (group ? "openclawqa " : "") +
+        (action === "react"
+          ? `React to this WhatsApp${group ? " group" : ""} message with thumbs up for QA action check ${token}. Do not send any visible text reply after the reaction.`
+          : `Use the WhatsApp message tool upload-file action to send a PNG with caption ${token}. Do not send any visible text reply after the upload.`);
+      const input: unknown[] = [
+        { role: "developer", content: "Use message for channel actions through the tool catalog." },
+        makeUserInput(prompt),
+      ];
+      // Custom Responses endpoints carry guidance in input, not body.instructions.
+      const request = () =>
+        expectOpenAiNonStreamingResponsesJson(server, { tools: catalogTools, input });
+      const payload = await request();
+      const call = outputItem(payload);
+      expect(outputItems(payload)).toHaveLength(1);
+      expect(call).toMatchObject({ type: "function_call", name: "tool_call" });
+      const planned = outputToolArgs(payload);
+      expect(planned).toMatchObject({
+        id: "message",
+        args:
+          action === "react"
+            ? { action, emoji: "👍" }
+            : { action, caption: token, contentType: "image/png" },
+      });
+      expect(await getJson(server, "/debug/last-request")).toMatchObject({
+        plannedToolName: "message",
+        plannedWireToolName: "tool_call",
+      });
+      input.push(
+        call,
+        makeToolOutputWithCallId(String(call.call_id), catalogResult("message", { ok: true })),
+      );
+      const completed = await request();
+      expect(outputItems(completed).some((item) => item.type === "function_call")).toBe(false);
+      expect(outputText(completed)).toBe("");
+    },
+  );
+
   it("plans runtime-fixture sessions_spawn happy and failure calls deterministically", async () => {
     const server = await startMockServer();
     const request = (prompt: string) =>
@@ -314,8 +362,8 @@ describe("mock scenario tool routing", () => {
       expectOpenAiNonStreamingResponsesJson(server, {
         tools: catalogTools,
         input,
-        instructions:
-          "Runtime: embedded | agent=qa | session=agent:qa:main | sessionId=qa-terminal-parent",
+        instructions: "Runtime: embedded | agent=qa | session=agent:qa:main",
+        client_metadata: { session_id: "qa-terminal-parent" },
       });
     const call = outputItem(await request());
     input.push(

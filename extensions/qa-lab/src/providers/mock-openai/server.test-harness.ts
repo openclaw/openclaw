@@ -1,5 +1,6 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, expect } from "vitest";
+import type { QaMockOpenAiServerOptions } from "./server-options.js";
 import { startQaMockOpenAiServer } from "./server.js";
 
 export type MockServer = { baseUrl: string };
@@ -16,10 +17,7 @@ export function createMockServerTestHarness() {
     }
   });
 
-  async function startMockServer(params?: {
-    finalOnlyMarkerPauseMs?: number;
-    modelRefs?: string[];
-  }) {
+  async function startMockServer(params?: QaMockOpenAiServerOptions) {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
       port: 0,
@@ -36,11 +34,17 @@ export function createMockServerTestHarness() {
 
 export const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
-export async function postJson(server: MockServer, path: string, body: unknown) {
+export async function postJson(
+  server: MockServer,
+  path: string,
+  body: unknown,
+  headers?: Record<string, string>,
+) {
   return fetch(`${server.baseUrl}${path}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
+      ...headers,
     },
     body: JSON.stringify(body),
   });

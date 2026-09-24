@@ -11,7 +11,7 @@ import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
   writeSkillProposalRollback,
   readSkillProposalRollback,
-} from "../skills/workshop/store-sqlite-rollback.js";
+} from "../skills/workshop/store-rollback.js";
 import { hashSkillProposalContent, importLegacySkillProposal } from "../skills/workshop/store.js";
 import * as workshopStore from "../skills/workshop/store.js";
 import {
@@ -769,7 +769,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       fs.access(path.join(recoveryRoot, recoveryDir, "proposal.json")),
     ).resolves.toBeUndefined();
 
-    importLegacySkillProposal({ record, ownerAgentId: "main" });
+    await importLegacySkillProposal({ record, ownerAgentId: "main" });
     await fs.mkdir(path.join(proposalDir, "references"), { recursive: true });
     await fs.writeFile(path.join(proposalDir, "references", "leftover.md"), "leftover\n", "utf8");
     await expect(

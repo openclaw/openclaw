@@ -37,6 +37,7 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
 import { registerBackgroundTasksEnglish } from "../../ui/src/i18n/locales/en-background-tasks.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
+import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
 import { waitForChildClose, waitForPidFile } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -341,6 +342,7 @@ describe("control-ui-i18n generated ownership", () => {
     for (const fragment of [
       registerBackgroundTasksEnglish.catalog,
       registerCodeBlocksEnglish.catalog,
+      registerSettingsEnglish.catalog,
       registerTranscriptsEnglish.catalog,
     ]) {
       const lazyCopy = flattenControlUiCatalog(fragment, "lazy copy");

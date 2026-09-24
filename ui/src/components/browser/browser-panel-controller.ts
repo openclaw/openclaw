@@ -387,7 +387,7 @@ export class BrowserPanelController implements ReactiveController {
         const targetId = this.activeTargetId;
         await this.refreshView(targetId, invocation.epoch);
         if (!options.newTab && invocation.isCurrent() && this.view?.targetId === targetId) {
-          this.operations.markNavigationReconciled(client, targetId);
+          this.operations.forgetNavigation(client, targetId);
         }
       }
     } catch (error) {
@@ -402,7 +402,7 @@ export class BrowserPanelController implements ReactiveController {
             this.setState("view", null);
             await this.refreshView(targetId, invocation.epoch);
             if (invocation.isCurrent() && this.view?.targetId === targetId) {
-              this.operations.markNavigationReconciled(client, targetId);
+              this.operations.forgetNavigation(client, targetId);
             }
           }
           if (
@@ -503,7 +503,7 @@ export class BrowserPanelController implements ReactiveController {
         this.activeTargetId === selectedTargetId &&
         this.view?.targetId === selectedTargetId
       ) {
-        this.operations.markNavigationReconciled(actionClient, selectedTargetId);
+        this.operations.forgetNavigation(actionClient, selectedTargetId);
       }
     }, false);
     if (!selectionSucceeded && this.operations.isLive(epoch) && this.activeTargetId === targetId) {
@@ -645,10 +645,6 @@ export class BrowserPanelController implements ReactiveController {
         this.host.renderRoot.querySelector<HTMLInputElement>(".bp-url")?.focus();
       }
     });
-  }
-
-  setUrlDraftEditing(editing: boolean): void {
-    this.urlDraftEditing = editing;
   }
 
   resetUrlDraftFromView(): void {

@@ -3,12 +3,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createWhatsAppQaScenarioEnvironment } from "./scenario-environment.js";
-import { whatsappQaCanaryScenario } from "./whatsapp-live.scenario-implementations.conversation.js";
-import {
-  whatsappQaStatusReactionLifecycleScenario,
-  whatsappQaStatusReactionsScenario,
-} from "./whatsapp-live.scenario-implementations.delivery.js";
-import { whatsappQaAgentMessageActionReactScenario } from "./whatsapp-live.scenario-implementations.user-path.js";
 
 type FlowPreparationInput = Parameters<
   ReturnType<typeof createWhatsAppQaScenarioEnvironment>["prepareFlow"]
@@ -56,25 +50,25 @@ async function prepareWhatsAppFlowFixture(params: {
 
 describe("WhatsApp QA scenario environment", () => {
   it.each([
-    { id: "whatsapp-canary", implementation: whatsappQaCanaryScenario, statusReactions: false },
+    { id: "whatsapp-canary", whatsappScenario: "whatsappQaCanaryScenario", statusReactions: false },
     {
       id: "whatsapp-agent-message-action-react",
-      implementation: whatsappQaAgentMessageActionReactScenario,
+      whatsappScenario: "whatsappQaAgentMessageActionReactScenario",
       statusReactions: false,
     },
     {
       id: "whatsapp-status-reactions",
-      implementation: whatsappQaStatusReactionsScenario,
+      whatsappScenario: "whatsappQaStatusReactionsScenario",
       statusReactions: true,
     },
     {
       id: "whatsapp-status-reaction-lifecycle",
-      implementation: whatsappQaStatusReactionLifecycleScenario,
+      whatsappScenario: "whatsappQaStatusReactionLifecycleScenario",
       statusReactions: true,
     },
   ])(
     "configures $id through the current WhatsApp schema",
-    async ({ id, implementation, statusReactions }) => {
+    async ({ id, whatsappScenario, statusReactions }) => {
       const baseMessages = {
         ackReaction: "💬",
         ackReactionScope: "group-mentions" as const,
@@ -122,13 +116,12 @@ describe("WhatsApp QA scenario environment", () => {
         }
         throw new Error(`unexpected gateway method: ${method}`);
       });
-      const prepared = await prepareWhatsAppFlowFixture({
-        config: {},
+      await prepareWhatsAppFlowFixture({
+        config: { whatsappScenario },
         gatewayCall,
         scenarioId: id,
         scenarioTitle: id,
       });
-      await prepared.whatsappScenarioContext.configureScenario(implementation);
 
       const patchCall = gatewayCall.mock.calls.find(([method]) => method === "config.patch");
       if (!patchCall) {
