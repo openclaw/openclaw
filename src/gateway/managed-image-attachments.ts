@@ -77,6 +77,7 @@ import {
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
 import { resolveManagedImageThumbnail } from "./managed-image-thumbnail-cache.js";
+import { sendManagedImageThumbnailResponse } from "./managed-image-thumbnail-response.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import {
@@ -1723,22 +1724,18 @@ export async function handleManagedOutgoingMediaHttpRequest(
         return true;
       }
       const sourceName = path.parse(responseFilename ?? "generated-image").name;
-      res.statusCode = 200;
-      res.setHeader("content-type", "image/png");
-      res.setHeader("content-length", String(thumbnail.byteLength));
-      res.setHeader("x-content-type-options", "nosniff");
-      res.setHeader("referrer-policy", "no-referrer");
-      res.setHeader(
-        "cache-control",
-        hasValidMediaTicket
+      sendManagedImageThumbnailResponse({
+        req,
+        res,
+        thumbnail,
+        cacheControl: hasValidMediaTicket
           ? `private, max-age=${MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS / 1000}, immutable`
           : "private, max-age=31536000, immutable",
-      );
-      res.setHeader(
-        "content-disposition",
-        buildManagedMediaContentDisposition(`${sourceName}-thumbnail.png`, "image/png"),
-      );
-      res.end(req.method === "HEAD" ? undefined : thumbnail);
+        contentDisposition: buildManagedMediaContentDisposition(
+          `${sourceName}-thumbnail.png`,
+          "image/png",
+        ),
+      });
       return true;
     }
 
