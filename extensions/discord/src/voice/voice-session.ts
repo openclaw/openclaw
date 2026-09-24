@@ -317,18 +317,10 @@ export class DiscordVoiceSessions {
         logger.warn(`discord voice: realtime close failed: ${formatErrorMessage(error)}`);
       }
       const audioCompletion = this.stopTransport(guildId, audio);
-      realtimeCompletion = Promise.allSettled([realtimeCompletion, audioCompletion]).then(
-        () => undefined,
-      );
-      const finish = () => {
+      stopCompletion = Promise.allSettled([realtimeCompletion, audioCompletion]).then(() => {
         entry.conversations.close();
         this.params.onSessionStopped(entry, optionsLocal.reason);
-      };
-      stopCompletion = realtimeCompletion
-        .catch((error: unknown) =>
-          logger.warn(`discord voice: realtime close failed: ${formatErrorMessage(error)}`),
-        )
-        .then(finish);
+      });
       const completion = stopCompletion;
       this.pendingStops.add(completion);
       const forget = () => {
@@ -427,8 +419,7 @@ export class DiscordVoiceSessions {
       };
     }
 
-    this.params.receive.enableDaveReceivePassthrough(
-      entry,
+    entry.audio.enablePassthrough(
       "post-join warmup",
       DAVE_RECEIVE_PASSTHROUGH_INITIAL_EXPIRY_SECONDS,
     );
@@ -529,17 +520,7 @@ export class DiscordVoiceSessions {
           void entry.stop("realtime terminal error");
         }
       },
-      runAgentTurn: ({ context, message, toolsAllow, userId, isCurrent, signal, voiceSelection }) =>
-        this.params.receive.runDiscordRealtimeAgentTurn({
-          context,
-          entry,
-          message,
-          toolsAllow,
-          userId,
-          isCurrent,
-          ...(signal ? { signal } : {}),
-          voiceSelection,
-        }),
+      runAgentTurn: (turn) => this.params.receive.runDiscordRealtimeAgentTurn({ ...turn, entry }),
       resolveSpeakerContext: (userId) =>
         this.params.receive.resolveDiscordVoiceIngressContext(entry, userId),
     });

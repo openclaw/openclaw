@@ -3,7 +3,6 @@ import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
-import { resolveRenderedColors } from "../../test-helpers/rendered-colors.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI compact subagent ordering",
@@ -85,24 +84,13 @@ suite.define(() => {
               deliveryStatus: "pending",
             },
           });
-          await expect.poll(order).toEqual([newest.id, oldest.id, middleTask.id]);
-          await rows.getByText("Mobile layout verified").waitFor();
+          await expect.poll(order).toEqual([oldest.id, middleTask.id]);
+          expect(await activity.textContent()).not.toContain("Mobile layout verified");
           await page.keyboard.press("Escape");
           await page.screenshot({
-            path: path.join(proofDir, "03-result-ready.png"),
+            path: path.join(proofDir, "03-completed-child-removed.png"),
             animations: "disabled",
           });
-          const completedBadge = activity.locator(
-            '[data-subagent-task-id="stable-child-2"] .chat-subagent-activity__badge',
-          );
-          expect(await completedBadge.count()).toBe(1);
-          const colors = await completedBadge.evaluate((element) => ({
-            badge: getComputedStyle(element).color,
-            success: getComputedStyle(element).getPropertyValue("--ok").trim(),
-          }));
-          const resolved = await page.evaluate(resolveRenderedColors, colors);
-          expect(resolved.badge).toEqual(resolved.success);
-
           await gateway.emitGatewayEvent("task", {
             action: "upserted",
             task: {
@@ -123,11 +111,9 @@ suite.define(() => {
               terminalSummary: "Session review timed out",
             },
           });
-          await expect
-            .poll(() => activity.locator(".chat-subagent-activity__badge").count())
-            .toBe(3);
+          await activity.waitFor({ state: "detached" });
           await page.screenshot({
-            path: path.join(proofDir, "04-status-badges.png"),
+            path: path.join(proofDir, "04-no-ongoing-subagents.png"),
             animations: "disabled",
           });
         },

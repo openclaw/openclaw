@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   resolveAgentWorkspaceDir,
@@ -386,7 +385,7 @@ async function forgetWorkspaceMemory(
       value: {
         ...value,
         content: scrubbed.content,
-        contentHash: createHash("sha256").update(scrubbed.content).digest("hex"),
+        contentHash: hashMemoryContent(scrubbed.content),
       },
     };
   });
@@ -548,12 +547,6 @@ async function forgetWorkspaceMemory(
           return false;
         }
         if (chunkIds.length > 0) {
-          if (indexPlan.ftsRows > 0) {
-            executeSqliteQuerySync(
-              db,
-              kysely.deleteFrom("memory_index_chunks_fts").where("id", "in", chunkIds),
-            );
-          }
           if (indexPlan.hasVectorTable) {
             executeSqliteQuerySync(
               db,

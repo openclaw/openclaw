@@ -26,6 +26,12 @@ per-signal state and transport under **Telemetry exporters**. The summary is
 redacted and does not include endpoint values, headers, certificates, payloads,
 or raw errors.
 
+Doctor reports sessions whose usage-cost cache refresh failed, since their totals
+may be incomplete. Check the Gateway logs and request usage again to retry.
+The bounded failure history keeps the latest 256 sessions across restarts;
+a successful refresh clears that session's warning. `--fix` does not clear a
+warning before the session has refreshed successfully.
+
 Related:
 
 - Troubleshooting: [Troubleshooting](/gateway/troubleshooting)

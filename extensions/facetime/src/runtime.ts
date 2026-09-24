@@ -252,10 +252,12 @@ export async function createFaceTimeRuntime(params: {
     if (!cancelled && !definitivelyAbsent) {
       throw new Error("FaceTime helper could not confirm outbound call cancellation");
     }
-    callUUID = helperResults.map(readOutboundCallUUID).find((value) => Boolean(value)) ?? callUUID;
+    const replyCallUUID = helperResults.map(readOutboundCallUUID).find((value) => Boolean(value));
+    callUUID = replyCallUUID ?? callUUID;
     if (outboundCallPending === pending) {
       retainOutboundDialHelperPeers(outboundCarrierPeers, result);
-      retainFaceTimeDialCallUUID(pending, callUUID);
+      // Native events may replace the carrier while cancellation is in flight.
+      retainFaceTimeDialCallUUID(pending, replyCallUUID);
       await persistOutboundCallPending();
     }
     return { ...(callUUID ? { callUUID } : {}), dialID, handle };

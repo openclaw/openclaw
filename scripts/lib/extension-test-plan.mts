@@ -30,9 +30,11 @@ import { isTelegramExtensionRoot } from "../../test/vitest/vitest.extension-tele
 import { isVoiceCallExtensionRoot } from "../../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../../test/vitest/vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../../test/vitest/vitest.extension-zalo-paths.mjs";
+import { isSharedVitestExcludedPath } from "../../test/vitest/vitest.pattern-file.ts";
 import { isPluginControlUiPath } from "../../test/vitest/vitest.ui-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
+import { GIT_LS_FILES_MAX_BUFFER_BYTES } from "./list-test-files.mts";
 import { parsePositiveInt } from "./numeric-options.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
@@ -90,13 +92,20 @@ const EXTENSION_TEST_COST_MULTIPLIERS: Record<string, number> = {
   "test/vitest/vitest.extension-providers.config.ts": 1.675,
   "test/vitest/vitest.extension-qa.config.ts": 1.125,
   "test/vitest/vitest.extension-signal.config.ts": 1.307,
-  "test/vitest/vitest.extension-slack.config.ts": 1.375,
-  "test/vitest/vitest.extension-telegram.config.ts": 5.061,
   "test/vitest/vitest.extension-voice-call.config.ts": 0.486,
   "test/vitest/vitest.extension-whatsapp.config.ts": 0.511,
   "test/vitest/vitest.extension-zalo.config.ts": 0.523,
   "test/vitest/vitest.extensions.config.ts": 0.642,
 };
+// Retain the pre-parallel PR rates as serial references. Future parallel samples
+// belong in EXTENSION_TEST_COST_MULTIPLIERS and must not be discounted again.
+const EXTENSION_TEST_SERIAL_REFERENCE_COST_MULTIPLIERS: Record<string, number> = {
+  "test/vitest/vitest.extension-slack.config.ts": 1.375,
+  "test/vitest/vitest.extension-telegram.config.ts": 5.061,
+};
+// Two-worker Slack measured 171.941 -> 134.990s; matched two-CPU Telegram measured
+// 41.447 -> 31.686s. Use a conservative 1.2x estimate only for multi-file work.
+const CONSERVATIVE_EXTENSION_PARALLEL_SPEEDUP = 1.2;
 // Isolated Codex workers retire each mocked graph instead of accumulating it (#125839).
 // Bound cold imports per envelope while sharing startup across parallel files.
 const CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 24;
@@ -104,7 +113,7 @@ const CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 24;
 // 12-file envelope boundary independently of the ordinary Codex lane.
 const CODEX_DATABASE_WORKER_TEST_PROCESS_FILE_LIMIT = 12;
 const MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 40;
-const TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT = 1;
+const TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT = 10;
 const TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT = 10;
 const EXTENSION_TEST_PROCESS_FILE_LIMITS = new Map<string, number>([
   ["test/vitest/vitest.extension-codex.config.ts", CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT],
@@ -113,9 +122,8 @@ const EXTENSION_TEST_PROCESS_FILE_LIMITS = new Map<string, number>([
   ["test/vitest/vitest.extension-matrix.config.ts", MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT],
   [
     "test/vitest/vitest.extension-telegram.config.ts",
-    // isolate:true re-evaluates the Telegram graph per file. A second file in
-    // the same process stayed silent past the 300s CI watchdog (observed 2026-08,
-    // changed-extensions-config-14/15 on #123528).
+    // Isolated thread workers retire each mocked graph. Keep one existing job
+    // envelope per process so its files can share the configured worker pool.
     TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT,
   ],
 ]);
@@ -127,10 +135,8 @@ const EXTENSION_TEST_JOB_FILE_LIMITS = new Map<string, number>([
   // CPUs. Reuse the job-only bound; Vitest keeps each config's file lifecycle.
   ["test/vitest/vitest.extension-qa.config.ts", 90],
   ["test/vitest/vitest.extension-providers.config.ts", 90],
-  // Bound Telegram CI jobs so isolate recycling stays inside one job instead
-  // of minting one runner per test file. Ten files keeps the worst job near
-  // 3 minutes (observed 2026-08: ~45s runner setup + ~7-24s per file) while
-  // halving the ~42-job fanout a Telegram-touching diff produced at five.
+  // Retain the existing Telegram job inventory while its isolated thread files
+  // share one process. Native database-worker files keep their separate lifecycle.
   ["test/vitest/vitest.extension-telegram.config.ts", TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT],
 ]);
 const EXTENSION_TEST_CONFIG_ROUTES: Array<[(root: string) => boolean, string]> = [
@@ -174,10 +180,6 @@ function isSkippedTrackedTestFile(relativePath: string) {
 }
 
 let trackedRepoTestFiles: string[] | null | undefined;
-// Large checkouts exceed Node's 1 MiB spawnSync default. Preserve the Git inventory path;
-// ENOBUFS would otherwise trigger expensive extension-directory walks.
-export const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
-
 export function listTrackedTestPlanFiles(cwd: string, pathspecs: readonly string[]) {
   // Query only the planner-owned tree: a full-repo inventory can overflow
   // spawnSync's buffer and either truncate the plan or force directory walks.
@@ -225,7 +227,7 @@ function listTrackedTestFiles(rootPath: string) {
   return trackedFiles.filter((file) => file.startsWith(rootPrefix));
 }
 
-function listFilesystemTestFiles(rootPath: string) {
+function listFilesystemTestFiles(rootPath: string, cwd = repoRoot) {
   const files = [];
   const stack = [rootPath];
 
@@ -236,7 +238,7 @@ function listFilesystemTestFiles(rootPath: string) {
     }
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
-      if (isPluginControlUiPath(normalizeRelative(path.relative(repoRoot, fullPath)))) {
+      if (isPluginControlUiPath(normalizeRelative(path.relative(cwd, fullPath)))) {
         continue;
       }
       if (entry.isDirectory()) {
@@ -247,7 +249,7 @@ function listFilesystemTestFiles(rootPath: string) {
         continue;
       }
       if (entry.isFile() && (fullPath.endsWith(".test.ts") || fullPath.endsWith(".test.tsx"))) {
-        files.push(normalizeRelative(path.relative(repoRoot, fullPath)));
+        files.push(normalizeRelative(path.relative(cwd, fullPath)));
       }
     }
   }
@@ -256,12 +258,12 @@ function listFilesystemTestFiles(rootPath: string) {
 }
 
 /** List working-tree test files for extension roots, including new untracked tests. */
-export function listExtensionTestFilesForRoots(roots: string[]) {
+export function listExtensionTestFilesForRoots(roots: string[], cwd = repoRoot) {
   const files = roots.flatMap((root) => {
-    const rootPath = path.join(repoRoot, root);
+    const rootPath = path.join(cwd, root);
     return fs.existsSync(rootPath) && fs.statSync(rootPath).isFile()
       ? [root]
-      : listFilesystemTestFiles(rootPath);
+      : listFilesystemTestFiles(rootPath, cwd);
   });
   return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
 }
@@ -272,6 +274,9 @@ function uniqueSortedTargets(targets: string[]) {
 
 function splitTargetsByFileLimit(targets: string[], maxFilesPerChunk: number) {
   const orderedTargets = uniqueSortedTargets(targets);
+  if (orderedTargets.length === 0) {
+    return [];
+  }
   if (orderedTargets.length <= maxFilesPerChunk) {
     return [orderedTargets];
   }
@@ -289,15 +294,15 @@ function splitTargetsByFileLimit(targets: string[], maxFilesPerChunk: number) {
   return chunks;
 }
 
-const DATABASE_WORKER_CONFIG = "test/vitest/vitest.extension-database-workers.config.ts";
+export const DATABASE_WORKER_CONFIG = "test/vitest/vitest.extension-database-workers.config.ts";
 // The 185-file native worker envelope was still running after 58 minutes in
-// run 35176277297. Bound jobs separately from the existing process lifetimes.
-export const NATIVE_DATABASE_WORKER_TEST_JOB_FILE_LIMIT = 20;
+// run 35176277297. Include migrated files too: run 35477485803 packed 149
+// database-worker files into one serial job that took 27 minutes.
+export const DATABASE_WORKER_TEST_JOB_FILE_LIMIT = 20;
 
 function splitWorkerTargetsByOriginalConfig(
   targets: string[],
   split: (config: string, files: string[]) => string[][],
-  nativeFileLimit?: number,
 ) {
   const groups = new Map<string, string[]>();
   for (const target of uniqueSortedTargets(targets)) {
@@ -310,11 +315,7 @@ function splitWorkerTargetsByOriginalConfig(
     if (config === "test/vitest/vitest.extension-codex.config.ts") {
       return splitTargetsByFileLimit(files, CODEX_DATABASE_WORKER_TEST_PROCESS_FILE_LIMIT);
     }
-    return config === DATABASE_WORKER_CONFIG
-      ? nativeFileLimit
-        ? splitTargetsByFileLimit(files, nativeFileLimit)
-        : [files]
-      : split(config, files);
+    return config === DATABASE_WORKER_CONFIG ? [files] : split(config, files);
   });
 }
 
@@ -325,13 +326,24 @@ function resolveExtensionTestJobFileLimit(config: string) {
 }
 
 /** Split an extension config's test files across bounded process lifetimes when required. */
-export function splitExtensionTestProcessTargets(config: string, targets: string[]) {
+export function splitExtensionTestProcessTargets(config: string, targets: string[]): string[][] {
   if (config === DATABASE_WORKER_CONFIG) {
-    return splitWorkerTargetsByOriginalConfig(targets, splitExtensionTestProcessTargets);
+    return splitWorkerTargetsByOriginalConfig(
+      targets.filter((file) => !isSharedVitestExcludedPath(file, BUNDLED_PLUGIN_ROOT_DIR)),
+      (originalConfig, files) =>
+        // The Telegram thread proof does not cover its native fork-owned files.
+        // Retain their one-file process lifetime from #123576.
+        originalConfig === "test/vitest/vitest.extension-telegram.config.ts"
+          ? files.map((file) => [file])
+          : splitExtensionTestProcessTargets(originalConfig, files),
+    );
   }
   const maxFilesPerProcess = EXTENSION_TEST_PROCESS_FILE_LIMITS.get(config);
   return maxFilesPerProcess
-    ? splitTargetsByFileLimit(targets, maxFilesPerProcess)
+    ? splitTargetsByFileLimit(
+        targets.filter((file) => !isSharedVitestExcludedPath(file, BUNDLED_PLUGIN_ROOT_DIR)),
+        maxFilesPerProcess,
+      )
     : [uniqueSortedTargets(targets)];
 }
 
@@ -339,14 +351,16 @@ export function splitExtensionTestProcessTargets(config: string, targets: string
 export function splitExtensionTestJobTargets(config: string, targets: string[]) {
   if (config === DATABASE_WORKER_CONFIG) {
     return splitWorkerTargetsByOriginalConfig(
-      targets,
+      targets.filter((file) => !isSharedVitestExcludedPath(file, BUNDLED_PLUGIN_ROOT_DIR)),
       splitExtensionTestJobTargets,
-      NATIVE_DATABASE_WORKER_TEST_JOB_FILE_LIMIT,
-    );
+    ).flatMap((files) => splitTargetsByFileLimit(files, DATABASE_WORKER_TEST_JOB_FILE_LIMIT));
   }
   const maxFilesPerJob = resolveExtensionTestJobFileLimit(config);
   return maxFilesPerJob
-    ? splitTargetsByFileLimit(targets, maxFilesPerJob)
+    ? splitTargetsByFileLimit(
+        targets.filter((file) => !isSharedVitestExcludedPath(file, BUNDLED_PLUGIN_ROOT_DIR)),
+        maxFilesPerJob,
+      )
     : [uniqueSortedTargets(targets)];
 }
 
@@ -378,16 +392,21 @@ export function createExtensionTestProcessTargetChunks(
   config: string,
   roots: string[],
   vitestArgs: string[] = [],
+  cwd = repoRoot,
 ) {
   if (!shouldSplitExtensionTestProcesses(config, vitestArgs)) {
     return [roots];
   }
   // Explicit file targets replace Vitest's root discovery, so inventory the working tree.
   // Otherwise a newly authored untracked test would silently disappear from a broad run.
-  const testFiles = listExtensionTestFilesForRoots(roots).filter(
+  const discoveredFiles = listExtensionTestFilesForRoots(roots, cwd);
+  if (discoveredFiles.length === 0) {
+    return [roots];
+  }
+  const testFiles = discoveredFiles.filter(
     (file) => config === DATABASE_WORKER_CONFIG || !databaseWorkerExtensionTestFiles.includes(file),
   );
-  return testFiles.length > 0 ? splitExtensionTestProcessTargets(config, testFiles) : [roots];
+  return splitExtensionTestProcessTargets(config, testFiles);
 }
 
 function countTestFiles(rootPath: string) {
@@ -404,7 +423,14 @@ export function estimateExtensionTestCost(
   testFileCount: number,
   files: readonly string[] = [],
 ) {
-  const multiplier = EXTENSION_TEST_COST_MULTIPLIERS[config] ?? 1;
+  const serialReference = EXTENSION_TEST_SERIAL_REFERENCE_COST_MULTIPLIERS[config];
+  const multiplier =
+    serialReference !== undefined && testFileCount <= 1
+      ? serialReference
+      : (EXTENSION_TEST_COST_MULTIPLIERS[config] ??
+        (serialReference === undefined
+          ? 1
+          : serialReference / CONSERVATIVE_EXTENSION_PARALLEL_SPEEDUP));
   // After #153539, the slowest pure app-server envelope in PR runs 35537834254,
   // 35537743091 and 35537672782 took 190.394s / 11 files on two workers.
   // Preserve its rounded-up wrapper wall/file floor over the mixed config median.

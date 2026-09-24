@@ -10,11 +10,12 @@ import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heart
 import type { SessionEventWakeWaitOptions } from "../../infra/session-event-wake.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { CronAgentAvailability } from "../agent-availability.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
-import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type {
   CronCompletionStatus,
   CronTriggerEvaluationResult,
@@ -39,6 +40,11 @@ import type {
   CronToolsAllowExecTarget,
   CronToolsAllowProvenance,
 } from "../types.js";
+import type {
+  CronNotificationIntent,
+  CronNotificationJob,
+  ResolvedFailureAlert,
+} from "./notification-intents.js";
 
 /** Event payload emitted for cron lifecycle changes and completed runs. */
 export type CronEvent = {
@@ -95,7 +101,7 @@ export type CronSystemEventEnqueueResult =
     };
 
 /** Notifications queued by cron mutations until their state is durable. */
-export type DeferredCronNotifications = Array<() => void>;
+export type DeferredCronNotifications = CronNotificationIntent[];
 
 export type CronRunDeliveryResult = {
   /** True after verified delivery, including a matching messaging-tool send. */
@@ -133,8 +139,8 @@ export type CronServiceDeps = {
   legacyDefaultAgentId?: string;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
   resolveSessionStoreAgentIds?: () => string[];
-  /** Revalidate agent ownership inside the cron mutation lock. */
-  isAgentAvailable?: (agentId: string) => boolean;
+  /** Revalidate ownership through the supplied transaction when a receipt holds it. */
+  isAgentAvailable?: CronAgentAvailability;
   /** Resolve session store path for a given agent id. */
   resolveSessionStorePath?: (agentId?: string) => string;
   /** Path to the session store (sessions.json) for reaper use. */
@@ -190,6 +196,7 @@ export type CronServiceDeps = {
   ) => number | undefined;
   runIsolatedAgentJob: (params: {
     job: CronJob;
+    admissionSource?: AdmittedRunContext["admissionSource"];
     message: string;
     abortSignal?: AbortSignal;
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
@@ -242,7 +249,7 @@ export type CronServiceDeps = {
     timeoutMs: number;
   }) => void | Promise<void>;
   sendCronFailureAlert?: (params: {
-    job: CronJob;
+    job: CronNotificationJob;
     payload: ReplyPayload;
     runAtMs?: number;
     channel: CronMessageChannel;
@@ -267,6 +274,13 @@ export type CronExecutionIdentityAdmission = {
 /** Cron deps after optional defaults have been made concrete. */
 type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
   nowMs: () => number;
+};
+
+/** Dependencies consumed by job policy before its mutation is committed. */
+export type CronJobPolicyContext = {
+  deps: Pick<CronServiceDepsInternal, "cronConfig" | "nowMs" | "log">;
+  /** Resolved by the host for this exact job while its recovery transaction holds the row. */
+  preparedFailureAlert?: { jobId: string; value: ResolvedFailureAlert | null };
 };
 
 /** Process-local admission state shared by every execution entry point of one cron service. */

@@ -10,6 +10,8 @@ import type {
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
+import { invalidateCronCatalog } from "../lib/cron/catalog.ts";
+import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import {
   createTestGatewayClient,
@@ -20,7 +22,7 @@ import type { CommandPalette } from "./command-palette.ts";
 type GatewayHarness = {
   gateway: ApplicationGateway;
   setConnected: (connected: boolean) => void;
-  emit: (event: string) => void;
+  emit: (event: string, payload?: unknown) => void;
 };
 
 export function createGateway(
@@ -76,16 +78,21 @@ export function createGateway(
   } satisfies ApplicationGateway;
   return {
     gateway,
-    emit(event) {
-      if (event === "config.changed" || event === "chat.metadata.changed") {
-        invalidateChatMetadataStore(client);
+    emit(event, payload = {}) {
+      if (event === "cron" || event === "config.changed") {
+        invalidateCronCatalog(client);
+      }
+      const invalidation = modelCatalogEventInvalidation({ event, payload });
+      if (invalidation) {
+        invalidateChatMetadataStore(client, undefined, undefined, invalidation);
       }
       for (const listener of events) {
-        listener({ type: "event", event, payload: {} });
+        listener({ type: "event", event, payload });
       }
     },
     setConnected(nextConnected) {
       if (!nextConnected) {
+        invalidateCronCatalog(client);
         invalidateChatMetadataStore(client);
       }
       snapshot = {

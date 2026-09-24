@@ -103,6 +103,7 @@ describe("gateway lifecycle hub import boundaries", () => {
             requestGatewayRestartWithSignalAdmission:
               vi.fn<LifecycleRuntime["requestGatewayRestartWithSignalAdmission"]>(),
             captureForegroundUpdateHandoffStop: () => undefined,
+            waitForSystemServiceUpdateHandoffs: () => undefined,
             isGatewayRestartExternallyAllowed: () => false,
             scheduleGatewayRestart: vi.fn<LifecycleRuntime["scheduleGatewayRestart"]>(),
             abortEmbeddedAgentRun: () => false,
@@ -113,7 +114,7 @@ describe("gateway lifecycle hub import boundaries", () => {
             markGatewayRestartHandled: vi.fn(),
             abortPendingChannelReloads: vi.fn(),
             markGatewayDraining: vi.fn(),
-            resolveGatewayRestartDeferralTimeoutMs: () => 300_000,
+            resolveGatewayRestartDrainTimeoutMs: () => 300_000,
             createGatewayActiveWorkSnapshot: () => idle,
             waitForGatewayActiveWork: vi.fn(async () => ({ drained: true, snapshot: idle })),
             stopGatewayManagedProviderLocalServices: vi.fn(async () => {}),

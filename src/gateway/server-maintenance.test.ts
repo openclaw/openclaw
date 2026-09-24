@@ -1,7 +1,9 @@
 // Gateway maintenance tests cover periodic cleanup for media, dedupe records,
 // stale chat buffers, expired runs, health summaries, and timer disposal.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isGatewayWorkAdmissionClosed,
@@ -64,7 +66,7 @@ function createMaintenanceTimerDeps() {
   return {
     ...createGatewayMaintenanceStateForTest(),
     logHealth: { info: vi.fn(), error: vi.fn() },
-    runWorktreeGc: vi.fn(async () => undefined),
+    runWorktreeGc: vi.fn<() => Promise<ManagedWorktreeGcResult | void>>(async () => undefined),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
     runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
   };
@@ -338,6 +340,40 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
+  it("records partial managed worktree cleanup in health logs", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    deps.runWorktreeGc.mockResolvedValue({
+      removed: [],
+      orphansDeleted: 0,
+      snapshotsPruned: 0,
+      outcome: "partial",
+      issues: [
+        {
+          id: "retained",
+          stage: "idle",
+          outcome: "failed",
+          reason: "cleanup-failed: repository unavailable",
+        },
+      ],
+      issueCount: 1,
+      protectedCount: 0,
+      protectionReasons: {},
+      orphansRetired: 0,
+      retiredCheckoutPaths: [],
+      limitsSatisfied: false,
+    });
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.waitFor(() =>
+      expect(deps.logHealth.error).toHaveBeenCalledWith(
+        expect.stringContaining("retained: cleanup-failed"),
+      ),
+    );
+    await stopMaintenanceTimers(timers);
+  });
+
   it("runs setup-outcome cleanup immediately without overlapping minute ticks", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
@@ -371,9 +407,8 @@ describe("startGatewayMaintenanceTimers", () => {
   it("passes owner activity to default managed worktree cleanup", async () => {
     vi.useFakeTimers();
     const gc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue({
-      removed: [],
-      orphansDeleted: 0,
-      snapshotsPruned: 0,
+      ...new WorktreeGcProgress().result,
+      limitsSatisfied: true,
     });
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const { runWorktreeGc: _runWorktreeGc, ...deps } = createMaintenanceTimerDeps();

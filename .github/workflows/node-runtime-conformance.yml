@@ -1,6 +1,8 @@
 name: Node Runtime Conformance
 
 on:
+  schedule:
+    - cron: "23 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
@@ -37,7 +39,7 @@ on:
       - "test/fixtures/node-runtime-integration-contract.json"
 
 concurrency:
-  group: node-runtime-conformance-${{ github.event.pull_request.number || github.sha }}
+  group: node-runtime-conformance-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 permissions:
@@ -48,6 +50,7 @@ env:
 
 jobs:
   typescript:
+    if: (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true')
     name: TypeScript contracts
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -74,6 +77,7 @@ jobs:
           src/infra/node-runtime-integration-contract.test.ts
 
   rust:
+    if: (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true')
     name: Rust workspace
     runs-on: ubuntu-24.04
     timeout-minutes: 20

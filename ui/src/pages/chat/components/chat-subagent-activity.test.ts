@@ -11,8 +11,6 @@ import {
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { deriveSubagentActivity } from "./chat-subagent-activity.ts";
 
-const TERMINAL_RETENTION_MS = 60_000;
-
 function makeTask(overrides: Partial<TaskSummary> & { id: string }): TaskSummary {
   return {
     taskId: overrides.id,
@@ -43,7 +41,6 @@ function makeProps(overrides: Partial<BackgroundTasksProps>): BackgroundTasksPro
     subagentActivity: deriveSubagentActivity({
       tasks: [],
       sessionKey: "agent:main:current",
-      terminalObservedAtByTask: new Map(),
       canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
     }),
     cancellingTaskIds: new Set(),
@@ -89,7 +86,6 @@ function flushAsync() {
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
-  vi.useRealTimers();
 });
 
 describe("subagent activity rows", () => {
@@ -106,11 +102,6 @@ describe("subagent activity rows", () => {
     { lastToolName: "read_file", expected: "Last tool: read_file" },
     { lastActivity: "Inspecting items[0", expected: "Inspecting items[0" },
     {
-      status: "completed" as const,
-      terminalSummary: "## Done\n- Read [results](https://example.com/results)",
-      expected: "Done Read results",
-    },
-    {
       lastActivity: "Checking foo_bar_baz at ~/.openclaw: 1 < 2 and ~5 files",
       expected: "Checking foo_bar_baz at ~/.openclaw: 1 < 2 and ~5 files",
     },
@@ -121,9 +112,7 @@ describe("subagent activity rows", () => {
       subagentActivity: deriveSubagentActivity({
         tasks: [task],
         sessionKey: "agent:main:current",
-        terminalObservedAtByTask: new Map(),
         canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
-        now: 3_000,
       }),
     });
 
@@ -151,12 +140,6 @@ describe("subagent activity rows", () => {
       moving: true,
     },
     {
-      title: "Layout review",
-      label: "Layout review",
-      status: "completed" as const,
-      description: "Completed",
-    },
-    {
       title: "",
       label: "Subagent",
       status: "running" as const,
@@ -171,28 +154,10 @@ describe("subagent activity rows", () => {
       moving: true,
     },
     {
-      title: " \n ",
-      label: "Subagent",
-      status: "failed" as const,
-      description: "Failed",
-    },
-    {
       title: "Layout review",
       label: "Layout review",
       status: "queued" as const,
       description: "Queued",
-    },
-    {
-      title: "Layout review",
-      label: "Layout review",
-      status: "cancelled" as const,
-      description: "Cancelled",
-    },
-    {
-      title: "Layout review",
-      label: "Layout review",
-      status: "timed_out" as const,
-      description: "Timed out",
     },
     {
       title: "Layout review",
@@ -212,48 +177,12 @@ describe("subagent activity rows", () => {
       title: "Layout review",
       label: "Layout review",
       status: "running" as const,
-      execution: { state: "finished" as const },
-      description: "Execution finished",
-    },
-    {
-      title: "Layout review",
-      label: "Layout review",
-      status: "running" as const,
       execution: { state: "queued" as const },
       description: "Queued",
     },
-    {
-      title: "Layout review",
-      label: "Layout review",
-      status: "completed" as const,
-      deliveryStatus: "session_queued" as const,
-      description: "Result ready — Queued for parent",
-    },
-    {
-      title: "Layout review",
-      label: "Layout review",
-      status: "completed" as const,
-      deliveryStatus: "pending" as const,
-      description: "Result ready — Waiting to send to parent",
-    },
-    {
-      title: "Layout review",
-      label: "Layout review",
-      status: "completed" as const,
-      deliveryStatus: "delivered" as const,
-      description: "Completed — Delivered to parent",
-    },
-    {
-      title: "Layout review",
-      label: "Layout review",
-      status: "completed" as const,
-      deliveryStatus: "failed" as const,
-      description: "Completed — Delivery failed · result retained",
-      warning: true,
-    },
   ])(
     "opens $label activity with $description",
-    ({ label, description, moving = false, warning, ...taskProps }) => {
+    ({ label, description, moving = false, ...taskProps }) => {
       const task = makeTask({
         id: "clickable-subagent",
         ...taskProps,
@@ -266,9 +195,7 @@ describe("subagent activity rows", () => {
         subagentActivity: deriveSubagentActivity({
           tasks: [task],
           sessionKey: "agent:main:current",
-          terminalObservedAtByTask: new Map(),
           canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
-          now: 3_000,
         }),
         onOpenTaskDetail,
       });
@@ -280,8 +207,6 @@ describe("subagent activity rows", () => {
       expect(row?.querySelector(".chat-subagent-activity__label")?.textContent).toBe(label);
       expect(row?.textContent?.replace(/\s+/g, " ").trim()).toBe(`${label} Checking spacing`);
       expect(row?.querySelector(".chat-reading-indicator") !== null).toBe(moving);
-      const hasBadge = warning || ["completed", "failed", "timed_out"].includes(task.status);
-      expect(row?.querySelector(".chat-subagent-activity__badge") !== null).toBe(hasBadge);
       expect(container.querySelector("openclaw-tooltip")?.content).toBe(
         `${label}\n${description}\nChecking spacing`,
       );
@@ -303,7 +228,6 @@ describe("subagent activity rows", () => {
       subagentActivity: deriveSubagentActivity({
         tasks: [task],
         sessionKey: "agent:main:current",
-        terminalObservedAtByTask: new Map(),
         canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
       }),
     });
@@ -314,7 +238,7 @@ describe("subagent activity rows", () => {
     expect(row?.hasAttribute("tabindex")).toBe(false);
   });
 
-  it("filters by requester, runtime, and retention while leaving other work in the aggregate", () => {
+  it("shows only ongoing children for the requester and leaves other work in the aggregate", () => {
     const now = 100_000;
     const current = makeTask({
       id: "current-subagent",
@@ -342,41 +266,28 @@ describe("subagent activity rows", () => {
         lastActivity: "Wrong requester",
       }),
       otherRuntime,
-      makeTask({
-        id: "expired-subagent",
-        status: "completed",
-        updatedAt: now - TERMINAL_RETENTION_MS - 1,
-        endedAt: now - TERMINAL_RETENTION_MS - 1,
-        terminalSummary: "Too old",
-      }),
+      ...(["completed", "failed", "cancelled", "timed_out"] as const).map((status) =>
+        makeTask({ id: `terminal-${status}`, status, endedAt: now, updatedAt: now }),
+      ),
+      makeTask({ id: "finished-execution", execution: { state: "finished" } }),
     ];
     const subagentActivity = deriveSubagentActivity({
       tasks,
       sessionKey: "agent:main:current",
-      terminalObservedAtByTask: new Map(),
       canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
-      now,
     });
 
-    expect(subagentActivity.rows.map((task) => task.id)).toEqual([
-      "recent-subagent",
-      "current-subagent",
-    ]);
-    expect(subagentActivity.taskIds).toEqual(new Set(["recent-subagent", "current-subagent"]));
+    expect(subagentActivity.rows.map((task) => task.id)).toEqual(["current-subagent"]);
 
     const container = renderStatusRow({
       tasks: [current, recent, otherRuntime],
       subagentActivity,
     });
-    expect(container.querySelectorAll(".chat-subagent-activity__row")).toHaveLength(2);
+    expect(container.querySelectorAll(".chat-subagent-activity__row")).toHaveLength(1);
     expect(container.textContent).toContain("Reviewing the current session");
-    expect(
-      container
-        .querySelector('[data-subagent-task-id="recent-subagent"]')
-        ?.getAttribute("aria-label"),
-    ).toContain("Completed");
+    expect(container.querySelector('[data-subagent-task-id="recent-subagent"]')).toBeNull();
+    expect(container.textContent).not.toContain("Review complete");
     expect(container.textContent).not.toContain("Wrong requester");
-    expect(container.textContent).not.toContain("Too old");
     expect(container.querySelector(".chat-tasks-status__link")?.textContent?.trim()).toBe(
       "1 running task",
     );
@@ -397,9 +308,7 @@ describe("subagent activity rows", () => {
     const subagentActivity = deriveSubagentActivity({
       tasks: [...running, ...queued],
       sessionKey: "agent:main:current",
-      terminalObservedAtByTask: new Map(),
       canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
-      now: 20_000,
     });
     const container = renderStatusRow({
       tasks: [...running, ...queued],
@@ -469,7 +378,7 @@ describe("subagent activity rows", () => {
   );
 
   it.each(["completed", "failed", "cancelled", "timed_out"] as const)(
-    "promotes a %s result once without letting later delivery updates reorder it",
+    "removes a %s result immediately and keeps it in Tasks through delivery updates",
     async (status) => {
       const tasks = Array.from({ length: 3 }, (_, index) =>
         makeTask({ id: String(index), createdAt: 1_000 + index, updatedAt: 2_000 + index }),
@@ -477,28 +386,27 @@ describe("subagent activity rows", () => {
       const { host } = createHost(...tasks);
       createBackgroundTasksProps(host);
       await flushAsync();
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      vi.setSystemTime(100_000);
       const ids = () =>
         createBackgroundTasksProps(host).subagentActivity.rows.map((task) => task.id);
       const finishedFirst = { ...tasks[1], status, endedAt: 100_000, updatedAt: 100_000 };
       handleBackgroundTasksEvent(host, { action: "upserted", task: finishedFirst });
-      expect(ids()).toEqual(["1", "0", "2"]);
-      vi.advanceTimersByTime(1_000);
+      expect(ids()).toEqual(["0", "2"]);
       handleBackgroundTasksEvent(host, {
         action: "upserted",
         task: { ...tasks[2], status: "completed", endedAt: 101_000, updatedAt: 101_000 },
       });
-      expect(ids()).toEqual(["2", "1", "0"]);
+      expect(ids()).toEqual(["0"]);
       handleBackgroundTasksEvent(host, {
         action: "upserted",
         task: { ...finishedFirst, updatedAt: 102_000, deliveryStatus: "delivered" },
       });
-      expect(ids()).toEqual(["2", "1", "0"]);
-      vi.advanceTimersByTime(TERMINAL_RETENTION_MS - 1_000);
-      expect(ids()).toEqual(["2", "0"]);
-      vi.advanceTimersByTime(1_000);
       expect(ids()).toEqual(["0"]);
+      expect(createBackgroundTasksProps(host).tasks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "1", status, deliveryStatus: "delivered" }),
+          expect.objectContaining({ id: "2", status: "completed" }),
+        ]),
+      );
     },
   );
 
@@ -517,18 +425,16 @@ describe("subagent activity rows", () => {
     const presentation = deriveSubagentActivity({
       tasks: [...active, ...finished],
       sessionKey: "agent:main:current",
-      terminalObservedAtByTask: new Map(),
       canonicalizeSessionKey: (key) => key ?? "",
-      now: 100_000,
     });
     expect(presentation.rows.map((task) => task.id)).toEqual([
-      "finished-54",
       "active-0",
       "active-1",
       "active-2",
       "active-3",
+      "active-4",
     ]);
-    expect(presentation.overflowCount).toBe(56);
+    expect(presentation.overflowCount).toBe(1);
     expect(presentation.taskIds.size).toBe(61);
   });
 
@@ -538,12 +444,10 @@ describe("subagent activity rows", () => {
       lastActivity: "Editing the final report",
       diffStat: { files: 2, added: 12, removed: 3 },
     });
-    const { host, requestUpdate } = createHost(running);
+    const { host } = createHost(running);
     createBackgroundTasksProps(host);
     await flushAsync();
 
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    vi.setSystemTime(100_000);
     handleBackgroundTasksEvent(host, {
       action: "upserted",
       task: makeTask({
@@ -567,21 +471,10 @@ describe("subagent activity rows", () => {
     const renderCurrent = () =>
       render(html`${renderBackgroundTasksStatusRow(createBackgroundTasksProps(host))}`, container);
     renderCurrent();
-    expect(
-      container.querySelector(".chat-subagent-activity__row")?.getAttribute("aria-label"),
-    ).toContain("Cancelled");
+    expect(container.querySelector(".chat-subagent-activity__row")).toBeNull();
     expect(container.textContent).not.toContain("Editing the final report");
     expect(container.textContent).not.toContain("Outdated progress");
     expect(container.textContent).not.toContain("read_file");
     expect(container.querySelector(".chat-diffstat")).toBeNull();
-
-    requestUpdate.mockClear();
-    vi.advanceTimersByTime(TERMINAL_RETENTION_MS - 1);
-    renderCurrent();
-    expect(container.querySelector(".chat-subagent-activity__row")).not.toBeNull();
-    vi.advanceTimersByTime(1);
-    expect(requestUpdate).toHaveBeenCalledOnce();
-    renderCurrent();
-    expect(container.querySelector(".chat-subagent-activity__row")).toBeNull();
   });
 });

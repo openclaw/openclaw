@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { startProcessWatchdogFixture } from "../../test/helpers/process-watchdog.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getGatewaySuspendStatus,
@@ -277,19 +278,20 @@ describe("runCronCommandJob", () => {
       const realSetTimeout = setTimeout;
       const spawnSpy = vi.spyOn(execSpawn, "spawnCommandWithInvocation");
       let parent: ChildProcess | undefined;
-      let command: ReturnType<typeof runCronCommandJob> | undefined;
+      let releaseAndWait: (() => ReturnType<typeof runCronCommandJob>) | undefined;
       try {
-        // Freeze the deadline until the real shell has published a live child;
-        // startup time must not consume the behavior this test is exercising.
-        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-        command = runCronCommandJob({
-          job: makeCommandJob({
-            kind: "command",
-            argv: ["sh", "-lc", shellCommand],
-            timeoutSeconds: 0.5,
+        // Hold only the command deadline until the child is live. Group exit
+        // observation and scoped cleanup must keep real time to observe the OS.
+        releaseAndWait = startProcessWatchdogFixture(() =>
+          runCronCommandJob({
+            job: makeCommandJob({
+              kind: "command",
+              argv: ["sh", "-lc", shellCommand],
+              timeoutSeconds: 0.5,
+            }),
+            abortSignal: controller.signal,
           }),
-          abortSignal: controller.signal,
-        });
+        );
         const spawnResult = spawnSpy.mock.results[0];
         if (spawnResult?.type !== "return") {
           throw new Error("command did not spawn");
@@ -310,14 +312,9 @@ describe("runCronCommandJob", () => {
         expect(Number.isSafeInteger(childPid)).toBe(true);
         expect(isPidAlive(childPid)).toBe(true);
 
-        await vi.advanceTimersByTimeAsync(500);
-        await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
-        // Force delivery now has a separate bounded exit-observation phase.
-        await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
-        const result = await command;
+        const result = await releaseAndWait();
         expect(result.status).toBe("error");
         expect(result.error).toBe("command timed out");
-        vi.useRealTimers();
         expect(await waitForPidToExit(childPid)).toBe(true);
       } finally {
         try {
@@ -329,13 +326,9 @@ describe("runCronCommandJob", () => {
               // The command may already have reaped its process group.
             }
           }
-          if (vi.isFakeTimers()) {
-            await vi.runAllTimersAsync();
-          }
         } finally {
-          vi.useRealTimers();
           spawnSpy.mockRestore();
-          await command;
+          await releaseAndWait?.();
         }
       }
     }),

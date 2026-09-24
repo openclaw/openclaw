@@ -5,7 +5,7 @@ import { chunkItems } from "../../utils/chunk-items.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import type { DoctorSessionScanScope } from "./session-accessor.sqlite-canonical-inventory.js";
 import {
   publishSessionEntryCacheInvalidation,

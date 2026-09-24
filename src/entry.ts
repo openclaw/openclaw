@@ -4,6 +4,7 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { format } from "node:util";
+import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from "./cli/one-shot-exit.js";
@@ -14,10 +15,15 @@ import {
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
 import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
+import {
+  isUpdateAdmissionInvocation,
+  tryRunUpdateAdmissionBeforeStartup,
+} from "./cli/run-main-update-admission.js";
 import { withCliProcessScope } from "./cli/runtime-cleanup-scope.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
   createGatewayDispatchStartupTrace,
+  prepareGatewayStartupTraceConsoleFormatting,
 } from "./cli/startup-trace.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import {
@@ -124,11 +130,12 @@ if (
   })
 ) {
   // Imported as a dependency — skip all entry-point side effects.
+} else if (isUpdateAdmissionInvocation(resolveCliArgvInvocation(process.argv))) {
+  await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv));
 } else {
   const entryFile = fileURLToPath(import.meta.url);
   const installRoot = resolveEntryInstallRoot(entryFile);
   installDistEsmResolveFastPath(import.meta.url);
-  process.title = "openclaw";
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();
   normalizeEnv();
@@ -205,6 +212,8 @@ if (
     if (!(await ensureCliRespawnReady())) {
       // Only the final child emits the diagnostic warning; parents still enforce admission.
       await assertSupportedRuntime(undefined, undefined, process.argv, true, inheritedRuntimeEnv);
+      // Idle respawn parents retain argv so offline maintenance can identify its launchers.
+      process.title = "openclaw";
       const parsedContainer = parseCliContainerArgs(process.argv);
       if (!parsedContainer.ok) {
         await writeCapturedCliArgumentError(parsedContainer.error);
@@ -322,6 +331,38 @@ export async function tryHandlePrecomputedCommandHelpFastPath(
   }
 }
 
+async function prepareCliFailureHandler(argv: string[], commandStarted: () => boolean) {
+  const [
+    { loadCliDotEnvForEarlyDiagnostic },
+    { enableConsoleCapture },
+    { formatCliFailureLines, formatCliJsonFailure },
+    { isJsonOutputModeActive },
+    configureTrace,
+  ] = await Promise.all([
+    import("./cli/dotenv.js"),
+    import("./logging.js"),
+    import("./cli/failure-output.js"),
+    import("./cli/json-output-mode.js"),
+    prepareGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace),
+  ]);
+  return async (error: unknown) => {
+    await loadCliDotEnvForEarlyDiagnostic(argv);
+    configureTrace();
+    enableConsoleCapture();
+    if (isJsonOutputModeActive(argv)) {
+      defaultRuntime.writeJson(formatCliJsonFailure(error));
+    }
+    for (const line of formatCliFailureLines({
+      title: commandStarted() ? "The CLI command failed." : "Could not start the CLI.",
+      error,
+      argv,
+    })) {
+      console.error(line);
+    }
+    process.exitCode = 1;
+  };
+}
+
 export async function runMainOrRootHelp(
   argv: string[],
   deps: RunMainOrRootHelpDeps = {},
@@ -329,6 +370,7 @@ export async function runMainOrRootHelp(
   // Command-phase errors reach this handler too: runCommandWithRuntime rethrows in JSON
   // mode so the envelope is written here. Only failures before runCli are startup failures.
   let commandStarted = false;
+  let failureHandler: Awaited<ReturnType<typeof prepareCliFailureHandler>> | undefined;
   await runCliWithExitFinalization({
     finalize: deps.finalize,
     run: async () => {
@@ -351,6 +393,8 @@ export async function runMainOrRootHelp(
         "run-main-import",
         deps.loadRunCli ?? (() => import("./cli/run-main.js")),
       );
+      // Commands can replace their own installation. Retain diagnostics before old chunks vanish.
+      failureHandler = await prepareCliFailureHandler(argv, () => commandStarted);
       commandStarted = true;
       await runCli(argv, {
         additionalStartupTrace: gatewayEntryStartupTrace,
@@ -359,26 +403,8 @@ export async function runMainOrRootHelp(
         retainConsoleRoutingUntilProcessExit: true,
       });
     },
-    onError: async (error) => {
-      const { loadCliDotEnvForEarlyDiagnostic } = await import("./cli/dotenv.js");
-      await loadCliDotEnvForEarlyDiagnostic(argv);
-      await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
-      const { enableConsoleCapture } = await import("./logging.js");
-      enableConsoleCapture();
-      const [{ formatCliFailureLines, formatCliJsonFailure }, { isJsonOutputModeActive }] =
-        await Promise.all([import("./cli/failure-output.js"), import("./cli/json-output-mode.js")]);
-      if (isJsonOutputModeActive(argv)) {
-        defaultRuntime.writeJson(formatCliJsonFailure(error));
-      }
-      for (const line of formatCliFailureLines({
-        title: commandStarted ? "The CLI command failed." : "Could not start the CLI.",
-        error,
-        argv,
-      })) {
-        console.error(line);
-      }
-      process.exitCode = 1;
-    },
+    onError: async (error) =>
+      (failureHandler ?? (await prepareCliFailureHandler(argv, () => commandStarted)))(error),
   });
 }
 

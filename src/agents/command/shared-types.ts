@@ -59,6 +59,8 @@ export type ClientToolDefinition = {
 };
 
 export type AgentRunClientContext = {
+  /** Profile selected from the session's assigned human owner or authenticated human creator, never its latest sender. */
+  bootstrapUserProfileId?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
   gatewayUiCommandTarget?: import("../../gateway/ui-command-target.types.js").GatewayUiCommandTarget;
@@ -185,6 +187,7 @@ export type AgentRunTranscriptContext = {
 };
 
 export type AgentRunLifecycle = {
+  providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
   /** Already-admitted internal execution; mutually exclusive with preparedRunAdmission. */
   admittedRunContext?: AdmittedRunContext;
   /** Host-only post-prepare continuation, removed before plugin invocation. */

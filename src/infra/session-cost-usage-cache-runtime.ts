@@ -6,6 +6,7 @@ import {
   refreshCostUsageCacheForAgent,
   resolveUsageCostCacheDatabasePath,
 } from "./session-cost-usage-aggregation.js";
+import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import { isSessionCostUsageRefreshRunning } from "./session-cost-usage-cache.sqlite.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import {
@@ -31,11 +32,13 @@ type UsageCostRefreshState = {
   databasePath: string;
   fullRefreshRequested: boolean;
   pendingSessionFiles: Set<string>;
+  pendingRebuildRows: Map<string, SessionCostUsageRollupRow>;
   storePath: string;
 };
 
 type UsageCostRefreshRequest = Pick<UsageCostRefreshState, "agentId" | "config" | "storePath"> & {
   sessionFiles?: string[];
+  rebuildRows?: SessionCostUsageRollupRow[];
 };
 
 // Only active queues retain their scope; one owner cannot adopt another owner's work.
@@ -62,7 +65,11 @@ async function readCostUsageSummaryFromWorker(
   if (result.kind !== "summary" || !result.summary.cacheStatus) {
     throw new Error("Usage worker returned an invalid aggregate summary");
   }
-  return { summary: result.summary, cacheStatus: result.summary.cacheStatus };
+  return {
+    summary: result.summary,
+    cacheStatus: result.summary.cacheStatus,
+    invalidRows: result.invalidRows,
+  };
 }
 
 export async function loadCostUsageSummary(params: {
@@ -90,12 +97,20 @@ export async function loadCostUsageSummary(params: {
     prepared.config,
     prepared.agentDir,
   );
-  const { summary, cacheStatus } = await readCostUsageSummaryFromWorker(prepared, {
+  const { summary, cacheStatus, invalidRows } = await readCostUsageSummaryFromWorker(prepared, {
     pricingFingerprint,
     startMs,
     endMs,
     dayBucket: params.dayBucket,
   });
+  if (invalidRows.length > 0) {
+    requestCostUsageCacheRefresh({
+      config: params.config,
+      agentId: params.agentId,
+      storePath,
+      rebuildRows: invalidRows,
+    });
+  }
   if (
     result === "busy" ||
     isUsageCostRefreshQueued(databasePath) ||
@@ -137,13 +152,24 @@ export async function loadCostUsageSummaryFromCache(params: {
         agentDir: prepared.agentDir,
         storePath,
         startMs: params.startMs,
+        rebuildRows: snapshot.invalidRows,
       });
       snapshot = await readCostUsageSummaryFromWorker(prepared, request);
       if (result === "refreshed" && snapshot.cacheStatus.staleFiles > 0) {
-        requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId, storePath });
+        requestCostUsageCacheRefresh({
+          config: params.config,
+          agentId: params.agentId,
+          storePath,
+          rebuildRows: snapshot.invalidRows,
+        });
       }
     } else {
-      requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId, storePath });
+      requestCostUsageCacheRefresh({
+        config: params.config,
+        agentId: params.agentId,
+        storePath,
+        rebuildRows: snapshot.invalidRows,
+      });
     }
   }
   if (
@@ -195,6 +221,7 @@ export async function loadSessionCostSummariesFromCache(params: {
       agentId: params.agentId,
       storePath,
       sessionFiles: staleSessionFiles,
+      rebuildRows: result.invalidRows,
     });
   }
   const refreshRunning = await isSessionCostUsageRefreshRunning(params.agentId, databasePath);
@@ -223,6 +250,7 @@ function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): void {
     databasePath,
     fullRefreshRequested: false,
     pendingSessionFiles: new Set(),
+    pendingRebuildRows: new Map(),
     storePath: params.storePath,
   };
   mergeUsageCostRefreshRequest(state, params);
@@ -239,6 +267,9 @@ function mergeUsageCostRefreshRequest(
   state.config = params.config ?? state.config;
   state.agentId = params.agentId;
   state.storePath = params.storePath;
+  for (const row of params.rebuildRows ?? []) {
+    state.pendingRebuildRows.set(row.key, row);
+  }
   if (!params.sessionFiles) {
     state.fullRefreshRequested = true;
     return;
@@ -283,6 +314,8 @@ async function runQueuedUsageCostRefresh(
         while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
           const fullRefreshRequested = state.fullRefreshRequested;
           const sessionFiles = fullRefreshRequested ? [] : [...state.pendingSessionFiles];
+          const rebuildRows = [...state.pendingRebuildRows.values()];
+          state.pendingRebuildRows.clear();
           if (!fullRefreshRequested) {
             state.pendingSessionFiles.clear();
           }
@@ -293,11 +326,17 @@ async function runQueuedUsageCostRefresh(
             databasePath: state.databasePath,
             storePath: state.storePath,
             sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
+            rebuildRows,
           });
           if (signal?.aborted) {
             return;
           }
           if (result === "busy") {
+            for (const row of rebuildRows) {
+              if (!state.pendingRebuildRows.has(row.key)) {
+                state.pendingRebuildRows.set(row.key, row);
+              }
+            }
             if (fullRefreshRequested) {
               state.fullRefreshRequested = true;
             } else {

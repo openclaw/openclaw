@@ -461,7 +461,12 @@ describe("qa-bus server", () => {
       expect(snapshot.events).toHaveLength(1);
       const storedAttachment = snapshot.messages[0]?.attachments?.[0];
       expect(storedAttachment).toEqual(attachment);
-      expect(Buffer.from(storedAttachment?.contentBase64 ?? "", "base64")).toEqual(generatedImage);
+      const storedImage = Buffer.from(storedAttachment?.contentBase64 ?? "", "base64");
+      expect(storedImage.byteLength).toBe(generatedImage.byteLength);
+      expect(
+        storedImage.equals(generatedImage),
+        "stored attachment bytes match the generated image",
+      ).toBe(true);
     },
   );
 

@@ -3,12 +3,15 @@ import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-m
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import type { MemoryTranscriptProjectionFrame } from "../config/sessions/session-transcript-reconcile-memory.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
-import type { SessionCostUsageRollupByteRow } from "./session-cost-usage-cache.kernel.js";
-import type { UsageCostTranscriptFile } from "./session-cost-usage-collection.js";
+import type {
+  SessionCostUsageRollupByteRow,
+  SessionCostUsageRollupRow,
+} from "./session-cost-usage-cache.kernel.js";
 import type {
   CostUsageSummary,
   SessionCostSummary,
   UsageCacheStatus,
+  UsageCostTranscriptFile,
   UsageDailyBucket,
 } from "./session-cost-usage.types.js";
 
@@ -46,6 +49,7 @@ export type UsageCostWorkerOperation =
       sessionsDir?: string;
       sessionFiles?: string[];
       startMs?: number;
+      rebuildRows?: SessionCostUsageRollupRow[];
     };
 
 export type UsageCostWorkerInput = {
@@ -60,12 +64,13 @@ export type UsageCostWorkerResult =
       kind: "inventory";
       files: Array<Pick<UsageCostTranscriptFile, "kind" | "sourcePath" | "sessionId" | "mtimeMs">>;
     }
-  | { kind: "summary"; summary: CostUsageSummary }
+  | { kind: "summary"; summary: CostUsageSummary; invalidRows: SessionCostUsageRollupRow[] }
   | {
       kind: "sessions";
       summaries: Array<SessionCostSummary | null>;
       cacheStatus: UsageCacheStatus;
       staleSessionFiles: string[];
+      invalidRows: SessionCostUsageRollupRow[];
     }
   | { kind: "refresh" };
 
@@ -92,6 +97,7 @@ type UsageCostPreparedRollup = {
   key: string;
   previousValue: Uint8Array | null;
   value: Uint8Array;
+  blob: Uint8Array;
   updatedAt: number;
 };
 
@@ -102,6 +108,7 @@ type UsageCostPruneRow = {
 };
 
 export type UsageCostWorkerHostEffects = {
+  "refresh-session": { input: { sessionFile: string }; output: void };
   pricing: {
     input: Array<{ provider?: string; model?: string }>;
     output: Array<ModelCostConfig | undefined>;
@@ -118,6 +125,10 @@ export type UsageCostWorkerHostEffects = {
   "memory-cache": {
     input: { filePaths?: readonly string[] };
     output: SessionCostUsageRollupByteRow[];
+  };
+  "memory-cache-body": {
+    input: SessionCostUsageRollupRow;
+    output: { blob: Uint8Array | null } | undefined;
   };
   "memory-transcript": {
     input: {

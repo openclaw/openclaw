@@ -56,7 +56,25 @@ type Terminal = {
   settled: Promise<unknown>;
 };
 
+function createSourceBoundHostCapabilities(signal: AbortSignal) {
+  const bindModelExecution = () => ({
+    signal,
+    assertCurrent: () => signal.throwIfAborted(),
+    release: () => {},
+  });
+  return createCodexTestHostCapabilities({
+    bindModelExecution,
+    retainSourceAuthority: () => ({
+      ...bindModelExecution(),
+      modelPolicyRequired: false,
+      bindModelExecution,
+    }),
+  });
+}
+
 async function fixture(options: { failSettlement?: boolean } = {}) {
+  // Keep the attempt budget under test control while sockets, workers, and real children progress.
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const sessionFile = path.join(tempDir, "native-owner-session.jsonl");
   const workspaceDir = path.join(tempDir, "workspace");
   const threadId = "qualification-shared-thread";
@@ -64,6 +82,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
   const terminated: Actor[] = [];
   const activeRuns: Array<{ controller: AbortController; run: Promise<unknown> }> = [];
   const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
+  const backgroundCleanupFailed = createDeferred<void>();
   const turns: string[] = [];
   let socket: WebSocket | undefined;
   let registeredUrl: string | undefined;
@@ -147,34 +166,44 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     const controller = new AbortController();
     const source = new AbortController();
     let completed = false;
+    const admitted = createDeferred<void>();
     const params = createParams(sessionFile, workspaceDir, {
       runId: `${actor}-run-${turns.length + 1}`,
       prompt: `${actor} qualification turn`,
     });
-    params.hostCapabilities = createCodexTestHostCapabilities({
-      retainSourceAuthority: () => ({
-        assertCurrent: () => source.signal.throwIfAborted(),
-        signal: source.signal,
-        release: () => {},
-      }),
-    });
+    params.hostCapabilities = createSourceBoundHostCapabilities(source.signal);
     params.senderId = actor;
     params.onAgentEvent = (event) => {
       events.push(event);
+      if (event.stream === "lifecycle" && event.data.phase === "start") {
+        admitted.resolve();
+      }
+      if (
+        event.stream === "codex_app_server.lifecycle" &&
+        event.data.phase === "background_cleanup_failed"
+      ) {
+        backgroundCleanupFailed.resolve();
+      }
     };
     params.sandbox = sandbox;
     params.abortSignal = controller.signal;
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
     setCodexTestToolFactory(params, () => []);
-    const expectedTurns = turns.length + 1;
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { experimental: { sandboxExecServer: true } } },
     });
     activeRuns.push({ controller, run });
-    await harness.waitForMethod("turn/start");
-    await vi.waitFor(() => expect(turns).toHaveLength(expectedTurns), { timeout: 5_000 });
-    await nextTurn();
+    await Promise.race([
+      admitted.promise,
+      run.then(() => {
+        throw new Error("Native process fixture attempt ended before admission");
+      }),
+    ]);
+    if (turns.length > 1) {
+      // A replaced relay keeps its retired listener for 250ms to reject stale callers.
+      await vi.advanceTimersByTimeAsync(250);
+    }
     const turnId = turns.at(-1)!;
     const commandThreadId = nativeChild?.threadId ?? threadId;
     const commandTurnId = nativeChild?.turnId ?? turnId;
@@ -315,8 +344,29 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
         }
       },
       run,
-      complete: async () => {
-        await harness.completeTurn({ threadId, turnId });
+      complete: async (answer?: string) => {
+        if (answer) {
+          await harness.notify({
+            method: "turn/completed",
+            params: {
+              threadId,
+              turn: {
+                id: turnId,
+                status: "completed",
+                items: [
+                  {
+                    id: `${actor}-answer`,
+                    type: "agentMessage",
+                    phase: "final_answer",
+                    text: answer,
+                  },
+                ],
+              },
+            },
+          });
+        } else {
+          await harness.completeTurn({ threadId, turnId });
+        }
         const result = await run;
         completed = true;
         return result;
@@ -328,6 +378,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     begin,
     terminated,
     events,
+    backgroundCleanupFailed: backgroundCleanupFailed.promise,
     harness,
     sessionFile,
     threadId,
@@ -341,17 +392,21 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
       });
     },
     dispose: async () => {
-      for (const { controller } of activeRuns) {
-        controller.abort(new Error("fixture cleanup"));
+      try {
+        for (const { controller } of activeRuns) {
+          controller.abort(new Error("fixture cleanup"));
+        }
+        await Promise.allSettled(activeRuns.map(({ run }) => run));
+        if (retainedEnvironment) {
+          await releaseCodexSandboxExecServerEnvironment(sandbox, retainedEnvironment);
+          retainedEnvironment = undefined;
+        }
+        await sandboxExecServerRegistry.closeAll();
+        socket?.terminate();
+        harness.close();
+      } finally {
+        vi.useRealTimers();
       }
-      await Promise.allSettled(activeRuns.map(({ run }) => run));
-      if (retainedEnvironment) {
-        await releaseCodexSandboxExecServerEnvironment(sandbox, retainedEnvironment);
-        retainedEnvironment = undefined;
-      }
-      await sandboxExecServerRegistry.closeAll();
-      socket?.terminate();
-      harness.close();
     },
   };
 }
@@ -364,13 +419,7 @@ function createSandboxPolicyRun() {
   const controller = new AbortController();
   const preparation: string[] = [];
   const exec = createRuntimeDynamicTool("exec");
-  params.hostCapabilities = createCodexTestHostCapabilities({
-    retainSourceAuthority: () => ({
-      signal: controller.signal,
-      assertCurrent: () => controller.signal.throwIfAborted(),
-      release: () => {},
-    }),
-  });
+  params.hostCapabilities = createSourceBoundHostCapabilities(controller.signal);
   params.sandbox = {
     ...createSandboxContext({}),
     sessionKey: params.sessionKey!,
@@ -398,13 +447,12 @@ describe("native background process source authority", () => {
       await guest.complete();
       guest.revoke();
       await expect(guest.terminal.settled).rejects.toThrow("fixture backend settlement failed");
-      await vi.waitFor(() =>
-        expect(f.events).toContainEqual(
-          expect.objectContaining({
-            stream: "codex_app_server.lifecycle",
-            data: expect.objectContaining({ phase: "background_cleanup_failed" }),
-          }),
-        ),
+      await f.backgroundCleanupFailed;
+      expect(f.events).toContainEqual(
+        expect.objectContaining({
+          stream: "codex_app_server.lifecycle",
+          data: expect.objectContaining({ phase: "background_cleanup_failed" }),
+        }),
       );
       expect(guest.terminal.alive).toBe(false);
       await expect(f.begin("guest")).rejects.toThrow("unsettled native command identity");
@@ -460,7 +508,19 @@ describe("native background process source authority", () => {
     try {
       const staff = await f.begin("maintainer");
       await f.retainSecondConsumer();
-      expect(readAttemptTerminal(await staff.complete()).aborted).toBe(false);
+      const completed = await staff.complete("Retained the running process for the next turn.");
+      expect(readAttemptTerminal(completed).aborted).toBe(false);
+      expect(completed.messagesSnapshot).toContainEqual(
+        expect.objectContaining({
+          role: "toolResult",
+          toolCallId: staff.terminal.itemId,
+          isError: false,
+          content: [{ type: "text", text: expect.stringContaining("still running") }],
+          __openclaw: expect.objectContaining({
+            toolOutput: expect.objectContaining({ outcome: "unknown" }),
+          }),
+        }),
+      );
       expect(staff.terminal.alive).toBe(true);
       expect(f.terminated).toEqual([]);
       const guest = await f.begin("guest");
@@ -468,7 +528,7 @@ describe("native background process source authority", () => {
       expect(f.harness.requests.filter(({ method }) => method === "thread/start")).toHaveLength(1);
       expect(staff.terminal.alive).toBe(true);
       guest.revoke();
-      expect(readAttemptTerminal(await guest.run).aborted).toBe(true);
+      await expect(guest.run).rejects.toBe(guest.sourceSignal.reason);
       expect(f.harness.requests).toContainEqual({
         method: "turn/interrupt",
         params: { threadId: f.threadId, turnId: guest.turnId },

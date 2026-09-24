@@ -23,7 +23,10 @@ import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { maybeRepairGatewayServiceConfig } from "./doctor-gateway-services.js";
 import { prepareWriterContext } from "./doctor-gateway-services.writer-order.test-support.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
-import { stoppedSystemdBinding } from "./doctor-maintenance.test-support.js";
+import {
+  stoppedSystemdBinding,
+  useDoctorMaintenanceRuntimeDirectory,
+} from "./doctor-maintenance.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
 const mocks = vi.hoisted(() => ({
@@ -113,35 +116,12 @@ vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
   waitForGatewayHealthyRestart: mocks.health,
 }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
-vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/state-database-coordinator.js")>();
-  return {
-    ...actual,
-    acquireGatewayLifecycleCoordinator: (
-      params: Parameters<typeof actual.acquireGatewayLifecycleCoordinator>[0],
-    ) =>
-      actual.acquireGatewayLifecycleCoordinator({
-        ...params,
-        runtimeDirectory: mocks.runtimeDirectory,
-      }),
-    acquireGatewayMaintenanceCoordinator: (
-      params: Parameters<typeof actual.acquireGatewayMaintenanceCoordinator>[0],
-    ) =>
-      actual.acquireGatewayMaintenanceCoordinator({
-        ...params,
-        runtimeDirectory: mocks.runtimeDirectory,
-      }),
-    acquireStateDatabaseCoordinator: (
-      params: Parameters<typeof actual.acquireStateDatabaseCoordinator>[0],
-    ) =>
-      actual.acquireStateDatabaseCoordinator({
-        ...params,
-        runtimeDirectory: mocks.runtimeDirectory,
-      }),
-  };
-});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+useDoctorMaintenanceRuntimeDirectory(() => {
+  mocks.runtimeDirectory = tempDirs.make("openclaw-doctor-installation-runtime-");
+  return mocks.runtimeDirectory;
+});
 const originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 beforeEach(() => {
   vi.clearAllMocks();
@@ -219,7 +199,6 @@ async function runInstallationCase(params: {
   mockProcessPlatform(params.platform);
   mockSystemAccountHome();
   const home = await fs.realpath(tempDirs.make("openclaw-doctor-installation-"));
-  mocks.runtimeDirectory = home;
   mocks.runtimePath =
     params.consent?.mixed === "version-managed-runtime"
       ? path.join(home, ".nvm", "versions", "node", "v26.8.1", "bin", "node")
@@ -527,7 +506,7 @@ async function runInstallationCase(params: {
         if (params.inspectionScenario === "competing-update") {
           expect(competingUpdateStarted).toBe(true);
           expect(finishError).toMatchObject({
-            message: expect.stringContaining("is still in progress"),
+            message: expect.stringContaining("remains recorded as running"),
           });
           expect(events).toEqual(["stop", "repair-state"]);
           expect(running).toBe(false);

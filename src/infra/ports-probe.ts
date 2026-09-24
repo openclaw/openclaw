@@ -96,13 +96,18 @@ export async function probeTcpListener(
   });
 }
 
-async function probePortOnHost(port: number, host: string): Promise<PortUsageStatus | "skip"> {
+async function probePortOnHost(
+  port: number,
+  host: string,
+  signal?: AbortSignal,
+): Promise<PortUsageStatus | "skip"> {
   try {
-    await tryListenOnPort({ port, host, exclusive: true });
+    await tryListenOnPort({ port, host, exclusive: true, ...(signal ? { signal } : {}) });
     // A successful scoped bind can coexist with a wildcard listener on macOS.
     // Confirm the endpoint before declaring it free, even without lsof or ss.
-    return await probeTcpListener(port, host);
+    return await probeTcpListener(port, host, signal);
   } catch (err) {
+    signal?.throwIfAborted();
     if (isErrno(err) && err.code === "EADDRINUSE") {
       return "busy";
     }
@@ -117,10 +122,13 @@ async function probePortOnHost(port: number, host: string): Promise<PortUsageSta
 export async function probePortUsage(
   port: number,
   probeHosts: readonly string[] = PORT_PROBE_HOSTS,
+  signal?: AbortSignal,
 ): Promise<PortUsageStatus> {
+  signal?.throwIfAborted();
   let sawUnknown = false;
   for (const host of probeHosts) {
-    const result = await probePortOnHost(port, host);
+    const result = await probePortOnHost(port, host, signal);
+    signal?.throwIfAborted();
     if (result === "busy") {
       return "busy";
     }

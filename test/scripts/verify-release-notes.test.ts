@@ -1741,9 +1741,8 @@ console.log(JSON.stringify({ data }));
       writeFileSync(
         preload,
         `import fs from "node:fs";
-const nativeWait = Atomics.wait;
 Atomics.wait = function (...args) {
-  const result = Reflect.apply(nativeWait, this, args);
+  const result = "timed-out";
   fs.appendFileSync(${JSON.stringify(waitsPath)}, JSON.stringify({ timeout: args[3], result }) + "\\n");
   return result;
 };

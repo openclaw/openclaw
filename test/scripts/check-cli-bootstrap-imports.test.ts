@@ -5,8 +5,9 @@ import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { build } from "tsdown";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  checkCliBootstrapExternalImports,
   collectCliBootstrapExternalImportErrors,
   collectGatewayRunChunkBudgetErrors,
   collectNativeHookRelayBundleErrors,
@@ -25,6 +26,7 @@ const workerDeployArtifactNames = [
   "image-processor.worker.mjs",
   "service-child-group-anchor.mjs",
   "service-child-relay.mjs",
+  "sqlite-store.worker.mjs",
   "worker.mjs",
   "workspace-rsync-receiver.mjs",
 ];
@@ -70,7 +72,14 @@ function writeGatewayRunChunk(
   );
 }
 
+beforeEach(() => {
+  vi.stubEnv("GITHUB_ACTIONS", "");
+  vi.stubEnv("GITHUB_STEP_SUMMARY", "");
+});
+
 afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
@@ -277,7 +286,11 @@ describe("check-cli-bootstrap-imports", () => {
     expect(
       collectGatewayRunChunkBudgetErrors({ rootDir: root, gatewayRunChunkMaxBytes: 50 }),
     ).toEqual([
-      `Gateway run chunk dist/${chunkName} is ${gatewayRunChunkBytes} bytes, above budget 50 bytes.`,
+      {
+        file: `dist/${chunkName}`,
+        title: "Gateway run chunk budget",
+        message: `Gateway run chunk dist/${chunkName} is ${gatewayRunChunkBytes} bytes, above budget 50 bytes.`,
+      },
     ]);
   });
 
@@ -323,8 +336,52 @@ describe("check-cli-bootstrap-imports", () => {
 
     expect(
       collectNativeHookRelayBundleErrors({ rootDir: root, nativeHookRelayStaticMaxBytes: 50 }),
-    ).toEqual(["Native hook relay static graph is 100 bytes, above budget 50 bytes."]);
+    ).toEqual([
+      {
+        file: "dist/native-hook-relay/entry.js",
+        title: "Native hook relay bundle budget",
+        message: "Native hook relay static graph is 100 bytes, above budget 50 bytes.",
+      },
+    ]);
   });
+
+  it.each(["", "true"])(
+    "reports bundle budgets at the check boundary with Actions=%s",
+    (actions) => {
+      const root = makeTempRoot();
+      const summaryPath = join(root, "summary.md");
+      vi.stubEnv("CI", "1");
+      vi.stubEnv("GITHUB_ACTIONS", actions);
+      vi.stubEnv("GITHUB_STEP_SUMMARY", summaryPath);
+      const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+      writeGatewayRunChunk(root);
+      writeFixture(root, "dist/native-hook-relay/entry.js", "export {};\n");
+      const check = () =>
+        checkCliBootstrapExternalImports({
+          rootDir: root,
+          entrypoints: [],
+          workerDeployEntrypoints: [],
+          gatewayRunChunkMaxBytes: 1,
+          nativeHookRelayStaticMaxBytes: 1,
+        });
+
+      if (actions) {
+        expect(check).not.toThrow();
+        expect(
+          diagnostic.mock.calls.filter(([message]) => String(message).startsWith("::warning")),
+        ).toHaveLength(2);
+        expect(fs.readFileSync(summaryPath, "utf8")).toContain("Gateway run chunk budget");
+        writeGatewayRunChunk(root, 'import "./server-close.js";');
+        writeFixture(root, "dist/server-close.js", "export {};\n");
+        expect(check).toThrow();
+        expect(diagnostic.mock.calls.flat().join("\n")).toContain("static graph imports cold path");
+      } else {
+        expect(check).toThrow();
+        expect(diagnostic.mock.calls.flat().join("\n")).toContain("above budget");
+        expect(fs.existsSync(summaryPath)).toBe(false);
+      }
+    },
+  );
 
   it("reports unexpected external packages in the native hook relay static graph", () => {
     const root = makeTempRoot();
@@ -335,17 +392,65 @@ describe("check-cli-bootstrap-imports", () => {
     ]);
   });
 
-  it("accepts the self-contained worker deploy artifacts with builtin imports", () => {
+  it("accepts builtin imports and forward exports without treating source text as imports", () => {
+    const root = makeTempRoot();
+    const source = [
+      "#!/usr/bin/env node",
+      "export { available };",
+      'import fs from "node:fs";',
+      "const available = Boolean(fs);",
+      `const text = ${JSON.stringify('require("string-only")')};`,
+      String.raw`const expression = /require\("regex-only"\)/;`,
+      '// import("comment-only");',
+      'const interpolated = `require("template-only") ${import("node:fs")}`;',
+      'import "node:os"',
+    ].join("\n");
+    for (const artifact of workerDeployArtifactNames) {
+      writeFixture(root, `dist/worker/${artifact}`, source);
+    }
+
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([]);
+  });
+
+  it.each([
+    {
+      label: "duplicate bindings across statements",
+      source: 'let value; import "node:fs"; let value;',
+      message: "Identifier 'value' has already been declared",
+    },
+    {
+      label: "duplicate exports across statements",
+      source: 'const value = 1; export { value }; import "node:fs"; export { value };',
+      message: "Duplicate export 'value'",
+    },
+    {
+      label: "unresolved forward exports at EOF",
+      source: 'export { missing }; import "node:fs";',
+      message: "Export 'missing' is not defined",
+    },
+    {
+      label: "module strictness after completed statements",
+      source: "const value = 1; with ({}) {}",
+      message: "'with' in strict mode",
+    },
+    {
+      label: "invalid syntax after an external import",
+      source: 'import "earlier-external"; const = 1;',
+      message: "Unexpected token",
+    },
+  ])("preserves module syntax validation for $label", ({ source, message }) => {
     const root = makeTempRoot();
     for (const artifact of workerDeployArtifactNames) {
       writeFixture(
         root,
         `dist/worker/${artifact}`,
-        'import fs from "node:fs";\nexport const available = Boolean(fs);\n',
+        artifact === "worker.mjs" ? source : "export {};\n",
       );
     }
 
-    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([]);
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([
+      expect.stringContaining(`is not parseable JavaScript: ${message}`),
+    ]);
   });
 
   it("accepts no worker artifact directory when the target has no worker contract", () => {
@@ -379,8 +484,17 @@ describe("check-cli-bootstrap-imports", () => {
         'import "left-pad";',
         'await import("./lazy.mjs");',
         '__require("json5");',
+        '__require2("numbered");',
+        '(__require)("parenthesized");',
+        '__require?.("optional");',
+        'const interpolated = `literal ${import("template-expression")}`;',
+        String.raw`__r\u0065quire("escaped");`,
+        'function nested() { require("nested"); }',
+        'export * from "export-all";',
+        'export { value } from "export-named";',
         'createRequire(import.meta.url)("../../package.json");',
         'moduleNamespace.createRequire(import.meta.url)("@openclaw/fs-safe/temp");',
+        'import "final-external"',
       ].join("\n"),
     );
     writeFixture(root, "dist/worker/github-exec-launcher.mjs", 'import "yaml";\n');
@@ -404,8 +518,17 @@ describe("check-cli-bootstrap-imports", () => {
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "../../package.json" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "./lazy.mjs" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "@openclaw/fs-safe/temp" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "escaped" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "export-all" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "export-named" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "final-external" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "json5" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "left-pad" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "nested" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "numbered" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "optional" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "parenthesized" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "template-expression" instead of bundling it.',
       "Worker deploy artifact emits unstaged runtime asset dist/worker/lazy.mjs.",
       "Worker deploy artifact must not contain a dependency manifest or lifecycle scripts.",
     ]);
@@ -418,6 +541,7 @@ describe("check-cli-bootstrap-imports", () => {
     ["default", "github-exec-launcher.mjs"],
     ["default", "service-child-group-anchor.mjs"],
     ["default", "service-child-relay.mjs"],
+    ["default", "sqlite-store.worker.mjs"],
   ] as const)(
     "enforces the %s-artifact worker deployment contract with missing artifact %s",
     (contract, missingArtifact) => {

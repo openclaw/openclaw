@@ -20,7 +20,7 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunNotice, renderUpdateRunReport } from "../../infra/update-run-report.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -123,8 +123,8 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
 
 import { UpdatePreMutationError } from "./shared.js";
 import { registerDoctorRestorationRollbackTests } from "./update-command-doctor-rollback.test-support.js";
-import { registerLiveRepairOwnershipTests } from "./update-command-live-repair.test-support.js";
 import { finishUpdate } from "./update-command-post-update.js";
+import { registerRestartFailureOwnershipTest } from "./update-command-restart-failure.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
@@ -157,6 +157,7 @@ async function finishFailedUpdate(
     failure?: { cause: unknown; detail: string };
     json?: boolean;
     stopped?: boolean;
+    mutationStarted?: boolean;
     run?: FinishUpdateParams["opts"]["run"];
     originalRoot?: string;
     previousInstallRoot?: string;
@@ -171,7 +172,7 @@ async function finishFailedUpdate(
   } = {},
 ): Promise<UpdateCommandFailure> {
   return await finishUpdate({
-    mutationStarted: true,
+    mutationStarted: options.mutationStarted ?? true,
     result,
     ...(options.failure ? { failure: options.failure } : {}),
     root: options.originalRoot ?? result.root ?? "/repo",
@@ -358,6 +359,22 @@ describe("failed update recovery restart", () => {
     await finishFailedUpdate(failedResult(undefined));
     expect(mocks.restart).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { mutationStarted: false, stopped: false, waitForStartup: false },
+    { mutationStarted: false, stopped: true, waitForStartup: true },
+    { mutationStarted: true, stopped: false, waitForStartup: true },
+  ])(
+    "retains recorded activation effects in recovery (mutation=$mutationStarted, stop=$stopped)",
+    async ({ mutationStarted, stopped, waitForStartup }) => {
+      const root = tempDirs.make("update-recovery-startup-policy-");
+      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "1.0.0" }));
+      await finishFailedUpdate({ ...failedResult(undefined), root }, { mutationStarted, stopped });
+      expect(mocks.verifyGateway).toHaveBeenCalledWith(expect.objectContaining({ waitForStartup }));
+      expect(mocks.restart).not.toHaveBeenCalled();
+      expect(mocks.restartCandidate).not.toHaveBeenCalled();
+    },
+  );
 
   it("retains structured mutation errors without authorizing service recovery", async () => {
     const restoreError = new Error("task enable denied");
@@ -925,7 +942,7 @@ describe("failed package update recovery safety", () => {
   });
 });
 
-registerLiveRepairOwnershipTests({
+registerRestartFailureOwnershipTest({
   makeTempDir: (prefix) => tempDirs.make(prefix),
   gatewayCommand: mocks.gatewayCommand,
 });

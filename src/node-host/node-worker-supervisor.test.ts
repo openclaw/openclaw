@@ -131,42 +131,55 @@ describe("node worker supervisor", () => {
   it("launches idempotently and persists only bounded non-secret facts", async () => {
     const { env, supervisor, workspaceDir } = fixture();
     const input = launchInput(workspaceDir, "success-launch");
-
-    expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toMatchObject({
-      launchId: "success-launch",
-      state: "running",
-      environmentId: input.descriptor.admission.environmentId,
-      sessionId: input.descriptor.admission.sessionId,
-      ownerEpoch: 3,
-      placementGeneration: 4,
-      runId: "run-1",
+    let adapter: workerLaunchTransport.NodeWorkerChildAdapter | undefined;
+    const captureAdapter = observeNodeWorkerAdapters((child) => {
+      adapter = child;
     });
-    const completed = await waitForTerminal(supervisor, input.launchId);
-    expect(completed).toMatchObject({ state: "completed", errorText: null });
-    expect(JSON.parse(completed.resultJson ?? "null")).toEqual({
-      status: "completed",
-      transcriptLeafId: "leaf-1",
-      transcriptNextSeq: 2,
-    });
-    expect(
-      JSON.parse(fs.readFileSync(path.join(workspaceDir, `${input.launchId}.argv.json`), "utf8")),
-    ).toEqual(["--internal-worker-ipc", "--internal-worker-session"]);
-    expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toEqual(completed);
-    await expect(
-      supervisor.launch(
-        {
-          ...input,
-          descriptor: testWorkerDescriptor(workspaceDir, "different-plan", input.launchId),
-        },
-        TEST_WORKER_ENDPOINT,
-      ),
-    ).rejects.toThrow("replayed with a different plan");
+    try {
+      expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toMatchObject({
+        launchId: "success-launch",
+        state: "running",
+        environmentId: input.descriptor.admission.environmentId,
+        sessionId: input.descriptor.admission.sessionId,
+        ownerEpoch: 3,
+        placementGeneration: 4,
+        runId: "run-1",
+      });
+      captureAdapter.mockRestore();
+      if (!adapter) {
+        throw new Error("missing worker adapter");
+      }
+      // Turn completion precedes the anchor's durable lineage-settled fact.
+      await (adapter.waitForExtinction?.() ?? adapter.wait());
+      const completed = await waitForTerminal(supervisor, input.launchId);
+      expect(completed).toMatchObject({ state: "completed", errorText: null });
+      expect(JSON.parse(completed.resultJson ?? "null")).toEqual({
+        status: "completed",
+        transcriptLeafId: "leaf-1",
+        transcriptNextSeq: 2,
+      });
+      expect(
+        JSON.parse(fs.readFileSync(path.join(workspaceDir, `${input.launchId}.argv.json`), "utf8")),
+      ).toEqual(["--internal-worker-ipc", "--internal-worker-session"]);
+      expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toEqual(completed);
+      await expect(
+        supervisor.launch(
+          {
+            ...input,
+            descriptor: testWorkerDescriptor(workspaceDir, "different-plan", input.launchId),
+          },
+          TEST_WORKER_ENDPOINT,
+        ),
+      ).rejects.toThrow("replayed with a different plan");
 
-    const row = openOpenClawStateDatabase({ env })
-      .db.prepare("SELECT * FROM node_worker_launches WHERE launch_id = ?")
-      .get(input.launchId);
-    expect(JSON.stringify(row)).not.toContain(TEST_WORKER_CREDENTIAL);
-    await supervisor.close();
+      const row = openOpenClawStateDatabase({ env })
+        .db.prepare("SELECT * FROM node_worker_launches WHERE launch_id = ?")
+        .get(input.launchId);
+      expect(JSON.stringify(row)).not.toContain(TEST_WORKER_CREDENTIAL);
+    } finally {
+      captureAdapter.mockRestore();
+      await supervisor.close();
+    }
   });
 
   it("admits two durable launches and releases one physical slot at a time", async () => {

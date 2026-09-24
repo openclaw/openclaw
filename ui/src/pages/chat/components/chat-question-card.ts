@@ -6,6 +6,11 @@ import { t } from "../../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import {
+  adjustTextareaHeight,
+  disconnectTextareaOverflowObserver,
+  observeTextareaOverflow,
+} from "./chat-composer-dom.ts";
+import {
   questionDraftValues,
   renderQuestionFreeText,
   renderQuestionOptions,
@@ -29,6 +34,7 @@ type QuestionPanelViewModel = {
   submitting?: boolean;
   drafts: Map<string, QuestionDraft>;
   error?: string | null;
+  notice?: string;
   requestPosition?: { current: number; total: number };
 };
 
@@ -160,6 +166,8 @@ class ChatQuestionPanel extends OpenClawLightDomElement {
   private requestKey: string | null = null;
   private collapsed = false;
   private focusAfterUpdate = false;
+  private answerTextarea: HTMLTextAreaElement | null = null;
+  private measuredAnswer: string | null = null;
 
   private setCollapsed(collapsed: boolean): void {
     if (this.props?.onCollapsedChange) {
@@ -189,7 +197,30 @@ class ChatQuestionPanel extends OpenClawLightDomElement {
     }
   }
 
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    if (this.answerTextarea) {
+      disconnectTextareaOverflowObserver(this.answerTextarea);
+      this.answerTextarea = null;
+    }
+  }
+
   override updated(): void {
+    const textarea = this.querySelector<HTMLTextAreaElement>(".chat-question-panel__textarea");
+    if (this.answerTextarea !== textarea) {
+      if (this.answerTextarea) {
+        disconnectTextareaOverflowObserver(this.answerTextarea);
+      }
+      this.answerTextarea = textarea;
+      this.measuredAnswer = null;
+      if (textarea) {
+        observeTextareaOverflow(textarea);
+      }
+    }
+    if (textarea && this.measuredAnswer !== textarea.value) {
+      adjustTextareaHeight(textarea);
+      this.measuredAnswer = textarea.value;
+    }
     if (!this.focusAfterUpdate || this.collapsed) {
       return;
     }
@@ -328,6 +359,20 @@ class ChatQuestionPanel extends OpenClawLightDomElement {
     if (disabled || event.isComposing || event.keyCode === 229) {
       return;
     }
+    if (event.target instanceof HTMLTextAreaElement) {
+      if (
+        event.key === "Enter" &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        this.answerValues(model, question).length > 0
+      ) {
+        event.preventDefault();
+        this.advanceOrSubmit(model, question);
+      }
+      // Text editing, including Enter and numeric keys, belongs to the textarea.
+      return;
+    }
     if (event.metaKey || event.ctrlKey || event.altKey) {
       return;
     }
@@ -387,7 +432,9 @@ class ChatQuestionPanel extends OpenClawLightDomElement {
       optionIndex === question.options.length
     ) {
       event.preventDefault();
-      this.querySelector<HTMLInputElement>(".chat-question-panel__other")?.focus({
+      this.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+        ".chat-question-panel__other",
+      )?.focus({
         preventScroll: true,
       });
       return;
@@ -581,6 +628,7 @@ class ChatQuestionPanel extends OpenClawLightDomElement {
         })}
 
         <div class="chat-question-panel__footer">
+          ${model.notice ? html`<span class="chat-question-panel__error" role="status">${model.notice}</span>` : nothing}
           ${
             model.error
               ? html`<span class="chat-question-panel__error" role="status">
@@ -622,8 +670,12 @@ class ChatQuestionPanel extends OpenClawLightDomElement {
                 >
                   ${
                     this.pendingAction?.kind === "skip"
-                      ? t("chat.questions.skipping")
-                      : t("chat.questions.skip")
+                      ? t(
+                          model.nonBlocking
+                            ? "chat.asyncQuestions.dismissing"
+                            : "chat.questions.skipping",
+                        )
+                      : t(model.nonBlocking ? "chat.asyncQuestions.dismiss" : "chat.questions.skip")
                   }
                 </button>`
               : nothing

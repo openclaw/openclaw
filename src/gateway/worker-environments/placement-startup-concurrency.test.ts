@@ -15,14 +15,14 @@ const protocolFeatures = [
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 ];
 
-function seedActiveNode(
+async function seedActiveNode(
   placements: ReturnType<typeof createWorkerSessionPlacementStore>,
   index: number,
 ) {
   const environmentId = `worker-${index}`;
   const sessionId = `session-${index}`;
-  support.seedBootstrapping(environmentId);
-  support.testState.store.transition({
+  await support.seedBootstrapping(environmentId);
+  await support.testState.store.transition({
     environmentId,
     from: "bootstrapping",
     to: "ready",
@@ -32,7 +32,7 @@ function seedActiveNode(
       sshEndpoint: null,
     },
   });
-  const environment = support.testState.store.transition({
+  const environment = await support.testState.store.transition({
     environmentId,
     from: "ready",
     to: "attached",
@@ -78,15 +78,19 @@ describe("worker placement startup concurrency", () => {
         protocolFeatures,
       });
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const workers = Array.from({ length: 9 }, (_, index) => ({
-        ...seedActiveNode(placements, index),
-        entered: createDeferredCore(),
-        release: createDeferredCore(),
-      }));
+      const workers = await Promise.all(
+        Array.from({ length: 9 }, async (_, index) => ({
+          ...(await seedActiveNode(placements, index)),
+          entered: createDeferredCore(),
+          release: createDeferredCore(),
+          inspected: createDeferredCore(),
+        })),
+      );
       const inspect = vi.fn(async ({ leaseId }: support.WorkerLifecycleLease) => {
         const worker = workers.find(({ environment }) => environment.leaseId === leaseId)!;
         worker.entered.resolve();
         await worker.release.promise;
+        worker.inspected.resolve();
         return { status: "active" as const };
       });
       const environments = support.createService(
@@ -102,7 +106,6 @@ describe("worker placement startup concurrency", () => {
       });
       let outcome = "pending";
       let failure: unknown;
-      vi.useFakeTimers();
       const starting = recovery.reconcile("startup").then(
         () => {
           outcome = "ready";
@@ -113,8 +116,7 @@ describe("worker placement startup concurrency", () => {
         },
       );
       try {
-        await workers[0]!.entered.promise;
-        await vi.advanceTimersByTimeAsync(0);
+        await Promise.all(workers.slice(0, 8).map((worker) => worker.entered.promise));
         expect(inspect).toHaveBeenCalledTimes(8);
         expect(outcome).toBe("pending");
         expect(adopt).not.toHaveBeenCalled();
@@ -135,14 +137,16 @@ describe("worker placement startup concurrency", () => {
           });
         }
         workers[0]!.release.resolve();
-        await vi.advanceTimersByTimeAsync(0);
+        if (!conflictingOwner) {
+          await workers[8]!.entered.promise;
+        }
         expect(inspect).toHaveBeenCalledTimes(conflictingOwner ? 8 : 9);
         expect(outcome).toBe("pending");
         expect(adopt).not.toHaveBeenCalled();
         for (const worker of workers.slice(1, 8)) {
           worker.release.resolve();
         }
-        await vi.advanceTimersByTimeAsync(0);
+        await Promise.all(workers.slice(0, 8).map((worker) => worker.inspected.promise));
         if (conflictingOwner) {
           await starting;
           expect(outcome).toBe("failed");

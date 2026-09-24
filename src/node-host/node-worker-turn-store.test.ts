@@ -1,9 +1,13 @@
 import { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -26,6 +30,7 @@ import {
 import * as processIdentity from "./node-worker-process-identity.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
+import { NodeWorkerTurnKernel } from "./node-worker-turn-store.kernel.js";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const NOW_MS = 10 * DAY_MS;
@@ -95,6 +100,47 @@ async function fixture(
 }
 
 describe("node worker turn journal", () => {
+  it("returns durable claim and finish receipts within one turn and owner read each", async () => {
+    const f = await fixture();
+    await f.start();
+    await f.finish();
+    const database = openOpenClawStateDatabase({ env: f.env });
+    const kernel = new NodeWorkerTurnKernel({ database, env: f.env });
+    const measure = <T>(operation: () => T): T => {
+      const admission = vi
+        .spyOn(operationAdmission, "requestSqliteWorkerOperationAdmission")
+        .mockImplementation(() => {});
+      const reads = trackSqliteStatementExecutions(database.db, ["receipt"], (sql) =>
+        sql.startsWith("select ") &&
+        (sql.includes('from "node_worker_turns"') || sql.includes('from "node_worker_launches"'))
+          ? "receipt"
+          : null,
+      );
+      try {
+        const result = operation();
+        expect.soft(reads.counts.receipt).toBeLessThanOrEqual(2);
+        return result;
+      } finally {
+        reads.restore();
+        admission.mockRestore();
+      }
+    };
+    const claimed = measure(() => kernel.claim({ claim: f.next, ...f.owner, nowMs: NOW_MS + 1 }));
+    expect(claimed.action).toBe("start");
+    expect(claimed.receipt).toEqual(await f.turns.get(f.next.launchId));
+    const finished = measure(() =>
+      kernel.finish({
+        expected: f.next,
+        ...f.owner,
+        state: "completed",
+        resultJson: "{}",
+        nowMs: NOW_MS + 2,
+      }),
+    );
+    expect(finished).toMatchObject({ state: "completed", completedAtMs: NOW_MS + 2 });
+    expect(finished).toEqual(await f.turns.get(f.next.launchId));
+  });
+
   it("reads and replays durable receipts after supervisor shutdown without restarting recovery", async () => {
     const unexpected = () => {
       throw new Error("Process work is outside this receipt-only fixture");

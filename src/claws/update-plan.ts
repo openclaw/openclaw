@@ -35,10 +35,9 @@ import {
   type ClawSourceIdentity,
 } from "./types.js";
 import {
-  cronCapabilityChange,
-  mcpCapabilityChange,
   packageCapabilityChange,
   pushResolvedAgentCapabilityChanges,
+  resourceCapabilityChange,
   type ClawUpdateCapabilityChange,
 } from "./update-capability-changes.js";
 import { makeEmptyClawUpdatePlan } from "./update-plan-empty.js";
@@ -538,7 +537,8 @@ export async function buildClawUpdatePlan(params: {
         ...(current ? { currentDigest: current.configDigest } : {}),
         desiredDigest,
       });
-      const capabilityChange = mcpCapabilityChange({
+      const capabilityChange = resourceCapabilityChange({
+        kind: "mcpServer",
         id: name,
         action,
         current: current ? configuredMcpServers[name] : undefined,
@@ -576,7 +576,8 @@ export async function buildClawUpdatePlan(params: {
             : "Target manifest removes this solely owned MCP declaration.",
         currentDigest: current.configDigest,
       });
-      const capabilityChange = mcpCapabilityChange({
+      const capabilityChange = resourceCapabilityChange({
+        kind: "mcpServer",
         id: current.name,
         action,
         current: configuredMcpServers[current.name],
@@ -613,7 +614,8 @@ export async function buildClawUpdatePlan(params: {
         ...(current ? { currentDigest: digest(current.job) } : {}),
         desiredDigest,
       });
-      const capabilityChange = cronCapabilityChange({
+      const capabilityChange = resourceCapabilityChange({
+        kind: "cronJob",
         id: target.id,
         action,
         current: current?.job,
@@ -640,7 +642,8 @@ export async function buildClawUpdatePlan(params: {
           : "Target manifest removes this owned cron declaration.",
         currentDigest: digest(current.job),
       });
-      const capabilityChange = cronCapabilityChange({
+      const capabilityChange = resourceCapabilityChange({
+        kind: "cronJob",
         id: current.manifestId,
         action,
         current: current.job,

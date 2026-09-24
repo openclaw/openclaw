@@ -14,10 +14,10 @@ import { handleSubagentsCommand } from "./commands-subagents.js";
 import { resolveRequesterSessionKey } from "./commands-subagents/shared.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const listControlledSubagentRunsMock = vi.hoisted(() => vi.fn(() => []));
+const readContextMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../agents/subagents/registry/subagent-control-scope.js", () => ({
-  listControlledSubagentRuns: listControlledSubagentRunsMock,
+  buildControlledSubagentRunsReadContext: readContextMock,
 }));
 
 const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) => {
@@ -146,7 +146,7 @@ describe("subagents command dispatch", () => {
     "/unknown",
   ])("does not dispatch unrelated command %s", async (command) => {
     expect(await handleSubagentsCommand(buildParams(command), true)).toBeNull();
-    expect(listControlledSubagentRunsMock).not.toHaveBeenCalled();
+    expect(readContextMock).not.toHaveBeenCalled();
   });
 
   it.each(["help", "foo", "steer 1 continue", "agents"])(
@@ -156,7 +156,7 @@ describe("subagents command dispatch", () => {
       const result = await handleSubagentsCommand(params, true);
       expect(result?.reply?.text).toContain("/subagents list");
       expect(result?.reply?.text).toContain("/session unbind");
-      expect(listControlledSubagentRunsMock).not.toHaveBeenCalled();
+      expect(readContextMock).not.toHaveBeenCalled();
     },
   );
 
@@ -202,6 +202,6 @@ describe("subagents command dispatch", () => {
     expect(auth.senderIsOwner).toBe(false);
     expect(auth.isAuthorizedSender).toBe(false);
     expect(result).toEqual({ shouldContinue: false });
-    expect(listControlledSubagentRunsMock).not.toHaveBeenCalled();
+    expect(readContextMock).not.toHaveBeenCalled();
   });
 });

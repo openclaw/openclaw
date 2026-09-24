@@ -358,7 +358,6 @@ export async function handleFeishuCardAction(params: {
         reason: decoded.reason,
         accountId,
       });
-      completeFeishuCardAction(event.token, account.accountId);
       return;
     }
 
@@ -377,7 +376,6 @@ export async function handleFeishuCardAction(params: {
             reason: "malformed",
             accountId,
           });
-          completeFeishuCardAction(event.token, account.accountId);
           return;
         }
         const prompt =
@@ -392,7 +390,6 @@ export async function handleFeishuCardAction(params: {
             reason: "malformed",
             accountId,
           });
-          completeFeishuCardAction(event.token, account.accountId);
           return;
         }
         await sendCardFeishu({
@@ -415,7 +412,6 @@ export async function handleFeishuCardAction(params: {
           }),
           accountId,
         });
-        completeFeishuCardAction(event.token, account.accountId);
         return;
       }
 
@@ -426,7 +422,6 @@ export async function handleFeishuCardAction(params: {
           text: "Cancelled.",
           accountId,
         });
-        completeFeishuCardAction(event.token, account.accountId);
         return;
       }
 
@@ -439,7 +434,6 @@ export async function handleFeishuCardAction(params: {
             reason: "malformed",
             accountId,
           });
-          completeFeishuCardAction(event.token, account.accountId);
           return;
         }
         await dispatchSyntheticCommand({
@@ -454,7 +448,6 @@ export async function handleFeishuCardAction(params: {
           accountId,
           chatType: envelope.c?.t,
         });
-        completeFeishuCardAction(event.token, account.accountId);
         return;
       }
 
@@ -464,7 +457,6 @@ export async function handleFeishuCardAction(params: {
         reason: "malformed",
         accountId,
       });
-      completeFeishuCardAction(event.token, account.accountId);
       return;
     }
 
@@ -485,9 +477,7 @@ export async function handleFeishuCardAction(params: {
       channelRuntime: params.channelRuntime,
       accountId,
     });
+  } finally {
     completeFeishuCardAction(event.token, account.accountId);
-  } catch (err) {
-    completeFeishuCardAction(event.token, account.accountId);
-    throw err;
   }
 }

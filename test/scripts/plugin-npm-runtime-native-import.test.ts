@@ -29,12 +29,41 @@ function fixture(format = "esm", declaration = "peerDependencies") {
     "package.json",
     JSON.stringify({
       name: "openclaw",
-      version: "1.0.0",
+      version: "2026.9.5",
       type: "module",
-      exports: { "./plugin-sdk/fixture": "./dist/plugin-sdk/fixture.js" },
+      exports: {
+        "./plugin-sdk/media-runtime": "./dist/plugin-sdk/media-runtime.js",
+        "./plugin-sdk/text-utility-runtime": "./dist/plugin-sdk/text-utility-runtime.js",
+        "./plugin-sdk/realtime-voice": "./dist/plugin-sdk/realtime-voice.js",
+        "./plugin-sdk/realtime-voice-provider": "./dist/plugin-sdk/realtime-voice-provider.js",
+      },
     }),
   );
-  writeFile(root, "dist/plugin-sdk/fixture.js", 'export const host = "host";\n');
+  writeFile(root, "dist/plugin-sdk/text-utility-runtime.js", "export {};\n");
+  for (const module of ["grapheme", "utf16-slice"]) {
+    const relative = `packages/normalization-core/src/${module}.ts`;
+    writeFile(
+      root,
+      relative,
+      fs.readFileSync(path.resolve(import.meta.dirname, "../..", relative), "utf8"),
+    );
+  }
+  // The supported host predates the private FFmpeg and playback facades.
+  writeFile(
+    root,
+    "dist/plugin-sdk/media-runtime.js",
+    'export function resolveFfmpegBin() { return "host"; }\n',
+  );
+  writeFile(
+    root,
+    "dist/plugin-sdk/realtime-voice-provider.js",
+    'export const canonicalizeBase64 = () => "provider";\n',
+  );
+  writeFile(
+    root,
+    "dist/plugin-sdk/realtime-voice.js",
+    'export const createRealtimeVoiceOutputActivityTracker = () => "voice"; export const isRealtimeVoiceAudioAudible = () => "audible";\n',
+  );
   writeFile(
     root,
     "node_modules/fixture-dep/package.json",
@@ -65,11 +94,14 @@ function fixture(format = "esm", declaration = "peerDependencies") {
     packageDir,
     "index.ts",
     [
-      'import { host } from "openclaw/plugin-sdk/fixture";',
+      'import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-ffmpeg";',
+      'import { createRealtimeVoiceOutputActivityTracker, isRealtimeVoiceAudioAudible } from "openclaw/plugin-sdk/realtime-voice-playback";',
+      'import { canonicalizeBase64 } from "openclaw/plugin-sdk/realtime-voice-provider";',
+      'import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";',
       'import { thirdParty } from "fixture-dep";',
       'import { writeFileSync } from "node:fs";',
       'writeFileSync("executed", "yes");',
-      "export const answer = `${host} ${thirdParty}`;",
+      "export const answer = `${resolveFfmpegBin()} ${thirdParty} ${createRealtimeVoiceOutputActivityTracker()} ${isRealtimeVoiceAudioAudible()} ${canonicalizeBase64()} ${findGraphemeChunkEnd('xa\\u0301z', 0, 2)}`;",
     ].join("\n"),
   );
   const entry = `./extensions/demo/dist/index.${format === "cjs" ? "cjs" : "js"}`;
@@ -211,7 +243,7 @@ describe("explicit source native-import preparation", () => {
 
     const loaded = nativeImport(root, entry, format);
     expect(loaded.status, loaded.stderr).toBe(0);
-    expect(loaded.stdout.trim()).toBe("host third-party");
+    expect(loaded.stdout.trim()).toBe("host third-party voice audible provider 1");
     expect(fs.readFileSync(path.join(root, "executed"), "utf8")).toBe("yes");
     expect(snapshot(root, directories)).toEqual(before);
   });

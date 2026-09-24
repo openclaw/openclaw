@@ -12,7 +12,7 @@ export const XAI_DEFAULT_IMAGE_MODEL = "grok-imagine-image";
 export const XAI_IMAGE_MODELS = ["grok-imagine-image", "grok-imagine-image-quality"] as const;
 export const XAI_DEFAULT_CONTEXT_WINDOW = 1_000_000;
 export const XAI_DEFAULT_MAX_TOKENS = 64_000;
-export const XAI_DEFAULT_MODEL_ID = "grok-4.6";
+export const XAI_DEFAULT_MODEL_ID = "grok-4.7";
 /** Models outside the manifest carry no price until the manifest lists them. */
 export const XAI_UNKNOWN_MODEL_COST = {
   input: 0,

@@ -117,9 +117,10 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
       !matchesStoppedService(before, params.state, inspection, params.allowIncompleteInspection))
   ) {
     throw new GatewayServiceUpdateOwnershipError(
-      inspection.kind === "unavailable" &&
-        params.state.runtime?.inspectionFailure?.timeoutMs !== undefined
-        ? inspection.message
+      inspection.kind === "unavailable"
+        ? params.state.runtime?.inspectionFailure?.timeoutMs !== undefined
+          ? inspection.message
+          : "Gateway service ownership could not be verified because inspection is unavailable. Run `openclaw gateway status --deep` and retry."
         : "Gateway service ownership or manager identity changed; inspect it before restarting manually.",
       undefined,
       inspection.kind === "unavailable" ? inspection.inspectionReason : undefined,

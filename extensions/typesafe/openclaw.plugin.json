@@ -1,7 +1,7 @@
 {
   "id": "typesafe",
   "name": "TypeSafe AI",
-  "description": "Optional typed evaluations, not a conversational model provider.",
+  "description": "Typed decision provider for hosted Jev and local System One models.",
   "categories": [
     "developer-tools"
   ],
@@ -10,17 +10,9 @@
     "onStartup": true
   },
   "contracts": {
-    "tools": [
-      "typesafe_evaluate"
-    ],
     "decisionProviders": [
       "typesafe"
     ]
-  },
-  "toolMetadata": {
-    "typesafe_evaluate": {
-      "optional": true
-    }
   },
   "configContracts": {
     "secretInputs": {
@@ -39,10 +31,6 @@
       "label": "TypeSafe API credential",
       "help": "Hosted Jev only. Select a SecretRef in Settings \u2192 Secrets. Ignored for a local baseUrl. Never paste credentials in chat.",
       "sensitive": true
-    },
-    "model": {
-      "label": "Evaluation tool default model",
-      "help": "Default only for typesafe_evaluate: jev-latest for hosted Jev, kev-latest for local System One. Local model labels do not load checkpoints. Native decisions use the agent decisionModel selection."
     },
     "timeoutMs": {
       "label": "Request timeout (ms)",
@@ -97,18 +85,11 @@
         },
         "additionalProperties": false
       },
-      "model": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 128,
-        "pattern": "^[a-zA-Z0-9._/-]+$",
-        "description": "Tool default: jev-latest for hosted Jev, kev-latest for a local endpoint."
-      },
       "timeoutMs": {
         "type": "integer",
         "minimum": 1000,
         "maximum": 60000,
-        "default": 10000
+        "default": 30000
       },
       "baseUrl": {
         "type": "string",
@@ -118,24 +99,54 @@
     },
     "additionalProperties": false
   },
-  "skills": [
-    "./skills/typesafe-evaluate"
-  ],
   "decisionModels": [
     {
       "provider": "typesafe",
       "id": "jev-latest",
-      "name": "Jev"
+      "name": "Jev",
+      "capabilities": {
+        "questionTypes": [
+          "boolean",
+          "choice",
+          "score"
+        ],
+        "maxQuestions": 256,
+        "maxChoiceAlternatives": 255,
+        "maxScoreLevels": 10,
+        "confidence": "provider-specific"
+      }
     },
     {
       "provider": "typesafe",
       "id": "jev-1.13.0",
-      "name": "Jev 1.13.0"
+      "name": "Jev 1.13.0",
+      "capabilities": {
+        "questionTypes": [
+          "boolean",
+          "choice",
+          "score"
+        ],
+        "maxQuestions": 256,
+        "maxChoiceAlternatives": 255,
+        "maxScoreLevels": 10,
+        "confidence": "provider-specific"
+      }
     },
     {
       "provider": "typesafe",
       "id": "kev-latest",
-      "name": "Kev (local server)"
+      "name": "Kev (local server)",
+      "capabilities": {
+        "questionTypes": [
+          "boolean",
+          "choice",
+          "score"
+        ],
+        "maxQuestions": 256,
+        "maxChoiceAlternatives": 255,
+        "maxScoreLevels": 10,
+        "confidence": "provider-specific"
+      }
     }
   ]
 }

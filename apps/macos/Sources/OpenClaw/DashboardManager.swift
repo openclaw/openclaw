@@ -836,6 +836,8 @@ extension DashboardManager {
         guard isMainWindow || windowID != nil else { return nil }
         let preserveNavigation = self.target(for: source) == target &&
             Self.notificationRoute(source.currentURL) == Self.notificationRoute(configuration.url)
+        let signInReturnURL = source.browserSignInReturnURL(
+            session: configuration.browserSession, dashboardURL: configuration.url)
         let pendingActions = source.takePendingNativeActions()
         self.displayedPrimaryRoutes[ObjectIdentifier(source)] = nil
         // Background reconciliation must not resurrect a window the user closed;
@@ -858,7 +860,7 @@ extension DashboardManager {
         } else if let windowID {
             self.auxiliaryWindows[windowID] = AuxiliaryWindowInstance(target: target, controller: replacement)
         }
-        self.loadWindow(replacement, configuration: configuration, present: false)
+        self.loadWindow(replacement, configuration: configuration, present: false, restoringRoute: signInReturnURL)
         if shouldPresent, present == true || !replacement.isWindowOpen {
             replacement.show()
         }

@@ -51,7 +51,9 @@ it.each(
       import fs from "node:fs";
       ${owner.pathname.endsWith(".ts") ? `await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)});` : ""}
       const {withDelegatedUpdateCommandExecutor}=await import(${JSON.stringify(owner.href)});
-      const raw=fs.readFileSync(0,"utf8");
+      // Wait for parent admission and decode UTF-8 across pipe chunks.
+      process.stdin.setEncoding("utf8");
+      let raw=""; for await (const chunk of process.stdin) raw+=chunk;
       if(raw) fs.writeFileSync(${JSON.stringify(received)},"received");
       const input=JSON.parse(raw);
       await withDelegatedUpdateCommandExecutor(input.executor,input.runId,input.root,async fence=>{
@@ -67,7 +69,7 @@ it.each(
         const commandOptions = typeof options === "number" ? { timeoutMs: options } : options;
         return runChild(argv, {
           ...commandOptions,
-          beforeInput: (pid) => {
+          beforeInput: (pid, spawnedArgv) => {
             reachedSpawn = true;
             if (fault === "requester-revoked") {
               requesterCurrent = false;
@@ -75,7 +77,7 @@ it.each(
             if (fault === "run-replaced") {
               params.opts.run = { runId: "replacement-run", env };
             }
-            commandOptions.beforeInput?.(pid);
+            commandOptions.beforeInput?.(pid, spawnedArgv);
           },
         });
       });

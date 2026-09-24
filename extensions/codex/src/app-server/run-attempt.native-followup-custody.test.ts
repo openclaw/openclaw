@@ -88,7 +88,9 @@ describe("native follow-up custody through the registered attempt", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: async () => undefined }]),
     );
-    const host = await createAdmittedHostCapabilityTestFixture(params);
+    const host = await createAdmittedHostCapabilityTestFixture(params, {
+      nativeModelPolicySupport: "exact",
+    });
     assert(
       host.agentHarnessTaskRuntimeScope,
       "Expected the session fixture to issue a task runtime scope",

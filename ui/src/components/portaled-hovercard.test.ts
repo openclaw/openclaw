@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 
 afterEach(() => {
@@ -48,6 +48,46 @@ describe("portaled hovercard presentation ownership", () => {
       } finally {
         view.controller.reset();
       }
+    },
+  );
+
+  it.each([false, true])(
+    "ignores unrelated scrolls and coalesces anchor movement (shadow=%s)",
+    (shadow) => {
+      vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+      const view = fixture(shadow);
+      onTestFinished(() => view.controller.reset());
+      const other = document.body.appendChild(document.createElement("section"));
+      let top = 100;
+      const measure = vi
+        .spyOn(view.trigger, "getBoundingClientRect")
+        .mockImplementation(() => new DOMRect(20, top, 100, 20));
+      view.mount();
+      expect(view.controller.card?.style.top).toBe("130px");
+      measure.mockClear();
+      for (let index = 0; index < 100; index++) {
+        other.dispatchEvent(new Event("scroll"));
+      }
+      vi.advanceTimersToNextFrame();
+      expect(measure).not.toHaveBeenCalled();
+
+      top = 140;
+      for (let index = 0; index < 5; index++) {
+        view.pane.dispatchEvent(new Event("scroll"));
+        window.dispatchEvent(new Event("resize"));
+      }
+      expect(measure).not.toHaveBeenCalled();
+      vi.advanceTimersToNextFrame();
+      expect(measure).toHaveBeenCalledTimes(1);
+      expect(view.controller.card?.style.top).toBe("170px");
+
+      measure.mockClear();
+      view.pane.dispatchEvent(new Event("scroll"));
+      view.controller.reset();
+      vi.advanceTimersToNextFrame();
+      window.dispatchEvent(new Event("resize"));
+      vi.advanceTimersToNextFrame();
+      expect(measure).not.toHaveBeenCalled();
     },
   );
 

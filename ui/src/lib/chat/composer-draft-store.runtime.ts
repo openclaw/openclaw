@@ -26,12 +26,30 @@ export type DurableComposerDraftScope = {
   scopeKey: string;
 };
 
+export type DurableQuestionDraft = {
+  itemId: string;
+  signature: string;
+  edited: boolean;
+  dismissed?: boolean;
+  answers: { selected: string[]; freeText: string }[];
+  reopenedAfterBoundary?: string;
+};
+
+export type DurableDraftModelSelection = {
+  agentId: string;
+  model: string;
+  agentRuntime?: string;
+  thinkingLevel: string;
+};
+
 type DurableComposerDraft = {
   revision: number;
   text: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
+  modelSelection?: DurableDraftModelSelection;
   attachments: DurableComposerDraftAttachment[];
+  questionDrafts?: DurableQuestionDraft[];
 };
 
 type ReadDurableComposerDraft = DurableComposerDraft & { writeId: string };
@@ -99,6 +117,31 @@ function isStoredAttachment(value: unknown): value is DurableComposerDraftAttach
   );
 }
 
+function isQuestionDraft(value: unknown): value is DurableQuestionDraft {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  // SAFETY: Only validation reads this view; all draft fields and nested answers are checked below.
+  const draft = value as Partial<DurableQuestionDraft>;
+  return (
+    typeof draft.itemId === "string" &&
+    typeof draft.signature === "string" &&
+    typeof draft.edited === "boolean" &&
+    (draft.dismissed === undefined || typeof draft.dismissed === "boolean") &&
+    (draft.reopenedAfterBoundary === undefined ||
+      typeof draft.reopenedAfterBoundary === "string") &&
+    Array.isArray(draft.answers) &&
+    draft.answers.every(
+      (answer) =>
+        answer &&
+        typeof answer === "object" &&
+        typeof answer.freeText === "string" &&
+        Array.isArray(answer.selected) &&
+        answer.selected.every((option) => typeof option === "string"),
+    )
+  );
+}
+
 function parseStoredDraft(value: unknown): StoredDurableComposerDraft | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -119,9 +162,23 @@ function parseStoredDraft(value: unknown): StoredDurableComposerDraft | null {
     !Number.isSafeInteger(record.revision) ||
     record.revision <= 0 ||
     !Array.isArray(record.attachments) ||
-    !record.attachments.every(isStoredAttachment)
+    !record.attachments.every(isStoredAttachment) ||
+    (record.questionDrafts !== undefined &&
+      (!Array.isArray(record.questionDrafts) || !record.questionDrafts.every(isQuestionDraft)))
   ) {
     return null;
+  }
+  const selection = record.modelSelection;
+  if (
+    selection !== undefined &&
+    (!selection ||
+      typeof selection !== "object" ||
+      typeof selection.agentId !== "string" ||
+      typeof selection.model !== "string" ||
+      typeof selection.thinkingLevel !== "string" ||
+      (selection.agentRuntime !== undefined && typeof selection.agentRuntime !== "string"))
+  ) {
+    record.modelSelection = undefined;
   }
   record.mentions = readHumanMentions(record.text, record.mentions);
   // SAFETY: the complete stored shape and every attachment payload were validated above.
@@ -129,7 +186,13 @@ function parseStoredDraft(value: unknown): StoredDurableComposerDraft | null {
 }
 
 function isActiveDraft(record: StoredDurableComposerDraft): boolean {
-  return Boolean(record.text || record.goalMode || record.attachments.length > 0);
+  return Boolean(
+    record.text ||
+    record.goalMode ||
+    record.modelSelection ||
+    record.attachments.length > 0 ||
+    record.questionDrafts?.length,
+  );
 }
 
 function tombstone(record: StoredDurableComposerDraft, now: number): StoredDurableComposerDraft {
@@ -140,7 +203,9 @@ function tombstone(record: StoredDurableComposerDraft, now: number): StoredDurab
     text: "",
     mentions: undefined,
     goalMode: undefined,
+    modelSelection: undefined,
     attachments: [],
+    questionDrafts: undefined,
     updatedAt: now,
     writeId: `fence:${revision}`,
   };
@@ -218,6 +283,7 @@ async function pruneOwnerRecords(
 function isLegacyChatDraft(record: StoredDurableComposerDraft): boolean {
   return (
     !record.scopeKey.startsWith(CHAT_SCOPE_PREFIX) &&
+    !record.scopeKey.startsWith("questions:v1:") &&
     record.scopeKey.includes("\u0000agent:") &&
     isActiveDraft(record)
   );
@@ -422,7 +488,9 @@ export async function readDurableComposerDraft(
         text: record.text,
         ...(record.mentions?.length ? { mentions: record.mentions } : {}),
         ...(record.goalMode ? { goalMode: record.goalMode } : {}),
+        ...(record.modelSelection ? { modelSelection: record.modelSelection } : {}),
         attachments: record.attachments,
+        ...(record.questionDrafts?.length ? { questionDrafts: record.questionDrafts } : {}),
       },
     };
   } catch {
@@ -491,7 +559,9 @@ export async function writeDurableComposerDraft(
         ? { mentions: draft.mentions.map((mention) => ({ ...mention })) }
         : {}),
       ...(draft.goalMode ? { goalMode: draft.goalMode } : {}),
+      ...(draft.modelSelection ? { modelSelection: { ...draft.modelSelection } } : {}),
       attachments: draft.attachments,
+      ...(draft.questionDrafts?.length ? { questionDrafts: draft.questionDrafts } : {}),
       updatedAt: now,
       writeId: options.writeId,
     };
@@ -540,6 +610,15 @@ async function retireDurableDraftInStore(
   retireBeforeRevision: number | undefined,
   now: number,
 ): Promise<DurableComposerDraftWriteResult> {
+  if (scope.scopeKey.startsWith(CHAT_SCOPE_PREFIX)) {
+    await retireDurableDraftInStore(
+      store,
+      { ...scope, scopeKey: `questions:v1:${scope.scopeKey}` },
+      minimumRevision,
+      retireBeforeRevision,
+      now,
+    );
+  }
   const key = recordKey(scope);
   const current = parseStoredDraft(await requestResult(store.get(key)));
   if (retireBeforeRevision !== undefined && (current?.revision ?? 0) >= retireBeforeRevision) {
@@ -556,6 +635,7 @@ async function retireDurableDraftInStore(
     revision,
     text: "",
     attachments: [],
+    questionDrafts: undefined,
     updatedAt: now,
     writeId,
   } satisfies StoredDurableComposerDraft);

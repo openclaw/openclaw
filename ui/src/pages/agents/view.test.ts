@@ -17,7 +17,8 @@ import {
   inertAgentFileControls,
   primaryModelPicker,
 } from "./agents-view.test-helpers.ts";
-import { renderAgentChannels, renderAgentFiles } from "./panels-status-files.ts";
+import { renderAgentFiles } from "./panels-files.ts";
+import { renderAgentChannels } from "./panels-status-files.ts";
 import { renderAgents } from "./view.ts";
 
 function createCronJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
@@ -345,26 +346,30 @@ describe("renderAgents", () => {
             configFormDirty: false,
             lastError: null,
           },
-          modelCatalog: [
-            {
-              id: "claude-opus-4-8",
-              alias: "opus",
-              name: "Opus 4.8",
-              provider: "anthropic",
-            },
-            {
-              id: "claude-sonnet-5",
-              alias: "sonnet",
-              name: "Sonnet 5",
-              provider: "anthropic",
-            },
-            {
-              id: "moonshotai/kimi-k2.5",
-              alias: "Kimi K2.5 (NVIDIA)",
-              name: "Kimi K2.5",
-              provider: "nvidia",
-            },
-          ],
+          modelCatalog: {
+            hasSnapshot: true,
+            retired: false,
+            models: [
+              {
+                id: "claude-opus-4-8",
+                alias: "opus",
+                name: "Opus 4.8",
+                provider: "anthropic",
+              },
+              {
+                id: "claude-sonnet-5",
+                alias: "sonnet",
+                name: "Sonnet 5",
+                provider: "anthropic",
+              },
+              {
+                id: "moonshotai/kimi-k2.5",
+                alias: "Kimi K2.5 (NVIDIA)",
+                name: "Kimi K2.5",
+                provider: "nvidia",
+              },
+            ],
+          },
         }),
       ),
       container,
@@ -798,56 +803,89 @@ describe("renderAgentFiles", () => {
     expect(picker.value).toBe("");
   });
 
-  it("shows the picked file as a tab with a create hint", () => {
-    const container = document.createElement("div");
-    const onSelectFile = vi.fn();
+  it.each([
+    ["no conflict", true, null, true],
+    ["matching conflict", true, "SOUL.md", false],
+    ["unrelated conflict", true, "AGENTS.md", true],
+    ["missing required file conflict", false, "SOUL.md", false],
+  ] as const)(
+    "shows current file creation guidance with %s",
+    (_label, expectedAbsent, conflict, showMissing) => {
+      const container = document.createElement("div");
+      const onSelectFile = vi.fn();
+      const onFileReload = vi.fn();
+      const onFileOverwrite = vi.fn();
 
-    render(
-      renderAgentFiles({
-        agentId: "alpha",
-        canWrite: true,
-        agentFilesList: {
+      render(
+        renderAgentFiles({
           agentId: "alpha",
-          workspace: "/tmp/workspace",
-          files: [
-            { name: "AGENTS.md", path: "/tmp/workspace/AGENTS.md", missing: false },
-            {
-              name: "SOUL.md",
-              path: "/tmp/workspace/SOUL.md",
-              missing: true,
-              expectedAbsent: true,
-            },
-          ],
-        },
-        agentFilesLoading: false,
-        agentFilesError: null,
-        agentFileActive: "SOUL.md",
-        agentFileContents: { "SOUL.md": "" },
-        agentFileDrafts: { "SOUL.md": "" },
-        agentFileSaving: false,
-        ...inertAgentFileControls,
-        onSelectFile,
-      }),
-      container,
-    );
+          canWrite: true,
+          agentFilesList: {
+            agentId: "alpha",
+            workspace: "/tmp/workspace",
+            files: [
+              { name: "AGENTS.md", path: "/tmp/workspace/AGENTS.md", missing: false },
+              {
+                name: "SOUL.md",
+                path: "/tmp/workspace/SOUL.md",
+                missing: true,
+                expectedAbsent,
+              },
+            ],
+          },
+          agentFilesLoading: false,
+          agentFilesError: null,
+          agentFileActive: "SOUL.md",
+          agentFileContents: { "SOUL.md": "" },
+          agentFileDrafts: { "SOUL.md": "Unsaved instructions" },
+          agentFileSaving: false,
+          ...inertAgentFileControls,
+          onSelectFile,
+          agentFileConflict: conflict,
+          onFileReload,
+          onFileOverwrite,
+        }),
+        container,
+      );
 
-    const tabLabels = Array.from(
-      container.querySelectorAll<HTMLElement>(".agent-files-hub-tabs .hub-tab"),
-    ).map((tab) => directText(tab));
-    expect(tabLabels).toStrictEqual(["AGENTS", "SOUL"]);
-    expect(container.querySelector(".agent-tab-add")).toBeNull();
-    expect(container.querySelectorAll(".agent-files-hub-tabs .hub-tab__badge")).toHaveLength(0);
-    expect(container.querySelector('[id="agent-files-tab-SOUL.md"]')?.hasAttribute("active")).toBe(
-      true,
-    );
-    container
-      .querySelector('[id="agent-files-tab-AGENTS.md"]')
-      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-    expect(onSelectFile).toHaveBeenCalledWith("AGENTS.md");
-    expect(container.querySelector(".callout.info")?.textContent?.trim()).toBe(
-      "This file does not exist yet. Saving will create it in the agent workspace.",
-    );
-  });
+      const tabLabels = Array.from(
+        container.querySelectorAll<HTMLElement>(".agent-files-hub-tabs .hub-tab"),
+      ).map((tab) => directText(tab));
+      expect(tabLabels).toStrictEqual(["AGENTS", "SOUL"]);
+      expect(container.querySelector(".agent-tab-add")).toBeNull();
+      expect(container.querySelectorAll(".agent-files-hub-tabs .hub-tab__badge")).toHaveLength(0);
+      expect(
+        container.querySelector('[id="agent-files-tab-SOUL.md"]')?.hasAttribute("active"),
+      ).toBe(true);
+      container
+        .querySelector('[id="agent-files-tab-AGENTS.md"]')
+        ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+      expect(onSelectFile).toHaveBeenCalledWith("AGENTS.md");
+      expect(container.querySelector(".callout.info")?.textContent?.trim()).toBe(
+        showMissing
+          ? "This file does not exist yet. Saving will create it in the agent workspace."
+          : undefined,
+      );
+      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
+        "Unsaved instructions",
+      );
+      const preview = container.querySelector(".md-preview-dialog__meta");
+      expect(preview?.querySelector("strong")?.textContent).toBe(
+        showMissing ? "Will Create on Save" : "Live Draft Preview",
+      );
+      expect(preview?.textContent).toContain(showMissing ? "Not Created Yet" : "Updated Unknown");
+      const resolutionButtons =
+        container.querySelectorAll<HTMLButtonElement>(".callout.danger button");
+      expect(Array.from(resolutionButtons, (button) => button.textContent?.trim())).toEqual(
+        showMissing ? [] : ["Reload", "Overwrite"],
+      );
+      if (!showMissing) {
+        resolutionButtons.forEach((button) => button.click());
+        expect(onFileReload).toHaveBeenCalledWith("SOUL.md");
+        expect(onFileOverwrite).toHaveBeenCalledWith("SOUL.md");
+      }
+    },
+  );
 
   it("renders the upgraded markdown preview structure with file metadata", () => {
     const container = document.createElement("div");

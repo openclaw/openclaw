@@ -7,34 +7,29 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
-import type {
-  ManagedRepairBoundary,
-  ManagedServiceBoundaryOptions,
-} from "./update-managed-service-handoff-boundary-contract.test-support.js";
-import {
-  managedRepairConfig,
-  prepareManagedRepairSpawnEnv,
-} from "./update-managed-service-handoff-repair.test-support.js";
+import type { ManagedServiceBoundaryOptions } from "./update-managed-service-handoff-boundary-contract.test-support.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
+import type { UpdateRequester } from "./update-requester-authority.js";
 
 export async function prepareManagedServiceRuntimeFixture(params: {
   recoveryModulePath: string;
   statePath: string;
   configPath: string;
+  validationReleasePath: string;
   activationGatePath: string;
   activationReleasePath: string;
   ledger: boolean;
   options?: {
     replaceLedgerWriter?: boolean;
-    requester?: { channel?: string; accountId?: string; senderId?: string };
+    requester?: UpdateRequester;
     cancelAtActivation?: "requester" | "inspection";
-    repair?: ManagedRepairBoundary;
   };
 }) {
   const {
     recoveryModulePath,
     statePath,
     configPath,
+    validationReleasePath,
     activationGatePath,
     activationReleasePath,
     ledger,
@@ -60,29 +55,31 @@ export async function prepareManagedServiceRuntimeFixture(params: {
   }
   if (options?.requester) {
     await fs.writeFile(statePath, "{}");
+    if (options.requester.authorizationSource?.startsWith("profile:")) {
+      await fs.appendFile(
+        recoveryModulePath,
+        `
+        const requesterRuntime = await import(${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.requester).href)});
+        export const { prepareManagedUpdateRequesterIdentity } = requesterRuntime;
+      `,
+      );
+      return { sourceRuntimeImport, ledgerRuntimeImport };
+    }
     await fs.writeFile(
       configPath,
-      JSON.stringify(
-        options.repair
-          ? managedRepairConfig(options.repair.baseUrl)
-          : {
-              commands: { ownerAllowFrom: ["slack:owner"] },
-              channels: { slack: { enabled: true } },
-            },
-      ),
+      JSON.stringify({
+        commands: { ownerAllowFrom: ["slack:owner"] },
+        channels: { slack: { enabled: true } },
+      }),
     );
     await fs.appendFile(
       recoveryModulePath,
       `
       export async function isManagedUpdateRequesterOwner(requester) {
-        const state = ${managedServiceStateUpdateScript(
-          statePath,
-          `state.ownerChecked = true;
-          ${options.cancelAtActivation === "requester" ? "state.ownerChecks = (state.ownerChecks || 0) + 1;" : ""}`,
-        )};
+        const state = ${managedServiceStateUpdateScript(statePath, "state.ownerChecked = true;")};
         ${
           options.cancelAtActivation === "requester"
-            ? `if (state.ownerChecks === 2) {
+            ? `if (fs.existsSync(${JSON.stringify(validationReleasePath)})) {
           fs.writeFileSync(${JSON.stringify(activationGatePath)}, "requester");
           while (!fs.existsSync(${JSON.stringify(activationReleasePath)})) {
             await new Promise((resolve) => setTimeout(resolve, 5));
@@ -103,12 +100,9 @@ export async function prepareManagedServiceSpawn(
   root: string,
   scriptPath: string,
   childEnv: NodeJS.ProcessEnv,
-  options?: Pick<
-    ManagedServiceBoundaryOptions,
-    "repair" | "beforeParkNotice" | "finalizationWorkMs"
-  >,
+  options?: Pick<ManagedServiceBoundaryOptions, "beforeParkNotice" | "finalizationWorkMs">,
 ) {
-  let env = options?.repair ? await prepareManagedRepairSpawnEnv(root, childEnv) : childEnv;
+  let env = childEnv;
   if (options?.finalizationWorkMs !== undefined) {
     const preloadPath = path.join(root, "finalization-clock-preload.cjs");
     const statePath = path.join(root, "manager-state.json");

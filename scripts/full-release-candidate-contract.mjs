@@ -160,6 +160,12 @@ export function buildFullReleaseCandidateRequest(input) {
 }
 
 export function validateFullReleaseCandidateRequest(value) {
+  const request = validateRecordedFullReleaseCandidateRequest(value);
+  parseUpgradeSurvivorScenarios(request.upgradeSurvivorScenarios.join(" "));
+  return request;
+}
+
+export function validateRecordedFullReleaseCandidateRequest(value) {
   exactKeys(
     value,
     [
@@ -228,10 +234,13 @@ export function validateFullReleaseCandidateRequest(value) {
     value.upgradeSurvivorScenarios,
     "full release candidate request upgradeSurvivorScenarios",
   );
+  // Retained v2 evidence keeps its original scenario bytes and request digest.
+  const activeScenarios = scenarios.filter((scenario) => scenario !== "msteams-polls");
   if (
     new Set(scenarios).size !== scenarios.length ||
     scenarios.some((entry, index) => index > 0 && compareAscii(scenarios[index - 1], entry) >= 0) ||
-    JSON.stringify(parseUpgradeSurvivorScenarios(scenarios.join(" "))) !== JSON.stringify(scenarios)
+    JSON.stringify(parseUpgradeSurvivorScenarios(activeScenarios.join(" "))) !==
+      JSON.stringify(activeScenarios)
   ) {
     fail("full release candidate request upgradeSurvivorScenarios are not normalized");
   }
@@ -269,7 +278,7 @@ export function validateFullReleaseCandidateRequest(value) {
 }
 
 export function canonicalFullReleaseCandidateRequestJson(value) {
-  return canonicalAsciiJson(validateFullReleaseCandidateRequest(value));
+  return canonicalAsciiJson(validateRecordedFullReleaseCandidateRequest(value));
 }
 
 export function candidateRequestSha256(value) {
@@ -424,7 +433,7 @@ function validateFullReleaseCandidateManifest(value) {
   if (value.schema !== FULL_RELEASE_CANDIDATE_MANIFEST_SCHEMA) {
     fail("full release candidate manifest schema is invalid");
   }
-  const request = validateFullReleaseCandidateRequest(value.request);
+  const request = validateRecordedFullReleaseCandidateRequest(value.request);
   const requestSha256 = sha256(value.requestSha256, "full release candidate requestSha256");
   if (requestSha256 !== candidateRequestSha256(request)) {
     fail("full release candidate requestSha256 does not match the request");
@@ -478,6 +487,7 @@ function buildFullReleaseCandidateManifest(input) {
   if (!isRecord(input)) {
     fail("full release candidate manifest input must be an object");
   }
+  validateFullReleaseCandidateRequest(input.request);
   return validateFullReleaseCandidateManifest({
     schema: FULL_RELEASE_CANDIDATE_MANIFEST_SCHEMA,
     ...input,
@@ -545,7 +555,7 @@ export function validateFullReleaseCandidateBinding(value) {
   if (value.schema !== FULL_RELEASE_CANDIDATE_BINDING_SCHEMA) {
     fail("full release candidate binding schema is invalid");
   }
-  const request = validateFullReleaseCandidateRequest(value.request);
+  const request = validateRecordedFullReleaseCandidateRequest(value.request);
   const requestSha256 = sha256(value.requestSha256, "full release candidate binding requestSha256");
   if (requestSha256 !== candidateRequestSha256(request)) {
     fail("full release candidate binding requestSha256 does not match the request");

@@ -48,7 +48,15 @@ describe("createLifecycleEventBroadcastHandler", () => {
       sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
       chatAbortControllers: new Map(),
     });
-    await handler({ sessionKey: sessionRow.key, agentId: "main", reason });
+    await handler({
+      sessionKey: sessionRow.key,
+      agentId: "main",
+      reason,
+      ...(["swarm", "swarm-note", "run-capacity"].includes(reason)
+        ? { scope: "runtime" as const }
+        : {}),
+    });
+    expect(broadcastToConnIds.mock.calls[0]?.[1]).not.toHaveProperty("scope");
     expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({
       reason,
       session: { key: sessionRow.key, sessionId: sessionRow.sessionId },
@@ -74,7 +82,12 @@ describe("createLifecycleEventBroadcastHandler", () => {
     const projection = {
       state: { rowContext: { projectedAgentRuns: undefined } },
       capture: () => current,
-      ensureMaterialized: () => prepared.promise,
+      ensureMaterialized: async () => {},
+      withPreparedExactRows: (async (queries, consume) => {
+        queries({});
+        await prepared.promise;
+        return { kind: "complete", value: consume(projection) };
+      }) satisfies SessionRowProjection["withPreparedExactRows"],
       isCurrent: (record: typeof original) => record === current,
       snapshot,
     } as unknown as SessionRowProjection;

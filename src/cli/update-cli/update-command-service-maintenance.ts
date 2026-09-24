@@ -18,6 +18,7 @@ import { readSystemdServiceExecStart } from "../../daemon/systemd-service-files.
 import { captureSystemdServiceIdentity } from "../../daemon/systemd-service-identity.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { admitSystemdUpdate } from "../../infra/update-managed-service-handoff-service.js";
 import { isCurrentManagedServiceUpdateHandoffProcess } from "../../infra/update-managed-service-handoff.js";
 import {
   getUpdateRun,
@@ -29,7 +30,7 @@ import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { gatewayMaintenanceBlockMessage } from "./update-command-handoff.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import type {
   ManagedGatewayUpdateVerdict,
   PreManagedServiceStop,
@@ -403,6 +404,15 @@ async function stopManagedServiceBeforeMutableUpdate(
         "Gateway restart skipped: no Gateway service or listener is running.",
     };
   }
+  const operatorRestartWarning =
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && serviceUpdateVerdict.kind === "owned"
+      ? await admitSystemdUpdate(
+          params.root,
+          serviceState.env,
+          serviceState.systemdInstallation ?? null,
+        )
+      : undefined;
+  assertCurrent();
   // Pure inventory inspection supplies no handoff callback. Execution supplies it
   // only after complete target admission, before online candidate validation.
   if (params.shouldRestart && serviceState.running && params.handoffFromGateway) {
@@ -413,6 +423,13 @@ async function stopManagedServiceBeforeMutableUpdate(
     if (await params.handoffFromGateway(serviceState)) {
       throw new UpdateCommandAbort();
     }
+  }
+  if (operatorRestartWarning) {
+    return {
+      ...inspected,
+      serviceMutationAllowed: false,
+      serviceMutationSkipMessage: operatorRestartWarning,
+    };
   }
   if (params.phase === "inspect") {
     const blockMessage = params.handoffFromGateway

@@ -42,6 +42,7 @@ async function runWorkboardCommand(params: {
   args?: string;
   context?: {
     senderIsOwner?: boolean;
+    assertOwnerCurrent?: () => void;
     gatewayClientScopes?: string[];
     config?: Record<string, unknown>;
     agentId?: string;
@@ -297,13 +298,166 @@ describe("handleWorkboardCommand", () => {
         api,
         store,
         args: `move ${card.id.slice(0, 8)} --status review`,
-        context: { gatewayClientScopes: ["operator.write"] },
+        context: {
+          gatewayClientScopes: ["operator.write"],
+          assertOwnerCurrent: () => {
+            throw new Error("not a chat owner");
+          },
+        },
       }),
     ).resolves.toEqual(expect.objectContaining({ text: expect.stringContaining("review") }));
     await expect(store.get(card.id)).resolves.toMatchObject({
       status: "review",
       metadata: { claim: { ownerId: "worker", token: "secret-token" } },
     });
+  });
+
+  it("rechecks owner authority after create and move preparation without gating reads", async () => {
+    let ownerCurrent = true;
+    let revokeBeforeWrite = false;
+    const store = createWorkboardSqliteTestStore({
+      beforeCardWrite: () => {
+        if (revokeBeforeWrite) {
+          ownerCurrent = false;
+        }
+      },
+    });
+    const api = createApi();
+    const card = await store.create({ title: "Keep original", status: "ready" });
+    const context = {
+      senderIsOwner: true,
+      assertOwnerCurrent: () => {
+        if (!ownerCurrent) {
+          throw new Error("owner revoked");
+        }
+      },
+    };
+    const list = store.list.bind(store);
+    vi.spyOn(store, "list").mockImplementationOnce(async (...args) => {
+      const cards = await list(...args);
+      ownerCurrent = false;
+      return cards;
+    });
+    await expect(
+      runWorkboardCommand({ api, store, args: "create Denied", context }),
+    ).rejects.toThrow("owner revoked");
+    expect(await store.list()).toEqual([card]);
+
+    ownerCurrent = true;
+    revokeBeforeWrite = true;
+    await expect(
+      runWorkboardCommand({ api, store, args: "create Denied at persistence", context }),
+    ).rejects.toThrow("owner revoked");
+    expect(await store.list()).toEqual([card]);
+    revokeBeforeWrite = false;
+
+    ownerCurrent = true;
+    const get = store.get.bind(store);
+    vi.spyOn(store, "get").mockImplementationOnce(async (id) => {
+      const result = await get(id);
+      ownerCurrent = false;
+      return result;
+    });
+    await expect(
+      runWorkboardCommand({ api, store, args: `move ${card.id} --status done`, context }),
+    ).rejects.toThrow("owner revoked");
+    expect(await store.get(card.id)).toEqual(card);
+    await expect(runWorkboardCommand({ api, store, args: "list", context })).resolves.toEqual({
+      text: expect.stringContaining("Keep original"),
+    });
+  });
+
+  it("settles an accepted dispatch but refuses another worker after owner revocation", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const first = await store.create({ title: "First", status: "ready", agentId: "first" });
+    const second = await store.create({ title: "Second", status: "ready", agentId: "second" });
+    let ownerCurrent = true;
+    const run = vi.fn(async () => {
+      ownerCurrent = false;
+      return { runId: "accepted-before-revocation" };
+    });
+    const result = await runWorkboardCommand({
+      api: createApi(run),
+      store,
+      args: "dispatch",
+      context: {
+        senderIsOwner: true,
+        assertOwnerCurrent: () => {
+          if (!ownerCurrent) {
+            throw new Error("owner revoked");
+          }
+        },
+      },
+    });
+    expect(result).toEqual({ text: expect.stringContaining("started=1 failures=1") });
+    expect(run).toHaveBeenCalledOnce();
+    await expect(store.get(first.id)).resolves.toMatchObject({
+      status: "running",
+      runId: "accepted-before-revocation",
+      metadata: { automation: { launch: { phase: "accepted" } } },
+    });
+    await expect(store.get(second.id)).resolves.toEqual(second);
+  });
+
+  it("requires fresh owner authority for each card in a serialized dispatch batch", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const first = await store.create({
+      title: "Promote before revocation",
+      status: "scheduled",
+      scheduledAt: 1,
+      position: 0,
+    });
+    const second = await store.create({
+      title: "Preserve after revocation",
+      status: "scheduled",
+      scheduledAt: 1,
+      position: 1,
+    });
+    let secondReadEntered!: () => void;
+    const secondRead = new Promise<void>((resolve) => {
+      secondReadEntered = resolve;
+    });
+    let resumeSecondRead!: () => void;
+    const readResumed = new Promise<void>((resolve) => {
+      resumeSecondRead = resolve;
+    });
+    const get = store.get.bind(store);
+    vi.spyOn(store, "get").mockImplementation(async (id) => {
+      const card = await get(id);
+      if (id === second.id) {
+        secondReadEntered();
+        await readResumed;
+      }
+      return card;
+    });
+    let ownerCurrent = true;
+    const api = createApi();
+    const dispatch = runWorkboardCommand({
+      api,
+      store,
+      args: "dispatch",
+      context: {
+        senderIsOwner: true,
+        assertOwnerCurrent: () => {
+          if (!ownerCurrent) {
+            throw new Error("owner revoked");
+          }
+        },
+      },
+    });
+    const rejected = expect(dispatch).rejects.toThrow("owner revoked");
+    try {
+      await secondRead;
+      await expect(get(first.id)).resolves.toMatchObject({ status: "ready" });
+      await expect(get(second.id)).resolves.toEqual(second);
+      ownerCurrent = false;
+    } finally {
+      resumeSecondRead();
+      await rejected;
+    }
+    await expect(get(first.id)).resolves.toMatchObject({ status: "ready" });
+    await expect(get(second.id)).resolves.toEqual(second);
+    expect(api.runtime.subagent.run).not.toHaveBeenCalled();
   });
 
   it("rejects invalid slash-command move statuses", async () => {

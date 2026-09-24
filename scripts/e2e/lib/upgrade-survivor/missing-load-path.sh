@@ -50,6 +50,24 @@ run_missing_load_path_fixture() {
       local GATEWAY_LOG="$ARTIFACT_ROOT/missing-load-path/baseline-gateway.log"
       local HEALTHZ_JSON="$ARTIFACT_ROOT/missing-load-path/baseline-healthz.json"
       local READYZ_JSON="$ARTIFACT_ROOT/missing-load-path/baseline-readyz.json"
+      local companion_version plugin
+      companion_version="$(node --input-type=module -e '
+        import { compareReleaseVersions, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
+        const release = parseReleaseVersion(process.argv[1]);
+        if (!release) throw new Error("Invalid baseline release version");
+        if (compareReleaseVersions(release.version, "2026.9.1") === -1) {
+          process.stdout.write(release.correctionNumber === undefined ? release.version : release.baseVersion);
+        }
+      ' "$baseline_version")" || return "$?"
+      if [ -n "$companion_version" ]; then
+        # Before 2026.9.1 exempted official plugin consent, startup repairs needed
+        # their published companion cohort; core corrections share it.
+        for plugin in codex discord whatsapp; do
+          phase "missing-load-path-baseline-$plugin" openclaw_prepublish_plugin_registry_run_published \
+            openclaw_e2e_fixture_plugin_command openclaw -- \
+            plugins install "@openclaw/$plugin@$companion_version" --force || return "$?"
+        done
+      fi
       phase missing-load-path-baseline-start openclaw_prepublish_plugin_registry_run_published start_missing_load_path_baseline
       phase missing-load-path-baseline-ready check_gateway_probes
       phase missing-load-path-baseline-stop stop_gateway

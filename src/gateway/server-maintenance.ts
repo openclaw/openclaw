@@ -2,12 +2,14 @@
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
+import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
   resolveWorktreeCleanupLimits,
   WORKTREE_GC_INTERVAL_MS,
 } from "../agents/worktrees/service.js";
+import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
 import {
@@ -112,7 +114,7 @@ export function startGatewayMaintenanceTimers(params: {
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   isNixMode?: boolean;
   getRuntimeConfig: () => OpenClawConfig;
-  runWorktreeGc?: () => Promise<unknown>;
+  runWorktreeGc?: () => Promise<ManagedWorktreeGcResult | void>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
   runManagedOutgoingMediaGc?: () => Promise<unknown>;
 }): {
@@ -245,9 +247,21 @@ export function startGatewayMaintenanceTimers(params: {
       });
     });
   const performWorktreeGc = () =>
-    periodicWork.track(runWorktreeGc).catch((err: unknown) => {
-      params.logHealth.error(`managed worktree cleanup failed: ${formatError(err)}`);
-    });
+    periodicWork
+      .track(runWorktreeGc)
+      .then((result) => {
+        if (!result) {
+          return;
+        }
+        if (result.outcome === "partial") {
+          params.logHealth.error(formatWorktreeGcResult(result));
+        } else if (result.outcome === "deferred") {
+          params.logHealth.info(formatWorktreeGcResult(result));
+        }
+      })
+      .catch((err: unknown) => {
+        params.logHealth.error(`managed worktree cleanup failed: ${formatError(err)}`);
+      });
   const worktreeCleanup = setInterval(() => void performWorktreeGc(), WORKTREE_GC_INTERVAL_MS);
   if (!restartDrainSignal.aborted) {
     void performWorktreeGc();

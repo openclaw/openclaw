@@ -156,7 +156,7 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
-  it("clamps queued Sol Ultra work to Codex Luna Max", () => {
+  it("preserves queued Sol Ultra work when switching to Codex Luna", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.items.push({
       prompt: "queued message",
@@ -184,12 +184,12 @@ describe("refreshQueuedFollowupSession", () => {
     expect(queue.items[0]?.run).toMatchObject({
       provider: "openai",
       model: "gpt-5.6-luna",
-      thinkLevel: "max",
+      thinkLevel: "ultra",
       thinkingCatalog: [{ provider: "openai", id: "gpt-5.6-luna", name: "Luna", reasoning: true }],
     });
   });
 
-  it("uses the highest supported non-max level when retargeting queued work", () => {
+  it("preserves harness-only Ultra when retargeting queued work", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.items.push({
       prompt: "queued message",
@@ -205,7 +205,7 @@ describe("refreshQueuedFollowupSession", () => {
       nextThinking: { level: "ultra", agentRuntime: "openclaw" },
     });
 
-    expect(queue.items[0]?.run.thinkLevel).toBe("high");
+    expect(queue.items[0]?.run.thinkLevel).toBe("ultra");
   });
 
   it.each([
@@ -247,7 +247,7 @@ describe("refreshQueuedFollowupSession", () => {
       stored: "off",
       model: "gpt-5.6-luna",
       reasoning: true,
-      expected: "max",
+      expected: "ultra",
     },
     {
       source: "turn",

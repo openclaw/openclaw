@@ -1,14 +1,21 @@
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
-import { LAUNCH_AGENT_POLICY, decodeLaunchdPlistMetadata } from "./launchd-plist.js";
+import {
+  LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+  LAUNCH_AGENT_POLICY,
+  decodeLaunchdPlistMetadata,
+} from "./launchd-plist.js";
 import {
   buildLaunchAgentEnvironmentWrapper,
+  isGeneratedLaunchAgentEnvironmentWrapper,
   readExistingLaunchAgentPlist,
+  resolveLaunchAgentEnvFilePath,
   resolveLaunchAgentEnvWrapperPath,
   resolveLaunchAgentPlistPath,
 } from "./launchd-service-files.js";
 import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import {
   isInstallerServiceDescription,
+  serviceDefinitionPreserved,
   serviceDefinitionUnknown,
 } from "./service-audit-preservation.js";
 import type { ServiceConfigIssue, ServiceDefinitionDrift } from "./service-audit-types.js";
@@ -46,6 +53,42 @@ export async function auditLaunchdDefinition(
   if (!installed) {
     throw new Error("LaunchAgent definition could not be decoded.");
   }
+  const wrapperPath = resolveLaunchAgentEnvWrapperPath(env, resolveLaunchAgentLabel(env));
+  const args = installed.ProgramArguments;
+  const wrapperIndex = Array.isArray(args) && args[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL ? 1 : 0;
+  if (
+    Array.isArray(args) &&
+    args[wrapperIndex] === wrapperPath &&
+    args[wrapperIndex + 1] !== resolveLaunchAgentEnvFilePath(env, resolveLaunchAgentLabel(env))
+  ) {
+    issues.push({
+      code: "launchd-env-file-argument",
+      message:
+        "LaunchAgent environment-file argument is missing or invalid. Run openclaw gateway install --force to repair the service.",
+      detail: sourcePath,
+      level: "recommended",
+    });
+  }
+  const wrapper = (await readExistingLaunchAgentPlist(wrapperPath))?.contents.toString("utf8");
+  if (
+    wrapper !== undefined &&
+    isGeneratedLaunchAgentEnvironmentWrapper(wrapper) &&
+    wrapper !== buildLaunchAgentEnvironmentWrapper()
+  ) {
+    issues.push({
+      code: "launchd-env-wrapper-outdated",
+      message: "LaunchAgent environment wrapper needs validation; reinstall the Gateway service.",
+      level: "recommended",
+    });
+    findings.push({
+      kind: "outdated",
+      key: "EnvironmentWrapper",
+      current: "legacy",
+      expected: "validated",
+      sourcePath: wrapperPath,
+      message: "LaunchAgent environment wrapper lacks environment-file validation.",
+    });
+  }
   if (inspectRewrite) {
     if (!isInstallerServiceDescription(installed.Comment, env)) {
       findings.push(
@@ -56,9 +99,7 @@ export async function auditLaunchdDefinition(
         ),
       );
     }
-    const wrapperPath = resolveLaunchAgentEnvWrapperPath(env, resolveLaunchAgentLabel(env));
-    const wrapper = (await readExistingLaunchAgentPlist(wrapperPath))?.contents ?? null;
-    if (wrapper !== null && wrapper.toString("utf8") !== buildLaunchAgentEnvironmentWrapper()) {
+    if (wrapper !== undefined && !isGeneratedLaunchAgentEnvironmentWrapper(wrapper)) {
       findings.push(
         serviceDefinitionUnknown(
           "EnvironmentWrapper",
@@ -110,6 +151,8 @@ export async function auditLaunchdDefinition(
         sourcePath,
         message: `LaunchAgent ${key} differs from the installer value ${String(value)}.`,
       });
+    } else if (value !== undefined && key !== "Label") {
+      findings.push(serviceDefinitionPreserved(key, sourcePath));
     } else {
       findings.push({
         kind: "unknown-edit",

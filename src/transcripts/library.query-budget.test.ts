@@ -29,6 +29,7 @@ import {
   readTranscriptEntry,
   readTranscriptLibraryEntry,
 } from "./store-read.js";
+import { readTranscriptSummarySnapshot } from "./store-sqlite-read.js";
 import { meetingTranscriptDb } from "./store-sqlite.js";
 import { transcriptSessionSelector } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
@@ -59,6 +60,9 @@ function observeArchiveReads(
   );
   vi.spyOn(store, "readLibraryEntry").mockImplementation(async (params) =>
     readTranscriptLibraryEntry(database, params),
+  );
+  vi.spyOn(store, "readSummarySnapshot").mockImplementation(async (descriptor, maxUtterances) =>
+    readTranscriptSummarySnapshot(database, descriptor, maxUtterances),
   );
   clearNodeSqliteKyselyCacheForDatabase(database);
   const queries: Array<{
@@ -137,6 +141,30 @@ function observeArchiveReads(
 }
 
 describe("transcript library SQLite query budgets", () => {
+  it("keeps export bookkeeping out of summary snapshot reads", async () => {
+    const { store, database } = fixture();
+    const target = session("summary-snapshot");
+    await store.writeSession(target);
+    await store.appendUtteranceForSession(target, { text: "Summarize this speech" });
+    const db = database();
+    executeSqliteQuerySync(
+      db,
+      meetingTranscriptDb(db)
+        .updateTable("meeting_transcript_sessions")
+        .set({
+          export_manifest_json: JSON.stringify({ "retained-export.md": "x".repeat(16_384) }),
+          export_pending_json: JSON.stringify(["x".repeat(16_384)]),
+        }),
+    );
+    const reads = observeArchiveReads(store, db);
+    expect(await store.readSummarySnapshot(target, 20)).toMatchObject({
+      nextSequence: 1,
+      summaryRevision: "",
+      utterances: [{ text: "Summarize this speech" }],
+    });
+    expect(reads.some((read) => read.rows > 0)).toBe(true);
+    expect(reads.reduce((bytes, read) => bytes + read.bytes, 0)).toBeLessThan(2_048);
+  });
   it("stops active status descriptor reads when the public result budget is consumed", async () => {
     const { store, database } = fixture();
     for (let index = 0; index < 6; index++) {
@@ -148,7 +176,10 @@ describe("transcript library SQLite query budgets", () => {
         appends: createTranscriptCaptureAppends(() => {}),
         session: target,
         providerId: target.source.providerId,
-        provider: {},
+        stopProvider: async () => {
+          throw new Error("Reading transcript status must not stop capture");
+        },
+        releaseProvider: async () => {},
         phase: "active",
       });
     }

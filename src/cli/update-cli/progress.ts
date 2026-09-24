@@ -8,6 +8,7 @@ import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import {
+  toPublicUpdateRun,
   updateStepDiagnostics,
   type UpdateRunPhase,
   type UpdateRunRecord,
@@ -21,7 +22,7 @@ import type {
   UpdateRunResult,
   UpdateStepProgress,
   UpdateStepResult,
-} from "../../infra/update-runner.js";
+} from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
@@ -29,6 +30,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 // a fast final transition cannot appear after the report or leave a spinner active.
 const activeUpdateProgress = new Map<string, (record: UpdateRunRecord | undefined) => void>();
 const UPDATE_PROGRESS_POLL_MS = 250;
+const UPDATE_STEP_NOTICE_MS = 30_000;
 
 // These CLI-only callbacks can render the row just committed by their ledger owner.
 export type UpdateDisplayProgress = {
@@ -70,10 +72,15 @@ export function createUpdateProgress(
 
   let currentSpinner: ReturnType<typeof spinner> | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let stepNotice: ReturnType<typeof setInterval> | undefined;
   let currentPhase: UpdateRunPhase | undefined;
   let observation: "active" | "suspended" | "disposed" = "active";
   const seenPhases = new Set<UpdateRunPhase>();
   const stop = () => {
+    if (stepNotice) {
+      clearInterval(stepNotice);
+      stepNotice = undefined;
+    }
     currentSpinner?.clear();
     currentSpinner = null;
   };
@@ -151,6 +158,13 @@ export function createUpdateProgress(
         currentSpinner.start(theme.accent(label));
       } else {
         defaultRuntime.log(`${label}...`);
+        const startedAtMs = Date.now();
+        stepNotice = setInterval(() => {
+          defaultRuntime.log(
+            `${label} — still running (${formatDurationPrecise(Date.now() - startedAtMs)})`,
+          );
+        }, UPDATE_STEP_NOTICE_MS);
+        stepNotice.unref?.();
       }
     },
     onStepComplete: (step, record) => {
@@ -260,15 +274,19 @@ export async function printResult(
     return undefined;
   });
   if (opts.json) {
-    defaultRuntime.writeJson({ ...result, ...(run ? { run } : {}), reportPath });
+    defaultRuntime.writeJson({
+      ...result,
+      ...(run ? { run: toPublicUpdateRun(run) } : {}),
+      reportPath,
+    });
     return;
   }
   defaultRuntime.log("");
   defaultRuntime.log(theme.heading(report.headline));
-  for (const line of report.lines) {
-    defaultRuntime.log(line);
-  }
   if (reportPath) {
     defaultRuntime.log(`Report: ${reportPath}`);
+  }
+  for (const line of report.lines) {
+    defaultRuntime.log(line);
   }
 }

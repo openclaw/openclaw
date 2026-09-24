@@ -3,6 +3,8 @@ const OPERATOR_ADMIN_SCOPE = "operator.admin";
 const OPERATOR_READ_SCOPE = "operator.read";
 const OPERATOR_TALK_SCOPE = "operator.talk";
 const OPERATOR_WRITE_SCOPE = "operator.write";
+const OPERATOR_SESSION_READ_SCOPE = "operator.sessions.read";
+const OPERATOR_SESSION_WRITE_SCOPE = "operator.sessions.write";
 const OPERATOR_SCOPE_PREFIX = "operator.";
 
 export function operatorScopeSatisfied(
@@ -15,8 +17,13 @@ export function operatorScopeSatisfied(
   return (
     granted.includes(requestedScope) ||
     granted.includes(OPERATOR_ADMIN_SCOPE) ||
-    ((requestedScope === OPERATOR_READ_SCOPE || requestedScope === OPERATOR_TALK_SCOPE) &&
-      granted.includes(OPERATOR_WRITE_SCOPE))
+    ((requestedScope === OPERATOR_READ_SCOPE ||
+      requestedScope === OPERATOR_TALK_SCOPE ||
+      requestedScope === OPERATOR_SESSION_READ_SCOPE ||
+      requestedScope === OPERATOR_SESSION_WRITE_SCOPE) &&
+      granted.includes(OPERATOR_WRITE_SCOPE)) ||
+    (requestedScope === OPERATOR_SESSION_READ_SCOPE &&
+      (granted.includes(OPERATOR_READ_SCOPE) || granted.includes(OPERATOR_SESSION_WRITE_SCOPE)))
   );
 }
 
@@ -37,11 +44,23 @@ export function intersectOperatorScopes(
   if (roleScopesAllow({ role: "operator", requestedScopes: scopes, allowedScopes: ceiling })) {
     return [...scopes];
   }
-  return [...new Set([...scopes, ...ceiling])].filter(
+  const result = [...new Set([...scopes, ...ceiling])].filter(
     (scope) =>
       roleScopesAllow({ role: "operator", requestedScopes: [scope], allowedScopes: scopes }) &&
       roleScopesAllow({ role: "operator", requestedScopes: [scope], allowedScopes: ceiling }),
   );
+  // General reads and session-only writes share a narrower read capability even
+  // when neither input spells it out. Do not add redundant or one-sided grants.
+  for (const scope of [OPERATOR_SESSION_WRITE_SCOPE, OPERATOR_SESSION_READ_SCOPE]) {
+    if (
+      operatorScopeSatisfied(scope, scopes) &&
+      operatorScopeSatisfied(scope, ceiling) &&
+      !operatorScopeSatisfied(scope, result)
+    ) {
+      result.push(scope);
+    }
+  }
+  return result;
 }
 
 /** Returns the original first requested scope not covered by the role's allowed scopes. */

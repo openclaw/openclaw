@@ -39,6 +39,7 @@ export const STALLED_CATALOG_MODEL_ID = "bench-model";
 
 export const BASE_GATEWAY_BENCH_CONFIG = {
   browser: { enabled: false },
+  update: { checkOnStart: false },
   // Loopback listener binding does not suppress LAN discovery.
   discovery: { mdns: { mode: "off" } },
   gateway: {
@@ -289,7 +290,6 @@ export function createGatewayBenchEnv(
     OPENCLAW_HOME: root,
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_STATE_DIR: path.join(root, "state"),
-    OPENCLAW_TEST_DISABLE_UPDATE_CHECK: "1",
     ...options.caseEnv,
   };
 }

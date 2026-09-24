@@ -64,17 +64,25 @@ Future evals should stay deterministic first:
 
 ## Cost budget
 
-Every test file runs on every pull request that touches its area, so its cost is
-paid thousands of times. Budgets, measured with `pnpm test <file> --maxWorkers=1`
-on one worker:
+CI selects tests by their owning area, so per-PR cost is paid repeatedly. Budgets,
+measured with `pnpm test <file> --maxWorkers=1` on one worker:
 
 - Target under 5 s of test time per file. Above 30 s, the PR body explains which
   contract needs that time and why no cheaper layer proves it.
-- A file that needs more than the planner's per-job budget (about 120 s) cannot be
-  packed with other files and sets the wall time of its whole job. Split it by
-  owner boundary, or move the long end-to-end composition to the release-only tier
-  (`RELEASE_ONLY_*` sets in `scripts/lib/ci-node-test-plan.mts`) and keep a fast
-  contract check in per-PR CI.
+- A file that needs more than its planner's per-job budget cannot share that
+  budget with other files and can set its job's wall time. Split it by owner
+  boundary, or consider the release-only tier (`RELEASE_ONLY_*` sets in
+  `scripts/lib/ci-node-test-plan.mts`). Weigh how likely an unrelated PR is to
+  break its contract and the cost of detecting that failure at release time.
+  The unchanged suite can itself supply prepublication proof; an independent
+  duplicate release test is not required. Slowness alone does not justify
+  deleting coverage.
+- The maintainer-tooling family uses `RELEASE_ONLY_TOOLING_SHARDS` and matching
+  maintainer leaves in mixed fast configs: product-only PRs and main omit it,
+  tooling-owner PRs select their affected files (with full-family fallback for unresolved owners), and manual CI and Full Release Validation
+  retain it. Keep tests in their canonical configs, with their process and timer
+  policies, so new files inherit the same owner routing. Dedicated product E2E
+  and live tests remain outside this tier. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
 - Use an injected clock at the owner instead of real timers, sleeps, or polling;
   claim ports through `src/test-utils/port-claims.ts`; give each file its own
   state directory; reuse suite-level Gateway and process fixtures instead of

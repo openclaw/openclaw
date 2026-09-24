@@ -79,6 +79,19 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+  it("keeps an explicit misalignment refusal terminal despite a fallback-safe error projection", () => {
+    const result = cyberRefusalResult();
+    result.meta.agentMeta.providerRefusal.category = "misalignment";
+    result.meta.error.fallbackSafe = true;
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "openai",
+        model: "gpt-general",
+        result,
+      }),
+    ).toBeNull();
+  });
+
   it.each([
     { label: "another provider", provider: "anthropic", harness: "openclaw", replayInvalid: false },
     { label: "another harness", provider: "openai", harness: "codex", replayInvalid: false },

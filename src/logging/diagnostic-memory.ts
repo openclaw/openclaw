@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { totalmem } from "node:os";
 // Diagnostic memory helpers capture process memory facts for support diagnostics.
 import { getHeapStatistics } from "node:v8";
@@ -179,37 +180,17 @@ function pickThresholdPressure(params: {
   thresholds: Required<DiagnosticMemoryThresholds>;
 }): Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type"> | null {
   const { memory, thresholds } = params;
-  if (memory.rssBytes >= thresholds.rssCriticalBytes) {
-    return {
-      level: "critical",
-      reason: "rss_threshold",
-      memory,
-      thresholdBytes: thresholds.rssCriticalBytes,
-    };
-  }
-  if (memory.heapUsedBytes >= thresholds.heapUsedCriticalBytes) {
-    return {
-      level: "critical",
-      reason: "heap_threshold",
-      memory,
-      thresholdBytes: thresholds.heapUsedCriticalBytes,
-    };
-  }
-  if (memory.rssBytes >= thresholds.rssWarningBytes) {
-    return {
-      level: "warning",
-      reason: "rss_threshold",
-      memory,
-      thresholdBytes: thresholds.rssWarningBytes,
-    };
-  }
-  if (memory.heapUsedBytes >= thresholds.heapUsedWarningBytes) {
-    return {
-      level: "warning",
-      reason: "heap_threshold",
-      memory,
-      thresholdBytes: thresholds.heapUsedWarningBytes,
-    };
+  // First match wins: critical pressure precedes warnings, with RSS first at each level.
+  const candidates = [
+    [memory.rssBytes, thresholds.rssCriticalBytes, "critical", "rss_threshold"],
+    [memory.heapUsedBytes, thresholds.heapUsedCriticalBytes, "critical", "heap_threshold"],
+    [memory.rssBytes, thresholds.rssWarningBytes, "warning", "rss_threshold"],
+    [memory.heapUsedBytes, thresholds.heapUsedWarningBytes, "warning", "heap_threshold"],
+  ] as const;
+  for (const [value, thresholdBytes, level, reason] of candidates) {
+    if (value >= thresholdBytes) {
+      return { level, reason, memory, thresholdBytes };
+    }
   }
   return null;
 }
@@ -427,6 +408,9 @@ export function emitDiagnosticMemorySample(options?: {
 
   const growthPressure = pickGrowthPressure({ current, thresholds });
   const pressure = pickThresholdPressure({ memory, thresholds }) ?? growthPressure;
+  if (pressure?.level === "critical") {
+    channel("openclaw.memory.critical").publish(undefined);
+  }
   if (pressure && shouldEmitPressure(pressure, now, thresholds.pressureRepeatMs)) {
     emitDiagnosticEvent({
       type: "diagnostic.memory.pressure",

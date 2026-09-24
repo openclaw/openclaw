@@ -26,7 +26,10 @@ The following lifecycle applies to Workshop proposals:
   `stale` if the live skill changes before apply.
 - **Scanner gated:** apply reruns the security scanner before writing. Only
   critical findings block apply; warn-level findings remain visible but do not
-  block it.
+  block it. Prompt-related keywords are not scanner findings: mentioning hidden
+  instructions or tool approval does not establish an instruction override.
+  Literal credential rejection, approval policy, and blocking evaluator decisions
+  remain enforced.
 - **Recoverable:** apply writes rollback metadata before touching live files.
 - **Revision atomic:** create and revise flush a complete immutable proposal
   generation, publish it with an atomic rename, then sync its parent directory

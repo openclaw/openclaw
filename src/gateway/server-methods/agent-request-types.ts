@@ -11,6 +11,7 @@ export type AgentRunRequest = {
   sessionId?: string;
   sessionKey?: string;
   expectedExistingSessionId?: string;
+  expectedExistingSessionLifecycleRevision?: string | null;
   thinking?: string;
   deliver?: boolean;
   attachments?: Array<{

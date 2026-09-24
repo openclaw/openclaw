@@ -798,11 +798,15 @@ describe("openclaw test state", () => {
       const runOperation = reconcilePool.runSessionTranscriptReconcileOperation;
       const operationSpy = vi
         .spyOn(reconcilePool, "runSessionTranscriptReconcileOperation")
-        .mockImplementationOnce((generation, run) =>
-          runOperation(generation, async (operation) => {
-            await resumeReconcile.promise;
-            return run(operation);
-          }),
+        .mockImplementationOnce((generation, run, owner) =>
+          runOperation(
+            generation,
+            async (operation) => {
+              await resumeReconcile.promise;
+              return run(operation);
+            },
+            owner,
+          ),
         );
       const originalRm = fs.rm;
       let removalStarted = false;

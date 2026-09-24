@@ -15,6 +15,7 @@ import type {
   WorkerPlacementMoveSource,
   WorkerPlacementMoveTarget,
 } from "./placement-move-intent.js";
+import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerPlacementExecutionMode,
@@ -81,6 +82,13 @@ export type WorkerDesktopLaunchResult = {
 
 /** Request-facing lifecycle methods, kept separate from persistence and provider internals. */
 export type WorkerEnvironmentServiceContract = {
+  /** Current explicit provider attestation, never the persisted legacy default. */
+  getDedicatedNodeLeaseSignal(environmentId: string): AbortSignal | undefined;
+  captureSessionAttachment(identity: WorkerEnvironmentSessionIdentity): {
+    binding: WorkerEnvironmentAttachment;
+    assertCurrent(): void;
+    touch(): Promise<void>;
+  };
   getSessionAttachment(sessionId: string): WorkerEnvironmentAttachment | undefined;
   findSessionAttachment(
     identity: Pick<WorkerEnvironmentSessionIdentity, "agentId" | "sessionKey">,
@@ -92,7 +100,7 @@ export type WorkerEnvironmentServiceContract = {
       }
     | undefined;
   assertSessionAttachment(binding: WorkerEnvironmentAttachment): void;
-  touchSessionAttachment(binding: WorkerEnvironmentAttachment): void;
+  touchSessionAttachment(binding: WorkerEnvironmentAttachment): Promise<void>;
   execSessionAttachment(
     binding: WorkerEnvironmentAttachment,
     command: import("./tunnel-contract.js").WorkerWorkspaceCommand,
@@ -118,11 +126,20 @@ export type WorkerEnvironmentServiceContract = {
     environmentId: string;
     ownerEpoch: number;
     remotePort: number;
-  }): Promise<{ connect: () => Promise<import("node:stream").Duplex>; close: () => Promise<void> }>;
+  }): Promise<{
+    connect: (
+      assertCurrent?: () => void,
+      touch?: () => Promise<void>,
+    ) => Promise<import("node:stream").Duplex>;
+    close: () => Promise<void>;
+  }>;
   list(): WorkerEnvironmentServiceRecord[];
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
   inventoryVersion(): number;
-  readMachineShape(environmentId: string): SessionPlacementMachine | undefined;
+  readMachineShape(
+    environmentId: string,
+    prepared?: WorkerEnvironmentPlacementFacts,
+  ): SessionPlacementMachine | undefined;
   machineShapeVersion(): number;
   supportsExecutionMode(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
   readProviderDisplayId(profileId: string): string | undefined;

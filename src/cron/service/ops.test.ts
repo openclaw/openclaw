@@ -37,7 +37,7 @@ import {
 import { list, writeScratch } from "./ops-read.js";
 import { inspectManualRunDisposition } from "./ops-run-preparation.js";
 import { run } from "./ops-run.js";
-import { proposeCronRunRecovery, recoverCronRunProposal } from "./run-recovery.js";
+import { observeCronRecoveryForTest, recoverCronRunForTest } from "./run-recovery.test-support.js";
 import type { CronAddResult, CronEvent } from "./state.js";
 import * as taskRuns from "./task-runs.js";
 import { runMissedJobs } from "./timer.js";
@@ -1009,7 +1009,7 @@ describe("cron service ops seam coverage", () => {
       nowMs: () => now,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
-    const proposal = await proposeCronRunRecovery(state, job.id, undefined, startedAt);
+    const proposal = await observeCronRecoveryForTest(state, job.id, undefined, startedAt);
     await cronStoreModule.saveCronJobsStore(
       storePath,
       { version: 1, jobs: [completedJob] },
@@ -1028,7 +1028,7 @@ describe("cron service ops seam coverage", () => {
     );
     runReceiptStore.releaseLocalCronRunReceiptOwnership(receipt);
 
-    expect(recoverCronRunProposal(state, proposal)).toEqual({ kind: "superseded" });
+    expect(await recoverCronRunForTest(state, proposal)).toEqual({ kind: "superseded" });
 
     await start(state);
 

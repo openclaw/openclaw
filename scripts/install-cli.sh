@@ -120,6 +120,7 @@ GIT_UPDATE="${OPENCLAW_GIT_UPDATE:-1}"
 JSON=0
 RUN_ONBOARD=0
 NODE_ONLY=0
+RUNTIME_ONLY=0
 SET_NPM_PREFIX=0
 PNPM_CMD=()
 GIT_REF_KIND=""
@@ -138,6 +139,7 @@ Usage: install-cli.sh [options]
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
   --node-version <ver>                Node version (default: 24.19.0)
   --node-only                         Install only a private Node runtime (no system package changes)
+  --runtime-only                      Install CLI runtime without Gateway probes, service changes, or onboarding
   --onboard                           Run "openclaw onboard" after install
   --no-onboard                        Skip onboarding (default)
   --set-npm-prefix                    Force npm prefix to ~/.npm-global if current prefix is not writable (Linux)
@@ -460,6 +462,10 @@ parse_args() {
         NODE_VERSION="$2"
         NODE_VERSION_REQUESTED=1
         shift 2
+        ;;
+      --runtime-only)
+        RUNTIME_ONLY=1
+        shift
         ;;
       --node-only)
         NODE_ONLY=1
@@ -1280,7 +1286,7 @@ ensure_pnpm() {
   local repo_dir="${1:-$PWD}"
   local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
   spec="$(repo_pnpm_spec "$repo_dir" || true)"
-  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.4.0"
+  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.4.2"
   version="${spec#pnpm@}"
   version="${version%%+*}"
   pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -1918,7 +1924,9 @@ main() {
   if [[ "$INSTALL_METHOD" == "git" ]]; then
     install_openclaw_from_git "$GIT_DIR"
   elif [[ "$INSTALL_METHOD" == "npm" ]]; then
-    ensure_git
+    if [[ "$RUNTIME_ONLY" -eq 0 ]]; then
+      ensure_git
+    fi
     if [[ "$SET_NPM_PREFIX" -eq 1 ]]; then
       fix_npm_prefix_if_needed
     fi
@@ -1940,11 +1948,15 @@ main() {
   else
     unset TMPDIR
   fi
-  refresh_gateway_service_if_loaded
+  if [[ "$RUNTIME_ONLY" -eq 1 ]]; then
+    emit_json step name gateway-service status skip reason runtime-only
+  else
+    refresh_gateway_service_if_loaded
+  fi
   emit_json "done" version "$installed_version"
   log "OpenClaw installed (${installed_version})."
 
-  if [[ "$RUN_ONBOARD" -eq 1 ]]; then
+  if [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
     "${PREFIX}/bin/openclaw" onboard
   fi
 }

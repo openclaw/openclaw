@@ -5,6 +5,7 @@ export const cliProcessTestFiles = [
   "src/cli/update-cli/update-command-candidate-exit.test.ts",
   "src/cli/update-cli/update-command-candidate-authority.process.test.ts",
   "src/cli/update-cli/update-command-fresh-doctor-authority.test.ts",
+  "src/cli/update-cli/update-command-fresh-inspection.test.ts",
   "src/cli/update-cli/update-command-fresh-preview.test.ts",
   "src/cli/update-cli/update-command-runtime-preview.test.ts",
   "src/cli/update-cli/update-command-plugins.persistence.test.ts",
@@ -53,6 +54,7 @@ export const cliProcessTestFiles = [
   "src/cli/state-dir-gateway-check.server.test.ts",
   "src/cli/cron-cli/cron-suppression.gateway.test.ts",
   "src/state/openclaw-database-verify.process.test.ts",
+  "src/infra/sqlite-readonly-worker.compile-cache.process.test.ts",
 ];
 
 const cliProcessTestFileSet = new Set(cliProcessTestFiles);

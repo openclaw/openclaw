@@ -4,6 +4,7 @@ import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-readonly-worker-protocol.js";
 import { assessInitialUpdateSnapshotCapacity } from "../../infra/update-candidate-snapshot.js";
 import {
   channelToNpmTag,
@@ -34,7 +35,7 @@ import {
   resolveUnmanagedUpdateInstallReason,
   resolveUpdateInstallSurface,
 } from "../../infra/update-runner-install-surface.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -51,6 +52,7 @@ import {
   resolveNodeRunner,
   resolveTargetVersion,
   UpdatePreMutationError,
+  usesCandidateUpdateAdmission,
   type UpdateCommandOptions,
 } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
@@ -228,11 +230,37 @@ export async function resolveUpdateCommandTarget(
         return undefined;
       }
 
-      const { configSnapshot, legacyConfigPlan, storedChannel } = await readUpdateChannelConfig(
-        Boolean(opts.channel),
-      );
+      const readChannelConfig = () =>
+        readUpdateChannelConfig(Boolean(opts.channel), {
+          tolerateReadFailure: usesCandidateUpdateAdmission(opts, installKind),
+        });
+      let channelConfig: Awaited<ReturnType<typeof readUpdateChannelConfig>>;
+      let inspectionWarning: string | undefined;
+      try {
+        channelConfig = await readChannelConfig();
+      } catch (error) {
+        if (!(error instanceof SqliteReadOnlyInspectionContentionError)) {
+          throw error;
+        }
+        channelConfig = await readChannelConfig();
+        inspectionWarning = `Read-only SQLite inspection recovered after temporary contention; continuing the update. ${formatErrorMessage(error)}`;
+        recordUpdateCommandTarget(opts.run, {
+          step: {
+            step: "warning:installation-inspection",
+            status: "completed",
+            detail: inspectionWarning,
+          },
+        });
+        defaultRuntime.error(`Warning: ${inspectionWarning}`);
+      }
+      const { configSnapshot, configReadFailure, legacyConfigPlan, storedChannel } = channelConfig;
 
-      if (opts.channel && !configSnapshot.valid && !legacyConfigPlan) {
+      if (
+        opts.channel &&
+        !configSnapshot.valid &&
+        !legacyConfigPlan &&
+        !usesCandidateUpdateAdmission(opts, installKind)
+      ) {
         const issues = formatConfigIssueLines(configSnapshot.issues, "-");
         await refuseUpdate(
           "invalid-config",
@@ -265,6 +293,25 @@ export async function resolveUpdateCommandTarget(
       const switchToPackage =
         requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
       updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
+      if (updateInstallKind !== "package" && configReadFailure) {
+        throw configReadFailure;
+      }
+      if (
+        opts.channel &&
+        !configSnapshot.valid &&
+        !legacyConfigPlan &&
+        updateInstallKind !== "package" &&
+        usesCandidateUpdateAdmission(opts, installKind)
+      ) {
+        await refuseUpdate(
+          "invalid-config",
+          [
+            "Config is invalid; cannot set update channel.",
+            ...formatConfigIssueLines(configSnapshot.issues, "-"),
+          ].join("\n"),
+        );
+        return undefined;
+      }
       if (channel === "dev" && requestedChannel !== "dev" && !opts.sourceUpdate) {
         try {
           devTarget = readDevUpdateTarget();
@@ -551,7 +598,13 @@ export async function resolveUpdateCommandTarget(
         },
       });
       // No-op updates need no candidate snapshot; package-space warnings remain advisory above.
-      if (updateInstallKind === "package" && !packageAlreadyCurrent && !opts.dryRun) {
+      if (
+        updateInstallKind === "package" &&
+        !packageAlreadyCurrent &&
+        !opts.dryRun &&
+        (!usesCandidateUpdateAdmission(opts, installKind) ||
+          (configSnapshot.valid && !configReadFailure))
+      ) {
         const env = opts.run?.env ?? process.env;
         const source = await readUpdateCandidateSource(env, legacyConfigPlan);
         const snapshot = await assessInitialUpdateSnapshotCapacity({
@@ -578,10 +631,12 @@ export async function resolveUpdateCommandTarget(
 
       return {
         root,
+        ...(inspectionWarning ? { inspectionWarning } : {}),
         mode: await resolveMode(),
         updateInstallKind,
         refuseUpdate,
         configSnapshot,
+        configReadFailure,
         legacyConfigPlan,
         storedChannel,
         requestedChannel,

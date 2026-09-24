@@ -16,8 +16,8 @@ const hoisted = vi.hoisted(() => ({
   prepareModelChoiceMock: vi.fn<typeof supportedSpawnModelChoice>(),
   runSubagentProgressMock: vi.fn(async () => {}),
 }));
-vi.mock("../subagents/spawn/subagent-spawn-deps.js", () => ({
-  getSubagentSpawnDeps: () => ({ prepareModelChoice: hoisted.prepareModelChoiceMock }),
+vi.mock("../subagents/spawn/subagent-spawn.runtime.js", () => ({
+  prepareModelChoice: hoisted.prepareModelChoiceMock,
 }));
 vi.mock("../subagents/spawn/subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],

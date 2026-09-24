@@ -108,6 +108,7 @@ function createImmediateInboundDebounce() {
   return {
     resolveInboundDebounceMs: vi.fn(() => 0),
     createInboundDebouncer: <T>(params: InboundDebouncerParams<T>) => ({
+      shouldBuffer: () => false,
       enqueue: async (item: T) => {
         try {
           await params.onFlush?.([item], createTestInboundDebounceFlush).completion;

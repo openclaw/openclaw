@@ -7,6 +7,8 @@ import type { DoctorOptions } from "./doctor-prompter.js";
 import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 
+export { runDoctorProcess } from "./doctor-process.js";
+
 async function resolveExplicitSessionSqliteMaintenancePaths(
   options: DoctorOptions,
 ): Promise<string[]> {
@@ -185,12 +187,25 @@ async function maybeCreateSessionSqliteGithubIssue(
   const supportIssue = report.supportIssue;
   if (!supportIssue) {
     if (shouldLog) {
-      runtime.log("session-sqlite recover: no support issue payload was generated");
+      runtime.log(
+        report.totals.issues === 0 &&
+          report.totals.importedEntries === 0 &&
+          report.totals.archivedTranscriptFiles === 0 &&
+          report.totals.archivedUnreferencedJsonlFiles === 0 &&
+          report.targets.every(
+            (target) =>
+              !target.restore?.restoredFiles.length && !target.corruptRecovery?.movedFiles.length,
+          )
+          ? "session-sqlite recover: nothing to recover; no report filed"
+          : "session-sqlite recover: no support issue payload was generated",
+      );
     }
     return;
   }
+  const { resolveDoctorRepairMode } = await import("./doctor-repair-mode.js");
+  const canPrompt = options.json !== true && resolveDoctorRepairMode(options).canPrompt;
   let approved = options.yes === true;
-  if (!approved && options.nonInteractive !== true && options.json !== true) {
+  if (canPrompt) {
     const { promptYesNo } = await import("../cli/prompt.js");
     approved = await promptYesNo(
       "Create a GitHub issue in openclaw/openclaw with the sanitized recovery report?",
@@ -198,9 +213,12 @@ async function maybeCreateSessionSqliteGithubIssue(
     );
   }
   if (!approved) {
-    supportIssue.github = { status: "skipped" };
+    const message = canPrompt
+      ? "GitHub issue creation skipped: confirmation was declined."
+      : "GitHub issue creation skipped: noninteractive recovery requires --yes.";
+    supportIssue.github = { message, status: "skipped" };
     if (shouldLog) {
-      runtime.log("session-sqlite recover: GitHub issue creation skipped");
+      runtime.log(`session-sqlite recover: ${message}`);
     }
     return;
   }

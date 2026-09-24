@@ -41,7 +41,7 @@ import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { expectRecordFields } from "../../subagent-test-fixtures.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
-import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
+import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
 
@@ -1015,7 +1015,7 @@ describe("spawnAcpDirect", () => {
     const operationalRunInstance = createOperationalRunInstanceRef("parent-run");
     const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
     let capturedIdentity: AgentRuntimeIdentity | undefined;
-    setSubagentSpawnDepsForTest({
+    spawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
       dispatchGatewayMethodInProcess: async <T>(
         _method: string,
@@ -1055,7 +1055,7 @@ describe("spawnAcpDirect", () => {
       );
     } finally {
       releaseAgentRunDelegatedAuthority(authority);
-      setSubagentSpawnDepsForTest();
+      spawnTesting.setDepsForTest();
     }
   });
 
@@ -1352,70 +1352,48 @@ describe("spawnAcpDirect", () => {
     });
   });
 
-  it("uses configured runtime=acp agent defaults before launching the external ACP agent", async () => {
-    replaceSpawnConfig({
-      ...createDefaultSpawnConfig(),
-      agents: {
-        list: [
-          {
-            id: "codex-acp",
-            runtime: {
-              type: "acp",
-              acp: { agent: "codex" },
-            },
-            subagents: {
-              model: "openai/gpt-5.5",
-              thinking: "low",
-            },
-          },
-        ],
-        defaults: {
-          subagents: {
-            allowAgents: ["codex"],
-            maxSpawnDepth: 2,
-          },
-        },
-      },
-    });
-
-    const result = await spawnAcpDirect(
-      {
-        task: "Investigate flaky tests",
-        agentId: "codex-acp",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-      },
-    );
-
-    expectAcceptedSpawn(result);
-    expectInitializeSessionFields({
-      agent: "codex",
-      runtimeOptions: {
-        model: "openai/gpt-5.5",
-        thinking: "low",
-      },
-    });
-  });
-
   it.each<{
     scenario: string;
     model?: string;
+    subagentModel?: string;
+    modelAliases?: Record<string, { alias: string }>;
     ownerThinking?: ThinkLevel;
     globalThinking?: ThinkLevel;
     modelThinking?: ThinkLevel;
     subagentThinking?: ThinkLevel;
     globalSubagentThinking?: ThinkLevel;
     thinking?: ThinkLevel;
+    expectedModel?: string;
     expectedThinking?: ThinkLevel;
     expectedThinkingExplicit?: boolean;
     backend?: string;
   }>([
     {
+      scenario: "qualified subagent model",
+      model: "anthropic/claude-sonnet-4-6",
+      subagentModel: "openai/gpt-5.5",
+      subagentThinking: "low",
+      expectedModel: "openai/gpt-5.5",
+      expectedThinking: "low",
+    },
+    {
+      scenario: "bare subagent alias with the ACP agent's provider",
+      model: "anthropic/claude-sonnet-4-6",
+      subagentModel: "opus",
+      modelAliases: { "claude-opus-4-6": { alias: "opus" } },
+      subagentThinking: "low",
+      expectedModel: "anthropic/claude-opus-4-6",
+      expectedThinking: "low",
+    },
+    {
       scenario: "configured primary model with global thinking default",
       model: "anthropic/claude-sonnet-4-6",
       globalThinking: "off",
       expectedThinking: "off",
+    },
+    {
+      scenario: "opaque harness primary without a native provider prefix",
+      model: "harness-only[context=272k,reasoning=medium,fast=false]",
     },
     {
       scenario: "owner default before model and global defaults",
@@ -1480,12 +1458,15 @@ describe("spawnAcpDirect", () => {
     "resolves configured ACP spawn model and thinking ($scenario)",
     async ({
       model,
+      subagentModel,
+      modelAliases,
       ownerThinking,
       globalThinking,
       modelThinking,
       subagentThinking,
       globalSubagentThinking,
       thinking,
+      expectedModel = model,
       expectedThinking,
       expectedThinkingExplicit,
       backend,
@@ -1502,14 +1483,18 @@ describe("spawnAcpDirect", () => {
               },
               model,
               thinkingDefault: ownerThinking,
-              subagents: { thinking: subagentThinking },
+              subagents: { model: subagentModel, thinking: subagentThinking },
             },
           ],
           defaults: {
+            model: "openai/gpt-5.4",
             thinkingDefault: globalThinking,
-            ...(model && modelThinking
-              ? { models: { [model]: { params: { thinking: modelThinking } } } }
-              : {}),
+            models: {
+              ...modelAliases,
+              ...(model && modelThinking
+                ? { [model]: { params: { thinking: modelThinking } } }
+                : {}),
+            },
             subagents: {
               allowAgents: ["codex"],
               maxSpawnDepth: 2,
@@ -1532,9 +1517,9 @@ describe("spawnAcpDirect", () => {
           ? { thinkingExplicit: expectedThinkingExplicit }
           : {}),
         runtimeOptions:
-          model || expectedThinking
+          expectedModel || expectedThinking
             ? {
-                ...(model ? { model } : {}),
+                ...(expectedModel ? { model: expectedModel } : {}),
                 ...(expectedThinking ? { thinking: expectedThinking } : {}),
               }
             : undefined,

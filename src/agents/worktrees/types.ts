@@ -92,6 +92,9 @@ export type RemoveManagedWorktreeResult = {
   removed: boolean;
   snapshotRef?: string;
   snapshotError?: string;
+  /** Exact retirement retains the original checkout, not merely its captured bytes. */
+  recoveryPath?: string;
+  recoveryRetainedUntil?: number;
 };
 
 export type ManagedWorktreeBranch = {
@@ -112,5 +115,33 @@ export type ManagedWorktreeBranchesResult = {
 export type ManagedWorktreeGcResult = {
   removed: string[];
   orphansDeleted: number;
+  orphansRetired: number;
+  /** Complete recovery locations, even when individual issue details are omitted. */
+  retiredCheckoutPaths: string[];
   snapshotsPruned: number;
+  outcome: "completed" | "deferred" | "partial";
+  /** Bounded per-worktree cleanup disposition; issueCount includes omitted entries. */
+  issues: {
+    id?: string;
+    stage: "idle" | "templates" | "limits" | "size" | "orphans" | "snapshots";
+    outcome: "failed" | "deferred" | "retired";
+    reason: string;
+  }[];
+  issueCount: number;
+  protectedCount: number;
+  protectionReasons: Record<string, number>;
+  /** Null when incomplete inventory or size measurements prevent a conclusion. */
+  limitsSatisfied: boolean | null;
+};
+
+/** Explicit early retirement only for a snapshot whose source remains retained. */
+export type RetireManagedWorktreeSnapshotParams = {
+  id: string;
+  expectedSnapshotRef: string;
+  expectedSnapshotOid: string;
+  expectedRemovedAt: number;
+  retainedSourceRef: string;
+  expectedRetainedSourceOid: string;
+  signal?: AbortSignal;
+  commitGuard?: () => void;
 };

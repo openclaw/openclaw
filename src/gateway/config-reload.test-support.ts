@@ -116,13 +116,12 @@ export function makeZeroDebounceHookSnapshot(hash: string): ConfigFileSnapshot {
 }
 
 export function makeZeroDebounceHookWrite(persistedHash: string): ConfigWriteNotification {
+  const snapshot = makeZeroDebounceHookSnapshot(persistedHash);
   return {
-    configPath: "/tmp/openclaw.json",
-    sourceConfig: { gateway: { reload: {} }, hooks: { enabled: true } },
-    runtimeConfig: {
-      gateway: { reload: {} },
-      hooks: { enabled: true },
-    },
+    configPath: snapshot.path,
+    snapshot,
+    sourceConfig: snapshot.sourceConfig,
+    runtimeConfig: snapshot.runtimeConfig,
     persistedHash,
     revision: 1,
     fingerprint: `runtime-${persistedHash}`,
@@ -291,13 +290,7 @@ export function createWriteReloaderHarness(
   return {
     ...harness,
     emitWrite: (write: ConfigWriteNotification) => {
-      persisted = makeSnapshot({
-        sourceConfig: write.sourceConfig,
-        config: write.runtimeConfig,
-        runtimeConfig: write.runtimeConfig,
-        parsed: write.sourceConfig,
-        hash: write.persistedHash,
-      });
+      persisted = write.snapshot;
       harness.emitWrite(write);
     },
   };

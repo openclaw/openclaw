@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { publishUserProfilesChange } from "./user-profile-list.js";
+import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import { type UserProfileRow, userProfilesDb } from "./user-profiles-internal.js";
 import { UserProfileOwnerError } from "./user-profiles-schema.js";
 
@@ -48,10 +49,12 @@ export function readGatewayOwnerProfileForEnsure(db: DatabaseSync) {
 export function ensureGatewayOwnerProfileRow(
   db: DatabaseSync,
   displayName: string | null,
+  mutation?: UserProfileMutationContext,
 ): UserProfileRow {
   const { existing, identified } = readGatewayOwnerProfileForEnsure(db);
   const kysely = userProfilesDb(db);
   const now = Date.now();
+  mutation?.before(db, existing?.id ?? GATEWAY_OWNER_PROFILE_ID);
   const row: UserProfileRow = existing
     ? {
         ...existing,
@@ -94,6 +97,7 @@ export function ensureGatewayOwnerProfileRow(
       .onConflict((conflict) => conflict.columns(["provider", "subject"]).doNothing()),
   );
   if (!existing || row.display_name !== existing.display_name || !identified) {
+    mutation?.publish(row.id);
     publishUserProfilesChange(db, row.id);
   }
   return row;

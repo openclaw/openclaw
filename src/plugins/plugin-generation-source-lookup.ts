@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
+import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
 import { createPluginSourceCapture } from "./plugin-package-metadata-capture.js";
 
 function canonicalSource(rootDir: string, sourceRoot: string, source: string): string {
@@ -64,6 +66,10 @@ function captureRecoverySource({
     });
     const relocate = (filename: string) =>
       path.join(recovery.directory, path.relative(boundaryRoot, filename));
+    // A partial capture can copy successfully while losing an already-loaded companion.
+    for (const captured of new Set(capturedPaths.values())) {
+      fs.lstatSync(relocate(captured));
+    }
     const sources = new Map(
       Array.from(capturedPaths, ([source, captured]) => [source, relocate(captured)]),
     );
@@ -74,6 +80,9 @@ function captureRecoverySource({
     };
   } catch (error) {
     recovery.dispose();
+    if (hasErrnoCode(error, "ENOENT")) {
+      throw new PluginSourceRecoveryUnavailableError(error);
+    }
     throw error;
   }
 }

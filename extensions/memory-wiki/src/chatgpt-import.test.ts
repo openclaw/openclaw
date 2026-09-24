@@ -382,12 +382,15 @@ describe("ChatGPT import rollback recovery", () => {
     const rollbackQueued = deferred();
     const originalEnqueue = Object.getOwnPropertyDescriptor(KeyedAsyncQueue.prototype, "enqueue")
       ?.value as KeyedAsyncQueue["enqueue"];
-    const enqueueSpy = vi
-      .spyOn(KeyedAsyncQueue.prototype, "enqueue")
-      .mockImplementation(function (this: KeyedAsyncQueue, key, task, hooks) {
-        rollbackQueued.resolve();
-        return originalEnqueue.call(this, key, task, hooks);
-      });
+    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue").mockImplementation(function (
+      this: KeyedAsyncQueue,
+      key,
+      task,
+      hooks,
+    ) {
+      rollbackQueued.resolve();
+      return originalEnqueue.call(this, key, task, hooks);
+    });
     let rollback: ReturnType<typeof rollbackChatGptImportRun> | undefined;
     try {
       rollback = rollbackChatGptImportRun({ config, runId: "chatgpt-queued" });

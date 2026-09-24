@@ -22,7 +22,6 @@ import {
   matchesNodeSearch,
 } from "./config-form.search.ts";
 import { configFieldId } from "./config-form.shared.ts";
-import { renderSettingsEmpty } from "./settings-ui.ts";
 
 export function renderMapField(
   params: ConfigNodeRenderParams & {
@@ -130,7 +129,7 @@ export function renderMapField(
       ></openclaw-config-form-collection-draft>
       ${
         visibleEntries.length === 0
-          ? renderSettingsEmpty(t("configForm.noCustomEntries"))
+          ? nothing
           : html`
               <div class="settings-subrows">
                 ${visibleEntries.map(([key, entryValue]) => {

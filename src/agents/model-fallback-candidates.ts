@@ -18,7 +18,7 @@ import {
 } from "../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
-import { resolveAgentConfig } from "./agent-scope-config.js";
+import { resolveAgentConfig, resolveAgentModelConfigForRuntime } from "./agent-scope-config.js";
 import {
   allowsPluginModelNormalization,
   hasExactConfiguredProviderModel,
@@ -216,7 +216,7 @@ function resolveFallbackCandidateContext(params: ModelCandidateChainParams) {
     params.cfg && params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
   const cacheKey = JSON.stringify({
     agentId: params.agentId,
-    agentModel: agentConfig?.model,
+    agentModel: resolveAgentModelConfigForRuntime(agentConfig),
     agentModels: agentConfig?.models,
     provider: params.provider,
     model: params.model,

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, type RawData } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
@@ -21,6 +21,7 @@ import {
 import { createSafeGatewayRestartPreflight } from "../infra/restart-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   isGatewaySubordinateWorkAdmissionClosed,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -31,7 +32,18 @@ import {
   getActiveSessionWorkAdmissionCount,
 } from "../sessions/session-lifecycle-admission.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { drainOpenClawAgentWriteQueuesForTest } from "../state/openclaw-agent-write-admission.test-support.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
+import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
+import {
+  collectHistoryTextValues,
+  createGatewayHistoryText,
+  createGatewayHistoryMessageToolCall,
+  createGatewayHistoryMessageToolResult,
+  createGatewayHistoryDeliveryMirror,
+  hasGatewayHistoryMessageToolMirror,
+} from "./session-history-fixtures.test-support.js";
 import * as sessionLifecycleState from "./session-lifecycle-state.js";
 import { removeChatTestDirectory as removeTempDir } from "./session-test-directories.test-support.js";
 import {
@@ -50,44 +62,6 @@ import {
 } from "./test-helpers.js";
 import { agentCommandMock } from "./test-helpers.runtime-state.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
-
-function createGatewayHistoryText(role: "user" | "assistant", text: unknown, timestamp: number) {
-  return { role, content: [{ type: "text", text }], timestamp };
-}
-
-function createGatewayHistoryMessageToolCall(
-  id: string,
-  args: Record<string, unknown>,
-  timestamp: number,
-) {
-  return {
-    role: "assistant",
-    content: [{ type: "toolCall", id, name: "message", arguments: args }],
-    timestamp,
-  };
-}
-
-function createGatewayHistoryMessageToolResult(id: string, content: unknown, timestamp: number) {
-  return { role: "toolResult", toolName: "message", toolCallId: id, content, timestamp };
-}
-
-function createGatewayHistoryDeliveryMirror(text: unknown, timestamp: number) {
-  return {
-    role: "assistant",
-    provider: "openclaw",
-    model: "delivery-mirror",
-    content: [{ type: "text", text }],
-    timestamp,
-  };
-}
-
-function hasGatewayHistoryMessageToolMirror(message: unknown) {
-  return Boolean(
-    message &&
-    typeof message === "object" &&
-    (message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror,
-  );
-}
 
 installGatewayTestHooks({ scope: "suite" });
 const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
@@ -108,34 +82,24 @@ installConnectedControlUiServerSuite((started) => {
 });
 
 describe("gateway server chat", () => {
-  beforeEach(() => {
+  let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>>;
+  beforeEach(async () => {
     dispatchInboundMessageMock.mockReset();
+    requestExecution = await observeGatewayRunExecution();
   });
-
-  const buildNoReplyHistoryFixture = (includeMixedAssistant = false) => [
-    createGatewayHistoryText("user", "hello", 1),
-    createGatewayHistoryText("assistant", "NO_REPLY", 2),
-    createGatewayHistoryText("assistant", "real reply", 3),
-    {
-      role: "assistant",
-      text: "real text field reply",
-      content: "NO_REPLY",
-      timestamp: 4,
-    },
-    createGatewayHistoryText("user", "NO_REPLY", 5),
-    ...(includeMixedAssistant
-      ? [
-          {
-            role: "assistant",
-            content: [
-              { type: "text", text: "NO_REPLY" },
-              { type: "image", source: { type: "base64", media_type: "image/png", data: "abc" } },
-            ],
-            timestamp: 6,
-          },
-        ]
-      : []),
-  ];
+  afterEach(async () => {
+    try {
+      await settleGatewayFixture();
+    } finally {
+      await requestExecution.restore();
+    }
+  });
+  const settleGatewayFixture = async () => {
+    await requestExecution.waitForCompletion();
+    await drainOpenClawAgentWriteQueuesForTest();
+    await flushPendingSessionsChangedEvents();
+    expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(0);
+  };
 
   const loadChatHistoryWithMessages = async (
     messages: Array<Record<string, unknown>>,
@@ -189,24 +153,10 @@ describe("gateway server chat", () => {
       return await run(dir);
     } finally {
       // Dispatch can outlive its RPC; keep its store selected until retained work settles.
-      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      testState.sessionStorePath = undefined;
+      await settleGatewayFixture();
       await removeTempDir(dir);
     }
   };
-
-  const collectHistoryTextValues = (historyMessages: unknown[]) =>
-    historyMessages
-      .map((message) => {
-        if (message && typeof message === "object") {
-          const entry = message as { text?: unknown };
-          if (typeof entry.text === "string") {
-            return entry.text;
-          }
-        }
-        return extractFirstTextBlock(message);
-      })
-      .filter((value): value is string => typeof value === "string");
 
   const expectRecordFields = (value: unknown, expected: Record<string, unknown>) => {
     if (!value || typeof value !== "object") {
@@ -413,9 +363,8 @@ describe("gateway server chat", () => {
         expect(subordinateAdmissionClosed).toBe(false);
       });
       await finalPromise;
-      await waitForFast(() => {
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
-      });
+      await requestExecution.waitForCompletion("idem-chat-detached-root");
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
     });
   });
 
@@ -667,7 +616,8 @@ describe("gateway server chat", () => {
     return res;
   };
   const waitForAgentRunDrained = async (runId: string) => {
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await requestExecution.waitForCompletion(runId);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
     await waitForAgentRunOk(runId, 0);
   };
   const abortChatRun = async (runId: string) => {
@@ -747,7 +697,7 @@ describe("gateway server chat", () => {
         expect(collectHistoryTextValues(users)).toEqual([message]);
       } finally {
         // A failed ACK assertion must not retire storage before detached work finishes.
-        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        await settleGatewayFixture();
         testState.sessionStorePath = undefined;
         await removeTempDir(dir);
       }
@@ -828,7 +778,9 @@ describe("gateway server chat", () => {
       });
       expect(res.ok).toBe(false);
       await waitForFast(() => expect(getActiveSessionWorkAdmissionCount()).toBe(0));
-      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await requestExecution.waitForCompletion("idem-chat-interrupt-throw-old");
+      await requestExecution.waitForCompletion("idem-chat-interrupt-throw-new");
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
 
       const reset = await rpcReq(ws, "sessions.reset", { key: "main", reason: "new" });
       expect(reset.ok).toBe(true);
@@ -861,7 +813,8 @@ describe("gateway server chat", () => {
 
         expect(res.ok).toBe(false);
         await waitForFast(() => expect(getActiveSessionWorkAdmissionCount()).toBe(0));
-        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        await requestExecution.waitForCompletion("idem-chat-interrupt-non-reply-throw");
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
 
         const reset = await rpcReq(ws, "sessions.reset", { key: "main", reason: "new" });
         expect(reset.ok).toBe(true);
@@ -961,8 +914,8 @@ describe("gateway server chat", () => {
       ).toBeTypeOf("string");
       await waitForAgentRunDrained("idem-sessions-send-orion");
     } finally {
+      await settleGatewayFixture();
       testState.agentsConfig = undefined;
-      testState.sessionStorePath = undefined;
       await removeTempDir(dir);
     }
   });
@@ -1036,9 +989,10 @@ describe("gateway server chat", () => {
       } else {
         expect(abortRes.payload?.abortedRunId).toBeNull();
       }
-      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await requestExecution.waitForCompletion("idem-sessions-abort-1");
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
-      testState.sessionStorePath = undefined;
+      await settleGatewayFixture();
       await removeTempDir(dir);
     }
   });
@@ -1072,9 +1026,10 @@ describe("gateway server chat", () => {
       if (abortRes.payload?.status === "aborted") {
         expect(abortRes.payload?.abortedRunId).toBe("idem-sessions-abort-runid-1");
       }
-      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await requestExecution.waitForCompletion("idem-sessions-abort-runid-1");
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
-      testState.sessionStorePath = undefined;
+      await settleGatewayFixture();
       await removeTempDir(dir);
     }
   });
@@ -1227,8 +1182,10 @@ describe("gateway server chat", () => {
       expect(agentAllowedRes.ok).toBe(true);
       expect(agentAllowedRes.payload?.status).toBe("accepted");
       expect(agentAllowedRes.payload?.runId).toBe("idem-2");
-      await waitForFast(() => expect(agentCommandMock).toHaveBeenCalled());
-      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await requestExecution.waitForCompletion("idem-2");
+      expect(agentCommandMock).toHaveBeenCalled();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      await drainOpenClawAgentWriteQueuesForTest();
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
@@ -1324,6 +1281,7 @@ describe("gateway server chat", () => {
       expect(defaultMsgs.length).toBe(200);
       expect(extractFirstTextBlock(defaultMsgs[0])).toBe("m1");
     } finally {
+      await settleGatewayFixture();
       Object.assign(agentDiscoveryMock, { enabled: false, models: [] });
       testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;
@@ -1615,44 +1573,103 @@ describe("gateway server chat", () => {
     },
   );
 
-  test("chat.history hides assistant NO_REPLY-only entries", async () => {
-    const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture());
-    const textValues = collectHistoryTextValues(historyMessages);
-    // The NO_REPLY assistant message (content block) should be dropped.
-    // The assistant with text="real text field reply" + content="NO_REPLY" stays
-    // because entry.text takes precedence over entry.content for the silent check.
-    // The user message with NO_REPLY text is preserved (only assistant filtered).
-    expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
-  });
+  test.each([
+    {
+      name: "hides assistant control replies in Responses output blocks",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "NO_REPLY" }],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "visible response" }],
+          timestamp: 2,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "input_text", text: "NO_REPLY" }],
+          timestamp: 3,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "input_text", text: "visible assistant input" }],
+          timestamp: 4,
+        },
+      ],
+      expected: ["assistant:visible response", "assistant:visible assistant input"],
+    },
+    {
+      name: "hides commentary-only assistant entries",
+      messages: [
+        createGatewayHistoryText("user", "hello", 1),
+        {
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "text", text: "thinking like caveman" }],
+          timestamp: 2,
+        },
+        createGatewayHistoryText("assistant", "real reply", 3),
+      ],
+      expected: ["user:hello", "assistant:real reply"],
+    },
+    {
+      name: "hides assistant announce/reply skip-only entries",
+      messages: [
+        createGatewayHistoryText("assistant", "ANNOUNCE_SKIP", 1),
+        createGatewayHistoryText("assistant", "REPLY_SKIP", 2),
+        {
+          role: "assistant",
+          text: "real text field reply",
+          content: "ANNOUNCE_SKIP",
+          timestamp: 3,
+        },
+        createGatewayHistoryText("assistant", "real reply", 4),
+      ],
+      expected: ["assistant:real text field reply", "assistant:real reply"],
+    },
+    {
+      name: "hides assistant NO_REPLY-only entries and keeps mixed-content assistant entries",
+      messages: [
+        createGatewayHistoryText("user", "hello", 1),
+        createGatewayHistoryText("assistant", "NO_REPLY", 2),
+        createGatewayHistoryText("assistant", "real reply", 3),
+        {
+          role: "assistant",
+          text: "real text field reply",
+          content: "NO_REPLY",
+          timestamp: 4,
+        },
+        createGatewayHistoryText("user", "NO_REPLY", 5),
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "NO_REPLY" },
+            { type: "image", source: { type: "base64", media_type: "image/png", data: "abc" } },
+          ],
+          timestamp: 6,
+        },
+      ],
+      expected: [
+        "user:hello",
+        "assistant:real reply",
+        "assistant:real text field reply",
+        "user:NO_REPLY",
+        "assistant:NO_REPLY",
+      ],
+    },
+  ])("chat.history $name", async ({ messages, expected }) => {
+    const historyMessages = await loadChatHistoryWithMessages(messages);
+    const roleAndText = historyMessages.map((message) => {
+      const entry = isRecord(message) ? message : {};
+      const role = typeof entry.role === "string" ? entry.role : "unknown";
+      const text =
+        typeof entry.text === "string" ? entry.text : (extractFirstTextBlock(message) ?? "");
+      return `${role}:${text}`;
+    });
 
-  test("chat.history hides assistant control replies in Responses output blocks", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
-      {
-        role: "assistant",
-        content: [{ type: "output_text", text: "NO_REPLY" }],
-        timestamp: 1,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "output_text", text: "visible response" }],
-        timestamp: 2,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "input_text", text: "NO_REPLY" }],
-        timestamp: 3,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "input_text", text: "visible assistant input" }],
-        timestamp: 4,
-      },
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual([
-      "visible response",
-      "visible assistant input",
-    ]);
+    expect(roleAndText).toEqual(expected);
   });
 
   test.each([
@@ -1783,53 +1800,6 @@ describe("gateway server chat", () => {
     expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
   });
 
-  test("chat.history hides commentary-only assistant entries", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryText("user", "hello", 1),
-      {
-        role: "assistant",
-        phase: "commentary",
-        content: [{ type: "text", text: "thinking like caveman" }],
-        timestamp: 2,
-      },
-      createGatewayHistoryText("assistant", "real reply", 3),
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual(["hello", "real reply"]);
-  });
-
-  test("chat.history hides assistant announce/reply skip-only entries", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryText("assistant", "ANNOUNCE_SKIP", 1),
-      createGatewayHistoryText("assistant", "REPLY_SKIP", 2),
-      {
-        role: "assistant",
-        text: "real text field reply",
-        content: "ANNOUNCE_SKIP",
-        timestamp: 3,
-      },
-      createGatewayHistoryText("assistant", "real reply", 4),
-    ]);
-    const roleAndText = historyMessages
-      .map((message) => {
-        const role =
-          message &&
-          typeof message === "object" &&
-          typeof (message as { role?: unknown }).role === "string"
-            ? (message as { role: string }).role
-            : "unknown";
-        const text =
-          message &&
-          typeof message === "object" &&
-          typeof (message as { text?: unknown }).text === "string"
-            ? (message as { text: string }).text
-            : (extractFirstTextBlock(message) ?? "");
-        return `${role}:${text}`;
-      })
-      .filter((entry) => entry !== "unknown:");
-
-    expect(roleAndText).toEqual(["assistant:real text field reply", "assistant:real reply"]);
-  });
   test("preserves split fenced-code indentation in chat.send events and history", async () => {
     await withMainSessionStore(async () => {
       const expected = "```yaml\nroot:\n  nested:\n    value: true\n```";
@@ -2194,35 +2164,6 @@ describe("gateway server chat", () => {
     );
   });
 
-  test("chat.history hides assistant NO_REPLY-only entries and keeps mixed-content assistant entries", async () => {
-    const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture(true));
-    const roleAndText = historyMessages
-      .map((message) => {
-        const role =
-          message &&
-          typeof message === "object" &&
-          typeof (message as { role?: unknown }).role === "string"
-            ? (message as { role: string }).role
-            : "unknown";
-        const text =
-          message &&
-          typeof message === "object" &&
-          typeof (message as { text?: unknown }).text === "string"
-            ? (message as { text: string }).text
-            : (extractFirstTextBlock(message) ?? "");
-        return `${role}:${text}`;
-      })
-      .filter((entry) => entry !== "unknown:");
-
-    expect(roleAndText).toEqual([
-      "user:hello",
-      "assistant:real reply",
-      "assistant:real text field reply",
-      "user:NO_REPLY",
-      "assistant:NO_REPLY",
-    ]);
-  });
-
   test("chat.history uses the owning agent thinkingDefault for non-default agent sessions", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
@@ -2262,10 +2203,10 @@ describe("gateway server chat", () => {
       expect(historyRes.payload?.thinkingLevel).toBe("minimal");
       expect(historyRes.payload?.sessionInfo?.thinkingLevel).toBeUndefined();
     } finally {
+      await settleGatewayFixture();
       Object.assign(agentDiscoveryMock, { enabled: false, models: [] });
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
-      testState.sessionStorePath = undefined;
       await removeTempDir(dir);
     }
   });
@@ -2324,12 +2265,7 @@ describe("gateway server chat", () => {
       });
       expect(sendRes.ok).toBe(true);
 
-      const waitRes = await rpcReq(ws, "agent.wait", {
-        runId: "idem-chat-thinking-no-persist",
-        timeoutMs: 1_000,
-      });
-      expect(waitRes.ok).toBe(true);
-      expect(waitRes.payload?.status).toBe("ok");
+      await waitForAgentRunDrained("idem-chat-thinking-no-persist");
 
       const sessionStorePath = testState.sessionStorePath;
       if (!sessionStorePath) {
@@ -2448,11 +2384,11 @@ describe("gateway server chat", () => {
     },
   );
 
-  test("agent.wait resolves chat.send runs that finish without lifecycle events", async () => {
+  test("agent.wait reads completed chat.send runs without lifecycle events", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-1";
       await sendChatAndExpectStarted(runId);
-      await waitForAgentRunOk(runId);
+      await waitForAgentRunDrained(runId);
     });
   });
 
@@ -2465,6 +2401,7 @@ describe("gateway server chat", () => {
       return undefined;
     });
 
+    const runId = "idem-wait-chat-vs-agent";
     try {
       testState.sessionStorePath = path.join(dir, "sessions.json");
       await writeSessionStore({
@@ -2476,9 +2413,8 @@ describe("gateway server chat", () => {
         },
       });
 
-      const runId = "idem-wait-chat-vs-agent";
       await sendChatAndExpectStarted(runId);
-      await waitForAgentRunOk(runId);
+      await waitForAgentRunDrained(runId);
 
       const agentRes = await rpcReq(ws, "agent", {
         sessionKey: "main",
@@ -2495,10 +2431,10 @@ describe("gateway server chat", () => {
       expectAgentWaitTimeout(waitWhileAgentInFlight);
 
       resolveAgentRun?.();
-      await waitForAgentRunOk(runId);
+      await waitForAgentRunDrained(runId);
     } finally {
       resolveAgentRun?.();
-      testState.sessionStorePath = undefined;
+      await settleGatewayFixture();
       await removeTempDir(dir);
     }
   });
@@ -2545,7 +2481,7 @@ describe("gateway server chat", () => {
       } finally {
         releaseDispatch.resolve();
         await completion;
-        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        await settleGatewayFixture();
       }
       expect(await completion).toEqual([
         outcome === "throw"
@@ -2574,6 +2510,7 @@ describe("gateway server chat", () => {
       });
       expect(seedWaitRes.ok).toBe(true);
       expect(seedWaitRes.payload?.status).toBe("ok");
+      await requestExecution.waitForCompletion(runId);
 
       const releaseBlockedReply = mockBlockedChatReply();
 
@@ -2826,6 +2763,7 @@ describe("gateway server chat", () => {
         expect(res.payload?.endedAt).toBe(456);
       }
     } finally {
+      await settleGatewayFixture();
       webchatWs.close();
       await removeTempDir(dir);
       testState.sessionStorePath = undefined;

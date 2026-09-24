@@ -8,15 +8,18 @@ description: "Run or recover OpenClaw macOS release signing, notarization, appca
 Use with `$release-openclaw-maintainer`, `$release-openclaw-ci`, `$one-password`, and `$release-private` if it exists when stable macOS assets, release-ops mac preflight, notarization, appcast promotion, or mac release recovery is involved.
 
 This is a regular stable-release skill. Do not invoke it for extended-stable;
-that track does not inherit macOS assets, appcast promotion, or a GitHub Release
-unless the current extended-stable release policy explicitly adds them.
+that track's GitHub Release carries shared validation evidence but does not
+inherit macOS assets or appcast promotion.
 
 ## Release authorization
 
 An explicit stable or full release request includes macOS publication unless
 the operator limits its scope. Continue through validation, signing,
 notarization, promotion, and verification without asking for separate macOS
-consent. Keep the exact release identity and all artifact checks.
+consent. Keep the exact release identity and all artifact checks. macOS
+publication runs in parallel with npm and never blocks it; a mac failure does
+not hold the npm/ClawHub release, GitHub release finalization, or main closeout.
+Fix it in parallel.
 
 Follow the current owner-configured environment policy. Do not invent an extra
 reviewer requirement or recreate an obsolete one. If GitHub still enforces an

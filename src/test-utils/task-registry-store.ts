@@ -2,6 +2,8 @@ import { serializeAgentSchemaInspectionError } from "../state/openclaw-agent-sch
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
   hasAuthoritativeTaskBackingFromRecords,
+  readManagedTaskBacking,
+  sameTaskBackingInstance,
   selectCurrentCanonicalTaskBacking,
 } from "../tasks/task-backing-records.js";
 import { restoreTaskExecutionSnapshot } from "../tasks/task-execution-owner.js";
@@ -22,7 +24,12 @@ import {
   ensureTaskFlowRegistryReadyAsync,
   runTaskFlowRegistryWorkerMutation,
 } from "../tasks/task-flow-runtime-internal.js";
+import { buildManagedFlowCancellationPatch } from "../tasks/task-initial-flow.rules.js";
 import type { TaskInitialWorkerOperations } from "../tasks/task-initial-worker.types.js";
+import {
+  acknowledgeTaskStateNotification,
+  updateTaskNotificationDelivery,
+} from "../tasks/task-notification.operation.js";
 import { captureTaskCreationEventTarget } from "../tasks/task-registry-agent-event-target.js";
 import {
   captureTaskAgentEventLineage,
@@ -36,6 +43,7 @@ import type {
   TaskMirroredFlowSyncOutcome,
   TaskRegistryRestoreResult,
 } from "../tasks/task-registry-restore.worker.js";
+import type { TaskWorkerTransitionInput } from "../tasks/task-registry-transition.kernel.js";
 import { runTaskRecordTransitionOperation } from "../tasks/task-registry-transition.operation.js";
 import type { TaskRegistryStore, TaskRegistryStoreSnapshot } from "../tasks/task-registry.store.js";
 import type { TaskRegistryMutationScope } from "../tasks/task-registry.store.types.js";
@@ -151,11 +159,26 @@ export function createInMemoryTaskRegistryStore(
       const unsupported = (): never => {
         throw new Error("Initial flow mutations require the isolated worker fixture.");
       };
-      const transitionRecord = (
-        transition: Parameters<typeof runTaskRecordTransitionOperation>[0],
-      ) =>
+      const transitionRecord = (transition: TaskWorkerTransitionInput) =>
         runTaskRecordTransitionOperation(transition, {
-          readCurrent: () => this.loadSnapshot().tasks.get(transition.taskId),
+          readCurrent: () => {
+            const task = this.loadSnapshot().tasks.get(transition.taskId);
+            const selected = transition.selectedTask;
+            if (task && selected && task.taskId !== selected.taskId) {
+              const managed = readManagedTaskBacking(task.detail);
+              if (
+                !selected.backing ||
+                !managed ||
+                managed.taskId !== selected.taskId ||
+                !sameTaskBackingInstance(managed.instance, selected.backing) ||
+                !task.parentFlowId ||
+                flowStore?.loadSnapshot().flows.get(task.parentFlowId)?.syncMode !== "managed"
+              ) {
+                return undefined;
+              }
+            }
+            return task;
+          },
           hasAuthoritativeBacking: (task) =>
             hasAuthoritativeTaskBackingFromRecords(task, {
               isManagedFlow: (flowId) =>
@@ -185,6 +208,38 @@ export function createInMemoryTaskRegistryStore(
           input: TaskInitialWorkerOperations[Key]["input"],
         ) => TaskInitialWorkerOperations[Key]["output"];
       } = {
+        "tasks.transitionRunRow": (input) => transitionRecord(input),
+        "tasks.bindRunOwner": (input) => transitionRecord({ kind: "run-owner", ...input }),
+        "tasks.acknowledgeStateChange": (input) =>
+          acknowledgeTaskStateNotification(input, {
+            readCurrent: () => ({
+              task: state.tasks.get(input.taskId),
+              deliveryState: state.deliveryStates.get(input.taskId),
+            }),
+            write: (write) => write(),
+            assertCurrent,
+            upsertDelivery: (deliveryState) => this.upsertDeliveryState(deliveryState),
+            upsertTask: (task, deliveryState) =>
+              this.upsertTaskWithDeliveryState({ task, deliveryState }),
+            deferCommit: (publish) => publish(),
+            onCommitted() {},
+            onFailure() {},
+          }),
+        "tasks.updateNotificationDelivery": (input) =>
+          updateTaskNotificationDelivery(input, {
+            readCurrent: () => ({
+              task: state.tasks.get(input.taskId),
+              deliveryState: state.deliveryStates.get(input.taskId),
+            }),
+            write: (write) => write(),
+            assertCurrent,
+            upsertDelivery: (deliveryState) => this.upsertDeliveryState(deliveryState),
+            upsertTask: (task, deliveryState) =>
+              this.upsertTaskWithDeliveryState({ task, deliveryState }),
+            deferCommit: (publish) => publish(),
+            onCommitted() {},
+            onFailure() {},
+          }),
         "tasks.createRecord": (input) =>
           runTaskCreateOperation(input, {
             readSelection: (identity) => {
@@ -262,7 +317,30 @@ export function createInMemoryTaskRegistryStore(
         },
         "tasks.linkInitialFlow": unsupported,
         "flows.deleteUnlinkedForTask": unsupported,
-        "flows.finalizeTaskCancellation": unsupported,
+        "flows.finalizeTaskCancellation": (input) => {
+          const task = state.tasks.get(input.taskId) ?? null;
+          if (!task || task.parentFlowId?.trim() !== input.flowId || !flowStore) {
+            return { changed: false, task, flow: null };
+          }
+          const stored = flowStore.loadSnapshot().flows.get(input.flowId);
+          if (!stored) {
+            return { changed: false, task, flow: null };
+          }
+          const flow = normalizeRestoredFlowRecord(stored);
+          const patch = buildManagedFlowCancellationPatch(
+            task,
+            flow,
+            () => [...state.tasks.values()].filter((row) => row.parentFlowId === flow.flowId),
+            input.now,
+          );
+          if (!patch) {
+            return { changed: false, task, flow };
+          }
+          const next = applyFlowPatch(flow, patch);
+          assertCurrent();
+          flowStore.upsertFlow(next);
+          return { changed: true, task, flow: next, previous: flow };
+        },
       };
       context.admission.assertCurrent();
       assertCurrent();
@@ -430,7 +508,6 @@ export function createInMemoryTaskFlowRegistryStore(
       const publication = preparePublication(result);
       publication.stage();
       publication.commit();
-      publication.publish();
       return result;
     },
     updateFlow: (params, preparePublication) => {
@@ -438,7 +515,6 @@ export function createInMemoryTaskFlowRegistryStore(
         const publication = preparePublication(result);
         publication.stage();
         publication.commit();
-        publication.publish();
         return result;
       };
       const stored = state.flows.get(params.flowId);

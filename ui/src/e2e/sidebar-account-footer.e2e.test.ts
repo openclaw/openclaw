@@ -78,11 +78,11 @@ async function runAccountFooterProof(
     await assertIdentityMenuContract(sidebar, menu);
 
     const buildLabel = (
-      await menu.getByRole("link", { name: "Control UI build details" }).textContent()
+      await menu.getByRole("menuitem", { name: "Control UI build details" }).textContent()
     )?.trim();
     const buildPrefix = branch === "main" ? "git@0123456" : "feat/sidebar-f…@0123456";
     expect(buildLabel?.startsWith(`${buildPrefix} · `)).toBe(true);
-    const buildLink = menu.getByRole("link", { name: "Control UI build details" });
+    const buildLink = menu.getByRole("menuitem", { name: "Control UI build details" });
     const buildTooltip = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip wa-tooltip");
     const buildTooltipCard = sidebar.locator(".sidebar-build-hover-card");
     await page.clock.install();
@@ -302,7 +302,7 @@ suite.define(() => {
     try {
       const { page, sidebar } = opened;
       await sidebar.locator(".sidebar-identity-card").click();
-      const buildLink = sidebar.getByRole("link", {
+      const buildLink = sidebar.getByRole("menuitem", {
         name: "Control UI build details",
         exact: true,
       });

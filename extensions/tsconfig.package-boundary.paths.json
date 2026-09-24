@@ -939,6 +939,24 @@
       ],
       "openclaw/plugin-sdk/worker-task-server": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/worker-task-server.d.ts"
+      ],
+      "openclaw/plugin-sdk/media-ffmpeg": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/media-ffmpeg.d.ts"
+      ],
+      "openclaw/plugin-sdk/realtime-voice-playback": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-voice-playback.d.ts"
+      ],
+      "openclaw/plugin-sdk/text-grapheme": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/text-grapheme.d.ts"
+      ],
+      "openclaw/plugin-sdk/agent-harness-session-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-session-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/agent-harness-attempt-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-attempt-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/secret-egress-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/secret-egress-runtime.d.ts"
       ]
     }
   }

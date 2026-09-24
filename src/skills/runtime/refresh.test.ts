@@ -18,7 +18,7 @@ import {
 
 type SkillsChangeEvent = NonNullable<Parameters<typeof bumpSkillsSnapshotVersion>[0]>;
 
-const { createdWatchers, watchMock, nativeWatchMock, watchForSkillRoot } =
+const { createdWatchers, watchMock, nativeWatchMock, nativeContentWatchMock, watchForSkillRoot } =
   createSkillsWatcherMock();
 
 const pluginSkillsMocks = vi.hoisted(() => ({
@@ -35,7 +35,10 @@ vi.mock("chokidar", () => ({
   default: { watch: watchMock },
 }));
 vi.mock("./refresh-ancestor-native.js", () => ({
-  createNativeSkillsAncestorWatcher: nativeWatchMock,
+  createNativeSkillsAncestorWatcher: vi.fn(nativeWatchMock),
+}));
+vi.mock("./refresh-content-native.js", () => ({
+  createNativeSkillsContentWatcher: vi.fn(nativeContentWatchMock),
 }));
 
 vi.mock("../loading/plugin-skills.js", () => ({
@@ -154,6 +157,33 @@ describe("ensureSkillsWatcher", () => {
         process.env.CHOKIDAR_USEPOLLING = previousPolling;
       }
       await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Darwin content and ancestor generations on stock Chokidar", async () => {
+    const ancestor = vi.mocked(
+      (await import("./refresh-ancestor-native.js")).createNativeSkillsAncestorWatcher,
+    );
+    const content = vi.mocked(
+      (await import("./refresh-content-native.js")).createNativeSkillsContentWatcher,
+    );
+    ancestor.mockClear();
+    content.mockClear();
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    try {
+      Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
+      refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir });
+      expect(ancestor).not.toHaveBeenCalled();
+      expect(content).not.toHaveBeenCalled();
+      expect(watchForSkillRoot(path.join(fixtureWorkspaceDir, "skills")).options).toMatchObject({
+        depth: 7,
+        usePolling: false,
+      });
+      expect(
+        watchForSkillRoot(path.join(fixtureWorkspaceDir, ".agents", "skills")).options,
+      ).toMatchObject({ depth: 0, usePolling: false });
+    } finally {
+      Object.defineProperty(process, "platform", platform);
     }
   });
 
@@ -612,6 +642,8 @@ describe("ensureSkillsWatcher", () => {
       // ignoreInitial may suppress all/change events for content found by this scan.
       expect(read()).toEqual([]);
       content.emit("ready");
+      expect(read()).toEqual([]);
+      watchForSkillRoot(logicalRoot).watcher.emit("ready");
       if (lastFailedAncestor) {
         expect(read()).toEqual([]);
         lastFailedAncestor.emit(
@@ -667,6 +699,12 @@ describe("ensureSkillsWatcher", () => {
       }
       const beforeReady = getSkillsSourceVersion(fixtureWorkspaceDir);
       deeper.watcher.emit("ready");
+      expect(getSkillsSourceVersion(fixtureWorkspaceDir)).toBe(beforeReady);
+      watchForSkillRoot(logicalRoot).watcher.emit("ready");
+      if (scan === "error-then-ready") {
+        expect(getSkillsSourceVersion(fixtureWorkspaceDir)).toBe(beforeReady);
+        watchForSkillRoot(logicalRoot).watcher.emit("ready");
+      }
       expect(getSkillsSourceVersion(fixtureWorkspaceDir)).toBeGreaterThan(beforeReady);
 
       const seen: SkillsChangeEvent[] = [];
@@ -921,6 +959,8 @@ describe("ensureSkillsWatcher", () => {
     await vi.advanceTimersByTimeAsync(250);
     expect(seen).toEqual([]);
     replacement.emit("ready");
+    expect(seen).toEqual([]);
+    watchForSkillRoot(sharedB).watcher.emit("ready");
     await vi.advanceTimersByTimeAsync(250);
     expect(seen).toEqual([
       { workspaceDir: fixtureWorkspaceDir, reason: "watch", changedPath: undefined },
@@ -980,6 +1020,8 @@ describe("ensureSkillsWatcher", () => {
         await vi.advanceTimersByTimeAsync(250);
         expect(seen).toEqual([]);
         watcher.emit("ready");
+        expect(seen).toEqual([]);
+        watchForSkillRoot(sharedRoot).watcher.emit("ready");
       } else {
         watcher.emit("all", event, changedPath);
       }

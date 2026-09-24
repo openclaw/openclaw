@@ -2,10 +2,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { openRootFileSync, readFileDescriptorBoundedSync } from "@openclaw/fs-safe/advanced";
+import { MAX_THEME_DEFINITION_BYTES } from "../packages/gateway-protocol/src/theme.ts";
 import {
   isPluginActivityToolName,
   MAX_PLUGIN_ACTIVITY_TOOL_ICONS,
   PLUGIN_ACTIVITY_ICON_PATH,
+  PLUGIN_ACTIVITY_ICON_MAX_BYTES,
   PLUGIN_TOOL_ACTIVITY_ICON_DIR,
   PORTABLE_PLUGIN_ICON_PATH,
 } from "../src/plugins/portable-icon-paths.ts";
@@ -20,6 +23,7 @@ import {
   readGeneratedBundledChannelConfigs,
   resolvePluginRuntimeChannelMetadata,
 } from "./lib/plugin-npm-package-manifest.mts";
+import { collectPluginThemeAssetPaths } from "./lib/plugin-theme-assets.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
   removeFileIfExists,
@@ -332,6 +336,42 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
         : mergedManifest;
       writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
       copyPluginIcons(pluginDir, distPluginDir);
+      const pluginRoot = fs.realpathSync(pluginDir);
+      for (const relativePath of collectPluginThemeAssetPaths(bundledManifest)) {
+        const maxBytes = relativePath.toLowerCase().endsWith(".svg")
+          ? PLUGIN_ACTIVITY_ICON_MAX_BYTES
+          : MAX_THEME_DEFINITION_BYTES * 4;
+        const file = openRootFileSync({
+          absolutePath: path.resolve(pluginRoot, relativePath),
+          rootPath: pluginRoot,
+          rootRealPath: pluginRoot,
+          boundaryLabel: "plugin root",
+          rejectHardlinks: false,
+          maxBytes,
+        });
+        let contents: Buffer | undefined;
+        if (file.ok) {
+          try {
+            contents = readFileDescriptorBoundedSync(file.fd, maxBytes);
+          } catch {
+            // Unreadable presentation assets must not invalidate the plugin package.
+          } finally {
+            fs.closeSync(file.fd);
+          }
+        }
+        const target = path.join(distPluginDir, relativePath);
+        // Declared paths are relative; reject generated directory links as well.
+        let directory = path.dirname(target);
+        while (directory !== path.dirname(distExtensionsRoot)) {
+          assertRealOutputRoot(directory);
+          directory = path.dirname(directory);
+        }
+        removePathIfExists(target);
+        if (contents) {
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.writeFileSync(target, contents);
+        }
+      }
     } else {
       removeFileIfExists(distManifestPath);
       removeFileIfExists(path.join(distPluginDir, PORTABLE_PLUGIN_ICON_PATH));

@@ -155,9 +155,8 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
   async (event) => {
     stubGatewayStoreTestGlobals();
     const { gateway, clients, current } = createGatewayStoreTestStore();
-    gateway.start();
+    gateway.connect({ gatewayUrl: window.location.origin.replace(/^http/u, "ws") });
     const client = current();
-    Object.assign(client, { gatewayUrl: window.location.origin.replace(/^http/u, "ws") });
     let revision: string | null = "one";
     let generation = 0;
     const widgetKinds = () =>

@@ -128,13 +128,8 @@ function recordNullableString(
   record: Record<string, unknown> | undefined,
   key: string,
 ): string | null | undefined {
-  if (!record || !(key in record)) {
-    return undefined;
-  }
-  if (record[key] === null) {
-    return null;
-  }
-  return normalizeOptionalString(record[key]);
+  const value = record?.[key];
+  return value === null ? null : normalizeOptionalString(value);
 }
 
 function mergeSlackAssistantThreadContext(
@@ -418,10 +413,7 @@ async function resolveSlackConversationContext(params: {
       })
     : null;
   const allowBotsSetting =
-    channelConfig?.allowBots ??
-    account.config?.allowBots ??
-    cfg.channels?.slack?.allowBots ??
-    false;
+    channelConfig?.allowBots ?? account.config?.allowBots ?? cfg.channels?.slack?.allowBots ?? true;
   const allowBotsMode: "off" | "all" | "mentions" =
     allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting ? "all" : "off";
 
@@ -454,7 +446,10 @@ async function authorizeSlackInboundMessage(params: {
     conversation;
 
   if (isBotMessage) {
-    if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
+    if (
+      (ctx.botUserId && message.user === ctx.botUserId) ||
+      (ctx.botId && message.bot_id === ctx.botId)
+    ) {
       return null;
     }
     if (allowBotsMode === "off") {
@@ -1350,6 +1345,7 @@ export async function prepareSlackMessage(params: {
     {
       agentId: route.agentId,
       sessionKey,
+      nativeChannelId: message.channel,
       messageId: threadContext.messageTs,
       inboundEventKind,
     },
@@ -1564,9 +1560,7 @@ export async function prepareSlackMessage(params: {
       avatar: conversationAvatar,
     },
     route: {
-      agentId: route.agentId,
-      dmScope: route.dmScope,
-      accountId: route.accountId,
+      ...route,
       routeSessionKey: route.sessionKey,
       dispatchSessionKey: sessionKey,
       parentSessionKey: threadKeys.parentSessionKey,

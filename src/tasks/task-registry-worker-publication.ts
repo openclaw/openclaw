@@ -13,7 +13,9 @@ import {
   matchesScope,
   taskIdsInScope,
   type PendingTaskRegistryMutation,
+  type TaskRegistryReadIdentity,
 } from "./task-registry.process-state.js";
+import type { TaskRegistryStore } from "./task-registry.store.js";
 import type {
   TaskRegistryMutationScope,
   TaskRegistryStoreSnapshot,
@@ -26,8 +28,8 @@ export type TaskRegistryWorkerMutationContext = {
   admission: OpenClawStateDatabaseReadAdmission;
   publicationRecords: () => ReadonlyMap<string, TaskRecord>;
   readEventTarget?: () => TaskAgentEventTarget | undefined;
-  /** Only a producer whose write contract preserves task routing, access, and detail. */
-  readIdentity?: "preserved";
+  /** Producer-owned identity writes; canonical readback and discovery retain the full scope. */
+  readIdentity?: TaskRegistryReadIdentity;
   /** Prepare current rows before this mutation invalidates their projection. */
   prepare?: () => Promise<void>;
   taskRowsWritten?: () => boolean;
@@ -64,7 +66,7 @@ function captureTaskRegistryWorkerSnapshot(
   return captured;
 }
 
-export function createTaskRegistryPublicationRecovery(
+function createTaskRegistryPublicationRecovery(
   pending: PendingTaskRegistryMutation,
   recover: (snapshot: TaskRegistryStoreSnapshot) => TaskRecord | undefined,
 ) {
@@ -318,11 +320,29 @@ export function claimTaskRegistryPublication(
 }
 
 export function createPendingTaskRegistryMutation(
-  scope: TaskRegistryMutationScope,
+  {
+    scope,
+    admission,
+    readIdentity,
+    recoverPublication,
+  }: Pick<
+    TaskRegistryWorkerMutationContext,
+    "scope" | "admission" | "readIdentity" | "recoverPublication"
+  >,
+  store: TaskRegistryStore,
   readEventTarget?: () => TaskAgentEventTarget | undefined,
-): PendingTaskRegistryMutation {
+) {
+  const readSettlement = readIdentity === "preserved" ? undefined : createDeferredCore();
   const pending: PendingTaskRegistryMutation = {
     scope,
+    readIdentity,
+    ...(readSettlement && {
+      readSettlement: {
+        databaseKey: admission.identity.key,
+        store,
+        promise: readSettlement.promise,
+      },
+    }),
     published: new Map(
       Array.from(currentTasksInScope(scope), (task) => [
         task.taskId,
@@ -359,5 +379,8 @@ export function createPendingTaskRegistryMutation(
         : undefined;
     };
   }
-  return pending;
+  const recovery = recoverPublication
+    ? createTaskRegistryPublicationRecovery(pending, recoverPublication)
+    : undefined;
+  return { pending, recovery, settle: readSettlement?.resolve };
 }

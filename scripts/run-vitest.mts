@@ -22,6 +22,7 @@ import {
   resolveVitestCliEntry,
   prepareVitestRuntime,
 } from "./lib/vitest-build-prerequisites.mts";
+import { createVitestCacheSlots, resolveVitestCacheRoot } from "./lib/vitest-cache-slots.mts";
 import {
   hasNonRunVitestSubcommand,
   collectVitestFileFilters,
@@ -46,7 +47,10 @@ import {
   runVitestCli,
   type exitVitestBySignal,
 } from "./lib/vitest-process.mts";
-import { resolveVitestRuntimeCliSelections } from "./lib/vitest-runtime-selection.mts";
+import {
+  resolveVitestRuntimeCliSelections,
+  shouldPrepareVitestCoreWorkers,
+} from "./lib/vitest-runtime-selection.mts";
 import { resolveVitestTestCommand } from "./lib/vitest-test-runtime.mts";
 import {
   createVitestUnhandledErrorDetector,
@@ -988,14 +992,14 @@ export async function runVitest(
       : env;
   // Canonical configs have known project scopes. Custom roots/projects keep
   // their own setup; never infer their runtime selection from a config name.
-  if (
+  const canonicalSelection =
     execution &&
     config &&
     !hasAlternateVitestRootArg(vitestArgs) &&
     !hasExplicitVitestProjectArg(vitestArgs) &&
     !hasNonRunVitestSubcommand(vitestArgs) &&
-    !hasExplicitDisabledRunFlag(vitestArgs)
-  ) {
+    !hasExplicitDisabledRunFlag(vitestArgs);
+  if (canonicalSelection) {
     const code = await prepareVitestRuntime(
       invocations.flatMap((cliArgs) =>
         resolveVitestRuntimeCliSelections(relativeConfig, cliArgs, invocationEnv),
@@ -1012,15 +1016,38 @@ export async function runVitest(
   const workers = sourceMode
     ? undefined
     : createVitestWorkerRun(resolveVitestProcessEnv(invocationEnv));
+  const withCacheSlot = createVitestCacheSlots();
   let interrupted: NodeJS.Signals | undefined;
+  let preparingWorkers = false;
   const onSignal = (signal: NodeJS.Signals) => {
     interrupted ??= signal;
+    if (preparingWorkers) {
+      // No borrower can finish admission yet; cancel through the existing owner.
+      void workers?.dispose().catch(() => {});
+    }
   };
   // The invocation outlives child-scoped handlers when admission or final
   // verification is still reading. Retain signal ownership through disposal.
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
   try {
+    if (
+      workers &&
+      canonicalSelection &&
+      invocations.some((args) =>
+        shouldPrepareVitestCoreWorkers(relativeConfig, args, invocationEnv),
+      )
+    ) {
+      preparingWorkers = true;
+      try {
+        await workers.prepare();
+      } finally {
+        preparingWorkers = false;
+      }
+    }
+    if (interrupted) {
+      return;
+    }
     let failedExitCode = 0;
     for (const [index, invocation] of invocations.entries()) {
       const guardedVitestArgs = await resolveExplicitTestFileNoPassArgs(invocation);
@@ -1028,20 +1055,41 @@ export async function runVitest(
       if (invocations.length > 1) {
         console.error("[vitest] bounded process " + (index + 1) + "/" + invocations.length);
       }
-      const handle = spawnWatchedVitestProcess({
-        workerRun: workers,
-        pnpmArgs: [
-          "exec",
-          "node",
-          ...resolveVitestNodeArgs(invocationEnv),
-          vitestCliEntry,
-          ...guardedVitestArgs,
-        ],
-        spawnParams: resolveVitestSpawnParams(spawnEnv),
-        env: spawnEnv,
-      });
-      const { code, signal } = await handle.completion;
-      interrupted ??= handle.getForwardedSignal() ?? signal ?? undefined;
+      const { code, signal } = await withCacheSlot(
+        {
+          config: config ?? "",
+          env: spawnEnv,
+          watchMode: sourceMode,
+          ...(!sourceMode &&
+          config &&
+          !spawnEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.trim() &&
+          !hasVitestOption(guardedVitestArgs, "--fsModuleCachePath")
+            ? {
+                cacheAssignment: {
+                  kind: "scheduler" as const,
+                  root: resolveVitestCacheRoot(spawnEnv),
+                },
+              }
+            : {}),
+        },
+        async ({ env: cacheEnv }) => {
+          const handle = spawnWatchedVitestProcess({
+            workerRun: workers,
+            pnpmArgs: [
+              "exec",
+              "node",
+              ...resolveVitestNodeArgs(invocationEnv),
+              vitestCliEntry,
+              ...guardedVitestArgs,
+            ],
+            spawnParams: resolveVitestSpawnParams(cacheEnv),
+            env: cacheEnv,
+          });
+          const result = await handle.completion;
+          return { ...result, signal: handle.getForwardedSignal() ?? result.signal };
+        },
+      );
+      interrupted ??= signal ?? undefined;
       const exitCode = code ?? 1;
       // Ordinary test failures must not hide later files; interruptions stop
       // admission and are re-raised only after the invocation has been disposed.

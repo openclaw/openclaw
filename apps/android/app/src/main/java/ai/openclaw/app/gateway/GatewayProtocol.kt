@@ -967,6 +967,17 @@ enum class GatewayMethod(
   ThemesImport("themes.import"),
   ControlUiGithubDetail("controlUi.githubDetail"),
   ProgressCardRefresh("progressCard.refresh"),
+  WebSearchStatus("webSearch.status"),
+  WebSearchTest("webSearch.test"),
+  SessionsProviderReviewContinue("sessions.providerReview.continue"),
+  UsersLinkChannelIdentity("users.linkChannelIdentity"),
+  UsersUnlinkChannelIdentity("users.unlinkChannelIdentity"),
+  UsersListChannelIdentities("users.listChannelIdentities"),
+  UsersPersonalFileGet("users.personalFile.get"),
+  UsersPersonalFileSet("users.personalFile.set"),
+  PortalSessionList("portal.session.list"),
+  PortalSessionOpen("portal.session.open"),
+  PortalSessionClose("portal.session.close"),
 }
 
 enum class GatewayEvent(
@@ -1018,6 +1029,7 @@ enum class GatewayEvent(
   UsersPrefsChanged("users.prefs.changed"),
   SkillsChanged("skills.changed"),
   PluginsChanged("plugins.changed"),
+  PluginsInstallProgress("plugins.install.progress"),
   VoicewakeChanged("voicewake.changed"),
   VoicewakeRoutingChanged("voicewake.routing.changed"),
   ExecApprovalRequested("exec.approval.requested"),
