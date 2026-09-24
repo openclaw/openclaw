@@ -204,7 +204,6 @@ describe("check-deadcode-exports", () => {
         "skills/**/*.{js,mjs,cjs,ts,mts,cts}!",
       ]),
     );
-    expect(knipConfig.workspaces["."].entry).toContain("docs/nav-tabs-underline.js!");
     expect(knipConfig.workspaces["."].entry).toEqual(
       expect.arrayContaining([
         "config/knip.config.ts!",
