@@ -30,9 +30,24 @@ With the built-in safeguard quality guard enabled, OpenClaw applies the final
 summary budget before validation. Required headings must remain in the retained
 generated body, while pending asks and exact identifiers must remain in the
 exact text that would be stored. Invalid output gets only the configured number
-of corrective attempts. If no finalized summary passes, compaction stops before
-writing a transcript entry, keeps the original history, and surfaces the
-existing recovery outcome.
+of corrective attempts. If no finalized summary passes, OpenClaw stores a bounded
+degraded summary - the structured previous summary with the latest request context
+and whichever exact identifiers still fit, plus the generated split-turn prefix and
+the preserved recent turns. Identifiers are best-effort on this path: the longest are
+dropped first so the bounded request context always survives, and when the artifact
+must be trimmed, older preserved turns are cut before the split-turn prefix. The
+boundary it writes records
+`details.qualityDegraded`, which is the durable fact; the run also logs
+`reasonCode=quality_guard_degraded_fallback`, which is diagnostic only and does not
+survive the session. This is
+lossy on purpose: cancelling instead left the transcript at full size, so every
+later turn failed the same preflight and the session could not be compacted at
+all. A configured compaction provider that throws or returns an empty result
+falls back to built-in LLM summarization rather than cancelling. Cancellation is
+reserved for a failed built-in generation, an unresolvable summarization model,
+and missing credentials, which keep the original history. Caller-initiated aborts
+and transport timeouts are re-thrown, so explicit cancellation is always
+respected.
 
 ## Auto-compaction
 

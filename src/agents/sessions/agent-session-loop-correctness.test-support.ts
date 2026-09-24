@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, vi, type Mock } from "vitest";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
+import type { AgentSessionEvent } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
 import type { ToolDefinition } from "./extensions/types.js";
@@ -170,6 +171,19 @@ export async function createTestSession(
 export function appendHistory(sessionManager: SessionManager, assistant: AssistantMessage): void {
   sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: Date.now() - 2 });
   sessionManager.appendMessage({ ...assistant, timestamp: Date.now() - 1 });
+}
+
+/** Collect compaction_end events in order; both compaction suites assert on them. */
+export function collectCompactionEnds(session: {
+  subscribe: (listener: (event: AgentSessionEvent) => void) => unknown;
+}) {
+  const events: Array<Extract<AgentSessionEvent, { type: "compaction_end" }>> = [];
+  session.subscribe((event) => {
+    if (event.type === "compaction_end") {
+      events.push(event);
+    }
+  });
+  return events;
 }
 
 export function registerAgentSessionLoopTestLifecycle(): void {

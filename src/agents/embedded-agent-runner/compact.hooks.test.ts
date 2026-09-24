@@ -51,6 +51,7 @@ import { createEventBus } from "../sessions/event-bus.js";
 import { createExtensionRuntime, loadExtensionFromFactory } from "../sessions/extensions/loader.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
+import { createPreparedCodexCompactionPlans } from "./compact.hooks.codex-plans.test-support.js";
 import {
   acquireAgentRunPreparedModelRuntimeMock,
   attemptServerEndpointCompactionMock,
@@ -315,39 +316,6 @@ async function nativeCompactionArgs(
     agentHarnessId: overrides.agentHarnessId,
   });
   return params;
-}
-
-function createPreparedCodexCompactionPlans(modelId = "gpt-5.5") {
-  const modelRoute = {
-    provider: "openai",
-    modelId,
-    api: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
-    authRequirement: "api-key",
-    requestTransportOverrides: "none",
-    runtimePolicy: { compatibleIds: ["codex"] },
-  } as const;
-  const runtimeAuthPlan = {
-    providerForAuth: "openai",
-    modelId,
-    authProfileProviderForAuth: "openai",
-    harnessAuthProvider: "openai",
-    selectedAuthMode: "api-key",
-    modelRoute,
-  } as const;
-  return {
-    modelRoute,
-    runtimeAuthPlan,
-    runtimePlan: {
-      resolvedRef: {
-        provider: "openai",
-        modelId,
-        modelApi: "openai-responses",
-        harnessId: "codex",
-      },
-      auth: runtimeAuthPlan,
-    } as never,
-  };
 }
 
 const sessionHook = (action: string): SessionHookEvent | undefined =>
@@ -2224,7 +2192,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     it.each([
       ["provider timeout", "request timed out", "fallback"],
       ["provider rate limit", "429 rate limit exceeded", "fallback"],
-      ["intentional quality rejection", undefined, "cancel"],
+      ["intentional quality rejection", undefined, "degrade"],
       ["explicit model timeout", "request timed out", "cancel"],
       [
         "reasoning-mandatory rejection",
@@ -2296,7 +2264,10 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
               : createAssistant(activeModel, [
                   {
                     type: "text",
-                    text: outcome === "cancel" ? "Missing required sections." : fallbackSummary,
+                    text:
+                      outcome === "cancel" || outcome === "degrade"
+                        ? "Missing required sections."
+                        : fallbackSummary,
                   },
                 ]),
           );
@@ -2368,7 +2339,18 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           fallback ? [primary, backup] : [primary],
         );
         expect(config).toEqual(configBefore);
-        if (outcome !== "cancel") {
+        if (outcome === "degrade") {
+          // Exhausted quality validation commits a bounded fallback instead of cancelling:
+          // cancelling never shrinks the transcript, so the session could never compact again.
+          expect(result).toMatchObject({ ok: true, compacted: true });
+          const boundary = expectDefined(
+            sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
+            "degraded compaction boundary",
+          );
+          expect(boundary).toMatchObject({ details: { qualityDegraded: true } });
+          expect(boundary.summary).toContain("## Decisions");
+          expect(sessionManager.buildSessionContext().messages).not.toEqual(originalMessages);
+        } else if (outcome !== "cancel") {
           if (outcome === "thinking") {
             expect([...new Set(requestedThinking)]).toEqual(["off", "minimal"]);
           }
