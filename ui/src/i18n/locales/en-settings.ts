@@ -69,7 +69,7 @@ const enSettings = {
     enabledTools: "{count} Enabled Tools",
     listedToolsOne: "{count} Listed Tool",
     listedTools: "{count} Listed Tools",
-    access: "Access",
+    access: "Agent setting",
     disableNamed: "Disable {name}",
     enableNamed: "Enable {name}",
     defaultPresets: "Default Presets",

@@ -25,7 +25,7 @@ import {
 } from "./thread-binding-policy.js";
 import { isContextEngineBindingCompatible } from "./thread-context-engine.js";
 import {
-  areDynamicToolFingerprintsCompatible,
+  areCodexDynamicToolFingerprintsCompatible,
   areUserMcpServersFingerprintsCompatible,
   shouldStartTransientNoToolThread,
 } from "./thread-fingerprints.js";
@@ -611,11 +611,11 @@ export async function startOrResumeThread(
       // the dynamic tool catalog, so only invalidate fingerprints we actually have.
       if (
         binding.dynamicToolsFingerprint &&
-        !areDynamicToolFingerprintsCompatible(
-          binding.dynamicToolsFingerprint,
-          dynamicToolsFingerprint,
-          legacyDynamicToolsFingerprint,
-        )
+        !areCodexDynamicToolFingerprintsCompatible({
+          previous: binding.dynamicToolsFingerprint,
+          next: dynamicToolsFingerprint,
+          nextLegacy: legacyDynamicToolsFingerprint,
+        })
       ) {
         assertCodexBindingMayBeReplaced(
           binding,

@@ -112,6 +112,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected fallbackReason?: string;
   protected intervalTimer: NodeJS.Timeout | null = null;
   protected dirty = false;
+  protected memoryWatchGeneration = 0;
   // A success clears only the failure visible when it started. This keeps a
   // concurrent failure visible even when older or no-op work settles later.
   protected readonly syncOutcomes = new MemorySyncOutcomeLedger();
@@ -159,6 +160,11 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     deferIndex?: boolean;
     prefixIndexItems?: MemoryIndexWorkItem[];
   }): Promise<MemorySourceSyncPlan>;
+
+  protected markMemoryWatchDirty(): void {
+    this.memoryWatchGeneration += 1;
+    this.dirty = true;
+  }
 
   protected async withManagerOperation<T>(run: () => Promise<T>): Promise<T> {
     this.memoryFiles?.assertCurrent();

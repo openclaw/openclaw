@@ -148,6 +148,11 @@ uncertain-delivery warning without sending the message again. The browser keeps 
 payload until consumption or cancellation is confirmed. If delivery is still unknown,
 the review warning remains.
 
+If automatic restart recovery is interrupted or cancelled before the agent resumes,
+the **System · restart recovery** notice shows that outcome and asks you to send a
+message to continue. It does not mean the agent resumed. Messages forwarded from
+other sessions keep their own delivery status next to each message.
+
 Once the Gateway confirms that a message is in the transcript, reconnecting retires its temporary browser copy even when the original message is outside the latest history page. Loading older history shows the saved message in its original position without adding a second copy.
 
 Retiring a delivered attachment does not discard the run's completion. If the browser misses

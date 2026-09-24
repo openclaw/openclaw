@@ -184,7 +184,7 @@ suite.define(() => {
         .getByRole("menuitemradio", { name: "Research", exact: true })
         .click();
       await rowFor(research[0]!.key).waitFor({ state: "visible" });
-      const loadMore = sidebar.getByRole("button", { name: "Load more sessions", exact: true });
+      const loadMore = sidebar.locator(".sidebar-session-pagination--roster > button");
       await loadMore.waitFor({ state: "visible" });
       await expect.poll(settledResearchRevision).toBeGreaterThan(0);
       const settledResearch = {
@@ -253,10 +253,12 @@ suite.define(() => {
       ).toHaveLength(0);
       await expect.poll(() => loadMore.isDisabled()).toBe(true);
       await expect.poll(() => loadMore.getAttribute("aria-busy")).toBe("true");
+      await expect.poll(() => loadMore.getAttribute("aria-label")).toContain("Loading");
       await gateway.resolveDeferred("sessions.list");
       await expect.poll(sidebarState).toMatchObject(settledResearch);
       await expect.poll(() => loadMore.isDisabled()).toBe(false);
       await expect.poll(() => loadMore.getAttribute("aria-busy")).toBe("false");
+      await expect.poll(() => loadMore.getAttribute("aria-label")).toBe("Load more sessions");
       await loadMore.click();
       // Preserve the original assertion failure after exercising the recovery control.
       let paginationFailure: Error | undefined;

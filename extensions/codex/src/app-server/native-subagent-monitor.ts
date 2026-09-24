@@ -31,10 +31,7 @@ import { readCodexNativeSubagentHistoryOwner } from "./native-subagent-history-o
 import {
   CodexNativeSubagentHistoryRecovery,
   isNoFinalCompletion,
-  normalizeIdentifier,
   readNativeTurnEnd,
-  readThreadParentThreadId,
-  readThreadSpawnSource,
   systemErrorFallbackCompletion,
 } from "./native-subagent-history-recovery.js";
 import {
@@ -94,9 +91,12 @@ import {
 import { CodexNativeSubagentSubmissionOwner } from "./native-subagent-submission-owner.js";
 import {
   codexNativeSubagentRunId,
+  normalizeIdentifier,
   readCodexNativeSubagentRunId,
   readNativeSubagentThreadIds,
   readNativeTaskAssignment,
+  readThreadParentThreadId,
+  readThreadSpawnSource,
   type NativeSubagentAssignment,
 } from "./native-subagent-task-ids.js";
 import { CodexNativeSubagentTurnObservation } from "./native-subagent-turn-observation.js";
@@ -170,10 +170,7 @@ class Monitor {
     this.retainChildThread = options.retainChildThread;
     this.releaseChildThread = options.releaseChildThread;
     this.childCloses = new CodexNativeSubagentCloseOwner(client, {
-      isParentCurrent: (state) =>
-        !this.disposed &&
-        !this.retiredParentStates.has(state) &&
-        this.parentStates.get(state.parentThreadId) === state,
+      isParentCurrent: (state) => this.isCurrentParent(state),
       isParentRetired: (state) => this.retiredParentStates.has(state),
       knownChild: (id) => this.knownChildren.get(id),
       currentChild: (id) => this.currentChild(id),
@@ -256,11 +253,7 @@ class Monitor {
     });
     this.submissions = new CodexNativeSubagentSubmissionOwner({
       isCurrent: (state) => {
-        if (
-          this.disposed ||
-          this.parentStates.get(state.parentThreadId) !== state ||
-          this.retiredParentStates.has(state)
-        ) {
+        if (!this.isCurrentParent(state)) {
           return false;
         }
         try {
@@ -446,10 +439,7 @@ class Monitor {
           },
         );
       },
-      isCurrent: (state) =>
-        !this.disposed &&
-        !this.retiredParentStates.has(state) &&
-        this.parentStates.get(state.parentThreadId) === state,
+      isCurrent: (state) => this.isCurrentParent(state),
     });
   }
 
@@ -469,10 +459,7 @@ class Monitor {
       parents: this.parentStates,
       children: this.childStates,
       knownChildren: this.knownChildren,
-      isCurrent: (state) =>
-        !this.disposed &&
-        !this.retiredParentStates.has(state) &&
-        this.parentStates.get(state.parentThreadId) === state,
+      isCurrent: (state) => this.isCurrentParent(state),
       interruptModelExecution: this.interruptModelExecution,
       retainTargetRevision: (threadId) => this.recovery.retainThreadStatusRevision(threadId),
       currentModelExecution: (threadId) =>
@@ -517,7 +504,7 @@ class Monitor {
       releaseNativeParentModelSources(state, this.knownChildren.values());
       state.owners.clear();
       this.childCloses.clear(state);
-      this.clearPendingChildAdmissionEvidenceForParent(parentThreadId);
+      this.admissionCustody.retainOnly((evidence) => evidence.parentThreadId !== parentThreadId);
       for (const childState of Array.from(this.childStates.values())) {
         if (childState.parentThreadId === parentThreadId) {
           this.childCloses.retireChild(state, childState, "Subagent parent session ended.");
@@ -1265,9 +1252,7 @@ class Monitor {
       return true;
     }
     if (
-      this.disposed ||
-      this.parentStates.get(state.parentThreadId) !== state ||
-      this.retiredParentStates.has(state) ||
+      !this.isCurrentParent(state) ||
       (known &&
         (!known.assignment.terminal ||
           known.pendingTurns.length > 0 ||
@@ -1499,12 +1484,16 @@ class Monitor {
     return runId ? this.childStates.get(runId) : undefined;
   }
 
+  private isCurrentParent(state: ParentState): boolean {
+    return (
+      !this.disposed &&
+      !this.retiredParentStates.has(state) &&
+      this.parentStates.get(state.parentThreadId) === state
+    );
+  }
+
   private refreshWaitDependency(state: ParentState, receiverThreadId: string): void {
-    if (
-      this.disposed ||
-      this.parentStates.get(state.parentThreadId) !== state ||
-      this.retiredParentStates.has(state)
-    ) {
+    if (!this.isCurrentParent(state)) {
       return;
     }
     for (const child of this.childStates.values()) {
@@ -1888,10 +1877,6 @@ class Monitor {
     );
   }
 
-  private clearPendingChildAdmissionEvidenceForParent(parentThreadId: string): void {
-    this.admissionCustody.retainOnly((evidence) => evidence.parentThreadId !== parentThreadId);
-  }
-
   private removePendingSpawnAdmissionEvidenceForChild(childThreadId: string): void {
     this.admissionCustody.retainOnly(
       (evidence) => evidence.childThreadId !== childThreadId || evidence.kind === "interaction",
@@ -2248,11 +2233,7 @@ class Monitor {
         this.recovery.scheduleTaskCandidateReconciliation(candidate);
         return;
       }
-      if (
-        this.disposed ||
-        this.retiredParentStates.has(candidate.parentState) ||
-        this.parentStates.get(candidate.parentState.parentThreadId) !== candidate.parentState
-      ) {
+      if (!this.isCurrentParent(candidate.parentState)) {
         return;
       }
       if (!statusRead.isCurrent() || this.childStates.get(candidate.runId) !== childBeforeRead) {
