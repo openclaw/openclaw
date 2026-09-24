@@ -3734,6 +3734,84 @@ describe("messaging tool media URL tracking", () => {
     setActivePluginRegistry(createTestRegistry());
   });
 
+  it.each([
+    {
+      label: "standalone channel",
+      sessionKey: "agent:main:slack:channel:c1",
+      sameChannelThreadRequired: false,
+      expected: true,
+    },
+    {
+      label: "thread session",
+      sessionKey: "agent:main:slack:channel:c1:thread:171.222",
+      sameChannelThreadRequired: false,
+      expected: false,
+    },
+    {
+      label: "bound thread",
+      sessionKey: "agent:main:slack:channel:c1",
+      sameChannelThreadRequired: true,
+      expected: false,
+    },
+  ])("records top-level Slack completion only for $label", async (testCase) => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" }),
+            messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+          },
+        },
+      ]),
+    );
+    const { ctx } = createTestContext();
+    const onDeliveredMessageToolOnlySourceReply = vi.fn();
+    Object.assign(ctx.params, {
+      config: {},
+      sourceReplyDeliveryMode: "message_tool_only",
+      messageChannel: "slack",
+      currentChannelId: "c1",
+      currentThreadId: "171.222",
+      replyToMode: "all",
+      sessionKey: testCase.sessionKey,
+      sameChannelThreadRequired: testCase.sameChannelThreadRequired,
+      onDeliveredMessageToolOnlySourceReply,
+    });
+    ctx.consumeToolSendReceipt = () => ({
+      details: {
+        messageDelivery: {
+          status: "settled",
+          partialDelivery: false,
+          createdThreadIds: [],
+          primaryPlatformMessageId: "171.333",
+        },
+      },
+    });
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: "tool-top-level-slack-completion",
+      args: {
+        action: "send",
+        channel: "slack",
+        target: "c1",
+        topLevel: true,
+        message: "parent-channel reply",
+      },
+      isError: false,
+      result: { details: { ok: true, messageId: "171.333", channelId: "c1" } },
+    });
+    const target = requireSingleMessagingTarget(ctx);
+    expect(target.threadSuppressed).toBe(true);
+    expect(target.sourceReplyFinal).toBe(testCase.expected ? true : undefined);
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(testCase.expected);
+    expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual(
+      testCase.expected ? ["parent-channel reply"] : [],
+    );
+    expect(onDeliveredMessageToolOnlySourceReply).toHaveBeenCalledTimes(testCase.expected ? 1 : 0);
+  });
+
   it("uses the current provider and thread for implicit message sends", async () => {
     setActivePluginRegistry(
       createTestRegistry([

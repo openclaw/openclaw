@@ -1,5 +1,10 @@
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setChannelSourceTurnSameThreadRequired } from "../../../auto-reply/reply/source-turn-id.js";
+import {
+  mintMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../../../gateway/message-action-turn-capability.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
 import {
   EmbeddedPluginApprovalBroker,
@@ -215,6 +220,58 @@ afterEach(() => {
 });
 
 describe("prepareEmbeddedAttemptAgentSession", () => {
+  it.each([
+    { label: "bound-thread admission", admitted: true, recovery: false },
+    { label: "standalone admission", admitted: false, recovery: true },
+    { label: "recovery without a capability", admitted: undefined, recovery: true },
+  ])(
+    "shares the same-thread fact from $label with terminal and stream consumers",
+    async ({ admitted, recovery }) => {
+      const fixture = createInput();
+      const sessionKey = "agent:agent-1:slack:channel:c1";
+      const policySessionKey = "agent:agent-1:main";
+      const token =
+        admitted === undefined
+          ? undefined
+          : mintMessageActionTurnCapability({
+              agentId: fixture.input.sessionAgentId,
+              runId: attempt.runId,
+              sessionId: attempt.sessionId,
+              sessionKey: policySessionKey,
+              toolContext: {
+                currentChannelProvider: "slack",
+                currentChannelId: "c1",
+                currentThreadTs: "171.222",
+                sameChannelThreadRequired: admitted,
+              },
+            });
+      fixture.input.attempt = {
+        ...attempt,
+        sessionKey,
+        messageActionTurnCapability: token,
+      };
+      setChannelSourceTurnSameThreadRequired(fixture.input.attempt, recovery);
+      fixture.input.clientToolPreparation = {
+        codeModeControlsEnabledForRun: true,
+        deferredDirectoryToolsCallable: false,
+        sandboxSessionKey: policySessionKey,
+      } as never;
+      try {
+        const prepared = await prepareEmbeddedAttemptAgentSession(fixture.input);
+        expect(prepared.sameChannelThreadRequired).toBe(admitted ?? recovery);
+        expect(hoisted.installMessageToolOnlyTerminalHook).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sameChannelThreadRequired: prepared.sameChannelThreadRequired,
+          }),
+        );
+      } finally {
+        if (token) {
+          revokeMessageActionTurnCapability(token);
+        }
+      }
+    },
+  );
+
   it("cancels a hydrated directory tool's approval with its captured permission generation", async () => {
     const fixture = createInput();
     const generation = new AbortController();

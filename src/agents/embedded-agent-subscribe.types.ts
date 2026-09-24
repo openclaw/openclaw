@@ -129,6 +129,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   currentAccountId?: string;
   /** Current transport thread resolved for this run. */
   currentThreadId?: string;
+  /** Admitted source conversation must remain in its transport thread, including bound sessions. */
+  sameChannelThreadRequired?: boolean;
   /** Current inbound message id used to distinguish child replies from explicit roots. */
   currentMessageId?: string | number;
   /** Reply mode used by transport auto-threading. */

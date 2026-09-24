@@ -211,6 +211,7 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
             clientToolCallSlots: [],
             hasDeliveredSourceReply: () => false,
             markSourceReplyDelivered: () => {},
+            sameChannelThreadRequired: false,
             trustedLocalMediaToolNames: new Set(),
             builtinToolNames: new Set(),
             coreBuiltinToolNames: new Set(),

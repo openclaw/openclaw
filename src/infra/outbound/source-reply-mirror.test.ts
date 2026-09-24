@@ -134,6 +134,62 @@ describe("reconcileTerminalSourceReplyDelivery", () => {
 });
 
 describe("isDeliveredCurrentSourceReply", () => {
+  it.each([
+    {
+      name: "standalone inbound anchor",
+      sessionKey: "agent:main:slack:channel:c0example0",
+      sameChannelThreadRequired: false,
+      expected: true,
+    },
+    {
+      name: "thread-root inbound",
+      sessionKey: "agent:main:slack:channel:c0example0:thread:1700000000.000002",
+      sameChannelThreadRequired: false,
+      expected: false,
+    },
+    {
+      name: "bound thread with an unsuffixed session key",
+      sessionKey: "agent:main:slack:channel:c0example0",
+      sameChannelThreadRequired: true,
+      expected: false,
+    },
+    {
+      name: "unknown admitted thread requirement",
+      sessionKey: "agent:main:slack:channel:c0example0",
+      sameChannelThreadRequired: undefined,
+      expected: false,
+    },
+  ])(
+    "classifies an explicit top-level Slack send from a $name",
+    ({ sessionKey, sameChannelThreadRequired, expected }) => {
+      expect(
+        isDeliveredCurrentSourceReply({
+          action: "send",
+          channel: "slack",
+          actionParams: {
+            target: "channel:C0EXAMPLE0",
+            message: "Good night.",
+            topLevel: true,
+          },
+          cfg: {},
+          sessionKey,
+          toolContext: {
+            currentChannelProvider: "slack",
+            currentChannelId: "channel:C0EXAMPLE0",
+            currentThreadTs: "1700000000.000002",
+            currentMessageId: "1700000000.000002",
+            sameChannelThreadRequired,
+          },
+          deliveredPayload: {
+            result: {
+              receipt: { primaryPlatformMessageId: "1700000000.000004" },
+            },
+          },
+        }),
+      ).toBe(expected);
+    },
+  );
+
   it("matches a canonical Google Chat thread receipt to its inbound source thread", () => {
     const params = {
       action: "send",

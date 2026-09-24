@@ -79,6 +79,7 @@ function isDeliveredMessageToolOnlySourceReply(
       currentChannelId: params.currentChannelId,
       currentMessagingTarget: params.currentMessagingTarget,
       currentThreadId: params.currentThreadId,
+      sameChannelThreadRequired: params.sameChannelThreadRequired,
       sessionKey: params.sessionKey,
       deliveredPayload: params.context.result,
     }),

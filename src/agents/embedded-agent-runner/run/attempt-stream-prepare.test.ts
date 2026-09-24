@@ -129,13 +129,14 @@ describe("prepareEmbeddedAttemptStream", () => {
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
   });
 
-  it("passes exact run-local media trust to the subscription", () => {
+  it("passes media trust and standalone thread admission", () => {
+    const sameChannelThreadRequired = false;
     const trustedLocalMediaToolNames = new Set(["plugin_media"]);
 
-    prepareCatalogExecutor([], { trustedLocalMediaToolNames });
+    prepareCatalogExecutor([], { trustedLocalMediaToolNames, sameChannelThreadRequired });
 
     expect(mocks.subscribe).toHaveBeenCalledWith(
-      expect.objectContaining({ trustedLocalMediaToolNames }),
+      expect.objectContaining({ trustedLocalMediaToolNames, sameChannelThreadRequired }),
     );
   });
 

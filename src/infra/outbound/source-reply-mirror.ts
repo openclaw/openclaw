@@ -24,6 +24,7 @@ import {
   completeRestartRecoveryTerminalDelivery,
   type RestartRecoveryTerminalDeliveryScope,
 } from "../../config/sessions/restart-recovery-receipt.js";
+import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -122,12 +123,26 @@ function resolveSourceReplyThreadPlacement(
   threadAddressing: ReturnType<typeof resolveChannelThreadAddressing>,
 ): SourceReplyThreadPlacement {
   const currentThreadId = normalizeOptionalString(params.toolContext?.currentThreadTs);
-  const deliveredPlacement = resolveDeliveredThreadPlacement(params, currentThreadId);
+  // Explicit top-level delivery is compared with the admitted source
+  // conversation, not an auto-reply anchor carried in `currentThreadTs`.
+  // Bound sessions omit the thread suffix, so retain the provider's explicit
+  // thread requirement as the authoritative fallback for those sessions.
+  // Older callers without an admitted fact retain their transport thread;
+  // only an explicit false identifies a standalone reply anchor.
+  const sessionThreadId = normalizeOptionalString(
+    parseSessionThreadInfoFast(params.sessionKey).threadId,
+  );
+  const sourceConversationThreadId =
+    params.actionParams.topLevel === true
+      ? (sessionThreadId ??
+        (params.toolContext?.sameChannelThreadRequired === false ? undefined : currentThreadId))
+      : currentThreadId;
+  const deliveredPlacement = resolveDeliveredThreadPlacement(params, sourceConversationThreadId);
   if (deliveredPlacement) {
     return deliveredPlacement;
   }
   if (params.actionParams.topLevel === true) {
-    return currentThreadId ? "mismatch" : "match";
+    return sourceConversationThreadId ? "mismatch" : "match";
   }
   if (
     threadAddressing === "message" &&

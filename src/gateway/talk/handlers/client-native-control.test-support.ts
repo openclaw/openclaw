@@ -490,6 +490,7 @@ export async function withParkedNativeTask(
                   clientToolCallSlots: [],
                   hasDeliveredSourceReply: () => false,
                   markSourceReplyDelivered: () => {},
+                  sameChannelThreadRequired: false,
                   builtinToolNames: new Set(),
                   coreBuiltinToolNames: new Set(),
                   replaySafeToolNames: new Set(),

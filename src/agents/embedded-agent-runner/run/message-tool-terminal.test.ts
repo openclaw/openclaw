@@ -257,6 +257,61 @@ describe("message-tool-only source replies", () => {
 
   it.each([
     {
+      label: "standalone channel session",
+      sessionKey: "agent:main:slack:channel:c0example0",
+      sameChannelThreadRequired: false,
+      expected: true,
+    },
+    {
+      label: "thread-root session",
+      sessionKey: "agent:main:slack:channel:c0example0:thread:1700000000.000002",
+      sameChannelThreadRequired: false,
+      expected: false,
+    },
+    {
+      label: "bound thread with an unsuffixed session key",
+      sessionKey: "agent:main:slack:channel:c0example0",
+      sameChannelThreadRequired: true,
+      expected: false,
+    },
+  ])("records an explicit top-level Slack send from a $label", async (testCase) => {
+    const agent = {} as unknown as Agent;
+    const onDeliveredSourceReply = vi.fn();
+    installMessageToolOnlyTerminalHook({
+      agent,
+      sourceReplyDeliveryMode: "message_tool_only",
+      onDeliveredSourceReply,
+      config: {},
+      currentProvider: "slack",
+      currentAccountId: "default",
+      currentChannelId: "channel:C0EXAMPLE0",
+      currentThreadId: "1700000000.000002",
+      sameChannelThreadRequired: testCase.sameChannelThreadRequired,
+      currentMessageId: "1700000000.000002",
+      sessionKey: testCase.sessionKey,
+    });
+
+    const hookResult = await agent.afterToolCall?.(
+      createAfterToolCallContext({
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "slack",
+          accountId: "default",
+          target: "channel:C0EXAMPLE0",
+          message: "Good night.",
+          topLevel: true,
+          final: true,
+        },
+      }),
+    );
+
+    expect(onDeliveredSourceReply).toHaveBeenCalledTimes(testCase.expected ? 1 : 0);
+    expect(hookResult).toEqual(testCase.expected ? { terminate: true } : undefined);
+  });
+
+  it.each([
+    {
       label: "the exact source route",
       accountId: "account-1",
       target: "chat123",

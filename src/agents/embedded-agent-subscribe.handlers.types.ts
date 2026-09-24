@@ -360,6 +360,7 @@ type ToolHandlerParams = Pick<
   | "currentMessagingTarget"
   | "currentAccountId"
   | "currentThreadId"
+  | "sameChannelThreadRequired"
   | "currentMessageId"
   | "replyToMode"
   | "hasRepliedRef"
