@@ -6,9 +6,7 @@ import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
-import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
-
-const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
+import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
 const note = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
