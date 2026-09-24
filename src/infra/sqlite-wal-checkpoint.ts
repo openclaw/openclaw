@@ -251,7 +251,7 @@ export function createSqliteWalCheckpoint(
   };
 
   return {
-    checkpoint(mode: SqliteWalCheckpointMode): boolean {
+    checkpoint(this: void, mode: SqliteWalCheckpointMode): boolean {
       try {
         return recordCheckpoint(mode, checkpoint(database, mode));
       } catch (error) {
@@ -260,7 +260,7 @@ export function createSqliteWalCheckpoint(
       }
     },
     recordError: recordCheckpointError,
-    inspectIdle(): boolean {
+    inspectIdle(this: void): boolean {
       const { busy, logFrames, checkpointedFrames } = readCheckpointResult(
         checkpoint(database, "PASSIVE"),
       );
