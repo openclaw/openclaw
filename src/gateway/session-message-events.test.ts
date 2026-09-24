@@ -2705,11 +2705,12 @@ describe("session.message websocket events", () => {
       },
       storePath,
     });
-    const { committer, identity, receiver, sessionTarget, source } = createWorkerFanoutFixture({
-      storePath,
-      sessionId,
-      sessionKey,
-    });
+    const { committer, identity, receiver, push, sessionTarget, source } =
+      createWorkerFanoutFixture({
+        storePath,
+        sessionId,
+        sessionKey,
+      });
     const ws = await harness.openWs();
     const workerChats: Record<string, unknown>[] = [];
     const collectWorkerChats = (data: RawData) => {
@@ -2794,13 +2795,6 @@ describe("session.message websocket events", () => {
             (payload as Record<string, unknown>).runId === runId,
           timeoutMs,
         );
-      const liveEvent = {
-        event: { kind: "assistant", payload: { text: "hello", delta: "hello" } },
-        lastAckedSeq: 0,
-        seq: 1,
-      } as const;
-      const push = (runEpoch = 4, runId = "worker") =>
-        receiver.apply({ identity, source, request: { ...liveEvent, runEpoch, runId } });
       const [workerEvent] = await Promise.all([
         waitForChat("worker"),
         expectNoMessageWithin({

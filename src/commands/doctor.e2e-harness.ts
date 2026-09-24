@@ -471,10 +471,13 @@ vi.mock("./doctor-browser.js", () => ({
   noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("./doctor-memory-search.js", () => ({
+vi.mock("./doctor-memory-recall.js", () => ({
   maybeRepairMemoryRecallHealth,
-  noteMemorySearchHealth,
   noteMemoryRecallHealth,
+}));
+
+vi.mock("./doctor-memory-search.js", () => ({
+  noteMemorySearchHealth,
 }));
 
 vi.mock("../plugins/doctor-contract-registry.js", () => ({

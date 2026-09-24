@@ -24,7 +24,10 @@ import {
   getOpenClawStateDatabaseTerminalFailureAsync,
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
+  recordOpenClawStateDatabaseOpenFailure,
+  openClawStateDatabaseCache,
 } from "./openclaw-state-db-cache.js";
+import { findOpenClawStateDatabaseFailure } from "./openclaw-state-db-failure.js";
 import {
   getExistingOpenClawStateSchemaPath,
   isExistingOpenClawStateSchema,
@@ -654,7 +657,23 @@ async function runAdmittedOpenClawStateWorkerOperation<T>(
     }
   } catch (error) {
     if (error instanceof Error) {
-      throw hydrateOpenClawStateWorkerError(error);
+      const hydrated = hydrateOpenClawStateWorkerError(error);
+      const failure = findOpenClawStateDatabaseFailure(hydrated, context.admission.databasePath);
+      if (
+        failure &&
+        !openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(
+          context.admission.databasePath,
+        )
+      ) {
+        try {
+          context.admission.assertCurrent();
+        } catch {
+          // A retired generation cannot publish a refusal against its replacement.
+          throw hydrated;
+        }
+        recordOpenClawStateDatabaseOpenFailure(context.admission.databasePath, failure);
+      }
+      throw hydrated;
     }
     throw error;
   }

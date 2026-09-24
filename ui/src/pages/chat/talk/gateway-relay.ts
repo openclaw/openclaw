@@ -4,10 +4,10 @@ import {
   type TalkCatalogResult,
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../../i18n/index.ts";
+import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { RealtimeTalkAudioInputBudget } from "./audio-input-budget.ts";
 import {
-  bytesToBase64,
   floatToPcm16,
   measureRealtimeTalkAudioFrame,
   RealtimeTalkMediaStreamMeter,

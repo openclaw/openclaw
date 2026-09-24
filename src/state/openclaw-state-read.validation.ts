@@ -161,6 +161,14 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.input.now === "number" &&
         (typeof input.command.input.runId === "string" ||
           typeof input.command.input.executionId === "string")) ||
+      (input.command.type === "sessionRepositoryWorkspaces.find" &&
+        Array.isArray(input.command.owners) &&
+        input.command.owners.every(
+          (owner) =>
+            isRecord(owner) &&
+            typeof owner.agentId === "string" &&
+            typeof owner.sessionKey === "string",
+        )) ||
       (input.command.type === "workspace.snapshot" &&
         typeof input.command.workspaceDir === "string") ||
       (input.command.type === "updateRuns.get" && typeof input.command.runId === "string") ||
@@ -188,6 +196,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.backendId === "string" &&
         typeof input.command.scopeKey === "string") ||
       (input.command.type === "fleet.get" && typeof input.command.tenantId === "string") ||
+      input.command.type === "worktrees.cleanupState" ||
       input.command.type === "workerPlacements.changeSnapshot" ||
       (input.command.type === "workers.placementProjection" &&
         Array.isArray(input.command.sessionIds) &&

@@ -38,6 +38,7 @@ it("replaces the live status with the latest owned commentary without duplicatin
   });
   const status = () => container.querySelector(".chat-working-indicator__preamble");
   expect(status()?.textContent).toBe("Checking tests.");
+  expect(status()?.getAttribute("title")).toBe("Checking tests.");
   expect(container.textContent?.match(/Checking tests\./g)).toHaveLength(1);
   expect(container.textContent).toContain("Reading the files.");
 

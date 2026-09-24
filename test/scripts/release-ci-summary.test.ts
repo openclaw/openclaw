@@ -1253,7 +1253,7 @@ process.stdout.write(readFileSync(process.env.ARCHIVE));
         `child: ${childRunId} OpenClaw Release Checks completed/failure`,
       );
       expect(result.stdout).toContain(
-        "advisory: releaseChecksCandidate completed/failure cross_os_release_checks / Windows / packaged fresh",
+        "::warning title=Advisory lane failed::releaseChecksCandidate completed/failure cross_os_release_checks / Windows / packaged fresh",
       );
       expect(result.stdout).toContain(
         "advisory: releaseChecksCandidate completed/success cross_os_release_checks / macOS / packaged fresh",
@@ -5313,5 +5313,36 @@ describe("release CI summary child correlation", () => {
     expect(() => selectManifestParentJob(parentJobs, child, parentManifest, 1)).toThrow(
       "manifest parent job carry-forward fingerprint mismatch",
     );
+  });
+});
+
+describe("lane waiver advisory evidence", () => {
+  const job = (name: string, conclusion = "failure") => ({ name, status: "completed", conclusion });
+  const childEvidence = {
+    normalCi: {
+      jobs: [job("checks-node-fast"), job("checks-windows-node-test-1"), job("openclaw/ci-gate")],
+    },
+    releaseChecksCandidate: {
+      jobs: [
+        job("install_smoke_release_checks / installer_smoke"),
+        job("cross_os_release_checks / Linux / packaged fresh"),
+        job("Verify release checks"),
+      ],
+    },
+  };
+
+  it("records waived lanes with their reason and keeps proof lanes out", () => {
+    const withWaiver = releaseAdvisoryJobEvidence(childEvidence, "stable", "main", "ship");
+    expect(
+      withWaiver.map((entry) => `${entry.child}:${entry.job}:${entry.reason ?? "policy"}`),
+    ).toEqual([
+      "normalCi:checks-node-fast:lane_waiver",
+      "normalCi:checks-windows-node-test-1:policy",
+      "normalCi:openclaw/ci-gate:lane_waiver",
+      "releaseChecksCandidate:cross_os_release_checks / Linux / packaged fresh:lane_waiver",
+    ]);
+    expect(
+      releaseAdvisoryJobEvidence(childEvidence, "stable", "main").map((entry) => entry.job),
+    ).toEqual(["checks-windows-node-test-1"]);
   });
 });

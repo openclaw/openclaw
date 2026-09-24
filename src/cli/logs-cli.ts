@@ -86,10 +86,6 @@ type LogSourceIdentity = {
   localFallback?: boolean;
 };
 
-async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
-  return await import("./logs-cli.runtime.js");
-}
-
 type LogsCliOptions = GatewayRpcOpts & {
   limit?: string;
   maxBytes?: string;
@@ -278,7 +274,7 @@ async function readSystemdJournalFallback(params: {
   if (process.platform !== "linux") {
     return null;
   }
-  const runtime = await loadLogsCliRuntime();
+  const runtime = await import("./logs-cli.runtime.js");
   const service = await runtime.readSystemdServiceRuntime(process.env);
   if (service.status !== "running" || typeof service.pid !== "number") {
     return null;
@@ -568,6 +564,8 @@ export function registerLogsCli(program: Command) {
     let first = true;
     let lastSourceIdentity: string | undefined;
     const jsonMode = Boolean(opts.json);
+    const emitNotice = (message: string) =>
+      jsonMode ? emitJsonLine({ type: "notice", message }) : errorLine(message);
     const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
     const rich = isRich() && opts.color !== false && !opts.plain;
     const localTime = !opts.utc;
@@ -706,31 +704,7 @@ export function registerLogsCli(program: Command) {
         }
         for (const line of lines) {
           const parsed = parseLogLine(line);
-          if (parsed) {
-            if (!emitJsonLine({ type: "log", ...parsed })) {
-              return;
-            }
-          } else if (!emitJsonLine({ type: "raw", raw: line })) {
-            return;
-          }
-        }
-        if (payload.truncated) {
-          if (
-            !emitJsonLine({
-              type: "notice",
-              message: "Log tail truncated (increase --limit or --max-bytes).",
-            })
-          ) {
-            return;
-          }
-        }
-        if (payload.reset) {
-          if (
-            !emitJsonLine({
-              type: "notice",
-              message: formatLogResetNotice(payload.skippedBytes),
-            })
-          ) {
+          if (!emitJsonLine(parsed ? { type: "log", ...parsed } : { type: "raw", raw: line })) {
             return;
           }
         }
@@ -777,16 +751,15 @@ export function registerLogsCli(program: Command) {
             return;
           }
         }
-        if (payload.truncated) {
-          if (!errorLine("Log tail truncated (increase --limit or --max-bytes).")) {
-            return;
-          }
-        }
-        if (payload.reset) {
-          if (!errorLine(formatLogResetNotice(payload.skippedBytes))) {
-            return;
-          }
-        }
+      }
+      if (
+        payload.truncated &&
+        !emitNotice("Log tail truncated (increase --limit or --max-bytes).")
+      ) {
+        return;
+      }
+      if (payload.reset && !emitNotice(formatLogResetNotice(payload.skippedBytes))) {
+        return;
       }
       if (payload.sourceKind === "journal") {
         // The journal is an at-least-once bridge: retain its cursor, leave the

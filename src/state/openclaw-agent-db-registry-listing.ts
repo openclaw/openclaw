@@ -242,7 +242,11 @@ export function listOpenClawRegisteredAgentDatabases(
 export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
   inputOptions: AgentDatabaseRegistryListOptions = {},
 ): {
-  read(): Promise<{ result: OpenClawAgentDatabaseRegistryReadResult; assertCurrent: () => void }>;
+  assertCurrent: () => void;
+  read(): Promise<{
+    result: OpenClawAgentDatabaseRegistryReadResult;
+    assertCurrent: () => void;
+  }>;
 } {
   try {
     const env = cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env);
@@ -254,16 +258,22 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
     };
     const context = captureOpenClawStateWorkerContext(options);
     const inCapturedScope = AsyncLocalStorage.snapshot();
+    let assertPreparedCurrent = () => context.admission.assertCurrent();
     return {
+      assertCurrent: () => assertPreparedCurrent(),
       async read() {
         context.admission.assertCurrent();
         const memo = activateRegisteredAgentDatabasesMemo(options);
+        let invalidated = false;
         const assertCurrent = () => {
           context.admission.assertCurrent();
-          if (registry.memo !== memo) {
+          if (invalidated || registry.memo !== memo) {
+            invalidated = true;
             throw new Error("Agent database registry changed during discovery; retry the read.");
           }
         };
+        // Install the witness before the first await, including a read that later rejects.
+        assertPreparedCurrent = assertCurrent;
         if (!memo.entries) {
           const reply = await inCapturedScope(() =>
             withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, () =>
@@ -298,6 +308,9 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
     };
   } catch (error) {
     return {
+      assertCurrent() {
+        throw error;
+      },
       async read() {
         throw error;
       },

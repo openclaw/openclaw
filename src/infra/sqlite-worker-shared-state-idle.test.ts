@@ -224,17 +224,19 @@ it("replaces a failed idle actor after an enclosing callback settles", async () 
   const nativePost = vi.spyOn(MessagePort.prototype, "postMessage");
   nativePost.mockRestore();
   let resume: (() => void) | undefined;
-  const send = vi
-    .spyOn(MessagePort.prototype, "postMessage")
-    .mockImplementation(function (this: MessagePort, message, transfers) {
-      if (isRecord(message) && message.type === "accepted" && Object.hasOwn(message, "admission")) {
-        // Hold the acquired-custody grant, after live authority has accepted this inspection.
-        send.mockRestore();
-        resume = () => nativePost.call(this, message, transfers);
-        return;
-      }
-      return nativePost.call(this, message, transfers);
-    });
+  const send = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
+    this: MessagePort,
+    message,
+    transfers,
+  ) {
+    if (isRecord(message) && message.type === "accepted" && Object.hasOwn(message, "admission")) {
+      // Hold the acquired-custody grant, after live authority has accepted this inspection.
+      send.mockRestore();
+      resume = () => nativePost.call(this, message, transfers);
+      return;
+    }
+    return nativePost.call(this, message, transfers);
+  });
   f.advance(minute);
   f.scheduled(minute)();
   const entered = createDeferredCore();

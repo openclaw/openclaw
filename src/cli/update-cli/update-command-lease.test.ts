@@ -13,8 +13,10 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import {
+  createUpdateRun,
   getUpdateRun,
   listUpdateRuns,
+  recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
@@ -860,9 +862,43 @@ describe("update orchestration lifecycle ownership", () => {
       return { ...pluginResult, changed: false };
     });
 
-    await expect(invoke("repair", [recovery.runId])).rejects.toThrow("An update resumed");
+    await expect(invoke("repair", [recovery.runId])).rejects.toThrow(
+      "did not assume the update resumed",
+    );
 
     expect(getUpdateRun(recovery.runId)).toMatchObject({ status: "running", reason: null });
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+  });
+
+  it("repair reports unverified recorded ownership for a captured old-host run", async () => {
+    const driver = { host: "renamed-host.example", pid: 424_242, startIdentity: "1" };
+    const created = createUpdateRun({ trigger: "cli", origin: { driver } });
+    const recovery = recordUpdateRunPhase(created.runId, "verifying");
+    await writeScenario("repair", { pluginUpdate: { ...pluginResult, changed: false } });
+
+    const error = await invoke("repair", [recovery.runId]).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    const message = String(error);
+    expect(message).toContain(`Update ${recovery.runId} remains recorded as running (verifying);`);
+    expect(message).toContain("driver PID 424242 on renamed-host.example, liveness: not observed");
+    expect(message).toContain(
+      "Repair could not verify that the recorded update work stopped; it did not assume the update resumed.",
+    );
+    expect(message).toContain(
+      'Check each named host or supervisor: this host cannot safely determine liveness when a driver is shown as "not observed".',
+    );
+    expect(message).toContain(
+      "If a driver is active, wait for it or stop it through its owning host or supervisor.",
+    );
+    expect(message).toContain(
+      "If this is the same machine after a rename, restore its recorded hostname before retrying `openclaw update repair`; otherwise contact support.",
+    );
+    expect(message).not.toContain("An update resumed");
+    expect(getUpdateRun(recovery.runId)).toMatchObject({ status: "running", phase: "verifying" });
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 

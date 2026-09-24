@@ -116,13 +116,26 @@ function noteFlowRecoveryHints() {
   );
 }
 
-function pluginVersionDriftToHealthFindings(
-  drift: PluginVersionDriftReport | undefined,
-  runningGatewayVersion?: string,
+function pluginVersionReadinessToHealthFindings(
+  readiness: PluginVersionRestartReadiness | undefined,
 ): HealthFinding[] {
-  if (!drift) {
+  if (!readiness) {
     return [];
   }
+  if (readiness.status === "unresolved") {
+    return [
+      {
+        checkId: WORKSPACE_STATUS_CHECK_ID,
+        severity: "warning",
+        message: `Could not check plugin restart readiness: ${readiness.reason}`,
+        path: "plugins",
+        requirement: "plugin-version-restart-readiness",
+        fixHint:
+          "Repair the Gateway service installation, then rerun openclaw doctor before restarting.",
+      },
+    ];
+  }
+  const { report: drift, runningGatewayVersion } = readiness;
   if (drift.drifts.length === 0) {
     if (!isGatewayRestartPending(drift, runningGatewayVersion)) {
       return [];
@@ -181,28 +194,6 @@ function isGatewayRestartPending(
   );
 }
 
-function pluginVersionReadinessToHealthFindings(
-  readiness: PluginVersionRestartReadiness | undefined,
-): HealthFinding[] {
-  if (!readiness) {
-    return [];
-  }
-  if (readiness.status === "resolved") {
-    return pluginVersionDriftToHealthFindings(readiness.report, readiness.runningGatewayVersion);
-  }
-  return [
-    {
-      checkId: WORKSPACE_STATUS_CHECK_ID,
-      severity: "warning",
-      message: `Could not check plugin restart readiness: ${readiness.reason}`,
-      path: "plugins",
-      requirement: "plugin-version-restart-readiness",
-      fixHint:
-        "Repair the Gateway service installation, then rerun openclaw doctor before restarting.",
-    },
-  ];
-}
-
 function pluginCompatibilityWarningToHealthFinding(message: string): HealthFinding {
   return {
     checkId: WORKSPACE_STATUS_CHECK_ID,
@@ -215,18 +206,19 @@ function pluginCompatibilityWarningToHealthFinding(message: string): HealthFindi
 }
 
 function pluginDiagnosticToHealthFinding(
-  diagnostic: ReturnType<typeof buildPluginRegistrySnapshotReport>["diagnostics"][number],
+  diagnostic: WorkspacePluginDiagnostic,
   message = diagnostic.message,
 ): HealthFinding {
   return {
     checkId: WORKSPACE_STATUS_CHECK_ID,
     severity: diagnostic.level === "error" ? "error" : "warning",
     message,
-    ...(diagnostic.pluginId ? { path: `plugins.entries.${diagnostic.pluginId}` } : {}),
-    ...(diagnostic.pluginId ? { target: diagnostic.pluginId } : {}),
+    ...(diagnostic.pluginId
+      ? { path: `plugins.entries.${diagnostic.pluginId}`, target: diagnostic.pluginId }
+      : {}),
     ...(diagnostic.source ? { source: diagnostic.source } : {}),
     ...(diagnostic.errorCode ? { errorCode: diagnostic.errorCode } : {}),
-    ...(diagnostic.code ? { requirement: diagnostic.code } : { requirement: "plugin-diagnostic" }),
+    requirement: diagnostic.code || "plugin-diagnostic",
   };
 }
 
@@ -260,46 +252,64 @@ function taskFlowRecoveryToHealthFinding(finding: TaskFlowRecoveryFinding): Heal
   };
 }
 
-export function collectWorkspaceStatusHealthFindings(
+function visitWorkspacePluginStatus(
   cfg: OpenClawConfig,
-  options: NoteWorkspaceStatusOptions = {},
-): HealthFinding[] {
+  options: NoteWorkspaceStatusOptions,
+  visit: (status: {
+    agentLabel: string;
+    registry: ReturnType<typeof buildPluginRegistrySnapshotReport>;
+    compatibilityWarnings: string[];
+    diagnostics: WorkspacePluginDiagnostic[];
+  }) => void,
+) {
   const agentIds = listAgentIds(cfg);
   const scopes = agentIds.map((agentId) => ({
     agentId,
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
   }));
-  const workspaceFindings: HealthFinding[] = [];
   const reportedPluginDiagnostics = new Set<string>();
   for (const { agentId, workspaceDir } of scopes) {
-    const collectForWorkspace = () => {
-      const findings: HealthFinding[] = [];
-      const prefix = agentIds.length > 1 ? `Agent "${agentId}": ` : "";
-      const pluginRegistry = buildPluginRegistrySnapshotReport({ config: cfg, workspaceDir });
+    const inspect = () => {
+      const registry = buildPluginRegistrySnapshotReport({ config: cfg, workspaceDir });
       const compatibilityWarnings = buildPluginCompatibilityWarnings({
         config: cfg,
         workspaceDir,
-        report: pluginRegistry,
+        report: registry,
       });
-      for (const message of compatibilityWarnings) {
-        findings.push(pluginCompatibilityWarningToHealthFinding(`${prefix}${message}`));
-      }
-      for (const diagnostic of pluginRegistry.diagnostics) {
-        if (!claimPluginDiagnostic(reportedPluginDiagnostics, diagnostic)) {
-          continue;
-        }
-        findings.push(
-          pluginDiagnosticToHealthFinding(diagnostic, `${prefix}${diagnostic.message}`),
-        );
-      }
-      return findings;
+      visit({
+        agentLabel: agentIds.length > 1 ? `Agent "${agentId}":` : "",
+        registry,
+        compatibilityWarnings,
+        diagnostics: registry.diagnostics.filter((diagnostic) =>
+          claimPluginDiagnostic(reportedPluginDiagnostics, diagnostic),
+        ),
+      });
     };
-    workspaceFindings.push(
-      ...(options.runWithPluginMetadataSnapshot
-        ? options.runWithPluginMetadataSnapshot({ config: cfg, workspaceDir }, collectForWorkspace)
-        : collectForWorkspace()),
-    );
+    if (options.runWithPluginMetadataSnapshot) {
+      options.runWithPluginMetadataSnapshot({ config: cfg, workspaceDir }, inspect);
+    } else {
+      inspect();
+    }
   }
+  return scopes;
+}
+
+export function collectWorkspaceStatusHealthFindings(
+  cfg: OpenClawConfig,
+  options: NoteWorkspaceStatusOptions = {},
+): HealthFinding[] {
+  const workspaceFindings: HealthFinding[] = [];
+  visitWorkspacePluginStatus(cfg, options, ({ agentLabel, compatibilityWarnings, diagnostics }) => {
+    const prefix = agentLabel ? `${agentLabel} ` : "";
+    workspaceFindings.push(
+      ...compatibilityWarnings.map((message) =>
+        pluginCompatibilityWarningToHealthFinding(`${prefix}${message}`),
+      ),
+      ...diagnostics.map((diagnostic) =>
+        pluginDiagnosticToHealthFinding(diagnostic, `${prefix}${diagnostic.message}`),
+      ),
+    );
+  });
 
   return [
     ...pluginVersionReadinessToHealthFindings(options.pluginVersionReadiness),
@@ -400,17 +410,12 @@ function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | u
 /** Emits plugin and TaskFlow recovery problem notes for doctor. */
 export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceStatusOptions = {}) {
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
-  const agentIds = listAgentIds(cfg);
-  const scopes = agentIds.map((agentId) => ({
-    agentId,
-    workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
-  }));
-  const reportedPluginDiagnostics = new Set<string>();
-  for (const { agentId, workspaceDir } of scopes) {
-    const noteForWorkspace = () => {
-      const prefix = agentIds.length > 1 ? `Agent "${agentId}":\n` : "";
-      const pluginRegistry = buildPluginRegistrySnapshotReport({ config: cfg, workspaceDir });
-      const errored = pluginRegistry.plugins
+  const scopes = visitWorkspacePluginStatus(
+    cfg,
+    options,
+    ({ agentLabel, registry, compatibilityWarnings, diagnostics }) => {
+      const prefix = agentLabel ? `${agentLabel}\n` : "";
+      const errored = registry.plugins
         .filter((plugin) => plugin.status === "error")
         .toSorted((a, b) => a.id.localeCompare(b.id));
       if (errored.length > 0) {
@@ -423,20 +428,12 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceS
         ];
         note(lines.join("\n"), "Plugins");
       }
-      const compatibilityWarnings = buildPluginCompatibilityWarnings({
-        config: cfg,
-        workspaceDir,
-        report: pluginRegistry,
-      });
       if (compatibilityWarnings.length > 0) {
         note(
           `${prefix}${compatibilityWarnings.map((line) => `- ${line}`).join("\n")}`,
           "Plugin compatibility",
         );
       }
-      const diagnostics = pluginRegistry.diagnostics.filter((diagnostic) =>
-        claimPluginDiagnostic(reportedPluginDiagnostics, diagnostic),
-      );
       if (diagnostics.length > 0) {
         const lines = diagnostics.map((diag) => {
           const level = diag.level.toUpperCase();
@@ -446,13 +443,8 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceS
         });
         note(`${prefix}${lines.join("\n")}`, "Plugin diagnostics");
       }
-    };
-    if (options.runWithPluginMetadataSnapshot) {
-      options.runWithPluginMetadataSnapshot({ config: cfg, workspaceDir }, noteForWorkspace);
-    } else {
-      noteForWorkspace();
-    }
-  }
+    },
+  );
   notePluginVersionReadiness(options.pluginVersionReadiness);
   noteFlowRecoveryHints();
 

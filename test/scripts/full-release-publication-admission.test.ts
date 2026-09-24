@@ -69,6 +69,8 @@ const toolingPaths = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/update-compat-inventory.json",
+  "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
   "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/frozen-target-compat.sh",
@@ -813,7 +815,7 @@ globalThis.fetch = async (input, init = {}) => {
     write(
       tooling,
       "package.json",
-      JSON.stringify({ ...manifest, version, dependencies: { yaml: "2.9.0" } }),
+      JSON.stringify({ ...manifest, version, dependencies: { yaml: "2.9.1" } }),
     );
     writePlugins(tooling);
     write(tooling, "apps/android/version.json", androidVersion);

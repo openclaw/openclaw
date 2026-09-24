@@ -51,7 +51,7 @@ import { ChatProviderReviewController } from "./chat-provider-review-controller.
 import { createChatQuestionActions } from "./chat-question-actions.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
-import { chatSendHoldReason } from "./chat-send-support.ts";
+import { chatSendPendingReason } from "./chat-send-support.ts";
 import { refreshChatCommands } from "./chat-state-refresh.ts";
 import {
   resolveChatAgentId,
@@ -151,7 +151,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       onSetup: () => this.context.navigate("model-setup"),
     });
     const placementStartup = this.context.placementStartup.get(state.sessionKey);
-    const sendHoldReason = chatSendHoldReason(state, state.sessionKey, placementStartup !== null);
+    const pendingReason = chatSendPendingReason(state, state.sessionKey, placementStartup !== null);
     const runActive = hasDirectSessionRun(state);
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
       catalog,
@@ -326,7 +326,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         ? this.catalogSession?.canContinue === true
         : !disabledReason &&
           !(selectedSessionArchived || restartRecoveryTombstoned || placementComposer.blocksSend) &&
-          (!sendHoldReason || initialHistoryUnavailable));
+          (!pendingReason || initialHistoryUnavailable));
     const composerAvailability = {
       canCompose: composerAccess.canCompose && composerAvailable,
       canSend: composerAccess.canSend && composerAvailable,
@@ -340,9 +340,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         (placementComposer.state.kind === "failed" && !placementComposer.state.recoveryAction
           ? placementComposer.failedUnavailableMessage
           : null) ??
-        (state.connected && (placementStartup || initialHistoryUnavailable)
-          ? null
-          : sendHoldReason),
+        (state.connected && (placementStartup || initialHistoryUnavailable) ? null : pendingReason),
       disabledReasonTone:
         !composerAccess.canSend ||
         placementComposer.busyMessage ||
@@ -385,7 +383,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       // Keep its pane loading until startup can display the retained message again.
       loading: catalogKey
         ? this.catalogLoading
-        : state.chatLoading || (!runActive && sendHoldReason !== null && placementStartup === null),
+        : state.chatLoading || (!runActive && pendingReason !== null && placementStartup === null),
       routeLoadingSkeleton: this.routeLoadingSkeleton && initialHistoryUnavailable,
       sending:
         (placementStartup !== null && placementStartup.phase !== "failed") ||

@@ -268,6 +268,33 @@ describe("security review workflow trust boundaries", () => {
     const condition = workflow.jobs.resolve!.if!.replace(/^\$\{\{|\}\}$/gu, "");
     for (const event of [
       { eventName: "pull_request_target", allowed: true },
+      { eventName: "pull_request_target", action: "synchronize", allowed: true },
+      { eventName: "pull_request_target", action: "closed", allowed: true },
+      {
+        eventName: "pull_request_target",
+        action: "edited",
+        changes: { title: { from: "Previous title" } },
+        allowed: false,
+      },
+      {
+        eventName: "pull_request_target",
+        action: "edited",
+        changes: { body: { from: "Previous body" } },
+        allowed: false,
+      },
+      {
+        eventName: "pull_request_target",
+        action: "edited",
+        changes: { body: { from: "" }, base: { ref: { from: "release" } } },
+        allowed: true,
+      },
+      {
+        eventName: "pull_request_target",
+        action: "edited",
+        changes: { maintainer_can_modify: { from: false } },
+        allowed: true,
+      },
+      { eventName: "pull_request_target", action: "edited", changes: {}, allowed: true },
       { eventName: "workflow_run", sourceEvent: "pull_request", allowed: true },
       { eventName: "workflow_run", sourceEvent: "push", allowed: false },
       { eventName: "workflow_run", sourceEvent: "workflow_dispatch", allowed: true },
@@ -298,13 +325,19 @@ describe("security review workflow trust boundaries", () => {
           event: {
             action: event.action,
             comment: { body: event.body ?? "" },
-            changes: { body: { from: event.previousBody ?? "" } },
+            changes:
+              event.changes ??
+              (event.eventName === "pull_request_target"
+                ? {}
+                : { body: { from: event.previousBody ?? "" } }),
             issue: { pull_request: event.issue ? null : {} },
             workflow_run: { event: event.sourceEvent },
           },
         },
         contains: (value: string, search: string) =>
           value.toLowerCase().includes(search.toLowerCase()),
+        startsWith: (value: unknown, prefix: string) => String(value).startsWith(prefix),
+        vars: { OPENCLAW_RELEASE_PRIORITY_RUN: "" },
       });
       expect(Boolean(result), JSON.stringify(event)).toBe(event.allowed);
     }

@@ -1,7 +1,7 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Page, Request, Response, Route } from "playwright-core";
-import { toErrorObject } from "../infra/errors.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationRedirectChainAllowed,
@@ -475,7 +475,11 @@ export async function gotoPageWithNavigationGuard(
   let navigationFailed = false;
   let navigationError: unknown;
   try {
-    await opts.assertPageCurrent?.();
+    // Synchronous authority must not yield between its final fence and navigation.
+    const assertion = opts.assertPageCurrent?.();
+    if (assertion) {
+      await assertion;
+    }
     response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
   } catch (err) {
     navigationFailed = true;

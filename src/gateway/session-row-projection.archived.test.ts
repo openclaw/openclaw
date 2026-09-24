@@ -1,5 +1,7 @@
+import { StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   deleteSessionEntryLifecycle,
   replaceSessionEntrySync,
@@ -7,7 +9,6 @@ import {
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import * as placementRead from "./server-methods/session-placement-read-projection.js";
 import {
   canRunSessionListBackgroundWork,
   retainSessionListForegroundWork,
@@ -59,7 +60,7 @@ it("keeps archived rows cold at hydration and across broad refreshes", async () 
       for (const scope of ["catalog", "config", "stores", { agentId: "main" }] as const) {
         const before = projection.materializedCount;
         sessionChanges.emit({ all: true, scope });
-        expect(projection.dirtyRowCount).toBe(live);
+        expect(projection.dirtyRowCount).toBe(scope === "catalog" ? live : live + archived);
         await projection.ensureMaterialized();
         expect(projection.materializedCount - before).toBe(live);
         expect(reads.mock.calls.some(([row]) => row.entry?.archivedAt !== undefined)).toBe(false);
@@ -123,6 +124,7 @@ it("reindexes cold lineage when a literal parent appears and disappears", async 
     );
     const release = retainSessionListForegroundWork();
     let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
+    let boardReads: ReturnType<typeof observeSqliteReadSql> | undefined;
     try {
       projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       const initial = projection
@@ -130,7 +132,7 @@ it("reindexes cold lineage when a literal parent appears and disappears", async 
         .find((row) => row.key === child)!;
       expect(initial).toBeDefined();
       expect(ready(initial)).toBe(false);
-      const boardReads = vi.spyOn(placementRead, "readSessionRowHasBoard");
+      boardReads = observeSqliteReadSql(StatementSync.prototype);
       const check = async (literal: boolean) => {
         if (!projection) {
           throw new Error("Expected a live projection");
@@ -150,7 +152,7 @@ it("reindexes cold lineage when a literal parent appears and disappears", async 
         expect(row?.membership).toBe(initial.membership);
         expect(row?.hasBoard).toBe(initial.hasBoard);
         expect(row?.materialized).toBeUndefined();
-        expect(boardReads).not.toHaveBeenCalled();
+        expect(boardReads?.queries.filter((sql) => sql.includes("board_tabs"))).toEqual([]);
         if (literal) {
           expect(
             projection.selectEntries({ parentSessionKey: "global" }).map((entry) => entry.key),
@@ -185,6 +187,7 @@ it("reindexes cold lineage when a literal parent appears and disappears", async 
         expect.objectContaining({ key: child, model: "qwen3:14b" }),
       ]);
     } finally {
+      boardReads?.restore();
       projection?.dispose();
       release();
     }

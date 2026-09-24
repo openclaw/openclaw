@@ -237,7 +237,6 @@ describe("production lint suppressions", () => {
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/infra/exec-approvals-effective.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/json-file.ts|typescript-eslint/no-unnecessary-type-parameters|1",
         "src/infra/net/fetch-guard.ts|no-warning-comments|1",
         // Undici invokes its method-shaped clientFactory callback without an options receiver.

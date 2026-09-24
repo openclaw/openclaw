@@ -13,6 +13,7 @@ import {
   type BrowserInspectedNode,
   type BrowserPanelTab,
 } from "./browser-client.ts";
+import type { BrowserPanelInputController } from "./browser-panel-controller-input.ts";
 import { BrowserPanelNativePresentation } from "./browser-panel-native-presentation.ts";
 import type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
@@ -48,6 +49,7 @@ interface BrowserPanelNativeHost extends BrowserPanelNativeState {
   >;
   readonly native: { readonly activeTab: NativeBrowserTab | undefined };
   readonly pendingInput: Pick<BrowserPanelPendingInput, "queueInspection">;
+  readonly input: Pick<BrowserPanelInputController, "paintOverlay">;
   setState<Key extends keyof BrowserPanelNativeState>(
     key: Key,
     value: BrowserPanelNativeState[Key],
@@ -56,7 +58,6 @@ interface BrowserPanelNativeHost extends BrowserPanelNativeState {
   syncUrlDraft(url: string): void;
   reportError(error: unknown): void;
   exitCaptureModes(): void;
-  paintOverlay(): void;
 }
 
 const presenters = new Set<BrowserPanelNativeController>();
@@ -392,7 +393,7 @@ export class BrowserPanelNativeController {
           this.controller.reportError(reply.error);
         } else if (reply?.ok && "node" in reply) {
           this.controller.setState("inspected", readBrowserInspectedNode(reply.node));
-          this.controller.paintOverlay();
+          this.controller.input.paintOverlay();
         }
       });
     });

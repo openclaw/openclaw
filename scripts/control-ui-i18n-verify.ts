@@ -16,7 +16,10 @@ import {
 } from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
-import { compareStringArrays } from "./lib/control-ui-i18n-sync-plan.ts";
+import {
+  compareStringArrays,
+  extractTranslationPlaceholders,
+} from "./lib/control-ui-i18n-sync-plan.ts";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 
 export type CatalogFallbackBaseline = {
@@ -44,12 +47,6 @@ export function formatControlUiCatalogFallbackDriftError(): string {
     "control-ui catalog fallback baseline drift detected.",
     "Run `pnpm ui:i18n:sync` (included in `pnpm release:prep`) and commit the generated locale artifacts.",
   ].join("\n");
-}
-
-export function extractTranslationPlaceholders(text: string): string[] {
-  return [...new Set([...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? ""))]
-    .filter(Boolean)
-    .toSorted((left, right) => left.localeCompare(right));
 }
 
 export function flattenControlUiCatalog(
