@@ -143,12 +143,12 @@ export type AgentsApiFunctionResult =
   | { success: true; output: string }
   | { success: false; error: string };
 
-/** Session lifecycle uses the SDK; tool replies retain their existing request contract. */
+/** The SDK owns the wire protocol; OpenClaw retains native session authority. */
 export class AgentsApiClient {
   private readonly sessions: OpenAI["beta"]["agents"]["sessions"];
 
   constructor(
-    private readonly apiKey: string,
+    apiKey: string,
     private readonly assertCurrent: () => void,
   ) {
     this.sessions = new OpenAI({
@@ -282,23 +282,30 @@ export class AgentsApiClient {
     result: AgentsApiFunctionResult,
     signal: AbortSignal,
   ): Promise<void> {
-    await this.input(sessionId, signal, {
-      type: "agent.session.input.tool_result",
-      turn_id: call.turn_id,
-      call_id: call.call_id,
-      ...(result.success
-        ? { success: true, output: result.output }
-        : { success: false, error: result.error }),
-    });
+    await this.sessions.events.create(
+      sessionId,
+      {
+        events: [
+          {
+            type: "agent.session.input.tool_result",
+            turn_id: call.turn_id,
+            call_id: call.call_id,
+            ...(result.success
+              ? { success: true, output: result.output }
+              : { success: false, error: result.error }),
+          },
+        ],
+        "Idempotency-Key": randomUUID(),
+      },
+      { signal },
+    );
+    this.assertCurrent();
   }
 
   async turn(sessionId: string, turnId: string, signal: AbortSignal): Promise<AgentsApiTurn> {
-    const response = await this.request(
-      `/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}`,
-      "GET",
-      signal,
+    const turn = turnSchema.parse(
+      await this.sessions.turns.retrieve(turnId, { session_id: sessionId }, { signal }),
     );
-    const turn = turnSchema.parse(await response.json());
     this.assertCurrent();
     if (turn.id !== turnId || turn.session_id !== sessionId || turn.subagent_id !== null) {
       throw new Error("Agents API returned a turn outside the requested root session");
@@ -389,79 +396,6 @@ export class AgentsApiClient {
       }
     }
     return items;
-  }
-
-  private async input(sessionId: string, signal: AbortSignal, event: unknown): Promise<void> {
-    const response = await this.request(
-      `/${encodeURIComponent(sessionId)}/events`,
-      "POST",
-      signal,
-      {
-        events: [event],
-      },
-    );
-    await response.body?.cancel();
-  }
-
-  private async request(
-    path: string,
-    method: string,
-    signal: AbortSignal,
-    body?: unknown,
-  ): Promise<Response> {
-    this.assertCurrent();
-    signal.throwIfAborted();
-    const headers = {
-      Authorization: `Bearer ${this.apiKey}`,
-      "OpenAI-Beta": "agents=v1",
-      "Content-Type": "application/json",
-      Accept: "text/event-stream, application/json",
-      ...(method === "POST" ? { "Idempotency-Key": randomUUID() } : {}),
-    };
-    let response: Response;
-    for (let attempt = 0; ; attempt++) {
-      this.assertCurrent();
-      const guarded = await fetchWithSsrFGuard({
-        url: `https://api.openai.com/v1/agents/sessions${path}`,
-        signal,
-        beforeRequest: this.assertCurrent,
-        init: {
-          method,
-          headers,
-          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        },
-      });
-      response = responseWithRelease(guarded.response, guarded.release);
-      if (response.status !== 503 || attempt === 2) {
-        break;
-      }
-      await response.body?.cancel();
-      await delay(1_000, undefined, { signal });
-    }
-    try {
-      this.assertCurrent();
-    } catch (error) {
-      await response.body?.cancel().catch(() => undefined);
-      throw error;
-    }
-    if (!response.ok) {
-      const result: unknown = await response.json();
-      const parsed = z.object({ error: errorSchema }).safeParse(result);
-      throw new AgentsApiError(
-        `Agents API ${method} ${path}: HTTP ${response.status}${parsed.success ? `: ${parsed.data.error.message}` : ""}`,
-        {
-          status: response.status,
-          ...(parsed.success
-            ? {
-                code: parsed.data.error.code,
-                type: parsed.data.error.type,
-                param: parsed.data.error.param,
-              }
-            : {}),
-        },
-      );
-    }
-    return response;
   }
 }
 
