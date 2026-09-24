@@ -747,7 +747,7 @@ function createTestConfig(baseUrl: string): OpenClawConfig {
         skills: [],
       },
     },
-    tools: { profile: "coding" },
+    tools: { profile: "coding", codeMode: false, toolSearch: false },
     models: {
       mode: "replace",
       providers: {
@@ -858,9 +858,16 @@ async function startProofModelServer(options?: {
       body += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
     }
     requestBodies.push(body);
+    const requestBody = JSON.parse(body) as { tools?: Array<{ type?: string; name?: string }> };
+    const respondWithTool = (name: string, args: Record<string, unknown>) => {
+      expect(requestBody.tools).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "function", name })]),
+      );
+      writeOpenAiResponsesSse(response, buildToolCallEvents(name, args));
+    };
     if (options?.yieldAfterSpawn && parentCheckedChildren && !parentYielded) {
       parentYielded = true;
-      writeOpenAiResponsesSse(response, buildToolCallEvents("sessions_yield", {}));
+      respondWithTool("sessions_yield", {});
       return;
     }
     const completion = [RESTORED_CHILD_RESULT, CHILD_MARKER].find((marker) =>
@@ -888,23 +895,20 @@ async function startProofModelServer(options?: {
       return;
     }
     if (body.includes(PARENT_PROMPT) && !body.includes("function_call_output")) {
-      writeOpenAiResponsesSse(
-        response,
-        buildToolCallEvents("sessions_spawn", {
-          task: CHILD_TASK,
-          label: "requester-owner-child",
-          ...(options?.placement ? { placement: options.placement } : {}),
-          thread: false,
-          mode: "run",
-          ...(options?.yieldAfterSpawn ? { completionTarget: "parent" } : {}),
-        }),
-      );
+      respondWithTool("sessions_spawn", {
+        task: CHILD_TASK,
+        label: "requester-owner-child",
+        ...(options?.placement ? { placement: options.placement } : {}),
+        thread: false,
+        mode: "run",
+        ...(options?.yieldAfterSpawn ? { completionTarget: "parent" } : {}),
+      });
       return;
     }
     if (options?.yieldAfterSpawn) {
       await options.yieldAfterSpawn;
       parentCheckedChildren = true;
-      writeOpenAiResponsesSse(response, buildToolCallEvents("subagents", { action: "list" }));
+      respondWithTool("subagents", { action: "list" });
       return;
     }
     writeOpenAiResponsesText(response, {

@@ -20,7 +20,7 @@ import {
 type PublishOutputFileAtomically =
   typeof import("./output-file.runtime.js").publishOutputFileAtomically;
 type GetSubCliCompletionGroups =
-  typeof import("./program/register.subclis-core.js").getSubCliCompletionGroups;
+  typeof import("./program/register.subclis.js").getSubCliCompletionGroups;
 
 const outputFileMocks = vi.hoisted(() => ({
   publishOutputFileAtomically: vi.fn<PublishOutputFileAtomically>(),
@@ -68,7 +68,7 @@ vi.mock("./program/program-context.js", () => ({
   getProgramContext: getProgramContextMock,
 }));
 
-vi.mock("./program/register.subclis-core.js", () => ({
+vi.mock("./program/register.subclis.js", () => ({
   getSubCliCompletionGroups: getSubCliCompletionGroupsMock,
 }));
 

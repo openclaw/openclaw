@@ -1,8 +1,9 @@
 // Xai provider module implements model/runtime integration.
 import type {
   ImageGenerationProvider,
-  ImageGenerationRequest,
   ImageGenerationSourceImage,
+  OpenAiCompatibleImageProviderRequestBody,
+  OpenAiCompatibleImageProviderRequestParams,
 } from "openclaw/plugin-sdk/image-generation";
 import {
   createOpenAiCompatibleImageGenerationProvider,
@@ -35,16 +36,9 @@ function resolveImageForEdit(
   return toImageDataUrl({ buffer: input.buffer, mimeType: input.mimeType });
 }
 
-function resolveXaiImageBaseUrl(req: ImageGenerationRequest): string {
-  return normalizeOptionalString(req.cfg?.models?.providers?.xai?.baseUrl) ?? XAI_BASE_URL;
-}
-
-function buildBody(params: {
-  req: ImageGenerationRequest;
-  inputImages: ImageGenerationSourceImage[];
-  model: string;
-  count: number;
-}): Record<string, unknown> {
+function buildRequest(
+  params: OpenAiCompatibleImageProviderRequestParams,
+): OpenAiCompatibleImageProviderRequestBody {
   const body: Record<string, unknown> = {
     model: params.model,
     prompt: params.req.prompt,
@@ -76,7 +70,7 @@ function buildBody(params: {
     }
   }
 
-  return body;
+  return { kind: "json", body };
 }
 
 export function buildXaiImageGenerationProvider(): ImageGenerationProvider {
@@ -84,17 +78,10 @@ export function buildXaiImageGenerationProvider(): ImageGenerationProvider {
   return createOpenAiCompatibleImageGenerationProvider({
     ...metadata,
     defaultBaseUrl: XAI_BASE_URL,
-    resolveBaseUrl: ({ req }) => resolveXaiImageBaseUrl(req),
     resolveAllowPrivateNetwork: () => false,
     defaultTimeoutMs: XAI_IMAGE_DEFAULT_TIMEOUT_MS,
-    buildGenerateRequest: ({ req, inputImages, model, count }) => ({
-      kind: "json",
-      body: buildBody({ req, inputImages, model, count }),
-    }),
-    buildEditRequest: ({ req, inputImages, model, count }) => ({
-      kind: "json",
-      body: buildBody({ req, inputImages, model, count }),
-    }),
+    buildGenerateRequest: buildRequest,
+    buildEditRequest: buildRequest,
     missingApiKeyError: "xAI API key missing",
     failureLabels: {
       generate: "xAI image generation failed",

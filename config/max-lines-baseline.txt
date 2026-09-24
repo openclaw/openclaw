@@ -116,7 +116,6 @@ extensions/matrix/src/cli.test.ts
 extensions/matrix/src/matrix/monitor/events.test.ts
 extensions/matrix/src/matrix/monitor/handler.test.ts
 extensions/matrix/src/matrix/sdk.test.ts
-extensions/matrix/src/matrix/sdk/verification-manager.ts
 extensions/matrix/src/matrix/send.test.ts
 extensions/mattermost/src/channel.test.ts
 extensions/mattermost/src/channel.ts
@@ -219,7 +218,6 @@ extensions/telegram/src/channel.ts
 extensions/telegram/src/draft-stream.test.ts
 extensions/telegram/src/draft-stream.ts
 extensions/telegram/src/fetch.ts
-extensions/telegram/src/format.ts
 extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
 extensions/telegram/src/thread-bindings.ts
@@ -423,7 +421,6 @@ src/channels/streaming.ts
 src/cli/capability-cli.test.ts
 src/cli/command-secret-gateway.test.ts
 src/cli/command-secret-gateway.ts
-src/cli/command-secret-targets.ts
 src/cli/config-cli.test.ts
 src/cli/cron-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
@@ -465,7 +462,6 @@ src/commands/doctor-gateway-services.test.ts
 src/commands/doctor-gateway-services.ts
 src/commands/doctor-legacy-config.migrations.test.ts
 src/commands/doctor-memory-search.test.ts
-src/commands/doctor-memory-search.ts
 src/commands/doctor-session-sqlite.ts
 src/commands/doctor-state-integrity.ts
 src/commands/doctor-state-migrations.test.ts
@@ -573,7 +569,6 @@ src/gateway/server-methods/chat.directive-tags.test.ts
 src/gateway/server-methods/config.ts
 src/gateway/server-methods/cron.ts
 src/gateway/server-methods/cron.validation.test.ts
-src/gateway/server-methods/devices.ts
 src/gateway/server-methods/doctor.test.ts
 src/gateway/server-methods/doctor.ts
 src/gateway/server-methods/models-auth-status.test.ts
@@ -582,7 +577,6 @@ src/gateway/server-methods/nodes.invoke-wake.test.ts
 src/gateway/server-methods/send.test.ts
 src/gateway/server-methods/send.ts
 src/gateway/server-methods/server-methods.test.ts
-src/gateway/server-methods/skills.ts
 src/gateway/server-node-events.test.ts
 src/gateway/server-node-events.ts
 src/gateway/server-plugins.test.ts

@@ -50,6 +50,7 @@ import {
 import {
   abortedPartialPersistenceError,
   captureAbortedPartial,
+  deferAbortedPartialPersistence,
   withAbortedPartialPersistenceWarning,
   type AbortedPartialSnapshot,
   type ChatAbortOrigin,
@@ -122,12 +123,7 @@ export function abortQueuedCollectorSession(
   params: Omit<ChatSessionAbortParams, "ops"> & { runId?: string },
 ): Promise<QueuedCollectorAbortOutcome> | undefined {
   const entry = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
-  if (
-    !entry ||
-    !isSubagentRunQueued(entry) ||
-    params.excludeRunIds?.has(entry.runId) ||
-    (params.runId && entry.runId !== params.runId)
-  ) {
+  if (!entry || !isSubagentRunQueued(entry) || (params.runId && entry.runId !== params.runId)) {
     return undefined;
   }
   const workerCancellation = captureWorkerInferenceForSession({
@@ -399,7 +395,6 @@ type ChatSessionAbortParams = {
   cascadeDescendants?: true;
   /** Exact lifecycle owners may include hidden and side runs for this one session. */
   includeProtectedRuns?: boolean;
-  excludeRunIds?: ReadonlySet<string>;
   /** Captures exact registrations before cancellation can remove them. */
   onControllerTargets?: (
     targets: Array<{ runId: string; entry: ChatAbortControllerEntry }>,
@@ -434,7 +429,6 @@ function prepareChatSessionAbort(
     agentId: params.agentId,
     defaultAgentId: params.defaultAgentId,
     requester: params.requester,
-    excludeRunIds: params.excludeRunIds,
   });
   const {
     authorizedRuns,
@@ -452,7 +446,6 @@ function prepareChatSessionAbort(
     requester: params.requester,
     preserveSideRuns: params.preserveSideRuns,
     includeProtectedRuns: params.includeProtectedRuns,
-    excludeRunIds: params.excludeRunIds,
   });
   const resolvePendingRuns = (keyPrefix: string) =>
     resolveAuthorizedPreRegisteredRunsForSessionKeys({
@@ -465,7 +458,6 @@ function prepareChatSessionAbort(
       keyPrefix,
       preserveSideRuns: params.preserveSideRuns,
       includeProtectedRuns: params.includeProtectedRuns,
-      excludeRunIds: params.excludeRunIds,
     });
   const pendingAgent = resolvePendingRuns("agent:");
   const pendingChat = resolvePendingRuns(PENDING_CHAT_SEND_DEDUPE_PREFIX);
@@ -547,6 +539,7 @@ function prepareChatSessionAbort(
               agentId: entry.agentId ?? params.agentId,
               text,
               abortOrigin: params.abortOrigin,
+              resolveTerminalProducer: entry.resolveTerminalProducer,
               session: params.session,
             }),
           ]
@@ -591,6 +584,13 @@ function prepareChatSessionAbort(
         runId,
         sessionKey,
         stopReason: params.stopReason,
+        onAbortCommitted: () => {
+          recordRun(runId);
+          deferAbortedPartialPersistence(
+            snapshots.find((snapshot) => snapshot.runId === runId),
+            params.context,
+          );
+        },
       });
       if (res.aborted) {
         recordRun(runId);

@@ -324,11 +324,41 @@ describe("check-database-first-legacy-stores", () => {
         { kind: "legacy restart sentinel reference", line: 2 },
       ]),
       "allows the CLI preflight to detect exact legacy restart sentinel inputs": sourceCase`
+        import fs from "node:fs";
         [
           path.join(stateDir, "restart-sentinel.json"),
           path.join(stateDir, "restart-sentinel.json.doctor-importing"),
-        ].some(fileOrDirExists);
+        ].some(fs.existsSync);
       `("src/cli/program/config-guard.ts", []),
+      "flags an unbound filesystem name in CLI preflight detection": sourceCase`
+        [path.join(stateDir, "restart-sentinel.json")].some(fs.existsSync);
+      `("src/cli/program/config-guard.ts", [
+        { kind: "legacy restart sentinel reference", line: 2 },
+      ]),
+      "flags a custom filesystem object in CLI preflight detection": sourceCase`
+        const fs = { existsSync: () => true };
+        [path.join(stateDir, "restart-sentinel.json")].some(fs.existsSync);
+      `("src/cli/program/config-guard.ts", [
+        { kind: "legacy restart sentinel reference", line: 3 },
+      ]),
+      "flags a shadowed filesystem import in CLI preflight detection": sourceCase`
+        import fs from "node:fs";
+        function detect(fs) {
+          return [path.join(stateDir, "restart-sentinel.json")].some(fs.existsSync);
+        }
+      `("src/cli/program/config-guard.ts", [
+        { kind: "legacy restart sentinel reference", line: 4 },
+      ]),
+      "flags custom predicates over CLI preflight restart sentinel inputs": sourceCase`
+        [path.join(stateDir, "restart-sentinel.json")].some(fileOrDirExists);
+      `("src/cli/program/config-guard.ts", [
+        { kind: "legacy restart sentinel reference", line: 2 },
+      ]),
+      "flags callbacks that read CLI preflight restart sentinel inputs": sourceCase`
+        [path.join(stateDir, "restart-sentinel.json")].some((file) => fs.readFileSync(file));
+      `("src/cli/program/config-guard.ts", [
+        { kind: "legacy restart sentinel reference", line: 2 },
+      ]),
       "flags direct legacy restart sentinel reads from the CLI preflight": sourceCase`
         await readFile(path.join(stateDir, "restart-sentinel.json"), "utf8");
         await readFile(path.join(stateDir, "restart-sentinel.json.doctor-importing"), "utf8");
@@ -337,9 +367,10 @@ describe("check-database-first-legacy-stores", () => {
         { kind: "legacy restart sentinel reference", line: 3 },
       ]),
       "flags nested restart sentinel paths disguised as CLI preflight detection": sourceCase`
-        [path.join(stateDir, "archive/restart-sentinel.json")].some(fileOrDirExists);
+        import fs from "node:fs";
+        [path.join(stateDir, "archive/restart-sentinel.json")].some(fs.existsSync);
       `("src/cli/program/config-guard.ts", [
-        { kind: "legacy restart sentinel reference", line: 2 },
+        { kind: "legacy restart sentinel reference", line: 3 },
       ]),
       "flags retired Diffs viewer sidecar writes": fsPathCase`
         await fs.writeFile(path.join(root, id, "viewer.html"), html);

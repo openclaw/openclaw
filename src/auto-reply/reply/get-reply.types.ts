@@ -41,6 +41,8 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  /** One accepted request owns this monotonic custody budget across dispatch attempts. */
+  stateAcquisitionDeadline?: () => number;
   /** Host-minted original operator authority; never restored from session metadata. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
   extractedFileImages?: ExtractedFileImage[];

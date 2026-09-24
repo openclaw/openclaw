@@ -11,7 +11,7 @@ import type {
 } from "./schema/environments.js";
 import type * as HumanMentionsSchema from "./schema/human-mentions.js";
 import type { LogsTailParams } from "./schema/logs-chat.js";
-import type { PortalCloseParams, PortalListParams, PortalOpenParams } from "./schema/portals.js";
+import type * as PortalSchema from "./schema/portals.js";
 import type * as GitHubSchema from "./schema/session-github-publication.js";
 import type {
   ThemesListParams,
@@ -50,9 +50,12 @@ export type GatewayCoreRequestParams = {
   "logs.tail": LogsTailParams;
   "mentions.list": HumanMentionsSchema.MentionsListParams;
   "mentions.dismiss": HumanMentionsSchema.MentionsDismissParams;
-  "portal.close": PortalCloseParams;
-  "portal.list": PortalListParams;
-  "portal.open": PortalOpenParams;
+  "portal.close": PortalSchema.PortalCloseParams;
+  "portal.list": PortalSchema.PortalListParams;
+  "portal.open": PortalSchema.PortalOpenParams;
+  "portal.session.close": Static<typeof PortalSchema.SessionPortalCloseParamsSchema>;
+  "portal.session.list": Static<typeof PortalSchema.SessionPortalListParamsSchema>;
+  "portal.session.open": Static<typeof PortalSchema.SessionPortalOpenParamsSchema>;
   "sessions.github.publish": GitHubSchema.SessionGitHubPublishParams;
   "sessions.github.options": Static<typeof GitHubSchema.SessionGitHubOptionsParamsSchema>;
   "sessions.github.status": Static<typeof GitHubSchema.SessionGitHubStatusParamsSchema>;

@@ -623,6 +623,7 @@ it.runIf(!process.versions.bun)(
         ok: true,
         value: {
           kind: "session-store-target",
+          logicalAgentId: "main",
           sourcePath: request.database.path,
           database: request.database,
         },
@@ -670,6 +671,7 @@ it.runIf(!process.versions.bun).each([false, true])(
       ok: true,
       value: {
         kind: "session-store-target",
+        logicalAgentId: "main",
         sourcePath: request.database.path,
         database: request.database,
       },
@@ -716,6 +718,7 @@ it("keeps native worker retirement for Bun candidate cleanup", async () => {
     ok: true,
     value: {
       kind: "session-store-target",
+      logicalAgentId: "main",
       sourcePath: request.database.path,
       database: request.database,
     },
@@ -779,6 +782,7 @@ it.runIf(!process.versions.bun).each([false, true])(
       ok: true,
       value: {
         kind: "session-store-target",
+        logicalAgentId: "main",
         sourcePath: request.database.path,
         database: request.database,
       },
@@ -905,6 +909,7 @@ it.each(["store", "inventory"] as const)(
           kind === "store"
             ? {
                 kind: "session-store-target",
+                logicalAgentId: "main",
                 sourcePath: original.physicalPath,
                 database: { agentId: "main", path: original.physicalPath },
               }

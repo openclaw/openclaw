@@ -325,7 +325,6 @@ export async function runReleasePublishPreflight(
             releaseTag: options.tag,
             npmDistTag: options.npmDistTag,
             stableSoakWaiver: options.stableSoakWaiver,
-            laneWaiver: options.laneWaiver,
             expectedSha: sourceSha,
             expectedReleaseProfile: options.releaseProfile,
           }),

@@ -191,49 +191,31 @@ export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON="$CONFIG_COVERAGE_JSON"
 rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON" "$ARTIFACT_ROOT/backup-rollback.json" "$ARTIFACT_ROOT/baseline-companion.json"
 : >"$PHASE_LOG"
 
-validate_baseline_package_spec() {
-  local spec="$1"
-  if [[ "$spec" =~ ^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
-    return 0
-  fi
-  echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, openclaw@alpha, an exact OpenClaw release version, or a bare release version; got: $spec" >&2
-  return 1
+normalize_baseline_spec() {
+  node --input-type=module - "$1" <<'NODE'
+import {
+  assertSupportedUpgradeSurvivorBaselineSpec,
+  normalizeUpgradeSurvivorBaselineSpec,
+} from "./scripts/lib/upgrade-survivor-policy.mjs";
+const spec = normalizeUpgradeSurvivorBaselineSpec(process.argv[2]);
+if (!spec) throw new Error("OPENCLAW_UPGRADE_SURVIVOR_BASELINE cannot be empty");
+assertSupportedUpgradeSurvivorBaselineSpec(spec);
+process.stdout.write(spec);
+NODE
 }
 
 normalize_baseline() {
-  local raw="${BASELINE_RAW//[[:space:]]/}"
-  if [ -z "$raw" ]; then
-    echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE cannot be empty" >&2
-    return 1
-  fi
-  case "$raw" in
-    openclaw@*)
-      baseline_spec="$raw"
-      baseline_version="${raw#openclaw@}"
-      ;;
-    *@*)
-      echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@<version> or a bare version" >&2
-      return 1
-      ;;
-    *)
-      baseline_version="$raw"
-      baseline_spec="openclaw@$raw"
-      ;;
-  esac
+  baseline_spec="$(normalize_baseline_spec "$BASELINE_RAW")" || return "$?"
+  baseline_version="${baseline_spec#openclaw@}"
   case "$baseline_version" in
     latest | beta | alpha)
       baseline_version=""
       baseline_version_expected="0"
       ;;
-    dev | main | "")
-      echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, openclaw@alpha, openclaw@<version>, or a bare version" >&2
-      return 1
-      ;;
     *)
       baseline_version_expected="1"
       ;;
   esac
-  validate_baseline_package_spec "$baseline_spec"
 }
 
 validate_update_restart_mode() {
@@ -1010,6 +992,7 @@ install_baseline() {
     return 1
   fi
   installed_version="$(read_installed_version)"
+  normalize_baseline_spec "$installed_version" >/dev/null || return "$?"
   if [ "$baseline_version_expected" = "1" ] && [ "$installed_version" != "$baseline_version" ]; then
     echo "baseline package version mismatch: expected $baseline_version, got $installed_version" >&2
     cat "$(package_root)/package.json" >&2 || true

@@ -64,15 +64,6 @@ function cloneIfObject<T>(value: T): T {
   return value;
 }
 
-function resolveSetupAvatarUrl(input: MatrixSetupInput): string | undefined {
-  const avatarUrl = input.avatarUrl;
-  if (typeof avatarUrl !== "string") {
-    return undefined;
-  }
-  const trimmed = avatarUrl.trim();
-  return trimmed || undefined;
-}
-
 function resolveExistingMatrixAccountKey(
   accounts: Record<string, Record<string, unknown>>,
   targetAccountId: string,
@@ -147,7 +138,7 @@ export function validateMatrixSetupInput(params: {
   input: ChannelSetupInput;
 }): string | null {
   const input = params.input as MatrixSetupInput;
-  const avatarUrl = resolveSetupAvatarUrl(input);
+  const avatarUrl = normalizeOptionalString(input.avatarUrl);
   if (avatarUrl && !isSupportedMatrixAvatarSource(avatarUrl)) {
     return "Matrix avatar URL must be an mxc:// URI or an http(s) URL.";
   }
@@ -164,13 +155,8 @@ export function validateMatrixSetupInput(params: {
   if (!accessToken && !password) {
     return "Matrix requires --access-token or --password";
   }
-  if (!accessToken) {
-    if (!userId) {
-      return "Matrix requires --user-id when using --password";
-    }
-    if (!password) {
-      return "Matrix requires --password when using --user-id";
-    }
+  if (!accessToken && !userId) {
+    return "Matrix requires --user-id when using --password";
   }
   return null;
 }
@@ -192,7 +178,7 @@ export function applyMatrixSetupAccountConfig(params: {
     accountId: normalizedAccountId,
     name: input.name,
   }) as CoreConfig;
-  const avatarUrl = resolveSetupAvatarUrl(input);
+  const avatarUrl = normalizeOptionalString(input.avatarUrl);
 
   if (input.useEnv) {
     return updateMatrixAccountConfig(next, normalizedAccountId, {

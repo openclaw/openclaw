@@ -51,13 +51,17 @@ import {
   resolveGatewayAssistantAvatar,
 } from "./assistant-avatar.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
-import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
+import {
+  buildAssistantMediaContentDisposition,
+  resolveAssistantMediaFilename,
+} from "./assistant-media-content-disposition.js";
 import {
   resolveAssistantMediaPolicy,
   type AssistantMediaSession,
   type AssistantMediaReader,
 } from "./assistant-media-policy.js";
 import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
+import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import {
   buildControlUiRootAssetPath,
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
@@ -73,7 +77,11 @@ import {
   type ControlUiEnvironment,
   type ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
-import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
+import {
+  applyControlUiSecurityHeaders,
+  buildControlUiCspHeader,
+  computeInlineScriptHashes,
+} from "./control-ui-csp.js";
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
@@ -193,19 +201,6 @@ function controlUiAvatarResolutionMeta(resolved: AgentAvatarResolution | null): 
     avatarStatus: resolved.kind,
     avatarReason: resolved.kind === "none" ? resolved.reason : null,
   };
-}
-
-function applyControlUiSecurityHeaders(res: ServerResponse) {
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  // Browser Talk is owned by this same-origin Control UI document. Keep camera
-  // access here; the Gateway's default policy continues to deny it elsewhere.
-  res.setHeader(
-    "Permissions-Policy",
-    "camera=(self), microphone=*, geolocation=*, clipboard-write=*",
-  );
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -656,16 +651,17 @@ export async function handleControlUiAssistantMediaRequest(
   let byteStream: ReturnType<typeof createGatewayByteStream> | undefined;
   try {
     const media = await openAssistantMedia(source, policy, allowance);
-    const resolvedReference = media.reference;
-    const localPath = resolvedReference.path;
     let opened = media.opened;
     byteStream = createGatewayByteStream(res, opened.handle, () => respondControlUiNotFound(res));
     const mime = media.mimeType;
     let contentType = mime ?? "application/octet-stream";
     let filename =
-      resolvedReference.kind === "inbound"
-        ? extractOriginalFilename(localPath)
-        : path.basename(localPath);
+      media.reference.kind === "inbound"
+        ? resolveAssistantMediaFilename(
+            extractOriginalFilename(media.reference.path),
+            url.searchParams.get("filename"),
+          )
+        : path.basename(media.reference.path);
     const mediaKind = kindFromMime(contentType);
     if (
       url.searchParams.get("playback") === "1" &&
@@ -1092,17 +1088,7 @@ export async function handleControlUiHttpRequest(
           ? (resolveRuntimeServiceBuildId() ?? undefined)
           : undefined,
       devGitBranch,
-      embedSandbox:
-        config?.gateway?.controlUi?.embedSandbox === "trusted"
-          ? "trusted"
-          : config?.gateway?.controlUi?.embedSandbox === "strict"
-            ? "strict"
-            : "scripts",
-      allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
-      automaticallyFetchFavicons: config?.gateway?.controlUi?.automaticallyFetchFavicons !== false,
-      seamColor: config?.ui?.seamColor,
-      environment: config?.gateway?.controlUi?.environment,
-      communityInvite: config?.gateway?.controlUi?.communityInvite !== false,
+      ...resolveControlUiBootstrapPresentation(config),
       terminalEnabled,
       cliAgentsEnabled: config?.gateway?.cliAgents?.enabled !== false,
       pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",

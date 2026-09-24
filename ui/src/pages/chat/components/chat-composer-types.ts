@@ -24,7 +24,7 @@ import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
-import type { ChatRunUiStatus } from "../run-lifecycle.ts";
+import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { RealtimeTalkCameraDevice } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
@@ -88,7 +88,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   disabledReasonTone?: "info" | "danger";
   disabledReasonBusy?: boolean;
   disabledBanner?: ChatComposerDisabledBanner;
-  runError?: { summary: string } | null;
+  runError?: ChatRunError | null;
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;

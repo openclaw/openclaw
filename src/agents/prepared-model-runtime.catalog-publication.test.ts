@@ -20,6 +20,7 @@ import {
 } from "../gateway/session-row-projection.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
   recordRuntimeAuthMaterialization,
   revokeRuntimeAuthMaterializations,
@@ -93,19 +94,24 @@ async function setup(preparedMap = false, profile?: AuthProfileCredential) {
     ? await prepareModelRuntimeSnapshot(input)
     : await publishPreparedModelRuntimeSnapshot(input, { catalogMode: "static" });
   await owner.loadFullModelCatalog!({ refresh: true });
-  for (let index = 0; index < rowCount; index++) {
-    replaceSessionEntrySync(
-      { agentId: "default", sessionKey: `agent:default:row-${index}` },
-      {
-        sessionId: `session-${index}`,
-        updatedAt: index + 1,
-        label: `Row ${index}`,
-        modelProvider: "custom",
-        model: "synthetic-model",
-        visibility: "shared",
-      },
-    );
-  }
+  runOpenClawAgentWriteTransaction(
+    () => {
+      for (let index = 0; index < rowCount; index++) {
+        replaceSessionEntrySync(
+          { agentId: "default", sessionKey: `agent:default:row-${index}` },
+          {
+            sessionId: `session-${index}`,
+            updatedAt: index + 1,
+            label: `Row ${index}`,
+            modelProvider: "custom",
+            model: "synthetic-model",
+            visibility: "shared",
+          },
+        );
+      }
+    },
+    { agentId: "default" },
+  );
   const context = requestContext(config);
   const readPrepared = vi.fn(() =>
     readPreparedGatewayModelCatalog({ agentId: "default", getConfig: () => config }),

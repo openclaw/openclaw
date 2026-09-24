@@ -169,6 +169,7 @@ const enPluginManagement = {
     intentTrending: "Trending",
     intentOfficial: "Official",
     intentBundled: "Bundled",
+    loadingCategories: "Loading plugin categories…",
     categoriesLabel: "Plugin categories",
     categoriesTitle: "Categories",
     allCategories: "All categories",

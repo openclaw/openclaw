@@ -15,6 +15,7 @@ import {
   DEFAULT_AI_SNAPSHOT_EFFICIENT_MAX_CHARS,
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
 } from "../constants.js";
+import { resolveBrowserEngine } from "../engines/registry.js";
 import {
   resolveDefaultSnapshotFormat,
   shouldUsePlaywrightForAriaSnapshot,
@@ -82,9 +83,7 @@ export function resolveSnapshotPlan(params: {
       ? "aria"
       : refsModeRaw === "role"
         ? "role"
-        : params.profile.engine === "lightpanda"
-          ? "aria"
-          : undefined;
+        : resolveBrowserEngine(params.profile.engine).defaultSnapshotRefs;
   const interactive = interactiveRaw ?? (mode === "efficient" ? true : undefined);
   const compact = compactRaw ?? (mode === "efficient" ? true : undefined);
   const depth =

@@ -59,15 +59,6 @@ export function createMatrixCryptoFacade(deps: {
   ) => Promise<Buffer>;
 }) {
   return {
-    updateSyncData: async (
-      _toDeviceMessages: unknown,
-      _otkCounts: unknown,
-      _unusedFallbackKeyAlgs: unknown,
-      _changedDeviceLists: unknown,
-      _leftDeviceLists: unknown,
-    ) => {
-      // compatibility no-op
-    },
     isRoomEncrypted: deps.isRoomEncrypted,
     requestOwnUserVerification: async () => {
       const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;

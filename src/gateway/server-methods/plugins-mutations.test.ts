@@ -313,35 +313,38 @@ describe("plugin management Gateway mutation handlers", () => {
     },
   );
 
-  it("forwards exact batch owners and reports one applied reload receipt", async () => {
-    const plugins = [
-      {
-        pluginId: "workboard",
-        installHash: "a".repeat(64),
-        sourceDigests: { workboard: "b".repeat(64) },
-      },
-      { pluginId: "diffs", installHash: "c".repeat(64) },
-    ];
-    const pluginIds = plugins.map((plugin) => plugin.pluginId);
-    const runtime = { ...application, pluginIds };
-    const warning = "Previous plugin service could not close.";
-    managementMocks.reload.mockResolvedValue({
-      pluginIds,
-      application: { ...runtime, warnings: [warning] },
-      warnings: [warning],
-    });
+  it.each([false, true])(
+    "reports the owner's restart requirement (%s) for one applied reload receipt",
+    async (restartRequired) => {
+      const plugins = [
+        {
+          pluginId: "workboard",
+          installHash: "a".repeat(64),
+          sourceDigests: { workboard: "b".repeat(64) },
+        },
+        { pluginId: "diffs", installHash: "c".repeat(64) },
+      ];
+      const pluginIds = plugins.map((plugin) => plugin.pluginId);
+      const runtime = { ...application, pluginIds };
+      const warning = "Previous plugin service could not close.";
+      managementMocks.reload.mockResolvedValue({
+        pluginIds,
+        application: { ...runtime, restartRequired, warnings: [warning] },
+        warnings: [warning],
+      });
 
-    expect(await callHandler("plugins.reload", { plugins })).toEqual({
-      ok: true,
-      response: { ok: true, pluginIds, restartRequired: false, runtime, warnings: [warning] },
-      error: undefined,
-    });
-    expect(managementMocks.reload).toHaveBeenCalledExactlyOnceWith({
-      plugins,
-      applyRuntime: expect.any(Function),
-      beforePersistentApply: expect.any(Function),
-    });
-  });
+      expect(await callHandler("plugins.reload", { plugins })).toEqual({
+        ok: true,
+        response: { ok: true, pluginIds, restartRequired, runtime, warnings: [warning] },
+        error: undefined,
+      });
+      expect(managementMocks.reload).toHaveBeenCalledExactlyOnceWith({
+        plugins,
+        applyRuntime: expect.any(Function),
+        beforePersistentApply: expect.any(Function),
+      });
+    },
+  );
 
   it.each([
     { label: "cleanup", error: new Error("file cleanup failed") },
