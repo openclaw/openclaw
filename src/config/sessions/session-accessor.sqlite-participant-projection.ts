@@ -9,6 +9,7 @@ import {
 import { SESSION_PARTICIPANTS_TABLE } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { readCurrentSessionEntryCacheParticipants } from "./session-accessor.sqlite-entry-cache.js";
 import {
   readParticipantIdentity,
   type SessionParticipantIdentity,
@@ -115,6 +116,7 @@ function withProjectedParticipants(
 export function readSqliteSessionParticipantProjection(database: DatabaseSync, sessionKey: string) {
   return (
     readPreparedSessionParticipants(database, sessionKey) ??
+    readCurrentSessionEntryCacheParticipants(database, sessionKey) ??
     participantProjection(
       participantRecordsBySessionKey(database, [sessionKey]).get(sessionKey) ?? [],
     )
@@ -126,7 +128,9 @@ export function projectSqliteSessionParticipants(
   sessionKey: string,
   entry: SessionEntry,
 ): SessionEntry {
-  const prepared = readPreparedSessionParticipants(database, sessionKey);
+  const prepared =
+    readPreparedSessionParticipants(database, sessionKey) ??
+    readCurrentSessionEntryCacheParticipants(database, sessionKey);
   if (prepared) {
     return prepared.participants ? { ...entry, ...prepared } : entry;
   }
