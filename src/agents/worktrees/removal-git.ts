@@ -8,6 +8,7 @@ import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
 import { canonicalPathKey } from "./orphan-paths.js";
+import { WorktreeRemovalIncompleteError } from "./removal-errors.js";
 import type { ExactStateRetirement } from "./snapshot-exact-state-contract.js";
 import type { ExactStateSnapshot } from "./snapshot-exact-state.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -70,6 +71,30 @@ export async function prepareSnapshotBranchDeletion(
     throw new Error(`Cannot bind branch cleanup to ${snapshotRef}; checkout preserved.`);
   }
   return deletionOptions;
+}
+
+/** A pending pin protects the completed capture from a second removal attempt. */
+export async function requireWorktreeRemovalRef(
+  record: ManagedWorktreeRecord,
+  git: Pick<WorktreeGitPolicy, "run">,
+  options: GitOptions,
+): Promise<string> {
+  const pendingRef = `refs/openclaw/removals/${record.id}`;
+  const pending = await git.run(
+    record.repoRoot,
+    ["show-ref", "--verify", "--quiet", pendingRef],
+    options,
+  );
+  if (pending.code === 0) {
+    throw new WorktreeRemovalIncompleteError(
+      `Previous worktree removal may be incomplete; inspect ${record.path} before cleanup. Recovery snapshot preserved at ${pendingRef}.`,
+      record.id,
+    );
+  }
+  if (pending.code !== 1) {
+    throw commandError("git show-ref --verify", pending);
+  }
+  return pendingRef;
 }
 
 /** Once destructive deletion starts, its allocation owner joins it without a deadline. */

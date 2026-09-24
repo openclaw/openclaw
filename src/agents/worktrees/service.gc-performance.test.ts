@@ -7,6 +7,7 @@ import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import * as checkoutInspection from "./checkout-inspection.js";
 import * as registry from "./registry.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
+import { initializeManagedWorktreeTestRepository } from "./service.test-support.js";
 import { hasTemplates } from "./template-registry.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -85,20 +86,23 @@ it("protects a sweep of live leases without writer admission or checkout inspect
   expect(measurements).toMatchObject({ writes: 0, registryReads: 1, checkoutInspections: 0 });
 });
 
-it("protects a leased worktree created after the sweep snapshot before inspecting Git", async () => {
+it("protects a leased worktree created after the sweep snapshot before checkout inspection", async () => {
   const root = tempDirs.make("openclaw-gc-late-lease-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
-  addLeasedWorktree(env, root, "initial");
+  // Pressure reconciliation needs real repository refs, even for protected rows.
+  const repo = await initializeManagedWorktreeTestRepository(root);
+  addLeasedWorktree(env, repo, "initial");
   const inspections = vi.spyOn(checkoutInspection, "inspectManagedWorktreeCheckout");
   const result = await new ManagedWorktreeService({ env, now: () => IDLE_GC_MS + 2 }).gc({
     limits: { maxCount: 0 },
     shouldRemoveOwner: () => {
-      addLeasedWorktree(env, root, "late");
+      addLeasedWorktree(env, repo, "late");
       return false;
     },
   });
   expect(result.removed).toEqual([]);
   expect(result.protectedCount).toBe(2);
+  expect(result.limitsSatisfied).toBe(false);
   expect(result.issues.every((issue) => issue.reason === "run lease is active")).toBe(true);
   expect(inspections).not.toHaveBeenCalled();
 });

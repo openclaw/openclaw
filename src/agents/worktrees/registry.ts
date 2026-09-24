@@ -22,6 +22,7 @@ import {
 import {
   assertRegistryMutationCustody,
   collectLiveRunLeases,
+  findPendingWorktreeRemovalInDatabase,
   worktreeRunLeaseScope,
   WorktreeRemovalContentionError,
   WORKTREE_REMOVING_LEASE_KEY,
@@ -597,7 +598,11 @@ export function claimWorktreeRemovalRow(
       // The removal claim is exclusive: a live marker owned by a different token means
       // another remover is mid-operation, so this remover must not enter it too.
       if (removingToken !== undefined && removingToken !== params.token) {
-        throw new WorktreeRemovalContentionError("busy", "worktree removal is already in progress");
+        throw new WorktreeRemovalContentionError(
+          "busy",
+          "worktree removal is already in progress",
+          true,
+        );
       }
       const payloadJson = JSON.stringify({
         pid: params.pid,
@@ -721,5 +726,13 @@ export function hasLiveWorktreeRunLeaseRow(
         ).livePids.length > 0,
       { env },
     ) ?? false
+  );
+}
+
+/** Removal-claim admission is a synchronous lock primitive, not an ordinary state reader. */
+export function findPendingWorktreeRemoval(env: NodeJS.ProcessEnv, ids: readonly string[]) {
+  return withExistingOpenClawStateDatabaseCurrentReadOnly(
+    ({ db }) => findPendingWorktreeRemovalInDatabase(db, ids),
+    { env },
   );
 }

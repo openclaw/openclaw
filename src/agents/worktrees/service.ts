@@ -55,11 +55,17 @@ import {
   updateRegistryWorktree,
   WorktreeRemovalContentionError,
 } from "./registry.js";
-import { WorktreeSnapshotError, WorktreeRemovalLockError } from "./removal-errors.js";
+import {
+  WorktreeSnapshotError,
+  WorktreeRemovalLockError,
+  WorktreeRemovalIncompleteError,
+  rethrowWorktreeRemovalFailure,
+} from "./removal-errors.js";
 import {
   assertExactStateOwner,
   prepareSnapshotBranchDeletion,
   removeManagedCheckout,
+  requireWorktreeRemovalRef,
   requireExactManagedWorktreeHead,
   retireExactWorktree,
   requireManagedWorktreeHead,
@@ -155,6 +161,8 @@ type RemoveWorktreeParams = WorktreeMutationGuard & {
   claimToken?: string;
   rollbackGuard?: () => void;
   runEndCleanup?: ManagedWorktreeRunEndCleanup;
+  /** GC pressure must be reread after acquiring the allocation lease. */
+  assertCleanupPressure?: () => Promise<void>;
 };
 const WORKTREE_CLEANUP_TARGET = 100;
 
@@ -817,6 +825,7 @@ export class ManagedWorktreeService {
       const result = await this.withAllocationLease(params, async (guard) => {
         timing?.markPhase();
         try {
+          await params.assertCleanupPressure?.();
           return await this.removeWithAllocation({ ...params, ...guard }, timing);
         } finally {
           timing?.markRemovalStage();
@@ -840,19 +849,14 @@ export class ManagedWorktreeService {
     const record = this.requireLiveRecord(params.id);
     if (params.exactState) {
       assertExactStateOwner(record, params.exactState);
-      const pending = await runGit(
-        record.repoRoot,
-        ["show-ref", "--verify", "--quiet", `refs/openclaw/removals/${record.id}`],
-        { signal: params.signal, beforeRun: params.commitGuard },
+      await requireWorktreeRemovalRef(
+        record,
+        { run: runGit },
+        {
+          signal: params.signal,
+          beforeRun: params.commitGuard,
+        },
       );
-      if (pending.code === 0) {
-        throw new Error(
-          "Previous worktree removal may be incomplete; source and recovery snapshot preserved",
-        );
-      }
-      if (pending.code !== 1) {
-        throw commandError("git show-ref", pending);
-      }
     }
     const claimToken = params.claimToken ?? randomUUID();
     claimWorktreeRemoval(this.env, { worktreeId: record.id, token: claimToken });
@@ -877,8 +881,9 @@ export class ManagedWorktreeService {
       );
     } catch (error) {
       timing?.markRemovalStage("finalization");
-      abortWorktreeRemoval(this.env, record.id, claimToken);
-      throw error;
+      return rethrowWorktreeRemovalFailure(error, () =>
+        abortWorktreeRemoval(this.env, record.id, claimToken),
+      );
     }
   }
 
@@ -931,20 +936,7 @@ export class ManagedWorktreeService {
     return await withManagedWorktreeGit(
       { record, env: this.env, getConfig: this.getConfig ?? getRuntimeConfig, ...gitOptions },
       async (git) => {
-        const pendingRef = `refs/openclaw/removals/${record.id}`;
-        const pending = await git.run(
-          record.repoRoot,
-          ["show-ref", "--verify", "--quiet", pendingRef],
-          gitOptions,
-        );
-        if (pending.code !== 1) {
-          if (pending.code !== 0) {
-            throw commandError("git show-ref --verify", pending);
-          }
-          throw new Error(
-            `Previous worktree removal may be incomplete; inspect ${record.path} before cleanup. Recovery snapshot preserved at ${pendingRef}.`,
-          );
-        }
+        const pendingRef = await requireWorktreeRemovalRef(record, git, gitOptions);
         const checkHead = () =>
           params.exactState
             ? requireExactManagedWorktreeHead(record, params.exactState, gitOptions)
@@ -1147,8 +1139,14 @@ export class ManagedWorktreeService {
             },
           });
         }
-        await removeManagedCheckout(record, git, params.requireLossless, params.commitGuard);
-        return await finalize();
+        try {
+          await removeManagedCheckout(record, git, params.requireLossless, params.commitGuard);
+          return await finalize();
+        } catch (error) {
+          // Even a nonzero Git exit can follow partial or complete deletion.
+          // Keep the pending snapshot and signal stale registry accounting.
+          throw new WorktreeRemovalIncompleteError(error);
+        }
       },
     );
   }
@@ -1370,10 +1368,11 @@ export class ManagedWorktreeService {
         limits: params.limits ?? resolveWorktreeCleanupLimits(),
         progress,
         protect,
-        remove: async (record) => {
+        remove: async (record, assertCleanupPressure) => {
           await this.remove({
             id: record.id,
             reason: "limit-gc",
+            assertCleanupPressure,
             commitGuard: () => this.assertOwnerAllowsCleanup(record, params),
           });
         },

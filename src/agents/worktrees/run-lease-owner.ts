@@ -137,6 +137,24 @@ export function readWorktreeRunLeaseStateInDatabase(db: DatabaseSync) {
   return { liveScopes: [...liveScopes], staleScopes: [...staleScopes] };
 }
 
+/** One current read prevents claims moving between per-worktree probes. */
+export function findPendingWorktreeRemovalInDatabase(db: DatabaseSync, ids: readonly string[]) {
+  if (ids.length === 0) {
+    return undefined;
+  }
+  const k = getNodeSqliteKysely<WorktreeLeaseDatabase>(db);
+  const rows = executeSqliteQuerySync(
+    db,
+    k
+      .selectFrom("state_leases")
+      .select(["scope", "lease_key", "owner", "payload_json"])
+      .where("lease_key", "=", WORKTREE_REMOVING_LEASE_KEY)
+      .where("scope", "in", ids.map(worktreeRunLeaseScope)),
+  ).rows;
+  const pending = rows.find((row) => inspectRunLeases([row], {}).removingToken !== undefined);
+  return pending?.scope.slice(WORKTREE_RUN_LEASE_SCOPE_PREFIX.length);
+}
+
 export function reapWorktreeRunLeasesInDatabase(db: DatabaseSync, scopes: string[]): void {
   const k = getNodeSqliteKysely<WorktreeLeaseDatabase>(db);
   for (const scope of scopes) {
@@ -149,6 +167,7 @@ export class WorktreeRemovalContentionError extends Error {
   constructor(
     readonly kind: "busy" | "finalized",
     message: string,
+    readonly removalPending = false,
   ) {
     super(message);
     this.name = "WorktreeRemovalContentionError";

@@ -37,3 +37,26 @@ export function classifyWorktreeRemovalError(error: unknown): WorktreeRemovalFai
   }
   return "cleanup-failed";
 }
+
+/** A removal or its claim could not settle; persisted pressure may be stale. */
+export class WorktreeRemovalIncompleteError extends Error {
+  constructor(
+    cause: unknown,
+    readonly worktreeId?: string,
+  ) {
+    super(`Worktree removal could not be reconciled: ${String(cause)}`, { cause });
+    this.name = "WorktreeRemovalIncompleteError";
+  }
+}
+
+/** Preserve the initiating error when releasing its removal claim also fails. */
+export function rethrowWorktreeRemovalFailure(error: unknown, abort: () => void): never {
+  try {
+    abort();
+  } catch (cleanupError) {
+    throw new WorktreeRemovalIncompleteError(
+      new AggregateError([error, cleanupError], `${String(error)}; ${String(cleanupError)}`),
+    );
+  }
+  throw error;
+}

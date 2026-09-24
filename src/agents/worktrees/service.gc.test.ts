@@ -603,7 +603,8 @@ describe("ManagedWorktreeService garbage collection", () => {
           reason: expect.stringContaining("cleanup-failed"),
         },
       ],
-      limitsSatisfied: false,
+      // The unavailable repository also prevents removal reconciliation.
+      limitsSatisfied: null,
     });
     expect(getRegistryWorktree(env, broken.id)?.removedAt).toBeUndefined();
   });
@@ -963,7 +964,11 @@ describe("ManagedWorktreeService garbage collection", () => {
       });
     const collection = service.gc();
     let restoration: ReturnType<typeof service.restore> | undefined;
-    const waits = vi.spyOn(backoff, "sleepWithAbort");
+    const waiting = createDeferred();
+    const waits = vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async () => {
+      waiting.resolve();
+      await collection;
+    });
     try {
       await Promise.race([
         deleting.promise,
@@ -971,14 +976,9 @@ describe("ManagedWorktreeService garbage collection", () => {
           throw new Error(`Collection did not reach snapshot expiry: ${JSON.stringify(result)}`);
         }),
       ]);
-      let settled = false;
       restoration = service.restore({ id: created.id });
-      const outcome = restoration
-        .catch((error: unknown) => error)
-        .finally(() => {
-          settled = true;
-        });
-      await vi.waitFor(() => expect(waits.mock.calls.length > 0 || settled).toBe(true));
+      const outcome = restoration.catch((error: unknown) => error);
+      await Promise.race([waiting.promise, outcome]);
       resume.resolve();
       expect((await collection).snapshotsPruned).toBe(1);
       await expect(outcome).resolves.toMatchObject({

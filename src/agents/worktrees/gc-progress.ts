@@ -1,7 +1,8 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease.js";
-import { classifyWorktreeRemovalError } from "./removal-errors.js";
+import { classifyWorktreeRemovalError, WorktreeRemovalIncompleteError } from "./removal-errors.js";
+import { WorktreeRemovalContentionError } from "./run-lease-owner.js";
 import type { ManagedWorktreeGcResult } from "./types.js";
 
 const MAX_WORKTREE_GC_ISSUES = 64;
@@ -17,6 +18,8 @@ export class WorktreeGcProgress {
     protectedCount: 0,
     limitsSatisfied: null,
   };
+  hasUnreconciledRemoval = false;
+  private readonly reportedFailedRemovalIds = new Set<string>();
   private readonly attemptedIds = new Set<string>();
 
   start(id: string): boolean {
@@ -35,6 +38,9 @@ export class WorktreeGcProgress {
   ): void {
     if (id !== undefined && (stage === "idle" || stage === "limits")) {
       this.attemptedIds.add(id);
+      if (outcome === "failed") {
+        this.reportedFailedRemovalIds.add(id);
+      }
     }
     this.result.issueCount += 1;
     if (this.result.issues.length < MAX_WORKTREE_GC_ISSUES) {
@@ -58,7 +64,13 @@ export class WorktreeGcProgress {
   }
 
   recordLimitState(satisfied: boolean, inventoryComplete = true): void {
-    this.result.limitsSatisfied = satisfied ? (inventoryComplete ? true : null) : false;
+    this.result.limitsSatisfied = this.hasUnreconciledRemoval
+      ? null
+      : satisfied
+        ? inventoryComplete
+          ? true
+          : null
+        : false;
   }
 
   error(
@@ -66,6 +78,20 @@ export class WorktreeGcProgress {
     error: unknown,
     id?: string,
   ): void {
+    if (
+      error instanceof WorktreeRemovalIncompleteError ||
+      (error instanceof WorktreeRemovalContentionError && error.removalPending)
+    ) {
+      this.hasUnreconciledRemoval = true;
+    }
+    const issueId = error instanceof WorktreeRemovalIncompleteError ? (error.worktreeId ?? id) : id;
+    if (
+      issueId !== undefined &&
+      (stage === "idle" || stage === "limits") &&
+      this.reportedFailedRemovalIds.has(issueId)
+    ) {
+      return;
+    }
     const reason = classifyWorktreeRemovalError(error);
     const outcome =
       reason === "busy" ||
@@ -73,6 +99,6 @@ export class WorktreeGcProgress {
       (error instanceof OpenClawStateLeaseError && error.code === "OPENCLAW_STATE_LEASE_HELD")
         ? "deferred"
         : "failed";
-    this.record(stage, outcome, `${reason}: ${formatErrorMessage(error)}`, id);
+    this.record(stage, outcome, `${reason}: ${formatErrorMessage(error)}`, issueId);
   }
 }
