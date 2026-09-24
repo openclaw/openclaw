@@ -1,4 +1,4 @@
-// E2E tests for Docker setup script behavior and generated commands.
+// Shell contract tests for Docker setup behavior and generated commands.
 import { spawnSync } from "node:child_process";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -24,7 +24,7 @@ import {
   setupDockerSetupSandboxRoot,
   withUnixSocket,
   type DockerSetupSandbox,
-} from "./docker-setup.e2e.test-support.js";
+} from "./docker-setup.test-support.js";
 
 function createEnv(
   sandbox: DockerSetupSandbox,
