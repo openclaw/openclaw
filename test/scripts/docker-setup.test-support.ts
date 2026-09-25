@@ -42,6 +42,27 @@ fi
 if [[ "\${1:-}" == "compose" && "\${2:-}" == "version" ]]; then
   exit 0
 fi
+if [[ "\${1:-}" == "create" ]]; then
+  echo "create $*" >>"$log"
+  touch "$log-volume"
+  printf '%s' "\${!#}" > "$log-probe.cjs"
+  printf '%s\\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  exit 0
+fi
+if [[ "\${1:-}" == "inspect" ]]; then
+  printf '%s\\n' 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+  exit 0
+fi
+if [[ "\${1:-}" == "start" ]]; then
+  echo "start $*" >>"$log"
+  node "$log-probe.cjs"
+  exit $?
+fi
+if [[ "\${1:-}" == "rm" ]]; then
+  echo "rm $*" >>"$log"
+  if [[ " $* " == *" -v "* ]]; then rm -f "$log-volume"; fi
+  exit 0
+fi
 if [[ "\${1:-}" == "image" && "\${2:-}" == "inspect" ]]; then
   format=""
   if [[ "\${3:-}" == "-f" || "\${3:-}" == "--format" ]]; then
@@ -93,14 +114,7 @@ if [[ "\${1:-}" == "compose" ]]; then
     exit 1
   fi
   echo "compose $*" >>"$log"
-  if [[ "$*" == *"config get gateway.controlUi.allowedOrigins"* ]]; then
-    printf '%s\n' "\${DOCKER_STUB_CONTROL_UI_ORIGINS:-}"
-    exit 0
-  fi
-  if [[ "$*" == *"config get gateway.publicOrigin"* ]]; then
-    printf '%s\n' "\${DOCKER_STUB_PUBLIC_ORIGIN:-}"
-    exit 0
-  fi
+  echo "compose-image=\${OPENCLAW_IMAGE:-}" >>"$log"
   if [[ "$*" == *"config get tools.sandbox.tools --json"* ]]; then
     if [[ -n "\${DOCKER_STUB_SANDBOX_TOOLS_JSON:-}" ]]; then
       printf '%s\n' "$DOCKER_STUB_SANDBOX_TOOLS_JSON"
@@ -196,6 +210,15 @@ export async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
   await copyFile(
     join(repoRoot, "scripts", "lib", "host-timeout.sh"),
     join(rootDir, "scripts", "lib", "host-timeout.sh"),
+  );
+  await copyFile(
+    join(repoRoot, "scripts", "lib", "container-gateway-capability.sh"),
+    join(rootDir, "scripts", "lib", "container-gateway-capability.sh"),
+  );
+  await mkdir(join(rootDir, "dist"));
+  await writeFile(
+    join(rootDir, "dist", "index.js"),
+    'console.log(process.env.DOCKER_STUB_OLD_GATEWAY === "1" ? "--port <port>" : "--published-port <port>");',
   );
   await chmod(scriptPath, 0o755);
   await writeFile(dockerfilePath, "FROM scratch\n");

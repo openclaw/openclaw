@@ -250,7 +250,7 @@ describe("fleet container arguments", () => {
     expectOption(args, "--env-file", TEST_ENVIRONMENT_FILE);
     expect(args.join(" ")).not.toContain("gateway-token");
     expect(args.join(" ")).not.toContain("west=1");
-    expect(args.slice(-8)).toEqual([
+    expect(args.slice(-10)).toEqual([
       DEFAULT_FLEET_IMAGE,
       "node",
       "dist/index.js",
@@ -259,7 +259,18 @@ describe("fleet container arguments", () => {
       "lan",
       "--port",
       String(FLEET_GATEWAY_PORT),
+      "--published-port",
+      String(FLEET_BASE_PORT),
     ]);
+  });
+
+  it("replays the inspected command when rolling back an older image", () => {
+    const command = ["node", "dist/index.js", "gateway", "--port", "18789"];
+    const args = buildCellRunArgs(makeProfile({ command }), {
+      environmentFile: TEST_ENVIRONMENT_FILE,
+    });
+    expect(args.slice(-command.length)).toEqual(command);
+    expect(args).not.toContain("--published-port");
   });
 
   it("builds a stopped container with the same profile", () => {
@@ -269,7 +280,7 @@ describe("fleet container arguments", () => {
     expect(args[0]).toBe("create");
     expect(args).not.toContain("-d");
     expect(args).toContain("--cap-drop=ALL");
-    expect(args.slice(-7)).toEqual([
+    expect(args.slice(-9)).toEqual([
       "node",
       "dist/index.js",
       "gateway",
@@ -277,6 +288,8 @@ describe("fleet container arguments", () => {
       "lan",
       "--port",
       String(FLEET_GATEWAY_PORT),
+      "--published-port",
+      String(FLEET_BASE_PORT),
     ]);
   });
 

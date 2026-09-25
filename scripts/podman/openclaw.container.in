@@ -22,7 +22,16 @@ Environment=OPENCLAW_NO_RESPAWN=1
 PublishPort=127.0.0.1:18789:18789
 PublishPort=127.0.0.1:18790:18790
 Pull=never
-Exec=node dist/index.js gateway --bind lan --port 18789
+# Resolve capabilities inside each selected image after pull/rebuild and restart.
+Exec=sh -ec "gateway_capability=0; node -e ' \
+  const { spawnSync } = require(\"node:child_process\"); \
+  const result = spawnSync(process.execPath, [\"dist/index.js\", \"gateway\", \"--help\"], { encoding: \"utf8\", timeout: 30000, killSignal: \"SIGKILL\", maxBuffer: 1048576 }); \
+  if (result.status !== 0 || !/^\\s*--port(?:\\s|=)/m.test(result.stdout ?? \"\")) { console.error(\"Could not inspect Gateway help. Check the selected image before retrying; the Gateway was not started.\"); process.exit(1); } \
+  if (!/^\\s*--published-port(?:\\s|=)/m.test(result.stdout)) process.exit(2); \
+  ' || gateway_capability=$$?; \
+  if [ \"$$gateway_capability\" -eq 2 ]; then echo \"Starting the selected image with its legacy Gateway command; mapped-port origin defaults require a compatible image. Saved origin policy is unchanged. Select a compatible image or build this checkout to enable mapped-port defaults.\" >&2; exec node dist/index.js gateway --bind lan --port 18789; fi; \
+  if [ \"$$gateway_capability\" -ne 0 ]; then exit \"$$gateway_capability\"; fi; \
+  exec node dist/index.js gateway --bind lan --port 18789 --published-port 18789"
 
 [Service]
 TimeoutStartSec=300

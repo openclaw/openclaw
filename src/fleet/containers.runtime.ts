@@ -12,6 +12,7 @@ import {
   type CellContainerProfile,
   type FleetContainerRuntimeName,
 } from "./cell-profile.js";
+import { prepareFleetGatewayImage } from "./container-image.runtime.js";
 
 type FleetContainerCommandOptions = {
   allowFailure?: boolean;
@@ -68,6 +69,7 @@ export type FleetContainerInspectResult =
       labels: Record<string, string>;
       environment: Record<string, string>;
       imageId: string;
+      command: string[];
       memory: string;
       cpus: string;
       pidsLimit: number | undefined;
@@ -276,6 +278,7 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
     labels: Object.assign({}, readStringRecord(config.Labels)),
     environment: readEnvironment(config.Env),
     imageId: requireString(inspected.Image),
+    command: readStringArray(config.Cmd),
     memory: String(requireNonNegativeNumber(hostConfig.Memory)),
     cpus: String(nanoCpus / 1_000_000_000),
     pidsLimit: readPidsLimit(hostConfig.PidsLimit),
@@ -665,6 +668,9 @@ export function createFleetContainerRuntime(
       const result = await execute("docker", ["info", "--format", "{{json .SecurityOptions}}"]);
       return parseDockerRootlessInfo(result.stdout);
     },
+
+    prepareGatewayImage: (runtime: FleetContainerRuntimeName, image: string) =>
+      prepareFleetGatewayImage(execute, runtime, image),
 
     async run(profile: CellContainerProfile, start: boolean): Promise<void> {
       validateCellContainerProfile(profile);

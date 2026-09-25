@@ -61,6 +61,7 @@ import { WS_HANDSHAKE_PHASES, type GatewayWsClient, type WsHandshakePhase } from
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 const unauthorizedCloseBeforeConnectLogLimiter = new HandshakeAuthLogLimiter();
 export type GatewayConnectionOptions = {
+  publishedPort?: number;
   bootId: string;
   clients: GatewayClientRegistry;
   connectionWork: GatewayConnectionWork;
@@ -620,6 +621,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     socket,
     prepareAuthenticatedReceive: params.prepareAuthenticatedReceive,
     upgradeReq,
+    publishedPort: params.publishedPort,
     ingressAttribution,
     bootId: params.bootId,
     remoteAddr,

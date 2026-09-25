@@ -38,12 +38,13 @@ function headerValue(value: string | string[] | undefined): string | undefined {
 export function resolveBrowserOriginPolicy(params: {
   req: IncomingMessage;
   cfg?: OpenClawConfig;
+  publishedPort?: number;
 }): BrowserOriginPolicy {
   return {
     requestHost: headerValue(params.req.headers.host),
     origin: headerValue(params.req.headers.origin),
     fetchSite: headerValue(params.req.headers["sec-fetch-site"]),
-    allowedOrigins: resolveControlUiAllowedOrigins(params.cfg),
+    allowedOrigins: resolveControlUiAllowedOrigins(params.cfg, params.publishedPort),
     allowHostHeaderOriginFallback:
       params.cfg?.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
   };
@@ -144,9 +145,10 @@ export function checkBrowserOrigin(params: {
 }
 
 /** Return the request Origin only when the Gateway's canonical browser policy accepts it. */
-export function resolveAcceptedBrowserOrigin(params: {
+export function resolveAcceptedBrowserOriginForGateway(params: {
   req: IncomingMessage;
   cfg?: OpenClawConfig;
+  publishedPort?: number;
 }): string | undefined {
   const policy = resolveBrowserOriginPolicy(params);
   const origin = policy.origin?.trim();

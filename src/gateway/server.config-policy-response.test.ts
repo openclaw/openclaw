@@ -9,6 +9,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { GatewayClient } from "./client.js";
+import { pickPrimaryLanIPv4 } from "./net.js";
 import { startGatewayServerCore } from "./server-start.js";
 
 type ConfigSnapshot = { hash: string; config: OpenClawConfig };
@@ -51,6 +52,7 @@ describe("config writer policy-close ordering", () => {
     { method: "config.patch", policy: "origin" },
     { method: "config.apply", policy: "origin" },
     { method: "config.patch", policy: "publicOrigin" },
+    { method: "config.patch", policy: "publishedPort" },
   ] as const)(
     "acknowledges $method before closing its $policy-revoked writer",
     async ({ method, policy }) => {
@@ -59,6 +61,8 @@ describe("config writer policy-close ordering", () => {
       const origin = "https://writer.example.test";
       const nextOrigin = "https://retained.example.test";
       const browserPolicy = policy !== "token";
+      const inheritedOrigin = policy === "publicOrigin" || policy === "publishedPort";
+      const mappedOrigin = "http://localhost:25432";
       await state.writeConfig({
         gateway: {
           mode: "local",
@@ -66,7 +70,7 @@ describe("config writer policy-close ordering", () => {
           auth: { mode: "token", token },
           controlUi: {
             enabled: false,
-            ...(policy === "publicOrigin" ? {} : { allowedOrigins: [origin] }),
+            ...(inheritedOrigin ? {} : { allowedOrigins: [origin] }),
           },
           reload: { mode: "hybrid" },
         },
@@ -76,18 +80,25 @@ describe("config writer policy-close ordering", () => {
       const port = await getFreePort();
       server = await startGatewayServerCore(port, {
         controlUiEnabled: false,
-        ...(policy === "publicOrigin" ? { bind: "lan" } : {}),
+        ...(inheritedOrigin ? { bind: "lan" } : {}),
+        ...(policy === "publishedPort" ? { publishedPort: 25432 } : {}),
       });
       await server.startupSettled;
       const held = createDeferredCore();
       const published = createDeferredCore<restartSentinel.RestartSentinelPayload>();
       const writeSentinel = restartSentinel.writeRestartSentinel;
-      const connect = async (credential: string, browser = false, browserOrigin = origin) => {
+      const connect = async (
+        credential: string,
+        browser = false,
+        browserOrigin = origin,
+        host = "127.0.0.1",
+      ) => {
         const closed = createDeferredCore();
         const connected = createDeferredCore();
         let didClose = false;
         const client = new GatewayClient({
-          url: `ws://127.0.0.1:${port}`,
+          url: `ws://${host}:${port}`,
+          env: { ...process.env, OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1" },
           token: credential,
           clientName: browser ? "openclaw-control-ui" : "gateway-client",
           clientVersion: "1.0.0",
@@ -118,7 +129,7 @@ describe("config writer policy-close ordering", () => {
         await connected.promise;
         return { client, closed: closed.promise, didClose: () => didClose };
       };
-      if (policy === "publicOrigin") {
+      if (inheritedOrigin) {
         // Adding the public origin must supersede the runtime-only localhost seed.
         const setup = await connect(token);
         const snapshot = await setup.client.request<ConfigSnapshot>("config.get");
@@ -126,6 +137,31 @@ describe("config writer policy-close ordering", () => {
           baseHash: snapshot.hash,
           raw: JSON.stringify({ gateway: { publicOrigin: origin } }),
         });
+      }
+      let mapped: Awaited<ReturnType<typeof connect>> | undefined;
+      let mappedHost: string | undefined;
+      const avatarPreflight = async (browserOrigin: string) => {
+        const response = await fetch(`http://${mappedHost}:${port}/api/users/fixture/avatar`, {
+          method: "OPTIONS",
+          headers: { Origin: browserOrigin },
+        });
+        await response.arrayBuffer();
+        return {
+          status: response.status,
+          origin: response.headers.get("access-control-allow-origin"),
+        };
+      };
+      if (policy === "publishedPort") {
+        // Pair on the local connection, then use a real non-loopback socket so
+        // localhost development fallback cannot mask the published-port grant.
+        await connect(token, true, mappedOrigin);
+        const lanHost = pickPrimaryLanIPv4();
+        if (!lanHost) {
+          throw new Error("Published-port socket proof requires a non-loopback IPv4 interface.");
+        }
+        mappedHost = lanHost;
+        mapped = await connect(token, true, mappedOrigin, lanHost);
+        expect(await avatarPreflight(mappedOrigin)).toEqual({ status: 204, origin: mappedOrigin });
       }
       vi.spyOn(restartSentinel, "writeRestartSentinel").mockImplementation(async (payload) => {
         published.resolve(payload);
@@ -139,7 +175,7 @@ describe("config writer policy-close ordering", () => {
         const change =
           policy === "token"
             ? { gateway: { auth: { token: nextToken } } }
-            : policy === "publicOrigin"
+            : inheritedOrigin
               ? { gateway: { publicOrigin: nextOrigin } }
               : { gateway: { controlUi: { allowedOrigins: [nextOrigin] } } };
         const nextConfig = structuredClone(before.config);
@@ -147,7 +183,7 @@ describe("config writer policy-close ordering", () => {
           ...nextConfig.gateway,
           ...(policy === "token"
             ? { auth: { ...nextConfig.gateway?.auth, token: nextToken } }
-            : policy === "publicOrigin"
+            : inheritedOrigin
               ? { publicOrigin: nextOrigin }
               : {
                   controlUi: {
@@ -190,6 +226,26 @@ describe("config writer policy-close ordering", () => {
           nextOrigin,
         );
         expect((await fresh.client.request<ConfigSnapshot>("config.get")).hash).toBe(response.hash);
+        if (mapped) {
+          expect((await mapped.client.request<ConfigSnapshot>("config.get")).hash).toBe(
+            response.hash,
+          );
+          await expect(connect(token, true, origin)).rejects.toThrow(/origin not allowed/);
+          expect(await avatarPreflight(mappedOrigin)).toEqual({
+            status: 204,
+            origin: mappedOrigin,
+          });
+          expect(await avatarPreflight(nextOrigin)).toEqual({ status: 204, origin: nextOrigin });
+          expect(await avatarPreflight(origin)).toEqual({ status: 403, origin: null });
+          await fresh.client.request("config.patch", {
+            baseHash: response.hash,
+            raw: JSON.stringify({ gateway: { controlUi: { allowedOrigins: [] } } }),
+            replacePaths: ["gateway.controlUi.allowedOrigins"],
+          });
+          await mapped.closed;
+          expect(mapped.didClose()).toBe(true);
+          expect(await avatarPreflight(mappedOrigin)).toEqual({ status: 403, origin: null });
+        }
       } finally {
         held.resolve();
       }

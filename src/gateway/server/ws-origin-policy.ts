@@ -30,6 +30,7 @@ export function resolveGatewayWsBrowserOrigin(
     return undefined;
   }
   return {
+    ...(params.publishedPort !== undefined ? { publishedPort: params.publishedPort } : {}),
     requestHost: params.requestHost,
     origin: params.origin,
     isLocalClient: params.isLocalClient,
@@ -39,7 +40,7 @@ export function resolveGatewayWsBrowserOrigin(
 export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg: OpenClawConfig) {
   return checkBrowserOrigin({
     ...origin,
-    allowedOrigins: resolveControlUiAllowedOrigins(cfg),
+    allowedOrigins: resolveControlUiAllowedOrigins(cfg, origin.publishedPort),
     allowHostHeaderOriginFallback:
       cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
   });

@@ -23,6 +23,10 @@ export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks
   return cmd
     .option("--port <port>", "Port for the gateway WebSocket")
     .option(
+      "--published-port <port>",
+      "Mapped host port for container browser origins (launch only)",
+    )
+    .option(
       "--bind <mode>",
       'Bind mode ("loopback"|"lan"|"tailnet"|"auto"|"custom"). Defaults to config gateway.bind (or loopback).',
     )

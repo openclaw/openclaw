@@ -23,6 +23,7 @@ set -euo pipefail
 REPO_PATH="${OPENCLAW_REPO_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 source "$REPO_PATH/scripts/lib/build-metadata.sh"
 source "$REPO_PATH/scripts/lib/host-timeout.sh"
+source "$REPO_PATH/scripts/lib/container-gateway-capability.sh"
 # shellcheck source=scripts/podman/common.sh
 source "$REPO_PATH/scripts/podman/common.sh"
 RUN_SCRIPT_SRC="$REPO_PATH/scripts/run-openclaw-podman.sh"
@@ -35,7 +36,6 @@ OPENCLAW_IMAGE="${OPENCLAW_PODMAN_IMAGE:-${OPENCLAW_IMAGE:-openclaw:local}}"
 OPENCLAW_CONTAINER_NAME="${OPENCLAW_PODMAN_CONTAINER:-openclaw}"
 PLATFORM_NAME="$(uname -s 2>/dev/null || echo unknown)"
 HOST_GATEWAY_PORT="${OPENCLAW_PODMAN_GATEWAY_HOST_PORT:-${OPENCLAW_GATEWAY_PORT:-18789}}"
-QUADLET_GATEWAY_PORT="18789"
 PODMAN_PULL_TIMEOUT="${OPENCLAW_PODMAN_SETUP_PULL_TIMEOUT:-600s}"
 PODMAN_BUILD_TIMEOUT="${OPENCLAW_PODMAN_SETUP_BUILD_TIMEOUT:-1800s}"
 
@@ -80,84 +80,6 @@ escape_sed_replacement_pipe_delim() {
   printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'
 }
 
-seed_local_control_ui_origins() {
-  local file="$1"
-  local port="$2"
-  local dir=""
-  local tmp=""
-  ensure_safe_write_file_path "config file" "$file"
-  if ! command -v python3 >/dev/null 2>&1; then
-    echo "Warning: python3 not found; unable to seed gateway.controlUi.allowedOrigins in $file." >&2
-    return 0
-  fi
-  dir="$(dirname "$file")"
-  tmp="$(mktemp "$dir/.config.tmp.XXXXXX")"
-  if ! python3 - "$file" "$port" "$tmp" <<'PY'
-import json
-import sys
-
-path = sys.argv[1]
-port = sys.argv[2]
-tmp = sys.argv[3]
-try:
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-except json.JSONDecodeError as exc:
-    print(
-        f"Warning: unable to seed gateway.controlUi.allowedOrigins in {path}: existing config is not strict JSON ({exc}). Leaving file unchanged.",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-if not isinstance(data, dict):
-    raise SystemExit(f"{path}: expected top-level object")
-gateway = data.setdefault("gateway", {})
-if not isinstance(gateway, dict):
-    raise SystemExit(f"{path}: expected gateway object")
-gateway.setdefault("mode", "local")
-control_ui = gateway.setdefault("controlUi", {})
-if not isinstance(control_ui, dict):
-    raise SystemExit(f"{path}: expected gateway.controlUi object")
-allowed = control_ui.get("allowedOrigins")
-public_origin = gateway.get("publicOrigin")
-inherits_public_origin = "allowedOrigins" not in control_ui and isinstance(public_origin, str) and public_origin.strip()
-managed_localhosts = {"127.0.0.1", "localhost"}
-desired = [
-    f"http://127.0.0.1:{port}",
-    f"http://localhost:{port}",
-]
-if not isinstance(allowed, list):
-    allowed = []
-cleaned = []
-for origin in allowed:
-    if not isinstance(origin, str):
-        continue
-    normalized = origin.strip()
-    if not normalized:
-        continue
-    if normalized.startswith("http://"):
-        host_port = normalized[len("http://") :]
-        host = host_port.split(":", 1)[0]
-        if host in managed_localhosts:
-            continue
-    cleaned.append(normalized)
-if not inherits_public_origin:
-    control_ui["allowedOrigins"] = cleaned + desired
-with open(tmp, "w", encoding="utf-8") as fh:
-    json.dump(data, fh, indent=2)
-    fh.write("\n")
-PY
-  then
-    rm -f "$tmp"
-    return 0
-  fi
-  [[ -s "$tmp" ]] || {
-    rm -f "$tmp"
-    return 0
-  }
-  chmod 600 "$tmp" 2>/dev/null || true
-  mv -f "$tmp" "$file"
-}
-
 INSTALL_QUADLET=false
 for arg in "$@"; do
   case "$arg" in
@@ -173,11 +95,6 @@ if [[ -n "${OPENCLAW_PODMAN_QUADLET:-}" ]]; then
 fi
 if [[ "$INSTALL_QUADLET" == true && "$PLATFORM_NAME" != "Linux" ]]; then
   fail "--quadlet is only supported on Linux with systemd user services."
-fi
-
-SEED_GATEWAY_PORT="$HOST_GATEWAY_PORT"
-if [[ "$INSTALL_QUADLET" == true ]]; then
-  SEED_GATEWAY_PORT="$QUADLET_GATEWAY_PORT"
 fi
 
 require_cmd podman
@@ -213,7 +130,6 @@ validate_mount_source_path "workspace directory" "$OPENCLAW_WORKSPACE_DIR"
 validate_container_name "$OPENCLAW_CONTAINER_NAME"
 validate_image_name "$OPENCLAW_IMAGE"
 validate_port "gateway host port" "$HOST_GATEWAY_PORT"
-validate_port "seed gateway port" "$SEED_GATEWAY_PORT"
 
 install -d -m 700 "$OPENCLAW_CONFIG_DIR" "$OPENCLAW_WORKSPACE_DIR"
 ensure_private_existing_dir_owned_by_user "config directory" "$OPENCLAW_CONFIG_DIR"
@@ -253,6 +169,8 @@ else
   fi
 fi
 
+openclaw_prepare_gateway_image podman "$OPENCLAW_IMAGE" never >/dev/null
+
 ENV_FILE="$OPENCLAW_CONFIG_DIR/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
   TOKEN="$(generate_token_hex_32)"
@@ -271,23 +189,13 @@ CONFIG_JSON="$OPENCLAW_CONFIG_DIR/openclaw.json"
 if [[ ! -f "$CONFIG_JSON" ]]; then
   (
     umask 077
-    write_file_atomically "$CONFIG_JSON" 600 <<JSON
-{
-  "gateway": {
-    "mode": "local",
-        "controlUi": {
-          "allowedOrigins": [
-        "http://127.0.0.1:${SEED_GATEWAY_PORT}",
-        "http://localhost:${SEED_GATEWAY_PORT}"
-      ]
-    }
-  }
-}
+    write_file_atomically "$CONFIG_JSON" 600 <<'JSON'
+{ "gateway": { "mode": "local" } }
 JSON
   )
   echo "Wrote minimal config to $CONFIG_JSON"
 fi
-seed_local_control_ui_origins "$CONFIG_JSON" "$SEED_GATEWAY_PORT"
+ensure_local_gateway_mode "$CONFIG_JSON"
 
 if [[ "$INSTALL_QUADLET" == true ]]; then
   QUADLET_DIR="$OPENCLAW_HOME/.config/containers/systemd"

@@ -32,7 +32,8 @@ function inspection(running = false): Extract<FleetContainerInspectResult, { kin
       "openclaw.fleet.disk-limit": "10g",
     },
     environment: { OPENCLAW_GATEWAY_TOKEN: "old-token" },
-    imageId: "sha256:image",
+    imageId: `sha256:${"a".repeat(64)}`,
+    command: ["node", "dist/index.js", "gateway", "--port", "18789"],
     memory: "2147483648",
     cpus: "2",
     pidsLimit: 512,
@@ -63,6 +64,7 @@ function containerMock(current: FleetContainerInspectResult = inspection()) {
     isDockerRootless: vi.fn(async () => false),
     run: vi.fn<FleetContainerRuntime["run"]>(async () => undefined),
     pull: vi.fn(async () => undefined),
+    prepareGatewayImage: vi.fn(async (_runtime: string, image: string) => image),
     createNetwork: vi.fn(async () => undefined),
     removeNetwork: vi.fn(async () => undefined),
     logs: vi.fn(async () => undefined),
@@ -475,6 +477,29 @@ describe("fleet restore runtime", () => {
     };
   }
 
+  it("restores an older image with its exact inspected command", async () => {
+    const archive = await createArchive();
+    const current = inspection();
+    current.command.push("--allow-unconfigured");
+    const containers = containerMock(current);
+    vi.mocked(containers.prepareGatewayImage).mockRejectedValue(
+      new Error("missing --published-port"),
+    );
+    const result = await restoreFleetCell(restoreParams(containers, archive));
+    expect(containers.prepareGatewayImage).not.toHaveBeenCalled();
+    expect(containers.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        image: current.imageId,
+        command: ["node", "dist/index.js", "gateway", "--port", "18789", "--allow-unconfigured"],
+      }),
+      false,
+    );
+    expect(result.token).toBe("new-token");
+    await expect(fs.readFile(path.join(record.dataDir, "restored.txt"), "utf8")).resolves.toBe(
+      "new-data",
+    );
+  });
+
   it("rejects tenant mismatch and running cells before mutation", async () => {
     const mismatch = await createArchive({ tenant: "other" });
     const stopped = containerMock();
@@ -656,7 +681,8 @@ describe("fleet restore runtime", () => {
     const config = JSON.parse(
       await fs.readFile(path.join(record.dataDir, "openclaw.json"), "utf8"),
     ) as { gateway?: { controlUi?: { allowedOrigins?: string[] } } };
-    expect(config.gateway?.controlUi?.allowedOrigins).toContain("http://127.0.0.1:19100");
+    expect(config.gateway?.controlUi?.allowedOrigins).toBeUndefined();
+    expect(containers.run.mock.calls[0]?.[0].hostPort).toBe(19100);
     expect(containers.run.mock.calls[0]?.[0].environment.OPENCLAW_GATEWAY_TOKEN).toBe("new-token");
     expect(containers.run.mock.calls[0]?.[0].environment.XDG_CACHE_HOME).toBe(expectedCache);
     expect(containers.run.mock.calls[0]?.[0].userEnvironmentKeys).toEqual(keys);
@@ -687,7 +713,7 @@ describe("fleet restore runtime", () => {
         labels: { ...inspection(true).labels, "openclaw.fleet.attempt": NEXT_ATTEMPT },
       };
       containers.inspect.mockImplementationOnce(async () => {
-        containers.inspect.mockImplementation(async (_runtime, reference) =>
+        containers.inspect.mockImplementation(async (_runtime: string, reference) =>
           reference === "container-id" ? running : replacement,
         );
         return running;

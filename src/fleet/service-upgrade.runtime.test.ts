@@ -86,6 +86,7 @@ describe("fleet service upgrade and restore", () => {
       )
       .mockResolvedValueOnce(runningInspection({ labels: fleetLabels("acme", NEXT_ATTEMPT_ID) }));
 
+    containers.prepareGatewayImage.mockResolvedValueOnce("sha256:verified-image");
     const result = await service.upgrade("acme", "ghcr.io/openclaw/openclaw:v2");
 
     expect(result).toEqual({
@@ -100,7 +101,7 @@ describe("fleet service upgrade and restore", () => {
     const [profile, start] = containers.run.mock.calls[0] ?? [];
     expect(start).toBe(true);
     expect(profile).toMatchObject({
-      image: "ghcr.io/openclaw/openclaw:v2",
+      image: "sha256:verified-image",
       hostPort: 19_100,
       memory: "2147483648",
       cpus: "2",
@@ -154,7 +155,8 @@ describe("fleet service upgrade and restore", () => {
     await expect(service.upgrade("acme")).rejects.toThrow(/previous container was restored/iu);
 
     expect(containers.run).toHaveBeenCalledTimes(2);
-    expect(containers.run.mock.calls[1]?.[0].image).toBe("sha256:old-image-id");
+    expect(containers.run.mock.calls[1]?.[0].image).toBe(`sha256:${"a".repeat(64)}`);
+    expect(containers.run.mock.calls[1]?.[0].command).toEqual(runningInspection().command);
     expect((await getFleetCell(env, "acme"))?.image).toBe("ghcr.io/openclaw/openclaw:latest");
   });
 
@@ -205,7 +207,7 @@ describe("fleet service upgrade and restore", () => {
     await expect(service.upgrade("acme")).rejects.toThrow(/previous container was restored/iu);
 
     expect(containers.run).toHaveBeenCalledTimes(2);
-    expect(containers.run.mock.calls[1]?.[0].image).toBe("sha256:old-image-id");
+    expect(containers.run.mock.calls[1]?.[0].image).toBe(`sha256:${"a".repeat(64)}`);
     expect(containers.remove).toHaveBeenCalledWith("docker", "replacement-container-id", true);
     expect(containers.removeNetwork).not.toHaveBeenCalled();
     expect((await getFleetCell(env, "acme"))?.image).toBe("ghcr.io/openclaw/openclaw:latest");
@@ -234,7 +236,7 @@ describe("fleet service upgrade and restore", () => {
     await expect(service.upgrade("acme")).rejects.toThrow(/previous container was restored/iu);
 
     expect(containers.run).toHaveBeenCalledTimes(2);
-    expect(containers.run.mock.calls[1]?.[0].image).toBe("sha256:old-image-id");
+    expect(containers.run.mock.calls[1]?.[0].image).toBe(`sha256:${"a".repeat(64)}`);
     expect((await getFleetCell(env, "acme"))?.image).toBe("ghcr.io/openclaw/openclaw:latest");
   });
 
@@ -268,7 +270,7 @@ describe("fleet service upgrade and restore", () => {
     await expect(service.upgrade("acme")).rejects.toThrow(/previous container was restored/iu);
 
     expect(containers.run).toHaveBeenCalledTimes(2);
-    expect(containers.run.mock.calls[1]?.[0].image).toBe("sha256:old-image-id");
+    expect(containers.run.mock.calls[1]?.[0].image).toBe(`sha256:${"a".repeat(64)}`);
     expect((await getFleetCell(env, "acme"))?.image).toBe("ghcr.io/openclaw/openclaw:latest");
   });
 
@@ -299,8 +301,32 @@ describe("fleet service upgrade and restore", () => {
     await expect(service.upgrade("acme")).rejects.toThrow(/previous container was restored/iu);
 
     expect(containers.run).toHaveBeenCalledTimes(2);
-    expect(containers.run.mock.calls[1]?.[0].image).toBe("sha256:old-image-id");
+    expect(containers.run.mock.calls[1]?.[0].image).toBe(`sha256:${"a".repeat(64)}`);
     expect((await getFleetCell(env, "acme"))?.image).toBe("ghcr.io/openclaw/openclaw:latest");
+  });
+
+  it("refuses an incompatible image before stopping the existing cell", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({ tenant: "acme", gatewayToken: "old-token" });
+    containers.inspect.mockResolvedValue(runningInspection());
+    containers.run.mockClear();
+    containers.prepareGatewayImage.mockRejectedValueOnce(new Error("missing --published-port"));
+    await expect(service.upgrade("acme")).rejects.toThrow("missing --published-port");
+    expect(containers.stop).not.toHaveBeenCalled();
+    expect(containers.remove).not.toHaveBeenCalled();
+    expect(containers.run).not.toHaveBeenCalled();
+  });
+
+  it("refuses upgrade without an inspected rollback command", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({ tenant: "acme", gatewayToken: "old-token" });
+    containers.inspect.mockResolvedValue(runningInspection({ command: [] }));
+    await expect(service.upgrade("acme")).rejects.toThrow("valid inspected command");
+    expect(containers.pull).not.toHaveBeenCalled();
+    expect(containers.stop).not.toHaveBeenCalled();
+    expect(containers.remove).not.toHaveBeenCalled();
   });
 
   it("refuses upgrade before pull or removal when the inspected token is missing", async () => {

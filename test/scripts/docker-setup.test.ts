@@ -4,6 +4,7 @@ import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { parseSystemdExecStart, splitSystemdLogicalLines } from "../../src/daemon/systemd-unit.js";
 import {
   cleanupDockerSetupSandboxRoot,
   collectMatchingLines,
@@ -163,35 +164,72 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.stdout).not.toContain("test-token");
     expect(result.stdout).not.toContain("#token=");
     expect(log).toContain(
-      `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"},{"path":"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]}]`,
+      `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"}]`,
     );
     expect(log).not.toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
   });
 
-  it.each([undefined, "[]"])(
-    "keeps inherited origins out of Docker setup writes (%j)",
-    async (allowedOrigins) => {
-      const activeSandbox = requireSandbox(sandbox);
-      await resetDockerLog(activeSandbox);
-      const result = runDockerSetup(activeSandbox, {
-        DOCKER_STUB_CONTROL_UI_ORIGINS: allowedOrigins,
-        DOCKER_STUB_PUBLIC_ORIGIN: "https://team.example.com",
-      });
-      expect(result.status).toBe(0);
-      const writes = (await readDockerLogLines(activeSandbox)).filter((line) =>
-        line.includes("config set --batch-json"),
-      );
-      expect(writes).toHaveLength(1);
-      expect(writes[0]).not.toContain("https://team.example.com");
-      if (allowedOrigins === undefined) {
-        expect(writes[0]).not.toContain("gateway.controlUi.allowedOrigins");
-      } else {
-        expect(writes[0]).toContain(
-          '"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]',
-        );
-      }
-    },
-  );
+  it("rejects an older image before config writes or Gateway replacement", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+    const envPath = join(activeSandbox.rootDir, ".env");
+    const savedEnv = "OPENCLAW_IMAGE=old:selected\n";
+    await writeFile(envPath, savedEnv);
+    const result = runDockerSetup(activeSandbox, { DOCKER_STUB_OLD_GATEWAY: "1" });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Select a compatible image or build this checkout");
+    expect(await readFile(envPath, "utf8")).toBe(savedEnv);
+    const log = await readDockerLog(activeSandbox);
+    expect(log).not.toContain("config set");
+    expect(log).not.toContain("up -d");
+    expect(log).toContain("rm -f");
+    await expect(stat(`${activeSandbox.logPath}-volume`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("launches the verified image identity while preserving the saved image selection", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+    const result = runDockerSetup(activeSandbox, { OPENCLAW_IMAGE: "fixture:selected" });
+    expect(result.status, result.stderr).toBe(0);
+    await expect(stat(`${activeSandbox.logPath}-volume`)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readDockerLog(activeSandbox)).toContain(
+      "compose-image=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+    expect(await readFile(join(activeSandbox.rootDir, ".env"), "utf8")).toContain(
+      "OPENCLAW_IMAGE=fixture:selected",
+    );
+  });
+
+  it.each([
+    { allowedOrigins: undefined },
+    { allowedOrigins: [] },
+    { allowedOrigins: ["https://admin.example.com", "http://localhost:18888"] },
+  ])("leaves omitted or explicit browser origins unchanged (%j)", async ({ allowedOrigins }) => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+    const configDir = join(
+      activeSandbox.rootDir,
+      `config-origins-${allowedOrigins?.length ?? "omitted"}`,
+    );
+    await mkdir(configDir, { recursive: true });
+    const config = JSON.stringify({
+      gateway: { publicOrigin: "https://team.example.com", controlUi: { allowedOrigins } },
+    });
+    const configPath = join(configDir, "openclaw.json");
+    await writeFile(configPath, config);
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_CONFIG_DIR: configDir,
+      OPENCLAW_GATEWAY_PORT: "19123",
+    });
+    expect(result.status).toBe(0);
+    const writes = (await readDockerLogLines(activeSandbox)).filter((line) =>
+      line.includes("config set --batch-json"),
+    );
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).not.toContain("gateway.controlUi.allowedOrigins");
+    expect(writes[0]).not.toContain("gateway.publicOrigin");
+    expect(await readFile(configPath, "utf8")).toBe(config);
+  });
 
   it("allows ordinary spaces in host persistence paths and quotes generated mounts", async () => {
     const activeSandbox = requireSandbox(sandbox);
@@ -970,10 +1008,91 @@ describe("scripts/docker/setup.sh", () => {
     expect(syntaxCheck.stderr).not.toContain("declare: -A: invalid option");
   });
 
-  it("keeps docker-compose gateway command in sync", async () => {
-    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
-    expect(compose).not.toContain("gateway-daemon");
-    expect(compose).toContain('"gateway"');
+  describe.each(["Compose", "Quadlet"])("%s launch contract", (format) => {
+    it.each([
+      {
+        name: "current",
+        help: "--port <port>\n--published-port <port>",
+        helpStatus: 0,
+        expectedStatus: 0,
+        mapped: true,
+      },
+      { name: "legacy", help: "--port <port>", helpStatus: 0, expectedStatus: 0, mapped: false },
+      {
+        name: "failed help",
+        help: "--port <port>\n--published-port <port>",
+        helpStatus: 1,
+        expectedStatus: 1,
+        mapped: false,
+      },
+      {
+        name: "malformed help",
+        help: "A note about --port <port>",
+        helpStatus: 0,
+        expectedStatus: 1,
+        mapped: false,
+      },
+    ])(
+      "preserves selected image startup ($name)",
+      async ({ name, help, helpStatus, expectedStatus, mapped }) => {
+        const activeSandbox = requireSandbox(sandbox);
+        const parsed = parse(await readFile(join(repoRoot, "docker-compose.yml"), "utf8")) as {
+          services: { "openclaw-gateway": { command: string[] } };
+        };
+        const commandRoot = join(activeSandbox.rootDir, `compose-command-${name}`);
+        await mkdir(join(commandRoot, "dist"), { recursive: true });
+        await writeFile(
+          join(commandRoot, "dist", "index.js"),
+          `
+      if (process.argv.includes("--help")) {
+        console.log(${JSON.stringify(help)});
+        process.exit(${helpStatus});
+      } else console.log(JSON.stringify(process.argv.slice(2)));
+    `,
+        );
+        const quadlet = await readFile(
+          join(repoRoot, "scripts/podman/openclaw.container.in"),
+          "utf8",
+        );
+        const exec = splitSystemdLogicalLines(quadlet).find((line) => line.startsWith("Exec="));
+        if (!exec) {
+          throw new Error("Quadlet Gateway Exec must exist.");
+        }
+        const selectedCommand =
+          format === "Compose"
+            ? parsed.services["openclaw-gateway"].command
+            : parseSystemdExecStart(exec.slice(5));
+        const [command, ...args] = selectedCommand.map((value) =>
+          value
+            .replaceAll("$$", "$")
+            .replace("${OPENCLAW_GATEWAY_BIND:-lan}", "lan")
+            .replace("${OPENCLAW_GATEWAY_PORT:-18789}", "19123"),
+        );
+        if (!command) {
+          throw new Error("Compose Gateway command must not be empty.");
+        }
+        const result = spawnSync(command, args, { cwd: commandRoot, encoding: "utf8" });
+        expect(result.status, result.stderr).toBe(expectedStatus);
+        if (expectedStatus === 0) {
+          expect(JSON.parse(result.stdout)).toEqual([
+            "gateway",
+            "--bind",
+            "lan",
+            "--port",
+            "18789",
+            ...(mapped ? ["--published-port", format === "Compose" ? "19123" : "18789"] : []),
+          ]);
+          if (!mapped) {
+            expect(result.stderr).toContain(
+              "mapped-port origin defaults require a compatible image",
+            );
+          }
+        } else {
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain("Could not inspect Gateway help");
+        }
+      },
+    );
   });
 
   it("keeps docker-compose gateway Bonjour advertising in auto mode by default", async () => {
@@ -1027,9 +1146,10 @@ describe("scripts/docker/setup.sh", () => {
       >;
     };
     const gateway = services["openclaw-gateway"];
-    const listenerPort = gateway.command[gateway.command.indexOf("--port") + 1];
-    expect(listenerPort).toBe("18789");
+    const listenerPort = "18789";
     expect(gateway.ports).toContain(`\${OPENCLAW_GATEWAY_PORT:-18789}:${listenerPort}`);
+    expect(gateway.command.at(-1)).toBe("${OPENCLAW_GATEWAY_PORT:-18789}");
+    expect(services["openclaw-cli"].command).toBeUndefined();
     for (const name of ["openclaw-gateway", "openclaw-cli"] as const) {
       expect(services[name].environment, name).toMatchObject({
         OPENCLAW_HOME: "/home/node",

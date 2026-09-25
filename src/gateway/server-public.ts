@@ -56,6 +56,8 @@ export type GatewayServer = {
 };
 
 export type GatewayServerOptions = {
+  /** Host-mapped port for this server launch; never persisted as origin policy. */
+  publishedPort?: number;
   /** Internal native-host operation; direct readers retain their own execution owner. */
   prepareConfigSnapshot?: ConfigSnapshotPreparation;
   /** Internal, closure-bound host authority. Direct servers have no native lifecycle owner. */

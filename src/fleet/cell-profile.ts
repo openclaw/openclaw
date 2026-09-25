@@ -37,6 +37,8 @@ export interface CellContainerProfile {
   containerName: string;
   networkName: string;
   image: string;
+  /** Exact inspected command, used only when recreating a displaced generation. */
+  command?: readonly string[];
   runtime: FleetContainerRuntimeName;
   hostPort: number;
   dataDir: string;
@@ -187,6 +189,15 @@ export function cellOwnerId(dataDir: string): string {
 }
 
 export function validateCellContainerProfile(profile: CellContainerProfile): void {
+  if (
+    profile.command &&
+    (!profile.command.length ||
+      !profile.command[0]?.trim() ||
+      profile.command.some((arg) => arg.includes("\0")))
+  ) {
+    throw new Error("Cannot recreate a Fleet cell without a valid inspected command.");
+  }
+
   validateTenantId(profile.tenantId);
   validateHostPort(profile.hostPort);
   if (profile.containerName !== cellContainerName(profile.tenantId)) {
@@ -309,13 +320,17 @@ function buildCellContainerArgs(
     "--env-file",
     options.environmentFile,
     profile.image,
-    "node",
-    "dist/index.js",
-    "gateway",
-    "--bind",
-    "lan",
-    "--port",
-    String(FLEET_GATEWAY_PORT),
+    ...(profile.command ?? [
+      "node",
+      "dist/index.js",
+      "gateway",
+      "--bind",
+      "lan",
+      "--port",
+      String(FLEET_GATEWAY_PORT),
+      "--published-port",
+      String(profile.hostPort),
+    ]),
   ];
 }
 
