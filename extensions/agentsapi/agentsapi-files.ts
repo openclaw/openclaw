@@ -2,11 +2,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createStagedInputPathMatcher, root } from "openclaw/plugin-sdk/file-access-runtime";
-import {
-  readMediaBuffer,
-  resolveMediaBufferPath,
-  saveMediaBuffer,
-} from "openclaw/plugin-sdk/media-store";
+import { readMediaBuffer, resolveMediaBufferPath } from "openclaw/plugin-sdk/media-store";
 import { AgentsApiClient, type AgentsApiInputFile } from "./agentsapi-client.js";
 
 const maxFileBytes = 5 * 1024 * 1024;
@@ -121,6 +117,7 @@ export async function collectOutputs(
   rootTurnId: string,
   assertCurrent: () => void,
   signal: AbortSignal,
+  prepareReplyMedia: AgentHarnessAttemptParamsV2["hostCapabilities"]["prepareReplyMedia"],
 ): Promise<{
   toolMediaUrls: string[];
   hostOwnedToolMediaUrls: string[];
@@ -161,19 +158,41 @@ export async function collectOutputs(
   for (const artifact of artifacts) {
     assertCurrent();
     signal.throwIfAborted();
-    const buffer = await client.artifactContent(remoteSessionId, artifact, maxFileBytes, signal);
+    if (!prepareReplyMedia) {
+      throw new Error("Agents API output transfer requires host reply media preparation");
+    }
+    const prepared = await prepareReplyMedia({
+      kind: "payload",
+      payload: { mediaUrls: [artifact.path] },
+      workspaceRoot: "/workspace",
+      signal,
+      assertCurrent,
+      readWorkspaceFile: async (relativePath, options) => {
+        assertCurrent();
+        const expected = path.join(...path.posix.relative("/workspace", artifact.path).split("/"));
+        if (relativePath !== expected) {
+          throw new Error("Agents API output read does not match the admitted artifact");
+        }
+        const buffer = await client.artifactContent(
+          remoteSessionId,
+          artifact,
+          Math.min(maxFileBytes, options.maxBytes),
+          options.signal,
+        );
+        assertCurrent();
+        return buffer;
+      },
+    });
     assertCurrent();
     signal.throwIfAborted();
-    const saved = await saveMediaBuffer(
-      buffer,
-      undefined,
-      "outbound",
-      maxFileBytes,
-      path.posix.basename(artifact.path),
-    );
-    assertCurrent();
-    signal.throwIfAborted();
-    toolMediaUrls.push(saved.path);
+    if (prepared.kind !== "payload" || !prepared.payload.mediaUrl) {
+      throw new Error(
+        prepared.kind === "payload" && prepared.payload.text
+          ? prepared.payload.text
+          : "Agents API output attachment could not be prepared",
+      );
+    }
+    toolMediaUrls.push(prepared.payload.mediaUrl);
   }
   return {
     toolMediaUrls,

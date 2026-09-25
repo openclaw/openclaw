@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import * as mediaMime from "@openclaw/media-core/mime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   createStagedInputOwnershipFixture,
   useAutoCleanupTempDirTracker,
@@ -33,6 +35,7 @@ beforeEach(async () => {
 afterEach(() => {
   vi.unstubAllEnvs();
   guardedFetch.mockReset();
+  vi.restoreAllMocks();
 });
 
 describe("Agents API input attachment custody", () => {
@@ -186,6 +189,22 @@ describe("Agents API input attachment custody", () => {
 });
 
 describe("Agents API output attachment publication", () => {
+  let host: Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>;
+  beforeEach(async () => {
+    host = await createAdmittedHostCapabilityTestFixture({
+      runId: "run-output-files",
+      agentId: "main",
+      sessionId: "session-output-files",
+      sessionKey: "agent:main:session-output-files",
+      workspaceDir,
+      cwd: workspaceDir,
+      config: {},
+    });
+  });
+  afterEach(() => {
+    host.closeHost();
+    host.closeAdmission();
+  });
   it("persists current-turn deliverables as managed outbound media with the downloaded bytes", async () => {
     const binary = Buffer.from([255, 0, 127, 10]);
     const text = Buffer.from("completed result\n");
@@ -208,7 +227,14 @@ describe("Agents API output attachment publication", () => {
       { binary, text },
     );
 
-    const output = await collectOutputs(client, "session-files", "turn-files", () => {}, signal);
+    const output = await collectOutputs(
+      client,
+      "session-files",
+      "turn-files",
+      () => {},
+      signal,
+      host.hostCapabilities.prepareReplyMedia,
+    );
 
     expect(output.toolMediaUrls).toHaveLength(2);
     expect(output.hostOwnedToolMediaUrls).toEqual(output.toolMediaUrls);
@@ -232,7 +258,14 @@ describe("Agents API output attachment publication", () => {
   ])("does not publish artifacts from $name", async (options) => {
     const client = outputClient([artifact()], {}, options);
     await expect(
-      collectOutputs(client, "session-files", "turn-files", () => {}, signal),
+      collectOutputs(
+        client,
+        "session-files",
+        "turn-files",
+        () => {},
+        signal,
+        host.hostCapabilities.prepareReplyMedia,
+      ),
     ).rejects.toThrow("requires a completed root turn and idle session");
     expect(await outboundFiles()).toEqual([]);
   });
@@ -245,7 +278,14 @@ describe("Agents API output attachment publication", () => {
   ])("rejects $name before persisting any output", async ({ change }) => {
     const client = outputClient([artifact(), artifact({ id: "invalid", ...change })]);
     await expect(
-      collectOutputs(client, "session-files", "turn-files", () => {}, signal),
+      collectOutputs(
+        client,
+        "session-files",
+        "turn-files",
+        () => {},
+        signal,
+        host.hostCapabilities.prepareReplyMedia,
+      ),
     ).rejects.toThrow("exceeds its hosted path or 5 MiB file bounds");
     expect(await outboundFiles()).toEqual([]);
   });
@@ -270,11 +310,73 @@ describe("Agents API output attachment publication", () => {
     async ({ artifacts, message }) => {
       const client = outputClient(artifacts);
       await expect(
-        collectOutputs(client, "session-files", "turn-files", () => {}, signal),
+        collectOutputs(
+          client,
+          "session-files",
+          "turn-files",
+          () => {},
+          signal,
+          host.hostCapabilities.prepareReplyMedia,
+        ),
       ).rejects.toThrow(message);
       expect(await outboundFiles()).toEqual([]);
     },
   );
+
+  it.each(["host", "binding", "abort"])(
+    "rejects %s revocation during media-save preparation before writing output",
+    async (revocation) => {
+      const bytes = Buffer.from("%PDF-1.4\n%%EOF\n");
+      const client = outputClient(
+        [artifact({ path: "/workspace/outputs/result.pdf", size_bytes: bytes.length })],
+        { output: bytes },
+      );
+      const controller = new AbortController();
+      let bindingCurrent = true;
+      let reachedSave = false;
+      const assertCurrent = () => {
+        if (!bindingCurrent) {
+          throw new Error("fixture binding lease revoked");
+        }
+      };
+      const detectMime = mediaMime.detectMime;
+      vi.spyOn(mediaMime, "detectMime").mockImplementation(async (params) => {
+        const mime = await detectMime(params);
+        // The loader sniffs first; revoke inside saveMediaBuffer's own awaited preparation.
+        if (params.filePath === "result.pdf") {
+          reachedSave = true;
+          if (revocation === "host") {
+            host.closeHost();
+          } else if (revocation === "binding") {
+            bindingCurrent = false;
+          } else {
+            controller.abort(new Error("fixture transfer aborted"));
+          }
+        }
+        return mime;
+      });
+      await expect(
+        collectOutputs(
+          client,
+          "session-files",
+          "turn-files",
+          assertCurrent,
+          controller.signal,
+          host.hostCapabilities.prepareReplyMedia,
+        ),
+      ).rejects.toThrow(/no longer active|binding lease revoked|transfer aborted/);
+      expect(reachedSave).toBe(true);
+      expect(await outboundFiles()).toEqual([]);
+    },
+  );
+
+  it("refuses output publication without the host capability", async () => {
+    const client = outputClient([artifact()], { output: Buffer.from("x") });
+    await expect(
+      collectOutputs(client, "session-files", "turn-files", () => {}, signal, undefined),
+    ).rejects.toThrow("requires host reply media preparation");
+    expect(await outboundFiles()).toEqual([]);
+  });
 
   it("revalidates attempt custody after the artifact download and before saving outbound bytes", async () => {
     let current = true;
@@ -300,6 +402,7 @@ describe("Agents API output attachment publication", () => {
           }
         },
         signal,
+        host.hostCapabilities.prepareReplyMedia,
       ),
     ).rejects.toBe(revoked);
     expect(await outboundFiles()).toEqual([]);

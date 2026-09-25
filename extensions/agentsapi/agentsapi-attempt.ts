@@ -384,6 +384,7 @@ export async function runAgentsApiAttempt(
           result.turn.id,
           assertCurrent,
           controller.signal,
+          params.hostCapabilities.prepareReplyMedia,
         );
       } finally {
         // Transfer failure must not discard the completed reply. The projection

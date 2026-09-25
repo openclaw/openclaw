@@ -115,7 +115,9 @@ The reader must enforce the byte limit and workspace boundary and honor
 cancellation. It receives only paths authorized under the host's captured
 policy. Supply `workspaceRoot` when the remote workspace has a different
 absolute path; the host maps that alias to the logical workspace before checking
-policy. Keep the reader alive until preparation finishes.
+policy. Supply `assertCurrent` when native session or transport ownership can be
+revoked independently of the host attempt. The host retains this additional check
+through the final media write and publication. Keep the reader alive until preparation finishes.
 
 Missing, denied, and oversized attachments produce the usual delivery failure
 notice; preparation does not fall back to a stale Gateway workspace file.

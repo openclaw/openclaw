@@ -79,6 +79,8 @@ export type AgentHarnessHostCapabilities = Readonly<{
   prepareReplyMedia?: (
     request: {
       workspaceRoot?: string;
+      /** Additional native session or transport authority, retained through publication. */
+      assertCurrent?: () => void;
       readWorkspaceFile: (
         relativePath: string,
         options: { maxBytes: number; signal: AbortSignal },
