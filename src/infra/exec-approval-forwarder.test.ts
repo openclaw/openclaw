@@ -608,24 +608,48 @@ describe("exec approval forwarder", () => {
         },
       );
 
-      it("reports an expiry once when the durable terminal arrives after the timer", async () => {
+      const deliveredTexts = (deliver: ReturnType<typeof vi.fn>) =>
+        deliver.mock.calls.map(
+          ([call]) => (call as { payloads: Array<{ text?: string }> }).payloads[0]?.text ?? "",
+        );
+
+      it("reports a change applied after the deadline without a false expiry", async () => {
         vi.useFakeTimers();
         const { deliver, forwarder } = createForwarder({ cfg: unconfigured, resolveSessionTarget });
         await forwarder.handleSystemAgentApprovalRequested?.(systemAgentRequest);
+        // Approved just before the deadline; applying finishes after it.
         await vi.advanceTimersByTimeAsync(systemAgentRequest.expiresAtMs);
 
         await forwarder.handleSystemAgentApprovalResolved?.({
           id: systemAgentRequest.id,
-          decision: "deny",
-          ts: systemAgentRequest.expiresAtMs,
+          decision: "allow-once",
+          ts: systemAgentRequest.expiresAtMs + 1,
           request: systemAgentRequest.request,
-          terminalStatus: "expired",
+          applicationStatus: "applied",
         });
 
-        const texts = deliver.mock.calls.map(
-          ([call]) => (call as { payloads: Array<{ text?: string }> }).payloads[0]?.text ?? "",
-        );
-        expect(texts.filter((text) => /expired/i.test(text))).toHaveLength(1);
+        const texts = deliveredTexts(deliver);
+        expect(texts.filter((text) => /expired/i.test(text))).toHaveLength(0);
+        expect(texts.filter((text) => text.includes("approved and applied"))).toHaveLength(1);
+      });
+
+      it("reports the Gateway's recorded expiry once", async () => {
+        vi.useFakeTimers();
+        const { deliver, forwarder } = createForwarder({ cfg: unconfigured, resolveSessionTarget });
+        await forwarder.handleSystemAgentApprovalRequested?.(systemAgentRequest);
+        await vi.advanceTimersByTimeAsync(systemAgentRequest.expiresAtMs);
+        const expired = {
+          id: systemAgentRequest.id,
+          decision: "deny" as const,
+          ts: systemAgentRequest.expiresAtMs,
+          request: systemAgentRequest.request,
+          terminalStatus: "expired" as const,
+        };
+
+        await forwarder.handleSystemAgentApprovalResolved?.(expired);
+        await forwarder.handleSystemAgentApprovalResolved?.(expired);
+
+        expect(deliveredTexts(deliver).filter((text) => /expired/i.test(text))).toHaveLength(1);
       });
     });
   });

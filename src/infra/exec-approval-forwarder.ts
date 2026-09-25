@@ -12,7 +12,6 @@ import type {
 } from "../config/types.approvals.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { SYSTEM_AGENT_APPROVAL_EXPIRED_TEXT } from "../plugin-sdk/approval-terminal.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -80,7 +79,8 @@ type ApprovalRenderContext = {
 type ApprovalStrategy<TRequest, TResolved> = {
   kind: ChannelApprovalKind;
   config: (cfg: OpenClawConfig) => ExecApprovalForwardingConfig | undefined;
-  buildExpiredText: (request: TRequest) => string;
+  /** Omitted when the durable terminal publication owns expiry; no local timer runs. */
+  buildExpiredText?: (request: TRequest) => string;
   buildPendingPayload: (
     params: ApprovalRenderContext & { request: TRequest; nowMs: number },
   ) => ReplyPayload;
@@ -454,21 +454,24 @@ function createApprovalHandlers<
     }
 
     pendingEntry.value = { routeRequest, targets: filteredTargets };
-    const expiresInMs = Math.max(0, request.expiresAtMs - params.nowMs());
-    pending.scheduleExpiry(pendingEntry, expiresInMs, (expired) =>
-      trackDelivery(() =>
-        deliverToTargets({
-          cfg,
-          targets: expired.value.targets,
-          buildPayload: () => ({ text: params.strategy.buildExpiredText(request) }),
-          deliver: params.deliver,
+    const buildExpiredText = params.strategy.buildExpiredText;
+    if (buildExpiredText) {
+      const expiresInMs = Math.max(0, request.expiresAtMs - params.nowMs());
+      pending.scheduleExpiry(pendingEntry, expiresInMs, (expired) =>
+        trackDelivery(() =>
+          deliverToTargets({
+            cfg,
+            targets: expired.value.targets,
+            buildPayload: () => ({ text: buildExpiredText(request) }),
+            deliver: params.deliver,
+          }),
+        ).catch((err: unknown) => {
+          log.error(
+            `${params.strategy.kind} approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
+          );
         }),
-      ).catch((err: unknown) => {
-        log.error(
-          `${params.strategy.kind} approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
-        );
-      }),
-    );
+      );
+    }
 
     void trackDelivery(() =>
       deliverToTargets({
@@ -516,8 +519,8 @@ function createApprovalHandlers<
       await settled.terminal(settled.entry);
       return;
     }
-    // Only this forwarder's own entry proves the chat was asked; its expiry timer
-    // already reported a lapse, so a later durable terminal must not repeat it.
+    // Only this forwarder's own entry proves the chat was asked; without it the
+    // request went to a native card or had no live chat to answer.
     if (!params.strategy.liveOriginOnly) {
       await deliverResolved(resolved);
     }
@@ -564,7 +567,8 @@ const SYSTEM_AGENT_FORWARDING: ExecApprovalForwardingConfig = { enabled: true, m
 const systemAgentApprovalStrategy = {
   kind: "system-agent",
   config: () => SYSTEM_AGENT_FORWARDING,
-  buildExpiredText: () => SYSTEM_AGENT_APPROVAL_EXPIRED_TEXT,
+  // No local expiry timer: an approved change may still be applying at the
+  // deadline, so only the Gateway's recorded expiry reports a lapse.
   buildPendingPayload: buildForwardedSystemAgentPendingPayload,
   buildResolvedPayload: buildForwardedSystemAgentResolvedPayload,
   liveOriginOnly: true,
