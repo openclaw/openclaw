@@ -1,4 +1,6 @@
 import { open } from "node:fs/promises";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";
 import type { DiscordSourceConfig, GithubSourceConfig, Person } from "./types.js";
@@ -142,13 +144,19 @@ const MAX_PEOPLE_FILE_BYTES = 2 * 1024 * 1024;
 
 async function readPeopleFile(filePath: string): Promise<Person[]> {
   const handle = await open(filePath, "r");
+  const invalidFileMessage =
+    "team-reports.peopleFile must be a regular JSON file of at most 2 MiB.";
   try {
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > MAX_PEOPLE_FILE_BYTES) {
-      throw new Error("team-reports.peopleFile must be a regular JSON file of at most 2 MiB.");
+    if (!stat.isFile()) {
+      throw new Error(invalidFileMessage);
     }
-    const data: unknown = JSON.parse(await handle.readFile("utf8"));
+    const data: unknown = JSON.parse(
+      (await readFileHandleBounded(handle, MAX_PEOPLE_FILE_BYTES)).toString("utf8"),
+    );
     return peopleFileSchema.parse(data).people;
+  } catch (error) {
+    throw extractErrorCode(error) === "too-large" ? new Error(invalidFileMessage) : error;
   } finally {
     await handle.close();
   }

@@ -187,10 +187,11 @@ candidate-approved digests are supplied together or both omitted.
 Wait for `npm-release` environment approval, plugin npm then core npm, parallel
 ClawHub, npm postpublish verification, Docker publication, dependency/release
 evidence, and GitHub finalization. Reuse successful immutable child artifacts
-on recovery; never rebuild or republish successful versions. Each npm child
-needs its own `npm-release` approval and ClawHub children must never be
-approved by hand; watch `pending_deployments` on every child per
-`$release-openclaw-ci` (Publish children). Children run on hosted
+on recovery; never rebuild or republish successful versions. The parent's
+approval receipt lets the ClawHub child skip its gate; each npm child still
+needs its own `npm-release` approval (the workflow token cannot approve it).
+ClawHub children must never be approved by hand; watch `pending_deployments`
+on every child per `$release-openclaw-ci` (Publish children). Children run on hosted
 `ubuntu-latest`; if that pool is saturated, let jobs queue normally without
 cancelling PR CI. Blacksmith testbox runs use a separate pool.
 

@@ -2,28 +2,25 @@ import { logError } from "openclaw/plugin-sdk/logging-core";
 import { parseDiscordModalCustomIdForInteraction } from "../component-custom-id.js";
 import { resolveDiscordModalEntryWithPersistence } from "../components-registry.js";
 import { Modal, type ComponentData, type ModalInteraction } from "../internal/discord.js";
+import { replyUnavailableComponentInteraction } from "./agent-components-context.js";
 import {
-  type AgentComponentContext,
   formatModalSubmissionText,
   parseDiscordModalId,
-  replyUnavailableComponentInteraction,
-  resolveAuthorizedComponentInteraction,
   resolveInteractionCustomId,
   resolveModalFieldValues,
-} from "./agent-components-helpers.js";
+} from "./agent-components-data.js";
+import { resolveAuthorizedComponentInteraction } from "./agent-components-guild-auth.js";
 import { dispatchDiscordComponentEvent } from "./agent-components.dispatch.js";
 import { dispatchPluginDiscordInteractiveEvent } from "./agent-components.plugin-interactive.js";
+import type { AgentComponentContext } from "./agent-components.types.js";
 
 export class DiscordComponentModal extends Modal {
   override title = "OpenClaw form";
   override customId = "__openclaw_discord_component_modal_wildcard__";
   override components = [];
   override customIdParser = parseDiscordModalCustomIdForInteraction;
-  private ctx: AgentComponentContext;
-
-  constructor(ctx: AgentComponentContext) {
+  constructor(private readonly ctx: AgentComponentContext) {
     super();
-    this.ctx = ctx;
   }
 
   async run(interaction: ModalInteraction, data: ComponentData): Promise<void> {

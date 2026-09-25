@@ -681,7 +681,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
           computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache,
         ).toHaveBeenCalledWith(
           expect.objectContaining({
-            bundledMarketplacePath: codexCandidate.bundledMarketplacePath,
+            bundledMarketplacePath: "/managed/openai-bundled",
           }),
         );
       });

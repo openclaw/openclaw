@@ -566,12 +566,21 @@ fresh `--state-dir`, which the refusal prints.
    `npm beta floor: release-ledger token unavailable`), dispatch the sync by
    hand before the verify runs. `Finalize GitHub release` accepts an already
    public release with the expected tag target and latest state; a manual flip
-   does not fail the parent. Each npm child (`Plugin NPM Release`,
-   `openclaw-npm-release.yml`) needs its own `npm-release` approval;
+   does not fail the parent. The parent's `npm-release` approval is the one
+   release approval: the approved `publish` job writes and attests the
+   `openclaw-release-approval-v1-<run>-<attempt>` receipt (tag, target SHA,
+   tooling identity, approver) before dispatching children, and every
+   bot-dispatched child verifies it in its trusted-tooling validation job. The
+   ClawHub child then runs without its `clawhub-plugin-release` gate, waiting
+   instead for the parent's transaction-bound authorization receipt before its
+   publish jobs start. npm children keep the `npm-release` gate because their
+   npm trusted publishers are bound to that environment (`npm trust list
+openclaw`), and the workflow token cannot approve it (`canApprove=false`):
    watch `gh api repos/openclaw/openclaw/actions/runs/<child>/pending_deployments`
-   and approve npm children only. Never approve a ClawHub child by hand (its
-   publish jobs then fail `Artifact not found`); cancel it and re-dispatch the
-   parent. Before every child dispatch the parent rejects the gates of, cancels,
+   and approve the plugin npm and core npm children by hand. Direct human
+   dispatch of a child keeps its own gate and does not use the receipt. Never
+   approve a ClawHub child by hand; cancel it and re-dispatch the parent.
+   Before every child dispatch the parent rejects the gates of, cancels,
    and waits (bounded 5 minutes) for a failed earlier parent's `waiting`/`queued`
    children of the same release; a parent failure also cancels its own waiting
    npm children. Only legacy children without a parent identity in their run
