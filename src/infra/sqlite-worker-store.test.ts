@@ -20,6 +20,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createNodeEvalArgs } from "../test-utils/node-process.js";
+import { formatErrorMessageWithCode } from "./errors.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
 import { captureCoordinatorDatabase } from "./sqlite-coordinator.test-support.js";
 import {
@@ -47,7 +48,7 @@ vi.mock("node:os", async (importOriginal) => ({
   availableParallelism: () => 32,
 }));
 
-const { stores, tempDirs, databasePath, open } = useSqliteWorkerStoreFixture(
+const { stores, tempDirs, databasePath, open, openWithGateway } = useSqliteWorkerStoreFixture(
   "openclaw-sqlite-worker-store-",
 );
 
@@ -64,32 +65,6 @@ async function expectRejectedOpen(
   expect(result.status).toBe("rejected");
   if (code) {
     expect(result).toMatchObject({ reason: { code } });
-  }
-}
-
-async function openWithGateway(file: string) {
-  const root = path.dirname(file);
-  const gateway = coordinatorOwner.acquireGatewayLifecycleCoordinator({
-    databasePath: file,
-    runtimeDirectory: root,
-  });
-  try {
-    const store = await openSharedStateSqliteWorkerStore<FixtureOperations>(
-      {
-        moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-        databasePath: file,
-      },
-      {
-        environment: { OPENCLAW_STATE_DIR: root },
-        coordinatorRuntime: { directory: root, keepAlive: false },
-      },
-    );
-    assert(store, "Fixture shared-state worker did not open");
-    stores.add(store);
-    return { store, gateway };
-  } catch (error) {
-    gateway.release();
-    throw error;
   }
 }
 
@@ -820,22 +795,56 @@ describe("SQLite worker store", () => {
     ]);
   });
 
-  it("surfaces native-close cleanup failure and permits explicit recovery of committed data", async () => {
-    const file = databasePath();
-    const store = await open(file);
-    const receipt = await append(store, "preserved");
-    await store.execute({ type: "failClose", input: undefined });
-    const closed = store.close();
-    stores.delete(store);
-    await expect(closed).rejects.toThrow("Fixture native database closed with a cleanup failure");
+  it.each([
+    { owner: "agent", aggregate: false },
+    { owner: "agent", aggregate: true },
+    { owner: "shared", aggregate: true },
+  ] as const)(
+    "preserves $owner close diagnostics and committed data (aggregate: $aggregate)",
+    async ({ owner, aggregate }) => {
+      const file = databasePath();
+      const { store, gateway } = await openWithGateway(file, owner);
+      try {
+        const receipt = await append(store, "preserved");
+        await store.execute({ type: "failClose", input: { aggregate } });
+        const failure: unknown = await store.close().catch((error: unknown) => error);
+        stores.delete(store);
+        assert(failure instanceof Error);
+        const nativeFailure = aggregate ? failure.cause : failure;
+        assert(nativeFailure instanceof Error);
+        expect(nativeFailure.message).toBe("Fixture native database closed with a cleanup failure");
+        expect(nativeFailure.cause).toMatchObject({
+          message: "Fixture native close detail Authorization: Bearer synthetic-close-secret",
+          code: "SQLITE_BUSY",
+          errcode: 5,
+          errno: -16,
+        });
+        if (aggregate) {
+          assert(failure instanceof AggregateError);
+          expect(failure.errors).toHaveLength(2);
+          expect(failure.errors[0]).toBe(nativeFailure);
+          expect(failure.errors[1]).toBe(nativeFailure.cause);
+        }
+        const displayed = formatErrorMessageWithCode(failure);
+        expect(displayed).toContain("Fixture native close detail");
+        expect(displayed).toContain("SQLITE_BUSY");
+        expect(displayed).not.toContain("synthetic-close-secret");
 
-    const recovered = await open(file);
-    expect(await read(recovered)).toEqual(["preserved"]);
-    const recoveredReceipt = await append(recovered, "after recovery");
-    expect(recoveredReceipt.actor).not.toBe(receipt.actor);
-    expect(recoveredReceipt.writes).toBe(1);
-    expect(await read(recovered)).toEqual(["preserved", "after recovery"]);
-  });
+        const recovered = await open(file);
+        expect(await read(recovered)).toEqual(["preserved"]);
+        const recoveredReceipt = await append(recovered, "after recovery");
+        expect(recoveredReceipt.actor).not.toBe(receipt.actor);
+        expect(recoveredReceipt.writes).toBe(1);
+        expect(await read(recovered)).toEqual(["preserved", "after recovery"]);
+      } finally {
+        try {
+          await store.close();
+        } finally {
+          gateway.release();
+        }
+      }
+    },
+  );
 
   it.each([
     { reject: false, owner: "client" },

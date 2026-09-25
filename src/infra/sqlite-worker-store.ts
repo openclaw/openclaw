@@ -18,10 +18,13 @@ import {
 } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
-function withCallerErrors<T>(result: Promise<T>): Promise<T> {
+function withCallerErrors<T>(
+  result: Promise<T>,
+  options: { includeOrdinary?: boolean } = {},
+): Promise<T> {
   return result.catch((error: unknown) => {
     if (error instanceof Error) {
-      throw hydrateOpenClawStateWorkerError(error);
+      throw hydrateOpenClawStateWorkerError(error, options);
     }
     throw error;
   });
@@ -66,6 +69,7 @@ export function runSqliteWorkerStoreOperation<Operations extends SqliteWorkerOpe
       createAdmission,
       requireStateLifecycle,
     ),
+    { includeOrdinary: stateContext?.includeOrdinaryErrors },
   );
 }
 
@@ -73,7 +77,7 @@ function resolveSqliteWorkerBroker() {
   return resolveGlobalSingleton(
     Symbol.for("openclaw.sqliteWorkerBroker"),
     () => new SqliteWorkerBroker(),
-    (broker) => withCallerErrors(broker.close()),
+    (broker) => withCallerErrors(broker.close(), { includeOrdinary: true }),
   );
 }
 
@@ -142,7 +146,9 @@ export function getSqliteWorkerActorIdentity(store: object): object {
 }
 
 export function retireSqliteWorkerActor(identity: object): Promise<void> {
-  return withCallerErrors(resolveSqliteWorkerBroker().retireActor(identity));
+  return withCallerErrors(resolveSqliteWorkerBroker().retireActor(identity), {
+    includeOrdinary: true,
+  });
 }
 
 /** Recorded orphan custody at its original shared-state opening path. */
@@ -152,7 +158,9 @@ export function hasUnclaimedSharedStateSqliteCleanup(databasePath: string): bool
 
 /** Explicit cleanup only; referenced actors and other opening scopes are untouched. */
 export function closeUnclaimedSharedStateSqliteWorkers(databasePath: string): Promise<void> {
-  return withCallerErrors(resolveSqliteWorkerBroker().closeUnclaimedSharedState(databasePath));
+  return withCallerErrors(resolveSqliteWorkerBroker().closeUnclaimedSharedState(databasePath), {
+    includeOrdinary: true,
+  });
 }
 
 export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
@@ -206,7 +214,13 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
         onNativeStopped: custody.onNativeStopped,
       },
     ),
-  );
+  ).then((store) => {
+    if (store) {
+      const close = store.close.bind(store);
+      store.close = () => withCallerErrors(close(), { includeOrdinary: true });
+    }
+    return store;
+  });
 }
 
 /** Host-internal admission for the canonical shared-state actor. */
@@ -234,7 +248,7 @@ export function openSharedStateSqliteWorkerStore<Operations extends SqliteWorker
       const close = store.close.bind(store);
       // Keep the broker's binding identity while owning errors at this API boundary.
       store.execute = bindCallerExecute<Operations>({ execute }).execute;
-      store.close = () => withCallerErrors(close());
+      store.close = () => withCallerErrors(close(), { includeOrdinary: true });
     }
     return store;
   });

@@ -329,6 +329,7 @@ function decodeSqliteWorkerCleanupError(job: Job, payload: OpenClawStateWorkerEr
       message: "SQLite coordinator cleanup failed",
       sharedState: payload,
     }),
+    { includeOrdinary: true },
   );
 }
 

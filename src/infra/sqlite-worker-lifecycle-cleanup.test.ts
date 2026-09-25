@@ -14,6 +14,7 @@ import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as tokens from "./device-auth-store.js";
 import { storeDeviceAuthTokenInDatabase } from "./device-auth-store.kernel.js";
+import { formatErrorMessageWithCode } from "./errors.js";
 import { SQLITE_WORKER_MAX_RESULT_BYTES } from "./sqlite-worker-contract.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import * as sqliteWorkers from "./sqlite-worker-store.js";
@@ -87,7 +88,7 @@ if (!isMainThread) {
       armed = false;
       failedDatabase = this;
       fs.writeFileSync(${JSON.stringify(failed)}, "one cleanup failure");
-      throw new Error("Synthetic coordinator rollback failure");
+      throw Object.assign(new Error("Synthetic coordinator rollback failure"), { code: "SQLITE_IOERR", errcode: 10 });
     }
     return Reflect.apply(exec, this, [sql]);
   };
@@ -95,7 +96,7 @@ if (!isMainThread) {
   DatabaseSync.prototype.close = function(...args) {
     if (this === failedDatabase) {
       failedDatabase = undefined;
-      throw new Error("Synthetic coordinator close failure");
+      throw Object.assign(new Error("Synthetic coordinator close failure Authorization: Bearer synthetic-lifecycle-secret"), { code: "SQLITE_BUSY", errcode: 5 });
     }
     return Reflect.apply(close, this, args);
   };
@@ -267,11 +268,22 @@ if (!isMainThread) {
         expect(fs.readFileSync(failed, "utf8")).toBe("one cleanup failure");
         expect(nativeWrites).toBe(1);
         if (follower) {
-          expect(await follower).toMatchObject({
+          const result = await follower;
+          expect(result).toMatchObject({
             failed: true,
             exited: true,
-            error: { code: "unavailable" },
+            error: {
+              code: "unavailable",
+              cause: { message: "failed to release state-lifecycle coordinator" },
+            },
           });
+          if ("error" in result) {
+            const displayed = formatErrorMessageWithCode(result.error);
+            expect(displayed).toContain("Synthetic coordinator rollback failure");
+            expect(displayed).toContain("Synthetic coordinator close failure");
+            expect(displayed).toContain("SQLITE_BUSY");
+            expect(displayed).not.toContain("synthetic-lifecycle-secret");
+          }
         }
         if (!preparation) {
           expect(warnings).toHaveBeenCalledWith(

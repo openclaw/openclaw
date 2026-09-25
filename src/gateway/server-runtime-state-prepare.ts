@@ -17,6 +17,7 @@ import {
   canIsolateAgentDatabase,
   listAgentDatabaseAdmissionRefusals,
 } from "../state/agent-database-admission.js";
+import { getOpenClawAgentDatabaseCleanupFailures } from "../state/openclaw-agent-execution.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
@@ -448,6 +449,8 @@ export async function prepareGatewayKernelState(params: {
         (refusal) => !canIsolateAgentDatabase(cfg, refusal.agentId),
       );
     },
+    getAgentDatabaseCleanupFailures: () =>
+      getOpenClawAgentDatabaseCleanupFailures(resolveDatabasePath()),
     getPluginReloadStatus: params.getPluginReloadStatus,
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||

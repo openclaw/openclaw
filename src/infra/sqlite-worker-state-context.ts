@@ -15,6 +15,8 @@ export type SqliteWorkerStateContext = {
   initializationAgentPaths?: readonly string[];
   coordinatorRuntime: StateDatabaseCoordinatorRuntime;
   existingSchemaPath?: string;
+  /** Cleanup-only callers retain native error graphs without changing outcome classification. */
+  includeOrdinaryErrors?: true;
 };
 
 export function captureSqliteWorkerStateContext(
@@ -30,6 +32,7 @@ export function captureSqliteWorkerStateContext(
       : {}),
     coordinatorRuntime: { ...context.coordinatorRuntime },
     existingSchemaPath: context.existingSchemaPath,
+    ...(context.includeOrdinaryErrors ? { includeOrdinaryErrors: true } : {}),
   };
 }
 

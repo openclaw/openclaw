@@ -665,6 +665,7 @@ export class SqliteWorkerBroker {
     }
     const error = toErrorObject(reason, "SQLite worker failed");
     slot.failed = new SqliteWorkerError(error.message, "unavailable");
+    slot.failed.cause = error;
     for (const resume of this.waiters.get(slot) ?? []) {
       resume(slot.failed);
     }

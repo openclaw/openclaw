@@ -1,6 +1,7 @@
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
 import { readDatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { runSqliteWorkerStoreOperation } from "../infra/sqlite-worker-store.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
@@ -21,7 +22,8 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   if (observed.key !== params.lease.sharedStateIdentity) {
     throw new Error("Retired agent cleanup cannot adopt a replacement shared database");
   }
-  const context = {
+  const context: SqliteWorkerStateContext = {
+    includeOrdinaryErrors: true,
     environment: params.context.environment,
     coordinatorRuntime: { ...params.context.coordinatorRuntime, keepAlive: false },
     existingSchemaPath: params.context.existingSchemaPath,

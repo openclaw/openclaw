@@ -2,12 +2,20 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import * as os from "node:os";
+import { serialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import * as logging from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
+import { formatErrorMessageWithCode } from "./errors.js";
+import {
+  receiveSqliteWorkerReply,
+  type SqliteWorkerReplyOwner,
+} from "./sqlite-worker-broker-reply.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
+import type { Job } from "./sqlite-worker-broker.types.js";
 import {
   useSqliteWorkerStoreFixture,
   appendWorkerRow as append,
@@ -32,6 +40,72 @@ const { databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worker-broker
 });
 
 const nodeIt = process.versions.bun ? it.skip : it;
+
+it.each([false, true])(
+  "decodes ordinary cleanup without changing the completed result (aggregate: %s)",
+  (aggregate) => {
+    const native = Object.assign(
+      new Error("Native close refused Authorization: Bearer synthetic-reply-secret"),
+      { code: "SQLITE_BUSY", errcode: 5, errno: -16 },
+    );
+    const error = aggregate
+      ? new AggregateError([native], "Ordinary cleanup aggregate", { cause: native })
+      : native;
+    const payload = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
+    assert(payload);
+    const committed = { revision: 42 };
+    const job: Job = {
+      request: {
+        id: 1,
+        actor: 1,
+        type: "execute",
+        input: serialize(undefined),
+        stateContext: {
+          environment: { OPENCLAW_STATE_DIR: "/synthetic" },
+          coordinatorRuntime: { directory: "/synthetic", keepAlive: false },
+        },
+      },
+      bytes: 0,
+      nativeDispatched: true,
+      resolve: vi.fn(),
+      reject: vi.fn(),
+      detach: vi.fn(),
+    };
+    const fail = vi.fn<SqliteWorkerReplyOwner["fail"]>();
+    const finish = vi.fn();
+    const dispatch = vi.fn();
+    const postMessage = vi.fn();
+    receiveSqliteWorkerReply(
+      { current: job, worker: { postMessage } },
+      { id: 1, ok: true, value: serialize(committed), cleanupFailure: structuredClone(payload) },
+      { fail, finish, dispatch },
+    );
+    expect(fail).toHaveBeenCalledOnce();
+    const [received, currentError, completed] = fail.mock.calls[0]!;
+    assert(received instanceof Error);
+    expect(currentError).toBeUndefined();
+    expect(completed).toEqual({ value: committed });
+    const restored = aggregate ? received.cause : received;
+    expect(restored).toMatchObject({
+      message: native.message,
+      code: "SQLITE_BUSY",
+      errcode: 5,
+      errno: -16,
+    });
+    if (aggregate) {
+      assert(received instanceof AggregateError);
+      expect(received.errors).toHaveLength(1);
+      expect(received.errors[0]).toBe(restored);
+    }
+    const displayed = formatErrorMessageWithCode(received);
+    expect(displayed).toContain("Native close refused");
+    expect(displayed).toContain("SQLITE_BUSY");
+    expect(displayed).not.toContain("synthetic-reply-secret");
+    expect(finish).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(postMessage).not.toHaveBeenCalled();
+  },
+);
 
 nodeIt("keeps an independent database responsive while another worker is at capacity", async () => {
   const busy = await open(databasePath());

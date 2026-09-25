@@ -2,6 +2,7 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { AgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import type { AgentDatabaseCleanupFailure } from "../../state/openclaw-agent-execution.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
@@ -22,6 +23,7 @@ type ReadinessResult = {
   eventLoop?: GatewayEventLoopHealth;
   pluginReload?: GatewayPluginReloadStatus;
   agentDatabases?: readonly AgentDatabaseAdmissionRefusal[];
+  agentDatabaseCleanup?: readonly AgentDatabaseCleanupFailure[];
   stateDatabase?: { reason: string };
 };
 
@@ -98,6 +100,7 @@ export function createReadinessChecker(
     getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
     getStateDatabaseFailure?: () => Error | undefined;
     getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
+    getAgentDatabaseCleanupFailures?: () => readonly AgentDatabaseCleanupFailure[];
     getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
     shouldSkipChannelReadiness?: () => boolean;
     cacheTtlMs?: number;
@@ -139,13 +142,20 @@ export function createReadinessChecker(
       );
     }
     const agentDatabases = deps.getAgentDatabaseAdmissionRefusals?.();
-    if (agentDatabases?.length) {
+    const agentDatabaseCleanup = deps.getAgentDatabaseCleanupFailures?.();
+    if (agentDatabases?.length || agentDatabaseCleanup?.length) {
       cachedState = null;
       return withEventLoopHealth(
         {
           ready: false,
-          failing: agentDatabases.map(({ agentId }) => `agent-database:${agentId}`),
-          agentDatabases,
+          failing: [
+            ...(agentDatabases ?? []).map(({ agentId }) => `agent-database:${agentId}`),
+            ...(agentDatabaseCleanup ?? []).map(
+              ({ agentId }) => `agent-database-cleanup:${agentId}`,
+            ),
+          ],
+          ...(agentDatabases?.length ? { agentDatabases } : {}),
+          ...(agentDatabaseCleanup?.length ? { agentDatabaseCleanup } : {}),
           uptimeMs,
         },
         deps.getEventLoopHealth,

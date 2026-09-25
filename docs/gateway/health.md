@@ -99,6 +99,22 @@ probes read the admission owner's recorded result without querying SQLite.
 `/healthz` still reports HTTP liveness. Supervisors that need to detect a Gateway
 that is running but cannot admit work must monitor `/readyz`.
 
+### Agent database cleanup failure
+
+A retained native cleanup failure makes `/ready` and `/readyz` return `503` even
+when channel readiness was recently healthy or channels are intentionally
+skipped. Detailed responses include `failing: ["agent-database-cleanup:<id>"]`
+and `agentDatabaseCleanup` entries with each affected agent's `reason` and
+`repairHint`. This differs from a startup admission refusal: cleanup reports
+all owners still retaining failed native cleanup, including optional agents.
+
+Readiness reads the execution owners' recorded failures without querying SQLite
+or trying to close resources. The signal clears after the owning cleanup succeeds;
+healthy agents can continue serving requests while another agent retains its
+failed cleanup. If cleanup remains blocked, follow the repair hint and restart
+the Gateway rather than deleting database files or leases. `/healthz` remains
+an HTTP liveness probe and does not change for this failure.
+
 ### Plugin replacement recovery
 
 During plugin replacement or recovery, `/readyz` returns `503`. Detailed responses
