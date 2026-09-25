@@ -224,6 +224,130 @@ describe("cron timer outcome and failure policy regressions", () => {
   });
 
   it.each([
+    { name: "default policy", failureAlert: undefined, alerts: 1 },
+    { name: "failureAlert: false", failureAlert: false as const, alerts: 0 },
+  ])("alerts on a one-shot's first permanent failure ($name)", ({ failureAlert, alerts }) => {
+    const startedAt = Date.parse("2026-08-01T12:30:00.000Z");
+    const deferredNotifications: DeferredCronNotifications = [];
+    const state = createCronServiceState({
+      storePath: "/tmp/cron-one-shot-permanent-failure.json",
+      nowMs: () => startedAt,
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "one-shot-permanent-failure",
+      name: "one-shot permanent failure",
+      scheduledAt: startedAt,
+      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+      payload: { kind: "agentTurn", message: "fail" },
+      state: {},
+    });
+    job.deleteAfterRun = true;
+    if (failureAlert !== undefined) {
+      job.failureAlert = failureAlert;
+    }
+
+    const shouldDelete = applyJobResult(
+      state,
+      job,
+      {
+        status: "error",
+        error: "backend rejected the job configuration",
+        errorClassification: { kind: "permanent" },
+        startedAt,
+        endedAt: startedAt + 10,
+      },
+      { deferredNotifications },
+    );
+
+    // Kept for inspection (deleteAfterRun only applies to succeeded runs) and never re-run,
+    // so the default `after: 2` streak can't be reached: the alert has to fire now.
+    expect(shouldDelete).toBe(false);
+    expect(job.enabled).toBe(false);
+    expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(job.state.consecutiveErrors).toBe(1);
+    expect(job.state.autoDisabled).toBeUndefined();
+    expect(deferredNotifications).toHaveLength(alerts);
+    expect(deferredNotifications.every((n) => n.kind === "failure-alert")).toBe(true);
+  });
+
+  it("keeps the after threshold for a one-shot's retryable first failure", () => {
+    const startedAt = Date.parse("2026-08-01T12:40:00.000Z");
+    const deferredNotifications: DeferredCronNotifications = [];
+    const state = createCronServiceState({
+      storePath: "/tmp/cron-one-shot-transient-failure.json",
+      nowMs: () => startedAt,
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "one-shot-transient-failure",
+      name: "one-shot transient failure",
+      scheduledAt: startedAt,
+      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+      payload: { kind: "agentTurn", message: "fail" },
+      state: {},
+    });
+
+    applyJobResult(
+      state,
+      job,
+      {
+        status: "error",
+        error: "429 rate limit exceeded",
+        errorClassification: { kind: "reason", reason: "rate_limit" },
+        startedAt,
+        endedAt: startedAt + 10,
+      },
+      { deferredNotifications },
+    );
+
+    expect(job.enabled).toBe(true);
+    expect(job.state.nextRunAtMs).toBeTypeOf("number");
+    expect(deferredNotifications).toHaveLength(0);
+  });
+
+  it("resets the auto-disable streak after a successful recurring run", () => {
+    const startedAt = Date.parse("2026-08-01T13:00:00.000Z");
+    const state = createCronServiceState({
+      storePath: "/tmp/cron-consecutive-failure-reset.json",
+      nowMs: () => startedAt,
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "recurring-failure-reset",
+      name: "recurring failure reset",
+      scheduledAt: startedAt,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
+      payload: { kind: "agentTurn", message: "recover" },
+      state: {},
+    });
+    const apply = (status: "ok" | "error", run: number) =>
+      applyJobResult(
+        state,
+        job,
+        {
+          status,
+          ...(status === "error" ? { error: `failure ${run}` } : {}),
+          startedAt: startedAt + run * 60_000,
+          endedAt: startedAt + run * 60_000 + 10,
+        },
+        { deferredNotifications: [] },
+      );
+
+    for (let run = 0; run < 9; run += 1) {
+      apply("error", run);
+    }
+    apply("ok", 9);
+    for (let run = 10; run < 19; run += 1) {
+      apply("error", run);
+    }
+
+    expect(job.enabled).toBe(true);
+    expect(job.state.consecutiveErrors).toBe(9);
+    expect(job.state.autoDisabled).toBeUndefined();
+  });
+
+  it.each([
     { name: "silent job", delivery: { mode: "none" as const }, disables: false },
     {
       name: "webhook job",

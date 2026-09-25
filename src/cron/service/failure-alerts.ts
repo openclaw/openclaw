@@ -348,12 +348,14 @@ export function maybeEmitFailureAlert(
     failureNotificationDetail?: CronFailureNotificationDetail;
     runAtMs?: number;
     consecutiveCount: number;
+    /** The job will not run again, so a later run can never reach the `after` threshold. */
+    terminal?: boolean;
     deferredNotifications: DeferredCronNotifications;
   },
 ) {
   recordUnresolvedFailure(params.job, params.failureNotificationDetail);
   const alertConfig = params.alertConfig;
-  if (!alertConfig || params.consecutiveCount < alertConfig.after) {
+  if (!alertConfig || (!params.terminal && params.consecutiveCount < alertConfig.after)) {
     return;
   }
   // Best-effort delivery suppresses inherited alert noise, not an independently
@@ -447,6 +449,8 @@ export function finalizeCronFailureNotifications(
     };
     completionStatus: CronCompletionStatus;
     autoDisableNotificationOwnsFailure: boolean;
+    /** A one-shot disabled after a permanent error or exhausted retries. */
+    terminalFailure?: boolean;
     replay?: boolean;
     deferredNotifications: DeferredCronNotifications;
   },
@@ -470,6 +474,7 @@ export function finalizeCronFailureNotifications(
       failureNotificationDetail: params.result.failureNotificationDetail,
       runAtMs: params.result.startedAt,
       consecutiveCount: params.job.state.consecutiveErrors ?? 0,
+      terminal: params.terminalFailure,
       deferredNotifications: params.deferredNotifications,
     });
   } else if (

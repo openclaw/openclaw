@@ -343,8 +343,17 @@ describe("CronService one-shot lifecycle", () => {
         } else {
           expect(stored?.state.nextRunAtMs).toBeTypeOf("number");
         }
-        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+        if (executionStarted) {
+          // The job is disabled for good, so it can never reach the default `after: 2`
+          // streak: the failure alert fires now, and the run's own summary stays out of main.
+          expect(deps.enqueueSystemEvent).toHaveBeenCalledOnce();
+          const [text, opts] = vi.mocked(deps.enqueueSystemEvent).mock.calls[0] ?? [];
+          expect(String(text)).not.toContain("last output");
+          expect(opts).toMatchObject({ contextKey: `cron:${job.id}:failure-alert` });
+        } else {
+          expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+          expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+        }
       } finally {
         await cleanup();
       }

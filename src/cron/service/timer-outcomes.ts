@@ -236,6 +236,7 @@ export function applyJobResult(
     job.deleteAfterRun === true &&
     completionStatus === "succeeded";
   let autoDisableNotificationOwnsFailure = false;
+  let oneShotTerminalFailure = false;
   const applyReplaySchedule = () => {
     const nextRunAtMs = job.state.autoDisabled ? undefined : opts.replaySchedule?.nextRunAtMs;
     job.state.nextRunAtMs = nextRunAtMs === undefined ? undefined : scheduleNextRun(nextRunAtMs);
@@ -253,6 +254,7 @@ export function applyJobResult(
       result,
       completionStatus,
       autoDisableNotificationOwnsFailure,
+      terminalFailure: oneShotTerminalFailure,
       replay: opts.replay,
       deferredNotifications: opts.deferredNotifications,
     });
@@ -336,9 +338,11 @@ export function applyJobResult(
           // Permanent error or max retries exhausted: disable.
           // Note: deleteAfterRun:true only triggers on ok (see shouldDelete above),
           // so exhausted-retry jobs are disabled but intentionally kept in the store
-          // to preserve the error state for inspection.
+          // to preserve the error state for inspection. It will not run again, so the
+          // failure alert fires now instead of waiting for an `after` streak it can't reach.
           job.enabled = false;
           job.state.nextRunAtMs = undefined;
+          oneShotTerminalFailure = true;
           state.deps.log.warn(
             {
               jobId: job.id,
