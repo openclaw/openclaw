@@ -30,6 +30,10 @@ import type {
   SpeechProviderResolveConfigContext,
   SpeechProviderResolveTalkConfigContext,
   SpeechProviderResolveTalkOverridesContext,
+  SpeechDesignVoiceRequest,
+  SpeechDesignVoiceResult,
+  SpeechReplicateVoiceRequest,
+  SpeechReplicateVoiceResult,
   SpeechListVoicesRequest,
   SpeechProviderPrepareSynthesisContext,
   SpeechProviderPreparedSynthesis,
@@ -456,6 +460,10 @@ export type SpeechProviderPlugin = {
     req: SpeechTelephonySynthesisRequest,
   ) => Promise<SpeechTelephonySynthesisResult>;
   listVoices?: (req: SpeechListVoicesRequest) => Promise<SpeechVoiceOption[]>;
+  /** Store a prompted voice. Absent when the provider cannot design voices. */
+  designVoice?: (req: SpeechDesignVoiceRequest) => Promise<SpeechDesignVoiceResult>;
+  /** Store a replicated voice. Absent when the provider cannot clone from recordings. */
+  replicateVoice?: (req: SpeechReplicateVoiceRequest) => Promise<SpeechReplicateVoiceResult>;
 };
 
 /** Realtime transcription capability registered by a plugin. */

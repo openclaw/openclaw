@@ -760,4 +760,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["users.merge", "users", "operator.admin", "2026.9"],
   ["gateway.stop.request", "restart", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["diagnostics.heapSnapshot", "diagnostics", "operator.admin", "2026.9"],
+  ["tts.voices", "tts", "operator.read", "2026.9"],
+  ["tts.designVoice", "tts", "operator.write", "2026.9"],
+  ["tts.replicateVoice", "tts", "operator.write", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

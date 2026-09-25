@@ -16,6 +16,7 @@ import {
 import { resolveGoogleEnvApiKey } from "./gemini-auth.js";
 import type { GoogleGenerateContentResponse } from "./generate-content-response.js";
 import { GOOGLE_PREBUILT_VOICES } from "./voice-catalog.js";
+import { createGoogleSpeechVoiceMethods } from "./voices.js";
 
 // Implicit default stays on the generateContent path; Gemini 3.8 is an explicit opt-in.
 const DEFAULT_GOOGLE_TTS_MODEL = "gemini-3.1-flash-tts-preview";
@@ -652,7 +653,11 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
         ? {}
         : { model: normalizeGoogleTtsModel(params.modelId) }),
     }),
-    listVoices: async () => GOOGLE_PREBUILT_VOICES.map((voice) => ({ id: voice, name: voice })),
+    ...createGoogleSpeechVoiceMethods({
+      readConfig: readGoogleTtsProviderConfig,
+      resolveApiKey: resolveGoogleTtsApiKey,
+      resolveBaseUrl: resolveGoogleTtsBaseUrl,
+    }),
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(resolveGoogleTtsApiKey({ cfg, providerConfig })),
     prepareSynthesis: (ctx) => {

@@ -2019,6 +2019,7 @@ export const en: TranslationMap & {
     description: "Choose which sources can save meeting notes on this Gateway.",
     sources: "Auto-start sources",
   },
+  ttsVoiceLab: {},
   cloudWorkersPage: {},
   portalsPage: {},
   modelSetup: {

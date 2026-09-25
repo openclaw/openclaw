@@ -24,6 +24,8 @@ export function maybeApplyTtsToPayload(params: Parameters<typeof maybeApplyTtsTo
 }
 
 export {
+  designSpeechVoice,
+  replicateSpeechVoice,
   getLastTtsAttempt,
   getResolvedSpeechProviderConfig,
   getTtsMaxLength,

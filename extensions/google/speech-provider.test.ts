@@ -650,6 +650,8 @@ describe("Google speech provider", () => {
   });
 
   it("lists Gemini prebuilt TTS voices", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "");
+    vi.stubEnv("GOOGLE_API_KEY", "");
     const provider = buildGoogleSpeechProvider();
 
     const voices = await provider.listVoices?.({ providerConfig: {} });

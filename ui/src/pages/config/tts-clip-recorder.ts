@@ -1,0 +1,121 @@
+import { encodeWavPcm16Mono, floatToPcm16 } from "../../lib/pcm-wav.ts";
+import { RealtimeTalkPcmInputPump } from "../chat/talk/audio.ts";
+import {
+  RealtimeTalkInputController,
+  RealtimeTalkSelectedMicrophoneError,
+} from "../chat/talk/input.ts";
+
+export const TTS_CLIP_TARGET_SAMPLE_RATE_HZ = 24_000;
+export const TTS_CLIP_MAX_DURATION_MS = 30_000;
+
+export type TtsRecordedClip = {
+  wav: Uint8Array;
+  mimeType: "audio/wav";
+  durationMs: number;
+  sampleRate: number;
+};
+
+export class TtsClipRecorder {
+  private input: RealtimeTalkInputController | null = null;
+  private context: AudioContext | null = null;
+  private pump: RealtimeTalkPcmInputPump | null = null;
+  private chunks: Float32Array[] = [];
+  private startedAtMs = 0;
+  private onLevel: ((level: number) => void) | undefined;
+
+  get recording(): boolean {
+    return this.context !== null;
+  }
+
+  get elapsedMs(): number {
+    if (!this.startedAtMs) {
+      return 0;
+    }
+    return Math.max(0, Date.now() - this.startedAtMs);
+  }
+
+  async start(
+    options: {
+      deviceId?: string;
+      onLevel?: (level: number) => void;
+    } = {},
+  ): Promise<void> {
+    this.dispose();
+    this.onLevel = options.onLevel;
+    const input = new RealtimeTalkInputController(() => undefined);
+    this.input = input;
+    let media;
+    try {
+      media = await input.open(options.deviceId);
+    } catch (error) {
+      if (options.deviceId?.trim() && error instanceof RealtimeTalkSelectedMicrophoneError) {
+        media = await input.open(undefined);
+      } else {
+        throw error;
+      }
+    }
+    const context = new AudioContext({ sampleRate: TTS_CLIP_TARGET_SAMPLE_RATE_HZ });
+    this.context = context;
+    if (context.state === "suspended") {
+      await context.resume();
+    }
+    this.chunks = [];
+    this.pump = new RealtimeTalkPcmInputPump();
+    this.pump.start(media, context, (samples) => {
+      this.chunks.push(new Float32Array(samples));
+      this.onLevel?.(peakLevel(samples));
+    });
+    this.startedAtMs = Date.now();
+  }
+
+  async stop(): Promise<TtsRecordedClip> {
+    const context = this.context;
+    if (!context) {
+      throw new Error("No voice clip is being recorded");
+    }
+    const sampleRate = context.sampleRate || TTS_CLIP_TARGET_SAMPLE_RATE_HZ;
+    const chunks = this.chunks;
+    this.teardownGraph();
+    const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const samples = new Float32Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      samples.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return {
+      wav: encodeWavPcm16Mono(floatToPcm16(samples), sampleRate),
+      mimeType: "audio/wav",
+      durationMs: sampleRate > 0 ? (length / sampleRate) * 1000 : 0,
+      sampleRate,
+    };
+  }
+
+  dispose(): void {
+    this.teardownGraph();
+  }
+
+  private teardownGraph(): void {
+    this.pump?.stop();
+    this.pump = null;
+    void this.context?.close();
+    this.context = null;
+    this.startedAtMs = 0;
+    this.input?.stop();
+    this.input = null;
+    this.chunks = [];
+    this.onLevel?.(0);
+    this.onLevel = undefined;
+  }
+}
+
+function peakLevel(samples: Float32Array): number {
+  let peak = 0;
+  for (const sample of samples) {
+    const absolute = Math.abs(sample);
+    if (absolute > peak) {
+      peak = absolute;
+    }
+  }
+  return peak;
+}

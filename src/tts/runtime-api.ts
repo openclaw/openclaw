@@ -36,7 +36,13 @@ export {
   setTtsPersona,
   setTtsProvider,
 } from "./tts-settings-writes.js";
-export { getLastTtsAttempt, listSpeechVoices, setLastTtsAttempt } from "./tts-payload.js";
+export {
+  designSpeechVoice,
+  getLastTtsAttempt,
+  listSpeechVoices,
+  replicateSpeechVoice,
+  setLastTtsAttempt,
+} from "./tts-payload.js";
 export {
   getResolvedSpeechProviderConfig,
   isTtsProviderConfigured,

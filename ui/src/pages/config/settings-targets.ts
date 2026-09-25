@@ -13,6 +13,7 @@ export const CONNECTION_SETTINGS_TARGET_IDS = {
 export const COMMUNICATION_SETTINGS_TARGET_IDS = {
   notifications: "settings-communications-notifications",
   meetingCapture: "settings-communications-meeting-capture",
+  ttsVoiceLab: "settings-communications-tts-voice-lab",
 } as const;
 
 export const PROFILE_SETTINGS_TARGET_IDS = {

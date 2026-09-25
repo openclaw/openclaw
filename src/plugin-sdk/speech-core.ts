@@ -3,6 +3,10 @@
 export type { SpeechProviderPlugin } from "../plugins/types.js";
 export type { ResolvedTtsConfig, ResolvedTtsModelOverrides } from "../tts/tts-types.js";
 export type {
+  SpeechDesignVoiceRequest,
+  SpeechDesignVoiceResult,
+  SpeechReplicateVoiceRequest,
+  SpeechReplicateVoiceResult,
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
   SpeechListVoicesRequest,

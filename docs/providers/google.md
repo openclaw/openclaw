@@ -380,6 +380,59 @@ A Google Cloud Console API key restricted to the Gemini API is valid for this
 provider. This is not the separate Cloud Text-to-Speech API path.
 </Note>
 
+## Voice design
+
+Gemini 3.8 can store a voice from a text description. OpenClaw keeps that call
+in the bundled Google speech provider. With a Google key configured,
+`openclaw infer tts voices --provider google` lists the project catalog from
+`GET /v1beta/voices`, including stored `voice_…` ids. Without a key, it falls
+back to the built-in prebuilt names.
+
+Design a voice with:
+
+```bash
+openclaw infer tts design \
+  --provider google \
+  --name "Night Desk" \
+  --language en-US \
+  --prompt "A low, dry woman in her forties. Calm, unhurried, no smile in the voice." \
+  --output ./night-desk.wav
+```
+
+The prompt describes the speaker. It is not read aloud. Google stores the voice
+for a year, up to 200 stored voices on the project, and returns a preview clip.
+Speak it later by passing that `voice_…` id as `speakerVoice` or
+`openclaw infer tts convert --provider google --model google/gemini-3.8-flash-tts --voice <id>`.
+Voice design uses `gemini-3.8-flash-tts` unless you pass `--model gemini-3.8-flash-lite-tts`.
+It does not change the implicit Google TTS model. Talk and Live still use
+prebuilt voice names.
+
+## Voice replication
+
+Gemini 3.8 can store a voice from two recordings of the same adult speaker.
+This is not voice design. The reference clip is 10–30 seconds of natural speech.
+The consent clip must be the same speaker reciting Google's statement:
+
+> I am the owner of this voice and I consent to Google using this voice to create a synthetic voice model.
+
+```bash
+openclaw infer tts replicate \
+  --provider google \
+  --name "Bobby" \
+  --source ./reference.wav \
+  --consent ./consent.wav \
+  --output ./bobby-preview.wav
+```
+
+Google stores that voice on the project for a year, in the same 200-voice
+bucket as prompted voices. Speak it later with the returned `voice_…` id.
+OpenClaw does not synthesize the consent statement for you.
+
+Control UI records both takes in place: Settings → Communications → Voice →
+**Create from my voice**. That path captures 24 kHz WAV in the browser and
+calls `tts.replicateVoice`. Composer tap-to-talk is dictation (8 kHz, text
+only) and cannot clone a voice.
+
 ## Realtime voice
 
 The bundled `google` plugin registers a realtime voice provider backed by the

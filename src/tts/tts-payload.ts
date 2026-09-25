@@ -12,7 +12,7 @@ import { truncateUtf16Safe } from "../utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import { parseTtsDirectives, resolveTtsDirectiveFacts } from "./directives.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
-import type { SpeechVoiceOption } from "./provider-types.js";
+import type { SpeechDesignVoiceResult, SpeechVoiceOption } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable, isSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { isCodeHeavySpeechText, normalizeSpeechText } from "./speech-text.js";
 import { summarizeText } from "./tts-core.js";
@@ -76,6 +76,88 @@ export async function listSpeechVoices(params: {
     apiKey: params.apiKey,
     baseUrl: params.baseUrl,
     timeoutMs,
+  });
+}
+
+export async function designSpeechVoice(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  config?: ResolvedTtsConfig;
+  displayName: string;
+  prompt: string;
+  languageCode?: string;
+  gender?: string;
+  model?: string;
+}): Promise<SpeechDesignVoiceResult> {
+  assertSpeechRuntimeAvailable();
+  const cfg = params.cfg ? resolveTtsRuntimeConfig(params.cfg) : undefined;
+  const provider = canonicalizeSpeechProviderId(params.provider, cfg);
+  if (!provider) {
+    throw new Error("speech provider id is required");
+  }
+  const config = params.config ?? (cfg ? resolveTtsConfig(cfg) : undefined);
+  if (!config) {
+    throw new Error(`speech provider ${provider} requires cfg or resolved config`);
+  }
+  const resolvedProvider = getSpeechProvider(provider, cfg);
+  if (!resolvedProvider?.designVoice) {
+    throw new Error(`speech provider ${provider} does not support voice design`);
+  }
+  const timeoutMs = resolveSpeechProviderTimeoutMs({
+    config,
+    provider: resolvedProvider,
+  });
+  return await resolvedProvider.designVoice({
+    cfg,
+    providerConfig: getResolvedSpeechProviderConfig(config, resolvedProvider.id, cfg),
+    timeoutMs,
+    displayName: params.displayName,
+    prompt: params.prompt,
+    languageCode: params.languageCode,
+    gender: params.gender,
+    model: params.model,
+  });
+}
+
+export async function replicateSpeechVoice(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  config?: ResolvedTtsConfig;
+  displayName: string;
+  sourceAudio: Buffer;
+  consentAudio: Buffer;
+  sourceMimeType?: string;
+  consentMimeType?: string;
+  model?: string;
+}): Promise<SpeechDesignVoiceResult> {
+  assertSpeechRuntimeAvailable();
+  const cfg = params.cfg ? resolveTtsRuntimeConfig(params.cfg) : undefined;
+  const provider = canonicalizeSpeechProviderId(params.provider, cfg);
+  if (!provider) {
+    throw new Error("speech provider id is required");
+  }
+  const config = params.config ?? (cfg ? resolveTtsConfig(cfg) : undefined);
+  if (!config) {
+    throw new Error(`speech provider ${provider} requires cfg or resolved config`);
+  }
+  const resolvedProvider = getSpeechProvider(provider, cfg);
+  if (!resolvedProvider?.replicateVoice) {
+    throw new Error(`speech provider ${provider} does not support voice replication`);
+  }
+  const timeoutMs = resolveSpeechProviderTimeoutMs({
+    config,
+    provider: resolvedProvider,
+  });
+  return await resolvedProvider.replicateVoice({
+    cfg,
+    providerConfig: getResolvedSpeechProviderConfig(config, resolvedProvider.id, cfg),
+    timeoutMs,
+    displayName: params.displayName,
+    sourceAudio: params.sourceAudio,
+    consentAudio: params.consentAudio,
+    sourceMimeType: params.sourceMimeType,
+    consentMimeType: params.consentMimeType,
+    model: params.model,
   });
 }
 

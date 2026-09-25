@@ -18,8 +18,11 @@ import {
 import { resolvePreparedTtsProvider } from "../../tts/tts-provider-resolution.js";
 import { resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
 import {
+  designSpeechVoice,
   getTtsPersona,
+  replicateSpeechVoice,
   isTtsProviderConfigured,
+  listSpeechVoices,
   listTtsPersonas,
   resolveExplicitTtsOverrides,
   resolveTtsConfig,
@@ -318,6 +321,94 @@ export const ttsHandlers: GatewayRequestHandlers = {
           voices: [...(candidate.voices ?? [])],
         })),
         active: provider,
+      });
+    });
+  },
+  "tts.voices": async ({ params, respond, context }) => {
+    await respondUnavailableOnThrow(respond, async () => {
+      const cfg = context.getRuntimeConfig();
+      const provider = normalizeOptionalString(params.provider);
+      if (!provider) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "tts.voices requires provider"),
+        );
+        return;
+      }
+      const voices = await listSpeechVoices({ provider, cfg });
+      respond(true, { provider, voices });
+    });
+  },
+  "tts.designVoice": async ({ params, respond, context }) => {
+    const displayName = normalizeOptionalString(params.displayName);
+    const prompt = normalizeOptionalString(params.prompt);
+    const provider = normalizeOptionalString(params.provider);
+    if (!provider || !displayName || !prompt) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "tts.designVoice requires provider, displayName, and prompt",
+        ),
+      );
+      return;
+    }
+    await respondUnavailableOnThrow(respond, async () => {
+      const cfg = context.getRuntimeConfig();
+      const designed = await designSpeechVoice({
+        cfg,
+        provider,
+        displayName,
+        prompt,
+        languageCode: normalizeOptionalString(params.languageCode),
+        gender: normalizeOptionalString(params.gender),
+        model: normalizeOptionalString(params.modelId),
+      });
+      respond(true, {
+        provider,
+        id: designed.id,
+        name: designed.name,
+        mimeType: designed.mimeType,
+        audioBase64: designed.previewAudio.toString("base64"),
+      });
+    });
+  },
+  "tts.replicateVoice": async ({ params, respond, context }) => {
+    const displayName = normalizeOptionalString(params.displayName);
+    const provider = normalizeOptionalString(params.provider);
+    const sourceAudioBase64 = normalizeOptionalString(params.sourceAudioBase64);
+    const consentAudioBase64 = normalizeOptionalString(params.consentAudioBase64);
+    if (!provider || !displayName || !sourceAudioBase64 || !consentAudioBase64) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "tts.replicateVoice requires provider, displayName, sourceAudioBase64, and consentAudioBase64",
+        ),
+      );
+      return;
+    }
+    await respondUnavailableOnThrow(respond, async () => {
+      const cfg = context.getRuntimeConfig();
+      const replicated = await replicateSpeechVoice({
+        cfg,
+        provider,
+        displayName,
+        sourceAudio: Buffer.from(sourceAudioBase64, "base64"),
+        consentAudio: Buffer.from(consentAudioBase64, "base64"),
+        sourceMimeType: normalizeOptionalString(params.sourceMimeType),
+        consentMimeType: normalizeOptionalString(params.consentMimeType),
+        model: normalizeOptionalString(params.modelId),
+      });
+      respond(true, {
+        provider,
+        id: replicated.id,
+        name: replicated.name,
+        mimeType: replicated.mimeType,
+        audioBase64: replicated.previewAudio.toString("base64"),
       });
     });
   },

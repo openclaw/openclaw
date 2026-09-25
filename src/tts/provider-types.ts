@@ -135,6 +135,46 @@ export type SpeechListVoicesRequest = {
   timeoutMs?: number;
 };
 
+/** Provider request to store a prompted voice and return its preview clip. */
+export type SpeechDesignVoiceRequest = {
+  cfg?: OpenClawConfig;
+  providerConfig?: SpeechProviderConfig;
+  apiKey?: string;
+  baseUrl?: string;
+  timeoutMs?: number;
+  displayName: string;
+  prompt: string;
+  languageCode?: string;
+  gender?: string;
+  model?: string;
+};
+
+/** Stored voice id plus the provider's preview audio. */
+export type SpeechDesignVoiceResult = {
+  id: string;
+  name?: string;
+  previewAudio: Buffer;
+  mimeType: string;
+};
+
+/** Provider request to store a replicated voice from two recordings. */
+export type SpeechReplicateVoiceRequest = {
+  cfg?: OpenClawConfig;
+  providerConfig?: SpeechProviderConfig;
+  apiKey?: string;
+  baseUrl?: string;
+  timeoutMs?: number;
+  displayName: string;
+  sourceAudio: Buffer;
+  consentAudio: Buffer;
+  sourceMimeType?: string;
+  consentMimeType?: string;
+  model?: string;
+};
+
+/** Stored replicated voice id plus the provider's preview audio. */
+export type SpeechReplicateVoiceResult = SpeechDesignVoiceResult;
+
 /** Provider hook input for resolving normalized config from raw OpenClaw config. */
 export type SpeechProviderResolveConfigContext = {
   cfg: OpenClawConfig;

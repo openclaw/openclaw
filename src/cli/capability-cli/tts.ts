@@ -143,6 +143,60 @@ export function registerTtsCapabilityCommands(capability: Command): void {
 
   registerTransportTtsCommand(
     tts
+      .command("design")
+      .description("Design and store a prompted voice")
+      .requiredOption("--name <name>", "Display name")
+      .requiredOption("--prompt <text>", "Stable voice description. This is not spoken.")
+      .requiredOption("--output <path>", "Preview audio path")
+      .option("--provider <id>", "Speech provider id")
+      .option("--language <code>", "BCP-47 language code")
+      .option("--gender <gender>", "Voice gender")
+      .option("--model <id>", "Voice-design model id"),
+    "local",
+    async (opts, transport) => {
+      const { runTtsDesignVoice } = await import("./tts-stored-voice.js");
+      return await runTtsDesignVoice({
+        provider: typeof opts.provider === "string" ? opts.provider : undefined,
+        displayName: String(opts.name),
+        prompt: String(opts.prompt),
+        languageCode: typeof opts.language === "string" ? opts.language : undefined,
+        gender: typeof opts.gender === "string" ? opts.gender : undefined,
+        model: typeof opts.model === "string" ? opts.model : undefined,
+        output: String(opts.output),
+        transport,
+      });
+    },
+  );
+
+  registerTransportTtsCommand(
+    tts
+      .command("replicate")
+      .description(
+        "Store a replicated voice from two recordings of the same adult speaker. Consent audio must recite: I am the owner of this voice and I consent to Google using this voice to create a synthetic voice model.",
+      )
+      .requiredOption("--name <name>", "Display name")
+      .requiredOption("--source <path>", "10-30s reference recording of the speaker")
+      .requiredOption("--consent <path>", "Same speaker reciting Google's consent statement")
+      .requiredOption("--output <path>", "Preview audio path")
+      .option("--provider <id>", "Speech provider id")
+      .option("--model <id>", "Voice-replication model id"),
+    "local",
+    async (opts, transport) => {
+      const { runTtsReplicateVoice } = await import("./tts-stored-voice.js");
+      return await runTtsReplicateVoice({
+        provider: typeof opts.provider === "string" ? opts.provider : undefined,
+        displayName: String(opts.name),
+        source: String(opts.source),
+        consent: String(opts.consent),
+        model: typeof opts.model === "string" ? opts.model : undefined,
+        output: String(opts.output),
+        transport,
+      });
+    },
+  );
+
+  registerTransportTtsCommand(
+    tts
       .command("set-provider")
       .description("Set the active TTS provider")
       .requiredOption("--provider <id>", "Speech provider id"),

@@ -64,6 +64,7 @@ import {
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
 import { isUnknownSystemInfoMethodError, supportsSystemInfo } from "../connection/system-info.ts";
 import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
+import { resolveCuratedConfigRenderSection } from "./config-curated-sections.ts";
 import { ConfigRouteScrollController } from "./config-route-scroll-controller.ts";
 import {
   configSectionKeysForPage,
@@ -74,7 +75,6 @@ import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
 import { createLocalChatPreferenceProps } from "./local-chat-preference-props.ts";
 import { renderMcp, renderMcpIntro } from "./mcp.ts";
-import { renderMeetingCapture } from "./meeting-capture.ts";
 import { renderMemoryPage } from "./memory-page.ts";
 import { narrowMemorySchema } from "./memory-schema.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
@@ -83,7 +83,6 @@ import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
 } from "./session-observer-settings.ts";
-import { renderSessionStorage } from "./session-storage.ts";
 import { renderTalkPage } from "./talk-page.ts";
 import { renderUpdatesPage } from "./updates-page.ts";
 import {
@@ -1130,26 +1129,13 @@ export class ConfigPage extends OpenClawLightDomElement {
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: this.pageId === "advanced" ? undefined : titleForRoute(this.pageId),
       showSectionDocs: this.pageId !== "communications",
-      renderSection:
-        this.pageId === "communications" && activeSection === "transcripts"
-          ? (editor) =>
-              renderMeetingCapture({
-                mutationDisabled: this.isCuratedConfigMutationDisabled(),
-                advancedExpanded:
-                  this.routeData?.advanced === true ||
-                  this.routeData?.targetBlockId === "config-section-transcripts",
-                editor,
-              })
-          : this.pageId === "ai-agents" && activeSection === "session"
-            ? (editor) =>
-                renderSessionStorage({
-                  mutationDisabled: this.isCuratedConfigMutationDisabled(),
-                  advancedExpanded:
-                    this.routeData?.advanced === true ||
-                    this.routeData?.targetBlockId === "config-section-session",
-                  editor,
-                })
-            : undefined,
+      renderSection: resolveCuratedConfigRenderSection({
+        pageId: this.pageId,
+        activeSection,
+        mutationDisabled: this.isCuratedConfigMutationDisabled(),
+        advanced: this.routeData?.advanced === true,
+        targetBlockId: this.routeData?.targetBlockId,
+      }),
       sectionPrelude:
         activeSection === "browser" && browserPanelAvailable && !hasNativeBrowserBridge()
           ? renderBrowserLinkPreferencesRow({
