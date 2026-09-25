@@ -66,6 +66,7 @@ import {
   isControlUiSourcePath,
   isPluginControlUiPath,
   isUiBrowserTestFile,
+  uiE2eRealGatewayTestFiles,
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
 import {
@@ -2503,6 +2504,7 @@ function isVitestConfigTargetForKind(kind: string, targetArg: string, cwd: strin
 
 function isControlUiE2eTarget(relative: string) {
   return (
+    uiE2eRealGatewayTestFiles.includes(relative) ||
     relative === "ui/src/test-helpers/control-ui-e2e.ts" ||
     relative === "ui/src/e2e" ||
     relative.startsWith("ui/src/e2e/") ||
