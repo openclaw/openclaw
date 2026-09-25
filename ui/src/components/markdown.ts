@@ -697,13 +697,14 @@ export function toStreamingMarkdownParts(
   const state = streamingMarkdownState(streamKey);
   const previous = state?.rendered;
   const renderKey = markdownRenderKey(renderOptions);
-  // Indented code can continue across a formerly completed blank line. The
-  // message parse guard must also keep applying to the complete prefix.
+  // Containers and block-art classification can outlive a completed boundary.
+  // The message parse guard also keeps applying to the complete prefix.
   const incremental =
     previous?.options === renderKey &&
     stableMarkdown.startsWith(previous.markdown) &&
     (previous.markdown === stableMarkdown ||
-      (!/^(?: {4}| {0,3}\t)/mu.test(stableMarkdown) &&
+      (!/^(?: {4}| {0,3}[\t>])/mu.test(stableMarkdown) &&
+        !previous.html.includes('class="markdown-block-art"') &&
         (renderOptions.mode === "document" || boundary <= MARKDOWN_PARSE_LIMIT)));
   let stableHtml = incremental ? previous.html : "";
   const stableAppend = stableMarkdown.slice(incremental ? previous.markdown.length : 0);

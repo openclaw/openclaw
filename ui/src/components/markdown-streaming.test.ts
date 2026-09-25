@@ -80,6 +80,27 @@ describe("toStreamingMarkdownParts", () => {
     );
   });
 
+  it("reclassifies a completed block-art prefix when prose becomes stable", () => {
+    const key = "block-art-before-prose";
+    const source = "▀▀▀▀\n▄▄▄▄\n\nIntro";
+    toStreamingMarkdownParts(source, {}, key);
+    expect(toStreamingMarkdownParts(`${source}\n\n`, {}, key).join("")).toBe(
+      "<p>▀▀▀▀<br>\n▄▄▄▄</p>\n<p>Intro</p>\n",
+    );
+  });
+
+  it("keeps a completed fence and its continuation in one blockquote", () => {
+    const key = "quoted-fence-continuation";
+    const source = "> ~~~\n> code\n> ~~~\n";
+    toStreamingMarkdownParts(source, {}, key);
+    const fragment = htmlFragment(
+      toStreamingMarkdownParts(`${source}> after\n\n`, {}, key).join(""),
+    );
+    expect(fragment.querySelectorAll("blockquote")).toHaveLength(1);
+    expect(fragment.querySelector("blockquote code")?.textContent).toBe("code\n");
+    expect(fragment.querySelector("blockquote p")?.textContent).toBe("after");
+  });
+
   it("does not rescan completed disclosures in appended prefixes", () => {
     const prefixes: string[] = [];
     let prefix = "<details><summary>Done</summary></details>\n\n";
