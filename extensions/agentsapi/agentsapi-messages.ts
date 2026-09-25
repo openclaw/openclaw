@@ -1,8 +1,5 @@
 import type { Turn as SDKTurn } from "openai/resources/beta/agents/sessions/turns";
-import {
-  createAgentHarnessAssistantMessage,
-  makeZeroUsageSnapshot,
-} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
+import { createAgentHarnessAssistantMessage } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
@@ -26,6 +23,7 @@ import {
   joinTextParts,
   readTextParts,
 } from "./agentsapi-transcript.js";
+import { aggregateAgentsApiUsage, makeAgentsApiZeroUsage } from "./agentsapi-usage.js";
 
 type AgentEvent = Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0];
 type NativeTurn = SDKTurn | NonNullable<AgentsApiEvent["turn"]>;
@@ -48,7 +46,7 @@ type NativeTextState = {
 
 /** Native identities keep saved-state recovery and live events on the same projection. */
 class AgentsApiMessageProjection {
-  readonly reply: AgentsApiReply = { assistantUsage: emptyUsage() };
+  readonly reply: AgentsApiReply = { assistantUsage: makeAgentsApiZeroUsage() };
   private readonly items = new Map<string, NativeTextState>();
   private readonly turnByItem = new Map<string, string>();
   private readonly eventIds = new Set<string>();
@@ -106,9 +104,6 @@ class AgentsApiMessageProjection {
   }
 
   recordUsage(model: AgentHarnessAttemptParamsV2["model"], turns: SDKTurn[]): void {
-    const usage = emptyUsage();
-    let observed = false;
-    let reasoningTokens: number | undefined;
     // Canonical usage replaces observed usage by admitted turn identity. A failed
     // or partial REST read cannot discard terminal-event usage for omitted turns.
     const contributions = new Map(this.usageByTurn);
@@ -119,32 +114,9 @@ class AgentsApiMessageProjection {
       }
     }
     this.canonicalUsageRecorded = true;
-    for (const normalized of contributions.values()) {
-      observed = true;
-      usage.input += normalized.input ?? 0;
-      usage.output += normalized.output ?? 0;
-      usage.cacheRead += normalized.cacheRead ?? 0;
-      usage.cacheWrite += normalized.cacheWrite ?? 0;
-      usage.totalTokens +=
-        normalized.total ??
-        (normalized.input ?? 0) +
-          (normalized.output ?? 0) +
-          (normalized.cacheRead ?? 0) +
-          (normalized.cacheWrite ?? 0);
-      if (normalized.reasoningTokens !== undefined) {
-        reasoningTokens = (reasoningTokens ?? 0) + normalized.reasoningTokens;
-      }
-    }
-    if (observed) {
-      calculateCost(model, usage);
-      this.reply.usage = {
-        ...normalizeUsage(usage),
-        ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
-      };
-    } else {
-      this.reply.usage = { contextUsage: { state: "unavailable" } };
-    }
-    this.reply.assistantUsage = usage;
+    const aggregated = aggregateAgentsApiUsage(model, contributions.values());
+    this.reply.usage = aggregated.usage;
+    this.reply.assistantUsage = aggregated.assistantUsage;
   }
 
   get tokenUsage(): NormalizedUsage | undefined {
@@ -711,14 +683,6 @@ export function createAgentsApiMessageProjection(
   assertCurrent: () => void,
 ) {
   return new AgentsApiMessageProjection(params, remoteSessionId, emitEvent, assertCurrent);
-}
-
-function emptyUsage(): AssistantMessage["usage"] {
-  return {
-    ...makeZeroUsageSnapshot(),
-    // Turn billing sums hosted model calls; it is not a latest-call context snapshot.
-    contextUsage: { state: "unavailable" },
-  };
 }
 
 const INTERNAL_EVENT_TYPES = new Set([
