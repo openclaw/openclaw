@@ -42,6 +42,14 @@ cannot replace the batch's delivery state; already committed delivery evidence
 remains valid. Restart activation reconciles retained requester-turn bindings
 before resuming child completion.
 
+A requester can consume a previously queued child result before yielding for
+new work. The embedded prompt owner acknowledges that consumed steering lease
+on the intentional yield handoff, rather than releasing it as a failed
+injection. Preflight or compaction alone does not acknowledge foreground
+results, and ordinary cancellation keeps its existing release behavior.
+The new child batch remains separately owned by requester settlement; already
+consumed results cannot re-enter its queue or block its completion wake.
+
 For a nested requester, settlement persists its paused run together with the
 child wake batch before scheduling the continuation. This also covers a child
 that finishes before the requester yields: successor admission must not depend

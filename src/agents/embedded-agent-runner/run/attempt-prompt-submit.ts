@@ -108,6 +108,12 @@ export async function submitEmbeddedAttemptPrompt(input: {
       );
     }
   };
+  const acknowledgeSteering = () => {
+    if (input.leasedSteering) {
+      ackPendingAgentSteeringItems(input.leasedSteering);
+      input.onSteeringAcknowledged();
+    }
+  };
   assertSteeringCurrent();
   const userTurnRecorder = attempt.userTurnTranscriptRecorder;
   const persistedUserIdempotencyKey =
@@ -213,10 +219,14 @@ export async function submitEmbeddedAttemptPrompt(input: {
     } finally {
       cleanupRuntimeContextMessage();
     }
-    if (input.leasedSteering) {
-      ackPendingAgentSteeringItems(input.leasedSteering);
-      input.onSteeringAcknowledged();
+    acknowledgeSteering();
+  } catch (error) {
+    // Yield ends the requester turn, not delivery of results it already consumed.
+    // Preflight/compaction alone cannot acknowledge the foreground steering prompt.
+    if (!pendingSteering && isSessionsYieldAbortError(error)) {
+      acknowledgeSteering();
     }
+    throw error;
   } finally {
     cleanupProviderPromptHistoryTransform();
     cleanupModelPromptTransform();

@@ -5,6 +5,8 @@ import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
+import { findTaskByRunId } from "../../../tasks/runtime-internal.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
   createAssistant,
@@ -16,25 +18,35 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { testing as deliveryTesting } from "../../subagents/announce/subagent-announce-delivery.test-support.js";
 import { testing as announceTesting } from "../../subagents/announce/subagent-announce-output.test-support.js";
 import { markPendingFinalDelivery } from "../../subagents/registry/subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "../../subagents/registry/subagent-registry-memory.js";
+import { hasDescendantRunAwaitingSettle } from "../../subagents/registry/subagent-registry-read.js";
 import { persistSubagentRunsToDiskOrThrow } from "../../subagents/registry/subagent-registry-state.js";
 import {
   leasePendingAgentSteeringItems,
+  markRequesterTurnYielded,
   prependAgentSteeringPrompt,
   registerSubagentRun,
   releasePendingAgentSteeringItems,
+  settleRequesterAfterSessionSpawns,
 } from "../../subagents/registry/subagent-registry.js";
-import { writeSubagentSessionEntry } from "../../subagents/registry/subagent-registry.persistence.test-support.js";
+import {
+  settleSubagentRegistryPersistenceWork,
+  writeSubagentSessionEntry,
+} from "../../subagents/registry/subagent-registry.persistence.test-support.js";
+import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import {
   clearEmbeddedSessionPromptStates,
   getEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
+import { abortable } from "./abortable.js";
 import {
   handleEmbeddedAttemptPromptError,
   submitEmbeddedAttemptPrompt,
 } from "./attempt-prompt-submit.js";
+import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 
 const fixture = useSubagentControlFixture();
 registerAgentSessionLoopTestLifecycle();
@@ -49,6 +61,7 @@ const escapedAnswer = `${"&lt;finding&gt;".repeat(700)}complete answer tail`;
 
 afterEach(() => {
   announceTesting.setDepsForTest();
+  deliveryTesting.setDepsForTest();
   clearEmbeddedSessionPromptStates([sessionId]);
 });
 
@@ -145,6 +158,177 @@ function submissionInput(
     transcriptLeafId: null,
   };
 }
+
+it("does not replay a consumed baseline or block the next child after requester yield", async () => {
+  const requesterCalls: Array<{ message?: string; inputProvenance?: { sourceTool?: string } }> = [];
+  deliveryTesting.setDepsForTest({
+    callGateway: (async (request: { method: string; params?: (typeof requesterCalls)[number] }) => {
+      if (request.method !== "agent") {
+        throw new Error(`Unexpected delivery RPC ${request.method}`);
+      }
+      requesterCalls.push(request.params ?? {});
+      return { result: { payloads: [{ text: "Continue from the new CI report." }] } };
+    }) as typeof import("../../../gateway/call.js").callGateway,
+    getRequesterSessionActivity: () => ({ sessionId, isActive: false }),
+  });
+  await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: requesterSessionKey,
+    defaultSessionId: sessionId,
+  });
+  const { child, leasedSteering } = await prepareSteering();
+  const requesterTurnRunId = "requester-awaiting-ci";
+  const ci = {
+    runId: "later-ci-report",
+    childSessionKey: "agent:main:subagent:later-ci",
+    expectsCompletionMessage: true,
+  };
+  registerSubagentRun({
+    ...ci,
+    requesterSessionKey,
+    requesterDisplayKey: "main",
+    requesterAgentId: "main",
+    requesterTurnRunId,
+    task: "Watch the next CI run",
+    cleanup: "keep",
+  });
+  const controller = new AbortController();
+  const yieldTool = createSessionsYieldTool({
+    sessionId,
+    claimYield: () =>
+      markRequesterTurnYielded({
+        requesterSessionKey,
+        requesterAgentId: "main",
+        requesterTurnRunId,
+      }) > 0,
+    onYield: () => {
+      controller.abort(SESSIONS_YIELD_ABORT_REASON);
+      session.agent.abort();
+    },
+  });
+  const { session } = await createTestSession({ customTools: [yieldTool] });
+  streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+    expect(JSON.stringify(context.messages)).toContain(escapedAnswer);
+    return createAssistantResultStream(
+      createAssistant(
+        model,
+        [{ type: "toolCall", id: "wait-for-ci", name: "sessions_yield", arguments: {} }],
+        "toolUse",
+      ),
+    );
+  });
+  const input = submissionInput(leasedSteering);
+  let promptSettled: Promise<void> | undefined;
+  const submission = submitEmbeddedAttemptPrompt({
+    ...input,
+    activeSession: session,
+    promptActiveSession: (prompt, options) => {
+      promptSettled = session.prompt(prompt, options);
+      return abortable(controller.signal, promptSettled);
+    },
+  });
+  await submission.catch(async (error: unknown) => {
+    await handleEmbeddedAttemptPromptError({
+      activeSession: session,
+      attempt: { runId: requesterTurnRunId, sessionId },
+      error,
+      handleMidTurnPrecheckRequest: vi.fn(),
+      markYieldAborted: vi.fn(),
+      releaseLeasedSteering: () => releasePendingAgentSteeringItems(leasedSteering),
+      withOwnedTranscriptWrite: async (operation) => operation(),
+      yieldAbortSettled: promptSettled ?? null,
+      yieldDetected: controller.signal.aborted,
+      yieldMessage: null,
+    });
+  });
+  await promptSettled;
+  expect(controller.signal.reason).toBe(SESSIONS_YIELD_ABORT_REASON);
+  expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+  expect(
+    settleRequesterAfterSessionSpawns({
+      requesterSessionKey,
+      requesterAgentId: "main",
+      requesterTurnRunId,
+      requesterYielded: true,
+      acceptedSessionSpawns: [ci],
+    }),
+  ).toBe(true);
+  expect(subagentRuns.get(ci.runId)?.requesterSettleWake).toMatchObject({
+    batchRunIds: [ci.runId],
+    requesterYieldBatch: true,
+  });
+  expect(child.delivery?.status).toBe("delivered");
+  expect(input.onSteeringAcknowledged).toHaveBeenCalledOnce();
+  // Acknowledgment starts worker-backed cleanup; join that owner before reading settlement.
+  await settleSubagentRegistryPersistenceWork();
+  expect(hasDescendantRunAwaitingSettle(requesterSessionKey, ci.runId)).toBe(false);
+  expect(
+    await leasePendingAgentSteeringItems({ requesterSessionKey, leaseId: "next-requester-turn" }),
+  ).toBeUndefined();
+
+  // The later child completes through the lifecycle listener. Only its frozen
+  // batch may resume the requester; the old result must not be replayed.
+  emitAgentEvent({
+    runId: ci.runId,
+    sessionKey: ci.childSessionKey,
+    stream: "lifecycle",
+    data: {
+      phase: "end",
+      endedAt: Date.now(),
+      terminalReply: { disposition: "visible", text: "New CI report." },
+    },
+  });
+  await settleSubagentRegistryPersistenceWork();
+  expect(subagentRuns.get(ci.runId)?.delivery?.status).toBe("delivered");
+  expect(subagentRuns.get(ci.runId)?.requesterSettleWake).toBeUndefined();
+  expect(requesterCalls).toHaveLength(1);
+  expect(requesterCalls[0]?.inputProvenance?.sourceTool).toBe("subagent_settle");
+  expect(requesterCalls[0]?.message).toContain("New CI report.");
+  expect(requesterCalls[0]?.message).not.toContain("complete answer tail");
+  expect(findTaskByRunId(ci.runId)?.deliveryStatus).toBe("delivered");
+});
+
+it.each(["preflight", "compaction", "failed-dispatch", "ordinary-abort"])(
+  "does not acknowledge unconsumed or cancelled steering (%s)",
+  async (phase) => {
+    const { child, leasedSteering } = await prepareSteering();
+    const { session } = await createTestSession();
+    const input = submissionInput(leasedSteering);
+    const originalTransformContext = session.agent.transformContext;
+    const error = new Error("aborted", {
+      cause: phase === "ordinary-abort" ? "cancelled" : SESSIONS_YIELD_ABORT_REASON,
+    });
+    const baseStreamFn = () => {
+      if (phase === "failed-dispatch") {
+        throw error;
+      }
+      return createAssistantResultStream(createAssistant(testModel, []));
+    };
+    session.agent.streamFn = baseStreamFn;
+    await expect(
+      submitEmbeddedAttemptPrompt({
+        ...input,
+        activeSession: session,
+        promptActiveSession: async (_prompt, options) => {
+          if (phase === "failed-dispatch" || phase === "ordinary-abort") {
+            options?.preflightResult?.(true);
+          }
+          if (phase !== "preflight") {
+            await session.agent.streamFn(testModel, { messages: [] });
+          }
+          throw error;
+        },
+      }),
+    ).rejects.toBe(error);
+    expect(input.onSteeringAcknowledged).not.toHaveBeenCalled();
+    expect(child.delivery?.status).toBe("in_progress");
+    expect(session.agent.streamFn).toBe(baseStreamFn);
+    expect(session.agent.transformContext).toBe(originalTransformContext);
+    releasePendingAgentSteeringItems(leasedSteering);
+    expect(child.delivery?.status).toBe("pending");
+  },
+);
 
 it.each([false, true])(
   "preserves parent continuation and cancellation after child reactivation (abort=%s)",
