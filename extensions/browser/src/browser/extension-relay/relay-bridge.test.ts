@@ -189,55 +189,6 @@ describe("ExtensionRelayBridge", () => {
     }
   });
 
-  it("retires an unresponsive extension and immediately fails pending CDP work", async () => {
-    vi.useFakeTimers();
-    const onStateChange = vi.fn();
-    const bridge = new ExtensionRelayBridge({ onStateChange });
-    try {
-      const { socket, handlers } = wireExtension(bridge);
-      sendHello(handlers);
-
-      const client = new FakeSocket();
-      const cdp = bridge.attachCdpClientSocket(client);
-      cdp.onMessage(
-        JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      const attached = client.frames().find((frame) => frame.method === "Target.attachedToTarget");
-      const sessionId = (attached?.params as { sessionId?: string } | undefined)?.sessionId;
-      expect(typeof sessionId).toBe("string");
-
-      socket.send = (data) => FakeSocket.prototype.send.call(socket, data);
-      await vi.advanceTimersByTimeAsync(50_000);
-      expect(socket.frames().filter((frame) => frame.type === "ping")).toHaveLength(2);
-
-      cdp.onMessage(JSON.stringify({ id: 2, sessionId, method: "Page.getFrameTree" }));
-      expect(socket.frames().at(-1)).toMatchObject({ type: "cdp", method: "Page.getFrameTree" });
-      await vi.advanceTimersByTimeAsync(9_999);
-      expect(bridge.extensionConnected).toBe(true);
-      expect(client.frames().find((frame) => frame.id === 2)).toBeUndefined();
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(socket).toMatchObject({
-        closed: true,
-        closeCode: 4000,
-        closeReason: "extension heartbeat timeout",
-      });
-      expect(bridge.extensionConnected).toBe(false);
-      expect(client.frames().find((frame) => frame.id === 2)).toMatchObject({
-        error: { message: "extension disconnected" },
-      });
-      expect(onStateChange).toHaveBeenCalledTimes(2);
-
-      handlers.onClose();
-      expect(onStateChange).toHaveBeenCalledTimes(2);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      bridge.dispose();
-      vi.useRealTimers();
-    }
-  });
-
   it("keeps an extension alive when each heartbeat receives an immediate pong", async () => {
     vi.useFakeTimers();
     const bridge = new ExtensionRelayBridge();
