@@ -660,17 +660,24 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const client: TestClient = { request };
     const acquisition = createDeferred<TestClient>();
     const acquisitionStarted = createDeferred<void>();
+    const producer = createDeferred<Promise<unknown>>();
+    const onClientAcquired = vi.fn();
     sharedClientMocks.getSharedCodexAppServerClient.mockImplementationOnce(() => {
       acquisitionStarted.resolve();
       return acquisition.promise;
     });
 
-    const result = requestCodexAppServerJson({
-      method: "thread/list",
-      requestParams: { limit: 10 },
-      timeoutMs: 50,
-      controlObservation,
-    });
+    const result = withCodexAppServerJsonClient(
+      {
+        timeoutMs: 50,
+        timeoutMessage: "codex app-server thread/list timed out",
+        controlObservation,
+        onClientAcquired,
+        onProducer: producer.resolve,
+      },
+      async (scopedRequest) =>
+        scopedRequest({ method: "thread/list", requestParams: { limit: 10 } }),
+    );
     const rejection = expect(result).rejects.toThrow("codex app-server thread/list timed out");
     await acquisitionStarted.promise;
     const acquireOptions = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0] as
@@ -688,9 +695,12 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     });
 
     acquisition.resolve(client);
-    await Promise.resolve();
-    await Promise.resolve();
+    await expect(producer.promise).rejects.toThrow("codex app-server thread/list timed out");
     expect(request).not.toHaveBeenCalled();
+    expect(onClientAcquired).toHaveBeenCalledExactlyOnceWith(client);
+    expect(
+      sharedClientMocks.releaseLeasedSharedCodexAppServerClient,
+    ).toHaveBeenCalledExactlyOnceWith(client);
   });
 
   it("does not let an expired attempt abort its replacement", async () => {

@@ -267,6 +267,7 @@ export default definePluginEntry({
       resolveConfig: resolveCurrentConfig,
       resolvePluginConfig: resolveCurrentPluginConfig,
       runtime: api.runtime,
+      onDispose: api.lifecycle.onDispose,
     };
     api.registerAgentHarness(createCodexAppServerAgentHarness(agentHarnessOptions), {
       nativeCompaction: createCodexAppServerNativeCompaction(agentHarnessOptions),

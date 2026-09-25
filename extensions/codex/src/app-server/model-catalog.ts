@@ -4,6 +4,7 @@ import {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileStore,
 } from "./auth-profile.js";
+import type { CodexAppServerClient } from "./client.js";
 import { readCodexPluginConfig } from "./config-parsing.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import { isCodexAppServerProxyLaunch } from "./launch-args.js";
@@ -12,7 +13,10 @@ import { listAllCodexAppServerModels, type CodexAppServerModel } from "./models.
 import { probeCodexNativeAuth } from "./native-auth.js";
 import type { CodexGetAccountResponse } from "./protocol.js";
 import { withCodexAppServerJsonClient } from "./request.js";
-import { captureSharedCodexAppServerCatalogLifetime } from "./shared-client.js";
+import {
+  captureSharedCodexAppServerCatalogLifetime,
+  clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
+} from "./shared-client.js";
 
 // Manifest contract (openclaw.plugin.json discovery.timeoutMs default): live model
 // discovery is bounded tightly so a wedged app-server degrades to the static catalog.
@@ -61,9 +65,42 @@ export function createCodexAppServerModelCatalog(runtime: string) {
   const scopeKey = (params: AgentHarnessModelCatalogParams) =>
     JSON.stringify([params.agentId, params.agentDir, params.workspaceDir]);
   let disposed = false;
+  const producers = new Set<Promise<unknown>>();
+  const clients = new Map<CodexAppServerClient, () => void>();
+  const closing = new Set<CodexAppServerClient>();
+  let disposal: Promise<void> | undefined;
   return {
     dispose() {
       disposed = true;
+      disposal ??= (async () => {
+        await Promise.allSettled(producers);
+        for (const [client, unobserve] of clients) {
+          if (clearSharedCodexAppServerClientIfCurrentAndUnclaimed(client).closed) {
+            closing.add(client);
+          }
+          unobserve();
+          clients.delete(client);
+        }
+        const results = await Promise.allSettled(
+          [...closing].map(async (client) => {
+            const result = await client.closeAndWait();
+            if (!result.exited) {
+              throw new Error("Codex model catalog transport did not exit");
+            }
+            closing.delete(client);
+          }),
+        );
+        const failures = results.filter((result) => result.status === "rejected");
+        if (failures.length > 0) {
+          throw new AggregateError(
+            failures.map((result) => result.reason),
+            "Codex model catalog cleanup failed",
+          );
+        }
+      })().finally(() => {
+        disposal = undefined;
+      });
+      return disposal;
     },
     read(
       params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
@@ -130,6 +167,24 @@ export function createCodexAppServerModelCatalog(runtime: string) {
           config: params.config,
           agentDir: params.agentDir,
           timeoutMs,
+          onClientAcquired: (client) => {
+            if (clients.has(client)) {
+              return;
+            }
+            let exited = false;
+            const unobserve = client.addTransportExitHandler(() => {
+              exited = true;
+              clients.delete(client);
+            });
+            if (!exited) {
+              clients.set(client, unobserve);
+            }
+          },
+          onProducer: (producer) => {
+            producers.add(producer);
+            const settled = () => producers.delete(producer);
+            void producer.then(settled, settled);
+          },
           ...(authProfileStore ? { authProfileStore, authProfileId } : {}),
         },
         async (request, client) => {

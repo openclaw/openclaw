@@ -1,13 +1,15 @@
-/** Client ownership and synchronous retirement, independent of startup/auth execution. */
+/** Shared client ownership, startup settlement, and terminal cleanup. */
 import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import type { CodexDesktopGeneration } from "./desktop-generation-owner.js";
+import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 
 export type SharedCodexAppServerClientEntry = {
   readonly key: string;
   client?: CodexAppServerClient;
   startup?: SharedCodexAppServerClientStartup;
+  startupTransport?: Promise<CodexAppServerClient>;
   activeLeases: number;
   // Anonymous releases cannot consume explicit native-subagent retains.
   anonymousLeases: number;
@@ -26,6 +28,12 @@ export type SharedCodexAppServerClientStartup = {
 export type CodexAppServerStartupLifetime = {
   controller: AbortController;
   pending: Set<Promise<unknown>>;
+  cleanups?: Map<CodexAppServerClient, StartupCleanupReceipt>;
+};
+
+type StartupCleanupReceipt = {
+  operation: Promise<void>;
+  unobserve: () => void;
 };
 
 export type SharedCodexAppServerClientState = {
@@ -49,7 +57,23 @@ type CodexAppServerClientStartMetadata = {
 export const createCodexAppServerStartupLifetime = (): CodexAppServerStartupLifetime => ({
   controller: new AbortController(),
   pending: new Set(),
+  cleanups: new Map(),
 });
+
+function startupCleanupReceipts(lifetime: CodexAppServerStartupLifetime) {
+  // Same-build reloads retain lifetime objects created before cleanup receipts were introduced.
+  return (lifetime.cleanups ??= new Map<CodexAppServerClient, StartupCleanupReceipt>());
+}
+
+export function ownCodexStartup<T>(
+  lifetime: CodexAppServerStartupLifetime,
+  operation: Promise<T>,
+): Promise<T> {
+  lifetime.pending.add(operation);
+  const release = () => lifetime.pending.delete(operation);
+  void operation.then(release, release);
+  return operation;
+}
 
 // Share same-build module copies without adopting an older in-process plugin's clients.
 export const getSharedCodexAppServerClientState = defineCodexBuildState(
@@ -64,6 +88,71 @@ export const getSharedCodexAppServerClientState = defineCodexBuildState(
     startMetadata: new WeakMap(),
   }),
 );
+
+export function trackSharedCodexAppServerClient(client: CodexAppServerClient): void {
+  const state = getSharedCodexAppServerClientState();
+  if (state.liveClients.has(client)) {
+    return;
+  }
+  state.liveClients.add(client);
+  client.addTransportExitHandler((exitedClient) => {
+    state.liveClients.delete(exitedClient);
+    for (const check of state.desktopGenerationDrainChecks) {
+      check();
+    }
+  });
+}
+
+/** Failed startup retains custody until physical exit or a successful cleanup retry. */
+export function closeCodexAppServerStartupClient(
+  lifetime: CodexAppServerStartupLifetime,
+  client: CodexAppServerClient,
+  options?: Parameters<CodexAppServerClient["closeAndWait"]>[0],
+): Promise<void> {
+  const cleanups = startupCleanupReceipts(lifetime);
+  const previous = cleanups.get(client);
+  if (previous && lifetime.pending.has(previous.operation)) {
+    return previous.operation;
+  }
+  previous?.unobserve();
+  trackSharedCodexAppServerClient(client);
+  getSharedCodexAppServerClientState().isolatedClients.delete(client);
+  let exited = false;
+  let awaitingExit = false;
+  const unobserve = client.addTransportExitHandler(() => {
+    exited = true;
+    if (awaitingExit && cleanups.get(client)?.operation === closing) {
+      cleanups.delete(client);
+    }
+  });
+  const closing = ownCodexStartup(
+    lifetime,
+    (async () => {
+      try {
+        const result = await client.closeAndWait(options);
+        if (!result.exited && !exited) {
+          awaitingExit = true;
+          throw new Error("Codex app-server startup cleanup did not confirm transport exit");
+        }
+      } finally {
+        if (!awaitingExit) {
+          unobserve();
+        }
+      }
+    })(),
+  );
+  const receipt = { operation: closing, unobserve };
+  cleanups.set(client, receipt);
+  void closing.then(
+    () => {
+      if (cleanups.get(client) === receipt) {
+        cleanups.delete(client);
+      }
+    },
+    () => {},
+  );
+  return closing;
+}
 
 export function hasActiveSharedCodexAppServerWork(): boolean {
   const state = getSharedCodexAppServerClientState();
@@ -168,7 +257,7 @@ export function closeRetiredSharedClientEntryIfIdle(
   return closeRetiredSharedClientEntry(entry);
 }
 
-export function closeRetiredSharedClientEntry(entry: SharedCodexAppServerClientEntry): boolean {
+function closeRetiredSharedClientEntry(entry: SharedCodexAppServerClientEntry): boolean {
   const client = entry.client;
   if (!client) {
     return false;
@@ -176,4 +265,93 @@ export function closeRetiredSharedClientEntry(entry: SharedCodexAppServerClientE
   entry.client = undefined;
   client.close();
   return true;
+}
+
+export function retirePendingSharedClientEntryIfUnclaimed(
+  entry: SharedCodexAppServerClientEntry,
+): void {
+  if (entry.activeLeases > 0 || entry.pendingAcquires > 0) {
+    return;
+  }
+  entry.startupAbort?.abort(new Error("Codex app-server startup was abandoned"));
+  entry.closeWhenIdle = true;
+  const state = getSharedCodexAppServerClientState();
+  if (state.clients.get(entry.key) === entry) {
+    state.clients.delete(entry.key);
+  }
+  if (!entry.client) {
+    return;
+  }
+  closeRetiredSharedClientEntry(entry);
+}
+
+/** Failed final claimants join physical cleanup; healthy peers keep their startup. */
+export async function waitForUnclaimedSharedClientStartup(
+  entry: SharedCodexAppServerClientEntry,
+  lifetime: CodexAppServerStartupLifetime,
+): Promise<void> {
+  if (!entry.startupTransport || entry.activeLeases > 0 || entry.pendingAcquires > 0) {
+    return;
+  }
+  await entry.startupTransport.then(
+    (client) => closeCodexAppServerStartupClient(lifetime, client),
+    () => {},
+  );
+}
+
+/** Clears all shared clients and waits for their processes to exit. */
+export async function clearSharedCodexAppServerClientAndWait(options?: {
+  exitTimeoutMs?: number;
+  forceKillDelayMs?: number;
+}): Promise<void> {
+  const state = getSharedCodexAppServerClientState();
+  const lifetime = state.startup;
+  const cleanups = startupCleanupReceipts(lifetime);
+  lifetime.controller.abort();
+  state.clients.clear();
+  const closing = new Map<CodexAppServerClient, Promise<void>>();
+  const closeObservedClients = () => {
+    for (const client of state.liveClients) {
+      if (!closing.has(client)) {
+        closing.set(client, closeCodexAppServerStartupClient(lifetime, client, options));
+      }
+    }
+  };
+  closeObservedClients();
+  // Startup can add a late-registration close after its acquire is aborted.
+  // Drain the producers as well as their published transports before reopening admission.
+  try {
+    while (lifetime.pending.size > 0) {
+      await Promise.allSettled(lifetime.pending);
+    }
+    closeObservedClients();
+    await Promise.allSettled(closing.values());
+    const receipts = [...cleanups];
+    const results = await Promise.allSettled(receipts.map(([, receipt]) => receipt.operation));
+    // A callback failure remains reportable, but an observed exit has discharged physical custody.
+    for (const [client, receipt] of receipts) {
+      if (!state.liveClients.has(client) && cleanups.get(client) === receipt) {
+        receipt.unobserve();
+        cleanups.delete(client);
+      }
+    }
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    try {
+      await nativeHookRelayUnregisterQueue.flush();
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Codex app-server cleanup failed");
+    }
+  } finally {
+    if (state.startup === lifetime && cleanups.size === 0) {
+      state.startup = createCodexAppServerStartupLifetime();
+    }
+  }
 }

@@ -1,6 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexAppServerModelCatalog } from "./model-catalog.js";
 import { listAllCodexAppServerModels } from "./models.js";
 import { probeCodexNativeAuth } from "./native-auth.js";
@@ -23,14 +23,31 @@ vi.mock("./auth-profile.js", async () => {
   });
 });
 
-const rpc = vi.hoisted(() => ({ request: vi.fn(), epoch: 0, client: {} }));
-vi.mock("./request.js", () => ({
-  withCodexAppServerJsonClient: vi.fn(
-    (_options: unknown, run: (request: unknown, client: unknown) => unknown) =>
-      run(rpc.request, rpc.client),
-  ),
-}));
+const rpc = vi.hoisted(() => {
+  const request = vi.fn();
+  return {
+    request,
+    epoch: 0,
+    client: { request, closeAndWait: vi.fn(), addTransportExitHandler: vi.fn() },
+    acquire: vi.fn(),
+    release: vi.fn(),
+    clearUnclaimed: vi.fn(),
+  };
+});
+vi.mock("./request.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./request.js")>();
+  return {
+    ...original,
+    withCodexAppServerJsonClient: vi.fn(original.withCodexAppServerJsonClient),
+  };
+});
 vi.mock("./shared-client.js", () => ({
+  createIsolatedCodexAppServerClient: vi.fn(),
+  getLeasedSharedCodexAppServerClient: rpc.acquire,
+  releaseLeasedSharedCodexAppServerClient: rpc.release,
+  clearSharedCodexAppServerClientIfCurrentAndUnclaimed: rpc.clearUnclaimed,
+  isCodexAppServerStartSelectionChangedError: () => false,
+  retireSharedCodexAppServerClientIfCurrent: vi.fn(),
   captureSharedCodexAppServerCatalogLifetime: () => {
     const epoch = rpc.epoch;
     return () => rpc.epoch === epoch;
@@ -55,7 +72,13 @@ const catalogParams = {
 };
 
 describe("Codex app-server model catalog", () => {
-  afterEach(() => vi.unstubAllEnvs());
+  beforeAll(async () => {
+    await import("./sandbox-guard.js");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  });
 
   beforeEach(() => {
     profiles.store = { version: 1, profiles: {} };
@@ -67,6 +90,11 @@ describe("Codex app-server model catalog", () => {
     listModelsMock.mockReset();
     vi.mocked(withCodexAppServerJsonClient).mockClear();
     rpc.epoch += 1;
+    rpc.acquire.mockReset().mockResolvedValue(rpc.client);
+    rpc.release.mockReset();
+    rpc.clearUnclaimed.mockReset().mockReturnValue({ closed: true });
+    rpc.client.closeAndWait.mockReset().mockResolvedValue({ exited: true, cleanup: "closed" });
+    rpc.client.addTransportExitHandler.mockReset().mockReturnValue(() => {});
     rpc.request
       .mockReset()
       .mockResolvedValue({ account: { type: "apiKey" }, requiresOpenaiAuth: true });
@@ -123,7 +151,7 @@ describe("Codex app-server model catalog", () => {
       },
     ]);
     expect(listModelsMock).toHaveBeenCalledExactlyOnceWith({
-      request: rpc.request,
+      request: expect.any(Function),
       limit: 100,
       includeHidden: true,
     });
@@ -430,9 +458,79 @@ describe("Codex app-server model catalog", () => {
     rpc.request.mockReturnValueOnce(disposed.promise);
     const late = owner.load(catalogParams, undefined);
     await vi.waitFor(() => expect(rpc.request).toHaveBeenCalledTimes(3));
-    owner.dispose();
+    const disposing = owner.dispose();
     disposed.resolve({ account: { type: "apiKey" }, requiresOpenaiAuth: true });
     expect(await late).toEqual([]);
+    await disposing;
     expect(read()).toBeUndefined();
   });
+
+  it("joins a timed-out producer before closing its released client", async () => {
+    vi.useFakeTimers();
+    listModelsMock.mockResolvedValue({ models: [] });
+    const entered = createDeferred<void>();
+    const account = createDeferred<unknown>();
+    rpc.request.mockImplementationOnce(() => {
+      entered.resolve();
+      return account.promise;
+    });
+    const loading = owner.load(catalogParams, { discovery: { timeoutMs: 50 } });
+    const rejected = expect(loading).rejects.toThrow("timed out");
+    await entered.promise;
+    await vi.advanceTimersByTimeAsync(50);
+    await rejected;
+    let disposed = false;
+    const disposing = Promise.resolve(owner.dispose()).then(() => {
+      disposed = true;
+    });
+    await Promise.resolve();
+    expect(disposed).toBe(false);
+    expect(rpc.release).not.toHaveBeenCalled();
+    expect(rpc.clearUnclaimed).not.toHaveBeenCalled();
+    account.resolve({ account: null, requiresOpenaiAuth: true });
+    await disposing;
+    expect(rpc.release).toHaveBeenCalledExactlyOnceWith(rpc.client);
+    expect(rpc.clearUnclaimed).toHaveBeenCalledExactlyOnceWith(rpc.client);
+    expect(rpc.client.closeAndWait).toHaveBeenCalledOnce();
+    expect(await owner.load(catalogParams, undefined)).toEqual([]);
+  });
+
+  it.each(["rejected", "still-running"])(
+    "retains close custody when cleanup is %s",
+    async (failure) => {
+      listModelsMock.mockResolvedValue({ models: [] });
+      await owner.load(catalogParams, undefined);
+      if (failure === "rejected") {
+        rpc.client.closeAndWait.mockRejectedValueOnce(new Error("synthetic close failure"));
+      } else {
+        rpc.client.closeAndWait.mockResolvedValueOnce({ exited: false, cleanup: "uncertain" });
+      }
+      await expect(owner.dispose()).rejects.toThrow("Codex model catalog cleanup failed");
+      await owner.dispose();
+      expect(rpc.clearUnclaimed).toHaveBeenCalledOnce();
+      expect(rpc.client.closeAndWait).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each(["already-exited", "later-exit"])(
+    "releases observations after %s transport settlement",
+    async (when) => {
+      const exited = createDeferred<() => void>();
+      rpc.client.addTransportExitHandler.mockImplementationOnce((onExit: () => void) => {
+        if (when === "already-exited") {
+          onExit();
+        }
+        exited.resolve(onExit);
+        return () => {};
+      });
+      listModelsMock.mockResolvedValue({ models: [] });
+      await owner.load(catalogParams, undefined);
+      if (when === "later-exit") {
+        (await exited.promise)();
+      }
+      await owner.dispose();
+      expect(rpc.clearUnclaimed).not.toHaveBeenCalled();
+      expect(rpc.client.closeAndWait).not.toHaveBeenCalled();
+    },
+  );
 });

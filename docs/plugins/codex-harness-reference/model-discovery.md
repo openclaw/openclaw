@@ -33,6 +33,11 @@ valid only while that native owner and its account/config observation remain
 current. A missing account, failed refresh, account/config mutation, or retired
 client leaves native models unavailable until discovery succeeds again.
 
+When a discovery or inspection registration retires, it waits for its requests
+to finish releasing their clients, including work still settling after a timeout.
+It then closes unused app-server connections it observed. Connections with active
+requests or pending acquisitions remain available to their other callers.
+
 Use the Models page **Refresh** action (`models.list` with `view: "all"` and
 `refresh: true`) to publish the full catalog for the selected agent. Prepared-only
 reads do not start discovery. Native configuration changes outside OpenClaw

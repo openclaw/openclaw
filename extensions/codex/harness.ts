@@ -8,6 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "./native-tool-policy.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
@@ -65,6 +66,7 @@ type CodexAppServerAgentHarnessOptions = {
   runtime?: PluginRuntime;
   bindingStore: CodexAppServerBindingStore;
   sessionCatalogControlFactory?: CodexSessionCatalogControlFactory;
+  onDispose?: OpenClawPluginApi["lifecycle"]["onDispose"];
 };
 
 async function disposeSharedCodexAppServerClients(): Promise<void> {
@@ -98,6 +100,12 @@ export function createCodexAppServerAgentHarness(
       >
     | undefined;
   let disposed = false;
+  let modelCatalogDisposed = false;
+  const disposeModelCatalog = async () => {
+    modelCatalogDisposed = true;
+    await modelCatalog?.dispose();
+  };
+  options.onDispose?.(disposeModelCatalog);
   const resolveAttemptPluginConfig = (config: OpenClawConfig | undefined) =>
     resolvePluginConfigObject(config, "codex") ??
     options.resolvePluginConfig?.() ??
@@ -225,7 +233,7 @@ export function createCodexAppServerAgentHarness(
     loadModelCatalog: async (params) => {
       const { createCodexAppServerModelCatalog } =
         await import("./src/app-server/model-catalog.js");
-      if (disposed) {
+      if (disposed || modelCatalogDisposed) {
         return { entries: [] };
       }
       modelCatalog ??= createCodexAppServerModelCatalog(harnessRuntimeId);
@@ -510,8 +518,20 @@ export function createCodexAppServerAgentHarness(
     },
     dispose: async () => {
       disposed = true;
-      modelCatalog?.dispose();
-      await disposeSharedCodexAppServerClients();
+      // Abort shared startup before joining the catalog's admitted producers.
+      const results = await Promise.allSettled([
+        disposeModelCatalog(),
+        disposeSharedCodexAppServerClients(),
+      ]);
+      const failures: unknown[] = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "Codex harness cleanup failed");
+      }
     },
   };
   return harness;
