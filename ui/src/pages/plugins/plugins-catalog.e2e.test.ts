@@ -42,6 +42,7 @@ describeControlUiE2e("Control UI installed plugin catalog", () => {
               ...remoteIconPlugin,
               id: "matrix",
               name: "Matrix",
+              clawhubPackage: "matrix",
               catalogId: "ch_bWF0cml4",
             },
           ]),
