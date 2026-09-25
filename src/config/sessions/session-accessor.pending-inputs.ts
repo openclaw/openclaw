@@ -495,7 +495,7 @@ function readPendingInputRows(
       ? executeSqliteQuerySync(
           database.db,
           base.selectAll().where("seq", "in", selected),
-        ).rows.sort((left, right) => right.seq - left.seq)
+        ).rows.toSorted((left, right) => right.seq - left.seq)
       : [];
     // An aborted but registered owner still owns the terminal disposition. Reads
     // must not race its finish(cancelled) by recording an inferred interruption.
