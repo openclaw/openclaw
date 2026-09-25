@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { resolveChatSendShortcut } from "../../app/chat-send-shortcut.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { t } from "../../i18n/index.ts";
@@ -100,7 +101,8 @@ export function renderNewSessionDraftView(options: {
               mode: submission.permission.value,
               onSelect: (permissionMode) => submission.permission.set(permissionMode ?? undefined),
             }),
-        requiresModifier: preferences?.chatSendShortcut === "modifier-enter",
+        requiresModifier:
+          resolveChatSendShortcut(preferences?.chatSendShortcut) === "modifier-enter",
         requestUpdate,
         get submitting() {
           return submission.submitting;

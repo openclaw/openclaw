@@ -4,6 +4,7 @@ import type { SessionObserverDigest } from "../../../../packages/gateway-protoco
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
+import { resolveChatSendShortcut } from "../../app/chat-send-shortcut.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
 import { icons } from "../../components/icons.ts";
@@ -208,7 +209,7 @@ export function sidebarPanelDefinitions(
         .pullRequests=${params.pullRequests}
         .companion=${params.companion}
         .connected=${state?.connected === true}
-        .sendShortcut=${state?.settings.chatSendShortcut ?? "enter"}
+        .sendShortcut=${resolveChatSendShortcut(state?.settings.chatSendShortcut)}
         .onSubmit=${params.onCompanionSubmit}
         .onDraftChange=${params.onCompanionDraftChange}
         .onAttachmentsChange=${params.onCompanionAttachmentsChange}

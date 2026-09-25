@@ -188,12 +188,18 @@ export function renderChatPreferencesSection(
     UI_APPEARANCE_DEFAULTS.chatMessageMaxWidth,
     props.chatMessageMaxWidth !== undefined,
   );
-  const sendShortcutDefaultDescription = renderSettingsDefaultDescription(
-    props.chatSendShortcutResetValue === "modifier-enter"
-      ? t("chat.sendShortcutModifierEnter")
-      : t("chat.sendShortcutEnter"),
-    props.chatSendShortcutOverridden,
-  );
+  // Touch-only devices default to Return for a new line; say so while it applies.
+  const sendShortcutDefaultDescription =
+    props.chatSendShortcutTouchDefault && !props.chatSendShortcutOverridden
+      ? t("chat.sendShortcutTouchNewLine")
+      : renderSettingsDefaultDescription(
+          props.chatSendShortcutTouchDefault
+            ? t("chat.sendShortcutTouchNewLine")
+            : props.chatSendShortcutResetValue === "modifier-enter"
+              ? t("chat.sendShortcutModifierEnter")
+              : t("chat.sendShortcutEnter"),
+          props.chatSendShortcutOverridden,
+        );
   const sendShortcutProvenance = serverUiPrefProvenanceHint(props.chatSendShortcutProvenance);
   const followUpProvenance = serverUiPrefProvenanceHint(props.chatFollowUpModeProvenance);
   const catalogTargetDefaultDescription = renderSettingsDefaultDescription(

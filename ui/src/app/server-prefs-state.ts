@@ -6,6 +6,7 @@ import {
   normalizeAccentColor,
   normalizeChatFollowUpModeOverride,
   normalizeChatSendShortcut,
+  normalizeChatSendShortcutOverride,
   UI_APPEARANCE_DEFAULTS,
   type ChatFollowUpMode,
   type ChatSendShortcut,
@@ -103,7 +104,7 @@ export const SYNCED_PREFS = {
       value === "enter" || value === "modifier-enter"
         ? normalizeChatSendShortcut(value)
         : undefined,
-    local: (settings) => normalizeChatSendShortcut(settings.chatSendShortcut),
+    local: (settings) => normalizeChatSendShortcutOverride(settings.chatSendShortcut),
     write: (value) => ({ chatSendShortcut: value }),
     clearable: true,
     reset: () => ({ chatSendShortcut: undefined }),
