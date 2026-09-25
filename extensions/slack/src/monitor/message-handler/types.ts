@@ -29,6 +29,7 @@ export type PreparedSlackMessage = {
   sessionDisplayName?: string;
   slackMessageMetadata?: MessageMetadata;
   requireMention: boolean;
+  allowImplicitThreadReplies?: boolean;
   isDirectMessage: boolean;
   isRoomish: boolean;
   preview: string;
