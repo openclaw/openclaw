@@ -2140,7 +2140,6 @@ describe("tui session actions", () => {
         openOverlay: (component) => tui.showOverlay(component),
         closeOverlay: () => tui.hideOverlay(),
         setActivityStatus,
-        formatSessionKey: (key) => key,
         requestExit: vi.fn(),
         ...actions,
       });

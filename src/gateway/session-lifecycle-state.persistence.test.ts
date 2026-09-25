@@ -291,7 +291,6 @@ it.each(["success", "failed-write"])(
       getResolvedSessionId: () => sessionId,
       getResolvedSessionAgentId: () => "main",
       getAgentId: () => "main",
-      getCfgForAgent: () => cfg,
       getSessionPersisted: () => true,
       getSupersededSessionId: () => undefined,
       setAdmittedSessionId: (admittedSessionId) => expect(admittedSessionId).toBe(sessionId),

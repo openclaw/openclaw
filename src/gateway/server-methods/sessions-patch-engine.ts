@@ -17,6 +17,7 @@ import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { recordSessionStatusModelPatchOutcome } from "../session-model-patch-origin.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import { invalidSessionRequest } from "../session-request-error.js";
 import {
   resolveCanonicalGatewaySessionStoreKey,
   resolveCanonicalSessionEntryFromStoreKeys,
@@ -39,7 +40,6 @@ import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import * as patchEffects from "./sessions-patch-effects.js";
 import {
   assertSessionPatchCommitAllowed,
-  invalidSessionPatchOutcome,
   sessionChangedError,
   unexpectedPatchError,
 } from "./sessions-patch-errors.js";
@@ -116,7 +116,7 @@ export async function executeSessionPatchMutations(params: {
     }
     const logicalId = `${resolved.storePath}\0${resolved.canonicalKey ?? key}`;
     if (logicalTargets.has(logicalId)) {
-      return invalidSessionPatchOutcome("Duplicate target.");
+      return invalidSessionRequest("Duplicate target.");
     }
     logicalTargets.add(logicalId);
   }
@@ -130,7 +130,7 @@ export async function executeSessionPatchMutations(params: {
   for (const [index, { input, key, requestedAgent, resolved }] of preflightTargets.entries()) {
     const unreadAckError = validateSessionUnreadAck(params.patch, input);
     if (unreadAckError) {
-      outcomes[index] = invalidSessionPatchOutcome(unreadAckError);
+      outcomes[index] = invalidSessionRequest(unreadAckError);
       continue;
     }
     if (!requestedAgent.ok) {
@@ -138,7 +138,7 @@ export async function executeSessionPatchMutations(params: {
       continue;
     }
     if (!resolved) {
-      outcomes[index] = invalidSessionPatchOutcome("Session target could not be resolved.");
+      outcomes[index] = invalidSessionRequest("Session target could not be resolved.");
       continue;
     }
     const requestedAgentId = requestedAgent.agentId;
@@ -172,7 +172,7 @@ export async function executeSessionPatchMutations(params: {
       initialEntry,
     );
     if (missingHarnessSessionError) {
-      outcomes[index] = invalidSessionPatchOutcome(missingHarnessSessionError);
+      outcomes[index] = invalidSessionRequest(missingHarnessSessionError);
       continue;
     }
     // Commit guards are core control state; construct the protocol patch from
@@ -182,7 +182,7 @@ export async function executeSessionPatchMutations(params: {
     const expectationError =
       sessionPatchExpectations.resolveSessionPatchExpectationError(fullPatch);
     if (expectationError) {
-      outcomes[index] = invalidSessionPatchOutcome(expectationError);
+      outcomes[index] = invalidSessionRequest(expectationError);
       continue;
     }
     let initialPlacementPatchError: string | undefined;
@@ -202,7 +202,7 @@ export async function executeSessionPatchMutations(params: {
       continue;
     }
     if (initialPlacementPatchError) {
-      outcomes[index] = invalidSessionPatchOutcome(initialPlacementPatchError);
+      outcomes[index] = invalidSessionRequest(initialPlacementPatchError);
       continue;
     }
     const lifecycleIdentities = Array.from(

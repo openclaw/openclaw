@@ -97,10 +97,10 @@ describe("SQLite session participants", () => {
             skipMaintenance: true,
           });
         }
-        // Each updater receives one authoritative read; publishing its write needs no second read.
-        expect(reads.counts.participants).toBe(100);
+        // Metadata-only updates retain the participant owner's current revision.
+        expect(reads.counts.participants).toBe(0);
         recordSessionParticipant(scope, { identity: remote("new"), promptedAt: 2 });
-        expect(reads.counts.participants).toBe(101);
+        expect(reads.counts.participants).toBe(1);
         expect(read()).toMatchObject({
           label: "Update 99",
           participants: ["existing", "new"].map((id) => ({ identity: remote(id) })),

@@ -98,6 +98,7 @@ export const RELEASE_ONLY_RUNTIME_TEST_FILES = [
   "test/plugins/codex-model-catalog.gateway.test.ts",
   "test/scripts/bench-sqlite-reliability.test.ts",
   "test/scripts/check-openclaw-package-tarball.bundled-mcp.test.ts",
+  "test/scripts/ci-changed-node-test-plan.integration.test.ts",
   "test/scripts/ci-linux-git.test.ts",
   "test/scripts/full-release-validation-at-sha.test.ts",
   "test/scripts/package-acceptance-workflow.test.ts",

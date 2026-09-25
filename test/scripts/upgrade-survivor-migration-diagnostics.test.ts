@@ -312,6 +312,49 @@ it("publishes redacted baseline Gateway and agent-turn failures", () => {
   }
 });
 
+it("retains failed rollback producer evidence without converting qualified omissions into restored files", () => {
+  const f = fixture();
+  write(path.join(f.artifacts, "backup-rollback-create.json"), {
+    verified: true,
+    skippedVolatileCount: 3,
+    skipped: [],
+    warning: `token=${secret}`,
+  });
+  write(path.join(f.artifacts, "backup-rollback-restore.json"), { ok: true });
+  const proof = {
+    status: "failed",
+    runtime: {
+      version: "2026.9.4",
+      manifestSha256: "a".repeat(64),
+      entrySha256: "b".repeat(64),
+    },
+    rawTranscriptRestoration: "unsupported-by-published-backup",
+    omittedRawTranscripts: [
+      {
+        relative: "agents/main/sessions/upgrade-restored-index-history.jsonl",
+        sha256: "c".repeat(64),
+        canonicalEventCount: 2,
+        reason: "published-2026.9.4-volatile-transcript",
+      },
+    ],
+    failure: { command: "verify", message: "baseline preflight failed" },
+  };
+  write(path.join(f.artifacts, "backup-rollback.json"), proof);
+  fs.writeFileSync(path.join(f.artifacts, "backup-rollback-restore.json.err"), `token=${secret}\n`);
+  const report = capture(f);
+  expect(report.outcome).toBe("failed");
+  expect(JSON.parse(report.logs["backup-rollback-create.json"])).toMatchObject({
+    verified: true,
+    skippedVolatileCount: 3,
+    skipped: [],
+  });
+  expect(JSON.parse(report.logs["backup-rollback-restore.json"])).toEqual({ ok: true });
+  expect(JSON.parse(report.logs["backup-rollback.json"])).toEqual(proof);
+  expect(report.logs["backup-rollback-restore.json.err"]).not.toContain(secret);
+  expect(report.logs["backup-rollback-create.json.err"]).toBeNull();
+  expect(report.omissions["backup-rollback-create.json.err"]).toBe("missing or unsafe file");
+});
+
 it.each([
   { name: "truncated Doctor output", opaqueCopies: 1, omission: "truncated at a complete line" },
   {
@@ -576,6 +619,8 @@ it("omits unsafe migration files and oversized registration collections without 
   fs.symlinkSync(f.root, path.join(f.state, "session-sqlite-migration-runs"));
   fs.writeFileSync(path.join(f.root, "baseline-gateway.log"), privateBody);
   fs.symlinkSync(f.root, path.join(f.artifacts, "missing-load-path"));
+  fs.symlinkSync(outside, path.join(f.artifacts, "backup-rollback-create.json"));
+  fs.writeFileSync(path.join(f.artifacts, "backup-rollback.json"), "x".repeat(262145));
   fs.writeFileSync(
     path.join(f.artifacts, "sibling-registrations.jsonl"),
     Array.from({ length: 129 }, () =>
@@ -589,6 +634,10 @@ it("omits unsafe migration files and oversized registration collections without 
     ).join("\n"),
   );
   const report = capture(f);
+  expect(report.logs["backup-rollback-create.json"]).toBeNull();
+  expect(report.omissions["backup-rollback-create.json"]).toBe("missing or unsafe file");
+  expect(report.logs["backup-rollback.json"]).toBeNull();
+  expect(report.omissions["backup-rollback.json"]).toBe("input exceeds cap; omitted whole");
   for (const section of ["sessions", "archives", "sibling", "doctor"]) {
     expect(report.migration[section].availability).toBe("unavailable");
   }
@@ -617,6 +666,15 @@ it("does not reuse sibling or startup observations when an attempt fails before 
     "sibling-refusal-worker.json",
     "sibling-refusal-child.json",
     "sibling-refusal-cleanup.json",
+    "legacy-operator-restored-index.json",
+    "restored-index-post-update.json",
+    "restored-index-candidate-import.json",
+    "restored-index-rollback.json",
+    "backup-rollback.json",
+    "backup-rollback-create.json",
+    "backup-rollback-create.json.err",
+    "backup-rollback-restore.json",
+    "backup-rollback-restore.json.err",
   ];
   for (const name of logs) {
     fs.mkdirSync(path.dirname(path.join(f.artifacts, name)), { recursive: true });

@@ -1,11 +1,9 @@
 import fs from "node:fs";
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  ErrorCodes,
-  errorShape,
-  type ErrorShape,
-  type SessionsCreateParams,
+import type {
+  ErrorShape,
+  SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
@@ -13,6 +11,7 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { invalidSessionRequest } from "../session-request-error.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 
 type PreparedSessionCreateRoot = {
@@ -42,7 +41,7 @@ export function prepareSessionCreateFilesystemRoot(params: {
     }
     const sessionRoot = fs.realpathSync(rootCandidate);
     if (!fs.statSync(sessionRoot).isDirectory()) {
-      return err(errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create cwd is not a directory"));
+      return invalidSessionRequest("sessions.create cwd is not a directory");
     }
     if (params.sessionCwd && params.enforceSandboxContainment) {
       const targetRuntime = resolveSandboxRuntimeStatus({
@@ -56,23 +55,17 @@ export function prepareSessionCreateFilesystemRoot(params: {
         (params.sandboxRequired || targetRuntime.sandboxed) &&
         !isPathInside(fs.realpathSync(workspaceDir), sessionRoot)
       ) {
-        return err(
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            params.requestedProjectId
-              ? "sessions.create project is outside the sandboxed agent workspace"
-              : "sessions.create cwd is outside the sandboxed agent workspace",
-          ),
+        return invalidSessionRequest(
+          params.requestedProjectId
+            ? "sessions.create project is outside the sandboxed agent workspace"
+            : "sessions.create cwd is outside the sandboxed agent workspace",
         );
       }
     }
     return ok({ sessionRoot, sessionCwd: params.sessionCwd ? sessionRoot : undefined });
   } catch (error) {
-    return err(
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `sessions.create cwd is unavailable: ${formatErrorMessage(error)}`,
-      ),
+    return invalidSessionRequest(
+      `sessions.create cwd is unavailable: ${formatErrorMessage(error)}`,
     );
   }
 }

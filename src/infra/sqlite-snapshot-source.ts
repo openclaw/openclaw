@@ -29,7 +29,9 @@ import {
 import {
   assertSqliteSourceReadAllowed,
   withSqliteSourceHandleAsync,
+  withSqliteSourceHandle,
 } from "./sqlite-source-handle.js";
+import { readSqliteSourceContentVersionInProcess } from "./sqlite-source-revision.js";
 import {
   assertStateDatabaseSourceReadContext,
   hasStateDatabaseSourceExclusion,
@@ -205,4 +207,18 @@ export async function withSqliteSnapshotSource<T>(
   } finally {
     await prepared?.cleanupAsync();
   }
+}
+
+/** Fresh bytes without opening SQLite or making another durable private copy. */
+export function readSqliteSourceContentVersionSync(pathname: string): string | undefined {
+  if (hasStateDatabaseSourceExclusion(pathname)) {
+    return readSqliteSourceContentVersionInProcess(pathname);
+  }
+  // Do not acquire file exclusion: the Gateway may already be starting. A shared
+  // source lease spans this read-only child's complete synchronous settlement.
+  // The child owns no SQLite connection, snapshots, or authority to publish effects.
+  return withSqliteSourceHandle(
+    pathname,
+    () => runSqliteReadOnlyWorkerSync(pathname, undefined, "content-version") || undefined,
+  );
 }

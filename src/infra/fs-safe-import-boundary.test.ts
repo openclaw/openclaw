@@ -75,6 +75,24 @@ const PLUGIN_OWNED_FS_SAFE_IMPORTS: Record<
   string,
   Record<string, { values: readonly string[]; types?: readonly string[] }>
 > = {
+  "extensions/acpx/src/codex-auth-bridge.ts": {
+    "@openclaw/fs-safe/json": { values: ["tryReadJson"] },
+  },
+  "extensions/codex/src/app-server/computer-use-service-path.ts": {
+    "@openclaw/fs-safe/advanced": {
+      values: ["assertDirectoryIdentitySync", "readDirectoryIdentity"],
+      types: ["DirectoryIdentity"],
+    },
+  },
+  "extensions/codex/src/migration/helpers.ts": {
+    "@openclaw/fs-safe/json": { values: ["tryReadJson"] },
+  },
+  "extensions/cua-computer/src/driver-artifact-verification.ts": {
+    "@openclaw/fs-safe/durability": { values: ["sha256FileSync"] },
+  },
+  "extensions/feishu/src/doctor.ts": {
+    "@openclaw/fs-safe/path": { values: ["safeStatSync"] },
+  },
   "extensions/llama-cpp/src/llama-server-install.ts": {
     "@openclaw/fs-safe/durability": { values: ["sha256File"] },
   },
@@ -94,6 +112,12 @@ const PLUGIN_OWNED_FS_SAFE_IMPORTS: Record<
   "extensions/matrix/src/matrix/state-layout-walk.ts": {
     "@openclaw/fs-safe/path": { values: ["hasNodeErrorCode"] },
     "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
+  },
+  "extensions/matrix/src/matrix/monitor/startup-verification.ts": {
+    "@openclaw/fs-safe/json": { values: ["tryReadJson"] },
+  },
+  "extensions/matrix/src/matrix/thread-bindings.ts": {
+    "@openclaw/fs-safe/json": { values: ["tryReadJson"] },
   },
   "extensions/memory-core/src/migration/doctor-memory-sidecar.ts": {
     "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },

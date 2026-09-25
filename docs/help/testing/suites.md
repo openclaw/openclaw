@@ -18,6 +18,11 @@ Most days:
 - Docker-backed QA site: `pnpm qa:lab:up`
 - Linux VM-backed QA lane: `pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline`
 
+The last two lanes need tooling the other commands do not: `qa:lab:up` needs a
+running Docker daemon and a source checkout, because the npm tarball omits QA
+Lab, and the `multipass` runner needs Multipass installed. See
+[QA-specific runners](/help/testing/qa-runners).
+
 When you touch tests or want extra confidence:
 
 - Informational V8 coverage report: `pnpm test:coverage`

@@ -1,5 +1,6 @@
 // Setup gateway config helpers build gateway config from onboarding answers.
 import { validateDottedDecimalIPv4Input } from "@openclaw/net-policy/ipv4";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import {
   normalizeGatewayTokenInput,
@@ -7,7 +8,7 @@ import {
   validateGatewayPasswordInput,
 } from "../commands/onboard-helpers.js";
 import type { SecretInputMode } from "../commands/onboard-types.js";
-import type { GatewayBindMode, GatewayTailscaleMode, OpenClawConfig } from "../config/config.js";
+import type { GatewayAuthConfig, OpenClawConfig } from "../config/config.js";
 import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "../config/gateway-control-ui-origins.js";
 import {
   normalizeSecretInputString,
@@ -57,10 +58,6 @@ function getLocalizedTailscaleExposureOptions() {
   }));
 }
 
-function normalizeWizardTextInput(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
 function validateGatewayPortInput(value: unknown): string | undefined {
   if (parseTcpPort(value) === null) {
     return formatPortRangeHint();
@@ -93,33 +90,19 @@ export async function configureGatewayForSetup(
       ? quickstartGateway.bind
       : await prompter.select<GatewayWizardSettings["bind"]>({
           message: t("wizard.gateway.bindAddress"),
-          options: [
-            {
-              value: "loopback",
-              label: t("wizard.gateway.bindLoopback"),
-              hint: t("wizard.gateway.bindLoopbackHint"),
-            },
-            {
-              value: "lan",
-              label: t("wizard.gateway.bindLan"),
-              hint: t("wizard.gateway.bindLanHint"),
-            },
-            {
-              value: "tailnet",
-              label: t("wizard.gateway.bindTailnet"),
-              hint: t("wizard.gateway.bindTailnetHint"),
-            },
-            {
-              value: "auto",
-              label: t("wizard.gateway.bindAuto"),
-              hint: t("wizard.gateway.bindAutoHint"),
-            },
-            {
-              value: "custom",
-              label: t("wizard.gateway.bindCustom"),
-              hint: t("wizard.gateway.bindCustomHint"),
-            },
-          ],
+          options: (
+            [
+              ["loopback", "bindLoopback"],
+              ["lan", "bindLan"],
+              ["tailnet", "bindTailnet"],
+              ["auto", "bindAuto"],
+              ["custom", "bindCustom"],
+            ] as const
+          ).map(([value, key]) => ({
+            value,
+            label: t(`wizard.gateway.${key}`),
+            hint: t(`wizard.gateway.${key}Hint`),
+          })),
           initialValue: quickstartGateway.bind,
         });
 
@@ -183,8 +166,9 @@ export async function configureGatewayForSetup(
   }
 
   let gatewayToken: string | undefined;
-  let gatewayTokenInput: SecretInput | undefined;
+  const auth: GatewayAuthConfig = { ...nextConfig.gateway?.auth, mode: authMode };
   if (authMode === "token") {
+    let gatewayTokenInput: SecretInput | undefined;
     const quickstartTokenString = normalizeSecretInputString(quickstartGateway.token);
     const quickstartTokenRef = resolveSecretInputRef({
       value: quickstartGateway.token,
@@ -244,6 +228,7 @@ export async function configureGatewayForSetup(
       gatewayToken = (quickstartTokenString ?? ambientToken) || randomToken();
       gatewayTokenInput = gatewayToken;
     }
+    auth.token = gatewayTokenInput;
   }
 
   if (authMode === "password") {
@@ -282,38 +267,17 @@ export async function configureGatewayForSetup(
         });
         password = resolved.ref;
       } else {
-        password = normalizeWizardTextInput(
-          await prompter.text({
-            message: t("wizard.gateway.passwordPrompt"),
-            validate: validateGatewayPasswordInput,
-            sensitive: true,
-          }),
-        );
+        password =
+          normalizeOptionalString(
+            await prompter.text({
+              message: t("wizard.gateway.passwordPrompt"),
+              validate: validateGatewayPasswordInput,
+              sensitive: true,
+            }),
+          ) ?? "";
       }
     }
-    nextConfig = {
-      ...nextConfig,
-      gateway: {
-        ...nextConfig.gateway,
-        auth: {
-          ...nextConfig.gateway?.auth,
-          mode: "password",
-          password,
-        },
-      },
-    };
-  } else if (authMode === "token") {
-    nextConfig = {
-      ...nextConfig,
-      gateway: {
-        ...nextConfig.gateway,
-        auth: {
-          ...nextConfig.gateway?.auth,
-          mode: "token",
-          token: gatewayTokenInput,
-        },
-      },
-    };
+    auth.password = password;
   }
 
   nextConfig = {
@@ -321,11 +285,12 @@ export async function configureGatewayForSetup(
     gateway: {
       ...nextConfig.gateway,
       port,
-      bind: bind as GatewayBindMode,
+      bind,
+      auth,
       ...(bind === "custom" && customBindHost ? { customBindHost } : {}),
       tailscale: {
         ...nextConfig.gateway?.tailscale,
-        mode: tailscaleMode as GatewayTailscaleMode,
+        mode: tailscaleMode,
       },
     },
   };
@@ -343,11 +308,11 @@ export async function configureGatewayForSetup(
     nextConfig,
     settings: {
       port,
-      bind: bind as GatewayBindMode,
+      bind,
       customBindHost: bind === "custom" ? customBindHost : undefined,
       authMode,
       gatewayToken,
-      tailscaleMode: tailscaleMode as GatewayTailscaleMode,
+      tailscaleMode,
     },
   };
 }

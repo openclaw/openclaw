@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import {
   decodeSessionArchiveBytes,
@@ -81,11 +81,7 @@ import {
   type AgentDatabaseMigrationTarget,
   type PreparedAgentDatabaseMigrationDiscovery,
 } from "./state-migrations.media-persistence-targets.js";
-import {
-  assertEventIdentitiesUnchanged,
-  parseArchiveContent,
-  transformMediaArchiveContent,
-} from "./state-migrations.media-persistence-transform.js";
+import { transformMediaArchiveContent } from "./state-migrations.media-persistence-transform.js";
 import { migrateCanonicalTranscriptArchives } from "./state-migrations.transcript-directives-archives.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
@@ -93,14 +89,6 @@ const PREVIOUS_MEDIA_SCHEMA_VERSION = AGENT_MEDIA_SCHEMA_VERSION - 1;
 const ARCHIVE_TEMP_MARKER = ".media-retirement";
 
 type MediaMigrationDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
-
-type ArchiveSourceSnapshot = {
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  sha256: string;
-  size: number;
-};
 
 function createMigrationDatabaseHandle(
   database: DatabaseSync,
@@ -355,30 +343,18 @@ async function migrateAgentDatabase(params: {
   }
 }
 
-function readArchiveSourceSnapshot(filePath: string): ArchiveSourceSnapshot {
-  const stat = fs.lstatSync(filePath);
-  if (!stat.isFile() || stat.isSymbolicLink()) {
-    throw new Error(`${filePath} is not a regular archive file`);
-  }
-  const bytes = fs.readFileSync(filePath);
-  return {
-    dev: stat.dev,
-    ino: stat.ino,
-    mtimeMs: stat.mtimeMs,
-    sha256: createHash("sha256").update(bytes).digest("hex"),
-    size: stat.size,
-  };
-}
-
-function archiveSourceMatches(filePath: string, expected: ArchiveSourceSnapshot): boolean {
+function archiveSourceMatches(
+  filePath: string,
+  expected: ReturnType<typeof readRegularFileSync>,
+): boolean {
   try {
-    const current = readArchiveSourceSnapshot(filePath);
+    const current = readRegularFileSync({ filePath });
     return (
-      current.dev === expected.dev &&
-      current.ino === expected.ino &&
-      current.mtimeMs === expected.mtimeMs &&
-      current.sha256 === expected.sha256 &&
-      current.size === expected.size
+      current.stat.dev === expected.stat.dev &&
+      current.stat.ino === expected.stat.ino &&
+      current.stat.mtimeMs === expected.stat.mtimeMs &&
+      current.stat.size === expected.stat.size &&
+      current.buffer.equals(expected.buffer)
     );
   } catch {
     return false;
@@ -389,13 +365,13 @@ function migrateTranscriptArchive(
   filePath: string,
   options: { beforeReplace?: () => void } = {},
 ): boolean {
-  const source = readArchiveSourceSnapshot(filePath);
-  const content = readSessionArchiveContentSync(filePath);
+  const source = readRegularFileSync({ filePath });
+  const compressed = filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
+  const content = decodeSessionArchiveBytes(source.buffer, compressed);
   const transformed = transformMediaArchiveContent(content, filePath);
   if (!transformed.changed) {
     return false;
   }
-  const compressed = filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
   const encoded = compressed
     ? encodeSessionArchiveContent(transformed.content)
     : { bytes: Buffer.from(transformed.content, "utf8"), suffix: "" as const };
@@ -418,11 +394,6 @@ function migrateTranscriptArchive(
       if (staged !== transformed.content) {
         throw new Error(`${filePath} failed codec readback before replacement`);
       }
-      assertEventIdentitiesUnchanged(
-        parseArchiveContent(transformed.content, filePath),
-        parseArchiveContent(staged, tempPath),
-        filePath,
-      );
     },
   });
   if (readSessionArchiveContentSync(filePath) !== transformed.content) {

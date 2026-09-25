@@ -143,6 +143,26 @@ index, so remote results describe those materialized files rather than an exact
 copy of the staged snapshot. Keep the intended proof files consistent before
 using that route.
 
+## Workflow lint tools
+
+`pnpm check:workflows` requires actionlint built from the revision pinned in
+`scripts/check-workflows.mts` and `.pre-commit-config.yaml`. Released and unknown
+builds intentionally use the pinned fallback on every platform. Install Go to
+let the wrapper acquire that revision, or use the pinned pre-commit hook.
+
+The zizmor check also requires pre-commit, the Python `pre_commit` module, or
+Python 3.10+ with venv support so the wrapper can install its pinned pre-commit
+runtime. A matching installed actionlint does not remove this requirement.
+
+For offline use, have a pre-commit runtime and its zizmor hook cached, plus
+either a matching installed actionlint or the pinned actionlint hook cached.
+With pre-commit installed, prime both hook environments while online:
+
+```bash
+pre-commit run actionlint --all-files
+pre-commit run zizmor --all-files
+```
+
 ## Surface ratchets
 
 Size, length, count, and measured performance limits are errors locally and
