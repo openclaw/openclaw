@@ -457,6 +457,8 @@ prepare_gates() {
 
   PR_MAIN_SHA=""
   enter_worktree "$pr" false || return 1
+  # Comparison authority is this operation's private main checkpoint, not the wrapper trust anchor.
+  local comparison_base="$PR_MAIN_SHA"
 
   mark_pr_operation_side_effects_if_available
   refresh_prep_branch_for_reviewed_head "$pr"
@@ -578,7 +580,7 @@ prepare_gates() {
   else
     prepare_local_gate_workspace
     run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
-    run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check
+    run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check --base "$comparison_base"
 
     if [ "$docs_only" = "true" ]; then
       gates_mode="docs_only"

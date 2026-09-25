@@ -1,18 +1,27 @@
 // Runs the repository check lanes selected by CLI arguments.
+import { execFileSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
-import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
+import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 
-type CheckCommand = { name: string; args: string[] };
+type CheckCommand = { name: string; args: string[]; comparisonBase?: boolean };
 type RunManagedCheck = (options: { args: string[]; bin: string }) => Promise<number>;
 
-export const PREFLIGHT_CHECKS: CheckCommand[] = [
+const PREFLIGHT_CHECKS: CheckCommand[] = [
   { name: "conflict markers", args: ["check:no-conflict-markers"] },
   { name: "script TypeScript erasability", args: ["check:script-erasability"] },
-  { name: "line-cap growth ratchet", args: ["check:line-cap-ratchet"] },
-  { name: "max-lines suppression ratchet", args: ["check:max-lines-ratchet"] },
-  { name: "assertion SAFETY comment ratchet", args: ["check:assertion-safety"] },
+  { name: "line-cap growth ratchet", args: ["check:line-cap-ratchet"], comparisonBase: true },
+  {
+    name: "max-lines suppression ratchet",
+    args: ["check:max-lines-ratchet"],
+    comparisonBase: true,
+  },
+  {
+    name: "assertion SAFETY comment ratchet",
+    args: ["check:assertion-safety"],
+    comparisonBase: true,
+  },
   { name: "changelog attributions", args: ["check:changelog-attributions"] },
   { name: "database-first legacy-store guard", args: ["check:database-first-legacy-stores"] },
   { name: "doctor deprecation registry", args: ["check:doctor-deprecation-registry"] },
@@ -45,11 +54,12 @@ export const PREFLIGHT_CHECKS: CheckCommand[] = [
  */
 export function usage() {
   return [
-    "Usage: node --import tsx scripts/check.mts [--timed] [--include-architecture] [--include-test-types]",
+    "Usage: node --import tsx scripts/check.mts [--base <commit>] [--timed] [--include-architecture] [--include-test-types]",
     "",
     "Runs the local check graph: guard preflights, typecheck, lint, and policy guards.",
     "",
     "Options:",
+    "  --base <commit>         Compare ratchets against a captured full commit OID.",
     "  --timed                 Print timing summary even when checks pass.",
     "  --include-architecture  Run architecture import-cycle checks instead of runtime cycles.",
     "  --include-test-types    Typecheck production and test sources.",
@@ -61,10 +71,23 @@ export function usage() {
  * Parses aggregate check runner arguments.
  */
 function parseCheckArgs(argv: string[]) {
+  const defaults: {
+    base?: string;
+    help: boolean;
+    includeArchitecture: boolean;
+    includeTestTypes: boolean;
+    timed: boolean;
+  } = {
+    help: false,
+    includeArchitecture: false,
+    includeTestTypes: false,
+    timed: false,
+  };
   return parseFlagArgs(
     argv,
-    { help: false, includeArchitecture: false, includeTestTypes: false, timed: false },
+    defaults,
     [
+      stringFlag("--base", "base"),
       booleanFlag("--timed", "timed", true, { repeatable: true }),
       booleanFlag("--include-architecture", "includeArchitecture", true, { repeatable: true }),
       booleanFlag("--include-test-types", "includeTestTypes", true, { repeatable: true }),
@@ -87,6 +110,23 @@ export async function main(argv = process.argv.slice(2)) {
   let args;
   try {
     args = parseCheckArgs(argv);
+    if (args.base !== undefined) {
+      if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(args.base)) {
+        throw new Error("--base requires a full immutable commit OID");
+      }
+      const commit = execFileSync(
+        "git",
+        ["rev-parse", "--verify", "--end-of-options", `${args.base}^{commit}`],
+        {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+        },
+      ).trim();
+      if (commit !== args.base) {
+        throw new Error("--base must name an available commit, not a tag");
+      }
+    }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 2;
@@ -125,7 +165,11 @@ export async function main(argv = process.argv.slice(2)) {
     {
       name: "preflight guards",
       parallel: true,
-      commands: PREFLIGHT_CHECKS,
+      commands: PREFLIGHT_CHECKS.map((command) =>
+        args.base !== undefined && command.comparisonBase
+          ? { name: command.name, args: [...command.args, "--base", args.base] }
+          : command,
+      ),
     },
     {
       name: "typecheck",
