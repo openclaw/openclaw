@@ -249,6 +249,44 @@ describe("openclaw attach (action)", () => {
     expect(out).not.toContain("attach.revoke");
   });
 
+  it("--print-config: warns on stderr that the printed env carries a live bearer token (interactive TTY)", async () => {
+    const stderrTtyDescriptor = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+    Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
+    try {
+      await runAttach("--print-config", "--session", "agent:main:cli");
+      const errLine = logs.find((line) => line.startsWith("ERR:"));
+      expect(errLine).toContain("OPENCLAW_MCP_TOKEN");
+      expect(errLine).toContain("secret");
+      // Warning must land before the JSON payload, not interleaved after it.
+      const warnIndex = logs.indexOf(errLine ?? "");
+      const jsonIndex = logs.findIndex((line) => line.includes('"sessionKey"'));
+      expect(warnIndex).toBeLessThan(jsonIndex);
+    } finally {
+      if (stderrTtyDescriptor) {
+        Object.defineProperty(process.stderr, "isTTY", stderrTtyDescriptor);
+      } else {
+        Reflect.deleteProperty(process.stderr, "isTTY");
+      }
+    }
+  });
+
+  it("--print-config: skips the stderr warning when stderr is redirected (non-TTY)", async () => {
+    const stderrTtyDescriptor = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+    Object.defineProperty(process.stderr, "isTTY", { value: false, configurable: true });
+    try {
+      await runAttach("--print-config", "--session", "agent:main:cli");
+      // Redirected/scripted callers keep the pre-existing exact-output contract: no new stderr line.
+      expect(logs.find((line) => line.startsWith("ERR:"))).toBeUndefined();
+      expect(logs.join("\n")).toContain('"sessionKey"');
+    } finally {
+      if (stderrTtyDescriptor) {
+        Object.defineProperty(process.stderr, "isTTY", stderrTtyDescriptor);
+      } else {
+        Reflect.deleteProperty(process.stderr, "isTTY");
+      }
+    }
+  });
+
   it("calls attach.grant in CLI mode with an auto-resolved device identity (operator.admin regression guard)", async () => {
     // Regression guard: attach.grant is operator.admin-scoped. mode BACKEND or an explicit
     // deviceIdentity:null drops the operator device identity → the gateway rejects with

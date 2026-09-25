@@ -36,6 +36,10 @@ Options:
 - `--bin <path>` selects the Claude Code binary. Default: `claude`.
 - `--print-config` writes the temporary `.mcp.json`, prints the launch command and env, and leaves the grant live until TTL expiry (it does not spawn Claude Code or revoke the grant).
 
+<Warning>
+The env that `--print-config` prints to stdout includes a live `OPENCLAW_MCP_TOKEN` bearer credential. Treat it as a secret: do not paste it into logs, chat transcripts, or shared reports. When stderr is attached to a terminal, a warning also prints to stderr immediately before the JSON; scripted or redirected invocations (non-TTY stderr) keep the pre-existing output exactly as-is.
+</Warning>
+
 Pass either a positional target or `--session`, not both. Short references are
 resolved before the scoped attach grant is minted; a missing session is never
 created implicitly.

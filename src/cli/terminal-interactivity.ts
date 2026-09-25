@@ -1,5 +1,5 @@
-/** True when CLI input and output both belong to an interactive terminal. */
-function isTtyStream(stream: { isTTY?: boolean }): boolean {
+/** True when the given stream is attached to an interactive terminal. */
+export function isTtyStream(stream: { isTTY?: boolean }): boolean {
   return stream.isTTY === true;
 }
 
