@@ -373,6 +373,9 @@ export function buildEmbeddedRunPayloads(params: {
       ...delivery,
       ...(params.toolFailureExplanation ? { isError: true } : {}),
     };
+    if (params.toolFailureExplanation) {
+      setReplyPayloadMetadata(replyPayload, { toolFailureExplanation: true });
+    }
     replyItems.push(
       ttsFacts ? setReplyPayloadMetadata(replyPayload, { tts: ttsFacts }) : replyPayload,
     );

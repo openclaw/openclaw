@@ -107,7 +107,7 @@ function sanitizeFinalReplyText(
   if (!text) {
     return text;
   }
-  return payload.isError
+  return payload.isError && !getReplyPayloadMetadata(payload)?.toolFailureExplanation
     ? renderUserFacingText(text, { errorContext: true, conversationContext })
     : sanitizeUserFacingText(text, { conversationContext });
 }
