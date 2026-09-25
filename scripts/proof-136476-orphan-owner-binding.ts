@@ -163,6 +163,7 @@ function createController(runs: Map<string, SubagentRunRecord>, edges: EdgeRecor
     // No detached task backs these runs; the real "unavailable" resolution is
     // what the production lookup returns for an un-tasked run.
     resolveSubagentTask: () => ({ lookup: "unavailable" }) as never,
+    resolveSubagentTaskAsync: async () => ({ lookup: "unavailable" }) as never,
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: async () => {},
     emitSubagentProgressEndedForRun: async () => {},
