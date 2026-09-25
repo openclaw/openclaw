@@ -106,16 +106,27 @@ describe("Control UI Vite build", () => {
     const pages = fileURLToPath(new URL("../pages/", import.meta.url));
     const first = path.join(pages, "chunk-fixture-first", "view.ts");
     const second = path.join(pages, "chunk-fixture-second", "view.ts");
+    const lazy = path.join(pages, "chunk-fixture-lazy", "view.ts");
+    const firstCss = fileURLToPath(new URL("../styles/new-session.css", import.meta.url));
+    const secondCss = fileURLToPath(
+      new URL("../styles/chat/composer-progress.css", import.meta.url),
+    );
+    const lazyCss = path.join(path.dirname(lazy), "view.css");
     const modules = new Map([
-      [first, 'import "./view.css"; export const message = "first";'],
-      [second, 'import "./view.css"; export const message = "second";'],
-      [path.join(path.dirname(first), "view.css"), ".first-page { color: red; }"],
-      [path.join(path.dirname(second), "view.css"), ".second-page { color: blue; }"],
+      [first, 'import "../../styles/new-session.css"; export const message = "first";'],
+      [
+        second,
+        'import "../../styles/chat/composer-progress.css"; export const message = "second";',
+      ],
+      [lazy, 'import "./view.css"; export const message = "lazy";'],
+      [firstCss, ".first-page { color: red; }"],
+      [secondCss, ".second-page { color: blue; }"],
+      [lazyCss, ".lazy-page { color: purple; }"],
     ]);
     await fs.writeFile(path.join(root, "initial.css"), ".initial-page { color: green; }");
     await fs.writeFile(
       path.join(root, "main.js"),
-      'import "./initial.css"; globalThis.loadFirst = () => import("fixture:first"); globalThis.loadSecond = () => import("fixture:second");',
+      'import "./initial.css"; globalThis.loadFirst = () => import("fixture:first"); globalThis.loadSecond = () => import("fixture:second"); globalThis.loadLazy = () => import("fixture:lazy");',
     );
     config.plugins = [
       {
@@ -127,6 +138,9 @@ describe("Control UI Vite build", () => {
           }
           if (source === "fixture:second") {
             return second;
+          }
+          if (source === "fixture:lazy") {
+            return lazy;
           }
           if (importer && source.startsWith(".")) {
             const resolved = path.resolve(path.dirname(importer), source);
@@ -152,14 +166,22 @@ describe("Control UI Vite build", () => {
             ...controlUiCodeSplitting,
             groups: controlUiCodeSplitting.groups.map((group) =>
               group.name === "control-ui-boot-shared"
-                ? Object.assign({}, group, { test: (id: string) => modules.has(id), minSize: 0 })
+                ? Object.assign({}, group, {
+                    test: (id: string) => [first, second, firstCss, secondCss].includes(id),
+                    minSize: 0,
+                  })
                 : group,
             ),
           },
         },
       },
     };
-    await build(config);
+    const built = await build(config);
+    if (Array.isArray(built) || !("output" in built)) {
+      throw new Error("Expected one production bundle");
+    }
+    const lazyChunk = built.output.find((chunk) => chunk.type === "chunk" && lazy in chunk.modules);
+    expect(lazyChunk?.type === "chunk" && lazyCss in lazyChunk.modules).toBe(true);
     const names = await fs.readdir(path.join(outDir, "assets"));
     const styles = await Promise.all(
       names

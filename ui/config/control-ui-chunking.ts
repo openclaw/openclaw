@@ -13,6 +13,12 @@ const controlUiBootModules = JSON.parse(
   fs.readFileSync(path.join(configDir, "control-ui-boot-modules.json"), "utf8"),
 ) as Record<"shared" | "new" | "chat", string[]>;
 
+const measuredStyles = new Set(
+  Object.values(controlUiBootModules)
+    .flat()
+    .filter((id) => id.endsWith(".css")),
+);
+
 function normalizeModuleId(id: string): string {
   return id.replace(/\\/g, "/");
 }
@@ -118,54 +124,62 @@ export function controlUiStableChunkName(id: string): string | undefined {
   return undefined;
 }
 
-export const controlUiCodeSplitting = {
-  includeDependenciesRecursively: false,
-  groups: [
-    {
-      name: (id: string) => controlUiStableChunkName(id) ?? null,
-      test: (id: string) => controlUiStableChunkName(id) !== undefined,
-      priority: 20,
-    },
-    {
-      name: (id: string) =>
-        normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
-      tags: ["$initial"] as ["$initial"],
-      priority: 10,
-      // Keep the boot graph in fewer partitions; the performance checker owns
-      // the compressed-size and request budgets for the emitted chunks.
-      maxSize: 1024 * 1024,
-    },
-    ...(["shared", "new", "chat"] as const).map((route, index) => {
-      const modules = new Set(controlUiBootModules[route]);
-      return {
-        name: `control-ui-boot-${route}`,
-        test: (id: string) => modules.has(controlUiBootManifestKey(id)),
-        // Shared dependencies must be assigned first, or a route group pulls
-        // them (and therefore other routes) into its eagerly imported chunk.
-        priority: 8 - index,
-        includeDependenciesRecursively: true,
-        // Shared and chat groups both contain dense UI modules; keep their
-        // generated chunks within the existing compressed-size budget.
-        // Let tiny split tails stay with their consumers through automatic chunking.
-        minSize: 16 * 1024,
-        maxSize: 1408 * 1024,
-      };
-    }),
-    {
-      name: (id: string, context: Rolldown.ChunkingContext) => {
-        const pages = new Set(
-          (context.getModuleInfo(id)?.importers ?? []).flatMap((importer) => {
-            const page = /^ui\/src\/pages\/([^/]+)\//u.exec(
-              controlUiBootManifestKey(importer),
-            )?.[1];
-            return page ? [page] : [];
-          }),
-        );
-        return pages.size ? "css-" + [...pages].toSorted().join("-") : null;
+export function createControlUiCodeSplitting(options: { includeBootGroups?: boolean } = {}) {
+  return {
+    includeDependenciesRecursively: false,
+    groups: [
+      {
+        name: (id: string) => controlUiStableChunkName(id) ?? null,
+        test: (id: string) => controlUiStableChunkName(id) !== undefined,
+        priority: 20,
       },
-      test: (id: string) => controlUiBootManifestKey(id).endsWith(".css"),
-      // Page-owned styles must not be absorbed by measured JavaScript boot groups.
-      priority: 9,
-    },
-  ],
-};
+      {
+        name: (id: string) =>
+          normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
+        tags: ["$initial"] as ["$initial"],
+        priority: 10,
+        // Keep the boot graph in fewer partitions; the performance checker owns
+        // the compressed-size and request budgets for the emitted chunks.
+        maxSize: 1024 * 1024,
+      },
+      ...(options.includeBootGroups === false
+        ? []
+        : [
+            ...(["shared", "new", "chat"] as const).map((route, index) => {
+              const modules = new Set(controlUiBootModules[route]);
+              return {
+                name: `control-ui-boot-${route}`,
+                test: (id: string) => modules.has(controlUiBootManifestKey(id)),
+                // Shared dependencies must be assigned first, or a route group pulls
+                // them (and therefore other routes) into its eagerly imported chunk.
+                priority: 8 - index,
+                includeDependenciesRecursively: true,
+                // Shared and chat groups both contain dense UI modules; keep their
+                // generated chunks within the existing compressed-size budget.
+                // Let tiny split tails stay with their consumers through automatic chunking.
+                minSize: 16 * 1024,
+                maxSize: 1408 * 1024,
+              };
+            }),
+            {
+              name: (id: string, context: Rolldown.ChunkingContext) => {
+                const pages = new Set(
+                  (context.getModuleInfo(id)?.importers ?? []).flatMap((importer) => {
+                    const page = /^ui\/src\/pages\/([^/]+)\//u.exec(
+                      controlUiBootManifestKey(importer),
+                    )?.[1];
+                    return page ? [page] : [];
+                  }),
+                );
+                return pages.size ? "css-" + [...pages].toSorted().join("-") : null;
+              },
+              test: (id: string) => measuredStyles.has(controlUiBootManifestKey(id)),
+              // Protect measured page styles without splitting unrelated lazy CSS into JS facades.
+              priority: 9,
+            },
+          ]),
+    ],
+  };
+}
+
+export const controlUiCodeSplitting = createControlUiCodeSplitting();
