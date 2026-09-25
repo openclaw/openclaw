@@ -154,7 +154,8 @@ vi.mock("../urbit/sse-client.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../settings.js", () => ({
+vi.mock("../settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../settings.js")>()),
   createSettingsManager: vi.fn(() => settingsManagerMock),
 }));
 
