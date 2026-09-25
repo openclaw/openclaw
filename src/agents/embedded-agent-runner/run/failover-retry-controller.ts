@@ -56,6 +56,7 @@ function resolveTransientRetryDelayMs(params: {
 }
 
 const MAX_RATE_LIMIT_ATTEMPTS = 10;
+const MAX_RATE_LIMIT_RETRY_BEFORE_MODEL_FALLBACK_MS = 60_000;
 const MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
 const MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
 const RETRY_SLEEP_CHUNK_MS = 24 * 60 * 60 * 1000;
@@ -326,6 +327,17 @@ export function createEmbeddedRunFailoverRetryController(input: {
         recordDecision("rejected", "retry_delay_exceeds_cap");
         log.warn(
           `rate-limit retry floor ${retry.retryAfterMs === Infinity ? "exceeds representable time" : `${retry.retryAfterMs}ms`} exceeds retry.provider.maxRetryDelayMs=${retryDelayCapMs} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}; failing over`,
+        );
+        return false;
+      }
+      if (
+        rateLimit &&
+        fallbackConfigured &&
+        typeof retry.retryAfterMs === "number" &&
+        retry.retryAfterMs > MAX_RATE_LIMIT_RETRY_BEFORE_MODEL_FALLBACK_MS
+      ) {
+        log.warn(
+          `rate-limit retry floor ${retry.retryAfterMs}ms exceeds ${MAX_RATE_LIMIT_RETRY_BEFORE_MODEL_FALLBACK_MS}ms for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}; failing over`,
         );
         return false;
       }
