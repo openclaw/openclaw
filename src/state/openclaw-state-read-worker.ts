@@ -223,12 +223,6 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   let bytes = Buffer.byteLength(command.type, "utf8");
-  if (command.type === "agentDatabaseDeletion.snapshot") {
-    return bytes + Buffer.byteLength(command.purpose, "utf8");
-  }
-  if (command.type === "agentDeletionJournal.status") {
-    return bytes + Buffer.byteLength(command.agentId, "utf8");
-  }
   if (command.type === "sessionRepositoryWorkspaces.find") {
     return command.owners.reduce(
       (total, owner) =>
@@ -237,6 +231,12 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
         Buffer.byteLength(owner.sessionKey, "utf8"),
       bytes,
     );
+  }
+  if (command.type === "agentDatabaseDeletion.snapshot") {
+    return bytes + Buffer.byteLength(command.purpose, "utf8");
+  }
+  if (command.type === "agentDeletionJournal.status") {
+    return bytes + Buffer.byteLength(command.agentId, "utf8");
   }
   if (command.type === "subagents.runs") {
     return (
