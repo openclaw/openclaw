@@ -302,7 +302,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         return;
       }
       models = next;
-      selector.setItems(modelSelectItems(models), emptyMessage);
+      const { modelProvider, model } = state.sessionInfo;
+      selector.setItems(
+        modelSelectItems(models),
+        emptyMessage,
+        modelProvider && model ? modelKey(modelProvider, model) : undefined,
+      );
       tui.requestRender();
     };
     request.refreshModels = (agentId) => {

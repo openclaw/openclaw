@@ -40,6 +40,7 @@ export class SearchableSelectList implements Component, Focusable {
   }>;
   private filteredItems: SearchableSelectItem[];
   private selectedIndex = 0;
+  private retainedSelection?: string;
   private maxVisible: number;
   private theme: SearchableSelectListTheme;
   private searchInput: Input;
@@ -72,16 +73,22 @@ export class SearchableSelectList implements Component, Focusable {
     this.searchInput.focused = value;
   }
 
-  setItems(items: SearchableSelectItem[], emptyMessage = "No matches") {
-    const selectedValue = this.filteredItems[this.selectedIndex]?.value;
+  setItems(items: SearchableSelectItem[], emptyMessage = "No matches", fallbackValue?: string) {
+    // Invalidation can clear the rows before a replacement catalog arrives.
+    const selectedValue = this.filteredItems[this.selectedIndex]?.value ?? this.retainedSelection;
     this.items = items;
     this.emptyMessage = sanitizeRenderableLine(emptyMessage);
     this.preparedItems = undefined;
     this.updateFilter();
-    this.selectedIndex = Math.max(
-      0,
-      this.filteredItems.findIndex((item) => item.value === selectedValue),
-    );
+    const selectedIndex = this.filteredItems.findIndex((item) => item.value === selectedValue);
+    this.selectedIndex =
+      selectedIndex >= 0
+        ? selectedIndex
+        : Math.max(
+            0,
+            this.filteredItems.findIndex((item) => item.value === fallbackValue),
+          );
+    this.retainedSelection = this.filteredItems[this.selectedIndex]?.value ?? selectedValue;
   }
 
   private updateFilter() {
