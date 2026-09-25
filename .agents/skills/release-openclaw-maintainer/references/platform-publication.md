@@ -29,11 +29,13 @@ for credential topology. A smoke-test artifact with ad-hoc signing proves no
 release readiness. Real publish reuses the successful notarized preflight and
 validation for the same tag/source SHA.
 
-The real publish (`openclaw-macos-publish.yml` in `openclaw/releases`) requires
-the public GitHub release; flip it as soon as core npm is visible. Preflights
-resume from notarization checkpoints without rebuilding: pass
-`resume_notarization_run_id=<run>`, `resume_notarization_run_attempt=1`, and
-`resume_notarization_variant=all`. The appcast lands as an auto-opened PR
+The real publish (`openclaw-macos-publish.yml` in `openclaw/releases`) attaches
+assets to the GitHub release whether it is still a draft or public; still flip
+it as soon as core npm is visible. A re-dispatched preflight for the same tag
+and source resumes every variant from its newest checkpoint without rebuilding;
+`ignore_checkpoints=true` forces a rebuild and `resume_notarization_run_id`,
+`resume_notarization_run_attempt`, `resume_notarization_variant` only pin one
+specific run. The appcast lands as an auto-opened PR
 `chore(release): update appcast for <version>` that must be merged; macOS is
 not complete until it is. Record preflight/publish run ids in the handoff.
 

@@ -22,6 +22,10 @@ import {
 } from "../pages/chat/components/chat-composer-mention-menu.ts";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import {
+  PluginIconController,
+  pluginIconFetchContext,
+} from "../pages/plugins/plugin-icon-controller.ts";
+import {
   getCommandPaletteModelItems,
   getStaticCommandPaletteCatalogItems,
   loadCommandPaletteCatalogItems,
@@ -65,6 +69,14 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
   @state() private open = false;
+  @state() private pluginIconUrls: Record<string, string> = {};
+  private readonly pluginIcons = new PluginIconController({
+    getFetchContext: () => pluginIconFetchContext(this.context!),
+    isConnected: () => this.isConnected && this.open && this.gateway.connected,
+    onUrlsChange: (urls) => {
+      this.pluginIconUrls = urls;
+    },
+  });
   private initialInput: CommandPaletteOpenInput | undefined;
   private takeInitialInput: CommandPaletteInputHandoff | undefined;
   private inputElement: HTMLTextAreaElement | undefined;
@@ -323,6 +335,20 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     // ModalDialog owns autofocus. Focusing its not-yet-open slotted field here
     // can retire the loader before the browser has admitted the new modal.
     this.adoptInitialInput();
+    const iconIds = new Set(
+      this.catalogItems.flatMap((item) =>
+        item.hasPluginIcon && item.pluginId ? [item.pluginId] : [],
+      ),
+    );
+    this.pluginIcons.reconcileKeys(iconIds);
+    for (const element of this.querySelectorAll<HTMLElement>(
+      ".cmd-palette__plugin-icon[data-plugin-icon-id]",
+    )) {
+      const pluginId = element.dataset.pluginIconId;
+      if (pluginId && iconIds.has(pluginId)) {
+        this.pluginIcons.load(pluginId);
+      }
+    }
   }
 
   private invalidateSessionSearch() {
@@ -347,6 +373,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     this.modelReader.clear();
     this.catalogLoad = undefined;
     this.catalogItems = [];
+    this.pluginIcons.reset();
   }
 
   private ensureCatalogItems(force = false): Promise<void> {
@@ -649,6 +676,8 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       onNavigate: this.onNavigate,
       onSelectSession: this.onSelectSession,
       onSlashCommand: this.onSlashCommand,
+      pluginIconUrls: this.pluginIconUrls,
+      onPluginIconError: (pluginId) => this.pluginIcons.handleError(pluginId),
       onInputRef: this.handleInputRef,
       draft: this.draft,
     }));

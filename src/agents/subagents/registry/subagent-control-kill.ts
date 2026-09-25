@@ -7,7 +7,6 @@ import {
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { runExclusiveSessionLifecycleMutation } from "../../../sessions/session-lifecycle-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
 import {
   captureTaskCancellationControl,
@@ -93,6 +92,7 @@ async function withSubagentKillScope<T>(
     : taskControl;
   const selected = new Set<string>();
   const releaseRetirements: Array<() => void> = [];
+  const completeRetirementPublications: Array<() => void> = [];
   const holds: Array<NonNullable<ReturnType<typeof holdQueuedSwarmRun>>> = [];
   const hold = (tree: KillTree) => {
     if (!tree.dispatchHold) {
@@ -167,6 +167,7 @@ async function withSubagentKillScope<T>(
         entry,
         (candidate) => latest() === candidate,
       );
+      completeRetirementPublications.push(retirement.completePublication);
       releaseRetirements.push(retirement.release);
       const bind = (current: SubagentRunRecord): KillBinding => {
         const { generation, createdAt } = retirement.observation;
@@ -254,48 +255,23 @@ async function withSubagentKillScope<T>(
       },
     };
     scope.refresh();
-    const complete = async (result: T) => {
-      if (preparePublication) {
-        do {
-          await preparePublication.prepare();
-        } while (preparePublication.needsPreparation());
-      }
-      if (publish) {
-        params.assertCurrent?.();
-      }
-      return publish ? publish(result, trees) : result;
-    };
-    const publicationTargets =
-      preparePublication && publish
-        ? trees.flatMap(({ entry, session }) =>
-            session
-              ? [
-                  {
-                    scope: session.storePath,
-                    identities: [entry.childSessionKey, session.entry?.sessionId],
-                  },
-                ]
-              : [],
-          )
-        : [];
-    let value: T;
-    if (publicationTargets.length) {
-      let result: T;
-      value = await runExclusiveSessionLifecycleMutation({
-        targets: publicationTargets,
-        // Keep the mutation fence through publication without holding lifecycle locks during drain.
-        prepare: async () => {
-          result = await run(scope, trees);
-        },
-        run: () => complete(result),
-      });
-    } else {
-      value = await complete(await run(scope, trees));
+    const result = await run(scope, trees);
+    if (preparePublication) {
+      do {
+        await preparePublication.prepare();
+      } while (preparePublication.needsPreparation());
     }
-    outcome = { ok: true, value };
+    if (publish) {
+      params.assertCurrent?.();
+    }
+    outcome = { ok: true, value: publish ? publish(result, trees) : result };
   } catch (error) {
     outcome = { ok: false, error };
   }
+  // Failed-launch cleanup may own the same provisional session. Let it proceed only
+  // after cancellation publication finishes (including failure), before releasing a
+  // scheduler hold that can itself await that cleanup.
+  completeRetirementPublications.forEach((complete) => complete());
   const released = await Promise.allSettled(holds.map((reservation) => reservation.release()));
   const retired = await Promise.allSettled(releaseRetirements.map(async (release) => release()));
   if (!outcome.ok) {

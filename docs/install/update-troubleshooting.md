@@ -340,6 +340,23 @@ Older releases can reject enable, uninstall, and reinstall while trying to copy
 that same missing capture. Restart the Gateway through its service owner before
 retrying, or upgrade the host. See [plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
 
+### Snapshot parse errors from 2026.9.5 and 2026.9.6
+
+An update started from 2026.9.5 or 2026.9.6 can stop with a message such as
+`Update state snapshot failed (exit): Assigning to rvalue (308:4)`. The installed
+updater could not parse valid JavaScript that assigns to `import.meta.url` in a
+plugin's dependency, for example `@jsquash/png` or `@jsquash/avif`. The fix is in
+the target release, but the installed updater runs this check before the target
+starts. Disable the plugin for this one update:
+
+```bash
+openclaw plugins disable <id>
+openclaw update
+openclaw plugins enable <id>
+```
+
+Updates from the fixed release onward inspect these plugins normally.
+
 ### Large model-catalog temporary directories
 
 Older releases can retain several complete plugin copies inside
