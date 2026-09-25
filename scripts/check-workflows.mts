@@ -202,7 +202,7 @@ if (hasPinnedActionlint()) {
     runPreCommitHook("actionlint", workflows);
   } else {
     console.error(
-      `[check-workflows] missing workflow linter: install actionlint, Go for actionlint@${ACTIONLINT_REVISION}, or pre-commit.`,
+      `[check-workflows] missing workflow linter: install actionlint built from ${ACTIONLINT_REVISION}, Go to acquire that revision, or a pre-commit runtime.`,
     );
     process.exit(1);
   }

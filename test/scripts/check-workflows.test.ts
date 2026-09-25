@@ -67,7 +67,7 @@ describe("check-workflows", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("missing workflow linter");
-    expect(result.stderr).toContain("install actionlint, Go");
+    expect(result.stderr).toContain("install actionlint built from");
     expect(result.stderr).toContain("011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7");
   });
 
@@ -78,6 +78,7 @@ describe("check-workflows", () => {
     { version: "v1.7.13-0.20260419144658-011a6d15e749", tool: "installed" },
     { version: "1.7.12", tool: "pre-commit", acquireStatus: 1 },
     { version: "1.7.12", tool: "go", lintStatus: 7 },
+    { version: "1.7.12", tool: "unavailable", lintStatus: 1 },
   ])(
     "selects $tool actionlint for installed version $version ($acquireStatus/$lintStatus)",
     ({ version, tool, acquireStatus = 0, lintStatus = 0 }) => {
@@ -101,7 +102,7 @@ describe("check-workflows", () => {
           { mode: 0o755 },
         );
       }
-      if (tool !== "pre-commit" || acquireStatus !== 0) {
+      if (tool === "go" || acquireStatus !== 0) {
         writeFileSync(
           path.join(binDir, "pinned-actionlint"),
           [
@@ -130,18 +131,20 @@ describe("check-workflows", () => {
           { mode: 0o755 },
         );
       }
-      writeFileSync(
-        path.join(binDir, "pre-commit"),
-        [
-          "#!/bin/sh",
-          'if [ "$1" = "--version" ]; then exit 0; fi',
-          'printf "%s\\n" "$*" >> "$PRE_COMMIT_MARKER"',
-          "exit 0",
-          "",
-        ].join("\n"),
-        { mode: 0o755 },
-      );
-      for (const command of ["python3", "node"]) {
+      if (tool !== "unavailable") {
+        writeFileSync(
+          path.join(binDir, "pre-commit"),
+          [
+            "#!/bin/sh",
+            'if [ "$1" = "--version" ]; then exit 0; fi',
+            'printf "%s\\n" "$*" >> "$PRE_COMMIT_MARKER"',
+            "exit 0",
+            "",
+          ].join("\n"),
+          { mode: 0o755 },
+        );
+      }
+      for (const command of tool === "unavailable" ? ["node"] : ["python3", "node"]) {
         writeFileSync(path.join(binDir, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
       }
 
@@ -177,6 +180,12 @@ describe("check-workflows", () => {
       }
       if (lintStatus !== 0) {
         expect(existsSync(preCommitMarkerPath)).toBe(false);
+        if (tool === "unavailable") {
+          expect(result.stderr).toContain(
+            "missing workflow linter: install actionlint built from 011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7",
+          );
+          expect(result.stderr).toContain("Go to acquire that revision, or a pre-commit runtime");
+        }
         return;
       }
       const preCommitArgs = readFileSync(preCommitMarkerPath, "utf8");
