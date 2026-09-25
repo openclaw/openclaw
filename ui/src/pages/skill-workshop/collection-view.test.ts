@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { computeSkillWorkshopDiff } from "../../lib/skill-workshop/diff.ts";
-import { createSkillWorkshopState, skillWorkshopRouteData } from "./proposals.ts";
+import { createSkillWorkshopState } from "./proposals.ts";
 import {
   createContext,
   type SkillWorkshopPageTestElement,
@@ -101,7 +101,7 @@ describe("Workshop installed comparisons", () => {
     const page = document.createElement(
       "openclaw-skill-workshop-page",
     ) as SkillWorkshopPageTestElement;
-    page.data = skillWorkshopRouteData(state);
+    page.state = state;
     page.context = createContext(vi.fn());
     document.body.append(page);
     await page.updateComplete;

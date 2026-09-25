@@ -1,6 +1,5 @@
 import { consume } from "@lit/context";
 import { nothing } from "lit";
-import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationGatewaySnapshot } from "../../app/context.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -26,7 +25,6 @@ import {
   createSkillWorkshopState,
   loadSkillWorkshopProposals,
   resolveSkillWorkshopAgentId,
-  type SkillWorkshopRouteData,
   type SkillWorkshopState,
 } from "./proposals.ts";
 import {
@@ -47,7 +45,6 @@ registerSkillWorkshopEnglish();
 class SkillWorkshopPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: SkillWorkshopPageContext;
-  @property({ attribute: false }) data?: SkillWorkshopRouteData;
 
   private state?: SkillWorkshopState;
   private operationEpoch = 0;
@@ -269,7 +266,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
 
   override willUpdate() {
     if (!this.state && this.context) {
-      this.state = createSkillWorkshopState(this.data);
+      this.state = createSkillWorkshopState();
       this.state.skillWorkshopMode = loadSkillWorkshopMode();
     }
   }

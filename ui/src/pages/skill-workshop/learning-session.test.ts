@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
-import { createSkillWorkshopState, skillWorkshopRouteData } from "./proposals.ts";
+import { createSkillWorkshopState } from "./proposals.ts";
 import {
   createContext,
   type SkillWorkshopPageTestElement,
@@ -20,7 +20,7 @@ async function mountLearningPage() {
   const page = document.createElement(
     "openclaw-skill-workshop-page",
   ) as SkillWorkshopPageTestElement;
-  page.data = skillWorkshopRouteData(state);
+  page.state = state;
   page.context = context;
   document.body.append(page);
   await page.updateComplete;
