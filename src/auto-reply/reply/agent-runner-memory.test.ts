@@ -13,6 +13,7 @@ import {
   type AdmittedRunContext,
   type PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import { MEMORY_FLUSH_ALLOWED_TOOLS } from "../../agents/agent-tools.read.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { resetContextWindowCacheForTest } from "../../agents/context.js";
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
@@ -55,6 +56,7 @@ import {
 } from "./agent-runner-memory.test-support.js";
 import {
   createTestFollowupRun,
+  createTestTemplateContext,
   withTestModelContextTokens,
   writeTestSessionStore,
 } from "./agent-runner.test-fixtures.js";
@@ -247,6 +249,56 @@ function modelRoutingProvenance(
   return { requestedProvider, requestedModel, stage };
 }
 
+type EmbeddedAgentParams = {
+  preparedRunAdmission?: PreparedAgentRunAdmission;
+  provider?: string;
+  model?: string;
+  thinkLevel?: string;
+  agentHarnessId?: string;
+  agentHarnessRuntimeOverride?: string;
+  authProfileId?: unknown;
+  authProfileIdSource?: unknown;
+  prompt?: string;
+  transcriptPrompt?: string;
+  memoryFlushWritePath?: string;
+  cliBackendDispatch?: string;
+  toolsAllow?: string[];
+  silentExpected?: boolean;
+  allowEmptyAssistantReplyAsSilent?: boolean;
+  terminalReplyExpectation?: "required" | "optional";
+  extraSystemPrompt?: string;
+  bootstrapPromptWarningSignaturesSeen?: string[];
+  bootstrapPromptWarningSignature?: string;
+  abortSignal?: AbortSignal;
+  isFinalFallbackAttempt?: boolean;
+  onCompactionAccounting?: (fact: CompactionAccountingFact | undefined) => void;
+  onAgentEvent?: (evt: {
+    stream: string;
+    data: { completed?: boolean; isError?: boolean; name?: string; phase?: string };
+  }) => void;
+};
+
+type CompactEmbeddedAgentSessionParams = {
+  agentId?: string;
+  agentHarnessId?: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+  contextTokenBudget?: number;
+  sessionKey?: string;
+  sandboxSessionKey?: string;
+  currentTokenCount?: number;
+  cwd?: string;
+  force?: boolean;
+  forcePreflight?: boolean;
+  modelSelectionLocked?: boolean;
+  preflightRequired?: boolean;
+  preflightCompactionTrigger?: string;
+  sessionEntry?: SessionEntry;
+  sessionFile?: string;
+  sessionId?: string;
+  trigger?: string;
+};
+
 function requireModelFallbackCall(index = 0) {
   const call = runWithModelFallbackMock.mock.calls[index]?.[0] as ModelFallbackParams | undefined;
   if (!call) {
@@ -300,6 +352,47 @@ async function commitSourceCompaction(params: { sessionKey: string; storePath: s
   return accepted;
 }
 
+async function commitMemoryCompaction(params: {
+  sessionKey: string;
+  storePath: string;
+  run?: EmbeddedAgentParams;
+}) {
+  const entry = loadSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath });
+  if (!entry) {
+    throw new Error("expected compaction predecessor");
+  }
+  const accepted = await acceptCompactionSuccessor({
+    currentTarget: {
+      agentId: "main",
+      sessionId: entry.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+    expectedEntry: {
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+      activeWriterRunId: entry.activeWriterRunId,
+    },
+    assertActive: () => params.run?.abortSignal?.throwIfAborted(),
+    result: {
+      ok: true,
+      compacted: true,
+      result: { sessionId: "session-rotated", tokensBefore: 120, tokensAfter: 42 },
+    },
+  });
+  params.run?.onCompactionAccounting?.({
+    kind: "durable",
+    count: 1,
+    currentContextSnapshot: { tokens: 42 },
+    target: {
+      ...accepted.sessionTarget,
+      lifecycleRevision: accepted.entry.lifecycleRevision,
+      activeWriterRunId: accepted.entry.activeWriterRunId,
+    },
+  });
+  return accepted;
+}
+
 describe("runMemoryFlushIfNeeded", () => {
   let rootDir = "";
 
@@ -342,6 +435,32 @@ describe("runMemoryFlushIfNeeded", () => {
       ...createCompactionLifecycle(createReplyOperation()),
       ...overrides,
     });
+  }
+
+  async function runProjectedCompaction(completed: boolean, followupRun = createTestFollowupRun()) {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = createFlushSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+    incrementCompactionCountMock.mockImplementation(incrementCompactionCount);
+    runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      if (completed) {
+        await commitMemoryCompaction({ sessionKey, storePath, run: params });
+      }
+      params.onAgentEvent?.({ stream: "compaction", data: { phase: "end", completed } });
+      return {
+        payloads: [],
+        meta: { agentMeta: { sessionId: "session-rotated" } },
+      };
+    });
+    const result = await runDefaultMemoryFlush(sessionEntry, {
+      followupRun,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+    return { followupRun, result, sessionKey, storePath };
   }
 
   function createRequiredPreflightParams(sessionFile: string): PreflightCompactionTestParams {
@@ -601,6 +720,118 @@ describe("runMemoryFlushIfNeeded", () => {
   );
 
   it("reuses its private buffer and admitted lifecycle across a model fallback", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = createFlushSessionEntry({ lifecycleRevision: "memory-generation" });
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+    const primaryError = new Error("primary failed after private compaction");
+    let memorySession: SessionManager | undefined;
+    let admission: PreparedAgentRunAdmission | undefined;
+    let admittedContext: AdmittedRunContext | undefined;
+    const releaseOperatorAuthority = vi.fn();
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "guest",
+      scopes: ["operator.write"],
+      assertCurrent: vi.fn(),
+      retain: () => releaseOperatorAuthority,
+    });
+    runEmbeddedAgentMock
+      .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        admission = params.preparedRunAdmission;
+        memorySession = params.sessionManager;
+        if (!admission || !memorySession) {
+          throw new Error("Missing private memory runtime");
+        }
+        expect(memorySession.getSessionTarget()).toBeUndefined();
+        admittedContext = await admission.admit("embedded");
+        expect(getAdmittedRunDelegatedAuthority(admittedContext)).toBeDefined();
+        expect(readAdmittedRunOperatorAuthority(admittedContext)).toMatchObject({
+          profileId: "guest",
+          scopes: ["operator.write"],
+        });
+        const retained = memorySession.appendMessage(makeUserMessage("Private retained work", 1));
+        memorySession.appendCompaction("Private summary", retained, 120);
+        throw primaryError;
+      })
+      .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        if (!memorySession || !admission || !admittedContext) {
+          throw new Error("Missing first memory attempt");
+        }
+        expect(params.sessionManager).toBe(memorySession);
+        expect(params.preparedRunAdmission).toBe(admission);
+        expect(await admission.admit("embedded")).toBe(admittedContext);
+        expect(getAdmittedRunDelegatedAuthority(admittedContext)).toBeDefined();
+        expect(memorySession.getBranch().at(-1)).toMatchObject({
+          type: "compaction",
+          summary: "Private summary",
+        });
+        expect(loadMainSessionEntry(storePath).compactionCount).toBe(1);
+        return { payloads: [], meta: {} };
+      });
+    runWithModelFallbackMock.mockImplementationOnce(async (params: ModelFallbackParams) => {
+      await expect(
+        params.run("anthropic", "claude", {
+          modelRoutingProvenance: modelRoutingProvenance("anthropic", "claude"),
+        }),
+      ).rejects.toBe(primaryError);
+      return {
+        result: await params.run("anthropic", "fallback", {
+          modelRoutingProvenance: modelRoutingProvenance("anthropic", "claude", "fallback"),
+        }),
+        provider: "anthropic",
+        model: "fallback",
+        attempts: [],
+      };
+    });
+    const result = await runDefaultMemoryFlush(sessionEntry, {
+      followupRun: {
+        ...createTestFollowupRun({
+          thinkingCatalog: [
+            { provider: "anthropic", id: "claude", input: ["text"] },
+            { provider: "anthropic", id: "fallback", input: ["text"] },
+          ],
+        }),
+        operatorAuthority,
+      },
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+    expect(result.outcome).toBe("completed");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+    expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
+    expect(loadMainSessionEntry(storePath)).toMatchObject({
+      sessionId: "session",
+      lifecycleRevision: "memory-generation",
+      compactionCount: 1,
+      memoryFlush: { kind: "succeeded", compactionCount: 1 },
+    });
+    if (!admittedContext) {
+      throw new Error("Memory attempt was not admitted");
+    }
+    expect(getAdmittedRunDelegatedAuthority(admittedContext)).toBeUndefined();
+    expect(releaseOperatorAuthority).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a flush on the configured CLI runtime instead of the direct-API passthrough", async () => {
+    await runProjectedCompaction(true);
+
+    const flushCall = requireEmbeddedAgentCall();
+    // Without the opt-in, an embedded flush targeting a CLI runtime falls
+    // through to `cli_runtime_passthrough_openclaw`, which bills subscription
+    // credentials as metered extra usage instead of the runtime's plan limits.
+    expect(flushCall.cliBackendDispatch).toBe("subscription-auth");
+    // The dispatch gate fails closed on tool policy: an absent, empty, or
+    // wildcard allowlist silently drops the run back to that passthrough, so
+    // pin the shape the gate requires rather than only the opt-in flag.
+    expect(flushCall.toolsAllow).toEqual([...MEMORY_FLUSH_ALLOWED_TOOLS]);
+    expect(flushCall.toolsAllow?.length ?? 0).toBeGreaterThan(0);
+    expect(flushCall.toolsAllow?.some((name) => name.includes("*"))).toBe(false);
+  });
+
+  it("accounts accepted memory compaction once after a model-only fallback refreshes context", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionKey = "main";
     const sessionEntry = createFlushSessionEntry({ lifecycleRevision: "memory-generation" });
@@ -1514,7 +1745,7 @@ describe("runMemoryFlushIfNeeded", () => {
     ).toBeUndefined();
   });
 
-  it("skips memory flush for CLI providers", async () => {
+  it("skips memory flush for CLI providers with no transcript anchor", async () => {
     const registry = createEmptyPluginRegistry();
     registry.cliBackends.push({
       pluginId: "test-codex-cli",
@@ -1537,6 +1768,9 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
+    // The exclusion now lifts only where a transcript-byte anchor can replace
+    // the compaction watermark. This session has no transcript size, so it
+    // keeps the original skip rather than flushing once and locking the dedup.
     expect(result).toEqual({ sessionEntry, outcome: "skipped" });
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
@@ -1573,7 +1807,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
-  it("skips memory flush for compatible CLI session runtime pins", async () => {
+  it("skips memory flush for compatible CLI session runtime pins with no transcript anchor", async () => {
     registerClaudeCliBackend();
     const sessionEntry: SessionEntry = createFlushSessionEntry({
       agentRuntimeOverride: "claude-cli",
@@ -4163,7 +4397,77 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
   });
 
-  it("keeps ownsNativeCompaction absolute over the SQLite transcript byte guard", async () => {
+  it.each([
+    { label: "below the token threshold", totalTokens: 10, shouldFlush: false },
+    { label: "above the token threshold", totalTokens: 90_000, shouldFlush: true },
+  ])(
+    "honors forceFlushTranscriptBytes: 0 for a CLI session $label",
+    async ({ totalTokens, shouldFlush }) => {
+      registerClaudeCliBackend(true);
+      // 0 disables the byte trigger. The transcript size is still read so the
+      // re-arm anchor resolves, so `size >= 0` must not stand in for it.
+      registerMemoryFlushPlanResolverForTest(() => ({
+        softThresholdTokens: 4_000,
+        forceFlushTranscriptBytes: 0,
+        reserveTokensFloor: 20_000,
+        prompt: "Pre-compaction memory flush.\nNO_REPLY",
+        systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+        relativePath: "memory/2023-11-14.md",
+      }));
+      const storePath = path.join(rootDir, `zero-byte-flush-${totalTokens}.json`);
+      const sessionKey = "agent:main:main";
+      const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+      await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
+      const manager = SessionManager.open(scope, rootDir);
+      manager.appendMessage({ role: "user", content: "x".repeat(256), timestamp: 1 });
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        compactionCount: 0,
+      };
+      const cfg = {
+        agents: {
+          defaults: {
+            models: { "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } } },
+            compaction: { memoryFlush: {} },
+          },
+        },
+      } as const;
+
+      const result = await runMemoryFlushIfNeeded({
+        cfg,
+        followupRun: createTestFollowupRun({
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          sessionId: "session",
+          sessionKey,
+        }),
+        sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        modelContextTokens: 100_000,
+        resolvedVerboseLevel: "off",
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        storePath,
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
+
+      if (shouldFlush) {
+        expect(result.outcome).not.toBe("skipped");
+      } else {
+        expect(result.outcome).toBe("skipped");
+        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("keeps ownsNativeCompaction absolute for compaction while the flush runs on the byte guard", async () => {
     registerClaudeCliBackend(true);
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
@@ -4177,9 +4481,8 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
     await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceTranscriptEvents(scope, [
-      { message: { role: "user", content: "x".repeat(256) }, type: "message" },
-    ]);
+    const manager = SessionManager.open(scope, rootDir);
+    manager.appendMessage({ role: "user", content: "x".repeat(256), timestamp: 1 });
     expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(10);
 
     const sessionEntry: SessionEntry = createFlushSessionEntry({
@@ -4232,10 +4535,13 @@ describe("runMemoryFlushIfNeeded", () => {
       ...createCompactionLifecycle(createReplyOperation()),
     });
 
-    expect(flushResult).toEqual({ sessionEntry, outcome: "skipped" });
+    // The transcript size gives this session a re-arm anchor, so the flush now
+    // runs where it previously could not. Compaction ownership is unchanged:
+    // the backend still owns it and OpenClaw still defers.
+    expect(flushResult.outcome).not.toBe("skipped");
+    expect(runEmbeddedAgentMock).toHaveBeenCalled();
     expect(preflightEntry).toBe(sessionEntry);
     expect(preflightEntry?.compactionCount).toBe(0);
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
