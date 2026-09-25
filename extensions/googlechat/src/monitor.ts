@@ -29,6 +29,7 @@ import {
   deliverGoogleChatReply,
   type GoogleChatTypingMessage,
 } from "./monitor-reply-delivery.js";
+import { normalizeGoogleChatReplyTarget } from "./monitor-reply-target.js";
 import {
   registerGoogleChatWebhookTarget,
   setGoogleChatWebhookEventProcessor,
@@ -360,14 +361,22 @@ async function processGoogleChatEvent(
         delivery: {
           durable: (payload, info) =>
             resolveGoogleChatDurableReplyOptions({
-              payload,
+              payload: normalizeGoogleChatReplyTarget({
+                payload,
+                sourceMessageName: message.name,
+                replyThreadName,
+              }),
               infoKind: info.kind,
               spaceId,
               hasTypingMessage: Boolean(typingMessage),
             }),
           deliver: async (payload) => {
             await deliverGoogleChatReply({
-              payload,
+              payload: normalizeGoogleChatReplyTarget({
+                payload,
+                sourceMessageName: message.name,
+                replyThreadName,
+              }),
               account,
               spaceId,
               runtime,
