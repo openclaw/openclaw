@@ -5,6 +5,42 @@ import { DEFAULT_MAX_LINKS } from "./defaults.js";
 
 const BARE_LINK_RE = /https?:\/\/\S+/gi;
 
+// Prose delimiters that are never meaningful as the last byte of a URL.
+const TRAILING_PUNCTUATION = ",.;:?!\"'…";
+// Closers are only trailing punctuation when unbalanced by their opener inside the URL,
+// so destinations like https://en.wikipedia.org/wiki/Foo_(bar) keep their suffix.
+const UNPAIRED_CLOSERS: Record<string, string> = { ")": "(", "]": "[", "}": "{", ">": "<" };
+
+function trimTrailingPunctuation(url: string): string {
+  let end = url.length;
+  while (end > 0) {
+    const last = url.slice(end - 1, end);
+    if (TRAILING_PUNCTUATION.includes(last)) {
+      end -= 1;
+      continue;
+    }
+    const opener = UNPAIRED_CLOSERS[last];
+    if (opener) {
+      let opens = 0;
+      let closes = 0;
+      for (let i = 0; i < end; i += 1) {
+        const char = url[i];
+        if (char === opener) {
+          opens += 1;
+        } else if (char === last) {
+          closes += 1;
+        }
+      }
+      if (closes > opens) {
+        end -= 1;
+        continue;
+      }
+    }
+    break;
+  }
+  return url.slice(0, end);
+}
+
 function stripMarkdownLinks(message: string): string {
   const chunks: string[] = [];
   let cursor = 0;
@@ -54,7 +90,7 @@ export function extractLinksFromMessage(message: string, opts?: { maxLinks?: num
   const results: string[] = [];
 
   for (const match of sanitized.matchAll(BARE_LINK_RE)) {
-    const raw = match[0]?.trim();
+    const raw = trimTrailingPunctuation(match[0]?.trim() ?? "");
     if (!raw) {
       continue;
     }

@@ -101,4 +101,38 @@ describe("extractLinksFromMessage", () => {
     ]);
     expect(extractLinksFromMessage("https://8.8.8.8/dns")).toEqual(["https://8.8.8.8/dns"]);
   });
+
+  it.each([
+    ["a comma mid-sentence", "see https://example.com/a, then tell me", "https://example.com/a"],
+    ["a period", "Check https://example.com/a.", "https://example.com/a"],
+    ["an exclamation mark", "wow https://example.com/a!", "https://example.com/a"],
+    ["a question mark", "https://example.com/a?", "https://example.com/a"],
+    ["a colon", "link: https://example.com/a:", "https://example.com/a"],
+    ["double quotes", 'open "https://example.com/a" now', "https://example.com/a"],
+    ["unbalanced parentheses", "(see https://example.com/a)", "https://example.com/a"],
+    ["stacked punctuation", "see https://example.com/a).", "https://example.com/a"],
+    ["an ellipsis", "https://example.com/a…", "https://example.com/a"],
+  ])("trims %s from a bare link", (_name, message, expected) => {
+    expect(extractLinksFromMessage(message)).toStrictEqual([expected]);
+  });
+
+  it("dedupes a link once its trailing punctuation is trimmed", () => {
+    const links = extractLinksFromMessage("https://example.com/a https://example.com/a,");
+    expect(links).toStrictEqual(["https://example.com/a"]);
+  });
+
+  it("keeps URL suffixes that are meaningful", () => {
+    expect(extractLinksFromMessage("https://en.wikipedia.org/wiki/Foo_(bar)")).toStrictEqual([
+      "https://en.wikipedia.org/wiki/Foo_(bar)",
+    ]);
+    expect(extractLinksFromMessage("https://example.com/page/")).toStrictEqual([
+      "https://example.com/page/",
+    ]);
+    expect(extractLinksFromMessage("https://example.com/search?q=foo")).toStrictEqual([
+      "https://example.com/search?q=foo",
+    ]);
+    expect(extractLinksFromMessage("https://example.com/a(b)_c.")).toStrictEqual([
+      "https://example.com/a(b)_c",
+    ]);
+  });
 });
