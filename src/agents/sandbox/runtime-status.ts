@@ -86,18 +86,6 @@ function resolveMainSessionKeyForSandbox(params: {
   });
 }
 
-function resolveComparableSessionKeyForSandbox(params: {
-  cfg?: OpenClawConfig;
-  agentId: string;
-  sessionKey: string;
-}): string {
-  return canonicalizeMainSessionAlias({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-}
-
 type SandboxRuntimeStatusParams = {
   cfg?: OpenClawConfig;
   sessionKey?: string;
@@ -180,7 +168,7 @@ export function resolveSandboxRuntimeStatusesForPersistedSessions(
       }),
       projection: "list" as const,
       sessionKeys: params.sessionKeys.map((sessionKey) =>
-        resolveComparableSessionKeyForSandbox({ ...params, sessionKey }),
+        canonicalizeMainSessionAlias({ ...params, sessionKey }),
       ),
     })),
   );
@@ -220,7 +208,7 @@ function resolveSandboxClassification(params: SandboxRuntimeStatusParams) {
   const cfg = params.cfg;
   const sandboxCfg = resolveSandboxConfigForAgent(cfg, classificationAgentId);
   const mainSessionKey = resolveMainSessionKeyForSandbox({ cfg, agentId: classificationAgentId });
-  const comparableSessionKey = resolveComparableSessionKeyForSandbox({
+  const comparableSessionKey = canonicalizeMainSessionAlias({
     cfg,
     agentId: classificationAgentId,
     sessionKey: classificationSessionKey,
@@ -312,10 +300,6 @@ function resolveSandboxRuntimeStatusWithRead(
   };
 }
 
-function sanitizeForSingleLineDisplay(value: string): string {
-  return escapeControlCharsVisible(value);
-}
-
 function hasUnsafeControlChars(value: string): boolean {
   return Array.from(value).some((char) => {
     const codePoint = char.codePointAt(0) ?? 0;
@@ -331,7 +315,7 @@ function redactSessionKey(value: string): string {
   if (trimmed.length <= 12) {
     return "(redacted)";
   }
-  return `${sanitizeForSingleLineDisplay(truncateUtf16Safe(trimmed, 6))}…${sanitizeForSingleLineDisplay(sliceUtf16Safe(trimmed, -6))}`;
+  return `${escapeControlCharsVisible(truncateUtf16Safe(trimmed, 6))}…${escapeControlCharsVisible(sliceUtf16Safe(trimmed, -6))}`;
 }
 
 function shellEscapeSingleArg(value: string): string {

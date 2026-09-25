@@ -84,9 +84,9 @@ const DEFAULT_TELEGRAM_BOT_RUNTIME: TelegramBotRuntime = {
   sequentialize,
   apiThrottler,
 };
-export function createTelegramBotCore(
+export async function createTelegramBotCore(
   opts: TelegramBotOptions & { telegramDeps: TelegramBotDeps },
-): TelegramBotInstance {
+): Promise<TelegramBotInstance> {
   const botRuntime = DEFAULT_TELEGRAM_BOT_RUNTIME;
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
   const telegramDeps = opts.telegramDeps;
@@ -424,7 +424,7 @@ export function createTelegramBotCore(
   const originalStop = bot.stop.bind(bot);
   // Acquire the account owner only after bot setup has succeeded.
   const threadBindingManager = threadBindingPolicy.enabled
-    ? createTelegramThreadBindingManager({
+    ? await createTelegramThreadBindingManager({
         cfg,
         accountId: account.accountId,
         idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
@@ -448,7 +448,7 @@ export function createTelegramBotCore(
         listBySession: () => [],
         resolveByConversation: () => null,
       };
-  bot.stop = ((...args: Parameters<typeof originalStop>) => {
+  bot.stop = (async (...args: Parameters<typeof originalStop>) => {
     if (disabledBindingAdapter) {
       unregisterSessionBindingAdapter({
         channel: "telegram",
@@ -456,8 +456,11 @@ export function createTelegramBotCore(
         adapter: disabledBindingAdapter,
       });
     }
-    threadBindingManager?.stop();
-    return originalStop(...args);
+    try {
+      return await originalStop(...args);
+    } finally {
+      await threadBindingManager?.stop();
+    }
   }) as typeof bot.stop;
   if (disabledBindingAdapter) {
     registerSessionBindingAdapter(disabledBindingAdapter);

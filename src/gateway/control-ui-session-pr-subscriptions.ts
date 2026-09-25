@@ -147,7 +147,7 @@ export function createControlUiSessionPullRequestSubscriptions(
   };
   const subscriptions = new Map<string, Map<string, Watched>>();
   const replacements = new Set<Promise<void>>();
-  const replacementGenerations = new Map<string, object>();
+  const replacementGenerations = new Map<string, { retainedKeys: ReadonlySet<string> }>();
   const pendingAdmissions = new Map<string, Set<() => boolean>>();
   const keyStates = new Map<string, WatchedKeyState>();
   const inflight = new Map<
@@ -242,7 +242,11 @@ export function createControlUiSessionPullRequestSubscriptions(
     if (scope.isClosing || subscription?.get(sessionKey) !== watched) {
       return undefined;
     }
-    if (!watched || !target || deps.isConnectionActive?.(connId) === false) {
+    if (deps.isConnectionActive?.(connId) === false) {
+      unsubscribe(connId);
+      return undefined;
+    }
+    if (!watched || !target) {
       subscription?.delete(sessionKey);
       const state = keyStates.get(sessionKey);
       state?.connIds.delete(connId);
@@ -250,9 +254,6 @@ export function createControlUiSessionPullRequestSubscriptions(
       if (subscription?.size === 0) {
         // Pruning an old watch does not retire a newer replacement still preparing its keys.
         subscriptions.delete(connId);
-        if (deps.isConnectionActive?.(connId) === false) {
-          replacementGenerations.delete(connId);
-        }
         if (subscriptions.size === 0 && timer !== null) {
           clearTimer(timer);
           timer = null;
@@ -554,7 +555,9 @@ export function createControlUiSessionPullRequestSubscriptions(
       return Promise.resolve();
     }
     // A fresh identity cannot revive retired work when a connection ID is reused.
-    const generation = {};
+    const previousGeneration = replacementGenerations.get(normalizedConnId);
+    const retainedKeys = new Set(sessionKeys.filter((key) => keyStates.has(key)));
+    const generation = { retainedKeys };
     replacementGenerations.set(normalizedConnId, generation);
     // Reserve retained-key intent in call order; an older preparation cannot overwrite it later.
     for (const key of sessionKeys) {
@@ -566,13 +569,16 @@ export function createControlUiSessionPullRequestSubscriptions(
     const isCurrentReplacement = () =>
       !scope.isClosing && replacementGenerations.get(normalizedConnId) === generation;
     const replacement = scope.track(async () => {
-      const retainedKeys = new Set(sessionKeys.filter((key) => keyStates.has(key)));
       for (const key of retainedKeys) {
         const admissions = pendingAdmissions.get(key) ?? new Set<() => boolean>();
         admissions.add(isCurrentReplacement);
         pendingAdmissions.set(key, admissions);
       }
       try {
+        // Install successor interest before retiring the previous preparation.
+        for (const key of previousGeneration?.retainedKeys ?? []) {
+          retireKeyStateIfUnused(key, keyStates.get(key));
+        }
         const previousSubscription = subscriptions.get(normalizedConnId);
         const subscription = new Map<string, Watched>();
         for (const key of sessionKeys) {
@@ -691,10 +697,13 @@ export function createControlUiSessionPullRequestSubscriptions(
       }
     });
     replacements.add(replacement);
-    void replacement.then(
-      () => replacements.delete(replacement),
-      () => replacements.delete(replacement),
-    );
+    const releaseReplacement = () => {
+      replacements.delete(replacement);
+      if (replacementGenerations.get(normalizedConnId) === generation) {
+        replacementGenerations.delete(normalizedConnId);
+      }
+    };
+    void replacement.then(releaseReplacement, releaseReplacement);
     return replacement;
   };
 
@@ -703,9 +712,13 @@ export function createControlUiSessionPullRequestSubscriptions(
     if (!normalizedConnId) {
       return;
     }
+    const generation = replacementGenerations.get(normalizedConnId);
     replacementGenerations.delete(normalizedConnId);
     removeMemberships(normalizedConnId, subscriptions.get(normalizedConnId));
     subscriptions.delete(normalizedConnId);
+    for (const key of generation?.retainedKeys ?? []) {
+      retireKeyStateIfUnused(key, keyStates.get(key));
+    }
     if (subscriptions.size === 0 && timer !== null) {
       clearTimer(timer);
       timer = null;

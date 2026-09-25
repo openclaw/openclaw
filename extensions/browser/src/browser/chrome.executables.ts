@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathExistsSync as exists } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -100,14 +101,6 @@ const CHROMIUM_EXE_NAMES = new Set([
   "opera-gx",
   "yandex-browser",
 ]);
-
-function exists(filePath: string) {
-  try {
-    return fs.existsSync(filePath);
-  } catch {
-    return false;
-  }
-}
 
 function isExecutable(filePath: string, platform: NodeJS.Platform): boolean {
   try {

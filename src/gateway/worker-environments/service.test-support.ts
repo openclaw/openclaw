@@ -230,6 +230,8 @@ export function createService(
       | "applyTranscriptCommit"
       | "bootstrapCallTimeoutMs"
       | "executeInference"
+      | "inferenceStore"
+      | "closeNodeBootstrapArtifacts"
       | "executeSessionTool"
       | "executeComputer"
       | "providerCallTimeoutMs"
@@ -277,7 +279,7 @@ export function createService(
       message: "Inference cancelled",
     }),
     inferenceStore: createWorkerInferenceStore({
-      database: testState.stateDb,
+      path: testState.stateDb.path,
       now: () => testState.nowMs,
     }),
     now: () => testState.nowMs,

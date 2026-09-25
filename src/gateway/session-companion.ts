@@ -1,11 +1,6 @@
-import type {
-  SessionsCompanionAskResult,
-  SessionsCompanionStateResult,
-} from "../../packages/gateway-protocol/src/schema/sessions.js";
-import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import type { SessionsCompanionStateResult } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
-import type { ChatAttachment } from "./chat-attachments.js";
 import {
   createSessionCompanionAskRuntime,
   type SessionCompanionAskDeps,
@@ -17,16 +12,7 @@ import { onGatewaySessionReset } from "./session-reset-notifications.js";
 type SessionCompanionTarget = { sessionKey: string; agentId: string };
 
 export type SessionCompanionService = {
-  ask: (params: {
-    agentId: string;
-    sessionKey: string;
-    question: string;
-    attachments?: ChatAttachment[];
-    connId: string;
-    operatorAuthority?: AdmittedRunOperatorAuthority;
-    assertSourceCurrent?: () => void;
-    signal?: AbortSignal;
-  }) => Promise<SessionsCompanionAskResult>;
+  ask: ReturnType<typeof createSessionCompanionAskRuntime>["ask"];
   state: (target: SessionCompanionTarget) => SessionsCompanionStateResult;
   reset: (target: SessionCompanionTarget) => void;
   dispose: () => void;

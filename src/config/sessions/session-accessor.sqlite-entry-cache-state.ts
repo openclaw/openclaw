@@ -1,8 +1,16 @@
 import type { DatabaseSync } from "node:sqlite";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
-import type { SessionEntryCacheDatabase } from "./session-accessor.sqlite-entry-cache-projection.js";
-import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
-import type { SqliteSessionEntryRevision } from "./session-accessor.sqlite-entry-revision.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
+import type {
+  SessionEntryCacheDatabase,
+  SessionEntryCacheSnapshot,
+} from "./session-accessor.sqlite-entry-cache.types.js";
+import {
+  cacheValidityTokensEqual,
+  readSessionEntryCacheValidityToken,
+  type SqliteSessionEntryRevision,
+} from "./session-accessor.sqlite-entry-revision.js";
+import type { SessionParticipantProjection } from "./session-membership-facts.types.js";
 
 export type SqliteSessionEntryCache = SessionEntryCacheSnapshot & {
   validityToken: SqliteSessionEntryRevision;
@@ -47,4 +55,30 @@ export function publishTrackedCacheUpdate(
   }
   publish();
   return false;
+}
+
+/** Participant display facts may be borrowed in a transaction only at its native revision. */
+export function readCurrentSessionEntryCacheParticipants(
+  database: DatabaseSync,
+  sessionKey: string,
+): SessionParticipantProjection | undefined {
+  const cached = sessionEntryCaches.get(database);
+  const entry = cached?.entries.get(sessionKey);
+  if (
+    !cached ||
+    !entry ||
+    !getAdmittedSqliteSchemaFacts(database) ||
+    !cacheValidityTokensEqual(
+      cached.validityToken,
+      readSessionEntryCacheValidityToken(database, "cached"),
+    )
+  ) {
+    return undefined;
+  }
+  return entry.participants
+    ? {
+        participants: entry.participants.map(({ identity }) => ({ identity: { ...identity } })),
+        participantCount: entry.participantCount,
+      }
+    : {};
 }

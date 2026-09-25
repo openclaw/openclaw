@@ -47,7 +47,7 @@ function normalizeTelegramAccountId(accountId?: string | null): string {
   return accountId?.trim() || "default";
 }
 
-type TelegramBot = ReturnType<typeof createTelegramBot>;
+type TelegramBot = Awaited<ReturnType<typeof createTelegramBot>>;
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -267,7 +267,7 @@ export class TelegramPollingSession {
       persistenceFloorUpdateId: committedUpdateId,
     };
     try {
-      return createTelegramBot({
+      return await createTelegramBot({
         token: this.opts.token,
         runtime: this.opts.runtime,
         buildContext: this.opts.buildContext,

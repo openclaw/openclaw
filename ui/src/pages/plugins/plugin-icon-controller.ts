@@ -1,3 +1,4 @@
+import type { ApplicationContext } from "../../app/context.ts";
 import type { PluginDiscoveryEntry, PluginListResult } from "../../lib/plugins/index.ts";
 import {
   fetchCatalogIconBlobUrl,
@@ -18,6 +19,18 @@ type PluginIconControllerHost = {
   onUrlsChange: (urls: Record<string, string>) => void;
   onLoadingChange?: () => void;
 };
+
+export function pluginIconFetchContext(context: ApplicationContext): PluginIconFetchContext {
+  return {
+    resourceBasePath: context.resourceBasePath,
+    gatewayUrl: context.gateway.connection.gatewayUrl,
+    auth: {
+      hello: context.gateway.snapshot.hello,
+      settings: { token: context.gateway.connection.token },
+      password: context.gateway.connection.password,
+    },
+  };
+}
 
 export class PluginIconController {
   private readonly misses = new Set<string>();

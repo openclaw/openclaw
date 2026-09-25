@@ -293,6 +293,11 @@ export function renderUpdateRunReport(
     }
   }
   for (const step of run.steps) {
+    if (run.status === "running" && step.status === "in_progress" && step.detail) {
+      lines.push(
+        `Waiting: ${step.step}${step.startedAtMs !== undefined ? ` (started ${new Date(step.startedAtMs).toISOString()})` : ""} — ${step.detail}`,
+      );
+    }
     if (step.snapshotCapacity) {
       lines.push(formatUpdateSnapshotCapacity(step.snapshotCapacity));
     }

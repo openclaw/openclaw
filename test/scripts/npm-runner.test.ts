@@ -21,6 +21,7 @@ describe("resolveNpmRunner", () => {
     expect(runner).toEqual({
       command: execPath,
       args: [expectedNpmCliPath],
+      packageJsonPath: path.posix.resolve(expectedNpmCliPath, "../../package.json"),
       shell: false,
     });
   });
@@ -43,6 +44,7 @@ describe("resolveNpmRunner", () => {
     expect(runner).toEqual({
       command: execPath,
       args: [expectedNpmCliPath, "pack", "openclaw@beta"],
+      packageJsonPath: path.posix.resolve(expectedNpmCliPath, "../../package.json"),
       shell: false,
     });
   });
@@ -64,6 +66,7 @@ describe("resolveNpmRunner", () => {
     expect(runner).toEqual({
       command: execPath,
       args: [expectedNpmCliPath],
+      packageJsonPath: path.win32.resolve(expectedNpmCliPath, "../../package.json"),
       shell: false,
     });
   });

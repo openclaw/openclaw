@@ -73,13 +73,23 @@ export function evaluateWorkflowExpression(
     hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
     preflightOutputs?: Record<string, string>;
-    additionalNeeds?: Record<string, { outputs: Record<string, string> }>;
+    additionalNeeds?: Record<
+      string,
+      {
+        outputs: Record<string, string>;
+        result?: "success" | "failure" | "cancelled" | "skipped";
+      }
+    >;
     jobResults?: Record<string, string>;
+    preflightResult?: string;
+    failFastOutputs?: Record<string, string>;
+    failFastResult?: string;
     pullRequestNumber?: number;
     ref?: string;
     resolveTargetOutputs?: Record<string, string>;
     releaseGate?: boolean;
     releaseRunnerGroup?: string;
+    releasePublishRunId?: string;
     runnerGroup?: string;
     releasePriorityRun?: string;
     releaseScope?: string;
@@ -141,6 +151,7 @@ export function evaluateWorkflowExpression(
     endsWith: (value: unknown, suffix: unknown) =>
       String(value).toLowerCase().endsWith(String(suffix).toLowerCase()),
     fromJSON: (value: string) => JSON.parse(value) as unknown,
+    fromJson: (value: string) => JSON.parse(value) as unknown,
     format: (value: string, ...args: unknown[]) =>
       value.replace(/\{\{|\}\}|\{(\d+)\}/gu, (token, index: string | undefined) =>
         index === undefined ? token[0]! : String(args[Number(index)]),
@@ -182,6 +193,7 @@ export function evaluateWorkflowExpression(
     inputs: {
       dispatch_id: context.dispatchId ?? "",
       runner_group: context.runnerGroup ?? "",
+      release_publish_run_id: context.releasePublishRunId ?? "",
       runner_backend: context.requestedRunnerBackend ?? "default",
       ci_shape: context.ciShape ?? "default",
       include_android: context.includeAndroid ?? false,
@@ -207,7 +219,7 @@ export function evaluateWorkflowExpression(
         result: context.jobResults?.["checks-baseline-ratchets"] ?? "success",
       },
       preflight: {
-        result: context.jobResults?.preflight ?? "success",
+        result: context.preflightResult ?? context.jobResults?.preflight ?? "success",
         outputs: {
           frozen_target: String(context.frozenTarget ?? false),
           hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
@@ -215,6 +227,10 @@ export function evaluateWorkflowExpression(
           runner_profile: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
           ...context.preflightOutputs,
         },
+      },
+      "pr-fail-fast": {
+        result: context.failFastResult ?? "success",
+        outputs: { failure_job_id: "", failure_run_attempt: "", ...context.failFastOutputs },
       },
     },
     vars: {

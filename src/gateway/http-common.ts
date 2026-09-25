@@ -126,7 +126,8 @@ export function parseGatewayJsonRequest<T extends z.ZodType>(
   return undefined;
 }
 
-function buildMissingScopeForbiddenBody(
+export function sendMissingScopeForbidden(
+  res: ServerResponse,
   missingScope: string | undefined,
   requiredScopes?: readonly string[],
 ) {
@@ -137,22 +138,14 @@ function buildMissingScopeForbiddenBody(
           requiredScopes: requiredScopes ?? [missingScope],
         })
       : undefined;
-  return {
+  sendJson(res, 403, {
     ok: false,
     error: {
       type: "forbidden",
       message: `missing scope: ${missingScope}`,
       ...(details ? { details } : {}),
     },
-  };
-}
-
-export function sendMissingScopeForbidden(
-  res: ServerResponse,
-  missingScope: string | undefined,
-  requiredScopes?: readonly string[],
-) {
-  sendJson(res, 403, buildMissingScopeForbiddenBody(missingScope, requiredScopes));
+  });
 }
 
 export async function readJsonBodyOrError(

@@ -1,4 +1,7 @@
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { SessionEntry } from "./types.js";
+
+export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
 export type SessionEntryCacheReadOptions = {
   cache: boolean;
