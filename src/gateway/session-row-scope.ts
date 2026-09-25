@@ -229,5 +229,6 @@ export function selectSessionRowEntries(
     }
   });
   acquired.length = selectedCount;
+  // SAFETY: The compacted prefix contains only rows accepted by records.hasEntry.
   return records.sort(acquired as records.EntryRow[], query.sortBy);
 }
