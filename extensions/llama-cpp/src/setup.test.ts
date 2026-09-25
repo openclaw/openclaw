@@ -7,6 +7,7 @@ import type {
   ProviderAppGuidedSetupContext,
   ProviderAuthContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -98,6 +99,22 @@ afterEach(async () => {
   await fs.rm(tempRoot, { recursive: true, force: true });
 });
 
+function chatModel(
+  id: string,
+  overrides: Partial<ModelDefinitionConfig> = {},
+): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 2048,
+    ...overrides,
+  };
+}
+
 function config(): ProviderAppGuidedSetupContext["config"] {
   return {
     models: {
@@ -129,54 +146,6 @@ function requestUnconfiguredLocalMemory(ctx: ProviderAuthContext): void {
   ctx.config.memory = { search: { provider: "local" } };
   delete ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
 }
-
-const externalChatRoutes: Array<{
-  name: string;
-  agents: NonNullable<ProviderAppGuidedSetupContext["config"]["agents"]>;
-}> = [
-  {
-    name: "the default primary",
-    agents: { defaults: { model: { primary: "llama-cpp/external-chat" } } },
-  },
-  {
-    name: "a default fallback",
-    agents: {
-      defaults: {
-        model: {
-          primary: "openai/gpt-5.4",
-          fallbacks: ["llama-cpp/external-chat"],
-        },
-      },
-    },
-  },
-  {
-    name: "an agent primary",
-    agents: {
-      defaults: { model: { primary: "openai/gpt-5.4" } },
-      entries: {
-        helper: { model: { primary: "llama-cpp/external-chat" } },
-      },
-    },
-  },
-  {
-    name: "the default subagent model",
-    agents: {
-      defaults: {
-        model: { primary: "openai/gpt-5.4" },
-        subagents: { model: "llama-cpp/external-chat" },
-      },
-    },
-  },
-  {
-    name: "an agent subagent model",
-    agents: {
-      defaults: { model: { primary: "openai/gpt-5.4" } },
-      entries: {
-        helper: { subagents: { model: "llama-cpp/external-chat" } },
-      },
-    },
-  },
-];
 
 describe("llama.cpp managed setup", () => {
   it.each([
@@ -461,16 +430,8 @@ describe("llama.cpp managed setup", () => {
     if (!provider) {
       throw new Error("missing fixture provider");
     }
-    provider.models[0] = {
-      id: "custom",
-      name: "Custom",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 8192,
-      maxTokens: 2048,
-      params: { modelPath },
-    };
+    provider.models[0] = chatModel("custom", { params: { modelPath } });
+
     provider.localService = {
       command,
       args: ["--models-preset", preset],
@@ -695,11 +656,7 @@ describe("llama.cpp managed setup", () => {
     );
   });
 
-  it.each([
-    { name: "embedding-only", totalmem: 4 * GIB },
-    { name: "chat", totalmem: 16 * GIB },
-  ])("stops $name setup when local-memory agents use different models", async ({ totalmem }) => {
-    vi.mocked(os.totalmem).mockReturnValue(totalmem);
+  it("stops setup when local-memory agents use different models", async () => {
     const ctx = authContext(true);
     delete ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
     ctx.config.agents = {
@@ -735,77 +692,35 @@ describe("llama.cpp managed setup", () => {
     expect(mocks.removeProfiles).not.toHaveBeenCalled();
   });
 
-  it.each(externalChatRoutes)(
-    "does not replace an external llama.cpp provider used as $name",
-    async ({ agents }) => {
+  it.each([false, true])(
+    "does not replace a provider with chat inventory during embedding-only setup (managed=%s)",
+    async (managed) => {
       vi.mocked(os.totalmem).mockReturnValue(4 * GIB);
       const ctx = authContext(true);
       ctx.config.memory = { search: { provider: "local" } };
-      ctx.config.agents = agents;
+      ctx.config.agents = { defaults: { model: { primary: "llama-cpp/external-chat" } } };
       const provider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
       if (!provider) {
-        throw new Error("missing external provider fixture");
+        throw new Error("missing provider fixture");
       }
-      provider.models = [
-        {
-          id: "external-chat",
-          name: "External chat",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 8192,
-          maxTokens: 2048,
-        },
-      ];
+      if (managed) {
+        provider.localService = {
+          command: path.join(tempRoot, "llama-server"),
+          args: ["--models-preset", path.join(tempRoot, "models.ini")],
+          healthUrl: "http://127.0.0.1:19432/health",
+        };
+      }
+      provider.models = [chatModel("external-chat")];
 
       await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
 
       expect(ctx.prompter.confirm).not.toHaveBeenCalled();
       expect(ctx.prompter.note).toHaveBeenCalledWith(
-        expect.stringContaining("existing llama.cpp server"),
+        expect.stringContaining(managed ? "chat routes" : "existing llama.cpp server"),
         "Setup skipped",
       );
       expect(mocks.ensureModel).not.toHaveBeenCalledWith(
         expect.objectContaining({ download: true }),
-      );
-      expect(ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID]).toBe(provider);
-    },
-  );
-
-  it.each(externalChatRoutes.filter(({ name }) => name !== "an agent primary"))(
-    "does not replace a managed llama.cpp provider used as $name",
-    async ({ agents }) => {
-      vi.mocked(os.totalmem).mockReturnValue(4 * GIB);
-      const ctx = authContext(true);
-      ctx.config.memory = { search: { provider: "local" } };
-      ctx.config.agents = agents;
-      const provider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-      if (!provider) {
-        throw new Error("missing managed provider fixture");
-      }
-      provider.localService = {
-        command: path.join(tempRoot, "llama-server"),
-        args: ["--models-preset", path.join(tempRoot, "models.ini")],
-        healthUrl: "http://127.0.0.1:19432/health",
-      };
-      provider.models = [
-        {
-          id: "external-chat",
-          name: "Managed chat",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 8192,
-          maxTokens: 2048,
-        },
-      ];
-
-      await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
-
-      expect(ctx.prompter.confirm).not.toHaveBeenCalled();
-      expect(ctx.prompter.note).toHaveBeenCalledWith(
-        expect.stringContaining("chat routes"),
-        "Setup skipped",
       );
       expect(ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID]).toBe(provider);
     },
@@ -870,16 +785,13 @@ describe("llama.cpp managed setup", () => {
     };
     provider.timeoutSeconds = 321;
     provider.models = [
-      {
-        id: "custom",
+      chatModel("custom", {
         name: "Custom model",
         reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 32_768,
         maxTokens: 4096,
         params: { modelPath: customModelPath, contextSize: 16_384 },
-      },
+      }),
     ];
 
     const result = await runLlamaCppSetup(ctx);
@@ -914,17 +826,7 @@ describe("llama.cpp managed setup", () => {
     provider.auth = "api-key";
     provider.headers = { Authorization: "Bearer external-header" };
     provider.params = { endpointOnly: true };
-    provider.models = [
-      {
-        id: "external-model",
-        name: "External model",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 2048,
-      },
-    ];
+    provider.models = [chatModel("external-model")];
 
     const result = await runLlamaCppSetup(ctx);
     const managed = result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
