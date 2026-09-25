@@ -1,7 +1,10 @@
 import { ChannelType } from "discord-api-types/v10";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isDiscordThreadChannelType } from "../channel-type.js";
+import { replySilently } from "./agent-components-reply.js";
 import type {
   AgentComponentContext,
   AgentComponentInteraction,
@@ -11,6 +14,15 @@ import type {
 } from "./agent-components.types.js";
 import { normalizeDiscordDisplaySlug, normalizeDiscordSlug } from "./allow-list.js";
 import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
+import {
+  resolveDiscordThreadLikeChannelContext,
+  resolveFetchedDiscordThreadLikeChannelContext,
+} from "./thread-channel-context.js";
+
+// Component callbacks send their first response only after authorization, and modal
+// triggers cannot defer at all. Bound channel metadata lookups like the live-policy wait;
+// a late lookup still fills the channel cache for the next click.
+const COMPONENT_CHANNEL_CONTEXT_WAIT_MS = 1_000;
 
 function formatUsername(user: { username: string; discriminator?: string | null }): string {
   if (user.discriminator && user.discriminator !== "0") {
@@ -69,38 +81,72 @@ export async function replyUnavailableComponentInteraction(
   }
 }
 
-export function resolveDiscordChannelContext(
-  interaction: AgentComponentInteraction,
-): DiscordChannelContext {
-  const channel = interaction.channel;
-  const channelInfo = resolveDiscordChannelInfoSafe(channel);
-  const channelName = channelInfo.name;
-  const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
-  const displayChannelSlug = channelName ? normalizeDiscordDisplaySlug(channelName) : "";
-  const channelType = channelInfo.type;
-  const isThread = isDiscordThreadChannelType(channelType);
+function buildDiscordChannelContext(params: {
+  channelName: string | undefined;
+  channelType: number | undefined;
+  isThread: boolean;
+  parentId: string | undefined;
+  parentName: string | undefined;
+}): DiscordChannelContext {
+  const { channelName, parentName } = params;
+  return {
+    ...params,
+    channelSlug: channelName ? normalizeDiscordSlug(channelName) : "",
+    displayChannelSlug: channelName ? normalizeDiscordDisplaySlug(channelName) : "",
+    parentSlug: parentName ? normalizeDiscordSlug(parentName) : "",
+  };
+}
 
-  let parentId: string | undefined;
-  let parentName: string | undefined;
-  let parentSlug = "";
-  if (isThread) {
-    parentId = channelInfo.parentId;
-    parentName = channelInfo.parentName;
-    if (parentName) {
-      parentSlug = normalizeDiscordSlug(parentName);
+// Resolves null when a payload without a channel object timed out, or when a guildless one
+// has no verified channel type (failed or typeless lookup, or a typeless channel object). Either
+// way DM or Group DM policy, allowlist, and routing facts are unknown, so the caller asks for a
+// retry instead. A guild payload with an unknown type still resolves: guild policy matches its id.
+// Only a thread's parent lookup can time out for a channel object, and its type is verified.
+async function resolveDiscordChannelContext(
+  interaction: AgentComponentInteraction,
+): Promise<DiscordChannelContext | null> {
+  const { channel, client } = interaction;
+  const channelId = interaction.rawData.channel_id;
+  // A hydrated channel already carries its type, name, and thread parent id. Discord can
+  // also send channel_id without a channel object; only then is the channel fetched.
+  const lookup = channel
+    ? resolveFetchedDiscordThreadLikeChannelContext({ client, channel })
+    : resolveDiscordThreadLikeChannelContext({ client, channel, channelIdFallback: channelId });
+  const timeout = new Error("Discord component channel lookup timed out");
+  try {
+    const resolved = await withTimeout(lookup, COMPONENT_CHANNEL_CONTEXT_WAIT_MS, {
+      createError: () => timeout,
+    });
+    if (!interaction.rawData.guild_id && resolved.channelType === undefined) {
+      logVerbose(`discord component: channel lookup for ${channelId} returned no channel type`);
+      return null;
+    }
+    return buildDiscordChannelContext({
+      channelName: resolved.channelName,
+      channelType: resolved.channelType,
+      isThread: resolved.isThreadChannel,
+      parentId: resolved.threadParentId,
+      parentName: resolved.threadParentName,
+    });
+  } catch (error) {
+    if (error !== timeout) {
+      throw error;
     }
   }
-
-  return {
-    channelName,
-    channelSlug,
-    displayChannelSlug,
-    channelType,
+  logVerbose(`discord component: channel lookup for ${channelId} timed out`);
+  if (!channel) {
+    return null;
+  }
+  // A hydrated thread still carries its parent id; only parent-name matching is lost.
+  const info = resolveDiscordChannelInfoSafe(channel);
+  const isThread = isDiscordThreadChannelType(info.type);
+  return buildDiscordChannelContext({
+    channelName: info.name,
+    channelType: info.type,
     isThread,
-    parentId,
-    parentName,
-    parentSlug,
-  };
+    parentId: isThread ? info.parentId : undefined,
+    parentName: isThread ? info.parentName : undefined,
+  });
 }
 
 export async function resolveComponentInteractionContext(params: {
@@ -136,10 +182,17 @@ export async function resolveComponentInteractionContext(params: {
   const username = formatUsername(user);
   const userId = user.id;
   const rawGuildId = interaction.rawData.guild_id;
-  const channelType = resolveDiscordChannelContext(interaction).channelType;
+  const channelCtx = await resolveDiscordChannelContext(interaction);
+  if (!channelCtx) {
+    await replySilently(interaction, {
+      content: "Channel details are unavailable right now. Try this interaction again.",
+      ...replyOpts,
+    });
+    return null;
+  }
+  const channelType = channelCtx.channelType;
   const isGroupDm = channelType === ChannelType.GroupDM;
-  const isDirectMessage =
-    channelType === ChannelType.DM || (!rawGuildId && !isGroupDm && channelType == null);
+  const isDirectMessage = channelType === ChannelType.DM;
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)
     : [];
@@ -154,5 +207,6 @@ export async function resolveComponentInteractionContext(params: {
     isDirectMessage,
     isGroupDm,
     memberRoleIds,
+    channelCtx,
   };
 }

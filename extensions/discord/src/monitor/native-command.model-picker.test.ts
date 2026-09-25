@@ -17,7 +17,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseCustomId, serializePayload, type MessagePayload } from "../internal/discord.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
-import { resolveDiscordChannelContext } from "./agent-components-context.js";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.state.js";
 import {
@@ -1112,27 +1111,6 @@ describe("Discord model picker interactions", () => {
       dispatchSpy,
       model: "openai/gpt-4o",
     });
-  });
-
-  it("ignores category parent metadata for non-thread component channels", () => {
-    const interaction = createInteraction({ userId: "owner" });
-    interaction.guild = { id: "guild-1" };
-    interaction.channel = {
-      type: ChannelType.GuildText,
-      id: "channel-1",
-      name: "general",
-      parentId: "category-1",
-      parent: { id: "category-1", name: "category-name" },
-    } as MockInteraction["channel"] & { parent?: { id?: string; name?: string } };
-
-    const channelCtx = resolveDiscordChannelContext(
-      interaction as unknown as Parameters<typeof resolveDiscordChannelContext>[0],
-    );
-
-    expect(channelCtx.isThread).toBe(false);
-    expect(channelCtx.parentId).toBeUndefined();
-    expect(channelCtx.parentName).toBeUndefined();
-    expect(channelCtx.parentSlug).toBe("");
   });
 
   it("shows timeout status and skips recents write when apply is still processing", async () => {

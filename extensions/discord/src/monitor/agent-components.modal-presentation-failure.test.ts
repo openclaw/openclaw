@@ -1,4 +1,4 @@
-import { InteractionResponseType, MessageFlags } from "discord-api-types/v10";
+import { ChannelType, InteractionResponseType, MessageFlags } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildDiscordComponentCustomId } from "../component-custom-id.js";
@@ -91,6 +91,7 @@ describe("Discord modal presentation failures", () => {
           id: "interaction-1",
           token: "interaction-token",
           channel_id: "dm-channel",
+          channel: { id: "dm-channel", type: ChannelType.DM },
           user: {
             id: "123456789",
             username: "AgentUser",

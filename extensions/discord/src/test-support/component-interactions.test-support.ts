@@ -7,6 +7,10 @@ import type {
   StringSelectMenuInteraction,
 } from "../internal/discord.js";
 
+// Payloads below omit the channel object, so DM classification comes from the channel lookup.
+const fetchDmChannel = async (channelId: string) =>
+  channelId === "dm-channel" ? { id: channelId, type: ChannelType.DM } : null;
+
 const createComponentInteractionBase = (senderId = "123456789") => {
   const reply = vi.fn().mockResolvedValue(undefined);
   const defer = vi.fn().mockResolvedValue(undefined);
@@ -19,7 +23,7 @@ const createComponentInteractionBase = (senderId = "123456789") => {
   return {
     reply,
     defer,
-    client: { rest },
+    client: { rest, fetchChannel: fetchDmChannel },
     user: { id: senderId, username: "AgentUser", discriminator: "0001" },
     message: { id: "msg-1" },
   };
@@ -75,7 +79,7 @@ export const createModalInteraction = (overrides: Partial<ModalInteraction> = {}
     fields,
     acknowledge,
     reply,
-    client: { rest },
+    client: { rest, fetchChannel: fetchDmChannel },
     ...overrides,
   } as unknown as ModalInteraction;
   return { interaction, acknowledge, reply };
