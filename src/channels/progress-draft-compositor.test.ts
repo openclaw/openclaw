@@ -923,17 +923,25 @@ describe("createChannelProgressDraftCompositor", () => {
       progressText: "found tests",
     });
     await progress.pushApprovalEvent({ phase: "requested", command: "pnpm test" });
-    await progress.pushCommandOutputEvent({
-      itemId: "command-1",
-      phase: "end",
-      name: "exec",
-      exitCode: 0,
-    });
-    await progress.pushPatchEvent({
-      itemId: "patch-1",
-      phase: "end",
-      modified: ["src/example.ts"],
-    });
+    const preparedSnapshot = progress.getSnapshot();
+    update.mockClear();
+    expect(
+      await progress.pushCommandOutputEvent({
+        itemId: "command-1",
+        phase: "end",
+        name: "exec",
+        exitCode: 0,
+      }),
+    ).toBe(false);
+    expect(
+      await progress.pushPatchEvent({
+        itemId: "patch-1",
+        phase: "end",
+        modified: ["src/example.ts"],
+      }),
+    ).toBe(false);
+    expect(update).not.toHaveBeenCalled();
+    expect(progress.getSnapshot()).toEqual(preparedSnapshot);
     await progress.pushItemEvent({
       itemId: "command-1",
       kind: "command",
@@ -951,10 +959,6 @@ describe("createChannelProgressDraftCompositor", () => {
     });
     await progress.pushApprovalEvent({ phase: "resolved", command: "ignored" });
     await progress.pushApprovalEvent({ command: "ignored without phase" });
-    await progress.pushCommandOutputEvent({ phase: "start", title: "ignored" });
-    await progress.pushCommandOutputEvent({ title: "ignored without phase" });
-    await progress.pushPatchEvent({ phase: "start", modified: ["ignored.ts"] });
-    await progress.pushPatchEvent({ modified: ["ignored-without-phase.ts"] });
 
     expect(progress.getSnapshot().lines).toEqual([
       expect.objectContaining({ id: "tool:tool-1", toolName: "exec" }),
@@ -964,6 +968,53 @@ describe("createChannelProgressDraftCompositor", () => {
       expect.objectContaining({ id: "patch-1", toolName: "apply_patch" }),
     ]);
     expect(progress.getSnapshot().diffStat).toBeUndefined();
+  });
+
+  describe.each(["command", "patch"] as const)("legacy %s admission", (event) => {
+    it.each([
+      { preparedItems: false, phase: "end", accepted: true },
+      { preparedItems: false, phase: "start", accepted: false },
+      { preparedItems: false, phase: undefined, accepted: false },
+      { preparedItems: true, phase: "end", accepted: false },
+      { preparedItems: true, phase: "start", accepted: false },
+      { preparedItems: true, phase: undefined, accepted: false },
+    ])(
+      "prepared=$preparedItems phase=$phase accepts=$accepted",
+      async ({ preparedItems, phase, accepted }) => {
+        const update = vi.fn();
+        const progress = createTestProgressDraftCompositor({ preparedItems, update });
+        await progress.start();
+        const before = progress.getSnapshot();
+        update.mockClear();
+
+        const visible =
+          event === "command"
+            ? await progress.pushCommandOutputEvent({
+                itemId: "legacy-1",
+                phase,
+                name: "exec",
+                title: "Run tests",
+                exitCode: 0,
+              })
+            : await progress.pushPatchEvent({
+                itemId: "legacy-1",
+                phase,
+                modified: ["src/example.ts"],
+              });
+
+        expect(visible).toBe(accepted);
+        if (accepted) {
+          expect(update).toHaveBeenCalledOnce();
+          expect(progress.getSnapshot().lines).toEqual([
+            expect.objectContaining({ id: "legacy-1" }),
+          ]);
+        } else {
+          expect(update).not.toHaveBeenCalled();
+          expect(progress.getSnapshot()).toEqual(before);
+        }
+        expect(progress.getSnapshot().diffStat).toBeUndefined();
+      },
+    );
   });
 
   it.each([false, undefined, "Custom progress"])(

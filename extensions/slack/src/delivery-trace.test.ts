@@ -185,7 +185,7 @@ type SlackTraceScenarioName =
   | "streaming-happy-native"
   | "short-final-native-rejection"
   | "final-blocks-and-text"
-  | "cancel-mid-stream"
+  | "pending-preview-without-final"
   | "preview-edit-fallback"
   | "progress-compact-commentary"
   | "progress-session-card"
@@ -215,6 +215,7 @@ const NATIVE_FINAL_TEXT =
 // Below the SDK's buffer threshold: final delivery must explicitly flush it.
 const SHORT_FINAL_TEXT = "All checks passed. Ship it.";
 
+const PENDING_PREVIEW_TEXT = "Working on the fix: verifying the patch.";
 const PREVIEW_PARTIAL_ONE = "Compiling the changelog";
 const PREVIEW_PARTIAL_TWO = "Compiling the changelog for 2026.1.0.";
 const PREVIEW_FINAL_TEXT = "Compiling the changelog for 2026.1.0.\n\nDone: 12 entries.";
@@ -268,16 +269,17 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     { kind: "final", text: BLOCKS_FINAL_TEXT },
     { kind: "idle" },
   ],
-  "cancel-mid-stream": [
+  "pending-preview-without-final": [
     { kind: "reply-start" },
     { kind: "partial", text: "Working on the fix" },
     { kind: "advance", ms: 300 },
     { kind: "partial", text: "Working on the fix: patching now." },
-    // Past the draft throttle (1000ms) so the second preview edit lands
-    // before the run is aborted.
+    // Publish one edit, then settle with a newer throttled update pending.
+    // This owns preview cleanup; it does not claim to abort the core run.
     { kind: "advance", ms: 1100 },
-    { kind: "cancel" },
+    { kind: "partial", text: PENDING_PREVIEW_TEXT },
     { kind: "idle" },
+    { kind: "advance", ms: 2000 },
   ],
   // Edit-preview tier: native transport ineligible → draft post + throttled
   // chat.update, and the final promotes the draft in place. Custom identity uses
@@ -711,8 +713,7 @@ async function setupSlackTrace(
         );
         break;
       case "cancel":
-        // An aborted run stops emitting payloads; closeout happens on idle.
-        break;
+        throw new Error("Slack cancellation requires an explicit owner action in the scenario");
       case "idle": {
         turn.options.typingCallbacks?.onIdle?.();
         turn.options.typingCallbacks?.onCleanup?.();
@@ -810,6 +811,22 @@ describe("slack delivery trace goldens", () => {
       });
       const wireTexts = collectSlackWireTexts(events);
       expect(wireTexts.join("\n")).not.toMatch(/Exec failed/i);
+      if (scenarioName === "pending-preview-without-final") {
+        const posted = events.find((event) => event.kind === "chat.postMessage");
+        const previewId = (posted?.data as { result?: { ts?: string } } | undefined)?.result?.ts;
+        expect(previewId).toBeDefined();
+        const deleted = events.find((event) => event.kind === "chat.delete");
+        expect(deleted?.data).toMatchObject({ target: previewId });
+        expect(wireTexts).not.toContain(PENDING_PREVIEW_TEXT);
+        expect(
+          events.filter(
+            (event) =>
+              event.seq > (deleted?.seq ?? 0) &&
+              (event.kind === "chat.postMessage" || event.kind === "chat.update"),
+          ),
+        ).toEqual([]);
+        expect(traceRuntimeError).not.toHaveBeenCalled();
+      }
       if (
         scenarioName === "native-prose-then-exec-failed" ||
         scenarioName === "preview-exec-failed-then-prose"
@@ -858,6 +875,7 @@ describe("slack delivery trace goldens", () => {
             markSlackStreamsStopped(traceState.client as unknown as WebClient, CHANNEL_ID, [
               streamTs!,
             ]);
+            return;
           }
           await handleStep(step);
         };

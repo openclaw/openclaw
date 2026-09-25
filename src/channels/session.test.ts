@@ -1,5 +1,6 @@
 // Channel session tests cover session persistence, lookup, and lifecycle helpers.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 
 const recordSessionMetaFromInboundMock = vi.fn((_args?: unknown) => Promise.resolve(undefined));
@@ -49,6 +50,46 @@ describe("recordInboundSession", () => {
   beforeEach(() => {
     recordSessionMetaFromInboundMock.mockClear();
     updateLastRouteMock.mockClear();
+  });
+
+  it("records the last route without waiting for tracked metadata persistence", async (context) => {
+    const metadata = createDeferred<undefined>();
+    recordSessionMetaFromInboundMock.mockReturnValueOnce(metadata.promise);
+    let trackedMetaTask: Promise<unknown> | undefined;
+    let metadataSettled = false;
+    const recording = recordInboundSession({
+      storePath: "/tmp/openclaw-session-store.json",
+      sessionKey: "agent:main:demo-channel:1234:thread:42",
+      ctx,
+      updateLastRoute: {
+        sessionKey: "agent:main:main",
+        channel: "demo-channel",
+        to: "demo-channel:1234",
+      },
+      onRecordError: vi.fn(),
+      trackSessionMetaTask: (task) => {
+        trackedMetaTask = task;
+        void task.then(() => {
+          metadataSettled = true;
+        });
+      },
+    });
+    // Drain the held task even if a regression makes recording time out.
+    context.onTestFinished(async () => {
+      metadata.resolve(undefined);
+      await recording;
+      await trackedMetaTask;
+    });
+
+    await recording;
+    expect(recordSessionMetaFromInboundMock).toHaveBeenCalledOnce();
+    expect(updateLastRouteMock).toHaveBeenCalledOnce();
+    expect(trackedMetaTask).toBeDefined();
+    expect(metadataSettled).toBe(false);
+
+    metadata.resolve(undefined);
+    await trackedMetaTask;
+    expect(metadataSettled).toBe(true);
   });
 
   it("does not pass ctx when updating a different session key", async () => {

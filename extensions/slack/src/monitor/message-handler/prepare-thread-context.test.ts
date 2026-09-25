@@ -2,6 +2,7 @@
 import type { App } from "@slack/bolt";
 import { resolveEnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 import * as mediaModule from "../media.js";
@@ -51,20 +52,25 @@ describe("resolveSlackThreadContextData", () => {
   }
 
   async function resolveAllowlistedThreadContext(params: {
-    repliesMessages: Array<Record<string, string>>;
+    repliesMessages: Array<Record<string, string | undefined>>;
     threadStarter: {
       text: string;
       userId?: string;
       ts?: string;
       botId?: string;
       files?: NonNullable<SlackMessageEvent["files"]>;
-    };
+    } | null;
     allowFromLower: string[];
     allowNameMatching: boolean;
     sessionState?: "missing" | "fresh" | "stale";
     sessionLastInteractionAt?: number;
     sessionUpdatedAt?: number;
     isGroupDm?: boolean;
+    initialHistoryLimit?: number;
+    botIdentity?: { botUserId?: string; botId?: string };
+    message?: Partial<SlackMessageEvent>;
+    roomLabel?: string;
+    contextVisibilityMode?: "all" | "allowlist";
   }) {
     const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi.fn().mockResolvedValue({
@@ -93,8 +99,8 @@ describe("resolveSlackThreadContextData", () => {
         },
       };
     }
-    ctx.botUserId = "U_BOT";
-    ctx.botId = "B1";
+    ctx.botUserId = params.botIdentity ? (params.botIdentity.botUserId ?? "") : "U_BOT";
+    ctx.botId = params.botIdentity ? params.botIdentity.botId : "B1";
     ctx.resolveUserName = async (id: string) => ({
       name: id === "U1" ? "Alice" : "Mallory",
     });
@@ -102,18 +108,20 @@ describe("resolveSlackThreadContextData", () => {
     const result = await resolveSlackThreadContextData({
       ctx,
       agentId: "main",
-      account: createSlackTestAccount({ thread: { initialHistoryLimit: 20 } }),
-      message: createThreadMessage(),
+      account: createSlackTestAccount({
+        thread: { initialHistoryLimit: params.initialHistoryLimit ?? 20 },
+      }),
+      message: createThreadMessage(params.message),
       isGroupDm: params.isGroupDm ?? false,
       isThreadReply: true,
       threadTs: "100.000",
       threadStarter: params.threadStarter,
-      roomLabel: "#general",
+      roomLabel: params.roomLabel ?? "#general",
       storePath,
       sessionKey: "thread-session",
       allowFromLower: params.allowFromLower,
       allowNameMatching: params.allowNameMatching,
-      contextVisibilityMode: "allowlist",
+      contextVisibilityMode: params.contextVisibilityMode ?? "allowlist",
       envelopeOptions: resolveEnvelopeFormatOptions({} as OpenClawConfig),
       effectiveDirectMedia: null,
     });
@@ -181,6 +189,7 @@ describe("resolveSlackThreadContextData", () => {
   });
 
   it("omits non-allowlisted starter, follow-ups, and unrelated current-bot replies", async () => {
+    const logVerbose = vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => {});
     const { replies, result } = await resolveAllowlistedThreadContext({
       repliesMessages: [
         { text: "starter secret", user: "U2", ts: "100.000" },
@@ -206,6 +215,9 @@ describe("resolveSlackThreadContextData", () => {
     expect(result.threadHistoryBody).not.toContain("blocked follow-up");
     expect(result.threadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(1);
+    expect(logVerbose).toHaveBeenCalledWith(
+      "slack: omitted 3 thread message(s) from context (mode=allowlist)",
+    );
   });
 
   it.each([
@@ -266,6 +278,7 @@ describe("resolveSlackThreadContextData", () => {
         repliesMessages: [
           { text: "starter from Alice", user: "U1", ts: "100.000" },
           { text: "assistant progress update", bot_id: "B1", ts: "100.200" },
+          { text: "self-authored progress update", user: "U_BOT", ts: "100.300" },
           { text: "allowed follow-up", user: "U1", ts: "100.800" },
           { text: "current message", user: "U1", ts: "101.000" },
         ],
@@ -287,9 +300,11 @@ describe("resolveSlackThreadContextData", () => {
       expect(result.threadHistoryBody).toContain("allowed follow-up");
       if (retained) {
         expect(result.threadHistoryBody).toContain("assistant progress update");
+        expect(result.threadHistoryBody).toContain("self-authored progress update");
         expect(result.threadHistoryBody).toContain("Bot (this assistant) (assistant)");
       } else {
         expect(result.threadHistoryBody).not.toContain("assistant progress update");
+        expect(result.threadHistoryBody).not.toContain("self-authored progress update");
       }
       expect(result.threadHistoryBody).not.toContain("current message");
     },
@@ -362,121 +377,118 @@ describe("resolveSlackThreadContextData", () => {
     expect(result.threadLabel).toBe(`Slack thread #general: ${"a".repeat(79)}`);
   });
 
-  it("includes bot-authored starter as assistant root context for a new thread session (default)", async () => {
+  it.each([
+    { name: "fetched bot-id root", author: { botId: "B1" }, rootInHistory: true },
+    { name: "omitted bot-id root", author: { botId: "B1" }, rootInHistory: false },
+    {
+      name: "trimmed bot-id root",
+      author: { botId: "B1" },
+      rootInHistory: true,
+      initialHistoryLimit: 1,
+    },
+    { name: "bot-user root", author: { userId: "U_BOT" }, rootInHistory: true },
+    {
+      name: "DM confirmation root (#79338)",
+      author: { botId: "B1" },
+      rootInHistory: true,
+      direct: true,
+    },
+  ])("retains exactly one $name as assistant context", async (testCase) => {
+    const starterText = "Confirmed Saturday 12:30pm meeting with Alice";
+    const root = {
+      text: starterText,
+      user: testCase.author.userId,
+      bot_id: testCase.author.botId,
+      ts: "100.000",
+    };
     const { result } = await resolveAllowlistedThreadContext({
       repliesMessages: [
-        { text: "bot starter", bot_id: "B1", ts: "100.000" },
-        { text: "allowed follow-up", user: "U1", ts: "100.800" },
-        { text: "current message", user: "U1", ts: "101.000" },
-      ],
-      threadStarter: {
-        text: "bot starter",
-        botId: "B1",
-      },
-      allowFromLower: ["u1"],
-      allowNameMatching: false,
-    });
-
-    expect(result.threadStarterBody).toBeUndefined();
-    expect(result.threadLabel).toBe("Slack thread #general (assistant root): bot starter");
-    expect(result.threadHistoryBody).toContain("allowed follow-up");
-    expect(result.threadHistoryBody).toContain("bot starter");
-    expect(result.threadHistoryBody).toContain("Bot (this assistant) (assistant)");
-    expect(result.threadHistoryBody).not.toContain("current message");
-  });
-
-  it("injects bot-authored starter when fetched history omits the root", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
-    const replies = vi.fn().mockResolvedValue({
-      messages: [
+        ...(testCase.rootInHistory ? [root] : []),
+        { text: "old user follow-up", user: "U1", ts: "100.100" },
         { text: "assistant reply", bot_id: "B1", ts: "100.500" },
-        { text: "allowed follow-up", user: "U1", ts: "100.800" },
+        { text: "self-authored reply", user: "U_BOT", ts: "100.600" },
+        { text: "allowed follow-up", user: "U1", ts: "100.900" },
         { text: "current message", user: "U1", ts: "101.000" },
       ],
-      response_metadata: { next_cursor: "" },
-    });
-    const ctx = createThreadContext({ replies });
-    ctx.botUserId = "U_BOT";
-    ctx.botId = "B1";
-    ctx.resolveUserName = async (id: string) => ({
-      name: id === "U1" ? "Alice" : "Mallory",
-    });
-
-    const result = await resolveSlackThreadContextData({
-      ctx,
-      agentId: "main",
-      account: createSlackTestAccount({ thread: { initialHistoryLimit: 20 } }),
-      message: createThreadMessage(),
-      isGroupDm: false,
-      isThreadReply: true,
-      threadTs: "100.000",
-      threadStarter: {
-        text: "bot starter",
-        botId: "B1",
-        ts: "100.000",
-      },
-      roomLabel: "#general",
-      storePath,
-      sessionKey: "thread-session",
-      allowFromLower: ["u1"],
+      threadStarter: { text: starterText, ...testCase.author },
+      initialHistoryLimit: testCase.initialHistoryLimit,
+      message: testCase.direct ? { channel: "D123", channel_type: "im" } : undefined,
+      roomLabel: testCase.direct ? "DM" : "#general",
+      contextVisibilityMode: testCase.direct ? "all" : "allowlist",
+      allowFromLower: testCase.direct ? [] : ["u1"],
       allowNameMatching: false,
-      contextVisibilityMode: "allowlist",
-      envelopeOptions: resolveEnvelopeFormatOptions({} as OpenClawConfig),
-      effectiveDirectMedia: null,
     });
 
     expect(result.threadStarterBody).toBeUndefined();
-    expect(result.threadLabel).toBe("Slack thread #general (assistant root): bot starter");
-    expect(result.threadHistoryBody).toContain("bot starter");
+    expect(result.threadLabel).toBe(
+      "Slack thread " + (testCase.direct ? "DM" : "#general") + " (assistant root): " + starterText,
+    );
+    expect(result.threadHistoryBody?.match(/\[slack message id: 100\.000 /g)).toHaveLength(1);
+    expect(result.threadHistoryBody).toContain(starterText);
     expect(result.threadHistoryBody).toContain("Bot (this assistant) (assistant)");
     expect(result.threadHistoryBody).toContain("allowed follow-up");
     expect(result.threadHistoryBody).not.toContain("assistant reply");
+    expect(result.threadHistoryBody).not.toContain("self-authored reply");
     expect(result.threadHistoryBody).not.toContain("current message");
+    if (testCase.initialHistoryLimit === 1) {
+      expect(result.threadHistoryBody).not.toContain("old user follow-up");
+    }
   });
 
-  it("injects bot-authored starter when initial history trimming drops the root", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
-    const replies = vi.fn().mockResolvedValue({
-      messages: [
-        { text: "bot starter", bot_id: "B1", ts: "100.000" },
-        { text: "old user follow-up", user: "U1", ts: "100.100" },
-        { text: "recent user follow-up", user: "U1", ts: "100.900" },
-        { text: "current message", user: "U1", ts: "101.000" },
-      ],
-      response_metadata: { next_cursor: "" },
-    });
-    const ctx = createThreadContext({ replies });
-    ctx.botUserId = "U_BOT";
-    ctx.botId = "B1";
-    ctx.resolveUserName = async () => ({ name: "Alice" });
-
-    const result = await resolveSlackThreadContextData({
-      ctx,
-      agentId: "main",
-      account: createSlackTestAccount({ thread: { initialHistoryLimit: 1 } }),
-      message: createThreadMessage(),
-      isGroupDm: false,
-      isThreadReply: true,
-      threadTs: "100.000",
-      threadStarter: {
-        text: "bot starter",
-        botId: "B1",
-        ts: "100.000",
-      },
-      roomLabel: "#general",
-      storePath,
-      sessionKey: "thread-session",
+  it.each([
+    { text: "  hello\n  world  ", snippet: "hello world" },
+    { text: "x".repeat(120), snippet: "x".repeat(80) },
+    { text: "a".repeat(79) + "🐱tail", snippet: "a".repeat(79) },
+    { text: "", snippet: undefined },
+    { text: "  \n  ", snippet: undefined },
+    { text: undefined, snippet: undefined },
+  ])("formats bot starter label for $text", async ({ text, snippet }) => {
+    const { result } = await resolveAllowlistedThreadContext({
+      repliesMessages: [],
+      threadStarter: text === undefined ? null : { text, botId: "B1" },
       allowFromLower: ["u1"],
       allowNameMatching: false,
-      contextVisibilityMode: "allowlist",
-      envelopeOptions: resolveEnvelopeFormatOptions({} as OpenClawConfig),
-      effectiveDirectMedia: null,
     });
+    expect(result.threadLabel).toBe(
+      "Slack thread #general" + (snippet ? " (assistant root): " + snippet : ""),
+    );
+  });
 
-    expect(result.threadHistoryBody).toContain("bot starter");
-    expect(result.threadHistoryBody).toContain("recent user follow-up");
-    expect(result.threadHistoryBody).not.toContain("old user follow-up");
-    expect(result.threadHistoryBody).not.toContain("current message");
+  it.each([
+    { botIdentity: {}, botId: undefined, author: "Mallory (user)" },
+    { botIdentity: { botUserId: "", botId: "" }, botId: undefined, author: "Mallory (user)" },
+    { botIdentity: {}, botId: "B1", author: "Mallory (assistant)" },
+    { botIdentity: { botUserId: "", botId: "" }, botId: "B1", author: "Mallory (assistant)" },
+  ])(
+    "does not treat $author as the current bot without configured identity $botIdentity",
+    async ({ botIdentity, botId, author }) => {
+      const { result } = await resolveAllowlistedThreadContext({
+        botIdentity,
+        repliesMessages: [{ text: "starter", user: "U_BOT", bot_id: botId, ts: "100.000" }],
+        threadStarter: { text: "starter", userId: "U_BOT", botId, ts: "100.000" },
+        allowFromLower: ["u_bot", "b1"],
+        allowNameMatching: false,
+      });
+      expect(result.threadStarterBody).toBe("starter");
+      expect(result.threadLabel).toBe("Slack thread #general: starter");
+      expect(result.threadHistoryBody).toContain(author);
+      expect(result.threadHistoryBody).not.toContain("Bot (this assistant)");
+    },
+  );
+
+  it("omits current-bot starter context already held by a fresh session", async () => {
+    const { replies, result } = await resolveAllowlistedThreadContext({
+      repliesMessages: [],
+      threadStarter: { text: "bot starter", botId: "B1" },
+      sessionState: "fresh",
+      sessionLastInteractionAt: 100,
+      allowFromLower: ["u1"],
+      allowNameMatching: false,
+    });
+    expect(result.threadStarterBody).toBeUndefined();
+    expect(result.threadHistoryBody).toBeUndefined();
+    expect(result.threadLabel).toBe("Slack thread #general");
+    expect(replies).not.toHaveBeenCalled();
   });
 
   it("keeps explicitly allowlisted third-party bot starter text in a new thread session", async () => {
@@ -524,86 +536,5 @@ describe("resolveSlackThreadContextData", () => {
       .find((entry) => entry.includes("malformed timestamp follow-up"));
     expect(malformedHistoryEntry).toContain("[slack message id: 0x65 channel: C123]");
     expect(malformedHistoryEntry).not.toContain("1970-01-01");
-  });
-
-  it("includes self-authored starter (identified by bot user id) for a new thread session (default)", async () => {
-    const { result } = await resolveAllowlistedThreadContext({
-      repliesMessages: [
-        { text: "self starter", user: "U_BOT", ts: "100.000" },
-        { text: "allowed follow-up", user: "U1", ts: "100.800" },
-        { text: "current message", user: "U1", ts: "101.000" },
-      ],
-      threadStarter: {
-        text: "self starter",
-        userId: "U_BOT",
-        ts: "100.000",
-      },
-      allowFromLower: ["u1"],
-      allowNameMatching: false,
-    });
-
-    expect(result.threadStarterBody).toBeUndefined();
-    expect(result.threadLabel).toBe("Slack thread #general (assistant root): self starter");
-    expect(result.threadHistoryBody).toContain("allowed follow-up");
-    expect(result.threadHistoryBody).toContain("self starter");
-    expect(result.threadHistoryBody).toContain("Bot (this assistant) (assistant)");
-  });
-
-  it("issue #79338: bot DM confirmation root is included so reply has parent context", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
-    const replies = vi.fn().mockResolvedValue({
-      messages: [
-        {
-          text: "Confirmed Saturday 12:30pm meeting with Alice",
-          bot_id: "B1",
-          ts: "100.000",
-        },
-        {
-          text: "actually it's Sunday 12:30 pm - apologize and correct",
-          user: "U1",
-          ts: "101.000",
-        },
-      ],
-      response_metadata: { next_cursor: "" },
-    });
-    const ctx = createThreadContext({ replies });
-    ctx.botUserId = "U_BOT";
-    ctx.botId = "B1";
-    ctx.resolveUserName = async (id: string) => ({ name: id === "U1" ? "Alice" : "Mallory" });
-
-    const result = await resolveSlackThreadContextData({
-      ctx,
-      agentId: "main",
-      account: createSlackTestAccount({ thread: { initialHistoryLimit: 20 } }),
-      message: createThreadMessage({
-        channel: "D123",
-        channel_type: "im",
-        text: "actually it's Sunday 12:30 pm - apologize and correct",
-        ts: "101.000",
-      }),
-      isGroupDm: false,
-      isThreadReply: true,
-      threadTs: "100.000",
-      threadStarter: {
-        text: "Confirmed Saturday 12:30pm meeting with Alice",
-        botId: "B1",
-        ts: "100.000",
-      },
-      roomLabel: "DM",
-      storePath,
-      sessionKey: "thread-session",
-      allowFromLower: [],
-      allowNameMatching: false,
-      contextVisibilityMode: "all",
-      envelopeOptions: resolveEnvelopeFormatOptions({} as OpenClawConfig),
-      effectiveDirectMedia: null,
-    });
-
-    expect(result.threadHistoryBody).toContain("Confirmed Saturday 12:30pm meeting with Alice");
-    expect(result.threadHistoryBody).toContain("Bot (this assistant) (assistant)");
-    expect(result.threadHistoryBody).not.toContain(
-      "actually it's Sunday 12:30 pm - apologize and correct",
-    );
-    expect(result.threadLabel).toContain("Confirmed Saturday 12:30pm");
   });
 });

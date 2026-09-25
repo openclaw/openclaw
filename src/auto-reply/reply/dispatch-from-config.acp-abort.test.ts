@@ -72,6 +72,15 @@ function setNoAbort() {
   mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
 }
 
+function createDiagnosticDispatchConfig(): OpenClawConfig {
+  return {
+    diagnostics: { enabled: true },
+    session: {
+      sendPolicy: { default: "allow" },
+    },
+  };
+}
+
 function createMockAcpSessionManager() {
   return {
     resolveSession: (params: {
@@ -478,12 +487,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
     const dispatchPromise = dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        diagnostics: { enabled: true },
-        session: {
-          sendPolicy: { default: "allow" },
-        },
-      } as OpenClawConfig,
+      cfg: createDiagnosticDispatchConfig(),
       dispatcher,
       replyResolver: vi.fn(),
     });
@@ -668,12 +672,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
     const dispatchPromise = dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        diagnostics: { enabled: true },
-        session: {
-          sendPolicy: { default: "allow" },
-        },
-      } as OpenClawConfig,
+      cfg: createDiagnosticDispatchConfig(),
       dispatcher,
       replyResolver: vi.fn(),
     });
@@ -789,12 +788,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
     const dispatchPromise = dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        diagnostics: { enabled: true },
-        session: {
-          sendPolicy: { default: "allow" },
-        },
-      } as OpenClawConfig,
+      cfg: createDiagnosticDispatchConfig(),
       dispatcher,
       replyResolver: vi.fn(),
     });
@@ -849,12 +843,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
 
     const dispatchPromise = dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        diagnostics: { enabled: true },
-        session: {
-          sendPolicy: { default: "allow" },
-        },
-      } as OpenClawConfig,
+      cfg: createDiagnosticDispatchConfig(),
       dispatcher,
       replyResolver: vi.fn(),
     });
@@ -929,12 +918,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
     const dispatchPromise = dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        diagnostics: { enabled: true },
-        session: {
-          sendPolicy: { default: "allow" },
-        },
-      } as OpenClawConfig,
+      cfg: createDiagnosticDispatchConfig(),
       dispatcher,
       replyResolver: vi.fn(),
     });
@@ -977,12 +961,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
     const dispatchPromise = dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        diagnostics: { enabled: true },
-        session: {
-          sendPolicy: { default: "allow" },
-        },
-      } as OpenClawConfig,
+      cfg: createDiagnosticDispatchConfig(),
       dispatcher,
       replyResolver,
     });
@@ -1014,12 +993,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
     const dispatchPromise = dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        diagnostics: { enabled: true },
-        session: {
-          sendPolicy: { default: "allow" },
-        },
-      } as OpenClawConfig,
+      cfg: createDiagnosticDispatchConfig(),
       dispatcher,
       replyOptions: { abortSignal: callerAbort.signal },
       replyResolver,
@@ -1035,18 +1009,23 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
-  it.each([
+  it.for([
     { abort: "abortByUser", expected: "cancelled" },
     { abort: "abortForRestart", expected: "cancelled" },
     { abort: "supersede", expected: "superseded" },
   ] as const)(
-    "records $abort before an abort-insensitive resolver settles",
-    async ({ abort, expected }) => {
+    "fences late progress and records $abort before an abort-insensitive resolver settles",
+    async ({ abort, expected }, context) => {
       const resolverStarted = createDeferred();
       const releaseResolver = createDeferred();
       const resolverFinished = createDeferred();
       const runState: ReplyOperationRunState = {};
       const dispatcher = createDispatcher();
+      const sendPreparedReply = vi.spyOn(dispatcher, "sendPreparedReply");
+      const onPartialReply = vi.fn();
+      const onReasoningStream = vi.fn();
+      const onItemEvent = vi.fn();
+      const progressCallbacks = [onPartialReply, onReasoningStream, onItemEvent];
       const ctx = buildTestCtx({
         Provider: "discord",
         Surface: "discord",
@@ -1062,11 +1041,31 @@ describe("dispatchReplyFromConfig ACP abort", () => {
           },
         } as OpenClawConfig,
         dispatcher,
-        replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState },
+        replyOptions: {
+          [REPLY_OPERATION_RUN_STATE]: runState,
+          suppressDefaultToolProgressMessages: true,
+          onPartialReply,
+          onReasoningStream,
+          onItemEvent,
+        },
         replyResolver: async (_resolverCtx, options) => {
-          resolverStarted.resolve();
-          await releaseResolver.promise;
           try {
+            await options?.onPartialReply?.({ text: "admitted partial" });
+            await options?.onReasoningStream?.({ text: "admitted reasoning" });
+            await options?.onItemEvent?.({
+              kind: "tool",
+              itemId: "before-abort",
+              progressText: "admitted item",
+            });
+            resolverStarted.resolve();
+            await releaseResolver.promise;
+            await options?.onPartialReply?.({ text: "late partial must stay hidden" });
+            await options?.onReasoningStream?.({ text: "late reasoning must stay hidden" });
+            await options?.onItemEvent?.({
+              kind: "tool",
+              itemId: "after-abort",
+              progressText: "late item must stay hidden",
+            });
             await options?.onToolResult?.({ text: "late tool should not send" });
             await options?.onBlockReply?.({ text: "late block should not send" });
             const [plan] = createStructuredOutboundPayloadPlan([
@@ -1083,9 +1082,24 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         },
       });
 
+      context.onTestFinished(async () => {
+        releaseResolver.resolve();
+        await Promise.allSettled([dispatchPromise]);
+        await replyRunRegistry.waitForIdle("agent:main:resolver-abort");
+      });
       await resolverStarted.promise;
       const operation = replyRunRegistry.get("agent:main:resolver-abort");
       try {
+        for (const callback of progressCallbacks) {
+          expect(callback).toHaveBeenCalledOnce();
+        }
+        expect(onPartialReply).toHaveBeenCalledWith({ text: "admitted partial" });
+        expect(onReasoningStream).toHaveBeenCalledWith({ text: "admitted reasoning" });
+        expect(onItemEvent).toHaveBeenCalledWith({
+          kind: "tool",
+          itemId: "before-abort",
+          progressText: "admitted item",
+        });
         expect(operation?.[abort]()).toBe(true);
         await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
         expect(runState.agentTurnOwner).toBe(operation);
@@ -1097,8 +1111,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         await replyRunRegistry.waitForIdle("agent:main:resolver-abort");
       }
 
+      for (const callback of progressCallbacks) {
+        expect(callback).toHaveBeenCalledOnce();
+      }
       expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
       expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+      expect(sendPreparedReply).not.toHaveBeenCalled();
       expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
       expect(getActiveReplyRunCount()).toBe(0);
     },
@@ -1119,12 +1137,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
     const dispatchPromise = dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        diagnostics: { enabled: true },
-        session: {
-          sendPolicy: { default: "allow" },
-        },
-      } as OpenClawConfig,
+      cfg: createDiagnosticDispatchConfig(),
       dispatcher,
       replyResolver: async (_resolverCtx, options) => {
         resolverStarted();
@@ -1188,12 +1201,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
     const dispatchPromise = dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        diagnostics: { enabled: true },
-        session: {
-          sendPolicy: { default: "allow" },
-        },
-      } as OpenClawConfig,
+      cfg: createDiagnosticDispatchConfig(),
       dispatcher,
       replyResolver: vi.fn(),
     });
@@ -1265,12 +1273,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
 
     const dispatchPromise = dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        diagnostics: { enabled: true },
-        session: {
-          sendPolicy: { default: "allow" },
-        },
-      } as OpenClawConfig,
+      cfg: createDiagnosticDispatchConfig(),
       dispatcher,
       replyResolver,
     });
@@ -1314,12 +1317,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     await expect(
       dispatchReplyFromConfig({
         ctx,
-        cfg: {
-          diagnostics: { enabled: true },
-          session: {
-            sendPolicy: { default: "allow" },
-          },
-        } as OpenClawConfig,
+        cfg: createDiagnosticDispatchConfig(),
         dispatcher,
         replyOptions: { sourceReplyDeliveryMode: "automatic" },
         replyResolver,

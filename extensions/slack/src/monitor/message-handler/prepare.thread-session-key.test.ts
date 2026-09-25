@@ -93,95 +93,37 @@ describe("thread-level session keys", () => {
     }));
   });
 
-  it("routes configured ACP bindings for top-level Slack channels", () => {
-    const ctx = buildCtx({ replyToMode: "off" });
-    const account = buildAccount("off");
-    const targetSessionKey = "agent:codex:acp:binding:slack:default:c123";
+  it.each([
+    { name: "top-level channel", channel: "C123", replyToMode: "off" as const },
+    {
+      name: "channel thread",
+      channel: "C123",
+      replyToMode: "all" as const,
+      threadTs: "1770408518.451689",
+    },
+    {
+      name: "MPIM thread",
+      channel: "G123",
+      replyToMode: "all" as const,
+      threadTs: "1777244692.409919",
+      isGroupDm: true,
+    },
+  ])("keeps configured ACP $name bindings on their target session", (testCase) => {
+    const ctx = buildCtx({ replyToMode: testCase.replyToMode });
+    const account = buildAccount(testCase.replyToMode);
+    const conversationId = testCase.channel.toLowerCase();
+    const targetSessionKey = "agent:codex:acp:binding:slack:default:" + conversationId;
     resolveConfiguredBindingRouteMock.mockImplementation(({ route, conversation }) => ({
       bindingResolution: {
         conversation,
         record: {
-          bindingId: "config:acp:slack:default:c123",
+          bindingId: "config:acp:slack:default:" + conversationId,
           targetSessionKey,
           targetKind: "session",
           conversation: {
             channel: "slack",
             accountId: "default",
-            conversationId: "c123",
-          },
-          status: "active",
-          boundAt: 0,
-          metadata: {
-            source: "config",
-            mode: "persistent",
-            agentId: "codex",
-          },
-        },
-      },
-      boundSessionKey: targetSessionKey,
-      boundAgentId: "codex",
-      route: {
-        ...route,
-        agentId: "codex",
-        sessionKey: targetSessionKey,
-        mainSessionKey: "agent:codex:main",
-        matchedBy: "binding.channel",
-        lastRoutePolicy: "session",
-      },
-    }));
-
-    const routing = resolveSlackRoutingContext({
-      ctx,
-      account,
-      message: buildChannelMessage({ channel: "C123" }),
-      isDirectMessage: false,
-      isGroupDm: false,
-      isRoom: true,
-      isRoomish: true,
-    });
-
-    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
-    const bindingRouteRequest = firstBindingRouteRequest();
-    expect(bindingRouteRequest).toEqual({
-      cfg: ctx.cfg,
-      route: {
-        agentId: "main",
-        channel: "slack",
-        accountId: "default",
-        sessionKey: "agent:main:slack:channel:c123",
-        mainSessionKey: "agent:main:main",
-        dmScope: "main",
-        groupScope: "per-group",
-        lastRoutePolicy: "session",
-        matchedBy: "default",
-      },
-      conversation: {
-        channel: "slack",
-        accountId: "default",
-        conversationId: "C123",
-      },
-    });
-    expect(routing.route.agentId).toBe("codex");
-    expect(routing.sessionKey).toBe(targetSessionKey);
-    expect(routing.configuredBindingSessionKey).toBe(targetSessionKey);
-    expect(routing.runtimeBinding).toBeNull();
-  });
-
-  it("does not append Slack thread suffixes to configured ACP binding sessions", () => {
-    const ctx = buildCtx({ replyToMode: "all" });
-    const account = buildAccount("all");
-    const targetSessionKey = "agent:codex:acp:binding:slack:default:c123";
-    resolveConfiguredBindingRouteMock.mockImplementation(({ route, conversation }) => ({
-      bindingResolution: {
-        conversation,
-        record: {
-          bindingId: "config:acp:slack:default:c123",
-          targetSessionKey,
-          targetKind: "session",
-          conversation: {
-            channel: "slack",
-            accountId: "default",
-            conversationId: "c123",
+            conversationId,
           },
           status: "active",
           boundAt: 0,
@@ -208,47 +150,47 @@ describe("thread-level session keys", () => {
       ctx,
       account,
       message: buildChannelMessage({
-        channel: "C123",
-        ts: "1770408522.168859",
-        thread_ts: "1770408518.451689",
+        channel: testCase.channel,
+        channel_type: testCase.isGroupDm ? "mpim" : "channel",
+        ts: "1777408522.168859",
+        thread_ts: testCase.threadTs,
+        parent_user_id: testCase.isGroupDm ? "U1" : undefined,
       }),
       isDirectMessage: false,
-      isGroupDm: false,
-      isRoom: true,
+      isGroupDm: testCase.isGroupDm ?? false,
+      isRoom: !testCase.isGroupDm,
       isRoomish: true,
     });
 
+    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+    const bindingRouteRequest = firstBindingRouteRequest();
+    if (!testCase.threadTs) {
+      expect(bindingRouteRequest).toEqual({
+        cfg: ctx.cfg,
+        route: {
+          agentId: "main",
+          channel: "slack",
+          accountId: "default",
+          sessionKey:
+            "agent:main:slack:" + (testCase.isGroupDm ? "group:" : "channel:") + conversationId,
+          mainSessionKey: "agent:main:main",
+          dmScope: "main",
+          groupScope: "per-group",
+          lastRoutePolicy: "session",
+          matchedBy: "default",
+        },
+        conversation: {
+          channel: "slack",
+          accountId: "default",
+          conversationId: "C123",
+        },
+      });
+    }
+    expect(routing.route.agentId).toBe("codex");
     expect(routing.sessionKey).toBe(targetSessionKey);
     expect(routing.sessionKey).not.toContain(":thread:");
-  });
-
-  it("keeps top-level channel turns in one session when replyToMode=off", () => {
-    const ctx = buildCtx({ replyToMode: "off" });
-    const account = buildAccount("off");
-
-    const first = resolveSlackRoutingContext({
-      ctx,
-      account,
-      message: buildChannelMessage({ ts: "1770408518.451689" }),
-      isDirectMessage: false,
-      isGroupDm: false,
-      isRoom: true,
-      isRoomish: true,
-    });
-    const second = resolveSlackRoutingContext({
-      ctx,
-      account,
-      message: buildChannelMessage({ ts: "1770408520.000001" }),
-      isDirectMessage: false,
-      isGroupDm: false,
-      isRoom: true,
-      isRoomish: true,
-    });
-
-    const firstSessionKey = first.sessionKey;
-    const secondSessionKey = second.sessionKey;
-    expect(firstSessionKey).toBe(secondSessionKey);
-    expect(firstSessionKey).not.toContain(":thread:");
+    expect(routing.configuredBindingSessionKey).toBe(targetSessionKey);
+    expect(routing.runtimeBinding).toBeNull();
   });
 
   it("uses parent thread_ts for thread replies even when replyToMode=off", () => {
@@ -416,149 +358,49 @@ describe("thread-level session keys", () => {
     },
   );
 
-  it("keeps configured MPIM bindings flat when Slack starts a reply thread", () => {
-    const ctx = buildCtx({ replyToMode: "all" });
-    const account = buildAccount("all");
-    const targetSessionKey = "agent:codex:acp:binding:slack:default:g123";
-    resolveConfiguredBindingRouteMock.mockImplementation(({ route, conversation }) => ({
-      bindingResolution: {
-        conversation,
-        record: {
-          bindingId: "config:acp:slack:default:g123",
-          targetSessionKey,
-          targetKind: "session",
-          conversation: {
-            channel: "slack",
-            accountId: "default",
-            conversationId: "g123",
-          },
-          status: "active",
-          boundAt: 0,
-          metadata: {
-            source: "config",
-            mode: "persistent",
-            agentId: "codex",
-          },
-        },
-      },
-      boundSessionKey: targetSessionKey,
-      boundAgentId: "codex",
-      route: {
-        ...route,
-        agentId: "codex",
-        sessionKey: targetSessionKey,
-        mainSessionKey: "agent:codex:main",
-        matchedBy: "binding.channel",
-        lastRoutePolicy: "session",
-      },
-    }));
+  it.each([false, true])(
+    "routes a seeded root (self thread_ts=%s) and its replies to one parent session",
+    (selfThreadTs) => {
+      const ctx = buildCtx({ replyToMode: "all" });
+      const account = buildAccount("all");
+      const rootTs = "1777244692.409919";
 
-    const routing = resolveSlackRoutingContext({
-      ctx,
-      account,
-      message: buildChannelMessage({
-        channel: "G123",
-        channel_type: "mpim",
-        text: "what did you find?",
-        ts: "1777244714.000100",
-        thread_ts: "1777244692.409919",
-        parent_user_id: "U1",
-      }),
-      isDirectMessage: false,
-      isGroupDm: true,
-      isRoom: false,
-      isRoomish: true,
-    });
+      const root = resolveSlackRoutingContext({
+        ctx,
+        account,
+        message: buildChannelMessage({
+          channel: "C0AHZFCAS1K",
+          text: "<@B1> send a subagent to review issue #50621",
+          ts: rootTs,
+          thread_ts: selfThreadTs ? rootTs : undefined,
+        }),
+        isDirectMessage: false,
+        isGroupDm: false,
+        isRoom: true,
+        isRoomish: true,
+        seedTopLevelRoomThread: true,
+      });
+      const followUp = resolveSlackRoutingContext({
+        ctx,
+        account,
+        message: buildChannelMessage({
+          channel: "C0AHZFCAS1K",
+          text: "https://github.com/openclaw/openclaw/issues/50621",
+          ts: "1777244714.000100",
+          thread_ts: rootTs,
+          parent_user_id: selfThreadTs ? "U1" : undefined,
+        }),
+        isDirectMessage: false,
+        isGroupDm: false,
+        isRoom: true,
+        isRoomish: true,
+      });
 
-    expect(routing.sessionKey).toBe(targetSessionKey);
-    expect(routing.sessionKey).not.toContain(":thread:");
-  });
-
-  it("routes a seeded thread root and replies with the same Slack thread_ts to one parent session", () => {
-    const ctx = buildCtx({ replyToMode: "all" });
-    const account = buildAccount("all");
-    const rootTs = "1777244692.409919";
-
-    const root = resolveSlackRoutingContext({
-      ctx,
-      account,
-      message: buildChannelMessage({
-        channel: "C0AHZFCAS1K",
-        text: "<@B1> send a subagent to review issue #50621",
-        ts: rootTs,
-        thread_ts: rootTs,
-      }),
-      isDirectMessage: false,
-      isGroupDm: false,
-      isRoom: true,
-      isRoomish: true,
-      seedTopLevelRoomThread: true,
-    });
-    const followUp = resolveSlackRoutingContext({
-      ctx,
-      account,
-      message: buildChannelMessage({
-        channel: "C0AHZFCAS1K",
-        text: "https://github.com/openclaw/openclaw/issues/50621",
-        ts: "1777244714.000100",
-        thread_ts: rootTs,
-        parent_user_id: "U1",
-      }),
-      isDirectMessage: false,
-      isGroupDm: false,
-      isRoom: true,
-      isRoomish: true,
-    });
-
-    const expectedSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919";
-    expect(root.sessionKey).toBe(expectedSessionKey);
-    expect(followUp.sessionKey).toBe(expectedSessionKey);
-    expect(new Set([root.sessionKey, followUp.sessionKey]).size).toBe(1);
-  });
-
-  it("seeds top-level app mentions into the same parent session used by later thread replies", () => {
-    const ctx = buildCtx({ replyToMode: "all" });
-    const account = buildAccount("all");
-    const rootTs = "1777244692.409919";
-
-    const rootMention = resolveSlackRoutingContext({
-      ctx,
-      account,
-      message: buildChannelMessage({
-        channel: "C0AHZFCAS1K",
-        text: "<@B1> send a subagent to review issue #50621",
-        ts: rootTs,
-      }),
-      isDirectMessage: false,
-      isGroupDm: false,
-      isRoom: true,
-      isRoomish: true,
-      seedTopLevelRoomThread: true,
-    });
-    const urlFollowUp = resolveSlackRoutingContext({
-      ctx,
-      account,
-      message: buildChannelMessage({
-        channel: "C0AHZFCAS1K",
-        text: "https://github.com/openclaw/openclaw/issues/50621",
-        ts: "1777244714.000100",
-        thread_ts: rootTs,
-      }),
-      isDirectMessage: false,
-      isGroupDm: false,
-      isRoom: true,
-      isRoomish: true,
-    });
-
-    const parentSessions = [rootMention.sessionKey, urlFollowUp.sessionKey];
-    const spawnedSubagentsByParent = new Set(parentSessions);
-
-    expect(rootMention.sessionKey).toBe(urlFollowUp.sessionKey);
-    expect(rootMention.sessionKey).toBe(
-      "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919",
-    );
-    expect(spawnedSubagentsByParent.size).toBe(1);
-  });
+      const expectedSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919";
+      expect(root.sessionKey).toBe(expectedSessionKey);
+      expect(followUp.sessionKey).toBe(expectedSessionKey);
+    },
+  );
 
   it("does not add thread suffix for DMs when replyToMode=off", () => {
     const ctx = buildCtx({ replyToMode: "off" });

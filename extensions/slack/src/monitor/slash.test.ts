@@ -729,72 +729,15 @@ describe("Slack native command argument menus", () => {
     );
   });
 
-  it("batches accepted payloads in order while omitting a hook-cancelled payload", async () => {
-    const { deliverSlackSlashRepliesMock, turnPlanMock } = getSlackSlashMocks();
-    const asyncDispatchMock = dispatchMock as unknown as {
-      mockImplementation: (
-        implementation: (params: unknown) => Promise<unknown>,
-      ) => typeof dispatchMock;
-    };
-    asyncDispatchMock.mockImplementation(async (params: unknown) => {
-      const deliver = (
-        params as {
-          dispatcherOptions: {
-            deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
-          };
-        }
-      ).dispatcherOptions.deliver;
-      const plan = turnPlanMock.mock.calls.at(-1)?.[0] as {
-        delivery: {
-          onDelivered?: (payload: unknown, info: unknown, result: unknown) => Promise<void> | void;
-        };
-      };
-      await deliver({ text: "first" }, { kind: "final" });
-      await plan.delivery.onDelivered?.(
-        { text: "cancelled" },
-        { kind: "final" },
-        {
-          visibleReplySent: false,
-          suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
-        },
-      );
-      await deliver({ text: "third" }, { kind: "final" });
-      return { counts: { final: 2, tool: 0, block: 0 } };
-    });
+  it("does not call the response URL when dispatch produces no replies", async () => {
+    const { deliverSlackSlashRepliesMock } = getSlackSlashMocks();
+    dispatchMock.mockResolvedValue({ counts: { final: 0, tool: 0, block: 0 } });
 
-    await runCommandHandler(agentStatusHandler);
+    const { respond } = await runCommandHandler(agentStatusHandler);
 
-    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledOnce();
-    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ replies: [{ text: "first" }, { text: "third" }] }),
-    );
-  });
-
-  it("does not call the response URL when every payload is hook-cancelled", async () => {
-    const { deliverSlackSlashRepliesMock, turnPlanMock } = getSlackSlashMocks();
-    const asyncDispatchMock = dispatchMock as unknown as {
-      mockImplementation: (implementation: () => Promise<unknown>) => typeof dispatchMock;
-    };
-    asyncDispatchMock.mockImplementation(async () => {
-      const plan = turnPlanMock.mock.calls.at(-1)?.[0] as {
-        delivery: {
-          onDelivered?: (payload: unknown, info: unknown, result: unknown) => Promise<void> | void;
-        };
-      };
-      await plan.delivery.onDelivered?.(
-        { text: "cancelled" },
-        { kind: "final" },
-        {
-          visibleReplySent: false,
-          suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
-        },
-      );
-      return { counts: { final: 0, tool: 0, block: 0 } };
-    });
-
-    await runCommandHandler(agentStatusHandler);
-
+    expect(dispatchMock).toHaveBeenCalledOnce();
     expect(deliverSlackSlashRepliesMock).not.toHaveBeenCalled();
+    expect(respond).not.toHaveBeenCalled();
   });
 
   it("prefers the configured slash command over native commands", async () => {
@@ -1942,7 +1885,7 @@ describe("slack slash commands access groups", () => {
 
 describe("slack slash command session metadata", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  const { deliverSlackSlashRepliesMock, recordSessionMetaFromInboundMock, resolveAgentRouteMock } =
+  const { deliverSlackSlashRepliesMock, turnPlanMock, resolveAgentRouteMock } =
     getSlackSlashMocks();
 
   it("routes threaded native Stop to the ordinary DM parent after a policy reload", async () => {
@@ -2079,24 +2022,32 @@ describe("slack slash command session metadata", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("calls recordSessionMetaFromInbound after dispatching a slash command", async () => {
+  it("passes Slack session metadata and route correlation to the inbound turn", async () => {
     const harness = createPolicyHarness({ groupPolicy: "open" });
     await registerAndRunPolicySlash({ harness });
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
-    const call = firstMockArg(
-      recordSessionMetaFromInboundMock as unknown as MockCallSource,
-      0,
-      "session meta",
-    ) as {
-      sessionKey?: string;
-      ctx?: { GroupSpace?: string; OriginatingChannel?: string };
+    expect(turnPlanMock).toHaveBeenCalledTimes(1);
+    const plan = firstMockArg(turnPlanMock, 0, "turn plan") as {
+      channel: string;
+      accountId: string;
+      route: { agentId: string; sessionKey: string };
+      ctxPayload: { SessionKey: string; CommandTargetSessionKey: string };
     };
-    expect(call.ctx?.OriginatingChannel).toBe("slack");
-    expect(call.ctx?.GroupSpace).toBe("T1");
-    expect(call.sessionKey).toBeTypeOf("string");
-    expect(call.sessionKey).not.toBe("");
+    expect(plan).toMatchObject({
+      channel: "slack",
+      accountId: "acct",
+      route: { agentId: "main" },
+      ctxPayload: {
+        OriginatingChannel: "slack",
+        GroupSpace: "T1",
+        SessionKey: "agent:main:slack:slash:u1",
+        CommandTargetSessionKey: "session:1",
+        AccountId: "acct",
+      },
+    });
+    expect(plan.route.sessionKey).toBe(plan.ctxPayload.SessionKey);
+    expect(plan.ctxPayload.SessionKey).not.toBe(plan.ctxPayload.CommandTargetSessionKey);
   });
 
   it("partitions Enterprise Grid slash sessions and replies by event team", async () => {
@@ -2239,35 +2190,6 @@ describe("slack slash command session metadata", () => {
     expect(harness.runtimeError).toHaveBeenCalledWith(
       expect.stringContaining("Slack chat.postMessage returned no message timestamp"),
     );
-  });
-
-  it("starts routed session metadata recording before dispatch without blocking delivery", async () => {
-    const recordStarted = createDeferred<void>();
-    const deferred = createDeferred<void>();
-    recordSessionMetaFromInboundMock.mockClear().mockImplementation(() => {
-      recordStarted.resolve();
-      return deferred.promise;
-    });
-
-    const harness = createPolicyHarness({ groupPolicy: "open" });
-    await registerCommands(harness.ctx, harness.account);
-
-    const runPromise = runSlashHandler({
-      commands: harness.commands,
-      command: {
-        channel_id: harness.channelId,
-        channel_name: harness.channelName,
-      },
-    });
-
-    await recordStarted.promise;
-    expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => {
-      expect(dispatchMock).toHaveBeenCalledTimes(1);
-    });
-
-    deferred.resolve();
-    await runPromise;
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

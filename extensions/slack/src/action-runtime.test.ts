@@ -1370,91 +1370,86 @@ describe("handleSlackAction", () => {
     ).rejects.toThrow(/requires content or blocks/i);
   });
 
-  it("auto-injects threadTs from context when replyToMode=all", async () => {
+  it.each<{
+    name: string;
+    to: string;
+    currentChannelId: string;
+    currentMessagingTarget?: string;
+    replyToMode?: "all" | "first" | "off";
+    patch?: { threadTs?: string | null; topLevel?: true };
+    expectedThreadTs?: string;
+  }>([
+    {
+      name: "matching channel",
+      to: "channel:C123",
+      currentChannelId: "C123",
+      expectedThreadTs: "1111111111.111111",
+    },
+    {
+      name: "matching DM user",
+      to: "user:U123",
+      currentChannelId: "slack:U123",
+      expectedThreadTs: "1111111111.111111",
+    },
+    {
+      name: "routable DM with native channel",
+      to: "user:U123",
+      currentChannelId: "D123",
+      currentMessagingTarget: "user:U123",
+      expectedThreadTs: "1111111111.111111",
+    },
+    {
+      name: "topLevel true",
+      to: "channel:C123",
+      currentChannelId: "C123",
+      patch: { topLevel: true },
+    },
+    {
+      name: "threadTs null",
+      to: "channel:C123",
+      currentChannelId: "C123",
+      patch: { threadTs: null },
+    },
+    {
+      name: "first without reply reference",
+      to: "channel:C123",
+      currentChannelId: "C123",
+      replyToMode: "first",
+    },
+    { name: "threading off", to: "channel:C123", currentChannelId: "C123", replyToMode: "off" },
+    { name: "different channel", to: "channel:C999", currentChannelId: "C123" },
+    {
+      name: "explicit thread override",
+      to: "channel:C123",
+      currentChannelId: "C123",
+      patch: { threadTs: "9999999999.999999" },
+      expectedThreadTs: "9999999999.999999",
+    },
+    {
+      name: "bare channel target",
+      to: "C123",
+      currentChannelId: "C123",
+      expectedThreadTs: "1111111111.111111",
+    },
+  ])("selects message thread for $name", async (testCase) => {
     const cfg = slackConfig();
     await handleSlackAction(
-      {
-        action: "sendMessage",
-        to: "channel:C123",
-        content: "Threaded reply",
-      },
+      { action: "sendMessage", to: testCase.to, content: "Reply", ...testCase.patch },
       cfg,
       {
-        currentChannelId: "C123",
+        currentChannelId: testCase.currentChannelId,
+        currentMessagingTarget: testCase.currentMessagingTarget,
         currentThreadTs: "1111111111.111111",
-        replyToMode: "all",
+        replyToMode: testCase.replyToMode ?? "all",
       },
     );
-    expectLastSlackSend("Threaded reply", cfg, "1111111111.111111");
-  });
-
-  it("auto-injects threadTs for matching DM user targets", async () => {
-    const cfg = slackConfig();
-    await handleSlackAction(
-      {
-        action: "sendMessage",
-        to: "user:U123",
-        content: "Threaded DM reply",
-      },
-      cfg,
-      {
-        currentChannelId: "slack:U123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode: "all",
-      },
-    );
-    expectSlackSendCall(0, "user:U123", "Threaded DM reply", {
+    expect(sendSlackMessage).toHaveBeenCalledOnce();
+    expectSlackSendCall(0, testCase.to, "Reply", {
       cfg,
       mediaUrl: undefined,
-      threadTs: "1111111111.111111",
+      threadTs: testCase.expectedThreadTs,
       blocks: undefined,
     });
-  });
-
-  it("auto-injects threadTs for routable DM targets while retaining the native channel", async () => {
-    const cfg = slackConfig();
-    await handleSlackAction(
-      {
-        action: "sendMessage",
-        to: "user:U123",
-        content: "Threaded DM reply",
-      },
-      cfg,
-      {
-        currentChannelId: "D123",
-        currentMessagingTarget: "user:U123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode: "all",
-      },
-    );
-    expectSlackSendCall(0, "user:U123", "Threaded DM reply", {
-      cfg,
-      mediaUrl: undefined,
-      threadTs: "1111111111.111111",
-      blocks: undefined,
-    });
-  });
-
-  it.each([
-    { name: "topLevel true", patch: { topLevel: true } },
-    { name: "threadTs null", patch: { threadTs: null } },
-  ] as const)("does not auto-inject threadTs for $name", async (testCase) => {
-    const cfg = slackConfig();
-    await handleSlackAction(
-      {
-        action: "sendMessage",
-        to: "channel:C123",
-        content: "Channel root",
-        ...testCase.patch,
-      },
-      cfg,
-      {
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode: "all",
-      },
-    );
-    expectLastSlackSend("Channel root", cfg);
   });
 
   it("replyToMode=first threads first message then stops", async () => {
@@ -1678,42 +1673,33 @@ describe("handleSlackAction", () => {
     expect(hasRepliedRef.value).toBe(false);
   });
 
-  it("replyToMode=first normalizes channel target when accounting explicit threadTs", async () => {
-    const { cfg, context, hasRepliedRef } = createReplyToFirstScenario();
+  it.each(["#c123", "channel:C123"])(
+    "consumes the first reply after explicit thread delivery to %s",
+    async (to) => {
+      const { cfg, context, hasRepliedRef } = createReplyToFirstScenario();
 
-    await handleSlackAction(
-      {
-        action: "sendMessage",
-        to: "#c123",
-        content: "Explicit",
+      await handleSlackAction(
+        {
+          action: "sendMessage",
+          to,
+          content: "Explicit",
+          threadTs: "9999999999.999999",
+        },
+        cfg,
+        context,
+      );
+
+      expect(sendSlackMessage).toHaveBeenCalledOnce();
+      expectSlackSendCall(0, to, "Explicit", {
+        cfg,
+        mediaUrl: undefined,
         threadTs: "9999999999.999999",
-      },
-      cfg,
-      context,
-    );
-
-    expect(hasRepliedRef.value).toBe(true);
-    await sendSecondMessageAndExpectNoThread({ cfg, context });
-  });
-
-  it("replyToMode=first marks hasRepliedRef even when threadTs is explicit", async () => {
-    const { cfg, context, hasRepliedRef } = createReplyToFirstScenario();
-
-    await handleSlackAction(
-      {
-        action: "sendMessage",
-        to: "channel:C123",
-        content: "Explicit",
-        threadTs: "9999999999.999999",
-      },
-      cfg,
-      context,
-    );
-
-    expectLastSlackSend("Explicit", cfg, "9999999999.999999");
-    expect(hasRepliedRef.value).toBe(true);
-    await sendSecondMessageAndExpectNoThread({ cfg, context });
-  });
+        blocks: undefined,
+      });
+      expect(hasRepliedRef.value).toBe(true);
+      await sendSecondMessageAndExpectNoThread({ cfg, context });
+    },
+  );
 
   it("replyToMode=first consumes a routable DM target with a native channel context", async () => {
     const cfg = slackConfig();
@@ -1749,30 +1735,6 @@ describe("handleSlackAction", () => {
       threadTs: undefined,
       blocks: undefined,
     });
-  });
-
-  it("replyToMode=first without hasRepliedRef does not thread", async () => {
-    const cfg = slackConfig();
-    await handleSlackAction({ action: "sendMessage", to: "channel:C123", content: "No ref" }, cfg, {
-      currentChannelId: "C123",
-      currentThreadTs: "1111111111.111111",
-      replyToMode: "first",
-    });
-    expectLastSlackSend("No ref", cfg);
-  });
-
-  it("does not auto-inject threadTs when replyToMode=off", async () => {
-    const cfg = slackConfig();
-    await handleSlackAction(
-      { action: "sendMessage", to: "channel:C123", content: "No thread" },
-      cfg,
-      {
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode: "off",
-      },
-    );
-    expectLastSlackSend("No thread", cfg);
   });
 
   it("keeps same-channel sends and uploads top-level for a prepared channel override", async () => {
@@ -1820,59 +1782,6 @@ describe("handleSlackAction", () => {
       threadTs: undefined,
       uploadFileName: undefined,
       uploadTitle: undefined,
-    });
-  });
-
-  it("does not auto-inject threadTs when sending to different channel", async () => {
-    const cfg = slackConfig();
-    await handleSlackAction(
-      { action: "sendMessage", to: "channel:C999", content: "Other channel" },
-      cfg,
-      {
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode: "all",
-      },
-    );
-    expectSlackSendCall(0, "channel:C999", "Other channel", {
-      cfg,
-      mediaUrl: undefined,
-      threadTs: undefined,
-      blocks: undefined,
-    });
-  });
-
-  it("explicit threadTs overrides context threadTs", async () => {
-    const cfg = slackConfig();
-    await handleSlackAction(
-      {
-        action: "sendMessage",
-        to: "channel:C123",
-        content: "Explicit wins",
-        threadTs: "9999999999.999999",
-      },
-      cfg,
-      {
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode: "all",
-      },
-    );
-    expectLastSlackSend("Explicit wins", cfg, "9999999999.999999");
-  });
-
-  it("handles channel target without prefix when replyToMode=all", async () => {
-    const cfg = slackConfig();
-    await handleSlackAction({ action: "sendMessage", to: "C123", content: "Bare target" }, cfg, {
-      currentChannelId: "C123",
-      currentThreadTs: "1111111111.111111",
-      replyToMode: "all",
-    });
-    expectSlackSendCall(0, "C123", "Bare target", {
-      cfg,
-      mediaUrl: undefined,
-      threadTs: "1111111111.111111",
-      blocks: undefined,
     });
   });
 

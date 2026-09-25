@@ -218,8 +218,8 @@ describe("downloadSlackFile", () => {
 
   it.each([
     { name: "public channel metadata", file: { channels: ["C123"] } },
-    { name: "private channel metadata", file: { groups: ["C123"] } },
-    { name: "DM metadata", file: { ims: ["C123"] } },
+    { name: "private channel metadata", file: { channels: undefined, groups: ["C123"] } },
+    { name: "DM metadata", file: { channels: undefined, ims: ["C123"] } },
     {
       name: "share metadata",
       file: {

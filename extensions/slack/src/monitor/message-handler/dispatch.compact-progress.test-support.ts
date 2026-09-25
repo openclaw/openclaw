@@ -24,29 +24,6 @@ export type SlackReplyOptionEvent =
       detailMode?: "explain" | "raw";
     }
   | {
-      kind: "patch";
-      itemId?: string;
-      toolCallId?: string;
-      phase?: string;
-      title?: string;
-      name?: string;
-      added?: string[];
-      modified?: string[];
-      deleted?: string[];
-      summary?: string;
-    }
-  | {
-      kind: "command_output";
-      itemId?: string;
-      toolCallId?: string;
-      phase?: string;
-      title?: string;
-      name?: string;
-      explanation?: string;
-      status?: string;
-      exitCode?: number | null;
-    }
-  | {
       kind: "plan";
       phase?: string;
       explanation?: string;
@@ -60,6 +37,15 @@ export type SlackReplyOptionEvent =
   | { kind: "reasoning_end" }
   | { kind: "checkpoint"; run: () => Promise<void> }
   | ({ kind: "approval" } & Parameters<NonNullable<GetReplyOptions["onApprovalEvent"]>>[0]);
+
+export const FAILED_COMMAND_ITEM = {
+  itemId: "tool-2",
+  kind: "tool",
+  name: "bash",
+  phase: "end",
+  meta: "pnpm test",
+  status: "failed",
+} as const;
 
 /** A model preamble stays visible while successful and failed work continues. */
 export async function emitCompactProgressScenario(reply: GetReplyOptions) {
@@ -83,12 +69,13 @@ export async function emitCompactProgressScenario(reply: GetReplyOptions) {
     phase: "start",
     args: { command: "pnpm test" },
   });
-  await reply.onCommandOutput?.({
+  await reply.onItemEvent?.({
     itemId: "tool-1",
+    kind: "tool",
     name: "bash",
     phase: "end",
-    title: "pnpm test",
-    exitCode: 0,
+    meta: "pnpm test",
+    status: "completed",
   });
   await reply.onReasoningStream?.({ text: "Considering the transport choice." });
   await reply.onToolStart?.({
@@ -99,15 +86,19 @@ export async function emitCompactProgressScenario(reply: GetReplyOptions) {
   });
   await reply.onItemEvent?.({
     toolCallId: "write-1",
+    kind: "tool",
     phase: "end",
     status: "completed",
   });
-  await reply.onPatchSummary?.({
+  await reply.onItemEvent?.({
+    itemId: "patch-1",
+    toolCallId: "patch-1",
+    kind: "patch",
+    name: "apply_patch",
     phase: "end",
+    status: "completed",
     title: "Apply patch",
-    added: ["result.txt"],
-    modified: [],
-    deleted: [],
+    meta: "result.txt",
   });
   await reply.onPlanUpdate?.({
     phase: "update",
@@ -120,13 +111,7 @@ export async function emitCompactProgressScenario(reply: GetReplyOptions) {
     phase: "end",
     progressText: "The fix is ready; I’m checking the result.",
   });
-  await reply.onCommandOutput?.({
-    itemId: "tool-2",
-    name: "bash",
-    phase: "end",
-    title: "pnpm test",
-    exitCode: 1,
-  });
+  await reply.onItemEvent?.(FAILED_COMMAND_ITEM);
   await reply.onPlanUpdate?.({
     phase: "update",
     explanation: "Finishing the checklist.",

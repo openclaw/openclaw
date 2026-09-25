@@ -836,8 +836,12 @@ describe("plugin interactive handlers", () => {
     },
   ] as const)("exposes binding authority only when $name", async (testCase) => {
     let bindingResult: unknown;
+    let currentBinding: unknown;
+    let detachResult: unknown;
     const handler = vi.fn(async (ctx: TelegramInteractiveHandlerContext) => {
       bindingResult = await ctx.requestConversationBinding();
+      currentBinding = await ctx.getCurrentConversationBinding();
+      detachResult = await ctx.detachConversationBinding();
     });
     expect(
       registerPluginInteractiveHandler(
@@ -864,9 +868,14 @@ describe("plugin interactive handlers", () => {
     });
 
     expect(bindingResult).toMatchObject({ status: testCase.expectedStatus });
-    expect(requestPluginConversationBindingMock).toHaveBeenCalledTimes(
-      testCase.expectedStatus === "bound" ? 1 : 0,
-    );
+    const authorized = testCase.expectedStatus === "bound";
+    expect(requestPluginConversationBindingMock).toHaveBeenCalledTimes(authorized ? 1 : 0);
+    expect(getCurrentPluginConversationBindingMock).toHaveBeenCalledTimes(authorized ? 1 : 0);
+    expect(detachPluginConversationBindingMock).toHaveBeenCalledTimes(authorized ? 1 : 0);
+    expect(detachResult).toEqual({ removed: authorized });
+    if (!authorized) {
+      expect(currentBinding).toBeNull();
+    }
   });
 
   it("does not consume dedupe keys when a handler throws", async () => {
