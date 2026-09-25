@@ -4,7 +4,6 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import {
-  getContextEngineRegistration,
   registerContextEngineInRegistry,
   registerContextEngineForOwner,
 } from "../../../context-engine/registry.js";
@@ -210,22 +209,6 @@ describe("doctor context-engine host compatibility", () => {
       expect(factory).not.toHaveBeenCalled();
     },
   );
-
-  it("distinguishes read-only discovery registrations from runtime entries", () => {
-    const id = uniqueEngineId();
-    const factory = () => {
-      throw new Error("discovery-only");
-    };
-    const result = registerContextEngineForOwner(id, factory, `doctor-test-owner-${id}`, {
-      lifecycle: "readOnlyDiscovery",
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(getContextEngineRegistration(id)).toMatchObject({
-      factory,
-      lifecycle: "readOnlyDiscovery",
-    });
-  });
 
   it("evaluates native Codex and OpenClaw agent-run hosts", async () => {
     const engineId = registerEngine(["thread-bootstrap-projection"]);

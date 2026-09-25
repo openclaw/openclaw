@@ -16,6 +16,16 @@ import {
 
 const roots: string[] = [];
 
+function configIO(root: string, env: NodeJS.ProcessEnv = { HOME: root, OPENCLAW_TEST_FAST: "1" }) {
+  return createConfigIO({
+    configPath: path.join(root, "openclaw.json"),
+    env,
+    homedir: () => root,
+    observe: false,
+    logger: { warn: () => {}, error: () => {} },
+  });
+}
+
 afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   resetConfigRuntimeState();
@@ -49,17 +59,11 @@ describe("default role materialization authored writes", () => {
       )}\n`,
       "utf-8",
     );
-    const io = createConfigIO({
-      configPath,
-      env: {
-        HOME: root,
-        OPENCLAW_TEST_FAST: "1",
-        DEFAULT_MODEL: "openai/default-model",
-        RESEARCH_MODEL: "openai/research-model",
-      } as NodeJS.ProcessEnv,
-      homedir: () => root,
-      observe: false,
-      logger: { warn: () => {}, error: () => {} },
+    const io = configIO(root, {
+      HOME: root,
+      OPENCLAW_TEST_FAST: "1",
+      DEFAULT_MODEL: "openai/default-model",
+      RESEARCH_MODEL: "openai/research-model",
     });
 
     const snapshot = await io.readConfigFileSnapshot();
@@ -126,13 +130,7 @@ describe("default role materialization authored writes", () => {
         configPath,
         JSON.stringify({ agents: { entries: { ops: {} } }, session: { store: sourceStore } }),
       );
-      const io = createConfigIO({
-        configPath,
-        env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-        homedir: () => root,
-        observe: false,
-        logger: { warn: () => {}, error: () => {} },
-      });
+      const io = configIO(root);
       const snapshot = await io.readConfigFileSnapshot();
       await io.writeConfigFile(
         {
@@ -167,13 +165,7 @@ describe("default role materialization authored writes", () => {
         session: { store: path.join(root, "source-sessions.json") },
       }),
     );
-    const io = createConfigIO({
-      configPath,
-      env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-      homedir: () => root,
-      observe: false,
-      logger: { warn: () => {}, error: () => {} },
-    });
+    const io = configIO(root);
     const snapshot = await io.readConfigFileSnapshot();
 
     await io.writeConfigFile(
@@ -203,13 +195,7 @@ describe("default role materialization authored writes", () => {
         session: { store: path.join(root, "source-sessions.json") },
       }),
     );
-    const io = createConfigIO({
-      configPath,
-      env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-      homedir: () => root,
-      observe: false,
-      logger: { warn: () => {}, error: () => {} },
-    });
+    const io = configIO(root);
     const snapshot = await io.readConfigFileSnapshot();
     const nextConfig: OpenClawConfig = {
       ...snapshot.config,
@@ -247,13 +233,7 @@ describe("default role materialization authored writes", () => {
         },
       }),
     );
-    const io = createConfigIO({
-      configPath,
-      env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-      homedir: () => root,
-      observe: false,
-      logger: { warn: () => {}, error: () => {} },
-    });
+    const io = configIO(root);
     const snapshot = await io.readConfigFileSnapshot();
 
     await io.writeConfigFile(
@@ -283,13 +263,7 @@ describe("default role materialization authored writes", () => {
       roots.push(root);
       const configPath = path.join(root, "openclaw.json");
       await fs.writeFile(configPath, JSON.stringify({ agents: { entries: { ops: {} } } }));
-      const io = createConfigIO({
-        configPath,
-        env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-        homedir: () => root,
-        observe: false,
-        logger: { warn: () => {}, error: () => {} },
-      });
+      const io = configIO(root);
       const snapshot = await io.readConfigFileSnapshot();
       const nextConfig: OpenClawConfig = {
         ...snapshot.config,
@@ -323,13 +297,7 @@ describe("default role materialization authored writes", () => {
       configPath,
       JSON.stringify({ agents: { entries: { ops: { agentDir: customAgentDir } } } }),
     );
-    const io = createConfigIO({
-      configPath,
-      env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-      homedir: () => root,
-      observe: false,
-      logger: { warn: () => {}, error: () => {} },
-    });
+    const io = configIO(root);
     const snapshot = await io.readConfigFileSnapshot();
 
     await expect(
@@ -361,13 +329,7 @@ describe("default role materialization authored writes", () => {
         },
       }),
     );
-    const io = createConfigIO({
-      configPath,
-      env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-      homedir: () => root,
-      observe: false,
-      logger: { warn: () => {}, error: () => {} },
-    });
+    const io = configIO(root);
     const snapshot = await io.readConfigFileSnapshot();
     const nextConfig: OpenClawConfig = {
       ...snapshot.config,
@@ -430,13 +392,7 @@ describe("default role materialization authored writes", () => {
       version: 1,
       jobs: [makeCronJob({ id: "other-ownerless" })],
     });
-    const io = createConfigIO({
-      configPath,
-      env,
-      homedir: () => root,
-      observe: false,
-      logger: { warn: () => {}, error: () => {} },
-    });
+    const io = configIO(root, env);
     const snapshot = await io.readConfigFileSnapshot();
     const nextConfig: OpenClawConfig = {
       ...snapshot.config,
@@ -493,13 +449,7 @@ describe("default role materialization authored writes", () => {
       }),
     );
     writeConfigMachineState("cron.store", storePath, { env });
-    const io = createConfigIO({
-      configPath,
-      env,
-      homedir: () => root,
-      observe: false,
-      logger: { warn: () => {}, error: () => {} },
-    });
+    const io = configIO(root, env);
     const snapshot = await io.readConfigFileSnapshot();
     const nextConfig: OpenClawConfig = {
       ...snapshot.config,
@@ -549,13 +499,7 @@ describe("default role materialization authored writes", () => {
     database
       .prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?")
       .run("not json", cronStoreKey(storePath), "corrupt");
-    const io = createConfigIO({
-      configPath,
-      env,
-      homedir: () => root,
-      observe: false,
-      logger: { warn: () => {}, error: () => {} },
-    });
+    const io = configIO(root, env);
     const snapshot = await io.readConfigFileSnapshot();
     const nextConfig: OpenClawConfig = {
       ...snapshot.config,
@@ -588,13 +532,7 @@ describe("default role materialization authored writes", () => {
         gateway: { port: 18789 },
       }),
     );
-    const io = createConfigIO({
-      configPath,
-      env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-      homedir: () => root,
-      observe: false,
-      logger: { warn: () => {}, error: () => {} },
-    });
+    const io = configIO(root);
     const snapshot = await io.readConfigFileSnapshot();
     expect(tryResolveLegacyCompatibilityAgentId(snapshot.config)).toBe("research");
 

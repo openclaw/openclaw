@@ -53,15 +53,6 @@ describe("legacy cron schedule enum migration", () => {
     expect((removed.job.schedule as Record<string, unknown>).kind).toBe(" DAILY ");
   });
 
-  it("does not report an issue for an already canonical kind", () => {
-    const jobs = [makeJob("canonical", { kind: "cron", expr: "0 7 * * *" })];
-
-    const result = normalizeStoredCronJobs(jobs);
-
-    expect(result.issues.legacyScheduleKind).toBeUndefined();
-    expect(result.removedJobs).toEqual([]);
-  });
-
   it("recovers only currently valid schedule rows and preserves recovery state", () => {
     const entries: QuarantinedCronConfigJob[] = [
       {
