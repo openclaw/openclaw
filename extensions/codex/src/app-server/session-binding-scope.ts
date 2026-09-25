@@ -49,7 +49,7 @@ export function scopeCodexRunBindingStore(params: {
         threadId,
         identity ? mapIdentity(identity) : undefined,
       ),
-    mutate: (identity, mutation, assertCurrent) =>
+    mutate: (identity, mutation, assertCurrent, authority) =>
       params.bindingStore.mutate(
         mapIdentity(identity),
         mutation.kind === "record-native-subagent-submission" ||
@@ -57,14 +57,16 @@ export function scopeCodexRunBindingStore(params: {
           ? { ...mutation, owner: mapHistoryOwner(identity, mutation.owner) }
           : mutation,
         assertCurrent,
+        authority,
       ),
     prepareSessionGenerationReclaim: (identity) =>
       params.bindingStore.prepareSessionGenerationReclaim(mapSessionIdentity(identity)),
-    adoptSessionGeneration: (identity, expectedPreviousSessionId, assertCurrent) =>
+    adoptSessionGeneration: (identity, expectedPreviousSessionId, assertCurrent, authority) =>
       params.bindingStore.adoptSessionGeneration(
         mapSessionIdentity(identity),
         expectedPreviousSessionId,
         assertCurrent,
+        authority,
       ),
     resetSessionGeneration: (identity) =>
       params.bindingStore.resetSessionGeneration(mapSessionIdentity(identity)),
@@ -73,6 +75,7 @@ export function scopeCodexRunBindingStore(params: {
     withSessionDeletion: (identity, assertCurrent, run) =>
       params.bindingStore.withSessionDeletion(mapSessionIdentity(identity), assertCurrent, run),
     withThreadArchiveFence: (run) => params.bindingStore.withThreadArchiveFence(run),
-    withLease: (identity, run) => params.bindingStore.withLease(mapIdentity(identity), run),
+    withLease: (identity, run, options) =>
+      params.bindingStore.withLease(mapIdentity(identity), run, options),
   };
 }

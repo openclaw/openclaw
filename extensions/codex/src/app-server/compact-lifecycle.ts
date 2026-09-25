@@ -152,10 +152,7 @@ export function watchCodexNativeCompactionCompletion(params: {
     completionTimeout.unref?.();
   };
   removeNotificationHandler = params.client.addNotificationHandler((notification) => {
-    if (!requestStarted) {
-      return;
-    }
-    if (!isJsonObject(notification.params)) {
+    if (!requestStarted || !isJsonObject(notification.params)) {
       return;
     }
     if (readCodexNotificationThreadId(notification.params) !== params.threadId) {

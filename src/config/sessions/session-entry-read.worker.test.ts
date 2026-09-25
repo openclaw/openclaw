@@ -5,6 +5,7 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -12,6 +13,7 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
@@ -570,6 +572,74 @@ it.each(["durable", "incognito"] as const)(
       } finally {
         authority.release();
       }
+    });
+  },
+);
+
+it("orders native reads with writers and ignores unrelated metadata notifications", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:ordered-consumer";
+    writeSessionEntry(database, sessionKey, { sessionId: "ordered-session", updatedAt: 1 });
+    const input = { agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env };
+    let escaped: (() => void) | undefined;
+    await withSessionEntriesFromStoresInWorker(
+      [input],
+      ([read]) => {
+        escaped = read!.assertCurrent;
+        sessionChanges.emit({ sessionKey, scope: "runtime" });
+        sessionChanges.emit({ all: true, scope: "agent-runs" });
+        sessionChanges.emit({ all: true, scope: "worker-placements" });
+        sessionChanges.emit({ all: true, scope: "profiles" });
+        sessionChanges.emit({ sessionKey, agentId: "main" });
+        sessionChanges.emit({ sessionKey, storePath: database.path, facts: { kind: "unchanged" } });
+        sessionChanges.emit({
+          all: true,
+          scope: { storePath: path.join(path.dirname(database.path), "unrelated.sqlite") },
+          factsInvalidated: true,
+        });
+        read!.assertCurrent();
+        expect(read!.result.entries[0]?.entry.sessionId).toBe("ordered-session");
+        sessionChanges.emit({ sessionKey, storePath: database.path, factsInvalidated: true });
+        expect(read!.assertCurrent).toThrow("Session entry changed during read");
+      },
+      { ordered: true },
+    );
+    expect(escaped).toThrow("consumer is no longer active");
+    await expect(
+      runOpenClawAgentWriteAdmission({ agentId: "main", path: database.path, env }, () =>
+        withSessionEntriesFromStoresInWorker([input], () => {}, { ordered: true }),
+      ),
+    ).rejects.toThrow("cannot reenter an active SQLite writer admission");
+  });
+});
+
+it.each(["entry", "store", "topology"] as const)(
+  "revokes an ordered reader after authoritative %s changes",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+      const sessionKey = "agent:main:changed-consumer";
+      writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
+      await withSessionEntriesFromStoresInWorker(
+        [{ agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env }],
+        ([read]) => {
+          read!.assertCurrent();
+          if (change === "entry") {
+            writeSessionEntry(database, sessionKey, { sessionId: "successor", updatedAt: 2 });
+          } else if (change === "store") {
+            sessionChanges.emit({
+              all: true,
+              scope: { storePath: database.path },
+              factsInvalidated: true,
+            });
+          } else {
+            sessionChanges.emit({ all: true, scope: "stores" });
+          }
+          expect(read!.assertCurrent).toThrow("Session entry changed during read");
+        },
+        { ordered: true },
+      );
     });
   },
 );

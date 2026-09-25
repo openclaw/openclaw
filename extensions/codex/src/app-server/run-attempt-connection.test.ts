@@ -232,9 +232,13 @@ describe("prepareCodexAttemptConnection", () => {
     await patchSessionEntry({ ...scope, update: () => ({ sessionId: "next-compaction" }) });
 
     expect(() => originalHostCapabilities.assertActive()).not.toThrow();
-    expect(() => connection.assertCurrent()).toThrow(
+    expect(() => connection.assertCurrent()).not.toThrow();
+    expect(connection.assertLegacyCurrent).toThrow("Codex session generation is no longer current");
+    const effect = vi.fn();
+    await expect(connection.withCurrent(effect)).rejects.toThrow(
       "Codex session generation is no longer current",
     );
+    expect(effect).not.toHaveBeenCalled();
     expect(bindingStore.read(current)).toEqual(binding);
   });
 
@@ -831,6 +835,7 @@ describe("prepareCodexAttemptConnection", () => {
           expect.anything(),
           { kind: "clear", threadId: "thread-existing" },
           expect.any(Function),
+          expect.objectContaining({ withCurrent: expect.any(Function) }),
         );
         const remainingListeners = getEventListeners(controller.signal, "abort").length;
         controller.abort("cancelled after rejection");

@@ -170,33 +170,36 @@ export async function prepareCodexThreadRequestContext(
   };
 }
 
-export function publishCodexThreadInferenceBinding(
+export async function publishCodexThreadInferenceBinding(
   params: CodexStartOrResumeThreadParams,
   binding: CodexAppServerThreadLifecycleBinding,
   reusedConfiguration = false,
-): CodexAppServerThreadLifecycleBinding {
-  params.assertCurrent?.();
-  params.signal?.throwIfAborted();
-  assertCodexInferenceRouteConfig(
-    params.client,
-    params.inferenceRoute,
-    params.config,
-    binding.modelProvider,
-    params.inferenceProviderRoutes,
-  );
-  if (reusedConfiguration) {
-    if (getCodexInferenceThread(params.client, binding.threadId) !== params.inferenceRoute) {
-      throw new Error("Codex inference thread configuration changed before reuse");
-    }
-  } else {
-    bindCodexInferenceThread(
+): Promise<CodexAppServerThreadLifecycleBinding> {
+  const publish = () => {
+    params.assertCurrent?.();
+    params.signal?.throwIfAborted();
+    assertCodexInferenceRouteConfig(
       params.client,
-      binding.threadId,
       params.inferenceRoute,
+      params.config,
+      binding.modelProvider,
       params.inferenceProviderRoutes,
     );
-  }
-  return binding;
+    if (reusedConfiguration) {
+      if (getCodexInferenceThread(params.client, binding.threadId) !== params.inferenceRoute) {
+        throw new Error("Codex inference thread configuration changed before reuse");
+      }
+    } else {
+      bindCodexInferenceThread(
+        params.client,
+        binding.threadId,
+        params.inferenceRoute,
+        params.inferenceProviderRoutes,
+      );
+    }
+    return binding;
+  };
+  return params.authority ? await params.authority.withCurrent(publish) : publish();
 }
 
 export function resolveCodexThreadAgentDir(params: CodexStartOrResumeThreadParams): string {

@@ -2,9 +2,11 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { invokeNativeHookRelay } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { hasCodexAppServerLiveThread } from "./client-runtime.js";
 import {
   createCodexTestHostCapabilities,
   setCodexTestToolFactory,
@@ -35,7 +37,11 @@ import {
   releaseCodexSandboxExecServerEnvironment,
 } from "./sandbox-exec-server.js";
 import { createSandboxContext, openSocket, rpc } from "./sandbox-exec-server.test-helpers.js";
-import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
+import type { CodexAppServerBindingStore } from "./session-binding.js";
+import {
+  readCodexAppServerBinding,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 import {
   appendSqliteHistoryMessage,
   attachSqliteSessionTarget,
@@ -78,6 +84,15 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
   const sessionFile = path.join(tempDir, "native-owner-session.jsonl");
   const workspaceDir = path.join(tempDir, "workspace");
   const threadId = "qualification-shared-thread";
+  const sessionScope = {
+    agentId: "main",
+    sessionKey: "agent:main:session-1",
+    storePath: path.join(tempDir, "native-owner-sessions.json"),
+  };
+  await upsertSessionEntry({
+    ...sessionScope,
+    entry: { sessionId: "session-1", updatedAt: 1 },
+  });
   const terminals = new Map<string, Terminal>();
   const terminated: Actor[] = [];
   const activeRuns: Array<{ controller: AbortController; run: Promise<unknown> }> = [];
@@ -87,6 +102,27 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
   let socket: WebSocket | undefined;
   let registeredUrl: string | undefined;
   let retainedEnvironment: Awaited<ReturnType<typeof ensureCodexSandboxExecServerEnvironment>>;
+  let bindingLeaseGate:
+    | {
+        entered: ReturnType<typeof createDeferred<void>>;
+        release: ReturnType<typeof createDeferred<void>>;
+      }
+    | undefined;
+  const withLease: CodexAppServerBindingStore["withLease"] = async (identity, run, leaseOptions) =>
+    await testCodexAppServerBindingStore.withLease(
+      identity,
+      async () => {
+        const gate = bindingLeaseGate;
+        if (gate) {
+          bindingLeaseGate = undefined;
+          gate.entered.resolve();
+          await gate.release.promise;
+        }
+        return await run();
+      },
+      leaseOptions,
+    );
+  const bindingStore = { ...testCodexAppServerBindingStore, withLease };
   const sandbox = createSandboxContext({
     ...(options.failSettlement
       ? {
@@ -171,6 +207,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
       runId: `${actor}-run-${turns.length + 1}`,
       prompt: `${actor} qualification turn`,
     });
+    params.sessionTarget = { ...sessionScope, sessionId: params.sessionId };
     params.hostCapabilities = createSourceBoundHostCapabilities(source.signal);
     params.senderId = actor;
     params.onAgentEvent = (event) => {
@@ -192,6 +229,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     setCodexTestToolFactory(params, () => []);
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { experimental: { sandboxExecServer: true } } },
+      bindingStore,
     });
     activeRuns.push({ controller, run });
     await Promise.race([
@@ -382,6 +420,25 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     harness,
     sessionFile,
     threadId,
+    armRetentionLeaseWait: () => {
+      const gate = { entered: createDeferred<void>(), release: createDeferred<void>() };
+      bindingLeaseGate = gate;
+      return gate;
+    },
+    rotateSessionLineage: async () => {
+      await patchSessionEntry({
+        ...sessionScope,
+        update: () => ({ previousSessionId: "session-predecessor-replaced" }),
+      });
+    },
+    settleBackgroundProcess: async (terminal: Terminal) => {
+      if (!socket) {
+        throw new Error("Native process fixture socket is unavailable");
+      }
+      await rpc(socket, "process/terminate", { processId: terminal.processId });
+      await terminal.closed;
+      await terminal.settled;
+    },
     retainSecondConsumer: async () => {
       // Same production lease operation used by a concurrent /btw turn or another
       // permitted session sharing this sandbox runtime; no fabricated process inventory.
@@ -541,6 +598,38 @@ describe("native background process source authority", () => {
       await f.dispose();
     }
   });
+  it.each(["active", "settled"] as const)(
+    "rechecks %s background custody at subscription retention",
+    async (custody) => {
+      const f = await fixture();
+      try {
+        const owner = await f.begin("maintainer");
+        const lease = f.armRetentionLeaseWait();
+        const completion = owner.complete();
+        await lease.entered.promise;
+        await f.rotateSessionLineage();
+        if (custody === "settled") {
+          await f.settleBackgroundProcess(owner.terminal);
+          expect(owner.terminal.alive).toBe(false);
+        } else {
+          expect(owner.terminal.alive).toBe(true);
+        }
+        lease.release.resolve();
+        if (custody === "active") {
+          expect(readAttemptTerminal(await completion).aborted).toBe(false);
+        } else {
+          await expect(completion).rejects.toMatchObject({
+            name: "AgentHarnessSessionSupersededError",
+          });
+        }
+        expect(hasCodexAppServerLiveThread(f.harness.client, f.threadId)).toBe(
+          custody === "active",
+        );
+      } finally {
+        await f.dispose();
+      }
+    },
+  );
   it("revokes completed guest work while a later maintainer foreground stays live", async () => {
     const f = await fixture();
     try {

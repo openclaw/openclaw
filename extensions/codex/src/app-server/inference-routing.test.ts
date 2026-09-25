@@ -14,18 +14,12 @@ import {
   getCodexInferenceThreadQualification,
 } from "./inference-routing.js";
 import type { CodexConfigReadResponse } from "./protocol.js";
-import { createClientHarness } from "./test-support.js";
+import type { CodexBindingAuthority } from "./session-binding.js";
+import { createClientHarness, stubCodexInferenceTransportEnv } from "./test-support.js";
 
 const clients: ReturnType<typeof createClientHarness>[] = [];
 beforeEach(() => {
-  // Each case declares its transport; developer CA/proxy settings must not select a different path.
-  for (const key of ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "REQUEST_METHOD"]) {
-    vi.stubEnv(key, undefined);
-  }
-  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
-    vi.stubEnv(key, undefined);
-    vi.stubEnv(key.toLowerCase(), undefined);
-  }
+  stubCodexInferenceTransportEnv();
 });
 afterEach(() => {
   for (const entry of clients.splice(0)) {
@@ -98,6 +92,112 @@ async function prepare(
 }
 
 describe("managed inference route ownership", () => {
+  it.each([false, true])(
+    "admits only config/account writes and route publications (prepared config=%s)",
+    async (preparedConfig) => {
+      let retained = false;
+      let admissions = 0;
+      const authority: CodexBindingAuthority = {
+        lineage: [],
+        assertCurrent: () => {},
+        assertLegacyCurrent: () => {},
+        withCurrent: async (consume) => {
+          admissions += 1;
+          retained = true;
+          try {
+            return consume();
+          } finally {
+            retained = false;
+          }
+        },
+      };
+      const h = harness({
+        onWrite(line, send) {
+          expect(retained).toBe(true);
+          const request = JSON.parse(line);
+          send({
+            id: request.id,
+            result:
+              request.method === "config/read"
+                ? { config: {}, origins: {} }
+                : { account: { type: "apiKey" } },
+          });
+        },
+      });
+      ownCodexInferenceClient(h.client);
+      const protect = vi.spyOn(h.client, "protectPrivateTransportSecret");
+      const prepared = await prepareCodexInferenceThreadConfig({
+        client: h.client,
+        binding: undefined,
+        clientId: "fixture-native-client",
+        cwd: "/workspace",
+        ...(preparedConfig ? { effectiveConfig: { config: {}, origins: {} } } : {}),
+        assertCurrent: authority.assertCurrent,
+        authority,
+      });
+      expect(prepared?.route).toBeDefined();
+      expect(protect).toHaveBeenCalledOnce();
+      expect(retained).toBe(false);
+      expect(admissions).toBe(preparedConfig ? 3 : 4);
+      expect(h.writes.map((line) => JSON.parse(line).method)).toEqual(
+        preparedConfig ? ["account/read"] : ["config/read", "account/read"],
+      );
+    },
+  );
+
+  it.each([2, 3])(
+    "refuses stale authority at route admission %s before publishing a handle",
+    async (rejectAdmission) => {
+      let admissions = 0;
+      let accountType = "apiKey";
+      const failure = new Error("route owner superseded");
+      const authority: CodexBindingAuthority = {
+        lineage: [],
+        assertCurrent: () => {},
+        assertLegacyCurrent: () => {},
+        withCurrent: async (consume) => {
+          admissions += 1;
+          if (admissions === rejectAdmission) {
+            throw failure;
+          }
+          return consume();
+        },
+      };
+      const h = harness({
+        onWrite(line, send) {
+          const request = JSON.parse(line);
+          expect(request.method).toBe("account/read");
+          send({ id: request.id, result: { account: { type: accountType } } });
+        },
+      });
+      ownCodexInferenceClient(h.client);
+      const protect = vi.spyOn(h.client, "protectPrivateTransportSecret");
+      const input = {
+        client: h.client,
+        binding: undefined,
+        clientId: "fixture-native-client",
+        cwd: "/workspace",
+        effectiveConfig: { config: { features: { memories: true } }, origins: {} },
+        assertCurrent: authority.assertCurrent,
+        authority,
+      };
+      await expect(prepareCodexInferenceThreadConfig(input)).rejects.toBe(failure);
+      expect(protect).not.toHaveBeenCalled();
+      expect(h.writes).toHaveLength(1);
+      if (rejectAdmission === 2) {
+        // Refusing the owner update must not leave the old auth route installed.
+        accountType = "chatgpt";
+      }
+      const prepared = await prepareCodexInferenceThreadConfig(input);
+      expect(prepared?.route.upstream).toBe(
+        accountType === "chatgpt"
+          ? "https://chatgpt.com/backend-api/codex"
+          : "https://api.openai.com/v1",
+      );
+      expect(protect).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([false, true])(
     "qualifies stock phase1 memory metadata at the binding boundary (configured=%s)",
     async (configured) => {

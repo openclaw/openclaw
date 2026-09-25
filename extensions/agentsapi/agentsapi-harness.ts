@@ -80,7 +80,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
         throw new Error("Agents API harness is closing");
       }
       const target = validateAgentsApiInput(params);
-      const authority = captureNativeSessionGenerationAuthority({
+      const captured = await captureNativeSessionGenerationAuthority({
         target,
         config: params.config,
         storePath: target.storePath,
@@ -93,12 +93,13 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
             `Agents API session generation is no longer current: ${sessionId}`,
           ),
       });
-      authority.assertCurrent();
+      const authority = captured.authority;
+      authority.assertLegacyCurrent();
       runningSessions.set(params.sessionId, (runningSessions.get(params.sessionId) ?? 0) + 1);
       try {
         return await getBindings().withSession(
           params.sessionId,
-          () => authority.assertCurrent(),
+          () => authority.assertLegacyCurrent(),
           (binding, bind, assertLeaseCurrent) => {
             if (closing) {
               throw new Error("Agents API harness is closing");
@@ -108,7 +109,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
               binding,
               bind,
               () => {
-                authority.assertCurrent();
+                authority.assertLegacyCurrent();
                 assertLeaseCurrent();
               },
               () => {

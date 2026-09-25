@@ -18,9 +18,11 @@ import type {
   CodexControlRequestObservation,
   CodexControlRequestPhase,
 } from "./request-observation.js";
-import { CodexAppServerRpcError } from "./rpc-error.js";
+import { CodexAppServerRpcError, CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";
 import type { CodexAppServerClientOptions } from "./shared-client.js";
 import { withAbortableTimeout, withTimeout } from "./timeout.js";
+
+export { CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";
 
 type CodexAppServerClientRequestParams = {
   client: CodexAppServerClient;
@@ -29,6 +31,7 @@ type CodexAppServerClientRequestParams = {
   timeoutMs?: number;
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  withCurrent?: (write: () => void) => Promise<void>;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   sessionKey?: string;
   sessionId?: string;
@@ -97,10 +100,9 @@ export async function requestCodexAppServerClientJson<T = JsonValue | undefined>
     const options = {
       timeoutMs,
       signal: params.signal,
+      withCurrent: params.withCurrent,
+      assertCurrent: params.assertCurrent,
       ...(attemptWaiterFinished ? { attemptWaiterFinished } : {}),
-      ...(params.assertCurrent
-        ? { assertCurrent: () => assertRequestOwnerCurrent(params.assertCurrent) }
-        : {}),
     };
     phase = "client-request";
     observeControlPhase(params.controlObservation, phase);
@@ -178,14 +180,6 @@ export type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
   /** Rechecks caller-owned authority immediately before each physical write. */
   assertCurrent?: () => void;
 }) => Promise<T>;
-
-/** A scoped guard rejected the request before a physical write. */
-export class CodexAppServerScopedRequestRejectedError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "CodexAppServerScopedRequestRejectedError";
-  }
-}
 
 function createScopeCleanupError(message: string): CodexAppServerScopedRequestRejectedError {
   // Every completed scope needs a fresh abort reason, even on success. Skip its

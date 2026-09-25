@@ -2,18 +2,18 @@ import {
   AgentHarnessPreflightError,
   formatErrorMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { codexPrewriteRejectionCause } from "./rpc-error.js";
 
 export const CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED =
   "CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED";
 
 /** True when a pre-write context restart must replay on the newly selected owner. */
-export function isCodexContextRestartSelectionChangedError(
-  error: unknown,
-): error is Error & { code: typeof CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED } {
+export function isCodexContextRestartSelectionChangedError(error: unknown): boolean {
+  const cause = codexPrewriteRejectionCause(error);
   return (
-    error instanceof Error &&
-    "code" in error &&
-    error.code === CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED
+    cause instanceof Error &&
+    "code" in cause &&
+    cause.code === CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED
   );
 }
 

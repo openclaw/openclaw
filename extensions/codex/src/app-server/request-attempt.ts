@@ -5,6 +5,7 @@ import type {
   CodexRequestWaiterSummary,
   CodexRequestWireOutcome,
 } from "./request-observation.js";
+import { CodexAppServerRpcError } from "./rpc-error.js";
 
 type CodexRequestWaitOptions = {
   timeoutMs?: number;
@@ -246,7 +247,10 @@ export function createCodexRequestAttempt(params: {
         for (const waiter of waiters) {
           const current = currentWaiterError(waiter);
           waiter.reject(
-            current?.error ?? params.localError(error, mayHaveWritten),
+            current?.error ??
+              (error instanceof CodexAppServerRpcError
+                ? error
+                : params.localError(error, mayHaveWritten)),
             current?.outcome ?? "native-error",
           );
         }

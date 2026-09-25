@@ -14,6 +14,7 @@ import {
   TURN_FINALIZE_DRAIN_ABORT_GRACE_MS,
   TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
 } from "./attempt-timeouts.js";
+import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
 import { CodexAppServerClient } from "./client.js";
 import { isJsonObject } from "./protocol.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
@@ -28,6 +29,8 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
+import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
+import * as sharedClient from "./shared-client.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 import { createInferenceReadyClientHarness, waitForHarnessRequest } from "./test-support.js";
@@ -234,10 +237,14 @@ describe("Codex app-server terminal settlement", () => {
     },
   );
 
-  it("preserves a completed reply through degraded settlement without stopping a shared sibling", async () => {
+  it("releases a warm claim after degraded settlement without retiring a shared sibling client", async () => {
+    const retired = vi.spyOn(sharedClient, "retireSharedCodexAppServerClientIfCurrent");
     const physical = createInferenceReadyClientHarness();
     const startClient = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(physical.client);
     const projection = createDeferred<void>();
+    const finalMirrorRelease = createDeferred<void>();
+    const finalMirrorStarted = createDeferred<void>();
+    let pendingFinalMirror: Promise<unknown> | undefined;
     const onReasoningStream = vi.fn(() => projection.promise);
     const onAttemptTimeout = vi.fn();
     const createSharedRunParams = (suffix: string) => ({
@@ -260,8 +267,8 @@ describe("Codex app-server terminal settlement", () => {
     };
     const siblingParams = createSharedRunParams("sibling");
     const firstSettled = vi.fn();
-    const firstRun = runCodexAppServerAttempt(firstParams);
-    void firstRun.then(firstSettled, firstSettled);
+    const warmupRun = runCodexAppServerAttempt(createSharedRunParams("settlement"));
+    let firstRun: ReturnType<typeof runCodexAppServerAttempt> | undefined;
     let siblingRun: ReturnType<typeof runCodexAppServerAttempt> | undefined;
     const wireRequests = () =>
       physical.writes.map(
@@ -281,8 +288,30 @@ describe("Codex app-server terminal settlement", () => {
       physical.send({ id: firstRequirements.id, result: { requirements: null } });
       const firstThread = await waitForHarnessRequest(physical, "thread/start");
       physical.send({ id: firstThread.id, result: threadStartResult("thread-settlement") });
-      const firstTurn = await waitForHarnessRequest(physical, "turn/start");
+      const warmupTurn = await waitForHarnessRequest(physical, "turn/start");
+      physical.send({ id: warmupTurn.id, result: turnStartResult("turn-warmup") });
+      physical.send({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-settlement",
+          turn: { id: "turn-warmup", status: "completed", items: [] },
+        },
+      });
+      await warmupRun;
+      // Exact-claim cleanup is a warm-thread contract; a fresh auto-subscription
+      // has no branded handle and must retain its separate guarded cleanup path.
+      const firstStart = physical.writes.length;
+      firstRun = runCodexAppServerAttempt(firstParams);
+      void firstRun.then(firstSettled, firstSettled);
+      const firstRequirementsAgain = await waitForHarnessRequest(
+        physical,
+        "configRequirements/read",
+        firstStart,
+      );
+      physical.send({ id: firstRequirementsAgain.id, result: { requirements: null } });
+      const firstTurn = await waitForHarnessRequest(physical, "turn/start", firstStart);
       physical.send({ id: firstTurn.id, result: turnStartResult("turn-settlement") });
+      expect(isCodexAppServerLiveThreadClaimed(physical.client, "thread-settlement")).toBe(true);
 
       const siblingStart = physical.writes.length;
       siblingRun = runCodexAppServerAttempt(siblingParams);
@@ -305,6 +334,13 @@ describe("Codex app-server terminal settlement", () => {
         );
       });
 
+      const finalMirror = codexTranscriptMirrorRuntime.mirrorBestEffort;
+      vi.spyOn(codexTranscriptMirrorRuntime, "mirrorBestEffort").mockImplementationOnce((input) => {
+        finalMirrorStarted.resolve();
+        const pending = finalMirrorRelease.promise.then(() => finalMirror(input));
+        pendingFinalMirror = pending;
+        return pending;
+      });
       vi.useFakeTimers();
       const receivedAt = Date.now();
       // Queue both frames before yielding. The second callback starts only after
@@ -338,6 +374,12 @@ describe("Codex app-server terminal settlement", () => {
       expect(onAttemptTimeout).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       expect(onAttemptTimeout).not.toHaveBeenCalled();
+      await finalMirrorStarted.promise;
+      expect(firstSettled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(TURN_FINALIZE_DRAIN_ABORT_GRACE_MS);
+      const unsubscribe = await waitForHarnessRequest(physical, "thread/unsubscribe");
+      expect(unsubscribe.params).toEqual({ threadId: "thread-settlement" });
+      physical.send({ id: unsubscribe.id, result: {} });
       await vi.waitFor(() => expect(firstSettled).toHaveBeenCalledOnce(), fastWait);
       const result = await firstRun;
       expect(readAttemptTerminal(result)).toMatchObject({
@@ -358,7 +400,8 @@ describe("Codex app-server terminal settlement", () => {
               method === "thread/unsubscribe",
           )
           .map(({ params }) => params?.threadId),
-      ).toEqual([]);
+      ).toEqual(["thread-settlement"]);
+      expect(retired).not.toHaveBeenCalled();
       expect(physical.stdinDestroyed).toBe(false);
       expect(resolveActiveEmbeddedRunSessionId(firstParams.sessionKey)).toBeUndefined();
       expect(resolveActiveEmbeddedRunSessionId(siblingParams.sessionKey)).toBe(
@@ -389,9 +432,15 @@ describe("Codex app-server terminal settlement", () => {
       expect(physical.stdinDestroyed).toBe(false);
     } finally {
       projection.resolve();
+      finalMirrorRelease.resolve();
+      await pendingFinalMirror;
       vi.useRealTimers();
       physical.client.close();
-      await Promise.allSettled([firstRun, ...(siblingRun ? [siblingRun] : [])]);
+      await Promise.allSettled([
+        warmupRun,
+        ...(firstRun ? [firstRun] : []),
+        ...(siblingRun ? [siblingRun] : []),
+      ]);
     }
   });
 
@@ -485,9 +534,12 @@ describe("Codex app-server terminal settlement", () => {
       const settled = vi.fn();
       const run = runCodexAppServerAttempt(params);
       let successor: ReturnType<typeof runCodexAppServerAttempt> | undefined;
+      let coverageBeforeSettlement: string | undefined;
       void run.then(settled, settled);
       try {
         await harness.waitForMethod("turn/start");
+        coverageBeforeSettlement = (await readCodexAppServerBinding(params.sessionFile))
+          ?.historyCoveredThrough;
         if (boundary === "checkpoint") {
           await promptPersisted.promise;
           await holdWriter();
@@ -617,6 +669,12 @@ describe("Codex app-server terminal settlement", () => {
           checkpoint.resolve();
           await Promise.allSettled(checkpointWrites);
           const events = await readSessionTranscriptEvents(transcriptTarget);
+          if (release === "after cutoff") {
+            // Releasing the old writer must not admit a late coverage mutation.
+            expect(
+              (await readCodexAppServerBinding(params.sessionFile))?.historyCoveredThrough,
+            ).toBe(coverageBeforeSettlement);
+          }
           const assistantRows = events.filter(
             (event) =>
               isJsonObject(event) &&

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -9,6 +10,7 @@ import {
   buildCodexSupervisionTestConnectionFingerprint,
   testCodexAppServerBindingStore,
 } from "./app-server/session-binding.test-helpers.js";
+import * as threadOwnership from "./app-server/thread-ownership.js";
 import { handleCodexCommand as dispatchCodexCommand } from "./command-dispatch.js";
 import type { CodexCommandDepsOverride } from "./command-handlers.js";
 
@@ -186,4 +188,34 @@ export function runCommand(
     ...options,
     deps: createDeps(deps),
   });
+}
+
+export function holdCodexThreadQueue(threadId: string) {
+  const blocked = createDeferred<void>();
+  const queue = threadOwnership.withCodexAppServerThreadMutation(threadId, () => blocked.promise);
+  const queued =
+    createDeferred<Parameters<typeof threadOwnership.withExclusiveCodexAppServerThread>[0]>();
+  const withExclusiveThread = threadOwnership.withExclusiveCodexAppServerThread;
+  const observer = vi
+    .spyOn(threadOwnership, "withExclusiveCodexAppServerThread")
+    .mockImplementation((params) => {
+      // The real owner enqueues synchronously, after session adoption has settled.
+      const pending = withExclusiveThread(params);
+      queued.resolve(params);
+      return pending;
+    });
+  return {
+    waitFor: (command: Promise<PluginCommandResult>) =>
+      Promise.race([
+        queued.promise,
+        command.then((result) => {
+          throw new Error(`Resume completed before joining the native queue: ${result.text}`);
+        }),
+      ]),
+    async release() {
+      observer.mockRestore();
+      blocked.resolve();
+      await queue;
+    },
+  };
 }

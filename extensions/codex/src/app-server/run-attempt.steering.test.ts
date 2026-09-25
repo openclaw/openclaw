@@ -781,7 +781,12 @@ describe("runCodexAppServerAttempt steering", () => {
   });
 
   it("seals unsent steering without erasing an earlier consumed dispatch", async () => {
-    const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
+    const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness(
+      undefined,
+      {
+        persistedThreads: [],
+      },
+    );
     const params = createSteeringParams();
 
     const run = runCodexAppServerAttempt(params);

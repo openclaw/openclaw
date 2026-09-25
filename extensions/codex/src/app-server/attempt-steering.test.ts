@@ -34,7 +34,10 @@ describe("Codex app-server steering queue", () => {
   function createQueue(
     client: QueueParams["client"] | { request: ReturnType<typeof vi.fn> },
     options: Partial<
-      Pick<QueueParams, "signal" | "requestTimeoutMs" | "prepareMessage" | "beforeSubmit">
+      Pick<
+        QueueParams,
+        "signal" | "requestTimeoutMs" | "prepareMessage" | "beforeSubmit" | "withCurrent"
+      >
     > = {},
   ) {
     return createCodexSteeringQueue({
@@ -54,6 +57,43 @@ describe("Codex app-server steering queue", () => {
     signal: expect.any(AbortSignal),
     assertCurrent: expect.any(Function),
   };
+
+  it("does not accept a steering batch aborted while fresh authority is pending", async () => {
+    const harness = createClientHarness();
+    const entered = createDeferred<void>();
+    const resume = createDeferred<void>();
+    const released = createDeferred<void>();
+    const controller = new AbortController();
+    const onQueueAccepted = vi.fn();
+    const queue = createQueue(harness.client, {
+      signal: controller.signal,
+      withCurrent: async (write) => {
+        entered.resolve();
+        try {
+          await resume.promise;
+          write();
+        } finally {
+          released.resolve();
+        }
+      },
+    });
+    const delivery = queue.queue("steer", { debounceMs: 0, onQueueAccepted });
+    const rejected = expect(delivery).rejects.toThrow("aborted");
+    try {
+      await entered.promise;
+      controller.abort();
+      await rejected;
+      expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(false);
+      expect(queue.getAcceptedMessages()).toEqual([]);
+      resume.resolve();
+      await released.promise;
+      expect(harness.writes).toEqual([]);
+    } finally {
+      resume.resolve();
+      queue.cancel();
+      harness.client.close();
+    }
+  });
 
   it.each(["committed", "failed", "revoked", "aborted", "sealed"] as const)(
     "guards physical steering submission after the source commit is %s",

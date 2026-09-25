@@ -2,6 +2,21 @@ import { isJsonObject, type JsonValue } from "./protocol.js";
 
 export const CODEX_APP_SERVER_OVERLOADED_ERROR_CODE = -32_001;
 
+/** A scoped guard rejected the request before a physical write. */
+export class CodexAppServerScopedRequestRejectedError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "CodexAppServerScopedRequestRejectedError";
+  }
+}
+
+/** Only definite pre-write rejection permits recovering the original startup cause. */
+export function codexPrewriteRejectionCause(error: unknown): unknown {
+  return error instanceof CodexAppServerScopedRequestRejectedError && error.cause !== undefined
+    ? error.cause
+    : error;
+}
+
 /** RPC error wrapper that preserves app-server error code and data. */
 export class CodexAppServerRpcError extends Error {
   readonly code?: number;

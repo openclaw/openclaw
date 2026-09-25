@@ -59,17 +59,17 @@ export function createLazyCodexAppServerBindingStore(
       readCurrentCodexNativeSubagentSubmissions(state, identity, owner),
     hasOtherThreadOwner: async (threadId, currentIdentity) =>
       (await store()).hasOtherThreadOwner(threadId, currentIdentity),
-    mutate: async (identity, mutation, assertCurrent) =>
-      (await store()).mutate(identity, mutation, assertCurrent),
+    mutate: async (identity, mutation, assertCurrent, authority) =>
+      (await store()).mutate(identity, mutation, assertCurrent, authority),
     prepareSessionGenerationReclaim: async (identity) =>
       (await store()).prepareSessionGenerationReclaim(identity),
-    adoptSessionGeneration: async (identity, previousSessionId, assertCurrent) =>
-      (await store()).adoptSessionGeneration(identity, previousSessionId, assertCurrent),
+    adoptSessionGeneration: async (identity, previousSessionId, assertCurrent, authority) =>
+      (await store()).adoptSessionGeneration(identity, previousSessionId, assertCurrent, authority),
     resetSessionGeneration: async (identity) => (await store()).resetSessionGeneration(identity),
     retireSessionGeneration: async (identity) => (await store()).retireSessionGeneration(identity),
     withSessionDeletion: async (identity, assertCurrent, run) =>
       (await store()).withSessionDeletion(identity, assertCurrent, run),
     withThreadArchiveFence: async (run) => (await store()).withThreadArchiveFence(run),
-    withLease: async (identity, run) => (await store()).withLease(identity, run),
+    withLease: async (identity, run, options) => (await store()).withLease(identity, run, options),
   };
 }

@@ -129,6 +129,7 @@ import {
 } from "./shared-client.js";
 import { cleanupCodexSideQuestion } from "./side-question-cleanup.js";
 import { SIDE_DEVELOPER_INSTRUCTIONS } from "./side-question-instructions.js";
+import { buildSideRunAttemptParams } from "./side-question-run-params.js";
 import {
   buildCodexRuntimeThreadConfig,
   CODEX_NATIVE_PERSONALITY_NONE,
@@ -177,7 +178,7 @@ export async function runCodexAppServerSideQuestion(
     config: params.cfg,
   });
   const hostCapabilities = params.hostCapabilities;
-  const { binding, assertCurrent } = await resolveCodexSessionBinding({
+  const { binding, authority } = await resolveCodexSessionBinding({
     bindingStore: options.bindingStore,
     identity: bindingIdentity,
     config: params.cfg,
@@ -185,6 +186,7 @@ export async function runCodexAppServerSideQuestion(
     assertCurrent: hostCapabilities.assertActive,
     signal: params.opts?.abortSignal,
   });
+  const assertCurrent = authority.assertCurrent;
   if (!binding?.threadId) {
     throw new Error(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
@@ -363,7 +365,8 @@ export async function runCodexAppServerSideQuestion(
     );
   }
   const clientOptions = {
-    assertCurrent,
+    // Existing synchronous process startup admission.
+    assertCurrent: authority.assertLegacyCurrent,
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
     authRequirement: preparedRuntimeAuth.plan.modelRoute?.authRequirement,
@@ -648,7 +651,7 @@ export async function runCodexAppServerSideQuestion(
         }),
         signal: runAbortController.signal,
         runBeforeToolCall: sideRunParams.hostCapabilities.runBeforeToolCall,
-        assertActive: assertCurrent,
+        assertActive: authority.assertLegacyCurrent,
         onPreToolUseFailure: (failure) => {
           if (nativePreToolUseFailureFallbackActive) {
             emitNativePreToolUseFailure(failure);
@@ -685,149 +688,155 @@ export async function runCodexAppServerSideQuestion(
       options: clientOptions,
       signal: runAbortController.signal,
       run: async (forkClient, requestOptions) =>
-        options.bindingStore.withLease(bindingIdentity, async () => {
-          const assertCurrentBinding = () => {
-            assertCurrent();
-            runAbortController.signal.throwIfAborted();
-            if (!isDeepStrictEqual(options.bindingStore.read(bindingIdentity), binding)) {
-              throw new Error("Codex side-question binding changed before fork");
-            }
-          };
-          const currentRequestOptions = () => {
-            const scoped = requestOptions();
-            return {
-              ...scoped,
-              assertCurrent: () => {
-                scoped.assertCurrent();
-                assertCurrentBinding();
-              },
+        options.bindingStore.withLease(
+          bindingIdentity,
+          async () => {
+            const assertCurrentBinding = () => {
+              assertCurrent();
+              runAbortController.signal.throwIfAborted();
+              if (!isDeepStrictEqual(options.bindingStore.read(bindingIdentity), binding)) {
+                throw new Error("Codex side-question binding changed before fork");
+              }
             };
-          };
-          assertCurrentBinding();
-          if (binding.connectionScope === "supervision") {
-            const { thread } = await forkClient.request(
-              "thread/read",
-              {
-                threadId: binding.threadId,
-                includeTurns: false,
-              },
-              currentRequestOptions(),
-            );
+            const currentRequestOptions = () => {
+              const scoped = requestOptions();
+              return {
+                ...scoped,
+                withCurrent: authority.withCurrent,
+                assertCurrent: () => {
+                  scoped.assertCurrent();
+                  assertCurrentBinding();
+                },
+              };
+            };
             assertCurrentBinding();
-            assertCodexSupervisionThreadLineage(binding, thread);
-          }
-          await ensureSandboxEnvironment(forkClient);
-          assertCurrentBinding();
-          const executionCwd = sandboxEnvironment?.cwd ?? cwd;
-          let pluginAppsConfigPatch: JsonObject | undefined;
-          if (binding.pluginAppPolicyContext) {
-            const refreshed = await refreshCodexPluginAppApprovalPolicy({
-              policyContext: binding.pluginAppPolicyContext,
-              configCwd: executionCwd,
-              request: (method, requestParams) => {
-                assertCurrentBinding();
-                return forkClient.request(method, requestParams, currentRequestOptions());
-              },
-            }).finally(assertCurrentBinding);
-            pluginAppPolicyContext = refreshed.policyContext;
-            pluginAppsConfigPatch = refreshed.configPatch;
-            for (const diagnostic of refreshed.diagnostics) {
-              embeddedAgentLog.warn(diagnostic.message);
-            }
-          }
-          assertCurrentBinding();
-          // Fork reloads native config; refresh ask overrides before replaying the
-          // bound app policy, including when /btw is the first run after restart.
-          const threadConfig =
-            mergeCodexThreadConfigs(
-              nativeHookRelayConfig,
-              runtimeThreadConfig,
-              pluginAppsConfigPatch,
-              appServer.networkProxy?.configPatch,
-            ) ?? runtimeThreadConfig;
-          const response = assertCodexThreadForkResponse(
-            await forkCodexSideThread(
-              forkClient,
-              {
-                threadId: binding.threadId,
-                model: modelSelection.model,
-                ...(modelSelection.modelProvider
-                  ? { modelProvider: modelSelection.modelProvider }
-                  : {}),
-                cwd: executionCwd,
-                ...(sessionPermissionPolicy
-                  ? { runtimeWorkspaceRoots: [sessionPermissionPolicy.root] }
-                  : {}),
-                approvalPolicy,
-                approvalsReviewer: appServer.approvalsReviewer,
-                ...(sandboxEnvironment || appServer.networkProxy ? {} : { sandbox }),
-                ...(serviceTier ? { serviceTier } : {}),
-                config: threadConfig,
-                developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
-                ephemeral: true,
-                // Paginated ephemeral forks require metadata-only responses; history stays native.
-                excludeTurns: true,
-                threadSource: "user",
-              },
-              currentRequestOptions(),
-            ),
-          );
-          if (!response.thread.id.trim() || response.thread.id === binding.threadId) {
-            await retireUnsafeCodexTurnClientBestEffort(forkClient, "unsafe side child identity");
-            throw new Error("Codex side fork returned an unsafe child identity");
-          }
-          childThreadId = response.thread.id;
-          childClient = forkClient;
-          collector = new CodexEphemeralTurn(forkClient, childThreadId, {
-            textMode: "last",
-            onRequest: handleServerRequest,
-            onAssistantMessageStart: async () => {
-              await params.opts?.onAssistantMessageStart?.();
-            },
-            onNotification: (notification) =>
-              nativeToolLifecycleProjector?.handleNotification(notification),
-          });
-          // A terminal answer may still be projecting after transport closure;
-          // native hook authority ends with the route, not that projection.
-          if (nativeHookRelay) {
-            collector.route.signal.addEventListener("abort", nativeHookRelay.unregister, {
-              once: true,
-            });
-          }
-          try {
-            assertCurrentBinding();
-            if (
-              supervisionModelSelection &&
-              (response.model !== supervisionModelSelection.model ||
-                response.modelProvider !== supervisionModelSelection.modelProvider)
-            ) {
-              throw new Error(
-                "Codex supervised side thread did not preserve its native model and provider",
+            if (binding.connectionScope === "supervision") {
+              const { thread } = await forkClient.request(
+                "thread/read",
+                {
+                  threadId: binding.threadId,
+                  includeTurns: false,
+                },
+                currentRequestOptions(),
               );
+              assertCurrentBinding();
+              assertCodexSupervisionThreadLineage(binding, thread);
             }
-            const scoped = requestOptions();
-            await refreshCodexThreadPolicy({
-              client: forkClient,
-              threadId: childThreadId,
-              developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
-              ...scoped,
-              signal: runAbortController.signal,
-              assertCurrent: () => {
-                assertCurrent();
-                runAbortController.signal.throwIfAborted();
-                scoped.assertCurrent();
+            await ensureSandboxEnvironment(forkClient);
+            assertCurrentBinding();
+            const executionCwd = sandboxEnvironment?.cwd ?? cwd;
+            let pluginAppsConfigPatch: JsonObject | undefined;
+            if (binding.pluginAppPolicyContext) {
+              const refreshed = await refreshCodexPluginAppApprovalPolicy({
+                policyContext: binding.pluginAppPolicyContext,
+                configCwd: executionCwd,
+                request: (method, requestParams) => {
+                  assertCurrentBinding();
+                  return forkClient.request(method, requestParams, currentRequestOptions());
+                },
+              }).finally(assertCurrentBinding);
+              pluginAppPolicyContext = refreshed.policyContext;
+              pluginAppsConfigPatch = refreshed.configPatch;
+              for (const diagnostic of refreshed.diagnostics) {
+                embeddedAgentLog.warn(diagnostic.message);
+              }
+            }
+            assertCurrentBinding();
+            // Fork reloads native config; refresh ask overrides before replaying the
+            // bound app policy, including when /btw is the first run after restart.
+            const threadConfig =
+              mergeCodexThreadConfigs(
+                nativeHookRelayConfig,
+                runtimeThreadConfig,
+                pluginAppsConfigPatch,
+                appServer.networkProxy?.configPatch,
+              ) ?? runtimeThreadConfig;
+            const response = assertCodexThreadForkResponse(
+              await forkCodexSideThread(
+                forkClient,
+                {
+                  threadId: binding.threadId,
+                  model: modelSelection.model,
+                  ...(modelSelection.modelProvider
+                    ? { modelProvider: modelSelection.modelProvider }
+                    : {}),
+                  cwd: executionCwd,
+                  ...(sessionPermissionPolicy
+                    ? { runtimeWorkspaceRoots: [sessionPermissionPolicy.root] }
+                    : {}),
+                  approvalPolicy,
+                  approvalsReviewer: appServer.approvalsReviewer,
+                  ...(sandboxEnvironment || appServer.networkProxy ? {} : { sandbox }),
+                  ...(serviceTier ? { serviceTier } : {}),
+                  config: threadConfig,
+                  developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
+                  ephemeral: true,
+                  // Paginated ephemeral forks require metadata-only responses; history stays native.
+                  excludeTurns: true,
+                  threadSource: "user",
+                },
+                currentRequestOptions(),
+              ),
+            );
+            if (!response.thread.id.trim() || response.thread.id === binding.threadId) {
+              await retireUnsafeCodexTurnClientBestEffort(forkClient, "unsafe side child identity");
+              throw new Error("Codex side fork returned an unsafe child identity");
+            }
+            childThreadId = response.thread.id;
+            childClient = forkClient;
+            collector = new CodexEphemeralTurn(forkClient, childThreadId, {
+              textMode: "last",
+              onRequest: handleServerRequest,
+              onAssistantMessageStart: async () => {
+                await params.opts?.onAssistantMessageStart?.();
               },
+              onNotification: (notification) =>
+                nativeToolLifecycleProjector?.handleNotification(notification),
             });
-          } catch (error) {
-            policyWriteUncertain =
-              error instanceof CodexThreadPolicyHandoffError && error.outcome === "unknown";
-            // A child already exists: selection recovery cannot repeat this callback.
-            throw error instanceof CodexThreadPolicyHandoffError
-              ? error
-              : new CodexThreadPolicyHandoffError("not-written", error);
-          }
-          return response.thread.id;
-        }),
+            // A terminal answer may still be projecting after transport closure;
+            // native hook authority ends with the route, not that projection.
+            if (nativeHookRelay) {
+              collector.route.signal.addEventListener("abort", nativeHookRelay.unregister, {
+                once: true,
+              });
+            }
+            try {
+              assertCurrentBinding();
+              if (
+                supervisionModelSelection &&
+                (response.model !== supervisionModelSelection.model ||
+                  response.modelProvider !== supervisionModelSelection.modelProvider)
+              ) {
+                throw new Error(
+                  "Codex supervised side thread did not preserve its native model and provider",
+                );
+              }
+              const scoped = requestOptions();
+              await refreshCodexThreadPolicy({
+                client: forkClient,
+                threadId: childThreadId,
+                developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
+                ...scoped,
+                withCurrent: authority.withCurrent,
+                signal: runAbortController.signal,
+                assertCurrent: () => {
+                  assertCurrent();
+                  runAbortController.signal.throwIfAborted();
+                  scoped.assertCurrent();
+                },
+              });
+            } catch (error) {
+              policyWriteUncertain =
+                error instanceof CodexThreadPolicyHandoffError && error.outcome === "unknown";
+              // A child already exists: selection recovery cannot repeat this callback.
+              throw error instanceof CodexThreadPolicyHandoffError
+                ? error
+                : new CodexThreadPolicyHandoffError("not-written", error);
+            }
+            return response.thread.id;
+          },
+          { assertCurrent, authority },
+        ),
       onClientChange: (nextClient) => {
         client = nextClient;
       },
@@ -887,6 +896,7 @@ export async function runCodexAppServerSideQuestion(
             timeoutMs: appServer.requestTimeoutMs,
             signal: runAbortController.signal,
             assertCurrent,
+            withCurrent: authority.withCurrent,
           },
         )
         .catch((error: unknown) => {
@@ -950,7 +960,7 @@ export async function runCodexAppServerSideQuestion(
     if (!result.text) {
       throw new Error("Codex /btw completed without an answer.");
     }
-    return { text: result.text, usage: result.usage };
+    return await authority.withCurrent(() => ({ text: result.text, usage: result.usage }));
   } catch (error) {
     primaryFailure = { error };
     throw error;
@@ -996,77 +1006,6 @@ export async function runCodexAppServerSideQuestion(
       ],
     });
   }
-}
-
-function buildSideRunAttemptParams(
-  params: AgentHarnessSideQuestionParamsV2,
-  options: { cwd: string; authProfileId?: string; runId: string; timeoutMs: number },
-): EmbeddedRunAttemptParamsV2 {
-  const sideParams = {
-    params,
-    config: params.cfg,
-    agentDir: params.agentDir,
-    provider: params.provider,
-    modelId: params.model,
-    model: params.runtimeModel ?? ({ id: params.model, provider: params.provider } as never),
-    prompt: params.question,
-    timeoutMs: options.timeoutMs,
-    sessionId: params.sessionId,
-    sessionFile: params.sessionFile,
-    sessionKey: params.sessionKey,
-    ...(params.sandboxSessionKey ? { sandboxSessionKey: params.sandboxSessionKey } : {}),
-    agentId: params.agentId,
-    ...(params.messageChannel ? { messageChannel: params.messageChannel } : {}),
-    ...(params.messageProvider ? { messageProvider: params.messageProvider } : {}),
-    ...(params.chatType ? { chatType: params.chatType } : {}),
-    ...(params.agentAccountId ? { agentAccountId: params.agentAccountId } : {}),
-    ...(params.messageTo ? { messageTo: params.messageTo } : {}),
-    ...(params.messageThreadId !== undefined ? { messageThreadId: params.messageThreadId } : {}),
-    ...(params.chatId ? { chatId: params.chatId } : {}),
-    ...(params.messageActionTurnCapability
-      ? { messageActionTurnCapability: params.messageActionTurnCapability }
-      : {}),
-    ...(params.groupId !== undefined ? { groupId: params.groupId } : {}),
-    ...(params.groupChannel !== undefined ? { groupChannel: params.groupChannel } : {}),
-    ...(params.groupSpace !== undefined ? { groupSpace: params.groupSpace } : {}),
-    ...(params.memberRoleIds ? { memberRoleIds: params.memberRoleIds } : {}),
-    ...(params.spawnedBy !== undefined ? { spawnedBy: params.spawnedBy } : {}),
-    ...(params.senderId !== undefined ? { senderId: params.senderId } : {}),
-    ...(params.senderName !== undefined ? { senderName: params.senderName } : {}),
-    ...(params.senderUsername !== undefined ? { senderUsername: params.senderUsername } : {}),
-    ...(params.senderE164 !== undefined ? { senderE164: params.senderE164 } : {}),
-    ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
-    ...(params.currentChannelId ? { currentChannelId: params.currentChannelId } : {}),
-    ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
-    workspaceDir: options.cwd,
-    authProfileId: options.authProfileId,
-    authProfileIdSource: options.authProfileId
-      ? params.preparedRuntimeAuth.plan.forwardedAuthProfileSource
-      : undefined,
-    thinkLevel: params.resolvedThinkLevel ?? "off",
-    resolvedReasoningLevel: params.resolvedReasoningLevel,
-    authStorage: params.preparedRuntimeAuth.authStorage,
-    authProfileStore: params.preparedRuntimeAuth.authProfileStore,
-    modelRegistry: params.preparedRuntimeAuth.modelRegistry,
-    preparedModelRuntime: params.preparedModelRuntime,
-    ...(params.preparedRuntimeAuth.resolvedApiKey
-      ? { resolvedApiKey: params.preparedRuntimeAuth.resolvedApiKey }
-      : {}),
-    runId: options.runId,
-    abortSignal: params.opts?.abortSignal,
-    onAgentEvent: (event: { stream: string; data: Record<string, unknown> }) => {
-      if (event.stream === "approval") {
-        void params.opts?.onApprovalEvent?.(event.data as never);
-      }
-    },
-    onBlockReply: params.opts?.onBlockReply,
-    onPartialReply: params.opts?.onPartialReply,
-    onToolResult: params.opts?.onToolResult,
-    requireExplicitMessageTarget: true,
-    hostCapabilities: params.hostCapabilities,
-    sandbox: params.sandbox,
-  };
-  return sideParams as EmbeddedRunAttemptParamsV2;
 }
 
 async function createCodexSideToolBridge(input: {

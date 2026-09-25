@@ -1,5 +1,6 @@
 // Codex tests cover attempt client cleanup plugin behavior.
 import { setImmediate } from "node:timers/promises";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   closeCodexStartupClientBestEffort,
@@ -7,11 +8,95 @@ import {
   retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
   terminateCodexBackgroundTerminals,
+  shouldRetireCodexStartupClient,
 } from "./attempt-client-cleanup.js";
+import { CodexAppServerStartupError, isCodexAppServerStartupError } from "./attempt-timeouts.js";
+import { isCodexAppServerIndeterminateTransportError } from "./client.js";
+import {
+  CodexAppServerScopedRequestRejectedError,
+  codexPrewriteRejectionCause,
+} from "./rpc-error.js";
+import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
+import { isCodexContextRestartSelectionChangedError } from "./thread-lifecycle-errors.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 describe("Codex app-server attempt client cleanup", () => {
+  it.each([
+    {
+      name: "startup selection",
+      cause: Object.assign(new Error("selection changed"), {
+        code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
+      }),
+      matches: isCodexAppServerStartSelectionChangedError,
+      retireBefore: false,
+    },
+    {
+      name: "context restart",
+      cause: Object.assign(new Error("context selection changed"), {
+        code: "CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED",
+      }),
+      matches: isCodexContextRestartSelectionChangedError,
+      retireBefore: true,
+    },
+    {
+      name: "startup timeout",
+      cause: new CodexAppServerStartupError("timed_out"),
+      matches: isCodexAppServerStartupError,
+      retireBefore: true,
+    },
+    {
+      name: "model-independent preflight",
+      cause: new AgentHarnessPreflightError("preflight refused"),
+      matches: (error: unknown) =>
+        codexPrewriteRejectionCause(error) instanceof AgentHarnessPreflightError,
+      retireBefore: false,
+    },
+  ])(
+    "preserves $name only for definite pre-write rejection",
+    async ({ cause, matches, retireBefore }) => {
+      const harness = createClientHarness();
+      const signal = new AbortController().signal;
+      try {
+        const before = await harness.client
+          .request(
+            "thread/start",
+            {},
+            {
+              assertCurrent: () => {
+                throw cause;
+              },
+            },
+          )
+          .catch((error: unknown) => error);
+        expect(before).toBeInstanceOf(CodexAppServerScopedRequestRejectedError);
+        expect(before).toMatchObject({ cause });
+        expect(matches(before)).toBe(true);
+        expect(shouldRetireCodexStartupClient(before, undefined, signal)).toBe(retireBefore);
+        expect(harness.writes).toHaveLength(0);
+
+        const after = await harness.client
+          .request(
+            "thread/start",
+            {},
+            {
+              withCurrent: async (write) => {
+                write();
+                throw cause;
+              },
+            },
+          )
+          .catch((error: unknown) => error);
+        expect(isCodexAppServerIndeterminateTransportError(after)).toBe(true);
+        expect(matches(after)).toBe(false);
+        expect(shouldRetireCodexStartupClient(after, undefined, signal)).toBe(true);
+        expect(harness.writes).toHaveLength(1);
+      } finally {
+        harness.client.close();
+      }
+    },
+  );
+
   it.each([
     { terminated: true, oneShot: false },
     { terminated: false, oneShot: false },

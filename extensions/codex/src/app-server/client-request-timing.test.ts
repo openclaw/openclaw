@@ -53,6 +53,96 @@ afterEach(() => {
 });
 
 describe("Codex request timing", () => {
+  it("prepares fresh authority for every wire attempt and releases before response", async () => {
+    const harness = createHarness();
+    let retained = false;
+    const withCurrent = vi.fn(async (write: () => void) => {
+      retained = true;
+      try {
+        write();
+      } finally {
+        retained = false;
+      }
+    });
+    const assertCurrent = vi.fn(() => expect(retained).toBe(true));
+    const pending = read(harness, { withCurrent, assertCurrent });
+    expect(withCurrent).toHaveBeenCalledTimes(1);
+    expect(retained).toBe(false);
+    harness.send({ id: requestId(harness), error: { code: -32001, message: "Server overloaded" } });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(withCurrent).toHaveBeenCalledTimes(2);
+    expect(assertCurrent).toHaveBeenCalledTimes(2);
+    expect(retained).toBe(false);
+    harness.send({ id: requestId(harness, 1), result: page });
+    await expect(pending).resolves.toEqual(page);
+  });
+
+  it.each(
+    (["thread/list", "turn/start"] as const).flatMap((method) =>
+      (["abort", "timeout", "close"] as const).map((reason) => ({ method, reason })),
+    ),
+  )(
+    "settles $method $reason during authority preparation and refuses a late wire grant",
+    async ({ method, reason }) => {
+      const harness = createHarness();
+      const resume = createDeferred<void>();
+      const released = createDeferred<void>();
+      const controller = new AbortController();
+      const pending = harness.client.request(
+        method,
+        method === "turn/start" ? { threadId: "held-turn", input: [] } : { limit: 1 },
+        {
+          timeoutMs: 1_000,
+          signal: controller.signal,
+          withCurrent: async (write) => {
+            try {
+              await resume.promise;
+              write();
+            } finally {
+              released.resolve();
+            }
+          },
+        },
+      );
+      void pending.catch(() => undefined);
+      const rejected = expect(pending).rejects.toThrow(
+        reason === "abort" ? "aborted" : reason === "timeout" ? "timed out" : "closed",
+      );
+      if (reason === "abort") {
+        controller.abort();
+      } else if (reason === "timeout") {
+        await vi.advanceTimersByTimeAsync(1_000);
+      } else {
+        harness.client.close();
+      }
+      await rejected;
+      if (reason !== "close") {
+        await expect(pending).rejects.toMatchObject({
+          reason: reason === "abort" ? "aborted" : "timed out",
+          mayHaveWritten: false,
+          code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
+        });
+      }
+      expect(harness.writes).toHaveLength(0);
+      resume.resolve();
+      await released.promise;
+      expect(harness.writes).toHaveLength(0);
+    },
+  );
+
+  it("rejects failed authority preparation without writing", async () => {
+    const harness = createHarness();
+    await expect(
+      read(harness, {
+        withCurrent: async () => {
+          throw new Error("session superseded");
+        },
+      }),
+    ).rejects.toThrow("session superseded");
+    expect(harness.writes).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("keeps a pending read valid across a wall-clock jump", async () => {
     const harness = createHarness();
     const pending = read(harness);

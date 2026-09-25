@@ -205,3 +205,20 @@ export function createFakeCodexAppServerClient(
     },
   };
 }
+
+export function rateLimitsUpdated(resetsAt: number): CodexServerNotification {
+  return {
+    method: "account/rateLimits/updated",
+    params: {
+      rateLimits: {
+        limitId: "codex",
+        limitName: "Codex",
+        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt },
+        secondary: null,
+        credits: null,
+        planType: "plus",
+        rateLimitReachedType: "rate_limit_reached",
+      },
+    },
+  };
+}

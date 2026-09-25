@@ -41,6 +41,9 @@ const {
   getSharedCodexAppServerClientMock,
   createOpenClawCodingToolsMock,
   toolExecuteMock,
+  flushDiagnosticEvents,
+  activeDiagnosticToolKeys,
+  nativeCommandItem,
   handleCodexAppServerApprovalRequestMock,
   resolveCodexProviderWebSearchSupportForClientMock,
   withLeasedCodexAppServerClientStartSelectionRetryMock,
@@ -110,32 +113,6 @@ async function startClientRequestWhenReady(
   });
 }
 
-function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
-function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string> {
-  const active = new Set<string>();
-  for (const event of events) {
-    if (event.type === "tool.execution.started") {
-      active.add(
-        `${event.runId ?? event.sessionId ?? event.sessionKey ?? "unknown"}:${event.toolCallId ?? event.toolName}`,
-      );
-    } else if (
-      event.type === "tool.execution.completed" ||
-      event.type === "tool.execution.error" ||
-      event.type === "tool.execution.blocked"
-    ) {
-      active.delete(
-        `${event.runId ?? event.sessionId ?? event.sessionKey ?? "unknown"}:${event.toolCallId ?? event.toolName}`,
-      );
-    }
-  }
-  return active;
-}
-
 function codexHookCommand(config: unknown, key: string) {
   const entries = (config as Record<string, unknown> | undefined)?.[key];
   if (!Array.isArray(entries)) {
@@ -153,26 +130,6 @@ function codexHookStateForEvent(
   event: string,
 ) {
   return Object.entries(hookState ?? {}).find(([key]) => key.endsWith(`:${event}:0:0`))?.[1];
-}
-
-function nativeCommandItem(
-  id: string,
-  status: "inProgress" | "completed",
-  durationMs: number | null,
-) {
-  return {
-    type: "commandExecution",
-    id,
-    command: "git status --short",
-    cwd: "/tmp/workspace",
-    processId: null,
-    source: "agent",
-    status,
-    commandActions: [],
-    aggregatedOutput: status === "completed" ? "" : null,
-    exitCode: status === "completed" ? 0 : null,
-    durationMs,
-  };
 }
 
 useProviderToolSchemaRuntimeForTest(["openai", "codex", "lmstudio"]);
@@ -468,6 +425,7 @@ describe("runCodexAppServerSideQuestion", () => {
       timeoutMs: 60_000,
       signal: undefined,
       assertCurrent: expect.any(Function),
+      withCurrent: expect.any(Function),
     });
 
     const injectCall = mockCall(client.request, 1);
@@ -483,6 +441,7 @@ describe("runCodexAppServerSideQuestion", () => {
       timeoutMs: 60_000,
       signal: expect.any(AbortSignal),
       assertCurrent: expect.any(Function),
+      withCurrent: expect.any(Function),
     });
     const injectedItem = injectParams?.items?.[0] as
       | { content?: Array<{ text?: string }> }
@@ -524,6 +483,7 @@ describe("runCodexAppServerSideQuestion", () => {
         timeoutMs: 60_000,
         signal: expect.any(AbortSignal),
         assertCurrent: expect.any(Function),
+        withCurrent: expect.any(Function),
       },
     ]);
     const turnStartParams = turnStartCall?.[1] as Record<string, unknown> | undefined;
@@ -3388,162 +3348,6 @@ describe("runCodexAppServerSideQuestion", () => {
       },
     ]);
     expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
-  });
-
-  it("finalizes an active native side-thread tool when side completion times out", async () => {
-    vi.useFakeTimers();
-    const client = createFakeClient();
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
-      diagnosticEvents.push(event),
-    );
-    client.request.mockImplementation(async (method: string) => {
-      if (method === "thread/fork") {
-        return threadResult("side-thread");
-      }
-      if (method === "thread/inject_items") {
-        return {};
-      }
-      if (method === "turn/start") {
-        setTimeout(() => {
-          client.emit({
-            method: "item/started",
-            params: {
-              ...codexTestTurnIds("side-thread"),
-              item: nativeCommandItem("native-tool-timeout", "inProgress", null),
-            },
-          });
-        }, 0);
-        return turnStartResult("turn-1");
-      }
-      if (method === "turn/interrupt") {
-        queueMicrotask(() =>
-          client.emit(turnCompleted("side-thread", "turn-1", "", "interrupted")),
-        );
-        return {};
-      }
-      if (method === "thread/backgroundTerminals/list") {
-        return { data: [] };
-      }
-      if (method === "thread/unsubscribe") {
-        return {};
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
-    getSharedCodexAppServerClientMock.mockResolvedValue(client);
-
-    try {
-      const runResult = runCodexAppServerSideQuestion(
-        sideParams({
-          agentId: "side-agent",
-          sessionKey: "agent:side-agent:main",
-          opts: { runId: "run-side-native-timeout" },
-        }),
-      ).catch((error: unknown) => error);
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(600_000);
-
-      await expect(runResult).resolves.toMatchObject({ name: "TimeoutError" });
-      expect(client.request).toHaveBeenCalledWith(
-        "thread/backgroundTerminals/list",
-        { threadId: "side-thread" },
-        expect.any(Object),
-      );
-      await vi.runAllTimersAsync();
-      expect(diagnosticEvents).toContainEqual(
-        expect.objectContaining({
-          type: "tool.execution.error",
-          agentId: "side-agent",
-          toolCallId: "native-tool-timeout",
-          terminalReason: "timed_out",
-        }),
-      );
-      expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
-    } finally {
-      unsubscribeDiagnostics();
-    }
-  });
-
-  it("classifies an active side tool as timed out when side completion expires", async () => {
-    vi.useFakeTimers();
-    const client = createFakeClient();
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
-      diagnosticEvents.push(event),
-    );
-    toolExecuteMock.mockImplementation(
-      (_callId: string, _args: unknown, signal?: AbortSignal) =>
-        new Promise((_resolve, reject) => {
-          signal?.addEventListener(
-            "abort",
-            () => reject(signal.reason instanceof Error ? signal.reason : new Error("aborted")),
-            { once: true },
-          );
-        }),
-    );
-    client.request.mockImplementation(async (method: string) => {
-      if (method === "thread/fork") {
-        return threadResult("side-thread");
-      }
-      if (method === "thread/inject_items") {
-        return {};
-      }
-      if (method === "turn/start") {
-        setTimeout(() => {
-          void client.handleRequest({
-            id: 42,
-            method: "item/tool/call",
-            params: {
-              ...codexTestTurnIds("side-thread"),
-              callId: "tool-timeout",
-              tool: "wiki_status",
-              arguments: {},
-            },
-          });
-        }, 0);
-        return turnStartResult("turn-1");
-      }
-      if (method === "turn/interrupt") {
-        queueMicrotask(() =>
-          client.emit(turnCompleted("side-thread", "turn-1", "", "interrupted")),
-        );
-        return {};
-      }
-      if (method === "thread/backgroundTerminals/list") {
-        return { data: [] };
-      }
-      if (method === "thread/unsubscribe") {
-        return {};
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
-    getSharedCodexAppServerClientMock.mockResolvedValue(client);
-
-    try {
-      const runPromise = runCodexAppServerSideQuestion(
-        sideParams({
-          agentId: "side-agent",
-          sessionKey: "global",
-          opts: { runId: "run-side-timeout" },
-        }),
-      );
-      const runResult = runPromise.catch((error: unknown) => error);
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(600_000);
-
-      await expect(runResult).resolves.toMatchObject({ name: "TimeoutError" });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(diagnosticEvents).toContainEqual(
-        expect.objectContaining({
-          type: "tool.execution.error",
-          agentId: "side-agent",
-          toolCallId: "tool-timeout",
-          terminalReason: "timed_out",
-        }),
-      );
-    } finally {
-      unsubscribeDiagnostics();
-    }
   });
 
   it("normalizes hook channel ids for side-thread dynamic tool requests", async () => {

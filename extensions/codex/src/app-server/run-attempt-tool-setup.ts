@@ -37,6 +37,7 @@ import type { CodexDynamicToolSpec } from "./protocol.js";
 import { isCodexResponsesOAuth } from "./responses-oauth.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
+import { isAuthorityResolutionOperationAbort } from "./run-attempt-tool-errors.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import {
   buildScheduledCodexAppServerConnectionIdentity,
@@ -44,10 +45,6 @@ import {
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
 import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
-
-function isAuthorityResolutionOperationAbort(error: unknown, signal: AbortSignal | undefined) {
-  return signal?.aborted === true && error === signal.reason;
-}
 
 export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   const {
@@ -270,7 +267,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     runAbortController.signal.throwIfAborted();
     connection.assertCurrent();
     const client = await connection.attemptClientFactory({
-      assertCurrent: connection.assertCurrent,
+      assertCurrent: connection.assertLegacyCurrent,
       startOptions: connection.appServer.start,
       authProfileId: connection.startupClientAuthProfileId,
       agentDir,
@@ -280,6 +277,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     try {
       nativeSpecs = await loadCodexNativeToolCatalog({
         client,
+        authority: connection.authority,
         binding: mutable.startupBinding,
         appServer: connection.appServer,
         agentDir,

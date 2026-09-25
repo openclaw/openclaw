@@ -73,6 +73,7 @@ type CodexLiveThreadReleaseParams = {
   threadId: string;
   cause?: unknown;
   assertCurrent?: () => void;
+  withCurrent?: (write: () => void) => Promise<void>;
 };
 
 /** Preserves the caller's abort reason across thread ownership transitions. */
@@ -102,6 +103,7 @@ export async function releaseCodexConsumedLiveThread(
       threadId: options.threadId,
       timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
       assertCurrent: options.assertCurrent,
+      withCurrent: options.withCurrent,
     }),
   );
   if (released) {
@@ -128,7 +130,12 @@ async function releaseCodexRetainedLiveThread(
 ): Promise<boolean> {
   try {
     return await options.lifecycleTiming.measure("retained-thread-unsubscribe", () =>
-      releaseCodexAppServerLiveThread(options.client, options.threadId, options.assertCurrent),
+      releaseCodexAppServerLiveThread(
+        options.client,
+        options.threadId,
+        options.assertCurrent,
+        options.withCurrent,
+      ),
     );
   } catch (error) {
     // An owner callback may already have retired the client; do not close it twice.
@@ -389,16 +396,23 @@ export async function tryReuseCodexLiveThread(
       preserveSubscription = true;
       return { kind: "resume", prebuiltFinalConfigPatch };
     }
-    await attestCodexThreadToolSurface({
-      client: params.client,
-      threadId: binding.threadId,
-      appIds: pluginThreadConfig?.provisionalAppIds ?? [],
-      signal: params.signal,
-      threadConfig: resumeParams.config,
-      restrictedToolSurface,
-      lifecycleTiming,
-      assertCurrent: assertWarmOwner,
-    });
+    try {
+      await attestCodexThreadToolSurface({
+        client: params.client,
+        threadId: binding.threadId,
+        appIds: pluginThreadConfig?.provisionalAppIds ?? [],
+        signal: params.signal,
+        threadConfig: resumeParams.config,
+        restrictedToolSurface,
+        lifecycleTiming,
+        assertCurrent: assertWarmOwner,
+        withCurrent: params.authority?.withCurrent,
+      });
+    } catch (error) {
+      // Admission can reject before its consumer runs; keep warm-owner guidance.
+      assertWarmOwner();
+      throw error;
+    }
     assertWarmOwner();
     if (ephemeralPolicy && ephemeralPolicy.skillsInstructions !== params.skillsInstructions) {
       try {
@@ -409,6 +423,7 @@ export async function tryReuseCodexLiveThread(
           timeoutMs: params.appServer.requestTimeoutMs,
           signal: params.signal,
           assertCurrent: assertWarmOwner,
+          withCurrent: params.authority?.withCurrent,
         });
       } catch (error) {
         // The ephemeral conversation survives a failed catalog handoff; the retained
@@ -448,6 +463,7 @@ export async function tryReuseCodexLiveThread(
             },
           },
           assertWarmOwner,
+          params.authority,
         ),
       ));
     if (!committed) {
@@ -492,27 +508,34 @@ export async function tryReuseCodexLiveThread(
     if (!ownershipTransferred) {
       let failure: { cause: unknown } | undefined;
       try {
+        let pendingRetention: Promise<boolean> | undefined;
         if (preserveSubscription) {
-          // Recheck immediately before republishing: even a passive failure can
-          // race cancellation or replacement of the retained generation.
-          try {
+          // A passive refusal still needs current durable lineage to republish.
+          // Start retention synchronously under that read, then await its eviction work.
+          const retain = () => {
             assertWarmOwner();
-            preserveSubscription = isSameCodexAppServerThreadOwner(
-              params.bindingStore.read(bindingIdentity),
-              binding,
-            );
+            if (
+              isSameCodexAppServerThreadOwner(params.bindingStore.read(bindingIdentity), binding)
+            ) {
+              pendingRetention = retainCodexAppServerBindingSubscription(
+                params.client,
+                binding.threadId,
+                retainedThread,
+              );
+            }
+          };
+          try {
+            if (params.authority) {
+              await params.authority.withCurrent(retain);
+            } else {
+              retain();
+            }
           } catch {
-            preserveSubscription = false;
+            // Rejected admission never transfers the consumed claim back to idle storage.
           }
         }
-        if (preserveSubscription) {
-          if (
-            !(await retainCodexAppServerBindingSubscription(
-              params.client,
-              binding.threadId,
-              retainedThread,
-            ))
-          ) {
+        if (pendingRetention) {
+          if (!(await pendingRetention)) {
             failure = {
               cause: new Error("Codex live thread ownership could not be returned to its session"),
             };

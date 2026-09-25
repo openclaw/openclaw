@@ -343,7 +343,7 @@ export async function resumeThread(
     agentId: scope.agentId,
     config: ctx.config,
   });
-  const { assertCurrent: assertHostGeneration } = await resolveCodexSessionBinding({
+  const { assertLegacyCurrent: assertHostGeneration } = await resolveCodexSessionBinding({
     reclaimStale: true,
     bindingStore: deps.bindingStore,
     identity,

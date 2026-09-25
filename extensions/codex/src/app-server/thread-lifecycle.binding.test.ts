@@ -2039,13 +2039,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const client = {
-      getInstanceId: () => "client-warm-conflict",
-      request,
-      addNotificationHandler: () => () => undefined,
-      addRequestHandler: () => () => undefined,
-      addCloseHandler: () => () => undefined,
-    } as never;
+    const { client } = createFakeCodexAppServerClient(request);
     ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
     const common = {
       client,
@@ -2080,6 +2074,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
       expect.anything(),
       expect.objectContaining({ kind: "patch", threadId: "thread-warm-conflict" }),
       expect.any(Function),
+      expect.objectContaining({
+        assertCurrent: expect.any(Function),
+        withCurrent: expect.any(Function),
+      }),
     );
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "config/read",
@@ -3720,7 +3718,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
           return await mutate(...args);
         });
       }
-      let resolveStart: ((value: ReturnType<typeof threadStartResult>) => void) | undefined;
+      const startResponse = createDeferred<ReturnType<typeof threadStartResult>>();
       const request = vi.fn(async (method: string, _requestParams?: unknown) => {
         if (method === "config/read") {
           return { config: {}, origins: {}, layers: [] };
@@ -3729,9 +3727,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
           return { requirements: null };
         }
         if (method === "thread/start") {
-          return await new Promise<ReturnType<typeof threadStartResult>>((resolve) => {
-            resolveStart = resolve;
-          });
+          return await startResponse.promise;
         }
         if (method === "thread/delete") {
           return {};
@@ -3751,12 +3747,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
         expect(request).toHaveBeenCalledWith("thread/start", expect.any(Object), {
           signal: abortController.signal,
           assertCurrent: expect.any(Function),
+          withCurrent: expect.any(Function),
         }),
       );
       if (phase === "thread-start") {
         abortController.abort("test_abort");
       }
-      resolveStart?.(threadStartResult("thread-after-abort"));
+      startResponse.resolve(threadStartResult("thread-after-abort"));
 
       await expect(run).rejects.toThrow("test_abort");
       await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();

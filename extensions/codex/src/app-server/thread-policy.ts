@@ -53,6 +53,7 @@ type CodexThreadHandoffParams = {
   signal?: AbortSignal;
   /** Warm reuse proves ownership before writing; an in-turn restore already holds it. */
   assertCurrent?: () => void;
+  withCurrent?: (write: () => void) => Promise<void>;
 };
 
 /** The complete body remains generic configuration for compaction and native child inheritance. */
@@ -133,7 +134,11 @@ async function injectCodexThreadDeveloperHandoff(
       },
     });
     outcome = "acknowledged";
-    params.assertCurrent?.();
+    if (params.withCurrent) {
+      await params.withCurrent(() => params.assertCurrent?.());
+    } else {
+      params.assertCurrent?.();
+    }
     params.signal?.throwIfAborted();
   } catch (cause) {
     if (
@@ -181,7 +186,7 @@ export async function assertAdoptedCodexThreadResumeAllowed(
     params.client.request(
       "thread/read",
       { threadId, includeTurns: false },
-      { signal: params.signal, assertCurrent },
+      { signal: params.signal, assertCurrent, withCurrent: params.authority?.withCurrent },
     ),
   );
   context.throwIfAborted();

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
+import type { CodexThreadResumeParams } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
@@ -58,6 +59,52 @@ function createClient(requestImpl: (method: string, params: unknown) => unknown)
 }
 
 describe("resumeCodexAppServerThread", () => {
+  it.each([false, true].flatMap((custom) => [false, true].map((written) => ({ custom, written }))))(
+    "preserves subscription certainty (custom=$custom, written=$written)",
+    async ({ custom, written }) => {
+      const harness = createClientHarness();
+      const abandonClient = vi.fn(async () => undefined);
+      const rejection = new Error("host lineage changed");
+      const withCurrent = async (write: () => void) => {
+        if (written) {
+          write();
+        }
+        throw rejection;
+      };
+      try {
+        await expect(
+          resumeCodexAppServerThread({
+            client: harness.client,
+            abandonClient,
+            request: { threadId: "thread-1" },
+            withCurrent,
+            ...(custom
+              ? {
+                  requestResume: (request: CodexThreadResumeParams) =>
+                    harness.client.request("thread/resume", request, { withCurrent }),
+                }
+              : {}),
+          }),
+        ).rejects.toMatchObject(
+          written
+            ? {
+                name: "CodexAppServerUnsafeSubscriptionError",
+                cause: {
+                  name: "CodexAppServerIndeterminateTransportError",
+                  mayHaveWritten: true,
+                  cause: rejection,
+                },
+              }
+            : { name: "CodexAppServerScopedRequestRejectedError", cause: rejection },
+        );
+        expect(harness.writes).toHaveLength(written ? 1 : 0);
+        expect(abandonClient).toHaveBeenCalledTimes(written ? 1 : 0);
+      } finally {
+        harness.client.close();
+      }
+    },
+  );
+
   it("resumes the requested thread and keeps the client leased", async () => {
     const { client, request } = createClient(async () => resumeResponse("thread-1", 2));
     const abandonClient = vi.fn(async () => undefined);
@@ -142,7 +189,10 @@ describe("resumeCodexAppServerThread", () => {
               throw rejection;
             },
           }),
-        ).rejects.toBe(rejection);
+        ).rejects.toMatchObject({
+          name: "CodexAppServerScopedRequestRejectedError",
+          cause: rejection,
+        });
         expect(harness.writes).toEqual([]);
         expect(harness.client.getCloseError()).toBeUndefined();
         expect(abandonClient).not.toHaveBeenCalled();
@@ -151,6 +201,42 @@ describe("resumeCodexAppServerThread", () => {
       }
     },
   );
+
+  it("unsubscribes a physical resume whose native response assembly fails", async () => {
+    const harness = createClientHarness({
+      onWrite(line, send) {
+        const request = JSON.parse(line);
+        send(
+          request.method === "thread/resume"
+            ? {
+                id: request.id,
+                error: { code: -32_603, message: "resume response assembly failed" },
+              }
+            : { id: request.id, result: { status: "unsubscribed" } },
+        );
+      },
+    });
+    const abandonClient = vi.fn(async () => undefined);
+    const onSubscriptionReleased = vi.fn();
+    try {
+      await expect(
+        resumeCodexAppServerThread({
+          client: harness.client,
+          abandonClient,
+          onSubscriptionReleased,
+          request: { threadId: "thread-1" },
+        }),
+      ).rejects.toMatchObject({ name: "CodexAppServerRpcError", code: -32_603 });
+      expect(harness.writes.map((line) => JSON.parse(line).method)).toEqual([
+        "thread/resume",
+        "thread/unsubscribe",
+      ]);
+      expect(onSubscriptionReleased).toHaveBeenCalledOnce();
+      expect(abandonClient).not.toHaveBeenCalled();
+    } finally {
+      harness.client.close();
+    }
+  });
 
   it("retires the exact client after a written structured failure loses cleanup ownership", async () => {
     const harness = createClientHarness();

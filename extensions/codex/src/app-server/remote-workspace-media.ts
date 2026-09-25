@@ -126,7 +126,12 @@ type CodexBoundedRemoteCommandClient = {
   request: (
     method: "command/exec",
     params: CodexCommandExecParams,
-    options: { signal?: AbortSignal; timeoutMs?: number },
+    options: {
+      signal?: AbortSignal;
+      timeoutMs?: number;
+      assertCurrent?: () => void;
+      withCurrent?: (write: () => void) => Promise<void>;
+    },
   ) => Promise<CodexCommandExecResponse>;
 };
 
@@ -138,6 +143,8 @@ export async function readBoundedCodexRemoteWorkspaceFile(params: {
   workspaceRoot?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  assertCurrent?: () => void;
+  withCurrent?: (write: () => void) => Promise<void>;
 }): Promise<CodexRemoteWorkspaceFileResponse> {
   if (!Number.isSafeInteger(params.maxBytes) || params.maxBytes < 0) {
     throw new Error("Codex remote workspace upload requires a valid media byte limit.");
@@ -178,7 +185,12 @@ export async function readBoundedCodexRemoteWorkspaceFile(params: {
           env: { NODE_OPTIONS: null, NODE_PATH: null },
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
         },
-        { signal: params.signal, timeoutMs },
+        {
+          signal: params.signal,
+          timeoutMs,
+          assertCurrent: params.assertCurrent,
+          withCurrent: params.withCurrent,
+        },
       );
     } catch (error) {
       if (
@@ -247,6 +259,11 @@ export async function readBoundedCodexRemoteWorkspaceFile(params: {
     offset += buffer.byteLength;
   } while (offset < (expectedSize ?? 0));
 
+  if (params.withCurrent) {
+    await params.withCurrent(() => params.assertCurrent?.());
+  } else {
+    params.assertCurrent?.();
+  }
   return { dataBase64: Buffer.concat(chunks, offset).toString("base64") };
 }
 

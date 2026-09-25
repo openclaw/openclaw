@@ -4,6 +4,7 @@ import { resolveBootstrapFilesForPreparation } from "openclaw/plugin-sdk/codex-m
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import * as sessionStoreRuntime from "openclaw/plugin-sdk/session-store-runtime";
 import {
   patchSessionEntry,
   resolveStorePath,
@@ -237,6 +238,125 @@ describe("Codex generation admission", () => {
 });
 
 describe("Codex finalization generation ownership", () => {
+  it.each(["current", "lineage-replaced"] as const)(
+    "uses worker authority at the originating turn/start wire boundary (%s)",
+    async (generation) => {
+      const params = createParams(
+        path.join(tempDir, "wire-lineage.jsonl"),
+        path.join(tempDir, "wire-lineage-workspace"),
+      );
+      const scope = {
+        agentId: "main",
+        sessionKey: params.sessionKey!,
+        storePath: path.join(tempDir, "wire-lineage", "sessions.json"),
+      };
+      params.sessionTarget = { ...scope, sessionId: params.sessionId };
+      await upsertSessionEntry({
+        ...scope,
+        entry: { sessionId: params.sessionId, updatedAt: 1 },
+      });
+      const bindingStore = createCodexTestBindingStore();
+      await bindingStore.mutate(
+        {
+          kind: "session",
+          agentId: "main",
+          sessionKey: params.sessionKey!,
+          sessionId: params.sessionId,
+        },
+        {
+          kind: "set",
+          binding: {
+            threadId: "thread-existing",
+            cwd: params.workspaceDir,
+            dynamicToolsFingerprint: "[]",
+            webSearchThreadConfigFingerprint: JSON.stringify({
+              "features.standalone_web_search": false,
+              web_search: "disabled",
+            }),
+            historyCoveredThrough: new Date(1).toISOString(),
+          },
+        },
+      );
+      const harness = createResumeHarness();
+      if (!("writes" in harness)) {
+        throw new Error("expected the persisted-thread app-server harness");
+      }
+      await prepareGenerationAttempt(params);
+      const originalRequest = harness.request.getMockImplementation()!;
+      const entered = createDeferred<void>();
+      let guarded = false;
+      harness.request.mockImplementation(async (...args: Parameters<typeof originalRequest>) => {
+        const [method, request, options] = args;
+        if (method !== "turn/start") {
+          return await originalRequest(...args);
+        }
+        expect(options?.withCurrent).toBeTypeOf("function");
+        const withCurrent = options!.withCurrent!;
+        return await originalRequest(method, request, {
+          ...options,
+          withCurrent: async (write) => {
+            guarded = true;
+            entered.resolve();
+            if (generation === "lineage-replaced") {
+              await patchSessionEntry({
+                ...scope,
+                update: () => ({ previousSessionId: "same-id-new-predecessor" }),
+              });
+            }
+            await withCurrent(() => {
+              const forbidden = vi
+                .spyOn(sessionStoreRuntime, "getSessionEntry")
+                .mockImplementation(() => {
+                  throw new Error("synchronous host lineage read reached wire admission");
+                });
+              try {
+                write();
+              } finally {
+                forbidden.mockRestore();
+              }
+            });
+          },
+        });
+      });
+      const run = runCodexAppServerAttempt(params, { bindingStore });
+      const settled = run.then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          entered.promise,
+          settled.then(() => {
+            throw new Error("attempt settled before guarded turn/start");
+          }),
+        ]);
+        if (generation === "current") {
+          await harness.waitForMethod("turn/start");
+          await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+          const outcome = await settled;
+          expect(outcome).toHaveProperty("result");
+          if ("result" in outcome) {
+            expect(readAttemptTerminal(outcome.result)).toMatchObject({
+              promptError: null,
+              aborted: false,
+            });
+          }
+        } else {
+          await expect(settled).resolves.toMatchObject({
+            error: { name: "AgentHarnessSessionSupersededError" },
+          });
+          expect(harness.writes.some((line) => JSON.parse(line).method === "turn/start")).toBe(
+            false,
+          );
+        }
+        expect(guarded).toBe(true);
+      } finally {
+        harness.close();
+        await settled;
+      }
+    },
+  );
+
   it.each([false, true])(
     "preserves successor continuity after agent_end outlives the recovered generation (coverage storage rejects: %s)",
     async (rejectCoverage) => {

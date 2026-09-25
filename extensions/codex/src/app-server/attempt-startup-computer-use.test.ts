@@ -286,7 +286,7 @@ describe("Computer Use attempt startup", () => {
           readHarnessRequestMethods(harness).filter((method) => method === "thread/unsubscribe"),
         ).toHaveLength(2);
       } else {
-        await vi.waitFor(() => expect(settled).toBe(true), { interval: 1, timeout: 1_000 });
+        // The unadvanced clock and held probe response prove startup does not await it.
         const { result, error } = await outcome;
         expect(error).toBeUndefined();
         expect(userStarts).toHaveLength(1);

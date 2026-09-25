@@ -4,11 +4,13 @@ import {
   type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { JsonObject } from "./protocol.js";
 import type {
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
   CodexAppServerThreadBinding,
+  CodexBindingAuthority,
 } from "./session-binding.js";
 import { isSameCodexAppServerThreadOwner } from "./thread-ownership.js";
 
@@ -87,6 +89,7 @@ export async function clearContextEngineProjectionBeforeNativeCompaction(params:
   identity: CodexAppServerBindingIdentity;
   binding: CodexAppServerThreadBinding;
   assertCurrent: () => void;
+  authority: CodexBindingAuthority;
 }): Promise<void> {
   const contextEngineBinding = params.binding.contextEngine;
   if (!contextEngineBinding?.projection) {
@@ -107,6 +110,7 @@ export async function clearContextEngineProjectionBeforeNativeCompaction(params:
       },
     },
     params.assertCurrent,
+    params.authority,
   );
   embeddedAgentLog.info("cleared codex context-engine projection before native compaction", {
     sessionId: params.sessionId,
@@ -140,4 +144,14 @@ export function isCodexThreadNotFoundError(error: unknown): boolean {
   // compaction.rs asserts message.contains("thread not found")). So the message
   // gates recovery, not user-facing classification; the generic code is ambiguous.
   return coerceErrorMessage(error).toLowerCase().includes("thread not found");
+}
+
+export function readIgnoredCompactionOverridePaths(
+  params: CompactEmbeddedAgentSessionParams,
+): string[] {
+  const compaction = asOptionalRecord(params.config?.agents?.defaults?.compaction);
+  return ["model", "thinkingLevel", "provider"].flatMap((field) => {
+    const value = compaction?.[field];
+    return typeof value === "string" && value.trim() ? [`agents.defaults.compaction.${field}`] : [];
+  });
 }

@@ -115,6 +115,9 @@ export async function runCodexAppServerAttempt(
               await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, activeTurn);
             }
           } catch (error) {
+            // Rejected cleanup admission must not hide the model permission loss
+            // behind a secondary subscription-release error.
+            connection.assertModelExecutionCurrent();
             if (!finalizedResult || !turnRuntime.state.pluginRuntimeRefreshStop) {
               throw error;
             }

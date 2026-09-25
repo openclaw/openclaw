@@ -1,11 +1,16 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import * as sessionReads from "../../../config/sessions/session-entry-read-runtime.js";
 import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import {
+  combineNativeSessionBindingAuthority,
+  createNativeSessionBindingAuthority,
+} from "./binding-authority.js";
 import {
   reclaimNativeSessionGeneration,
   resolveNativeSessionBinding,
@@ -30,8 +35,10 @@ describe("native session binding generation", () => {
     };
     const scope = { agentId: target.agentId, sessionKey: target.sessionKey, storePath };
     const binding = { value: "current-native-owner" };
+    const reads = vi.spyOn(sessionReads, "withSessionEntriesFromStoresInWorker");
     try {
       await upsertSessionEntryCore(scope, { sessionId: target.sessionId, updatedAt: 1 });
+      reads.mockClear();
       const resolved = await resolveNativeSessionBinding({
         target,
         storePath,
@@ -39,10 +46,56 @@ describe("native session binding generation", () => {
         createSupersededError,
       });
       expect(resolved.binding).toEqual(binding);
+      expect(reads).toHaveBeenCalledTimes(2);
+      expect(combineNativeSessionBindingAuthority(resolved.authority, resolved.authority)).toBe(
+        resolved.authority,
+      );
+      let peerActive = true;
+      const peer = createNativeSessionBindingAuthority(
+        resolved.authority.lineage.map((lineage) => ({ ...lineage, read: { ...lineage.read } })),
+        () => {
+          if (!peerActive) {
+            throw new Error("peer authority closed");
+          }
+        },
+      );
+      const combined = combineNativeSessionBindingAuthority(resolved.authority, peer);
+      reads.mockClear();
+      const effect = vi.fn(() => binding);
+      await expect(combined.withCurrent(effect)).resolves.toBe(binding);
+      expect(reads).toHaveBeenCalledTimes(1);
+      expect(reads.mock.calls[0]?.[0]).toHaveLength(1);
+      expect(effect).toHaveBeenCalledTimes(1);
+
+      peerActive = false;
+      effect.mockClear();
+      await expect(combined.withCurrent(effect)).rejects.toThrow("peer authority closed");
+      expect(effect).not.toHaveBeenCalled();
+      peerActive = true;
+      const conflicting = createNativeSessionBindingAuthority(
+        peer.lineage.map((lineage) => ({
+          read: lineage.read,
+          previousSessionId: lineage.previousSessionId,
+          createSupersededError: lineage.createSupersededError,
+          sessionId: "different-generation",
+        })),
+        () => {},
+      );
+      reads.mockClear();
+      await expect(
+        combineNativeSessionBindingAuthority(resolved.authority, conflicting).withCurrent(effect),
+      ).rejects.toThrow("Session generation is no longer current: different-generation");
+      expect(reads.mock.calls[0]?.[0]).toHaveLength(1);
+      expect(effect).not.toHaveBeenCalled();
 
       await patchSessionEntryCore(scope, () => ({ sessionId: "session-successor" }));
       expect(resolved.assertCurrent).toThrow("Session generation is no longer current");
+      await expect(combined.withCurrent(effect)).rejects.toThrow(
+        "Session generation is no longer current",
+      );
+      expect(effect).not.toHaveBeenCalled();
     } finally {
+      reads.mockRestore();
       await fixture.cleanup();
     }
   });
@@ -156,14 +209,20 @@ describe("native session binding generation", () => {
         await preparationReleased;
         return { kind: "verify", expectedPreviousSessionId: bindingSessionId };
       },
-      adopt: async (_expectedPreviousSessionId, assertCurrent) => {
-        assertCurrent();
-        bindingSessionId = target.sessionId;
-        return "adopted";
+      adopt: async (_expectedPreviousSessionId, assertCurrent, authority) => {
+        const adopt = () => {
+          assertCurrent();
+          bindingSessionId = target.sessionId;
+          return "adopted" as const;
+        };
+        return authority ? authority.withCurrent(adopt) : adopt();
       },
-      reclaim: async (_expectedPreviousSessionId, assertCurrent) => {
-        assertCurrent();
-        throw new Error("Stale reclaim is disabled");
+      reclaim: async (_expectedPreviousSessionId, assertCurrent, authority) => {
+        const reclaim = () => {
+          assertCurrent();
+          throw new Error("Stale reclaim is disabled");
+        };
+        return authority ? authority.withCurrent(reclaim) : reclaim();
       },
     };
     try {

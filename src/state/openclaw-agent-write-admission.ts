@@ -1,5 +1,6 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
+  isActiveStoreWriter,
   runQueuedStoreWrite,
   type StoreWriterQueue,
   type StoreWriterTiming,
@@ -65,4 +66,31 @@ export function runOpenClawAgentWorkerWrite<T>(
     timing,
     signal,
   );
+}
+
+/** Compose the existing foreground queues without inverting inherited acquisition order. */
+export async function runOpenClawAgentWriteAdmissions<T>(
+  options: readonly OpenClawAgentDatabaseOptions[],
+  run: () => Promise<T> | T,
+): Promise<T> {
+  const selected = new Map(
+    options.map((option) => [resolveOpenClawAgentSqlitePath(option), option]),
+  );
+  const paths = [...selected.keys()].toSorted();
+  const inherited = [...admission.queues.keys()].filter((pathname) =>
+    isActiveStoreWriter(admission.queues, pathname),
+  );
+  if (paths.some((pathname) => inherited.includes(pathname))) {
+    throw new Error("Session read batch cannot reenter an active SQLite writer admission");
+  }
+  if (paths.some((pathname) => inherited.some((held) => held > pathname))) {
+    throw new Error("Session read batch would invert inherited SQLite writer admission order");
+  }
+  const acquire = (index: number): Promise<T> => {
+    const pathname = paths[index];
+    return pathname === undefined
+      ? Promise.resolve().then(run)
+      : runOpenClawAgentWriteAdmission(selected.get(pathname)!, () => acquire(index + 1), true);
+  };
+  return await acquire(0);
 }

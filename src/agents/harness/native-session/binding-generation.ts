@@ -1,6 +1,11 @@
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  createNativeSessionBindingAuthority,
+  combineNativeSessionBindingAuthority,
+  readNativeSessionBindingEntries,
+  type NativeSessionBindingAuthority,
+} from "./binding-authority.js";
 
 /** Resolve host lineage before selecting a native queue, catalog, or connection. */
 export async function resolveNativeSessionBinding<TBinding>(
@@ -11,39 +16,63 @@ export async function resolveNativeSessionBinding<TBinding>(
     reclaimStale?: boolean;
     signal?: AbortSignal;
     assertBinding?: (binding: TBinding | undefined) => void;
+    authority?: NativeSessionBindingAuthority;
   },
-): Promise<{ binding: TBinding | undefined; assertCurrent: () => void }> {
-  let assertCurrent = params.assertCurrent ?? (() => {});
+): Promise<{
+  binding: TBinding | undefined;
+  assertCurrent: () => void;
+  assertLegacyCurrent: () => void;
+  authority: NativeSessionBindingAuthority;
+}> {
   const assertAdmissionCurrent = () => {
-    // Cancellation errors and cleanup behavior remain with each backend caller.
-    assertCurrent();
+    params.assertCurrent?.();
     params.signal?.throwIfAborted();
   };
   assertAdmissionCurrent();
-  params.assertBinding?.(readOwnershipBinding(params));
-  const authority = params.target?.sessionKey?.trim()
-    ? captureNativeSessionGenerationAuthority({ ...params, target: params.target, assertCurrent })
+  const captured = params.target?.sessionKey?.trim()
+    ? await captureNativeSessionGenerationAuthority({
+        ...params,
+        target: params.target,
+        assertCurrent: assertAdmissionCurrent,
+      })
     : undefined;
-  assertCurrent = authority?.assertCurrent ?? assertCurrent;
-  assertAdmissionCurrent();
-  let binding = params.readBinding();
-  if (!binding && authority && params.target && params.generation) {
+  const authority = combineNativeSessionBindingAuthority(
+    params.authority,
+    captured?.authority ?? createNativeSessionBindingAuthority([], assertAdmissionCurrent),
+  );
+  let binding = await authority.withCurrent(() => {
+    const current = params.readBinding();
+    params.assertBinding?.(
+      current ??
+        (captured?.previousSessionId ? params.readBinding(captured.previousSessionId) : undefined),
+    );
+    return current;
+  });
+  if (!binding && captured && params.target && params.generation) {
     if (
       !(await reclaimPreparedGeneration(
         { ...params, generation: params.generation, reclaimStale: params.reclaimStale === true },
-        authority,
+        { ...captured, authority },
         assertAdmissionCurrent,
       )) &&
       params.reclaimStale
     ) {
       throw params.createSupersededError(params.target.sessionId);
     }
-    binding = params.readBinding();
+    binding = await authority.withCurrent(() => {
+      const current = params.readBinding();
+      params.assertBinding?.(current);
+      return current;
+    });
+  } else if (!binding) {
+    params.assertBinding?.(binding);
   }
-  assertAdmissionCurrent();
-  params.assertBinding?.(binding);
-  // A committed binding is not host authority. Carry its exact lineage proof through waits.
-  return { binding, assertCurrent };
+  return {
+    binding,
+    assertCurrent: authority.assertLegacyCurrent,
+    assertLegacyCurrent: authority.assertLegacyCurrent,
+    authority,
+  };
 }
 
 /** Let the authoritative OpenClaw generation adopt its predecessor or reclaim a stale row. */
@@ -58,7 +87,7 @@ export async function reclaimNativeSessionGeneration(
   if (!params.target.sessionKey?.trim()) {
     return true;
   }
-  const authority = captureNativeSessionGenerationAuthority(params);
+  const authority = await captureNativeSessionGenerationAuthority(params);
   if (authority.state === "superseded") {
     return false;
   }
@@ -66,43 +95,53 @@ export async function reclaimNativeSessionGeneration(
 }
 
 /** Capture the host generation and predecessor together, then revalidate both after waits. */
-export function captureNativeSessionGenerationAuthority(params: NativeSessionGenerationParams) {
-  const readEntry = () => {
+export async function captureNativeSessionGenerationAuthority(
+  params: NativeSessionGenerationParams,
+) {
+  const read = {
+    agentId: params.target.agentId,
+    sessionKey: params.target.sessionKey?.trim() ?? "",
+    storePath:
+      params.storePath?.trim() ||
+      resolveSessionStorePathCore(params.config?.session?.store, {
+        agentId: params.target.agentId,
+      }),
+  };
+  const entry = await (async () => {
     try {
-      return readBindingSessionEntry(params);
+      return read.sessionKey
+        ? await readNativeSessionBindingEntries([read], ([candidate]) => {
+            params.assertCurrent?.();
+            return candidate;
+          })
+        : undefined;
     } catch {
-      // Failed host reads cannot authorize a durable native binding.
+      params.assertCurrent?.();
       return null;
     }
-  };
-  const entry = readEntry();
+  })();
   const current = entry?.sessionId === params.target.sessionId;
-  const state: "current" | "ephemeral" | "superseded" =
-    entry === undefined ? "ephemeral" : current ? "current" : "superseded";
-  const previousSessionId = current ? entry.previousSessionId : undefined;
-  const assertHostCurrent = () => {
-    if (state === "ephemeral") {
-      return;
-    }
-    const latest = readEntry();
-    if (
-      state !== "current" ||
-      !latest ||
-      latest.sessionId !== params.target.sessionId ||
-      latest.previousSessionId !== previousSessionId
-    ) {
-      throw params.createSupersededError(params.target.sessionId);
-    }
-  };
-  return {
-    state,
-    previousSessionId,
-    assertHostCurrent,
-    assertCurrent(this: void) {
+  const state = entry === undefined ? "ephemeral" : current ? "current" : "superseded";
+  const previousSessionId = current ? entry?.previousSessionId : undefined;
+  const authority = createNativeSessionBindingAuthority(
+    state === "current"
+      ? [
+          {
+            read,
+            sessionId: params.target.sessionId,
+            previousSessionId,
+            createSupersededError: params.createSupersededError,
+          },
+        ]
+      : [],
+    () => {
       params.assertCurrent?.();
-      assertHostCurrent();
+      if (state === "superseded") {
+        throw params.createSupersededError(params.target.sessionId);
+      }
     },
-  };
+  );
+  return { state, previousSessionId, authority } as const;
 }
 
 type NativeSessionGenerationTarget = {
@@ -119,7 +158,9 @@ type NativeSessionGenerationParams = {
   createSupersededError: (sessionId: string) => Error;
 };
 
-type NativeSessionGenerationAuthority = ReturnType<typeof captureNativeSessionGenerationAuthority>;
+type NativeSessionGenerationAuthority = Awaited<
+  ReturnType<typeof captureNativeSessionGenerationAuthority>
+>;
 
 export type NativeSessionGenerationReclaimPlan =
   | { kind: "resolved"; result: boolean }
@@ -133,8 +174,13 @@ export type NativeSessionGenerationOperations = {
   adopt: (
     expectedPreviousSessionId: string,
     assertCurrent: () => void,
+    authority?: NativeSessionBindingAuthority,
   ) => Promise<NativeSessionGenerationAdoptionResult>;
-  reclaim: (expectedPreviousSessionId: string, assertCurrent: () => void) => Promise<boolean>;
+  reclaim: (
+    expectedPreviousSessionId: string,
+    assertCurrent: () => void,
+    authority?: NativeSessionBindingAuthority,
+  ) => Promise<boolean>;
 };
 
 async function reclaimPreparedGeneration(
@@ -144,19 +190,23 @@ async function reclaimPreparedGeneration(
     onHostGenerationVerified?: (assertHostGeneration: () => void) => void;
   },
   authority: NativeSessionGenerationAuthority,
-  assertCurrent = authority.assertCurrent,
+  assertCurrent = authority.authority.assertCurrent,
 ): Promise<boolean> {
   const plan = await params.generation.prepareReclaim();
-  assertCurrent();
+  await authority.authority.withCurrent(assertCurrent);
   if (plan.kind === "resolved") {
     return plan.result;
   }
   if (authority.state !== "current") {
     return false;
   }
-  params.onHostGenerationVerified?.(authority.assertHostCurrent);
+  params.onHostGenerationVerified?.(authority.authority.assertLegacyCurrent);
   if (authority.previousSessionId === plan.expectedPreviousSessionId) {
-    const adopted = await params.generation.adopt(authority.previousSessionId, assertCurrent);
+    const adopted = await params.generation.adopt(
+      authority.previousSessionId,
+      assertCurrent,
+      authority.authority,
+    );
     if (adopted !== "absent") {
       return adopted !== "conflict";
     }
@@ -164,40 +214,9 @@ async function reclaimPreparedGeneration(
   if (params.reclaimStale === false) {
     return false;
   }
-  return params.generation.reclaim(plan.expectedPreviousSessionId, assertCurrent);
-}
-
-function readOwnershipBinding<TBinding>(params: {
-  target?: NativeSessionGenerationTarget;
-  config?: OpenClawConfig;
-  storePath?: string;
-  readBinding: (sessionId?: string) => TBinding | undefined;
-}): TBinding | undefined {
-  const binding = params.readBinding();
-  if (binding || !params.target) {
-    return binding;
-  }
-  const entry = readBindingSessionEntry({ ...params, target: params.target });
-  return entry?.sessionId === params.target.sessionId && entry.previousSessionId
-    ? params.readBinding(entry.previousSessionId)
-    : undefined;
-}
-
-function readBindingSessionEntry(params: {
-  target: NativeSessionGenerationTarget;
-  config?: OpenClawConfig;
-  storePath?: string;
-}) {
-  const { target } = params;
-  return target.sessionKey?.trim()
-    ? loadSessionEntryReadOnly({
-        agentId: target.agentId,
-        sessionKey: target.sessionKey.trim(),
-        storePath:
-          params.storePath?.trim() ||
-          resolveSessionStorePathCore(params.config?.session?.store, { agentId: target.agentId }),
-        hydrateSkillPromptRefs: false,
-        readConsistency: "latest",
-      })
-    : undefined;
+  return params.generation.reclaim(
+    plan.expectedPreviousSessionId,
+    assertCurrent,
+    authority.authority,
+  );
 }

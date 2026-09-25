@@ -131,8 +131,10 @@ it.each(["started", "resumed"] as const)(
       },
       { persistedThreads: action === "resumed" ? [threadId] : [] },
     );
+    // History handoff is protocol-driven; keep worker/cleanup timers real.
+    vi.useFakeTimers({ toFake: ["Date"] });
     const run = runCodexAppServerAttempt(params);
-    await Promise.race([harness.waitForMethod("turn/start"), run]);
+    await run.waitForTurnAccepted();
     await harness.completeTurn({ threadId, turnId: "turn-1" });
     await run;
     const request = harness.requests.find((item) => item.method === "turn/start");
@@ -152,7 +154,8 @@ it.each(["started", "resumed"] as const)(
     });
     nextParams.sessionTarget = params.sessionTarget;
     const next = runCodexAppServerAttempt(nextParams);
-    await Promise.race([vi.waitFor(() => expect(turnNumber).toBe(2), fastWait), next]);
+    await next.waitForTurnAccepted();
+    expect(turnNumber).toBe(2);
     await harness.completeTurn({ threadId, turnId: "turn-2" });
     await next;
     const nextRequest = harness.requests.findLast((item) => item.method === "turn/start");

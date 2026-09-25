@@ -5,6 +5,7 @@ import {
   type CodexHistoryRejectionReason,
 } from "./history-rejection.js";
 import type { JsonValue } from "./protocol.js";
+import type { CodexBindingWithCurrent } from "./session-binding.js";
 import type { CodexMirroredSessionHistoryTarget } from "./session-history.js";
 import type { SettledTurnMessages } from "./settled-turn-evidence.js";
 
@@ -41,7 +42,11 @@ export class CodexSettledTurnContext {
 export async function captureCodexSettledTurnFinalizationContext(
   params: CodexMirroredSessionHistoryTarget &
     SettledTurnMessages &
-    Partial<CodexSettledTurnSelection> & { signal?: AbortSignal; assertActive?: () => void },
+    Partial<CodexSettledTurnSelection> & {
+      signal?: AbortSignal;
+      assertActive?: () => void;
+      withCurrent?: CodexBindingWithCurrent;
+    },
 ): Promise<CodexSettledTurnContext | undefined> {
   let reason: CodexHistoryRejectionReason;
   try {
@@ -57,7 +62,12 @@ export async function captureCodexSettledTurnFinalizationContext(
     params.signal?.throwIfAborted();
     params.assertActive?.();
     if (result.status === "ok") {
-      return new CodexSettledTurnContext(result.value, { model, modelProvider, authProfileId });
+      const consume = () => {
+        params.signal?.throwIfAborted();
+        params.assertActive?.();
+        return new CodexSettledTurnContext(result.value, { model, modelProvider, authProfileId });
+      };
+      return params.withCurrent ? await params.withCurrent(consume) : consume();
     }
     reason = result.reason;
   } catch (error) {

@@ -84,6 +84,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     });
     const startupResult = await startCodexAttemptThread({
       assertCurrent: connection.assertCurrent,
+      authority: connection.authority,
       attemptClientFactory,
       bindingStore,
       runtime: connection.options.runtime,
@@ -164,6 +165,8 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       ({ path, maxBytes, workspaceRoot, signal, timeoutMs }) =>
         readBoundedCodexRemoteWorkspaceFile({
           client: startupResult.client,
+          assertCurrent: connection.assertCurrent,
+          withCurrent: connection.withCurrent,
           path,
           maxBytes,
           workspaceRoot,

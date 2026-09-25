@@ -3,6 +3,7 @@
  * liveness watches.
  */
 import { addTimerTimeoutGraceMs, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { codexPrewriteRejectionCause } from "./rpc-error.js";
 
 /** Minimum startup timeout accepted by the Codex app-server harness. */
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
@@ -32,14 +33,15 @@ export class CodexAppServerStartupError extends Error {
 export function isCodexAppServerStartupError(
   error: unknown,
   reason?: CodexAppServerStartupErrorReason,
-): error is CodexAppServerStartupError {
+): boolean {
+  const cause = codexPrewriteRejectionCause(error);
   return (
-    error instanceof Error &&
-    "code" in error &&
-    error.code === "CODEX_APP_SERVER_STARTUP_CANCELLED" &&
-    "reason" in error &&
-    (error.reason === "aborted" || error.reason === "timed_out") &&
-    (reason === undefined || error.reason === reason)
+    cause instanceof Error &&
+    "code" in cause &&
+    cause.code === "CODEX_APP_SERVER_STARTUP_CANCELLED" &&
+    "reason" in cause &&
+    (cause.reason === "aborted" || cause.reason === "timed_out") &&
+    (reason === undefined || cause.reason === reason)
   );
 }
 

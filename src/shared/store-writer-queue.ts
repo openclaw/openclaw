@@ -86,7 +86,7 @@ function claimStoreWriterTurn(immediate: boolean): Promise<void> | undefined {
   return undefined;
 }
 
-function isActiveStoreWriter(queues: StoreWriterQueues, storePath: string): boolean {
+export function isActiveStoreWriter(queues: StoreWriterQueues, storePath: string): boolean {
   // A new lane cannot be reentrant; bulk acquisition must not scan every held lock.
   if (!queues.has(storePath)) {
     return false;

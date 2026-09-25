@@ -5,8 +5,6 @@
 import { randomUUID } from "node:crypto";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parse as parseSemver } from "semver";
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
 import {
   closeCodexCatalogClientSource,
@@ -29,13 +27,17 @@ import {
   type CodexCatalogDecodeRoute,
 } from "./client-message-frames.js";
 import { dispatchCodexAppServerResponse } from "./client-response.js";
+import {
+  assertSupportedCodexAppServerVersion,
+  buildCodexAppServerRuntimeIdentity,
+  type CodexAppServerRuntimeIdentity,
+} from "./client-version.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import {
   type CodexAppServerRequestMethod,
   type CodexAppServerRequestParams,
   type CodexAppServerRequestResult,
-  type CodexInitializeResponse,
   isJsonObject,
   isRpcResponse,
   type CodexServerNotification,
@@ -46,7 +48,11 @@ import {
 } from "./protocol.js";
 import { createCodexRequestAttempt, type CodexRequestAttempt } from "./request-attempt.js";
 import type { CodexRequestWaiterFinished } from "./request-observation.js";
-import { CODEX_APP_SERVER_OVERLOADED_ERROR_CODE, CodexAppServerRpcError } from "./rpc-error.js";
+import {
+  CODEX_APP_SERVER_OVERLOADED_ERROR_CODE,
+  CodexAppServerRpcError,
+  CodexAppServerScopedRequestRejectedError,
+} from "./rpc-error.js";
 import { CodexServerRequests, type CodexServerRequestHandler } from "./server-requests.js";
 import { createStdioTransport } from "./transport-stdio.js";
 import { createWebSocketTransport } from "./transport-websocket.js";
@@ -57,7 +63,6 @@ import {
   type CodexAppServerCloseResult,
   type CodexAppServerTransport,
 } from "./transport.js";
-import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
 const CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES = 3;
@@ -69,6 +74,8 @@ type RequestOptions = {
   timeoutMs?: number;
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  /** Prepare authority asynchronously, retaining it only through synchronous wire admission. */
+  withCurrent?: (write: () => void) => Promise<void>;
   catalogPreview?: true;
   catalogPreviewCache?: CodexCatalogPreviewCache;
   catalogRows?: number;
@@ -208,14 +215,8 @@ type CodexServerNotificationHandler = (
   notification: CodexServerNotification,
 ) => Promise<void> | void;
 
-/** Runtime identity returned by the Codex app-server initialize handshake. */
-export type CodexAppServerRuntimeIdentity = {
-  serverVersion: string;
-  userAgent?: string;
-  codexHome?: string;
-  platformFamily?: string;
-  platformOs?: string;
-};
+export type { CodexAppServerRuntimeIdentity } from "./client-version.js";
+export { isUnsupportedCodexAppServerVersionError } from "./client-version.js";
 
 /** Stateful app-server JSON-RPC client over stdio or websocket transport. */
 export class CodexAppServerClient {
@@ -703,7 +704,6 @@ export class CodexAppServerClient {
         new CodexAppServerLocalRequestCancellationError(method, reason, written, cause),
       localError: (error, written) =>
         written &&
-        !(error instanceof CodexAppServerRpcError) &&
         !isCodexAppServerIndeterminateRequestCancellationError(error) &&
         !isCodexAppServerIndeterminateTransportError(error)
           ? new CodexAppServerIndeterminateTransportError(method, error)
@@ -729,8 +729,36 @@ export class CodexAppServerClient {
     if (!attempt.pending) {
       return result;
     }
-    try {
-      options.assertCurrent?.();
+    let consumed = false;
+    const write = () => {
+      if (consumed) {
+        throw new Error("Codex request wire admission was already consumed");
+      }
+      consumed = true;
+      if (!attempt.pending) {
+        return;
+      }
+      if (this.closed) {
+        throw this.closeError ?? new Error("codex app-server client is closed");
+      }
+      if (options.signal?.aborted) {
+        throw new CodexAppServerLocalRequestCancellationError(
+          method,
+          "aborted",
+          false,
+          options.signal.reason,
+        );
+      }
+      if (deadline !== undefined && performance.now() >= deadline) {
+        throw new CodexAppServerLocalRequestCancellationError(method, "timed out", false);
+      }
+      try {
+        options.assertCurrent?.();
+      } catch (cause) {
+        throw cause instanceof CodexAppServerScopedRequestRejectedError
+          ? cause
+          : new CodexAppServerScopedRequestRejectedError(coerceErrorMessage(cause), { cause });
+      }
       if (attempt.pending) {
         this.writeMessage(
           message,
@@ -741,8 +769,33 @@ export class CodexAppServerClient {
           },
         );
       }
+    };
+    const rejectAdmission = (cause: unknown) => {
+      // Only a failure before entering the wire callback proves an authority
+      // rejection. The attempt owns possible-write classification after entry.
+      attempt.failLocal(
+        !consumed && !(cause instanceof CodexAppServerScopedRequestRejectedError)
+          ? new CodexAppServerScopedRequestRejectedError(coerceErrorMessage(cause), { cause })
+          : toStringifiedError(cause),
+      );
+    };
+    try {
+      if (options.withCurrent) {
+        // The waiter owns cancellation while preparation is pending. A late grant
+        // cannot write a cancelled attempt, and custody never waits for its response.
+        void options
+          .withCurrent(write)
+          .then(() => {
+            if (!consumed && attempt.pending) {
+              throw new Error("Codex request authority did not admit the wire write");
+            }
+          })
+          .catch(rejectAdmission);
+      } else {
+        write();
+      }
     } catch (error) {
-      attempt.failLocal(toStringifiedError(error));
+      rejectAdmission(error);
     }
     return result;
   }
@@ -1031,75 +1084,6 @@ export class CodexAppServerClient {
       }
     }
   }
-}
-
-/** Raised when the initialize handshake detects an unsupported app-server version. */
-class CodexAppServerVersionError extends Error {
-  readonly detectedVersion?: string;
-
-  constructor(detectedVersion: string | undefined) {
-    const detected = detectedVersion
-      ? `detected ${detectedVersion}`
-      : "OpenClaw could not determine the running Codex version";
-    super(
-      `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but ${detected}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
-    );
-    this.name = "CodexAppServerVersionError";
-    this.detectedVersion = detectedVersion;
-  }
-}
-
-function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): string {
-  const detectedVersion = readCodexVersionFromUserAgent(response.userAgent);
-  if (!detectedVersion) {
-    throw new CodexAppServerVersionError(detectedVersion);
-  }
-  const detected = parseSemver(detectedVersion);
-  if (!detected || detected.compare(MIN_SUPPORTED_CODEX_APP_SERVER_VERSION) < 0) {
-    throw new CodexAppServerVersionError(detectedVersion);
-  }
-  if (detected.compare(CODEX_APP_SERVER_VERSION) > 0) {
-    embeddedAgentLog.warn(
-      "codex app-server is newer than OpenClaw's managed runtime; continuing with normal startup validation",
-      {
-        detectedVersion,
-        validatedVersion: CODEX_APP_SERVER_VERSION,
-      },
-    );
-  }
-  return detectedVersion;
-}
-
-export function isUnsupportedCodexAppServerVersionError(error: unknown): boolean {
-  return error instanceof CodexAppServerVersionError;
-}
-
-function buildCodexAppServerRuntimeIdentity(
-  response: CodexInitializeResponse,
-  serverVersion: string,
-): CodexAppServerRuntimeIdentity {
-  const userAgent = normalizeOptionalString(response.userAgent);
-  const codexHome = normalizeOptionalString(response.codexHome);
-  const platformFamily = normalizeOptionalString(response.platformFamily);
-  const platformOs = normalizeOptionalString(response.platformOs);
-  return {
-    serverVersion,
-    ...(userAgent ? { userAgent } : {}),
-    ...(codexHome ? { codexHome } : {}),
-    ...(platformFamily ? { platformFamily } : {}),
-    ...(platformOs ? { platformOs } : {}),
-  };
-}
-
-/** Extracts the Codex version from the app-server initialize user-agent field. */
-function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
-  // Codex returns `<originator>/<codex-version> ...`; the originator can be
-  // OpenClaw, Codex Desktop, or an env override, so only the slash-delimited
-  // version in the leading product field is stable.
-  const match = userAgent?.match(
-    /^[^/]+\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?:[\s(]|$)/,
-  );
-  return match?.[1];
 }
 
 const CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS = new Set([

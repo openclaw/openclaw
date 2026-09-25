@@ -1,14 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
-import {
-  embeddedAgentLog,
-  formatErrorMessage,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   CodexAppServerUnsafeSubscriptionError,
   isCodexAppServerUnsafeSubscriptionError,
-  unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { unsubscribeCodexAppServerLiveThread } from "./client-runtime.js";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
@@ -31,6 +26,7 @@ import type {
   JsonObject,
 } from "./protocol.js";
 import type {
+  CodexBindingAuthority,
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
   CodexAppServerPendingSupervisionBranch,
@@ -50,6 +46,10 @@ import {
   codexThreadSandboxOrPermissions,
   resolveCodexThreadApprovalsReviewer,
 } from "./thread-requests.js";
+import {
+  cleanPendingSupervisionArtifacts,
+  withPendingSupervisionCleanup,
+} from "./thread-supervision-cleanup.js";
 import { projectBoundedCodexThreadHistory } from "./transcript-mirror.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
@@ -57,6 +57,7 @@ type PendingSupervisionMaterializationParams = {
   client: CodexAppServerClient;
   abandonClient: () => Promise<void>;
   bindingStore: CodexAppServerBindingStore;
+  authority?: CodexBindingAuthority;
   bindingIdentity: CodexAppServerBindingIdentity;
   binding: CodexAppServerThreadBinding & {
     pendingSupervisionBranch: CodexAppServerPendingSupervisionBranch;
@@ -94,7 +95,11 @@ export async function materializePendingSupervisionBranch(
   params: PendingSupervisionMaterializationParams,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   let pending = params.binding.pendingSupervisionBranch;
-  const requestOptions = { signal: params.signal, assertCurrent: params.throwIfAborted };
+  const requestOptions = {
+    signal: params.signal,
+    assertCurrent: params.throwIfAborted,
+    withCurrent: params.authority?.withCurrent,
+  };
   const connectionFingerprint = buildCodexAppServerConnectionFingerprint(
     params.appServer,
     params.attempt.agentDir,
@@ -358,6 +363,7 @@ export async function materializePendingSupervisionBranch(
           },
         },
         params.throwIfAborted,
+        params.authority,
       );
     } catch (error) {
       let current: CodexAppServerThreadBinding | undefined;
@@ -662,63 +668,4 @@ async function recoverPendingSupervisionArtifacts(
     );
   }
   return next;
-}
-
-function withPendingSupervisionCleanup(
-  pending: CodexAppServerPendingSupervisionBranch,
-  cleanupThreadIds: string[],
-): CodexAppServerPendingSupervisionBranch {
-  return {
-    sourceThreadId: pending.sourceThreadId,
-    ...(pending.connectionFingerprint
-      ? { connectionFingerprint: pending.connectionFingerprint }
-      : {}),
-    ...(pending.lastTurnId ? { lastTurnId: pending.lastTurnId } : {}),
-    ...(cleanupThreadIds.length > 0 ? { cleanupThreadIds } : {}),
-  };
-}
-
-async function cleanPendingSupervisionArtifacts(
-  client: CodexAppServerClient,
-  pending: CodexAppServerPendingSupervisionBranch,
-): Promise<{ remaining: string[] }> {
-  const remaining: string[] = [];
-  for (const threadId of pending.cleanupThreadIds ?? []) {
-    if (!(await archiveSupervisionArtifact(client, threadId))) {
-      remaining.push(threadId);
-    }
-  }
-  return { remaining };
-}
-
-async function archiveSupervisionArtifact(
-  client: CodexAppServerClient,
-  threadId: string,
-): Promise<boolean> {
-  try {
-    await client.request(
-      "thread/archive",
-      { threadId },
-      { timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS },
-    );
-    return true;
-  } catch (error) {
-    const message = formatErrorMessage(error).toLowerCase();
-    if (
-      message.includes("no rollout found for thread id") ||
-      message.includes("thread not found") ||
-      message.includes("already archived")
-    ) {
-      return true;
-    }
-    await unsubscribeCodexThreadBestEffort(client, {
-      threadId,
-      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-    });
-    embeddedAgentLog.warn("failed to archive temporary Codex supervision thread", {
-      threadId,
-      error,
-    });
-    return false;
-  }
 }

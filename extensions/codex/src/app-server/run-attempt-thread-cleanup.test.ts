@@ -665,7 +665,7 @@ describe("Codex app-server main thread cleanup", () => {
     expect(request).toHaveBeenCalledWith(
       "thread/unsubscribe",
       { threadId: "thread-1" },
-      { timeoutMs: 5_000 },
+      { timeoutMs: 5_000, withCurrent: expect.any(Function) },
     );
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
@@ -712,10 +712,8 @@ describe("Codex app-server main thread cleanup", () => {
           ? { id: interrupt.id, error: { code: -32_000, message: "startup interrupt failed" } }
           : { id: interrupt.id, result: {} },
       );
-      if (!interruptFails) {
-        const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe");
-        harness.send({ id: unsubscribe.id, result: {} });
-      }
+      // Cancellation revokes native row admission, so cleanup retires the exact
+      // client rather than sending an unsubscribe under the canceled owner.
       await expect(failure).resolves.toMatchObject({
         message: "turn/start aborted: cancelled",
         cause: "cancelled",
@@ -730,9 +728,8 @@ describe("Codex app-server main thread cleanup", () => {
         "thread/start",
         "turn/start",
         "turn/interrupt",
-        ...(!interruptFails ? ["thread/unsubscribe"] : []),
       ]);
-      expect(harness.stdinDestroyed).toBe(interruptFails);
+      expect(harness.stdinDestroyed).toBe(true);
     },
   );
 
@@ -890,15 +887,16 @@ describe("Codex app-server main thread cleanup", () => {
         );
         harness.send({ id: confirmation.id, result: { data: [], nextCursor: null } });
       }
-      const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe");
-      harness.send({ id: unsubscribe.id, result: {} });
-
       if (rejected) {
         await rejected;
       } else {
         expect(readAttemptTerminal(await run)).toMatchObject({ aborted: true, timedOut: false });
       }
-      expect(close).not.toHaveBeenCalled();
+      expect(harness.writes.map((entry) => JSON.parse(entry).method)).not.toContain(
+        "thread/unsubscribe",
+      );
+      expect(close).toHaveBeenCalledOnce();
+      expect(harness.stdinDestroyed).toBe(true);
     },
   );
 
