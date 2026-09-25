@@ -1,5 +1,18 @@
 import { formatPortDiagnostics } from "../../infra/ports.js";
-import type { GatewayPortHealthSnapshot, GatewayRestartSnapshot } from "./restart-health.types.js";
+import type {
+  GatewayPortHealthSnapshot,
+  GatewayRestartSnapshot,
+  GatewayRestartWaitOutcome,
+} from "./restart-health.types.js";
+
+const restartFailureReasons: Partial<Record<GatewayRestartWaitOutcome, string>> = {
+  "plugin-errors": "activated plugins reported load errors",
+  "channel-errors": "channel health checks failed",
+  "version-mismatch": "the running Gateway version did not match the expected version",
+  "build-id-mismatch": "the running Gateway build did not match the expected build",
+  "stale-pids": "stale Gateway processes remained",
+  "generation-changed": "the Gateway process generation changed before readiness was confirmed",
+};
 
 function formatGatewayStillStarting(snapshot: GatewayRestartSnapshot): string {
   return `Gateway service is still starting after ${Math.round((snapshot.elapsedMs ?? 0) / 1000)}s. Last observed startup phase: ${snapshot.startupPhase ?? "unknown"}. Run openclaw gateway status --deep.`;
@@ -88,6 +101,11 @@ export function formatGatewayRestartFailure(params: {
       statusLine: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and port ${params.port} stayed free.`,
       failMessage: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and health checks never came up.`,
     };
+  }
+  const reason = params.health.waitOutcome && restartFailureReasons[params.health.waitOutcome];
+  if (reason) {
+    const message = `Gateway restart failed: ${reason}.`;
+    return { statusLine: message, failMessage: message };
   }
   const timeoutSeconds = Math.max(
     1,

@@ -42,6 +42,7 @@ import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GATEWAY_CONNECT_TIMEOUT_MS
+import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayDiscovery
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayEvent
@@ -55,6 +56,7 @@ import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewaySourcePreviewConfig
+import ai.openclaw.app.gateway.GatewayTlsParams
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayTlsProbeRunner
@@ -1363,7 +1365,7 @@ class NodeRuntime private constructor(
           ?.tls ?: manualTls.value
       },
     )
-  private var lastNodePermissions = connectionManager.buildPermissions()
+  private var lastNodeConnectOptions: GatewayConnectOptions? = null
   private var lastVoiceWakeCapabilityEnabled = isVoiceWakeCapabilityEnabled()
 
   /**
@@ -3902,20 +3904,20 @@ class NodeRuntime private constructor(
    */
   fun refreshNodePermissionSurface() {
     val permissions = connectionManager.buildPermissions()
-    if (permissions == lastNodePermissions) return
-    refreshAcceptedGatewayConnection()
+    if (permissions == lastNodeConnectOptions?.permissions) return
+    refreshAcceptedGatewayConnection(refreshOperator = false)
   }
 
   fun setCameraEnabled(value: Boolean) {
     if (prefs.cameraEnabled.value == value) return
     prefs.setCameraEnabled(value)
-    refreshAcceptedGatewayConnection()
+    refreshAcceptedGatewayConnection(refreshOperator = false)
   }
 
   fun setLocationMode(mode: LocationMode) {
     if (prefs.locationMode.value == mode) return
     prefs.setLocationMode(mode)
-    refreshAcceptedGatewayConnection()
+    refreshAcceptedGatewayConnection(refreshOperator = false)
   }
 
   fun setManualEnabled(value: Boolean) {
@@ -3937,13 +3939,13 @@ class NodeRuntime private constructor(
   fun grantInstalledAppsDisclosureConsent() {
     if (prefs.installedAppsSharingEnabled.value) return
     prefs.grantInstalledAppsDisclosureConsent()
-    refreshAcceptedGatewayConnection()
+    refreshAcceptedGatewayConnection(refreshOperator = false)
   }
 
   fun revokeInstalledAppsDisclosureConsent() {
     if (!prefs.installedAppsSharingEnabled.value) return
     prefs.revokeInstalledAppsDisclosureConsent()
-    refreshAcceptedGatewayConnection()
+    refreshAcceptedGatewayConnection(refreshOperator = false)
   }
 
   fun setNotificationForwardingEnabled(value: Boolean) {
@@ -4466,7 +4468,7 @@ class NodeRuntime private constructor(
     val enabled = isVoiceWakeCapabilityEnabled()
     if (enabled == lastVoiceWakeCapabilityEnabled) return
     lastVoiceWakeCapabilityEnabled = enabled
-    refreshAcceptedGatewayConnection()
+    refreshAcceptedGatewayConnection(refreshOperator = false)
   }
 
   suspend fun runVoiceE2e(
@@ -4843,7 +4845,10 @@ class NodeRuntime private constructor(
     }
   }
 
-  private fun refreshAcceptedGatewayConnection(connection: GatewayConnectionContext? = activeGatewayConnection) {
+  private fun refreshAcceptedGatewayConnection(
+    connection: GatewayConnectionContext? = activeGatewayConnection,
+    refreshOperator: Boolean = true,
+  ) {
     nodeApproval.invalidate()
     if (connection == null) return
     val endpoint = connectedEndpoint ?: return
@@ -4864,7 +4869,20 @@ class NodeRuntime private constructor(
         // in onConnected or leaves this caller responsible for refreshing the ready session.
         if (!nodeSession.isReady()) return@launchGatewayLifecycle
       }
-      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint))
+      val auth = resolveGatewayConnectAuth(endpoint)
+      if (refreshOperator || connection.refreshAfterBootstrap) {
+        connectWithAuth(endpoint = endpoint, auth = auth)
+      } else {
+        // Phone authority is declared only by the node. Keep the operator transport and
+        // its in-flight Chat/Talk requests alive while publishing the new node surface.
+        val options = connectionManager.buildNodeConnectOptions()
+        // Permission callbacks may queue behind the same lifecycle operation. Compare at
+        // admission so a duplicate cannot retire the node handshake we just started.
+        if (options == lastNodeConnectOptions) return@launchGatewayLifecycle
+        runGatewayConnectOperation {
+          connectNodeSession(endpoint, auth, connectionManager.resolveTlsParams(endpoint), options)
+        }
+      }
     }
   }
 
@@ -5061,18 +5079,26 @@ class NodeRuntime private constructor(
           onReady = { publishOperatorReadiness(connection) },
         )
       }
-      val nodeConnectOptions = connectionManager.buildNodeConnectOptions()
-      lastNodePermissions = nodeConnectOptions.permissions
-      nodeSession.connect(
-        endpoint,
-        auth.token,
-        auth.bootstrapToken,
-        auth.password,
-        nodeConnectOptions,
-        tls,
-        bootstrapHandoff = connection.bootstrapHandoff,
-      )
+      connectNodeSession(endpoint, auth, tls, connectionManager.buildNodeConnectOptions())
     }
+
+  private fun connectNodeSession(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth,
+    tls: GatewayTlsParams?,
+    options: GatewayConnectOptions,
+  ) {
+    lastNodeConnectOptions = options
+    nodeSession.connect(
+      endpoint,
+      auth.token,
+      auth.bootstrapToken,
+      auth.password,
+      options,
+      tls,
+      bootstrapHandoff = auth.bootstrapHandoff,
+    )
+  }
 
   // Auth reset waits for claimed connection starts before disconnecting. Session calls stay outside
   // this monitor because GatewaySession invokes callbacks while holding its own lifecycle monitor.

@@ -136,8 +136,10 @@ export async function loadModelsProviderData(
     ...(agentId ? { agentId } : {}),
     ...(agentDir ? { agentDir } : {}),
     ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
-    readOnly: false,
+    readOnly: true,
   });
+  // The owner records refresh outcomes; a sent menu must not wait for acquisition or be rewritten.
+  void published.loadFullModelCatalog?.().catch(() => undefined);
   return projectPreparedModelsProviderData(published.config, agentId, options, published);
 }
 

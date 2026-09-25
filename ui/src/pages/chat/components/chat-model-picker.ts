@@ -72,6 +72,7 @@ type ChatModelPickerParams = {
   triggerLoading?: boolean;
   triggerStarting?: boolean;
   onModelSetup?: () => void;
+  onProviderSettings?: (provider: string) => void;
   onOpen?: () => unknown;
   onOpenChange?: (open: boolean) => void;
   onModelSelect: (
@@ -425,7 +426,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                       </button>
                                       ${showAuth ? html`<span class="chat-controls__auth-meta" data-auth-kind=${auth.kind}><span aria-hidden="true">${auth.kind === "subscription" ? icons.circleUser : auth.kind === "api" ? icons.key : icons.alertTriangle}</span><span class="chat-controls__auth-meta-label">${authLabel}</span></span>` : nothing}
                                       ${
-                                        params.onModelSetup
+                                        params.onProviderSettings
                                           ? html`<button
                                               class="chat-controls__provider-settings"
                                               data-chat-model-provider-settings
@@ -433,7 +434,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                               aria-label=${t("chat.modelControls.configureModels")}
                                               @click=${(event: MouseEvent) => {
                                                 event.stopPropagation();
-                                                params.onModelSetup?.();
+                                                params.onProviderSettings?.(provider);
                                               }}
                                             >
                                               ${icons.settings}

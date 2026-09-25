@@ -87,6 +87,7 @@ type ModelProvidersViewProps = Omit<DefaultModelsViewProps, "models" | "selectio
     onAddProviderKeyChange: (value: string) => void;
     onAddProvider: () => void;
     providerScope?: TemplateResult;
+    accountRecovery?: TemplateResult | typeof nothing;
     providerQuery?: string;
     onProviderQueryChange?: (value: string) => void;
     onConnectProvider: () => void;
@@ -570,14 +571,16 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
           </openclaw-tooltip>
         `,
       },
-      props.loading
-        ? renderSettingsGroup(renderSettingsLoadingSkeleton())
-        : props.cards.length === 0 &&
-            props.installedAgents !== nothing &&
-            !props.error &&
-            !props.providerUsageFailed
-          ? nothing
-          : providerRows,
+      html`${props.accountRecovery}${
+        props.loading
+          ? renderSettingsGroup(renderSettingsLoadingSkeleton())
+          : props.cards.length === 0 &&
+              props.installedAgents !== nothing &&
+              !props.error &&
+              !props.providerUsageFailed
+            ? nothing
+            : providerRows
+      }`,
     )}
     ${
       props.providerUsageStalled

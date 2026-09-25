@@ -24,6 +24,7 @@ import type {
 } from "../pages/chat/components/chat-composer-mention-menu.ts";
 import { renderSelectedHumanMentions } from "../pages/chat/components/chat-composer-selected-mentions.ts";
 import type { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
+import "../styles/command-palette.css";
 import {
   commandPaletteCategoryLabel,
   filterCommandPaletteItems,

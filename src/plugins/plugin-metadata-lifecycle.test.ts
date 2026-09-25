@@ -1,4 +1,5 @@
 import { expect, it, onTestFinished, vi } from "vitest";
+import { withTestTimeout } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   setGatewayPluginMetadataSnapshot,
@@ -14,6 +15,7 @@ import {
   getPluginCache,
   getProcessPluginCache,
   retainPluginCache,
+  retirePluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
 import { PluginInstance } from "./plugin-instance.js";
@@ -220,7 +222,7 @@ it.each([true, false])(
       expect(cache.retirement).toBeUndefined();
       owner.beginClose();
       let joined = false;
-      const shutdown = owner.waitForRetirement().then((result) => {
+      const shutdown = owner.close().then((result) => {
         joined = true;
         return result;
       });
@@ -234,6 +236,68 @@ it.each([true, false])(
       cleanup.resolve(completed);
       await publication;
       await owner.close();
+    }
+  },
+);
+
+it.each([false, true])(
+  "settles publication and reports cleanup failures (released before final close: %s)",
+  async (releasedBeforeClose) => {
+    const cache = getPluginCache();
+    const instance = new PluginInstance("retained-publication");
+    const failure = new Error("retained consumer cleanup failed");
+    const dispose = vi.fn();
+    instance.lifecycle.onDispose(dispose);
+    cache.setupModules.set("retained-publication", instance);
+    const release = retainPluginCache(cache);
+    const owner = retainGatewayPluginMetadata();
+    owner.publish(owner.runBootstrap(() => createPluginMetadataSnapshotFixture()));
+    owner.publish(
+      withPluginCache(createPluginCache(), () => createPluginMetadataSnapshotFixture()),
+      new Set(["retained-publication"]),
+      async (options) =>
+        options?.deferConsumers
+          ? { cleanupCount: 0, failures: [], deferredPluginIds: ["retained-publication"] }
+          : {
+              cleanupCount: 1,
+              failures: [{ pluginId: "retained-publication", hookId: "instance", error: failure }],
+            },
+    );
+    owner.beginClose();
+    const publication = owner.waitForRetirement();
+    let closing: Promise<unknown> | undefined;
+    try {
+      await withTestTimeout(publication, 1_000, "Publication waited for its retained consumer");
+      expect(dispose).not.toHaveBeenCalled();
+      if (releasedBeforeClose) {
+        release();
+        await retirePluginCache(cache);
+        expect(dispose).toHaveBeenCalledOnce();
+      }
+      const finalEntered = createDeferredCore();
+      let closed = false;
+      closing = owner
+        .close(async (retire) => {
+          finalEntered.resolve();
+          await retire();
+        })
+        .then(() => {
+          closed = true;
+        });
+      await finalEntered.promise;
+      expect(closed).toBe(false);
+      if (!releasedBeforeClose) {
+        expect(dispose).not.toHaveBeenCalled();
+      }
+      release();
+      await closing;
+      expect((await owner.close()).failures).toEqual([
+        expect.objectContaining({ pluginId: "retained-publication", error: failure }),
+      ]);
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      await Promise.allSettled([publication, closing ?? owner.close()]);
     }
   },
 );

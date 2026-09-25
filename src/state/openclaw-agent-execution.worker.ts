@@ -66,6 +66,7 @@ export function createSqliteWorkerBackend(
   const backend = openAgentDatabaseBackend(input, opening);
   try {
     backend.execute({ type: "database.prepareWrite", input: undefined });
+    backend.assertSettled?.();
     return backend;
   } catch (error) {
     try {
@@ -298,6 +299,9 @@ function openAgentDatabaseBackend(
   let providerReview:
     | typeof import("../config/sessions/provider-review-store.worker.js")
     | undefined;
+  let entryReader:
+    | typeof import("../config/sessions/session-accessor.sqlite-entry-read.js")
+    | undefined;
   let archives:
     | typeof import("../config/sessions/session-accessor.sqlite-archive-store-kernel.js")
     | undefined;
@@ -342,6 +346,9 @@ function openAgentDatabaseBackend(
     if (command.type === "database.prepareWrite") {
       openWriter();
       return undefined;
+    }
+    if (command.type === "session.entry.read" && entryReader) {
+      return entryReader.readSessionEntryRow(openWriter(), command.input.sessionKey)?.entry;
     }
     if (command.type === "trajectory.events.append" && trajectory) {
       const opened = openWriter();
@@ -477,6 +484,11 @@ function openAgentDatabaseBackend(
   };
   return {
     prepare(command) {
+      if (command.type === "session.entry.read") {
+        return import("../config/sessions/session-accessor.sqlite-entry-read.js").then((module) => {
+          entryReader = module;
+        });
+      }
       if (command.type === "trajectory.events.append") {
         return import("../trajectory/runtime-store.sqlite.js").then((module) => {
           trajectory = module;

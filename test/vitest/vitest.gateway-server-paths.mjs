@@ -192,6 +192,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/sessions-resolve-store.test.ts",
   "src/gateway/setup-inference.first-signin.integration.test.ts",
   "src/gateway/startup-local-cli-pairing.test.ts",
+  "src/gateway/talk/client-authority.test.ts",
   "src/gateway/talk/handlers/client-native-actions.test.ts",
   "src/gateway/talk/relay/index.test.ts",
   "src/gateway/test-helpers.acquisition.test.ts",
