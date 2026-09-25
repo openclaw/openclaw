@@ -199,6 +199,137 @@ describe("doctor stale plugin config helpers", () => {
     }
   });
 
+  it.each<{
+    name: string;
+    config: OpenClawConfig & { plugins: NonNullable<OpenClawConfig["plugins"]> };
+    enabledIds: string[];
+    preserveAuthoredPolicy?: boolean;
+    omitAliasTarget?: boolean;
+  }>([
+    {
+      name: "manifest-owned bundled channel",
+      config: {
+        channels: { telegram: { enabled: true } },
+        plugins: { slots: { memory: "none" } },
+      },
+      enabledIds: ["channel-owner"],
+    },
+    {
+      name: "default memory and selected context engine",
+      config: { plugins: { slots: { contextEngine: "selected-context" } } },
+      enabledIds: ["memory-core", "selected-context"],
+    },
+    {
+      name: "selected installed memory and workspace context engine",
+      config: {
+        plugins: { slots: { memory: "selected-memory", contextEngine: "selected-context" } },
+      },
+      enabledIds: ["selected-memory", "selected-context"],
+    },
+    {
+      name: "denied channel and disabled selected memory",
+      config: {
+        channels: { telegram: { enabled: true } },
+        plugins: {
+          deny: ["channel-owner"],
+          slots: { memory: "selected-memory", contextEngine: "selected-context" },
+          entries: { "selected-memory": { enabled: false } },
+        },
+      },
+      enabledIds: ["selected-context"],
+    },
+    {
+      name: "slot owner with a legacy alias and a blocked canonical plugin",
+      config: {
+        plugins: { slots: { memory: "google-gemini-cli" } },
+      },
+      enabledIds: ["google-gemini-cli"],
+      preserveAuthoredPolicy: true,
+    },
+    {
+      name: "slot owner with a legacy alias and an absent canonical plugin",
+      config: { plugins: { slots: { memory: "google-gemini-cli" } } },
+      enabledIds: ["google-gemini-cli"],
+      preserveAuthoredPolicy: true,
+      omitAliasTarget: true,
+    },
+    {
+      name: "disabled channel and denied slots",
+      config: {
+        channels: { telegram: { enabled: false } },
+        plugins: {
+          deny: ["selected-memory", "selected-context"],
+          slots: { memory: "selected-memory", contextEngine: "selected-context" },
+          entries: { "channel-owner": { enabled: true } },
+        },
+      },
+      enabledIds: [],
+    },
+  ])(
+    "retains $name when the last allowlisted plugin is retired",
+    ({ config, enabledIds, preserveAuthoredPolicy, omitAliasTarget }) => {
+      const plugins: PluginManifestRecord[] = [
+        { ...manifest("channel-owner"), channels: ["telegram"] },
+        manifest("memory-core"),
+        { ...manifest("selected-memory"), origin: "global" },
+        { ...manifest("selected-context"), origin: "workspace" },
+        { ...manifest("unrelated-installed"), origin: "global" },
+        { ...manifest("google-gemini-cli"), origin: "global" },
+        ...(omitAliasTarget ? [] : [{ ...manifest("google"), origin: "global" as const }]),
+      ];
+      vi.mocked(manifestRegistry.loadPluginManifestRegistryCore).mockReturnValue({
+        plugins,
+        diagnostics: [],
+      });
+      const cfg: OpenClawConfig = {
+        ...config,
+        plugins: {
+          ...config.plugins,
+          allow: [" WebHooks ", " "],
+          entries: {
+            ...config.plugins.entries,
+            webhooks: { enabled: true },
+            "unrelated-installed": { enabled: true },
+          },
+        },
+      };
+      const expectActivation = (candidate: OpenClawConfig) => {
+        for (const plugin of plugins) {
+          expect(
+            resolveEffectivePluginActivationState({
+              ...plugin,
+              channelIds: plugin.channels,
+              config: normalizePluginsConfig(candidate.plugins),
+              rootConfig: candidate,
+            }).enabled,
+            plugin.id,
+          ).toBe(enabledIds.includes(plugin.id));
+        }
+      };
+      expectActivation(cfg);
+
+      const result = maybeRepairStalePluginConfig(cfg);
+
+      expectActivation(result.config);
+      if (preserveAuthoredPolicy) {
+        expect(result.config).toEqual(cfg);
+        expect(result.changes).toEqual([]);
+        expect(result.warnings).toEqual([
+          "- Stale plugin cleanup paused: preserving the restrictive plugins.allow policy because active plugin ids alias to other owners (google-gemini-cli -> google). Choose noncolliding allowed plugin ids, then rerun openclaw doctor --fix.",
+        ]);
+        return;
+      }
+      expect(result.config.plugins?.allow).toEqual(enabledIds);
+      if (enabledIds.length > 0) {
+        expect(result.changes).toContain(
+          `- plugins.allow: retained already enabled plugins as explicit allowlist entries (${enabledIds.join(", ")}); review this list when changing channels or plugin slots`,
+        );
+      }
+      expect(result.config.plugins?.entries?.webhooks).toBeUndefined();
+      expect(maybeRepairStalePluginConfig(result.config).changes).toEqual([]);
+    },
+  );
+
   it("preserves an explicit disable marker while removing stale disabled settings", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {

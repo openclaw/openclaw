@@ -75,10 +75,22 @@ remove its stale entry and `plugins.allow` or `plugins.deny` references through
 the normal config backup and repair flow. This retirement does not change the
 database schema or delete stored Tasks or TaskFlows.
 
-If Webhooks was the only plugin in `plugins.allow`, Doctor sets
-`plugins.enabled: false` after removing it. An empty allowlist would otherwise
-allow unrelated installed plugins to load. Review the remaining plugin choices,
-set `plugins.allow` to the plugins you want, and then re-enable plugins.
+If Webhooks was the only plugin in `plugins.allow`, Doctor retains other
+already enabled plugins as explicit allowlist entries, including configured
+bundled channels and selected memory or context-engine plugins. Existing deny
+and disable settings still apply. Doctor reports the retained IDs; review this
+list when changing channels or plugin slots because these entries remain explicit
+plugin permissions.
+
+If no enabled plugins remain, Doctor sets `plugins.enabled: false`. An empty
+allowlist would otherwise allow unrelated installed plugins to load. Review the
+remaining plugin choices, set `plugins.allow` to the plugins you want, and then
+re-enable plugins.
+
+If an active plugin's legacy ID aliases to a different owner, Doctor leaves the
+stale plugin settings unchanged and warns instead of granting that other owner
+access. Choose noncolliding allowed plugin IDs, then rerun `openclaw doctor --fix`
+to finish cleanup. Other Doctor repairs continue.
 
 Use [Gateway HTTP hooks](/automation/cron-jobs/webhooks) to wake an agent or submit
 an agent turn from an external service. Their `hooks.*` settings, internal event
