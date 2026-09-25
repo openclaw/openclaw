@@ -2017,7 +2017,7 @@ jobs:
             changedScopeHasQaImpact &&
             (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
           const nodeMatrixLimit = compactPlanMode === "pull-request"
-            ? (nodeRunnerBackend === "github-pr" ? 160 : 130) : 70;
+            ? (nodeRunnerBackend === "github-pr" ? 250 : 130) : 70;
           const rawNodeTestShards = runNodeFull
             ? changedNodeTestShards
               ? changedNodeTestShards
@@ -2436,7 +2436,7 @@ jobs:
           // Routing belongs to this workflow, not the frozen target's test planners.
           // PRs use free hosted capacity; main retains its bounded optional offload.
           const hostedPullRequest = workflowEventName === "pull_request" && !frozenTarget;
-          const HYBRID_HOSTED_ROW_LIMIT = hostedPullRequest ? 200 : 45;
+          const HYBRID_HOSTED_ROW_LIMIT = hostedPullRequest ? 300 : 45;
           const HYBRID_HOSTED_BASE_ROW_LIMIT = HYBRID_HOSTED_ROW_LIMIT - 5;
           const hybridHostedEligible = !frozenTarget && isCanonicalRepository &&
             ["hybrid", "runson"].includes(process.env.OPENCLAW_CI_RUNNER_BACKEND ?? "") &&
@@ -2525,7 +2525,7 @@ jobs:
           const hybridHostedRowsWithChecks = hybridHostedExistingRows +
             (hybridHostedChecks ? hybridHostedCheckRows : 0);
           // Main can spend remaining hosted capacity on independent four-CPU checks.
-          // PRs retain their Blacksmith placement regardless of spare row capacity.
+          // PR static checks are already included in the hosted base inventory.
           const hybridHostedMainCheckRows = manifest.run_check ? 2 : 0;
           const hybridHostedMainChecks = hybridHostedChecks && eventName === "push" &&
             eventRef === "refs/heads/main" &&
@@ -4345,7 +4345,7 @@ jobs:
       fail-fast: ${{ github.event_name == 'pull_request' }}
       # Compact and PR manifest caps bound registrations; parallelism bounds
       # active jobs. Canonical main retains two non-canceling parity slots.
-      max-parallel: ${{ needs.preflight.outputs.node_runner_backend == 'github-pr' && 160 || 96 }}
+      max-parallel: ${{ needs.preflight.outputs.node_runner_backend == 'github-pr' && 200 || 96 }}
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - *linux_node_checkout_step

@@ -716,6 +716,7 @@ function withSamplerFixture(
       dryRun?: boolean,
       count?: number,
       toolingRunIds?: number[],
+      pullRequestRunIds?: number[],
     ) => SpawnSyncReturns<string>;
     contents: () => string;
     requests: () => string[][];
@@ -791,7 +792,7 @@ if (args[1] === "--help") {
           .split("\n")
           .filter(Boolean)
           .map((line) => JSON.parse(line) as string[]),
-      invoke: (dryRun = false, count = 2, toolingRunIds = []) =>
+      invoke: (dryRun = false, count = 2, toolingRunIds = [], pullRequestRunIds = []) =>
         spawnSync(
           process.execPath,
           [
@@ -808,6 +809,7 @@ if (args[1] === "--help") {
             "--out",
             output,
             ...toolingRunIds.flatMap((id) => ["--tooling-run", String(id)]),
+            ...pullRequestRunIds.flatMap((id) => ["--pull-request-run", String(id)]),
             ...(dryRun ? ["--dry-run"] : []),
           ],
           {
@@ -1062,6 +1064,114 @@ it.todo("retains todo coverage");
     });
   });
 
+  it.each([
+    { name: "complete Node/Bun pair", node: "complete", bun: "complete", expected: 120 },
+    { name: "missing Bun child", node: "complete", bun: "absent" },
+    { name: "unfinished Bun child", node: "complete", bun: "unfinished" },
+    { name: "failed Node child", node: "failed", bun: "complete" },
+    {
+      name: "successful pure Bun job",
+      node: "absent",
+      bun: "complete",
+      completeJob: true,
+      expected: 20,
+    },
+    { name: "partial pure Bun job", node: "absent", bun: "complete" },
+    {
+      name: "unambiguous empty UI Node child",
+      node: "skipped",
+      bun: "complete",
+      ui: true,
+      expected: 20,
+    },
+    {
+      name: "ambiguous empty UI Node child",
+      node: "skipped",
+      bun: "complete",
+      ui: true,
+      ambiguous: true,
+    },
+    { name: "empty Node marker outside UI", node: "skipped", bun: "complete" },
+    { name: "dual Node child before missing Bun", node: "complete", bun: "absent", dual: true },
+  ])("admits only complete hosted PR runtime costs: $name", (scenario) => {
+    const group = {
+      shard_name: "fixture-runtime-hosted-1",
+      configs: [scenario.ui ? "ui/vitest.config.ts" : "test/vitest/vitest.gateway-core.config.ts"],
+      includePatterns: ["src/fixture.test.ts"],
+      timing_key: "fixture-runtime",
+    };
+    const span = (key: string, seconds: number, outcome: string) => {
+      if (outcome === "absent" || outcome === "skipped") {
+        return "";
+      }
+      const lines = compactLog(seconds, key).split("\n").slice(0, 2);
+      return outcome === "unfinished"
+        ? lines[0]!
+        : lines.join("\n").replace("exit 0", outcome === "failed" ? "exit 1" : "exit 0");
+    };
+    const text = [
+      `2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: ${scenario.dual ? "dual" : "bun-compatible"}`,
+      `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups(scenario.ambiguous ? [group, { ...group, timing_key: "other" }] : [group])}`,
+      span(`${scenario.dual ? "" : "node-subset:"}fixture-runtime`, 100, scenario.node),
+      span("bun:fixture-runtime", 20, scenario.bun),
+      scenario.node === "skipped"
+        ? "2026-08-27T23:01:00Z [shard:node-subset:fixture-runtime-hosted-1] skipped (native shard has no Node-only files)"
+        : "",
+    ].join("\n");
+    const runs = [1, 2].map((id) =>
+      timingRun(id, [
+        {
+          kind: "compactPullRequest",
+          labels: ["ubuntu-24.04"],
+          completeJob: scenario.completeJob,
+          text,
+        },
+      ]),
+    );
+    const measured = refitTestTimings(runs).timings.compactGroupSeconds.githubPullRequest ?? {};
+    expect(measured["fixture-runtime"]).toBe(scenario.expected);
+    expect(Object.keys(measured).some((key) => /^(?:node-subset|bun):/u.test(key))).toBe(false);
+    if (scenario.expected === undefined) {
+      expect(measured).toEqual({});
+    }
+  });
+
+  it("seeds one cancelled PR run with complete groups without lowering or pruning retained costs", () => {
+    withSamplerFixture(
+      {
+        runs: [],
+        seedRuns: { "1": samplerRun(1, { event: "pull_request", conclusion: "cancelled" }) },
+        baseline: {
+          ...baseline,
+          compactGroupSeconds: {
+            blacksmith: { retained: 40 },
+            github: { retained: 50 },
+            githubPullRequest: { omitted: 90, "kept-higher": 200 },
+          },
+        },
+        jobs: [
+          samplerJob(11, 1, {
+            labels: ["ubuntu-24.04"],
+            conclusion: "cancelled",
+            log: `${compactLog(100, "new-cost")}\n${compactLog(20, "kept-higher")}`,
+          }),
+        ],
+      },
+      (fixture) => {
+        const result = fixture.invoke(false, 2, [], [1]);
+        expect(result.status, result.stderr).toBe(0);
+        const timings = ciTestTimingsSchema.parse(JSON.parse(fixture.contents()));
+        expect(timings.compactGroupSeconds).toEqual({
+          blacksmith: { retained: 40 },
+          github: { retained: 50 },
+          githubPullRequest: { omitted: 90, "kept-higher": 200, "new-cost": 100 },
+        });
+        expect(timings.source).toContain("hosted PR qualification seed");
+        expect(fixture.requests().some((args) => args[1]?.includes("/workflows/"))).toBe(false);
+      },
+    );
+  });
+
   it("retains measured parent costs across split inventory changes without double-counting retries", () => {
     const parentShardName = "agentic-control-plane-agent-chat";
     const generations = [0, 1, 2].map((index) =>
@@ -1118,8 +1228,8 @@ it.todo("retains todo coverage");
         env: { OPENCLAW_VITEST_MAX_WORKERS: index === 2 ? "4" : "2" },
         includePatterns: ["src/cli/example.process.test.ts"],
       };
-      return {
-        ...timingRun(index + 1, [
+      return Object.assign(
+        timingRun(index + 1, [
           {
             kind: "compactPullRequest",
             labels: ["ubuntu-24.04"],
@@ -1129,8 +1239,8 @@ it.todo("retains todo coverage");
             ].join("\n"),
           },
         ]),
-        completeInventory: false,
-      };
+        { completeInventory: false },
+      );
     });
     const previous = {
       ...baseline,
@@ -1150,7 +1260,7 @@ it.todo("retains todo coverage");
     expect(ciTestTimingsSchema.parse(result.timings)).toEqual(result.timings);
 
     // Successful PRs finish their selected plan, not the repository's full inventory.
-    const successful = runs.map((run) => ({ ...run, completeInventory: true }));
+    const successful = runs.map((run) => Object.assign({}, run, { completeInventory: true }));
     const unselectedTooling = { "core-tooling-7": 480 };
     const retained = refitTestTimings(successful, {
       ...previous,

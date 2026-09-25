@@ -2779,7 +2779,7 @@ AFTER_CD
             preflightOutputs: { node_runner_backend: nodeRunnerBackend },
           },
         ),
-      ).toBe(nodeRunnerBackend === "github-pr" ? 160 : 96);
+      ).toBe(nodeRunnerBackend === "github-pr" ? 200 : 96);
     }
     expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);

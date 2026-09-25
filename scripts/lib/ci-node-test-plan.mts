@@ -421,15 +421,15 @@ const COMPACT_HYBRID_RUNTIME_JOB_SECONDS = 440;
 // Split groups above this hosted prediction before packing. Hybrid reuses the
 // hosted-derived splits so retries cannot reunite an oversized hosted group.
 const COMPACT_GITHUB_MAX_PREDICTED_SECONDS = 150;
-// PR measurements replace the older hosted hints. Reserve 150s of the ten-minute
-// job objective for checkout/setup; individual test deadlines stay unchanged.
-const COMPACT_HOSTED_PR_GROUP_SECONDS = 300;
-const COMPACT_HOSTED_PR_JOB_SECONDS = 450;
+// PR measurements replace the older hosted hints. Leave over four minutes of the
+// objective for checkout/setup and prediction error; test deadlines stay unchanged.
+const COMPACT_HOSTED_PR_GROUP_SECONDS = 120;
+const COMPACT_HOSTED_PR_JOB_SECONDS = 340;
 // Hosted run 35477045216 timed out after an hour on a 203-file serial stripe;
 // its 196-file sibling took 2867s. Bound admission independently of stale costs.
 const COMPACT_HOSTED_STORAGE_STATE_MAX_FILES = 64;
-// Hosted run 35937762430 spent 736s in a 64-file storage group.
-const COMPACT_HOSTED_PR_STORAGE_STATE_MAX_FILES = 32;
+// Hosted run 36182096172 spent 532s in a 32-file storage group.
+const COMPACT_HOSTED_PR_STORAGE_STATE_MAX_FILES = 16;
 // Hourly hosted run 35983526919 spent ~25 minutes in each of these owners.
 // Bound the main-tier work independently of stale whole-owner timing estimates.
 const COMPACT_HOSTED_MAIN_MAX_FILES = new Map([
@@ -437,10 +437,10 @@ const COMPACT_HOSTED_MAIN_MAX_FILES = new Map([
   ["agentic-gateway-methods", 96],
 ]);
 const HOSTED_MAIN_UPDATE_TEST = "src/cli/update-cli.test.ts";
-// Trusted forks can use the GitHub profile on Blacksmith. Every compact
-// profile must fit the same runner-registration allowance.
+// Legacy hosted profiles can run on Blacksmith through trusted-fork routing.
+// The explicit hosted-only PR profile does not consume that registration budget.
 const COMPACT_NODE_TEST_JOB_CAP = 90;
-const COMPACT_HOSTED_PR_NODE_TEST_JOB_CAP = 120;
+const COMPACT_HOSTED_PR_NODE_TEST_JOB_CAP = 210;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 16;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
@@ -1294,7 +1294,10 @@ function estimateCompactGroupSeconds(
   runnerBackend: string | undefined,
 ): number {
   if (isParallelToolingGroup(group) && group.includePatterns) {
-    return estimateParallelToolingSeconds(group, group.includePatterns, runnerBackend);
+    return Math.max(
+      estimateParallelToolingSeconds(group, group.includePatterns, runnerBackend),
+      runnerBackend === "github-pr" ? (readCompactGroupSeconds(group, "github-pr") ?? 0) : 0,
+    );
   }
   if (
     isParallelCommandsGroup(group) &&
@@ -3524,6 +3527,9 @@ function splitOversizedCompactGroup(
   const isCliProcess = group.shard_name === "agentic-cli-process";
   const isTooling = isParallelToolingGroup(group);
   const hostedFileLimit =
+    (runnerBackend === "github-pr" && group.shard_name === "agentic-gateway-methods"
+      ? 26
+      : undefined) ??
     (hostedMain ? COMPACT_HOSTED_MAIN_MAX_FILES.get(group.shard_name) : undefined) ??
     (isHostedNodeBackend(runnerBackend) && group.shard_name === "core-runtime-infra-storage-state"
       ? runnerBackend === "github-pr"
@@ -3601,6 +3607,14 @@ function splitOversizedCompactGroup(
     includePatterns?.map((file) => [file, resolveTestFilesBuildMode([file])]) ?? [],
   );
   const packTooling = isTooling && isHostedNodeBackend(runnerBackend);
+  const toolingScale =
+    runnerBackend === "github-pr" && isTooling && includePatterns?.length
+      ? Math.max(
+          1,
+          measuredProfileSeconds /
+            Math.max(1, estimateParallelToolingSeconds(group, includePatterns, runnerBackend)),
+        )
+      : 1;
   const agentsCoreFiles = isParallelAgentsCoreGroup(group)
     ? new Set(agentsCoreWorkFiles(group))
     : undefined;
@@ -3638,7 +3652,11 @@ function splitOversizedCompactGroup(
       const weight = patterns.reduce((sum, file) => sum + weightForFile(file), 0);
       return (
         (isTooling
-          ? estimateParallelToolingSeconds(group, patterns, packTooling ? "github" : runnerBackend)
+          ? estimateParallelToolingSeconds(
+              group,
+              patterns,
+              packTooling ? "github" : runnerBackend,
+            ) * toolingScale
           : weight) +
         Math.round(
           (mode ? VITEST_PRETEST_BUILD_SECONDS[mode] : 0) *
@@ -3661,7 +3679,12 @@ function splitOversizedCompactGroup(
           ),
           (bin, file) => batchWeight([...bin, file]) <= secondsCap,
         ).map((batch) => batch.toSorted(discoveryOrder));
-      stripes = packFiles(files, COMPACT_EXCLUSIVE_JOB_SECONDS);
+      stripes = packFiles(
+        files,
+        runnerBackend === "github-pr"
+          ? COMPACT_HOSTED_PR_GROUP_SECONDS
+          : COMPACT_EXCLUSIVE_JOB_SECONDS,
+      );
       const tail = stripes.at(-1);
       if (
         splitHostedToolingTails &&
@@ -3945,7 +3968,7 @@ function splitOversizedCompactGroup(
     if (isTooling) {
       return {
         group: child,
-        seconds: estimateParallelToolingSeconds(child, patterns, runnerBackend),
+        seconds: estimateParallelToolingSeconds(child, patterns, runnerBackend) * toolingScale,
       };
     }
     if (isParallelAgentsCoreGroup(group) && childTimings[timingKey] !== undefined) {
@@ -4449,12 +4472,15 @@ function createCompactNodeTestShardBundles(
           (/^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(planned.group.shard_name) &&
             (planned.group.includePatterns?.length ?? 0) > 32) ||
           planned.group.includePatterns?.includes(HOSTED_MAIN_UPDATE_TEST));
+      const dedicatedHostedStorage =
+        options.runnerBackend === "github-pr" &&
+        /^core-runtime-infra-storage-state(?:-hosted-\d+)?$/u.test(planned.group.shard_name);
       const key = JSON.stringify([
         sharesHostedCapacity ? "hosted-ordinary" : planned.group.runner,
         shard.requiresDist,
         // Keep measured heavy children alone despite their stale packing estimates.
         // Small Gateway tails and its runtime prerequisite keep ordinary packing.
-        dedicatedHostedMainGroup ? planned.group.shard_name : undefined,
+        dedicatedHostedMainGroup || dedicatedHostedStorage ? planned.group.shard_name : undefined,
       ]);
       const groups = groupsByRunner.get(key);
       if (groups) {

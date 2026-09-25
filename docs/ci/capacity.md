@@ -8,13 +8,20 @@ read_when:
 
 ## Runner registration budget
 
-The current automatic main/PR inventory has a conservative union of 70 potentially
+The retained main/legacy-PR registration envelope has a conservative union of 70 potentially
 self-hosted non-Node rows. Retain an 84-row allowance, including fourteen reserved
-rows, alongside the unchanged 70/130 Node caps. The four-main/21-PR arrival
+rows, alongside its 70/130 Node caps. The four-main/21-PR arrival
 envelope is **5,110 registrations**, leaving 890 below the 6,000 operating target.
 Historical 5,010/5,085/5,160 calculations below describe earlier inventories;
 this fresh count includes the five type stripes and five Windows rows.
 See [critical-path routing](/ci/routing-costs#hosted-assignment-on-the-critical-path).
+
+Current automatic PRs use the [hosted PR policy](/ci/runners#runners): 210 compact
+rows, 250 total Node rows, and at most 200 active Node jobs. These hosted-only
+bounds add no Blacksmith registrations. PR preflight, monitor, static checks,
+artifact build, Windows, and Node rows use hosted capacity; hourly main and
+manual/release routing retain the policies described below. Measure hosted
+assignment waits against the shared organization pool before expanding admission.
 
 OpenClaw's current GitHub runner-registration bucket reports 10,000 self-hosted
 runner registrations per 5 minutes in `gh api rate_limit`. Re-check
@@ -32,7 +39,7 @@ target below about 60% of the live bucket. With the current 10,000-registration
 bucket, that means a 6,000-registration operating target, leaving headroom for
 concurrent repositories, retries, and burst overlap.
 
-Trusted automatic hybrid first-attempt preflight jobs request the existing
+Trusted automatic hybrid main first-attempt preflight jobs request the existing
 16-class after three nearby hosted preflights remained unassigned while their
 Blacksmith security jobs completed. Each eligible hybrid run admits one
 Blacksmith preflight and gate, plus security when optional hosted admission is
@@ -70,13 +77,13 @@ The three Mac Node parts add two hosted jobs per run on `github` and `hybrid`, w
 
 `Release npm Cache Warm` (`release-npm-cache-warm.yml`) runs a hosted Linux job on scheduled and manual triggers to prepare an npm download seed from the latest published OpenClaw package with lifecycle scripts disabled. Its concurrency group is separate from push-triggered Vitest warming, so newer pushes cannot cancel a pending seed. Scheduled runs publish from `main`, so new release branches can restore that seed through GitHub's default-branch cache scope. Each seed starts empty and contains only the current baseline dependency graph. Cross-OS release checks first restore their candidate-specific cache, then a matching runtime/suite cache, then this shared seed. Only npm's content-addressed `_cacache` directory is archived; install prefixes, OpenClaw state, npm logs, and executable `npx` caches remain fresh. The producer and consumers use the same relative archive path and enable cross-OS archives. npm retains normal freshness and integrity checks and downloads missing platform-specific packages. This adds one hosted Linux job per scheduled or manual warmer run, no jobs on pushes, and no Blacksmith registrations.
 
-Small precise PR changes use a focused Node plan. Broad, deleted or unknown changes retain compact core plus the affected plugin fallback; canonical pushes use the integration compact. Every compact planner profile is capped at 90 rows, and plugin fallback packing is capped at 50. The final canonical Node matrix also enforces 70 push rows or 130 PR rows, including precise plans. Missing changed paths, missing current planner capabilities and planner errors fail preflight instead of emitting an incomplete successful matrix. Approved historical dispatches retain their full named plans. Count every emitted matrix row and nonmatrix job, including the conservative six-row Android inventory, independently of concurrency.
+Small precise PR changes use a focused Node plan. Broad, deleted or unknown changes retain compact core plus the affected plugin fallback; canonical pushes use the integration compact. The hosted PR profile is capped at 210 compact rows; other profiles retain 90. Plugin fallback packing is capped at 50. The final canonical Node matrix enforces 70 push rows, 250 hosted PR rows, or 130 legacy-profile PR rows, including precise plans. Missing changed paths, missing current planner capabilities and planner errors fail preflight instead of emitting an incomplete successful matrix. Approved historical dispatches retain their full named plans. Count every emitted matrix row and nonmatrix job, including the conservative six-row Android inventory, independently of concurrency.
 
 Android retains four normal rows and six full-manual rows. Normal same-repository canonical first attempts on Blacksmith overlap all four rows; the GitHub override, retries, manual dispatches, forks, and noncanonical repositories retain two. Reassigning app lint to the existing Wear and Kotlin-lint rows adds no jobs or registrations. A three-row cap kept every job below ten minutes but left a 941-second Android span in [run 35812544118](https://github.com/openclaw/openclaw/actions/runs/35812544118), so normal runs admit all four independent rows together. The conservative six-row allowance and `4 × 150 + 21 × 210 = 5,010` registration envelope remain unchanged, below the 6,000 operating target against the 10,000 live bucket checked on September 23, 2026. This allowance does not establish physical runner availability or a measured wall-time improvement.
 
 Preflight reserves the actual appended plugin Node rows before packing compact
 core work. Hosted tooling tail compaction therefore starts when the remaining
-Node budget is exceeded, even below the standalone 90-row compact cap. Dist
+Node budget is exceeded, even below the profile's standalone compact cap. Dist
 descriptors belong to their separate matrix and do not consume this Node budget;
 they still count toward the compact cap. The existing file-owner splitting,
 timing weights, process boundaries, runner requirements, and admission limits
@@ -134,7 +141,7 @@ The Codex rates were refreshed after the app-server fixture began reusing databa
 
 This calibration preserves execution policy: ordinary Codex files remain serial and non-isolated, database-worker-routed Codex files retain isolated forks, and both keep their 12-file process bound. The 300-second no-output watchdog and test deadlines remain unchanged. Weight changes affect packing and predictions, not per-file scheduling.
 
-The landed caps are 90 compact rows, 130 final PR Node rows and 70 final push Node rows; changed-extension fallback retains its 50-row cap. At the earlier 240-second budget, replaying PR #153435's 38 changed paths and a broad SDK fallback on the `9034c0aa` counting inventory with the refreshed Codex rates emitted 124 envelopes in 48 extension rows, down from 50 rows with the same envelope inventory and process bounds, for both changed sets:
+Before hosted PR offload, the caps were 90 compact rows, 130 final PR Node rows and 70 final push Node rows; changed-extension fallback retains its 50-row cap. At the earlier 240-second budget, replaying PR #153435's 38 changed paths and a broad SDK fallback on the `9034c0aa` counting inventory with the refreshed Codex rates emitted 124 envelopes in 48 extension rows, down from 50 rows with the same envelope inventory and process bounds, for both changed sets:
 
 | Profile    | Compact PR rows | Final PR Node rows before → after | Final push Node rows |
 | ---------- | --------------: | --------------------------------: | -------------------: |
@@ -565,7 +572,7 @@ earlier cohorts are being collected. When otherwise valid successful jobs end
 after that cutoff, scheduled sampling skips the entire run, reports its ID and
 cutoff, and seeks a replacement without consuming the sample quota. It never
 downloads that cohort's logs or drops only the late jobs into an apparently
-complete inventory. Explicit `--tooling-run` requests instead fail with the run
+complete inventory. Explicit `--tooling-run` and `--pull-request-run` requests instead fail with the run
 ID and cutoff; neither path moves the window.
 
 The refit seeks up to five completed `ci.yml` push runs on `main` with a success
@@ -578,7 +585,11 @@ pruning policy, including when mixed with failed-workflow samples.
 It also reads the newest five successful `ci.yml` `pull_request` runs for the
 PR-only numbered tooling family. These tests execute the PR merge-ref, not a
 canonical main revision; that provenance is appropriate for PR-only tooling.
-PR logs update only `toolingFileSeconds`, never main compact or release weights.
+PR logs update `toolingFileSeconds` and the separate hosted PR compact map,
+never main compact or release weights. Exact config, environment, and file
+membership identities retain observed PR group costs across repacking. Complete
+mixed-runtime groups include both Node and Bun; partial runtime observations
+cannot stand in for the complete descriptor.
 Tooling measurements are collected ahead of planner activation: run `35506602947`
 exceeds the current hosted and hybrid row caps when applied. Keep activation
 separate until measured test improvements or approved capacity make every profile fit.
@@ -600,6 +611,16 @@ For an explicit reviewed seed, use `pnpm ci:timings:refit --tooling-run <id>`
 single run only for tooling, preserves all other timing maps, and records the
 seed run IDs and merge-ref provenance in `source`. The initial tooling seed uses
 run `35506602947`; subsequent daily samples replace it under the ordinary rules.
+
+For a hosted PR qualification seed, use
+`pnpm ci:timings:refit --pull-request-run <id>` (repeatable). This explicit mode
+can use complete group spans from an unsuccessful PR run. It permits one sample
+only in the hosted PR compact map, increases observed costs without lowering
+retained estimates, preserves unobserved and other-profile history, and records
+the seed run IDs in `source`. A successful job or complete runtime membership
+must establish the group's completion. This seed is sizing evidence, not a
+successful-workload performance qualification; ordinary refits still require
+independent runs.
 
 It also samples up to five successful manual runs of each release-check workflow
 that owns Gateway E2E. Run searches remain bounded by 25 pages and GitHub's
@@ -769,6 +790,12 @@ not enable auto-merge. See
 [GitHub's workflow-trigger rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow).
 
 ## Bounded hybrid hosted offload
+
+Current automatic PRs count their hosted preflight and monitor in the base
+inventory and use a 295-row base threshold and 300-row optional-offload limit.
+Their static checks route hosted directly. The 40/45 limits and conditional
+check placement below describe main and historical PR policies, not the current
+hosted PR override. Neither budget reserves capacity in the shared hosted pool.
 
 Automatic canonical hybrid first attempts count the complete selected hosted inventory before adding short jobs: control and cache jobs, every selected check or Node matrix row, docs and i18n, performance, and hosted native jobs. Preflight records `hybrid_hosted_base_rows`, `hybrid_hosted_total_rows`, and `hybrid_hosted_offload`; the workflow guard independently expands the actual job gates, matrices, and runner expressions to verify the count. Eligible preflight runs on Blacksmith and is excluded from hosted rows; the performance row uses its canonical `run_control_ui_performance` owner.
 

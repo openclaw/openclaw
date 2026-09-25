@@ -2571,7 +2571,7 @@ describe("ci workflow guards", () => {
         (step: WorkflowStep) => step.name === "Build CI manifest",
       );
       expect(planner.run).toContain(
-        "const HYBRID_HOSTED_ROW_LIMIT = hostedPullRequest ? 200 : 45;",
+        "const HYBRID_HOSTED_ROW_LIMIT = hostedPullRequest ? 300 : 45;",
       );
       expect(planner.run).toContain(
         "const HYBRID_HOSTED_BASE_ROW_LIMIT = HYBRID_HOSTED_ROW_LIMIT - 5;",
@@ -7629,8 +7629,8 @@ describe("ci workflow guards", () => {
   it.each([
     ["pull_request", "compact", "blacksmith", 130, "blacksmith"],
     ["pull_request", "precise", "github", 130, "github"],
-    ["pull_request", "compact", "hybrid", 160, "github-pr"],
-    ["pull_request", "precise", "github", 160, "github-pr"],
+    ["pull_request", "compact", "hybrid", 250, "github-pr"],
+    ["pull_request", "precise", "github", 250, "github-pr"],
     ["push", "compact", "hybrid", 70, "hybrid"],
     ["workflow_dispatch", "compact", "blacksmith", null, "blacksmith"],
   ] as const)(

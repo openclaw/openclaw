@@ -18,7 +18,12 @@ export type CiTimingRun = {
   completeInventory: boolean;
   logs: (
     | { kind: "uiE2e" | "repoE2e"; text: string }
-    | { kind: "compact" | "compactPullRequest" | "tooling"; text: string; labels: string[] }
+    | {
+        kind: "compact" | "compactPullRequest" | "tooling";
+        text: string;
+        labels: string[];
+        completeJob?: boolean;
+      }
   )[];
 };
 
@@ -139,26 +144,84 @@ function readCompactLog(
   runtimeSamples: { blacksmith: Samples; github: Samples },
   runtimeDescriptors: Map<string, RuntimePlacementTiming>,
   pullRequest = false,
+  completeJob = false,
 ) {
   const profile = labels.some((label) => label.startsWith("blacksmith-"))
     ? "blacksmith"
     : pullRequest
       ? "githubPullRequest"
       : "github";
+  const aggregate = profile === "githubPullRequest";
+  const policies = new Set(
+    [
+      ...text.matchAll(
+        /(?:^|\n)\d{4}-\d\d-\d\dT[\d:.]+Z\s+OPENCLAW_CI_TEST_RUNTIME_POLICY: (\S+)\s*(?=\n|$)/gu,
+      ),
+    ].map((match) => match[1]),
+  );
+  const policy = policies.size === 0 ? "node" : policies.size === 1 ? [...policies][0] : undefined;
+  if (aggregate && !["node", "bun-compatible", "dual"].includes(policy ?? "")) {
+    return;
+  }
   const starts = new Map<string, number>();
   const descriptors = readRuntimeTimingGroups(text);
   const runtimeModes = new Map<string, "runtime" | "private-qa">();
+  const recordSpan = (key: string, elapsed: number) => {
+    recordSample(samples[profile], key, elapsed);
+    const matches = descriptors.filter((group) => (group.timing_key ?? group.shard_name) === key);
+    if (matches.length !== 1) {
+      return;
+    }
+    const group = matches[0]!;
+    if (profile === "githubPullRequest") {
+      const membershipKey = compactGroupMembershipTimingKey(group);
+      if (membershipKey) {
+        recordSample(samples[profile], membershipKey, elapsed);
+      }
+    }
+    const observation = {
+      configs: group.configs,
+      env: Object.fromEntries(
+        Object.entries(group.env ?? {}).toSorted(([a], [b]) => a.localeCompare(b)),
+      ),
+      includePatterns: group.includePatterns.toSorted(),
+      pretestBuildMode: runtimeModes.get(key),
+      seconds: Math.max(1, Math.round(elapsed)),
+    };
+    if (profile !== "githubPullRequest" && isRuntimePlacementTiming(observation)) {
+      const identity = runtimePlacementTimingIdentity(observation);
+      runtimeDescriptors.set(identity, observation);
+      recordSample(runtimeSamples[profile], identity, elapsed);
+    }
+  };
+  const logicalKey = (key: string) => key.replace(/^(?:node-subset|bun):/u, "");
+  const spans = new Map<string, Map<string, number[]>>();
+  const failed = new Set<string>();
+  const skippedNode = new Set<string>();
   for (const line of text.split("\n")) {
+    const skipped =
+      /\[shard:node-subset:([^\]]+)\] skipped \(native shard has no Node-only files\)/u.exec(line);
+    if (aggregate && skipped) {
+      const matches = descriptors.filter((group) => group.shard_name === skipped[1]);
+      if (
+        matches.length === 1 &&
+        matches[0]!.configs.length === 1 &&
+        matches[0]!.configs[0] === "ui/vitest.config.ts"
+      ) {
+        skippedNode.add(matches[0]!.timing_key ?? matches[0]!.shard_name);
+      }
+    }
     const readiness =
       /\[shard:([^\]]+)\] \[test\] preparing (runtime|private-qa) runtime before Vitest workers/u.exec(
         line,
       );
     if (readiness) {
-      const matches = descriptors.filter((group) => group.shard_name === readiness[1]);
+      const name = aggregate ? logicalKey(readiness[1]!) : readiness[1]!;
+      const matches = descriptors.filter((group) => group.shard_name === name);
       if (matches.length === 1) {
         const group = matches[0]!;
         const key = group.timing_key ?? group.shard_name;
-        if (starts.has(key)) {
+        if (aggregate || starts.has(key)) {
           runtimeModes.set(key, readiness[2] === "private-qa" ? "private-qa" : "runtime");
         }
       }
@@ -168,46 +231,66 @@ function readCompactLog(
     if (!event) {
       continue;
     }
-    const timestamp = event[1]!;
+    const timestamp = Date.parse(event[1]!);
     const key = event[2]!;
-    const action = event[3]!;
-    const exitCode = event[4];
-    if (action === "begin") {
-      starts.set(key, Date.parse(timestamp));
-      runtimeModes.delete(key);
+    const owner = logicalKey(key);
+    if (event[3] === "begin") {
+      if (aggregate && starts.has(key)) {
+        failed.add(owner);
+      }
+      if (!aggregate) {
+        runtimeModes.delete(key);
+      }
+      starts.set(key, timestamp);
       continue;
     }
     const started = starts.get(key);
-    if (exitCode === "0" && started !== undefined) {
-      // Preserve the workload as executed. Packed plans may be serial or
-      // concurrent, and admission must use the wrapper span it actually ran.
-      recordSample(samples[profile], key, (Date.parse(timestamp) - started) / 1000);
-      const matches = descriptors.filter((group) => (group.timing_key ?? group.shard_name) === key);
-      if (matches.length === 1) {
-        const group = matches[0]!;
-        if (profile === "githubPullRequest") {
-          const membershipKey = compactGroupMembershipTimingKey(group);
-          if (membershipKey) {
-            recordSample(samples[profile], membershipKey, (Date.parse(timestamp) - started) / 1000);
-          }
-        }
-        const observation = {
-          configs: group.configs,
-          env: Object.fromEntries(
-            Object.entries(group.env ?? {}).toSorted(([a], [b]) => a.localeCompare(b)),
-          ),
-          includePatterns: group.includePatterns.toSorted(),
-          pretestBuildMode: runtimeModes.get(key),
-          seconds: Math.max(1, Math.round((Date.parse(timestamp) - started) / 1000)),
-        };
-        if (profile !== "githubPullRequest" && isRuntimePlacementTiming(observation)) {
-          const identity = runtimePlacementTimingIdentity(observation);
-          runtimeDescriptors.set(identity, observation);
-          recordSample(runtimeSamples[profile], identity, (Date.parse(timestamp) - started) / 1000);
-        }
+    if (!aggregate) {
+      if (event[4] === "0" && started !== undefined) {
+        recordSpan(key, (timestamp - started) / 1000);
       }
+      starts.delete(key);
+      continue;
+    }
+    if (event[4] !== "0" || started === undefined) {
+      failed.add(owner);
+    } else {
+      const parts = spans.get(owner) ?? new Map<string, number[]>();
+      const values = parts.get(key) ?? [];
+      values.push((timestamp - started) / 1000);
+      parts.set(key, values);
+      spans.set(owner, parts);
     }
     starts.delete(key);
+  }
+  if (!aggregate) {
+    return;
+  }
+  for (const key of starts.keys()) {
+    failed.add(logicalKey(key));
+  }
+  for (const [key, parts] of spans) {
+    if (failed.has(key)) {
+      continue;
+    }
+    if (policy === "dual" && !completeJob && !parts.has(`bun:${key}`)) {
+      continue;
+    }
+    const mixed = parts.has(`bun:${key}`) || parts.has(`node-subset:${key}`);
+    // Both ordinary runtime children settle even after one fails. A successful
+    // whole job also proves pure-Bun and UI's Bun-first/empty-Node envelopes.
+    if (
+      mixed &&
+      !completeJob &&
+      !(
+        parts.has(`bun:${key}`) &&
+        (parts.has(`node-subset:${key}`) || parts.has(key) || skippedNode.has(key))
+      )
+    ) {
+      continue;
+    }
+    const elapsed = [...parts.values()].reduce((total, values) => total + median(values), 0);
+    recordSpan(key, elapsed);
   }
 }
 
@@ -375,6 +458,7 @@ function refitMap(
   observedParents?: Set<string>,
   minimumSamples = 2,
   retainReleaseCosts = false,
+  onlyIncrease = false,
 ) {
   const next = Object.fromEntries(
     Object.entries(previous).filter(
@@ -389,9 +473,10 @@ function refitMap(
     const center = median(values);
     const retained = values.filter((value) => value <= center * 2.5);
     if (retained.length >= minimumSamples) {
-      const measured = median(retained);
+      const measured = Math.max(onlyIncrease ? (previous[key] ?? 0) : 0, median(retained));
       if (
         previous[key] === undefined ||
+        (onlyIncrease && measured > previous[key]) ||
         Math.abs(measured - previous[key]) > previous[key] * 0.15
       ) {
         next[key] = Math.max(1, Math.round(measured));
@@ -406,7 +491,7 @@ function refitMap(
 export function refitTestTimings(
   runs: CiTimingRun[],
   previous?: CiTestTimings,
-  options: { seedTooling?: boolean } = {},
+  options: { seedTooling?: boolean; seedPullRequest?: boolean } = {},
 ) {
   const samples = {
     uiE2e: new Map<string, number[]>(),
@@ -480,6 +565,7 @@ export function refitTestTimings(
           currentRuntime,
           runtimeDescriptors,
           log.kind === "compactPullRequest",
+          log.completeJob === true,
         );
       } else {
         readE2eLog(text, current[log.kind], log.kind === "uiE2e" ? overhead : undefined);
@@ -560,6 +646,9 @@ export function refitTestTimings(
               // Successful PRs can omit whole families through changed-path selection.
               0,
               observedParents.githubPullRequest,
+              options.seedPullRequest ? 1 : 2,
+              false,
+              options.seedPullRequest === true,
             ),
           }
         : {}),
@@ -573,9 +662,11 @@ export function refitTestTimings(
       blacksmith: refitRuntime("blacksmith"),
       github: refitRuntime("github"),
     },
-    source: options.seedTooling
-      ? `tooling seed from successful pull_request CI merge-ref runs: ${runIds.join(", ")}; retained other timings: ${previous?.source ?? "none"}`
-      : `median of successful timing jobs from ${runIds.length} CI and release-check runs: ${runIds.join(", ")}`,
+    source: options.seedPullRequest
+      ? `hosted PR qualification seed from complete descriptor spans: ${runIds.join(", ")}; retained other timings: ${previous?.source ?? "none"}`
+      : options.seedTooling
+        ? `tooling seed from successful pull_request CI merge-ref runs: ${runIds.join(", ")}; retained other timings: ${previous?.source ?? "none"}`
+        : `median of successful timing jobs from ${runIds.length} CI and release-check runs: ${runIds.join(", ")}`,
     // PR plans may select only part of tooling. Absence is not evidence that
     // a file disappeared; preserve unobserved measurements across those windows.
     toolingFileSeconds: {

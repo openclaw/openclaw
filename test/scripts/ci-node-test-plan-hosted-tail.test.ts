@@ -83,9 +83,15 @@ it("keeps measured hosted PR rows bounded while preserving their complete file o
   };
   const owners = createNodeTestShards(prOptions);
   const jobs = createNodeTestShardBundles(prOptions);
-  expect(jobs.length).toBeLessThanOrEqual(120);
+  expect(jobs.length).toBeLessThanOrEqual(210);
   expect(jobs.every((job) => job.planConcurrency === 1)).toBe(true);
   expect(Math.max(...jobs.map((job) => job.predictedSeconds!))).toBeLessThanOrEqual(450);
+  for (const job of jobs.filter((entry) => entry.predictedSeconds! > 340)) {
+    expect(
+      job.pretestBuildMode !== undefined ||
+        (job.groups.length === 1 && job.groups[0]!.includePatterns?.length === 1),
+    ).toBe(true);
+  }
 
   for (const name of [
     "agentic-cli",
@@ -107,9 +113,13 @@ it("keeps measured hosted PR rows bounded while preserving their complete file o
       expect(group.configs, name).toEqual(owner.configs);
       expect(group.requiresDist, name).toBe(owner.requiresDist);
       if (name === "core-runtime-infra-storage-state") {
-        expect(group.includePatterns!.length).toBeLessThanOrEqual(32);
+        expect(group.includePatterns!.length).toBeLessThanOrEqual(16);
+        expect(jobs.find((job) => job.groups.includes(group))!.groups).toHaveLength(1);
       } else {
         expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS, name).toBe("2");
+        if (name === "agentic-gateway-methods") {
+          expect(group.includePatterns!.length).toBeLessThanOrEqual(26);
+        }
       }
     }
   }
