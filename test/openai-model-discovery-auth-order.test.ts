@@ -653,7 +653,7 @@ describe("Provider model discovery auth preparation", () => {
           providerOutcomes: outcomes,
         },
         new Map(),
-        previous,
+        { ...previous, providers: new Map() },
         auth,
         (provider) => provider,
       );
