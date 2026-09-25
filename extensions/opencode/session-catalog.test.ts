@@ -365,7 +365,7 @@ if (${version} === 2) {
   if (args[0] === "api" && args[2] === "session.list") {
     if (${archivedFirst} && !args.some((arg) => arg.startsWith("cursor="))) {
       process.stdout.write(JSON.stringify({
-        data: [1, 2].map((id) => ({
+        data: Array.from({ length: 100 }, (_, id) => ({
           id: "ses_archived" + id, time: { archived: 1 }, location: { directory: "/workspace" },
         })),
         cursor: { next: "live-page" },
@@ -586,6 +586,22 @@ describe("OpenCode session catalog", () => {
     const { provider } = captureOpenCodeSessionRegistrations();
     const hosts = await provider!.list({ limitPerHost: 1 });
     expect(hosts[0]?.sessions.map((session) => session.threadId)).toEqual(["ses_test"]);
+
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const run = processRuntimeMocks.runCommandBuffered.getMockImplementation()!;
+    processRuntimeMocks.runCommandBuffered.mockImplementationOnce(async (...args) => {
+      const result = await run(...args);
+      nowSpy.mockReturnValue(now + 30_001);
+      return result;
+    });
+    try {
+      await expect(
+        listLocalOpenCodeSessionPage({ limit: 1 }, { forceRefresh: true }),
+      ).rejects.toThrow("OpenCode session scan exceeded the time limit");
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   itWithCli("allows a relative OPENCODE_DB as an explicit isolated-state root", async () => {

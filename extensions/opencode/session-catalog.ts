@@ -120,12 +120,15 @@ const OPENCODE_PARAMETER_MESSAGES = {
   invalidThreadId: "threadId is invalid",
 };
 
-async function runOpenCode(args: string[]): Promise<string> {
+async function runOpenCode(args: string[], timeoutMs = CLI_TIMEOUT_MS): Promise<string> {
   const configDirectory = args.includes("--standalone")
     ? await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "opencode-config-"))
     : undefined;
   try {
-    return await executeOpenCode(args, configDirectory);
+    if (timeoutMs <= 0) {
+      throw new Error("OpenCode session scan exceeded the time limit");
+    }
+    return await executeOpenCode(args, timeoutMs, configDirectory);
   } catch (error) {
     log.warn(`OpenCode catalog CLI failed: ${String(error)}`);
     throw error;
@@ -136,7 +139,11 @@ async function runOpenCode(args: string[]): Promise<string> {
   }
 }
 
-async function executeOpenCode(args: string[], configDirectory?: string): Promise<string> {
+async function executeOpenCode(
+  args: string[],
+  timeoutMs: number,
+  configDirectory?: string,
+): Promise<string> {
   const invocation = materializeWindowsSpawnProgram(
     resolveWindowsSpawnProgram({
       command: "opencode",
@@ -166,7 +173,7 @@ async function executeOpenCode(args: string[], configDirectory?: string): Promis
     maxCombinedOutputBytes: MAX_CLI_OUTPUT_BYTES,
     maxOutputBytes: MAX_CLI_OUTPUT_BYTES,
     terminateOnOutputError: true,
-    timeoutMs: CLI_TIMEOUT_MS,
+    timeoutMs,
   });
   if (result.termination === "output-limit") {
     throw new Error("OpenCode session output exceeded the safety limit");
@@ -194,13 +201,15 @@ export async function queryOpenCodeDatabase(query: string): Promise<unknown> {
   return output.trim() ? (JSON.parse(output) as unknown) : [];
 }
 
-export async function runOpenCodeApi(operation: string, params: string[]): Promise<string> {
-  return runOpenCode([
-    "api",
-    "--standalone",
-    operation,
-    ...params.flatMap((param) => ["--param", param]),
-  ]);
+export async function runOpenCodeApi(
+  operation: string,
+  params: string[],
+  timeoutMs = CLI_TIMEOUT_MS,
+): Promise<string> {
+  return runOpenCode(
+    ["api", "--standalone", operation, ...params.flatMap((param) => ["--param", param])],
+    timeoutMs,
+  );
 }
 
 async function queryOpenCodeSessions(query: string, count: number): Promise<unknown> {
@@ -209,13 +218,15 @@ async function queryOpenCodeSessions(query: string, count: number): Promise<unkn
   }
   const sessions: unknown[] = [];
   let cursor: string | undefined;
+  const deadline = Date.now() + CLI_TIMEOUT_MS;
   while (sessions.length < count) {
-    const limit = count - sessions.length;
+    const limit = Math.max(OPENCODE_SESSION_CATALOG_MAX_PAGE_LIMIT, count - sessions.length);
     const parsed: unknown = JSON.parse(
-      await runOpenCodeApi("session.list", [
-        `limit=${limit}`,
-        ...(cursor ? [`cursor=${cursor}`] : ["order=desc", "parentID=null"]),
-      ]),
+      await runOpenCodeApi(
+        "session.list",
+        [`limit=${limit}`, ...(cursor ? [`cursor=${cursor}`] : ["order=desc", "parentID=null"])],
+        deadline - Date.now(),
+      ),
     );
     if (!isRecord(parsed) || !Array.isArray(parsed.data) || parsed.data.length > limit) {
       throw new Error("OpenCode returned an invalid session list");
@@ -232,6 +243,9 @@ async function queryOpenCodeSessions(query: string, count: number): Promise<unkn
           created: session.time.created,
           updated: session.time.updated,
         });
+        if (sessions.length === count) {
+          break;
+        }
       }
     }
     // The API applies its limit before archived rows are removed.
