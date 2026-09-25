@@ -32,7 +32,7 @@ export async function buildSubagentListForTests(params: {
   );
   return buildSubagentList({
     context,
-    sessionEntries: readSubagentListSessionEntries(params.cfg, context),
+    sessionEntries: await readSubagentListSessionEntries(params.cfg, context),
     taskMaxChars: params.taskMaxChars,
   });
 }

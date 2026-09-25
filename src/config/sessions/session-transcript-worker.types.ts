@@ -320,7 +320,7 @@ export type SessionExactEntriesWorkerInput = {
   env: NodeJS.ProcessEnv;
   sessionKeys: readonly string[];
   lifecycleSessionKey?: string;
-  projection?: "full" | "backing" | "sharing" | "replacement" | "creation";
+  projection?: "full" | "backing" | "sharing" | "replacement" | "creation" | "list";
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
