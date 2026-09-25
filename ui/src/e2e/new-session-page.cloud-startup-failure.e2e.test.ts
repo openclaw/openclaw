@@ -427,7 +427,6 @@ suite.define(() => {
             "chat.history": history,
           },
         });
-        let runtime: Awaited<ReturnType<typeof holdModuleResponse>> | undefined;
         await page.goto(`${suite.server.baseUrl}${controlUiSessionPath(sessionKey).slice(1)}`);
         const pane = page.locator(".chat-pane-cache__pane--active");
         const composer = page.locator(".agent-chat__composer-combobox textarea");
@@ -485,7 +484,7 @@ suite.define(() => {
         }
         await page.addInitScript(holdRecoveryDigest);
         await page.reload();
-        runtime = await holdModuleResponse(
+        const runtime = await holdModuleResponse(
           page,
           /\/assets\/session-placement-startup\.runtime-[^/?]+\.js(?:\?.*)?$/,
         );
