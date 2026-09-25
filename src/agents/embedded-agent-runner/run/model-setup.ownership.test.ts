@@ -314,11 +314,14 @@ describe("model chat and native model ownership", () => {
         loadNativeModelCatalog,
       });
 
-      expect(loadNativeModelCatalog).toHaveBeenCalledWith({
-        provider: "openai",
-        modelId: "fixture-model",
-        runtime: fixture.harness.id,
-      });
+      expect(loadNativeModelCatalog).toHaveBeenCalledWith(
+        {
+          provider: "openai",
+          modelId: "fixture-model",
+          runtime: fixture.harness.id,
+        },
+        expect.objectContaining({ onSelectionReady: expect.any(Function) }),
+      );
       expect(setup.nativeModelOwned).toBe(false);
       expect(setup.model).toMatchObject({
         id: "fixture-model",

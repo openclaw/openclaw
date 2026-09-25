@@ -45,6 +45,7 @@ import {
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
+import { fingerprintCodexModelCatalogAttemptAuthority } from "./thread-fingerprints.js";
 import { createCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
 import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
 
@@ -193,6 +194,40 @@ describe("startCodexAttemptThread", () => {
         agentId: "agent-1",
       }),
     );
+  });
+
+  it("binds native profile model authority after the prepared login account/read barrier", async () => {
+    const harness = createAttemptClientHarness();
+    const assertNativeModelSelectionCurrent = vi.fn();
+    const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      harness,
+      startupPreparedAuth: { kind: "api-key", apiKey: "prepared-platform-key" },
+      startupAuthBindingFingerprint: "synthetic-profile-binding",
+      assertNativeModelSelectionCurrent,
+    });
+
+    await answerInitialize(harness);
+    await answerPreparedApiKeyLogin(harness);
+    const threadStart = await waitForThreadStart(harness);
+    harness.send({ id: threadStart.id, result: threadStartResult() });
+    const result = await run;
+    const methods = readHarnessRequestMethods(harness);
+    const selectionBinding = assertNativeModelSelectionCurrent.mock.calls[0]?.[0];
+
+    expect(methods.indexOf("account/login/start")).toBeGreaterThan(-1);
+    expect(methods.indexOf("thread/start")).toBeGreaterThan(methods.indexOf("account/login/start"));
+    expect(methods.at(-1)).toBe("account/read");
+    expect(selectionBinding).toMatchObject({
+      phase: "bind",
+      authBindingFingerprint: "synthetic-profile-binding",
+      attemptFingerprint: fingerprintCodexModelCatalogAttemptAuthority({
+        clientInstanceId: result.client.getInstanceId(),
+        modelCatalogRevision: result.client.getModelCatalogRevision(),
+      }),
+    });
+
+    result.turnRoute.release();
+    result.releaseSharedClientLease();
   });
 
   it("rejects an expected artifact mismatch before any native thread request", async () => {

@@ -93,6 +93,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       startupAuthProfileId: startupClientAuthProfileId,
       startupAuthRequirement,
       startupAuthBindingFingerprint: preparedAuthBinding?.fingerprint,
+      assertNativeModelSelectionCurrent: params.assertNativeModelSelectionCurrent,
       ...(runtimeArtifactRequest ? { runtimeArtifactRequest } : {}),
       startupPreparedAuth,
       startupAuthAccountCacheKey,

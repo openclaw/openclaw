@@ -3,7 +3,11 @@
  * Callers supply an already loaded credential snapshot; this module never
  * resolves secrets or loads a provider runtime.
  */
-import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
+import {
+  findConfiguredProviderModel,
+  hasRequestCompatOverrides,
+  resolveMergedModelProviderConfig,
+} from "../../config/model-provider-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   ProviderResolveModelRoutesContext,
@@ -79,6 +83,33 @@ type PrepareAgentRuntimeAuthPlanParams = {
     authStore: AuthProfileStore;
   }): string | undefined;
 };
+
+function hasAuthoredProviderRoute(
+  providerConfig: ReturnType<typeof resolveMergedModelProviderConfig>,
+  provider: string,
+  modelId: string,
+): boolean {
+  if (!providerConfig) {
+    return false;
+  }
+  const configuredModel = findConfiguredProviderModel(providerConfig, provider, modelId);
+  return Boolean(
+    providerConfig.api !== undefined ||
+    providerConfig.baseUrl?.trim() ||
+    providerConfig.auth !== undefined ||
+    providerConfig.apiKey !== undefined ||
+    providerConfig.authHeader !== undefined ||
+    providerConfig.localService !== undefined ||
+    (providerConfig.headers && Object.keys(providerConfig.headers).length > 0) ||
+    providerConfig.request !== undefined ||
+    (providerConfig.params && Object.keys(providerConfig.params).length > 0) ||
+    configuredModel?.api !== undefined ||
+    configuredModel?.baseUrl !== undefined ||
+    (configuredModel?.headers && Object.keys(configuredModel.headers).length > 0) ||
+    (configuredModel?.params && Object.keys(configuredModel.params).length > 0) ||
+    hasRequestCompatOverrides(configuredModel?.compat),
+  );
+}
 
 export type PreparedAgentRuntimeAuthAttempt =
   | {
@@ -597,7 +628,9 @@ export function prepareAgentRuntimeAuth(
     sourcePlan,
     configuredAuthMode: automaticRouteAuthMode,
     ...(runtimeAuthOwner ? { runtimeAuthOwner } : {}),
-    ...(runtimeAuthOwner && configuredProvider === undefined
+    ...(runtimeAuthOwner &&
+    !requestedProfileId &&
+    !hasAuthoredProviderRoute(configuredProvider, params.provider, params.modelId)
       ? { allowNativeAuthOnSingleRoute: true }
       : {}),
   });

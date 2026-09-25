@@ -21,6 +21,7 @@ import {
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
+import { bindCodexModelCatalogAttemptAuthority } from "./attempt-model-catalog-authority.js";
 import { verifyStartupArtifact } from "./attempt-runtime-artifact.js";
 import { CodexAppServerStartupError, withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
@@ -128,6 +129,7 @@ export async function startCodexAttemptThread(params: {
   startupAuthProfileId: string | null | undefined;
   startupAuthRequirement?: CodexAppServerClientOptions["authRequirement"];
   startupAuthBindingFingerprint: string | undefined;
+  assertNativeModelSelectionCurrent?: EmbeddedRunAttemptParams["assertNativeModelSelectionCurrent"];
   runtimeArtifactRequest?: Readonly<{
     expected?: AgentHarnessRuntimeArtifactBinding;
   }>;
@@ -554,6 +556,11 @@ export async function startCodexAttemptThread(params: {
               if (!startupRoute) {
                 throw new Error("codex app-server startup did not reserve its thread route");
               }
+              await bindCodexModelCatalogAttemptAuthority(
+                activeStartupClient,
+                params,
+                startupAbandonController.signal,
+              );
               startupSandboxEnvironmentAcquired = false;
               startCodexComputerUseHealthMonitor({
                 client: activeStartupClient,

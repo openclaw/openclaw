@@ -326,6 +326,31 @@ export function selectProviderModelRouteAuth(params: {
     );
   }
 
+  const nativeRouteSupport = resolveDeferredRouteSupport(params.resolution);
+  const normalizedRuntimeAuthOwner = params.runtimeAuthOwner?.id.trim().toLowerCase();
+  // An identity-only login is an explicit provider denial of inference. A
+  // native runtime must not replace that decision with another account.
+  const hostHasDeniedCredential =
+    params.sourcePlan.kind === "automatic" &&
+    params.sourcePlan.orderedProfiles.some((source) => source.authRequirement === null);
+  if (
+    params.allowNativeAuthOnSingleRoute === true &&
+    params.sourcePlan.kind === "automatic" &&
+    !params.sourcePlan.profiles.explicitOrder &&
+    !params.sourcePlan.preserveProfilePriority &&
+    params.sourcePlan.fallback === undefined &&
+    !hostHasDeniedCredential &&
+    configuredMode === undefined &&
+    Boolean(normalizedRuntimeAuthOwner) &&
+    nativeRouteSupport.runtimePolicy.compatibleIds.includes(normalizedRuntimeAuthOwner ?? "")
+  ) {
+    return {
+      kind: "deferred",
+      reason: "runtime-auth-owner",
+      routeSupport: nativeRouteSupport,
+    };
+  }
+
   const configuredRequirement =
     configuredRoute?.authRequirement ??
     (params.resolution.routes.length === 1
@@ -466,7 +491,6 @@ export function selectProviderModelRouteAuth(params: {
   const hasCompatibleAuthWinner = Boolean(winner || (directSource && directRoute));
   if (!hasCompatibleAuthWinner) {
     const routeSupport = resolveDeferredRouteSupport(params.resolution);
-    const normalizedRuntimeAuthOwner = params.runtimeAuthOwner?.id.trim().toLowerCase();
     const runtimeAuthOwnerIsCompatible =
       Boolean(normalizedRuntimeAuthOwner) &&
       routeSupport.runtimePolicy.compatibleIds.includes(normalizedRuntimeAuthOwner ?? "");
@@ -475,11 +499,6 @@ export function selectProviderModelRouteAuth(params: {
       params.sourcePlan.kind === "automatic" &&
       params.sourcePlan.orderedProfiles.length === 0 &&
       params.sourcePlan.fallback === undefined;
-    // An identity-only login is an explicit provider denial of inference. A
-    // native runtime must not replace that decision with another account.
-    const hostHasDeniedCredential =
-      params.sourcePlan.kind === "automatic" &&
-      params.sourcePlan.orderedProfiles.some((source) => source.authRequirement === null);
     if (
       runtimeAuthOwnerIsCompatible &&
       !hostHasDeniedCredential &&
