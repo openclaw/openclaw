@@ -31,6 +31,7 @@ import {
 } from "../../scripts/ci-run-node-test-shard.mts";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
+  SOURCE_CHANNEL_TEST_POLICY,
   createUiRealGatewayTestShards,
   createUiTestShardGroups,
 } from "../../scripts/lib/ci-node-test-plan.mts";
@@ -8867,6 +8868,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       writeFileSync(
         path.join(root, directory, "ci-node-test-plan.mts"),
         `import { readFileSync } from "node:fs";
+         export const SOURCE_CHANNEL_TEST_POLICY = ${JSON.stringify(SOURCE_CHANNEL_TEST_POLICY)};
          export const createNodeTestShardBundles = () =>
            [${JSON.stringify(owner)}, readFileSync("candidate.txt", "utf8")];`,
       );
@@ -8997,6 +8999,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runnerProfile: "blacksmith",
           runAttempt: 1,
+          preflightOutputs: { run_lint_core: "true" },
         }),
       ).toBe(false);
       expect(
@@ -9007,6 +9010,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runnerProfile: "github",
           runAttempt: 1,
+          preflightOutputs: { run_lint_core: "true" },
         }),
       ).toBe(true);
       for (const [runnerProfile, expected] of [
@@ -9022,6 +9026,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             repository: "openclaw/openclaw",
             runnerProfile,
             runAttempt: 1,
+            preflightOutputs: { run_lint_core: "true" },
           }),
         ).toBe(expected);
       }
@@ -9156,25 +9161,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       return calls;
     };
 
-    const coreLintRows = (
-      context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]>,
-    ): number[] => {
-      const stripes = hostedCoreLint.strategy.matrix.stripe;
-      return Array.isArray(stripes)
-        ? stripes
-        : evaluateWorkflowExpression(stripes, {
-            eventName: "pull_request",
-            repository: "openclaw/openclaw",
-            runnerProfile: "hybrid",
-            runAttempt: 1,
-            ...context,
-          });
-    };
+    // Manifest tests own row admission; these cases execute every full-layout stripe.
     for (const eventName of ["pull_request", "push"] as const) {
-      const rows = coreLintRows({ eventName });
-      expect(rows).toEqual([1, 2]);
       expect(
-        rows.map((stripe) =>
+        [1, 2].map((stripe) =>
           runLintOwner({ capability: true, eventName, lane: "core", profile: "hybrid", stripe }),
         ),
       ).toEqual(
@@ -9189,24 +9179,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ),
       );
     }
-    for (const context of [
-      { runnerProfile: "github" as const },
-      { eventName: "workflow_dispatch" as const },
-      { frozenTarget: true },
-      { releaseGate: true },
-    ]) {
-      expect(coreLintRows(context)).toEqual([1, 2, 3, 4, 5]);
-    }
     for (const runAttempt of [1, 2]) {
-      const rows = coreLintRows({
-        eventName: "workflow_dispatch",
-        releaseGate: true,
-        runAttempt,
-        preflightOutputs: { node_runner_backend: "runson" },
-      });
-      expect(rows).toEqual([1, 2]);
       expect(
-        rows.flatMap((stripe) =>
+        [1, 2].flatMap((stripe) =>
           runLintOwner({
             capability: true,
             eventName: "workflow_dispatch",
@@ -9289,10 +9264,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runLintOwner({ capability: true, lane: "check", profile: "hybrid" })).toEqual([
       "node --import tsx scripts/run-oxlint-shards.mts --only=scripts --threads=1",
     ]);
-    expect(hostedExtensionLint.strategy.matrix.stripe).toEqual([1, 2, 3, 4, 5, 6]);
     expect(hostedExtensionLint.strategy["fail-fast"]).toBe(false);
     expect(hostedExtensionLint.strategy["max-parallel"]).toBe(6);
-    for (const stripe of hostedExtensionLint.strategy.matrix.stripe) {
+    for (const stripe of [1, 2, 3, 4, 5, 6]) {
       expect(
         runLintOwner({ capability: true, lane: "extensions", profile: "hybrid", stripe }),
       ).toEqual([
@@ -9406,6 +9380,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           CHECKOUT_KIND: "linux-node",
           CHECKOUT_BASE_SHA: String(checkoutBase),
           CHECKOUT_TOKEN: "fixture-checkout-token",
+          NARROW_CHECK_PATHS_JSON: "",
+          CI_TYPE_GRAPHS_JSON: "",
+          CI_CORE_TYPE_GRAPHS_JSON: "",
+          CI_CORE_TYPE_CONCURRENCY: "",
         },
       });
       expect(report.code, report.output).toBe(0);

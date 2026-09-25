@@ -199,7 +199,7 @@ function createInMemoryConfigRuntime(params: {
   };
 }
 
-function phasePlan(
+export function buildSetupMigrationPhasePlan(
   plan: MigrationPlan,
   phase: "before-promotion" | "after-promotion",
 ): MigrationPlan {
@@ -211,13 +211,6 @@ function phasePlan(
     return { ...item, status: "skipped" as const, reason: DEFERRED_REASON };
   });
   return { ...plan, items, summary: summarizeMigrationItems(items) };
-}
-
-export function buildSetupMigrationPhasePlan(
-  plan: MigrationPlan,
-  phase: "before-promotion" | "after-promotion",
-): MigrationPlan {
-  return phasePlan(plan, phase);
 }
 
 function takeMatchingItem(items: MigrationItem[], item: MigrationItem): MigrationItem | undefined {
