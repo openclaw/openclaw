@@ -9,7 +9,6 @@ import {
   type GatewayDispatchPayload,
   type GatewayHeartbeat,
   type GatewayIdentify,
-  type GatewayPresenceUpdateData,
   type GatewayReceivePayload,
   type GatewaySendPayload,
   type GatewayVoiceStateUpdateData,
@@ -25,15 +24,16 @@ import { GatewayHeartbeatTimers, GatewayReconnectTimer } from "./gateway-lifecyc
 import { decodeGatewayMessage, ensureGatewayParams } from "./gateway-payload.js";
 import { GatewaySendLimiter } from "./gateway-rate-limit.js";
 import { DiscordGatewayVoiceStateCache } from "./gateway-voice-state-cache.js";
-import type { DiscordGatewayVoiceStateTransition } from "./gateway-voice-state-cache.js";
+import type {
+  DiscordGatewayVoiceStateTransition,
+  GatewayPluginContract,
+  GatewayPluginOptions,
+  UpdatePresenceData,
+} from "./plugin-contract.js";
 import { WebSocket } from "./ws-runtime.js";
 
 export { GatewayCloseCodes };
 export const GatewayIntents = GatewayIntentBits;
-export type Activity = NonNullable<GatewayPresenceUpdateData["activities"]>[number];
-export type UpdatePresenceData = Omit<GatewayPresenceUpdateData, "status"> & {
-  status: "online" | "idle" | "dnd" | "invisible" | "offline";
-};
 type RequestGuildMembersData = {
   guild_id: string;
   query?: string;
@@ -41,13 +41,6 @@ type RequestGuildMembersData = {
   presences?: boolean;
   user_ids?: string | string[];
   nonce?: string;
-};
-type GatewayPluginOptions = {
-  reconnect?: { maxAttempts?: number };
-  intents?: number;
-  autoInteractions?: boolean;
-  shard?: [number, number];
-  url?: string;
 };
 type GatewayReconnectReason =
   | "close"
@@ -76,10 +69,10 @@ const INVALID_SESSION_MIN_DELAY_MS = 1_000;
 const INVALID_SESSION_JITTER_MS = 4_000;
 const RESUME_FAILURE_THRESHOLD = 3;
 
-export class GatewayPlugin extends Plugin {
+export class GatewayPlugin extends Plugin implements GatewayPluginContract {
   readonly id = "gateway";
   protected client?: Client;
-  readonly options: Required<Pick<GatewayPluginOptions, "autoInteractions">> & GatewayPluginOptions;
+  readonly options: GatewayPluginContract["options"];
   public ws: ws.WebSocket | null = null;
   public sequence: number | null = null;
   public lastHeartbeatAck = true;
