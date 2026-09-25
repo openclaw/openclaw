@@ -25,7 +25,7 @@ import { resolveSkillEntryMetadata } from "./skill-entry-metadata.js";
 import { resolvePluginSkillsDir, resolveSkillsUserHomeDir } from "./skill-paths.js";
 import {
   mergeSkillRecords,
-  warnSkillPrecedenceCollisions,
+  reportSkillPrecedenceCollisions,
   type SkillCollision,
 } from "./skill-precedence.js";
 import { resolveSkillDiscoveryLimits } from "./skill-root-discovery.js";
@@ -159,6 +159,7 @@ function loadWorkspaceSkillSourceEntries(
     ["extra", "bundled", "workshop", "managed", "personal", "workspace"].flatMap(
       (tier) => grouped.get(tier) ?? [],
     ),
+    JSON.stringify(["sources", plan.workspaceDir]),
     collisions,
   ).map(createSkillEntry);
 }
@@ -172,6 +173,7 @@ function loadExecutionSkillEntries(
     resolveWorkspaceSkillDirectories(executionWorkspaceDir).flatMap((root) =>
       loadSkillRootRecords({ ...root, config }),
     ),
+    JSON.stringify(["execution", executionWorkspaceDir]),
     collisions,
   ).map(createSkillEntry);
 }
@@ -336,7 +338,7 @@ function loadSkillEntries(
 }
 
 function mergeSkillTiers(
-  tiers: Pick<LocalSkillTiers, "agent" | "execution" | "collisions">,
+  tiers: LocalSkillTiers,
   opts?: LocalWorkspaceSkillLoadOptions,
   libraryEntries = opts?.librarySelections?.length
     ? loadSkillLibrarySelection(opts.librarySelections)
@@ -360,7 +362,7 @@ function mergeSkillTiers(
       }
     }
   }
-  warnSkillPrecedenceCollisions(collisions);
+  reportSkillPrecedenceCollisions(collisions, tiers.sourceKey);
   entries.push(...libraryEntries);
   return entries;
 }
@@ -473,6 +475,7 @@ async function prepareCapturedWorkspaceSkillEntries(
         );
       return order(left) - order(right);
     }),
+    JSON.stringify(["remote-agent", agentWorkspaceDir]),
   );
   return {
     entries: bundledOnly
@@ -480,6 +483,7 @@ async function prepareCapturedWorkspaceSkillEntries(
       : (opts?.entries ??
         mergeSkillTiers(
           {
+            sourceKey: JSON.stringify(["remote", agentWorkspaceDir, executionWorkspaceDir]),
             agent: agentEntries,
             execution: sources.executionEntries.map(onWorkspace),
             collisions: [],

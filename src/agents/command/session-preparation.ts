@@ -5,6 +5,7 @@ import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/t
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { buildDeliveryFormatPrompt } from "../../infra/outbound/delivery-format-prompt.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
@@ -254,13 +255,32 @@ export async function prepareEmbeddedSessionState(params: {
     assertSignalCurrent();
   }
 
+  const runContext = resolveAgentRunContext(params.opts);
+  // Announce and inter-session turns get the delivering channel's contract, like replies.
+  const deliveryFormat =
+    (params.opts.deliver === true || params.opts.sourceReplyDeliveryMode === "message_tool_only") &&
+    buildDeliveryFormatPrompt({
+      cfg: params.cfg,
+      // Delivery preflight records the actual outbound target as reply* options.
+      channel: params.opts.replyChannel ?? runContext.messageChannel,
+      accountId: params.opts.replyAccountId ?? runContext.accountId,
+      agentId: params.sessionAgentId,
+      allowBootstrap: true,
+    });
+  const extraSystemPrompt = [params.opts.extraSystemPrompt, deliveryFormat].filter(Boolean);
   return {
     sessionEntry,
     requestedThinkLevel,
     resolvedVerboseLevel,
     skillsSnapshot,
-    runContext: resolveAgentRunContext(params.opts),
+    runContext,
+    opts: deliveryFormat
+      ? { ...params.opts, extraSystemPrompt: extraSystemPrompt.join("\n\n") }
+      : params.opts,
   };
 }
 
-export type EmbeddedSessionState = Awaited<ReturnType<typeof prepareEmbeddedSessionState>>;
+export type EmbeddedSessionState = Omit<
+  Awaited<ReturnType<typeof prepareEmbeddedSessionState>>,
+  "opts"
+>;

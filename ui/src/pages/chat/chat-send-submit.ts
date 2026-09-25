@@ -26,12 +26,11 @@ import {
 } from "./chat-commands.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import {
   admitQueuedMessageForSession,
-  admitQueuedMessageForSessionResult,
   enqueueChatMessage,
-  removeQueuedMessageWithoutReleasing,
   readQueuedMessageById,
 } from "./chat-queue.ts";
 import {
@@ -63,7 +62,7 @@ import {
   prependReplyQuote,
 } from "./chat-send-support.ts";
 import { recordChatSendTiming } from "./chat-send-timing.ts";
-import { getPendingChatPickerPatch } from "./chat-session.ts";
+import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { withChatSubmitGuard, withChatSubmitHandoff } from "./chat-submit-guard.ts";
 import {
   recordNonTranscriptInputHistory,
@@ -365,7 +364,7 @@ export async function handleSendChat(
           }
           queued.sendState = reconnectSafeQueuedSendState(host);
           if (!admitQueuedMessageForSession(host, admission, queued)) {
-            removeQueuedMessageWithoutReleasing(host, queued.id);
+            chatOutboxOwner(host).remove(host, queued.id);
             if (messageOverride == null) {
               host.chatMessage = previousDraft;
               host.chatMentions = previousMentions ?? [];
@@ -638,7 +637,7 @@ export async function handleSendChat(
     }
 
     queued = publishPendingSendMessage(host, queued);
-    const admissionResult = admitQueuedMessageForSessionResult(
+    const admissionResult = chatOutboxOwner(host).admit(
       host,
       submission.admission,
       queued,

@@ -80,10 +80,6 @@ export function fitSidebarLayout(
   return next;
 }
 
-export function isSidebarRegionCollapsed(_layout: SidebarLayout, availableWidth: number): boolean {
-  return availableWidth < SIDEBAR_NARROW_BREAKPOINT_PX;
-}
-
 export function initializeBrowserSidebarWidth(
   layout: SidebarLayout,
   availableWidth: number,

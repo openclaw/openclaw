@@ -2,7 +2,7 @@
 import crypto from "node:crypto";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
+import { createAsyncLock, sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { fileStore } from "@openclaw/fs-safe/store";
 import {
   basenameFromAnyPath,
@@ -44,7 +44,7 @@ const PLAYBACK_TRANSCODE_MAX_CACHE_BYTES = 512 * 1024 * 1024;
 const PLAYBACK_TRANSCODE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
-let playbackCacheOperationTail = Promise.resolve();
+const queuePlaybackCacheOperation = createAsyncLock();
 type CleanOldMediaOptions = {
   recursive?: boolean;
   pruneEmptyDirs?: boolean;
@@ -251,15 +251,6 @@ async function pruneNonPlaybackMedia(ttlMs: number, options: CleanOldMediaOption
       await fs.rmdir(scopedDir).catch(() => {});
     }
   }
-}
-
-async function queuePlaybackCacheOperation<T>(operation: () => Promise<T>): Promise<T> {
-  const run = playbackCacheOperationTail.then(operation);
-  playbackCacheOperationTail = run.then(
-    () => {},
-    () => {},
-  );
-  return await run;
 }
 
 /** Serializes cache publication with quota enforcement and propagates failures to the writer. */

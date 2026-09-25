@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
+import { evaluateWorkflowExpression, evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
 const dedicated = [
   "full-release-validation",
@@ -46,6 +46,7 @@ const publishing = new Set([
   "vercel-container-registry-publish",
 ]);
 type Job = {
+  if?: string;
   "runs-on"?: string;
   uses?: string;
   with?: Record<string, string>;
@@ -92,6 +93,18 @@ describe("release runner reservation", () => {
         if (!job["runs-on"]) {
           continue;
         }
+        if (name === "ci" && jobName === "pr-fail-fast") {
+          expect(
+            evaluateWorkflowExpression(job.if!, {
+              ...context,
+              eventName: "workflow_dispatch",
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              preflightOutputs: { run_checks_node_core_nondist: "true" },
+            }),
+          ).toBe(false);
+          continue;
+        }
         const baseline = evaluateWorkflowRunner(job["runs-on"], context);
         expect(baseline, `${name}/${jobName}`).toBeTypeOf("string");
         expect(baseline).not.toBe("");
@@ -117,12 +130,23 @@ describe("release runner reservation", () => {
 
   it.each([...shared, ...mixed])("keeps unrelated %s callers outside the release group", (name) => {
     const workflow = workflows.get(name)!;
-    for (const job of Object.values(workflow.jobs)) {
+    for (const [jobName, job] of Object.entries(workflow.jobs)) {
       if (!job["runs-on"]) {
         continue;
       }
       for (const eventName of ["pull_request", "push", "schedule", "workflow_dispatch"] as const) {
         const ordinary = { ...context, eventName, releaseGate: true };
+        if (name === "ci" && jobName === "pr-fail-fast" && eventName !== "pull_request") {
+          expect(
+            evaluateWorkflowExpression(job.if!, {
+              ...ordinary,
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              preflightOutputs: { run_checks_node_core_nondist: "true" },
+            }),
+          ).toBe(false);
+          continue;
+        }
         expect(
           evaluateWorkflowRunner(job["runs-on"], { ...ordinary, releaseRunnerGroup: group }),
         ).toEqual(evaluateWorkflowRunner(job["runs-on"], ordinary));

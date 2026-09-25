@@ -1,6 +1,9 @@
 // Projects detached exec processes into the durable task ledger used by clients.
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { backgroundCommandTaskContent } from "../tasks/background-command-task-content.js";
+import {
+  backgroundCommandTaskContent,
+  backgroundCommandTaskSummary,
+} from "../tasks/background-command-task-content.js";
 import { BACKGROUND_EXEC_TASK_KIND } from "../tasks/background-exec-task-contract.js";
 import type { DetachedTaskTerminalState } from "../tasks/detached-task-runtime-contract.js";
 import { prepareRunningTaskRun } from "../tasks/detached-task-runtime.js";
@@ -122,12 +125,7 @@ export function finalizeBackgroundExecTask(params: {
       status,
       endedAt,
       lastEventAt: endedAt,
-      terminalSummary:
-        status === "succeeded"
-          ? "Command completed"
-          : status === "failed"
-            ? "Command failed"
-            : "Command stopped",
+      terminalSummary: backgroundCommandTaskSummary(status),
       ...(status === "succeeded" ? { clearError: true } : { error: execTaskError(params.outcome) }),
       detail: {
         exitCode: params.outcome.exitCode,

@@ -58,6 +58,20 @@ export function isChannelProgressAttentionLine(line: string | ChannelProgressDra
   );
 }
 
+/** Lines that reserve bounded progress capacity in active tool-log drafts. */
+export function isChannelProgressPriorityLine(line: string | ChannelProgressDraftLine): boolean {
+  if (typeof line === "string") {
+    return false;
+  }
+  const status = line.status?.toLowerCase();
+  if (line.kind === "item" && status === "failed" && Boolean(line.toolName?.trim())) {
+    return false;
+  }
+  return (
+    line.kind === "approval" || status === "failed" || status === "error" || status === "blocked"
+  );
+}
+
 export function getProgressDraftLineText(line: string | ChannelProgressDraftLine): string {
   if (typeof line === "string") {
     return line;

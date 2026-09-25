@@ -357,6 +357,8 @@ export class ModelProviderLoginController implements ReactiveController {
   render() {
     const picker = this.picker;
     if (picker) {
+      const canSelect = () =>
+        this.picker === picker && picker.phase === "ready" && picker.isCurrent();
       const groups =
         picker.phase === "ready" ? this.loginProviders(picker.providers, picker.authStatus) : [];
       const provider = groups.find((group) => group.id === picker.providerId);
@@ -445,11 +447,7 @@ export class ModelProviderLoginController implements ReactiveController {
                                     class="btn model-provider-login__option"
                                     ?disabled=${picker.phase !== "ready" || !picker.isCurrent()}
                                     @click=${() => {
-                                      if (
-                                        this.picker !== picker ||
-                                        picker.phase !== "ready" ||
-                                        !picker.isCurrent()
-                                      ) {
+                                      if (!canSelect()) {
                                         return;
                                       }
                                       this.picker = null;
@@ -478,12 +476,7 @@ export class ModelProviderLoginController implements ReactiveController {
                                       data-models-login-api-key
                                       ?disabled=${picker.phase !== "ready" || !picker.isCurrent()}
                                       @click=${() => {
-                                        if (
-                                          this.picker !== picker ||
-                                          !provider.apiKeyProvider ||
-                                          picker.phase !== "ready" ||
-                                          !picker.isCurrent()
-                                        ) {
+                                        if (!canSelect() || !provider.apiKeyProvider) {
                                           return;
                                         }
                                         this.reset();
@@ -537,11 +530,7 @@ export class ModelProviderLoginController implements ReactiveController {
                                     data-models-login-provider=${group.id}
                                     ?disabled=${picker.phase !== "ready" || !picker.isCurrent()}
                                     @click=${() => {
-                                      if (
-                                        this.picker !== picker ||
-                                        picker.phase !== "ready" ||
-                                        !picker.isCurrent()
-                                      ) {
+                                      if (!canSelect()) {
                                         return;
                                       }
                                       picker.providerId = group.id;
@@ -586,11 +575,7 @@ export class ModelProviderLoginController implements ReactiveController {
                         class="btn model-provider-login__secondary"
                         data-models-login-back
                         @click=${() => {
-                          if (
-                            this.picker !== picker ||
-                            picker.phase !== "ready" ||
-                            !picker.isCurrent()
-                          ) {
+                          if (!canSelect()) {
                             return;
                           }
                           picker.providers = undefined;

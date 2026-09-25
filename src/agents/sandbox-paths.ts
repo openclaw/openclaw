@@ -3,21 +3,20 @@
  *
  * Handles host paths, file URLs, temporary media paths, and workspace root assertions.
  */
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { URL } from "node:url";
-import { promisify } from "node:util";
 import {
   assertNoPathAliasEscape,
   assertNoWindowsNetworkPath,
   hasEncodedFileUrlSeparator,
+  resolvePathPrefixSync,
   safeFileURLToPath,
   type PathAliasPolicy,
 } from "@openclaw/fs-safe/advanced";
 import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
-import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
 
@@ -139,26 +138,9 @@ export function isPathBoundaryEscapeError(
   );
 }
 
-const realpathNative = promisify(fs.realpath.native);
-
 async function resolveRawPathViaExistingAncestor(rawPath: string): Promise<string> {
-  let cursor = rawPath;
-  const missingSuffix: string[] = [];
-  while (true) {
-    try {
-      return path.resolve(await realpathNative(cursor), ...missingSuffix);
-    } catch (error) {
-      if (!isNotFoundPathError(error)) {
-        throw error;
-      }
-      const parent = path.dirname(cursor);
-      if (parent === cursor) {
-        throw error;
-      }
-      missingSuffix.unshift(path.basename(cursor));
-      cursor = parent;
-    }
-  }
+  const { existingPath, unresolvedSegments } = resolvePathPrefixSync(rawPath);
+  return path.resolve(existingPath, ...unresolvedSegments);
 }
 
 async function assertRawParentWithinRoot(params: {

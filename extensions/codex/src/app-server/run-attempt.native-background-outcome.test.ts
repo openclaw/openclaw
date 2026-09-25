@@ -19,6 +19,8 @@ describe("native background command outcomes", () => {
     "cancel",
     "natural success",
     "natural failure",
+    "natural failure during stop",
+    "source retired during stop",
     "publication failure",
     "refused stop",
     "failed stop",
@@ -145,7 +147,19 @@ describe("native background command outcomes", () => {
           if (scenario === "refused stop") {
             return { terminated: false };
           }
-          await harness.notify(terminal(scenario === "natural success" ? 0 : 130));
+          if (scenario === "source retired during stop") {
+            source.abort();
+          }
+          await harness.notify(
+            terminal(
+              scenario === "natural success"
+                ? 0
+                : scenario === "natural failure during stop" ||
+                    scenario === "source retired during stop"
+                  ? 7
+                  : -1,
+            ),
+          );
           return { terminated: true };
         }
         return undefined;

@@ -325,7 +325,7 @@ export async function applyClawUpdatePlan(
     if (actions.length === 0) {
       return { appliedIds: [], rollback: async () => undefined };
     }
-    return await applyPackage({ ...fresh, actions }, params.targetManifest, targetAddPlan, {
+    return await applyPackage({ ...fresh, actions }, targetAddPlan, {
       ...options,
       runtimeBatch,
     });

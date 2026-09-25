@@ -120,7 +120,7 @@ function resolveWebhookPublicUrl(params: {
 
 async function initializeTelegramWebhookBot(params: {
   abortSignal?: AbortSignal;
-  bot: ReturnType<typeof createTelegramBot>;
+  bot: Awaited<ReturnType<typeof createTelegramBot>>;
   onRetry: () => void;
   retryPolicy: BackoffPolicy;
   runtime: RuntimeEnv;
@@ -346,7 +346,7 @@ export async function startTelegramWebhook(opts: {
   const botFetchAbortSignal = opts.abortSignal
     ? AbortSignal.any([opts.abortSignal, botAbortController.signal])
     : botAbortController.signal;
-  const bot = createTelegramBot({
+  const bot = await createTelegramBot({
     token: opts.token,
     runtime,
     buildContext: opts.buildContext,

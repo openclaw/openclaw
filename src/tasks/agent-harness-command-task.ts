@@ -6,7 +6,10 @@ import {
   assertAgentHarnessTaskRuntimeScope,
   type AgentHarnessTaskRuntimeScope,
 } from "./agent-harness-task-runtime-scope.js";
-import { backgroundCommandTaskContent } from "./background-command-task-content.js";
+import {
+  backgroundCommandTaskContent,
+  backgroundCommandTaskSummary,
+} from "./background-command-task-content.js";
 import {
   DetachedTaskAssignmentUnsupportedError,
   type DetachedTaskTerminalState,
@@ -100,12 +103,7 @@ export async function createAgentHarnessCommandTask(params: {
           ...terminal,
           ...(incognito
             ? {
-                terminalSummary: {
-                  succeeded: "Command completed",
-                  failed: "Command failed",
-                  cancelled: "Command stopped",
-                  timed_out: "Command timed out",
-                }[terminal.status],
+                terminalSummary: backgroundCommandTaskSummary(terminal.status),
                 ...(terminal.error ? { error: "Incognito task error." } : {}),
               }
             : {}),

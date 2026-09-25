@@ -38,6 +38,7 @@ import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { parsePluginReleaseSelection } from "./lib/plugin-npm-release.ts";
 import { loadChangelogCollection, loadReleaseChangelog } from "./lib/release-changelog.mjs";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
+import { ensureReleasePublishToolingTag } from "./lib/release-publish-preflight-evidence.mts";
 import { formatReleasePublishPreflight } from "./lib/release-publish-preflight-interface.mts";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import {
@@ -48,7 +49,7 @@ import {
 import { validateNpmPreflightDistTag } from "./openclaw-npm-extended-stable-release.mjs";
 import { validatePluginSdkApiReleaseEvidence } from "./plugin-sdk-api-release-evidence.mjs";
 import { runReleasePublishPreflight } from "./release-publish-preflight.mts";
-import { verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
+import { runReleaseToolingGh, verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 import {
   dedicatedSectionVersionForTag,
   extractChangelogReleaseSections,
@@ -108,6 +109,7 @@ const COMMAND_CAPTURE_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const TOOLING_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN =
   /^tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u;
+const PUBLISH_TOOLING_TAG_PATTERN = /^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u;
 const WINDOWS_NODE_TAG_PATTERN = /^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/u;
 const WINDOWS_NODE_REPO = "openclaw/openclaw-windows-node";
 const WINDOWS_NODE_REQUIRED_ASSETS = [
@@ -164,6 +166,7 @@ Options:
   --tag <tag>                         Release tag. An existing tag must resolve to the target SHA.
   --target-sha <sha>                  Frozen release SHA. Defaults to the current HEAD.
   --workflow-ref <ref>                Trusted workflow ref. Default: main; matching Tideclaw branch required for alpha.
+  --workflow-sha <sha>                Trusted main ancestor to pin the tooling to; reuses or mints its release-publish/<sha12>-<epoch> tag.
   --publish-workflow-ref <tag>         Protected publication tooling tag matching the trusted helper checkout.
   --publication-route <normal|prepared>
                                       Intended publication route. Default: normal; not inferred from a protected ref.
@@ -223,6 +226,7 @@ export function parseArgs(argv: string[]) {
     tag: "",
     targetSha: "",
     workflowRef: "",
+    workflowSha: "",
     publishWorkflowRef: "",
     publicationRoute: "normal",
     fullReleaseRunId: "",
@@ -244,6 +248,7 @@ export function parseArgs(argv: string[]) {
           ["--tag", "tag"],
           ["--target-sha", "targetSha"],
           ["--workflow-ref", "workflowRef"],
+          ["--workflow-sha", "workflowSha"],
           ["--publish-workflow-ref", "publishWorkflowRef"],
           ["--publication-route", "publicationRoute"],
           ["--repo", "repo"],
@@ -292,13 +297,26 @@ export function parseArgs(argv: string[]) {
   if (!["normal", "prepared"].includes(options.publicationRoute)) {
     throw new Error("--publication-route must be normal or prepared");
   }
+  if (options.workflowSha) {
+    if (!/^[a-f0-9]{40}$/u.test(options.workflowSha)) {
+      throw new Error("--workflow-sha must be a full lowercase commit SHA");
+    }
+    if (options.tag.includes("-alpha.")) {
+      throw new Error(
+        "--workflow-sha is only supported for regular beta and stable release candidates",
+      );
+    }
+    if (options.publishWorkflowRef) {
+      throw new Error("--workflow-sha and --publish-workflow-ref are mutually exclusive");
+    }
+  }
   if (
     options.publicationRoute === "prepared" &&
     (options.tag.includes("-alpha.") ||
       options.npmDistTag === "extended-stable" ||
       options.pluginPublishScope !== "all-publishable" ||
       options.plugins.trim() ||
-      !/^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u.test(options.publishWorkflowRef))
+      (!options.workflowSha && !PUBLISH_TOOLING_TAG_PATTERN.test(options.publishWorkflowRef)))
   ) {
     throw new Error(
       "Prepared publication requires a protected tooling tag and a complete regular-release roster.",
@@ -328,7 +346,7 @@ export function parseArgs(argv: string[]) {
   if (
     options.publishWorkflowRef &&
     (options.tag.includes("-alpha.") ||
-      !/^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u.test(options.publishWorkflowRef))
+      !PUBLISH_TOOLING_TAG_PATTERN.test(options.publishWorkflowRef))
   ) {
     throw new Error(
       "--publish-workflow-ref must name a protected release-publish tag for a regular release",
@@ -729,9 +747,22 @@ function fetchTrustedWorkflowSha(workflowRef: string, toolingRoot: string) {
 
 function runFromTrustedTooling(
   argv: string[],
-  { targetRoot, workflowRef }: { targetRoot: string; workflowRef: string },
+  {
+    targetRoot,
+    workflowRef,
+    workflowSha,
+  }: { targetRoot: string; workflowRef: string; workflowSha: string },
 ) {
-  const trustedToolingSha = fetchTrustedWorkflowSha(workflowRef, targetRoot);
+  let trustedToolingSha = fetchTrustedWorkflowSha(workflowRef, targetRoot);
+  if (workflowSha) {
+    if (
+      workflowSha !== trustedToolingSha &&
+      !gitIsAncestor(workflowSha, "refs/remotes/origin/main", targetRoot)
+    ) {
+      throw new Error(`--workflow-sha ${workflowSha} is not reachable from trusted ${workflowRef}`);
+    }
+    trustedToolingSha = workflowSha;
+  }
   const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-tooling-"));
   const toolingRoot = join(tempRoot, "checkout");
   let worktreeAdded = false;
@@ -873,11 +904,19 @@ export function assertReleaseCandidateTag(tag: string, targetSha: string, cwd: s
   }
 }
 
-function gitIsAncestor(ancestor: string, target: string) {
+function savedPublishWorkflowRef(statePath: string) {
+  const saved = existsSync(statePath)
+    ? readJson(statePath, "release candidate state").publishWorkflowRef
+    : undefined;
+  return typeof saved === "string" && PUBLISH_TOOLING_TAG_PATTERN.test(saved) ? saved : "";
+}
+
+function gitIsAncestor(ancestor: string, target: string, cwd = process.cwd()) {
   const result = spawnSync(
     "git",
     ["merge-base", "--is-ancestor", `${ancestor}^{commit}`, `${target}^{commit}`],
     {
+      cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -1622,7 +1661,7 @@ export function buildPublishCommand(
     options.publishWorkflowRef || npmPreflightSource?.workflowRef || options.workflowRef;
   const publishRefPattern = options.tag.includes("-alpha.")
     ? TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN
-    : /^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u;
+    : PUBLISH_TOOLING_TAG_PATTERN;
   if (!publishRefPattern.test(workflowRef)) {
     throw new Error(
       options.tag.includes("-alpha.")
@@ -1662,7 +1701,7 @@ export function buildPublishCommand(
   }
   if (
     mode === "prepare" &&
-    (!/^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u.test(workflowRef) ||
+    (!PUBLISH_TOOLING_TAG_PATTERN.test(workflowRef) ||
       options.pluginPublishScope !== "all-publishable" ||
       options.tag.includes("-alpha.") ||
       options.npmDistTag === "extended-stable")
@@ -2005,6 +2044,7 @@ async function main() {
     runFromTrustedTooling(process.argv.slice(2), {
       targetRoot,
       workflowRef: options.workflowRef,
+      workflowSha: options.workflowSha,
     });
     return;
   }
@@ -2030,6 +2070,29 @@ async function main() {
     workflowRef: options.workflowRef,
   });
   // Publication may use repaired tooling while the prepared tarball retains its original producer.
+  const statePath = join(options.outputDir, RELEASE_CANDIDATE_STATE_FILE);
+  if (options.workflowSha && !options.publishWorkflowRef) {
+    if (options.workflowSha !== toolingSha) {
+      throw new Error(
+        `--workflow-sha ${options.workflowSha} does not match tooling checkout ${toolingSha}`,
+      );
+    }
+    // A resumed candidate keeps the exact tag it recorded; a newer tag at the
+    // same SHA must not fail state reconciliation. The identity check below
+    // still proves that saved tag resolves to this tooling SHA.
+    const savedTag = savedPublishWorkflowRef(statePath);
+    const ensured = savedTag
+      ? { tag: savedTag, created: false }
+      : ensureReleasePublishToolingTag({
+          runGh: runReleaseToolingGh,
+          repo: options.repo,
+          toolingSha,
+        });
+    options.publishWorkflowRef = ensured.tag;
+    console.log(
+      `${ensured.created ? "created" : "reusing"} protected tooling tag ${ensured.tag} at ${toolingSha}`,
+    );
+  }
   const publishWorkflowIdentity = options.publishWorkflowRef
     ? verifyReleaseToolingIdentity({
         repository: options.repo,
@@ -2051,7 +2114,6 @@ async function main() {
   if (registryPackageNames.size !== options.parallelsRegistryPackageArtifacts.length) {
     throw new Error("Parallels registry package artifacts must have unique package names");
   }
-  const statePath = join(options.outputDir, RELEASE_CANDIDATE_STATE_FILE);
   const expectedState = buildReleaseCandidateState(options, { targetSha, toolingSha });
   let candidateState = reconcileReleaseCandidateState(
     existsSync(statePath) ? readJson(statePath, "release candidate state") : undefined,

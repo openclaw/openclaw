@@ -21,7 +21,7 @@ type Entry = {
   cancellationAttempt?: Promise<void>;
   done: ReturnType<typeof createDeferred<void>>;
   cancellation: "idle" | "pending" | "confirmed";
-  nativeCompleted?: boolean;
+  nativeCompletion?: { exitCode: number | undefined };
 };
 
 /** Task projection retains native custody; it never becomes a second process registry. */
@@ -86,13 +86,15 @@ export function prepareCodexNativeCommandTasks(
       return;
     }
     const terminal =
-      entry.nativeCompleted &&
+      entry.nativeCompletion &&
       entry.cancellation === "confirmed" &&
-      entry.terminal.status === "failed"
+      entry.terminal.status === "failed" &&
+      // Codex uses -1 when no exit result is available; Stop can acknowledge an already-exited process.
+      (entry.nativeCompletion.exitCode === undefined || entry.nativeCompletion.exitCode === -1)
         ? {
             ...entry.terminal,
             status: "cancelled" as const,
-            error: "Cancelled by operator.",
+            error: "Stop confirmed; native exit result unavailable.",
             terminalSummary: "Command stopped",
           }
         : entry.terminal;
@@ -149,18 +151,22 @@ export function prepareCodexNativeCommandTasks(
     const entry = entries.get(item.id);
     if (
       !entry ||
+      entry.nativeCompletion ||
+      entry.settlement ||
       (entry.processId && typeof item.processId === "string" && item.processId !== entry.processId)
     ) {
       return;
     }
-    const succeeded = item.status === "completed" && item.exitCode === 0;
-    entry.nativeCompleted = true;
-    entry.terminal ??= {
+    const exitCode = typeof item.exitCode === "number" ? item.exitCode : undefined;
+    const succeeded = item.status === "completed" && exitCode === 0;
+    entry.nativeCompletion = { exitCode };
+    // A collected native result supersedes an owner-close placeholder until settlement starts.
+    entry.terminal = {
       status: succeeded ? "succeeded" : "failed",
       endedAt: Date.now(),
       terminalSummary: succeeded ? "Command completed" : "Command failed",
       ...(succeeded ? { clearError: true } : { error: "Native command failed." }),
-      ...(typeof item.exitCode === "number" ? { detail: { exitCode: item.exitCode } } : {}),
+      ...(exitCode !== undefined ? { detail: { exitCode } } : {}),
     };
     await settle(item.id);
   });
