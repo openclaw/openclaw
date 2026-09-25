@@ -1,3 +1,4 @@
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { PeriodListEntry } from "../store.js";
 import type { GithubCounts, PersonReport, ReportDocument, SummaryDocument } from "../types.js";
 import type { PersonWorkSessions } from "../work-sessions.js";
@@ -19,7 +20,7 @@ import {
   shell,
   sourceBanners,
 } from "./page.js";
-import { escapeHtml, ITEM_LABELS, memberSummary, renderAvatar } from "./shared.js";
+import { ITEM_LABELS, memberSummary, renderAvatar } from "./shared.js";
 import { renderPersonWorkSessions } from "./work-sessions.js";
 
 function activitySegments(github: GithubCounts, discord: number) {

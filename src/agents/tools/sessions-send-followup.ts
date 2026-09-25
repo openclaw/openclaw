@@ -6,10 +6,7 @@ import {
 } from "../../gateway/operator-role-policy.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
-import {
-  prepareSessionMutationFacts,
-  SessionMutationFactsUnavailableError,
-} from "../../gateway/session-sharing-preparation.js";
+import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
@@ -51,7 +48,7 @@ export async function prepareSessionsSendFollowup(params: {
   if (getRegisteredDetachedTaskLifecycleRuntime()) {
     return undefined;
   }
-  const captured = captureOperatorToolGatewayContinuationContext();
+  const captured = await captureOperatorToolGatewayContinuationContext();
   if (!captured) {
     throw new Error("Followup completion requires in-process caller custody.");
   }
@@ -72,6 +69,7 @@ export async function prepareSessionsSendFollowup(params: {
     captured.release();
   };
   try {
+    assertInvocation?.();
     const cfg = getRuntimeConfig();
     const client = captured.run(() => getPluginRuntimeGatewayRequestScope()?.client);
     const actor = resolveGatewayOperatorRoleActor(client ?? null);
@@ -97,54 +95,31 @@ export async function prepareSessionsSendFollowup(params: {
     ]) {
       facts.push(await prepareSessionMutationFacts({ cfg, ...target }));
       assertInvocation?.();
-      captured.run(() => {});
+      captured.assertCurrent();
     }
-    const identities = facts.map((read) => {
-      const target = read.readCurrent(cfg).target;
-      if (!target?.entry || target.entry.archivedAt !== undefined) {
-        throw new Error("Followup requires existing unarchived conversations.");
-      }
-      return {
-        agentId: target.agentId,
-        storePath: target.storePath,
-        key: target.canonicalKey,
-        sessionId: target.entry.sessionId,
-        lifecycleRevision: target.entry.lifecycleRevision,
-      };
-    });
     const assertCurrent = () => {
       signal.throwIfAborted();
       if (released) {
         throw new Error("Followup completion custody was released.");
       }
-      captured.run(() => {});
+      captured.assertCurrent();
       if (profile && !profile.isCurrent()) {
         throw new FollowupAccessChangedError("Followup requester identity changed.");
       }
       const currentConfig = getRuntimeConfig();
-      for (const [index, read] of facts.entries()) {
-        const expected = identities[index]!;
+      // The prepared reader owns canonical routing, physical store and incarnation fencing.
+      for (const read of facts) {
         const currentFacts = read.readCurrent(currentConfig);
         const current = currentFacts.target;
-        if (
-          !current?.entry ||
-          current.entry.archivedAt !== undefined ||
-          current.agentId !== expected.agentId ||
-          current.storePath !== expected.storePath ||
-          current.canonicalKey !== expected.key ||
-          current.entry.sessionId !== expected.sessionId ||
-          current.entry.lifecycleRevision !== expected.lifecycleRevision
-        ) {
-          throw new FollowupAccessChangedError(
-            "Followup conversation incarnation was replaced or archived.",
-          );
+        if (!current?.entry || current.entry.archivedAt !== undefined) {
+          throw new FollowupAccessChangedError("Followup conversation was archived.");
         }
         const denied = authorizePreparedSessionMutation(
           {
             cfg: currentConfig,
             client: policyClient,
-            sessionKey: expected.key,
-            agentId: expected.agentId,
+            sessionKey: read.storageTarget.canonicalKey,
+            agentId: read.storageTarget.agentId,
           },
           currentFacts,
           {
@@ -165,21 +140,21 @@ export async function prepareSessionsSendFollowup(params: {
       }
     };
     assertCurrent();
+    const watchedKeys = new Set(
+      facts.flatMap((read) => {
+        const target = read.readCurrent(cfg).target;
+        return [target.canonicalKey, target.storeKey, ...target.storeKeys];
+      }),
+    );
     stopAccessWatch = sessionChanges.subscribe((change) => {
-      if (
-        "sessionKey" in change &&
-        !identities.some((identity) => identity.key === change.sessionKey)
-      ) {
+      if ("sessionKey" in change && !watchedKeys.has(change.sessionKey)) {
         return;
       }
       try {
         assertCurrent();
       } catch (error) {
         // Pending metadata remains fenced. A committed denial is irreversible for this capture.
-        if (
-          !(error instanceof SessionMutationFactsUnavailableError) &&
-          error instanceof FollowupAccessChangedError
-        ) {
+        if (error instanceof FollowupAccessChangedError) {
           revoked.abort(error);
         }
       }
@@ -187,7 +162,7 @@ export async function prepareSessionsSendFollowup(params: {
     return {
       runId: params.runId,
       requesterSessionKey: params.requesterSessionKey,
-      requesterSessionId: identities[0]!.sessionId,
+      requesterSessionId: facts[0]!.readCurrent(getRuntimeConfig()).target.entry.sessionId,
       requesterAgentId: params.requesterAgentId,
       targetSessionKey: params.targetSessionKey,
       targetAgentId: params.targetAgentId,
@@ -211,9 +186,9 @@ export async function prepareSessionsSendFollowup(params: {
 export async function startSessionsSendFollowup(
   request: FollowupRequest | undefined,
   params: Parameters<typeof startSessionsSendAgentRun>[0],
-  replyContext: Pick<
+  replyContext: Omit<
     Parameters<typeof startSessionsSendReplyFlow>[0],
-    "requesterSession" | "requesterDeliveryGeneration" | "requesterOrigin" | "requesterChannel"
+    "runId" | "skip" | "completion" | "reply"
   >,
 ) {
   const dispatch = () => startSessionsSendAgentRun(params);
@@ -224,20 +199,16 @@ export async function startSessionsSendFollowup(
       // The live owner proves acceptance even when its transport ACK was lost.
       // Preserve that one result obligation; never dispatch another target run.
       startSessionsSendReplyFlow({
+        ...replyContext,
         runId: request.runId,
         completion,
         skip: false,
-        callGateway: params.callGateway,
         targetSessionKey: request.targetSessionKey,
-        targetAgentId: params.sendParams.agentId,
-        displayKey: params.sessionKey,
-        message: params.sendParams.message,
-        announceTimeoutMs: params.deliveryTimeoutMs ?? 30_000,
-        maxPingPongTurns: 0,
-        replyMode: "one-way",
+        targetAgentId: request.targetAgentId,
         requesterAgentId: request.requesterAgentId,
         requesterSessionKey: request.requesterSessionKey,
-        ...replyContext,
+        maxPingPongTurns: 0,
+        replyMode: "one-way",
         notifyRequesterOnWaitFailure: true,
       });
       return {

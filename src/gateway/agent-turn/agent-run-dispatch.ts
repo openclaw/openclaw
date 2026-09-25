@@ -50,10 +50,7 @@ import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { captureAgentJobSession } from "./agent-job.js";
 import { readAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
-import {
-  settleFollowupTaskExecution,
-  readFollowupTerminalReply,
-} from "./agent-run-dispatch-followup.js";
+import { readFollowupTerminalReply } from "./agent-run-dispatch-followup.js";
 import {
   isGatewayAgentAbortRejection,
   projectRejectedGatewayStatus,
@@ -68,15 +65,6 @@ import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 export function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry): string {
   return entry?.abortStopReason?.trim() || "rpc";
-}
-
-export function deleteGatewayDedupeEntries(params: {
-  dedupe: AgentTurnContext["dedupe"];
-  keys: readonly string[];
-}) {
-  for (const key of params.keys) {
-    params.dedupe.delete(key);
-  }
 }
 
 type TaskSettlementAdmission =
@@ -169,10 +157,22 @@ export function dispatchAgentRunFromGateway(
       return;
     }
     if (followupCompletion) {
-      return settleFollowupTaskExecution(followupCompletion, params.runId, reply, () => {
-        assertSettlementCurrent?.();
-        return canSettleTrackedTask(task);
-      });
+      if (!followupCompletion.ownsExecution(params.runId)) {
+        return;
+      }
+      return (async () => {
+        try {
+          await followupCompletion.settle(params.runId, reply, () => {
+            assertSettlementCurrent?.();
+            if (!canSettleTrackedTask(task)) {
+              throw new Error("Follow-up physical execution lost its Gateway registration.");
+            }
+          });
+        } catch (error) {
+          followupCompletion.close(error);
+          throw error;
+        }
+      })();
     }
     if (!executionActivated && createdTask) {
       const settlementFailed = (error: unknown) => {
@@ -355,22 +355,28 @@ export function dispatchAgentRunFromGateway(
         ),
       );
     const cancel = task && createTrackedTaskCancellation(task);
+    const assertTaskOwnerCurrent = () => {
+      assertCurrent();
+      if (
+        !ownsRunRegistration() ||
+        params.context.chatAbortControllers.get(params.runId) !== registeredRunEntry
+      ) {
+        throw new Error("Task no longer owns its Gateway run registration.");
+      }
+    };
     if (followupCompletion && task) {
       followupCompletion.assertCurrent();
       originalTaskRunOwner = getTaskRunOwner(task);
-      releaseTaskOwner = followupCompletion.activate(params.runId, cancel);
-      return invoke();
+      return followupCompletion
+        .activate(params.runId, cancel, assertTaskOwnerCurrent)
+        .then((release) => {
+          releaseTaskOwner = release;
+          assertTaskOwnerCurrent();
+          followupCompletion.assertCurrent();
+          return invoke();
+        });
     }
     if (createdTask && task && cancel) {
-      const assertTaskOwnerCurrent = () => {
-        assertCurrent();
-        if (
-          !ownsRunRegistration() ||
-          params.context.chatAbortControllers.get(params.runId) !== registeredRunEntry
-        ) {
-          throw new Error("Task no longer owns its Gateway run registration.");
-        }
-      };
       return createdTask.bindRunOwner(cancel, assertTaskOwnerCurrent).then((binding) => {
         releaseTaskOwner = binding.release;
         originalTaskRunOwner = binding.owner;

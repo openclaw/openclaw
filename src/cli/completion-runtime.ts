@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -418,32 +419,9 @@ function updateCompletionProfile(
 }
 
 async function resolveCompletionProfileWritePath(profilePath: string): Promise<string> {
-  const profileDir = path.dirname(profilePath);
-  // Shell startup follows a symlink before `..`; create and canonicalize that lexical parent first.
-  await fs.mkdir(profileDir, { recursive: true });
-  const canonicalDir = await fs.realpath(profileDir);
-  try {
-    // Existing dotfile-manager symlinks must keep pointing at the atomically replaced referent.
-    return await fs.realpath(profilePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-  const linkTarget = await fs.readlink(profilePath).catch((error: unknown) => {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "EINVAL") {
-      return undefined;
-    }
-    throw error;
-  });
-  if (linkTarget === undefined) {
-    return path.join(canonicalDir, path.basename(profilePath));
-  }
-  // A dangling relative link is resolved from the directory that physically owns the link.
-  const targetPath = path.isAbsolute(linkTarget)
-    ? linkTarget
-    : `${canonicalDir}${path.sep}${linkTarget}`;
+  const { existingPath, unresolvedSegments } = resolvePathPrefixSync(profilePath);
+  // Keep unresolved `..` components until mkdir has created their physical parents.
+  const targetPath = [existingPath, ...unresolvedSegments].join(path.sep);
   const targetDir = path.dirname(targetPath);
   await fs.mkdir(targetDir, { recursive: true });
   return path.join(await fs.realpath(targetDir), path.basename(targetPath));

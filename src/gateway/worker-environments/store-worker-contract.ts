@@ -30,6 +30,7 @@ export type WorkerEnvironmentCommitAdmission = Array<{
   environmentId: string;
   recordAuthority: string;
   transferAuthority: string;
+  attachmentAuthority: string;
 }>;
 export type WorkerEnvironmentPruneCursor = { changedAtMs: number; environmentId: string };
 export type WorkerEnvironmentPruneObservation = Selectable<WorkerEnvironments>;

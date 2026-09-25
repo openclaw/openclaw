@@ -495,7 +495,11 @@ export function createGatewayHttpServer(opts: {
         (await getSessionKillHttpModule()).handleSessionKillHttpRequest(req, res, routeAuth),
       );
       addAdmittedStage(/^\/sessions\/[^/]+\/history$/.test(scopedRequestPath), async () =>
-        (await getSessionHistoryHttpModule()).handleSessionHistoryHttpRequest(req, res, routeAuth),
+        (await getSessionHistoryHttpModule()).handleSessionHistoryHttpRequest(req, res, {
+          ...routeAuth,
+          getCommittedRuntimeConfig: () =>
+            opts.getGatewayRequestContext?.()?.getCommittedRuntimeConfig?.() ?? loadGatewayConfig(),
+        }),
       );
       addAdmittedStage(scopedRequestPath.startsWith("/__openclaw__/board/"), async () =>
         (await getBoardHttpModule()).handleBoardHttpRequest(req, res, {
@@ -601,21 +605,17 @@ export function createGatewayHttpServer(opts: {
         handleControlUiRequest,
       );
       const mcpAppRoute = classifyMcpAppStandalonePath(scopedRequestPath);
-      if (
+      addAdmittedStage(
         configSnapshot.mcp?.apps?.enabled === true &&
-        (mcpAppRoute === "shell" || mcpAppRoute === "view")
-      ) {
-        requestStages.push(
-          async () =>
-            await runWithGatewayHttpWorkAdmission(res, async () => {
-              const standalone = await getMcpAppStandaloneModule();
-              return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
-                sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
-                sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
-              });
-            }),
-        );
-      }
+          (mcpAppRoute === "shell" || mcpAppRoute === "view"),
+        async () => {
+          const standalone = await getMcpAppStandaloneModule();
+          return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
+            sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
+            sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
+          });
+        },
+      );
       // Core and recovery routes run first, then plugin routes, then read-only Control UI
       // surfaces. Non-GET requests the SPA does not claim reach the startup 503 before final 404.
       if (handlePluginRequest) {

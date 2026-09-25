@@ -192,6 +192,14 @@
     "target": "OpenAI provider"
   },
   {
+    "source": "OpenAI authentication",
+    "target": "OpenAI 身份验证"
+  },
+  {
+    "source": "Authentication",
+    "target": "身份验证"
+  },
+  {
     "source": "xAI provider",
     "target": "xAI provider"
   },
@@ -4926,6 +4934,22 @@
   {
     "source": "Onnx plugin reference",
     "target": "ONNX 插件参考"
+  },
+  {
+    "source": "Telnyx",
+    "target": "Telnyx"
+  },
+  {
+    "source": "Telnyx plugin",
+    "target": "Telnyx 插件"
+  },
+  {
+    "source": "telnyx",
+    "target": "telnyx"
+  },
+  {
+    "source": "Telnyx (AI inference)",
+    "target": "Telnyx（AI 推理）"
   },
   {
     "source": "Deploy a team server",

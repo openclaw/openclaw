@@ -1039,7 +1039,7 @@ describe("codex command", () => {
         }
         throw new Error(`unexpected Codex method ${method}`);
       });
-      const parent = codexNativeSubagentMonitorRuntime.register({
+      const parent = await codexNativeSubagentMonitorRuntime.register({
         client: harness.client,
         parentThreadId: "thread-parent",
       });

@@ -81,8 +81,7 @@ export class TaskFollowupCompletion implements FollowupCompletionOwner {
   };
   private cohort?: Cohort;
   private readonly result = createDeferredCore<FollowupReply>();
-  private terminal?: Promise<void>;
-  private terminalResult?: FollowupReply;
+  private terminal?: Promise<FollowupReply>;
   private acceptedExecution = false;
   private cancellationRequested = false;
   private cancelling?: Promise<Result<TaskRecord, string>>;
@@ -114,7 +113,6 @@ export class TaskFollowupCompletion implements FollowupCompletionOwner {
       },
     );
     owner.binding = binding;
-    binding.owner.followupCompletion = owner;
     request.completion = owner;
     state.executions.set(request.runId, owner);
     request.custody.signal.addEventListener("abort", owner.revoked, { once: true });
@@ -134,10 +132,10 @@ export class TaskFollowupCompletion implements FollowupCompletionOwner {
     if (this.closed || !this.binding || getTaskRunOwner(this.receipt.task) !== this.binding.owner) {
       throw new Error("Followup task completion owner was replaced or closed.");
     }
-    if (!this.binding.owner.assertCurrent) {
+    if (!this.binding.owner.readCurrent) {
       throw new Error("Followup task receipt has no live custody.");
     }
-    this.binding.owner.assertCurrent();
+    this.binding.owner.readCurrent();
     this.request.custody.assertCurrent();
   }
   get accepted() {
@@ -155,36 +153,49 @@ export class TaskFollowupCompletion implements FollowupCompletionOwner {
       return;
     }
     this.execution.settled.resolve();
-    if (this.terminalResult) {
-      this.result.resolve(this.terminalResult);
-    }
+    void this.terminal?.then(this.result.resolve, this.result.reject);
   }
   ownsExecution(runId: string) {
     return !this.closed && this.execution.runId === runId;
   }
-  isLive() {
-    // Permission preparation can be pending while an owned task is still running.
-    // Only its live task/database receipt determines liveness; effects recheck custody.
-    if (this.closed || !this.binding || getTaskRunOwner(this.receipt.task) !== this.binding.owner) {
-      return false;
-    }
-    try {
-      this.binding.owner.assertCurrent?.();
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  activate(runId: string, cancel: TaskRunOwner["cancel"] | undefined) {
-    this.assertCurrent();
-    if (this.execution.runId !== runId || this.execution.yielded) {
-      throw new Error("Followup no longer owns this execution.");
-    }
+  async activate(
+    runId: string,
+    cancel: TaskRunOwner["cancel"] | undefined,
+    assertPhysicalCurrent: () => void,
+  ) {
     const execution = this.execution;
+    const assertCurrent = () => {
+      this.assertCurrent();
+      assertPhysicalCurrent();
+      if (
+        this.execution !== execution ||
+        execution.runId !== runId ||
+        execution.yielded ||
+        this.terminal ||
+        !this.acceptedExecution
+      ) {
+        throw new Error("Followup no longer owns this accepted execution.");
+      }
+    };
+    assertCurrent();
     execution.cancel = cancel;
-    return () => {
+    const release = () => {
       execution.cancel = undefined;
     };
+    try {
+      if (execution.admittedCohort) {
+        const resume = this.binding?.owner.resumeExecution;
+        if (!resume) {
+          throw new Error("Followup receipt cannot activate a successor.");
+        }
+        await resume(assertCurrent);
+        assertCurrent();
+      }
+      return release;
+    } catch (error) {
+      release();
+      throw error;
+    }
   }
   promoteYield(runId: string, entries: readonly SubagentRunRecord[], generation: number) {
     this.assertCurrent();
@@ -269,6 +280,7 @@ export class TaskFollowupCompletion implements FollowupCompletionOwner {
       admittedCohort: successor.cohort,
     };
     this.cohort = undefined;
+    this.acceptedExecution = false;
     state.executions.set(successor.runId, this);
   }
   async settle(runId: string, reply: FollowupReply, assertExecutionCurrent?: () => void) {
@@ -306,11 +318,10 @@ export class TaskFollowupCompletion implements FollowupCompletionOwner {
       );
       this.assertCurrent();
       const committed = this.binding?.owner.readCurrent?.();
-      const expectedStatus = terminalStatus;
-      if (!committed || committed.status !== expectedStatus) {
+      if (!committed || committed.status !== terminalStatus) {
         throw new Error("Followup terminal result was not committed by its task owner.");
       }
-      this.terminalResult = result;
+      return result;
     })();
     try {
       await this.terminal;

@@ -3,7 +3,6 @@ import { expect, test, vi } from "vitest";
 import { getRegistryWorktree, listRegistryWorktrees } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import {
   loadSessionEntry,
   onSessionIdentityMutation,
@@ -15,10 +14,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
@@ -126,7 +122,7 @@ test.each([false, true])(
 );
 
 test.each([false, true])(
-  "sessions.create accepts a signed agent-runtime visible-spawn policy with required parent=%s",
+  "sessions.create persists trusted agent-runtime spawn permissions with required parent=%s",
   async (required) => {
     const { storePath } = await createSessionStoreDir();
     const parentSessionKey = "agent:main:main";
@@ -161,6 +157,10 @@ test.each([false, true])(
         spawnDepth: 1,
       },
       {
+        context: {
+          // This fixture starts after authentication; token transport has its own tests.
+          validateAgentRuntimeApprovalAuthority: () => true,
+        },
         client: {
           connect: { scopes: ["operator.write"] },
           internal: {
@@ -170,6 +170,7 @@ test.each([false, true])(
               sessionKey: parentSessionKey,
               sessionSpawnContext: {
                 completionOwnerSessionKey: "agent:main:discord:direct:bob",
+                inheritedPermissionMode: "full",
                 inheritedToolPolicy: {
                   version: 1,
                   allow: ["read", "sessions_spawn"],
@@ -189,6 +190,7 @@ test.each([false, true])(
       createdActor: required ? actor : { type: "agent", id: "main" },
       spawnedBy: parentSessionKey,
       completionOwnerSessionKey: "agent:main:discord:direct:bob",
+      permissionMode: "full",
       inheritedToolAllow: ["read", "sessions_spawn"],
       inheritedToolDeny: ["exec"],
     });
@@ -197,6 +199,7 @@ test.each([false, true])(
     expect(child).toMatchObject({
       spawnedBy: parentSessionKey,
       completionOwnerSessionKey: "agent:main:discord:direct:bob",
+      permissionMode: "full",
       inheritedToolPolicyVersion: 1,
       createdActor: required ? actor : { type: "agent", id: "main" },
     });
@@ -260,16 +263,31 @@ test("sessions.create rejects a replaced required spawn parent before child crea
 });
 
 test("sessions.create commits no session after delegated authority closes", async () => {
-  await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:authority-race";
-  let validations = 0;
+  let authorityCurrent = true;
+  const firstGuard = createDeferredCore();
+  const writerEntered = createDeferredCore();
+  const releaseWriter = createDeferredCore();
+  const heldWriter = runExclusiveSqliteSessionWrite(
+    resolveSqliteStoreScope(storePath, { agentId: "main" }),
+    async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
+    },
+    "session.transcript.batch",
+  );
+  await writerEntered.promise;
 
-  const created = await directSessionReq(
+  const creating = directSessionReq(
     "sessions.create",
     { agentId: "main", key: sessionKey },
     {
       context: {
-        validateAgentRuntimeApprovalAuthority: () => ++validations < 3,
+        validateAgentRuntimeApprovalAuthority: () => {
+          firstGuard.resolve();
+          return authorityCurrent;
+        },
       },
       client: {
         connect: { scopes: ["operator.write"] },
@@ -284,11 +302,20 @@ test("sessions.create commits no session after delegated authority closes", asyn
     },
   );
 
-  expect(created.ok).toBe(false);
-  expect(created.error?.message).toContain("agent runtime authority is no longer active");
-  expect(
-    loadCombinedSessionStoreForGatewayCore(getRuntimeConfig()).store[sessionKey],
-  ).toBeUndefined();
+  try {
+    await firstGuard.promise;
+    authorityCurrent = false;
+    releaseWriter.resolve();
+    await heldWriter;
+
+    const created = await creating;
+    expect(created.ok).toBe(false);
+    expect(created.error?.message).toContain("agent runtime authority is no longer active");
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
+  } finally {
+    releaseWriter.resolve();
+    await Promise.allSettled([heldWriter, creating]);
+  }
 });
 
 test("sessions.create commits no child after its bound Gateway is replaced", async () => {
@@ -297,7 +324,6 @@ test("sessions.create commits no child after its bound Gateway is replaced", asy
   const admitted = {};
   const replacement = {};
   let current = admitted;
-  let guardCalls = 0;
   const firstGuard = createDeferredCore();
   const writerEntered = createDeferredCore();
   const releaseWriter = createDeferredCore();
@@ -320,23 +346,25 @@ test("sessions.create commits no child after its bound Gateway is replaced", asy
           if (current !== admitted) {
             throw new Error("current gateway instance binding was replaced");
           }
-          guardCalls += 1;
-          if (guardCalls === 1) {
-            firstGuard.resolve();
-          }
+          firstGuard.resolve();
         },
         assertTargetCurrent: vi.fn(),
       },
     },
   );
 
-  await firstGuard.promise;
-  current = replacement;
-  releaseWriter.resolve();
-  await heldWriter;
+  try {
+    await firstGuard.promise;
+    current = replacement;
+    releaseWriter.resolve();
+    await heldWriter;
 
-  await expect(creating).rejects.toThrow("current gateway instance binding was replaced");
-  expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
+    await expect(creating).rejects.toThrow("current gateway instance binding was replaced");
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
+  } finally {
+    releaseWriter.resolve();
+    await Promise.allSettled([heldWriter, creating]);
+  }
 });
 
 test("sessions.create commits no child after its worker turn closes", async () => {
@@ -380,7 +408,6 @@ test("sessions.create commits no child after its worker turn closes", async () =
     runId: "worker-run",
     owner: { kind: "worker", environmentId: "worker-environment", ownerEpoch: 7 },
   });
-  let guardCalls = 0;
   const firstGuard = createDeferredCore();
   const writerEntered = createDeferredCore();
   const releaseWriter = createDeferredCore();
@@ -402,22 +429,25 @@ test("sessions.create commits no child after its worker turn closes", async () =
           if (!placements.validateTurnClaim(turnClaim)) {
             throw new Error("worker turn authority changed");
           }
-          if (++guardCalls === 1) {
-            firstGuard.resolve();
-          }
+          firstGuard.resolve();
         },
         assertTargetCurrent: vi.fn(),
       },
     },
   );
 
-  await firstGuard.promise;
-  placements.releaseTurn(turnClaim);
-  releaseWriter.resolve();
-  await heldWriter;
+  try {
+    await firstGuard.promise;
+    placements.releaseTurn(turnClaim);
+    releaseWriter.resolve();
+    await heldWriter;
 
-  await expect(creating).rejects.toThrow("worker turn authority changed");
-  expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
+    await expect(creating).rejects.toThrow("worker turn authority changed");
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
+  } finally {
+    releaseWriter.resolve();
+    await Promise.allSettled([heldWriter, creating]);
+  }
 });
 
 test("sessions.create starts no initial turn when authority closes after session commit", async () => {
@@ -475,7 +505,6 @@ test("sessions.create removes a provisioned worktree when authority closes befor
     prefix: "openclaw-session-authority-worktree-",
   });
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
-  closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:authority-worktree-cleanup";

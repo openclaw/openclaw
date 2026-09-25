@@ -26,6 +26,7 @@ export function materializeDeclarationPackages(root: string, unified: boolean) {
     const manifest = JSON.parse(fs.readFileSync(path.join(source, "package.json"), "utf8"));
     fs.cpSync(source, destination, {
       recursive: true,
+      mode: fs.constants.COPYFILE_FICLONE,
       filter: (file) => path.basename(file) !== "node_modules",
     });
     for (const dependency of Object.keys({

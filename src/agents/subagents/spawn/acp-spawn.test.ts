@@ -41,6 +41,11 @@ import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { expectRecordFields } from "../../subagent-test-fixtures.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
+import {
+  expectRegisteredSubagentRun,
+  firstMockCall,
+  latestMockCall,
+} from "./subagent-spawn.test-helpers.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
@@ -377,22 +382,6 @@ function expectAcceptedSpawn(result: SpawnResult): Extract<SpawnResult, { status
     throw new Error("Expected ACP spawn to be accepted");
   }
   return result;
-}
-
-function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`Expected ${label} to be called`);
-  }
-  return call;
-}
-
-function latestMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const call = mock.mock.calls[mock.mock.calls.length - 1];
-  if (!call) {
-    throw new Error(`Expected ${label} to be called`);
-  }
-  return call;
 }
 
 function latestBindingInput(): Record<string, unknown> {
@@ -2769,14 +2758,16 @@ describe("spawnAcpDirect", () => {
       accountId: "bot-alpha",
       to: `room:${boundRoom}`,
     });
-    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectRegisteredSubagentRun(
+      hoisted.registerSubagentRunMock,
+      {
         requesterOrigin: expect.objectContaining({
           channel: "matrix",
           accountId: "bot-alpha",
           to: `room:${boundRoom}`,
         }),
-      }),
+      },
+      { assertCurrent: undefined },
     );
   });
 
@@ -3423,13 +3414,15 @@ describe("spawnAcpDirect", () => {
         return;
       }
       expectAcceptedSpawn(result);
-      expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
-        expect.objectContaining({
+      expectRegisteredSubagentRun(
+        hoisted.registerSubagentRunMock,
+        {
           requesterSessionKey: "global",
           childSessionKey: expect.stringMatching(/^agent:codex:acp:/),
           agentId: "codex",
           requesterAgentId: "research",
-        }),
+        },
+        { assertCurrent: undefined },
       );
     },
   );

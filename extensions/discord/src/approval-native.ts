@@ -1,5 +1,10 @@
+import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import { resolveApprovalRequestSessionConversation } from "openclaw/plugin-sdk/approval-native-runtime";
+import {
+  createChannelApproverDmTargetResolver,
+  createChannelNativeOriginTargetResolver,
+  resolveApprovalRequestSessionConversation,
+} from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -7,11 +12,6 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
-import {
-  createChannelApproverDmTargetResolver,
-  createChannelNativeOriginTargetResolver,
-  createApproverRestrictedNativeApprovalCapability,
-} from "./approval-runtime.js";
 import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 import {
   getDiscordExecApprovalApprovers,

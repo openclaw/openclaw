@@ -169,7 +169,8 @@ describe("prepareAgentRunTaskTracking", () => {
 
   it("registers plugin work only after its lookup settles", async () => {
     const lookup = delayLookup();
-    const preparation = prepareAgentRunTaskTracking(parameters({ client: pluginClient() }));
+    const params = parameters({ client: pluginClient() });
+    const preparation = prepareAgentRunTaskTracking(params);
     try {
       await Promise.resolve();
       expect(mocks.registerSubagentRun).not.toHaveBeenCalled();
@@ -178,6 +179,7 @@ describe("prepareAgentRunTaskTracking", () => {
       expect(mocks.registerSubagentRun).toHaveBeenCalledOnce();
       expect(mocks.registerSubagentRun).toHaveBeenCalledWith(
         expect.objectContaining({ runId, childSessionKey, task: "Continue the child task" }),
+        { assertCurrent: params.assertResumeAdmissionCurrent },
       );
     } finally {
       lookup.resolve(undefined);
@@ -293,6 +295,7 @@ describe("prepareAgentRunTaskTracking", () => {
 
 function followupFixture() {
   const task = { ...canonicalTask, runtime: "cli" as const };
+  const controller = new AbortController();
   const bindingGate = createDeferred();
   const bindingStarted = createDeferred();
   const release = vi.fn(() => mocks.owners.delete(task.taskId));
@@ -306,7 +309,7 @@ function followupFixture() {
     custody: {
       run: (work) => work(),
       assertCurrent: vi.fn(),
-      signal: new AbortController().signal,
+      signal: controller.signal,
       release: vi.fn(),
     },
   };
@@ -344,7 +347,17 @@ function followupFixture() {
       requesterOrigin: undefined,
       assertCurrent: vi.fn(),
     });
-  return { request, receipt, task, create, bindingGate, bindingStarted, release, register };
+  return {
+    request,
+    receipt,
+    task,
+    create,
+    bindingGate,
+    bindingStarted,
+    release,
+    register,
+    controller,
+  };
 }
 
 function cohort(): SubagentRunRecord[] {
@@ -380,7 +393,8 @@ describe("Gateway followup completion custody", () => {
     let accepted = false;
     const pending = withFollowupRequest(f.request, f.register).then((tracking) => {
       accepted = true;
-      expect(mocks.owners.get(f.task.taskId)?.followupCompletion).toBe(f.request.completion);
+      expect(f.request.completion).toBeDefined();
+      f.request.completion?.assertCurrent();
       return tracking;
     });
     await f.bindingStarted.promise;
@@ -454,6 +468,35 @@ describe("Gateway followup completion custody", () => {
     expect(f.receipt.settleUnstarted).toHaveBeenCalledOnce();
     expect(f.request.completion).toBeUndefined();
   });
+
+  it.each(["initial", "pending successor", "replacement owner"])(
+    "settles only the original unaccepted receipt after revocation (%s)",
+    async (kind) => {
+      const f = followupFixture();
+      f.bindingGate.resolve();
+      const tracking = await withFollowupRequest(f.request, f.register);
+      if (kind === "pending successor") {
+        f.request.completion?.markAccepted(runId);
+      }
+      f.controller.abort();
+      if (kind === "replacement owner") {
+        mocks.owners.set(f.task.taskId, { task: f.task, cancel: vi.fn<TaskRunOwner["cancel"]>() });
+      }
+      await settleUnstartedGatewayAgentTask({
+        tracking,
+        runId: kind === "pending successor" ? "not-adopted-successor" : runId,
+        admittedRunEntry: undefined,
+        context: { ...parameters().context, chatAbortControllers: new Map() },
+        outcome: { status: "error", reason: "failed", error: "source revoked before acceptance" },
+      });
+      expect(f.task.status).toBe(kind === "initial" ? "failed" : "running");
+      if (kind === "pending successor") {
+        expect(f.receipt.settleUnstarted).not.toHaveBeenCalled();
+      } else {
+        expect(f.receipt.settleUnstarted).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("prepares the exact successor before ordinary adoption and preserves the predecessor until final admission", async () => {
     const f = followupFixture();

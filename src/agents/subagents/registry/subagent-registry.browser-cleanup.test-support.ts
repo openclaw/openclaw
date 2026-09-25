@@ -98,7 +98,7 @@ export function registerBrowserCleanupBoundaryTests({
       const successorRunId = owner === "replacement row" ? runId : "run-browser-activation-new";
 
       try {
-        mod.registerSubagentRun({ runId, childSessionKey, task: "finish browser work" });
+        await mod.registerSubagentRun({ runId, childSessionKey, task: "finish browser work" });
         await activationEntered.promise;
         expect(loadBrowserMaintenanceSurface).toHaveBeenCalledOnce();
         expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
@@ -107,7 +107,7 @@ export function registerBrowserCleanupBoundaryTests({
           mod.prepareSubagentSessionCleanupRevocation(childSessionKey)();
         } else if (owner !== "current owner") {
           mockPendingAgentWait();
-          mod.registerSubagentRun({
+          await mod.registerSubagentRun({
             runId: successorRunId,
             childSessionKey,
             task: "continue using the same browser session",
@@ -150,7 +150,7 @@ export function registerBrowserCleanupBoundaryTests({
     });
     const settleRootWork = observeRootWork();
     try {
-      getRegistry().registerSubagentRun({
+      await getRegistry().registerSubagentRun({
         runId: "run-cleanup-warning",
         task: "finish despite cleanup warning",
       });

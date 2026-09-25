@@ -76,6 +76,12 @@ import type {
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
+type SessionTranscriptMatchWorkerInput = {
+  kind: "transcript-match";
+  database: { agentId: string; path: string };
+  request: import("./session-transcript-match.js").SessionTranscriptEventMatchRequest;
+};
+
 type SessionTranscriptSearchWorkerInput = {
   kind: "transcript-search";
   database: { agentId: string; path: string };
@@ -243,6 +249,13 @@ export type SessionRowPresenceWorkerInput = {
   scope: SessionAccessScope & { databaseAgentId: string };
 };
 
+type SessionProjectionStatusWorkerInput = {
+  kind: "projection-status";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+  sessionId?: string;
+};
+
 type SessionMembersWorkerInput = {
   kind: "session-members";
   database: { agentId: string; path: string };
@@ -338,6 +351,7 @@ export type SessionExactEntriesWorkerResult = {
     source: { agentId: string; path: string };
     databaseIdentity: string;
     members: Array<{ sessionKey: string; identityIds: string[] }>;
+    placeholders: Array<{ sessionKey: string; sessionId: string }>;
   };
 };
 
@@ -415,6 +429,7 @@ export type SessionHistoryWorkerInput =
   | SessionTitleFieldsWorkerInput
   | SessionRowBackfillWorkerInput
   | SessionRowPresenceWorkerInput
+  | SessionProjectionStatusWorkerInput
   | SessionMembersWorkerInput
   | SessionMembershipFactsWorkerInput
   | SessionProgressCardWorkerInput
@@ -426,7 +441,8 @@ export type SessionHistoryWorkerInput =
   | SessionTargetInventoryWorkerInput
   | SessionIdentityEvidenceWorkerInput
   | SessionUsageCacheWorkerInput
-  | SessionTranscriptSearchWorkerInput;
+  | SessionTranscriptSearchWorkerInput
+  | SessionTranscriptMatchWorkerInput;
 
 export type SessionTranscriptWorkerInput =
   | SessionSqliteTargetWorkerInput
@@ -452,6 +468,7 @@ export type SessionTranscriptWorkerValues = {
     result: PublishedSessionTranscriptArchive | null;
   };
   "transcript-search": SessionTranscriptSearchWorkerResult;
+  "transcript-match": { kind: "transcript-match"; result: { event: TranscriptEvent } | undefined };
   "cold-metadata": SessionColdMetadataWorkerResult;
   "transcript-hydration": SessionTranscriptHydrationWorkerResult;
   "current-turn-entry": SessionTranscriptCurrentTurnEntryRead;
@@ -462,6 +479,7 @@ export type SessionTranscriptWorkerValues = {
   "session-title-fields": SessionTitleFieldsWorkerResult;
   "session-row-backfill": SessionRowBackfillWorkerResult;
   "session-row-presence": boolean;
+  "projection-status": boolean;
   "session-members": SessionMember[];
   "session-membership-facts": SessionMembershipFacts;
   "session-progress-card": { kind: "session-progress-card"; card: ProgressCard | null };
@@ -504,6 +522,9 @@ export type SessionTranscriptWorkerReply<Kind extends keyof SessionTranscriptWor
     };
 
 export type SessionHistoryWorkerDatabase = {
+  findTranscriptEvent: (
+    request: SessionTranscriptMatchWorkerInput["request"],
+  ) => Promise<{ event: TranscriptEvent } | undefined>;
   readHistoricalEvictionCandidates: (
     input: Omit<SessionHistoricalEvictionCandidatesWorkerInput, "kind" | "database">,
   ) => Promise<string[]>;
@@ -532,6 +553,10 @@ export type SessionHistoryWorkerDatabase = {
     params: SessionRowBackfillWorkerInput["params"],
   ) => Promise<SessionRowBackfillWorkerResult["fields"]>;
   readEntryPresence: (scope: SessionRowPresenceWorkerInput["scope"]) => Promise<boolean>;
+  readProjectionStatus: (
+    input: Omit<SessionProjectionStatusWorkerInput, "kind" | "database">,
+    signal?: AbortSignal,
+  ) => Promise<boolean>;
   readIdentityEvidence: (
     input: Omit<SessionIdentityEvidenceWorkerInput, "kind" | "database">,
   ) => Promise<SessionIdentityEvidenceResult[]>;

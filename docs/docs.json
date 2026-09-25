@@ -2198,6 +2198,7 @@
                         "group": "OpenAI",
                         "pages": [
                           "providers/openai/setup",
+                          "providers/openai/authentication",
                           "providers/openai/models",
                           "providers/openai/runtimes",
                           "providers/openai/coverage-and-cost",
@@ -2215,6 +2216,7 @@
                       "providers/radius",
                       "providers/stepfun",
                       "providers/synthetic",
+                      "providers/telnyx",
                       "providers/tencent",
                       "providers/together",
                       "providers/venice",

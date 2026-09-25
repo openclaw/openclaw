@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeDailyIngestionState,
+  readDailyIngestionState,
   normalizeSessionIngestionState,
 } from "../dreaming-ingestion-state.js";
 import {
@@ -62,16 +63,9 @@ async function memoryCoreLegacySourceMatchesCanonical(
   raw: unknown,
 ): Promise<boolean> {
   if (source.label === "daily ingestion") {
-    const rows = await readMemoryCoreWorkspaceEntries({
-      namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
-      workspaceDir: source.workspaceDir,
-    });
     return isDeepStrictEqual(
       normalizeDailyIngestionState(raw),
-      normalizeDailyIngestionState({
-        version: 1,
-        files: Object.fromEntries(rows.map((row) => [row.key, row.value])),
-      }),
+      await readDailyIngestionState(source.workspaceDir),
     );
   }
   if (source.label === "session ingestion") {

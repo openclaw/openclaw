@@ -43,6 +43,71 @@ const oauthMocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
 }));
 
+it("keeps subscription-sharing OAuth in the host and hands native Codex only an isolated placeholder", async () => {
+  const profileId = "openai:token-sharing:test";
+  const credential = {
+    type: "oauth" as const,
+    provider: "openai",
+    authFlow: "chatgpt-token-sharing",
+    access: "synthetic-scoped-access",
+    refresh: "synthetic-refresh",
+    expires: Date.now() + 60_000,
+    issuer: "https://auth.openai.com",
+    clientId: "synthetic-client",
+    idToken: `header.${Buffer.from(JSON.stringify({ sub: "synthetic-subject" })).toString("base64url")}.signature`,
+  };
+  const params = {
+    authRequirement: "api-key" as const,
+    authProfileId: profileId,
+    resolvedApiKey: credential.access,
+    authProfileStore: { version: 1, profiles: { [profileId]: credential } },
+    homeScope: "agent" as const,
+    subscriptionProfileRequiredError: "required",
+    subscriptionProfileUnusableError: "unusable",
+  };
+  const handoff = await resolveCodexAppServerPreparedAuthHandoff(params);
+  expect(handoff.authProfileId).toBe(profileId);
+  expect(handoff.preparedAuth?.kind).toBe("profile");
+  if (handoff.preparedAuth?.kind !== "profile") {
+    throw new Error("expected profile handoff");
+  }
+  expect(handoff.preparedAuth.snapshot).toMatchObject({
+    inferenceAuth: "host-oauth",
+    loginParams: { type: "apiKey" },
+  });
+  expect(JSON.stringify(handoff.preparedAuth.snapshot)).not.toContain(credential.access);
+  expect(handoff.preparedAuth.snapshot).not.toHaveProperty("chatgptAccountId");
+  const h = createClientHarness();
+  try {
+    const applying = applyCodexAppServerAuthProfile({
+      client: h.client,
+      preparedAuth: handoff.preparedAuth,
+      authRequirement: "api-key",
+      startOptions: {
+        transport: "stdio",
+        command: "codex",
+        args: [],
+        homeScope: "agent",
+        headers: {},
+      },
+    });
+    const login = JSON.parse(await h.waitForWrite(0));
+    expect(login.method).toBe("account/login/start");
+    expect(login.params).toEqual(handoff.preparedAuth.snapshot?.loginParams);
+    expect(JSON.stringify(login)).not.toContain(credential.access);
+    h.send({ id: login.id, result: { type: "apiKey" } });
+    await applying;
+  } finally {
+    h.client.close();
+  }
+  await expect(
+    resolveCodexAppServerPreparedAuthHandoff({ ...params, homeScope: "user" }),
+  ).rejects.toThrow("isolated home");
+  await expect(
+    resolveCodexAppServerPreparedAuthHandoff({ ...params, requirePreparedAuth: true }),
+  ).rejects.toThrow("managed local");
+});
+
 type MockDesktopCandidate = ReturnType<typeof resolveMacOSDesktopCodexAppPathCandidates>[number];
 type MockCacheResult = {
   status: "independent" | "shared";
@@ -257,6 +322,21 @@ async function expectPathMissing(filePath: string): Promise<void> {
 type AuthProfileStore = ReturnType<typeof loadAuthProfileStoreForSecretsRuntime>;
 type AuthProfileCredential = AuthProfileStore["profiles"][string];
 
+function upsertWorkOAuthProfile(
+  agentDir: string,
+  credential: Omit<Extract<AuthProfileCredential, { type: "oauth" }>, "type" | "provider">,
+): void {
+  upsertAuthProfile({
+    agentDir,
+    profileId: "openai:work",
+    credential: {
+      type: "oauth",
+      provider: "openai",
+      ...credential,
+    },
+  });
+}
+
 function expectOAuthProfile(
   profile: AuthProfileCredential | undefined,
 ): Extract<AuthProfileCredential, { type: "oauth" }> {
@@ -309,16 +389,10 @@ describe("bridgeCodexAppServerStartOptions", () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const authProfileStore = { version: 1, profiles: {} };
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: "persisted-access",
-          refresh: "persisted-refresh",
-          expires: Date.now() + 60_000,
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: "persisted-access",
+        refresh: "persisted-refresh",
+        expires: Date.now() + 60_000,
       });
 
       expect(
@@ -616,7 +690,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
           computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache,
         ).toHaveBeenCalledWith(
           expect.objectContaining({
-            bundledMarketplacePath: codexCandidate.bundledMarketplacePath,
+            bundledMarketplacePath: "/managed/openai-bundled",
           }),
         );
       });
@@ -962,17 +1036,11 @@ describe("bridgeCodexAppServerStartOptions", () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const startOptions = createStartOptions({ clearEnv: ["FOO"] });
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 24 * 60 * 60_000,
-          accountId: "account-123",
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 24 * 60 * 60_000,
+        accountId: "account-123",
       });
       await writeCodexCliAuthFile(resolveCodexAppServerHomeDir(agentDir));
 
@@ -1274,17 +1342,11 @@ describe("bridgeCodexAppServerStartOptions", () => {
       clearEnv: ["FOO"],
     });
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 24 * 60 * 60_000,
-          accountId: "account-123",
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 24 * 60 * 60_000,
+        accountId: "account-123",
       });
 
       await expect(
@@ -1441,18 +1503,12 @@ describe("bridgeCodexAppServerStartOptions", () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 24 * 60 * 60_000,
-          accountId: "account-123",
-          email: "codex@example.test",
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 24 * 60 * 60_000,
+        accountId: "account-123",
+        email: "codex@example.test",
       });
 
       await applyCodexAppServerAuthProfile({
@@ -1562,17 +1618,11 @@ describe("bridgeCodexAppServerStartOptions", () => {
     });
     let checks = 0;
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 24 * 60 * 60_000,
-          accountId: "account-a",
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 24 * 60 * 60_000,
+        accountId: "account-a",
       });
 
       await expect(
@@ -1600,17 +1650,11 @@ describe("bridgeCodexAppServerStartOptions", () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: "persisted-access",
-          refresh: "persisted-refresh",
-          expires: Date.now() + 24 * 60 * 60_000,
-          accountId: "persisted-account",
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: "persisted-access",
+        refresh: "persisted-refresh",
+        expires: Date.now() + 24 * 60 * 60_000,
+        accountId: "persisted-account",
       });
       const authProfileStore: AuthProfileStore = {
         version: 1,
@@ -1662,17 +1706,11 @@ describe("bridgeCodexAppServerStartOptions", () => {
     });
     try {
       if (persistSameId) {
-        upsertAuthProfile({
-          agentDir,
-          profileId: "openai:work",
-          credential: {
-            type: "oauth",
-            provider: "openai",
-            access: "persisted-access",
-            refresh: "persisted-refresh",
-            expires: Date.now() + 24 * 60 * 60_000,
-            accountId: "persisted-account",
-          },
+        upsertWorkOAuthProfile(agentDir, {
+          access: "persisted-access",
+          refresh: "persisted-refresh",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "persisted-account",
         });
       }
       const authProfileStore: AuthProfileStore = {
@@ -1734,17 +1772,11 @@ describe("bridgeCodexAppServerStartOptions", () => {
       accountId: "persisted-account",
     });
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: "persisted-expired-access",
-          refresh: "persisted-refresh",
-          expires: Date.now() - 60_000,
-          accountId: "persisted-account",
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: "persisted-expired-access",
+        refresh: "persisted-refresh",
+        expires: Date.now() - 60_000,
+        accountId: "persisted-account",
       });
       const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
       expect(authProfileStore.runtimePersistedProfileIds).toContain("openai:work");
@@ -1793,17 +1825,11 @@ describe("bridgeCodexAppServerStartOptions", () => {
         expires: Date.now() + 60_000,
       });
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: "initial-access",
-          refresh: "initial-refresh",
-          expires: Date.now() + 60_000,
-          accountId: "rotating-account",
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: "initial-access",
+        refresh: "initial-refresh",
+        expires: Date.now() + 60_000,
+        accountId: "rotating-account",
       });
       const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
 
@@ -1857,17 +1883,11 @@ describe("bridgeCodexAppServerStartOptions", () => {
       },
     });
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: "initial-access",
-          refresh: "initial-refresh",
-          expires: Date.now() + 60_000,
-          accountId: "account-a",
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: "initial-access",
+        refresh: "initial-refresh",
+        expires: Date.now() + 60_000,
+        accountId: "account-a",
       });
       const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
       ensureCodexAppServerClientRuntime(harness.client, {
@@ -2247,17 +2267,11 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
     );
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: "initial-access",
-          refresh: "initial-refresh",
-          expires: Date.now() + 60_000,
-          accountId: "initial-account",
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: "initial-access",
+        refresh: "initial-refresh",
+        expires: Date.now() + 60_000,
+        accountId: "initial-account",
       });
       const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
 
@@ -2304,31 +2318,19 @@ describe("bridgeCodexAppServerStartOptions", () => {
     });
     providerRuntimeMocks.formatProviderAuthProfileApiKeyWithPlugin.mockImplementationOnce(
       async ({ context }) => {
-        upsertAuthProfile({
-          agentDir,
-          profileId: "openai:work",
-          credential: {
-            type: "oauth",
-            provider: "openai",
-            access: replacementAccess,
-            refresh: "replacement-refresh",
-            expires: Date.now() + 60_000,
-          },
+        upsertWorkOAuthProfile(agentDir, {
+          access: replacementAccess,
+          refresh: "replacement-refresh",
+          expires: Date.now() + 60_000,
         });
         return context.access;
       },
     );
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: initialAccess,
-          refresh: "initial-refresh",
-          expires: Date.now() - 60_000,
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: initialAccess,
+        refresh: "initial-refresh",
+        expires: Date.now() - 60_000,
       });
       const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
 
@@ -2367,17 +2369,11 @@ describe("bridgeCodexAppServerStartOptions", () => {
       accountId: "shared-account",
     });
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: "persisted-access",
-          refresh: "persisted-refresh",
-          expires: Date.now() + 24 * 60 * 60_000,
-          accountId: "shared-account",
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: "persisted-access",
+        refresh: "persisted-refresh",
+        expires: Date.now() + 24 * 60 * 60_000,
+        accountId: "shared-account",
       });
       const authProfileStore: AuthProfileStore = {
         version: 1,
@@ -2435,17 +2431,11 @@ describe("bridgeCodexAppServerStartOptions", () => {
       accountId: "scoped-account",
     });
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: "persisted-access",
-          refresh: "persisted-refresh",
-          expires: Date.now() + 24 * 60 * 60_000,
-          accountId: "persisted-account",
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: "persisted-access",
+        refresh: "persisted-refresh",
+        expires: Date.now() + 24 * 60 * 60_000,
+        accountId: "persisted-account",
       });
       const authProfileStore: AuthProfileStore = {
         version: 1,
@@ -2499,35 +2489,23 @@ describe("bridgeCodexAppServerStartOptions", () => {
         ? "current-access"
         : chatgptAccessToken("persisted-account", "current");
       try {
-        upsertAuthProfile({
-          agentDir,
-          profileId: "openai:work",
-          credential: {
-            type: "oauth",
-            provider: "openai",
-            access: storedAccountId
-              ? "stale-access"
-              : chatgptAccessToken("persisted-account", "stale"),
-            refresh: "stale-refresh",
-            expires: Date.now() - 60_000,
-            ...(storedAccountId ? { accountId: "persisted-account" } : {}),
-            email: "codex@example.test",
-          },
+        upsertWorkOAuthProfile(agentDir, {
+          access: storedAccountId
+            ? "stale-access"
+            : chatgptAccessToken("persisted-account", "stale"),
+          refresh: "stale-refresh",
+          expires: Date.now() - 60_000,
+          ...(storedAccountId ? { accountId: "persisted-account" } : {}),
+          email: "codex@example.test",
         });
         const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
         expect(authProfileStore.runtimePersistedProfileIds).toContain("openai:work");
-        upsertAuthProfile({
-          agentDir,
-          profileId: "openai:work",
-          credential: {
-            type: "oauth",
-            provider: "openai",
-            access: currentAccess,
-            refresh: "current-refresh",
-            expires: Date.now() + 24 * 60 * 60_000,
-            ...(storedAccountId ? { accountId: "persisted-account" } : {}),
-            email: "codex@example.test",
-          },
+        upsertWorkOAuthProfile(agentDir, {
+          access: currentAccess,
+          refresh: "current-refresh",
+          expires: Date.now() + 24 * 60 * 60_000,
+          ...(storedAccountId ? { accountId: "persisted-account" } : {}),
+          email: "codex@example.test",
         });
 
         await applyCodexAppServerAuthProfile({
@@ -2572,35 +2550,23 @@ describe("bridgeCodexAppServerStartOptions", () => {
         accountId: "account-a",
       });
       try {
-        upsertAuthProfile({
-          agentDir,
-          profileId: "openai:work",
-          credential: {
-            type: "oauth",
-            provider: "openai",
-            access: storedAccountId
-              ? "account-a-expired-access"
-              : chatgptAccessToken("account-a", "expired"),
-            refresh: "account-a-refresh",
-            expires: Date.now() - 60_000,
-            ...(storedAccountId ? { accountId: "account-a" } : {}),
-            email: "codex@example.test",
-          },
+        upsertWorkOAuthProfile(agentDir, {
+          access: storedAccountId
+            ? "account-a-expired-access"
+            : chatgptAccessToken("account-a", "expired"),
+          refresh: "account-a-refresh",
+          expires: Date.now() - 60_000,
+          ...(storedAccountId ? { accountId: "account-a" } : {}),
+          email: "codex@example.test",
         });
         const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
         expect(authProfileStore.runtimePersistedProfileIds).toContain("openai:work");
-        upsertAuthProfile({
-          agentDir,
-          profileId: "openai:work",
-          credential: {
-            type: "oauth",
-            provider: "openai",
-            access: replacementAccess,
-            refresh: "account-b-refresh",
-            expires: Date.now() + 24 * 60 * 60_000,
-            ...(storedAccountId ? { accountId: "account-b" } : {}),
-            email: "codex@example.test",
-          },
+        upsertWorkOAuthProfile(agentDir, {
+          access: replacementAccess,
+          refresh: "account-b-refresh",
+          expires: Date.now() + 24 * 60 * 60_000,
+          ...(storedAccountId ? { accountId: "account-b" } : {}),
+          email: "codex@example.test",
         });
         replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: authProfileStore }]);
 
@@ -3300,17 +3266,11 @@ describe("bridgeCodexAppServerStartOptions", () => {
           accountId: "account-default",
         },
       });
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: "work-access-token",
-          refresh: "work-refresh-token",
-          expires: Date.now() + 24 * 60 * 60_000,
-          accountId: "account-work",
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: "work-access-token",
+        refresh: "work-refresh-token",
+        expires: Date.now() + 24 * 60 * 60_000,
+        accountId: "account-work",
       });
 
       await applyCodexAppServerAuthProfile({
@@ -3350,18 +3310,12 @@ describe("bridgeCodexAppServerStartOptions", () => {
       accountId: "account-123",
     });
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: "expired-access-token",
-          refresh: "refresh-token",
-          expires: Date.now() - 60_000,
-          accountId: "account-123",
-          email: "codex@example.test",
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: "expired-access-token",
+        refresh: "refresh-token",
+        expires: Date.now() - 60_000,
+        accountId: "account-123",
+        email: "codex@example.test",
       });
 
       await applyCodexAppServerAuthProfile({
@@ -4012,18 +3966,12 @@ describe("bridgeCodexAppServerStartOptions", () => {
       accountId: "account-123",
     });
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: "stale-access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 60_000,
-          accountId: "account-123",
-          email: "codex@example.test",
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: "stale-access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 60_000,
+        accountId: "account-123",
+        email: "codex@example.test",
       });
 
       await expect(
@@ -4058,17 +4006,11 @@ describe("bridgeCodexAppServerStartOptions", () => {
     async ({ access, accountId }) => {
       const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
       try {
-        upsertAuthProfile({
-          agentDir,
-          profileId: "openai:work",
-          credential: {
-            type: "oauth",
-            provider: "openai",
-            access,
-            refresh: "workspace-refresh-token",
-            expires: Date.now() + 60_000,
-            ...(accountId ? { accountId } : {}),
-          },
+        upsertWorkOAuthProfile(agentDir, {
+          access,
+          refresh: "workspace-refresh-token",
+          expires: Date.now() + 60_000,
+          ...(accountId ? { accountId } : {}),
         });
 
         await expect(
@@ -4104,18 +4046,12 @@ describe("bridgeCodexAppServerStartOptions", () => {
       };
     });
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai:work",
-        credential: {
-          type: "oauth",
-          provider: "openai",
-          access: "current-access-token",
-          refresh: "refresh-token",
-          expires: currentExpiry,
-          accountId: "account-123",
-          email: "codex@example.test",
-        },
+      upsertWorkOAuthProfile(agentDir, {
+        access: "current-access-token",
+        refresh: "refresh-token",
+        expires: currentExpiry,
+        accountId: "account-123",
+        email: "codex@example.test",
       });
 
       await expect(

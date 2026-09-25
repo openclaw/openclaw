@@ -53,7 +53,6 @@ import {
   setTaskCleanupAfterById,
 } from "./runtime-internal.js";
 import { readTaskBackingInstance } from "./task-backing-authority.js";
-import { hasActiveCliRun, hasCliRunIdentity } from "./task-cli-run-liveness.js";
 import { runTaskFlowRegistryMaintenance } from "./task-flow-registry.maintenance.js";
 import {
   cleanupOrphanedParentOwnedAcpSessions,
@@ -70,6 +69,8 @@ import { createTaskMaintenanceScheduler } from "./task-registry-maintenance-sche
 import {
   createBackingSessionLookupContext,
   findTaskSessionEntry,
+  hasActiveCliRun,
+  hasCliRunIdentity,
   prepareBackingSessionFacts,
   observeBackingSessionFacts,
   resolveSessionChatType,

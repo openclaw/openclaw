@@ -106,6 +106,11 @@ the updated Gateway; older runs cannot recover a cause that was never recorded.
 
 An admitted `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
+An automatic-update campaign stops showing as applying when its own admitted run
+finishes, including when a managed handoff fails before restarting the Gateway.
+The Gateway reconciles the exact campaign run, so newer unrelated runs do not
+keep a finished campaign busy or clear a different active campaign.
+
 Retained dry-run previews remain available through history queries but do not
 replace `lastRun`, so a preview cannot hide the last real update failure.
 If history cannot be read or classified, status still shows update availability
@@ -236,6 +241,12 @@ openclaw gateway call update.runs.get --params '{"runId":"<run-id>"}'
 fields and adds optional `activeRun` and `lastRun` records. While a run is active,
 the Gateway broadcasts `update.run.changed` with `runId`, `phase`, `status`, and
 `updatedAtMs`. Reconnect and read the row to recover changes missed during restart.
+
+The Gateway's `update.status` reports current automatic-update policy and any live
+campaign independently of checkout discovery. Installation details can arrive
+later; reading status does not start scheduling or clear an active campaign. If
+the update channel cannot be resolved, `schedule` remains absent rather than
+claiming the scheduler is idle.
 
 When a history request needs a read-only snapshot, the Gateway prepares it
 asynchronously so other requests can continue. The snapshot preserves the source

@@ -37,8 +37,11 @@ export interface FollowupCompletionOwner {
   markAccepted(runId: string): void;
   finishExecution(runId: string): void;
   ownsExecution(runId: string): boolean;
-  isLive(): boolean;
-  activate(runId: string, cancel: TaskRunOwner["cancel"] | undefined): () => void;
+  activate(
+    runId: string,
+    cancel: TaskRunOwner["cancel"] | undefined,
+    assertCurrent: () => void,
+  ): Promise<() => void>;
   promoteYield(runId: string, entries: readonly SubagentRunRecord[], generation: number): void;
   successor(
     entries: readonly SubagentRunRecord[],

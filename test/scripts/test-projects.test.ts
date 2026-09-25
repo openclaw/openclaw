@@ -48,6 +48,7 @@ import {
 } from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
 import { listGitTrackedFiles, toRepoPath } from "../../src/test-utils/repo-files.js";
+import { listVitestConfigTestFiles } from "../vitest-projects-config.test-support.js";
 import { agentVitestProjectOwners } from "../vitest/vitest.agents-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
@@ -126,6 +127,9 @@ describe("test runtime prerequisites", () => {
     ["all plugins", ["extensions"], "private-qa"],
     ["full local suite", [], "private-qa"],
     ["ACP CLI process", ["src/cli/acp-cli-exit.process.test.ts"], "runtime"],
+    ["Windows Claude CLI process", ["src/process/exec.windows.integration.test.ts"], "runtime"],
+    ["process config", ["test/vitest/vitest.process.config.ts"], "runtime"],
+    ["ordinary process unit", ["src/process/exec.windows.test.ts"], undefined],
     ["update CLI process", ["src/cli/update-dry-run-state.process.test.ts"], "runtime"],
     ["migrated update process", ["src/cli/update-cli/update-command-migrated.test.ts"], "runtime"],
     ["update rollback", ["src/cli/update-cli/update-command-rollback.test.ts"], "runtime"],
@@ -2707,7 +2711,9 @@ describe("scripts/test-projects changed-target routing", () => {
         {
           config: "test/vitest/vitest.infra.config.ts",
           forwardedArgs,
-          includePatterns: ["src/gateway/server-methods/memory-search.test.ts"],
+          includePatterns: databaseWorkerCoreTestFiles.filter((file) =>
+            file.startsWith("src/gateway/"),
+          ),
           watchMode: false,
         },
       ]);
@@ -2859,6 +2865,10 @@ describe("scripts/test-projects changed-target routing", () => {
     [
       "test/vitest/vitest.unit-fast.config.ts",
       "src/agents/embedded-agent-runner/run/model-setup.selected-model.test.ts",
+    ],
+    [
+      "test/vitest/vitest.unit-fast.config.ts",
+      "test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts",
     ],
     [
       "test/vitest/vitest.unit-fast-isolated.config.ts",
@@ -3180,6 +3190,16 @@ describe("scripts/test-projects changed-target routing", () => {
       },
     ]);
   });
+
+  it.each(["scripts/docker/setup.sh", "scripts/lib/build-metadata.sh"])(
+    "routes stubbed Docker setup checks to tooling for %s",
+    (target) => {
+      const plan = buildVitestRunPlans([target]).find((candidate) =>
+        candidate.includePatterns?.includes("test/scripts/docker-setup.test.ts"),
+      );
+      expect(plan).toMatchObject({ config: "test/vitest/vitest.tooling.config.ts" });
+    },
+  );
 
   it("routes Docker E2E script targets to their owner tooling tests", () => {
     const targets = [
@@ -5354,16 +5374,69 @@ describe("test selector native source facts", () => {
     );
   });
 
+  it("preserves literal matches and whole-token references across a native source batch", () => {
+    const sources = {
+      "empty.txt": "",
+      "overlap.txt": "ushers ababa",
+      "paths.txt": "scripts/tool.mts @scope/name+tag_value-1.0 xabcdy abcd",
+      "unicode.txt": "éabcd😀foo/bar中 abc😀xyz",
+      "embedded.txt": "xabcdy scripts/tool.mts scripts/tool abcd",
+      "binary.txt": "null\0abcd\0tail",
+      "repeated.txt": "aaaaaaaaa aba aaa aaaa",
+      "late-references.txt":
+        "ushers ababa xabcdy scripts/tool.mts @scope/name+tag_value-1.0 xfoo/bary 😀 null\0 aaaaaa absent\n abcd scripts/tool foo/bar aaaa",
+    };
+    const terms = [
+      "",
+      "he",
+      "she",
+      "hers",
+      "aba",
+      "ba",
+      "aba",
+      "abcd",
+      "bcd",
+      "scripts/tool",
+      "scripts/tool.mts",
+      "@scope/name+tag_value-1.0",
+      "foo/bar",
+      "😀",
+      "\ud83d",
+      "\ude00",
+      "null\0",
+      "aaa",
+      "aaaa",
+      "absent",
+    ];
+    withTinyFileTree(sources, (cwd) => {
+      const files = Object.keys(sources).map((file) => ({ file, parseImports: false }));
+      const expected = Object.entries(sources).map(([file, source]) => {
+        const tokens = new Set(source.match(/[A-Za-z0-9_.@+/-]{4,}/gu));
+        return {
+          file,
+          imports: [],
+          typeOnlyImports: [],
+          matches: terms.filter((term) => source.includes(term)),
+          references: terms.filter((term) => tokens.has(term)),
+        };
+      });
+      expect(readTestSelectorSourceFacts(cwd, files, terms, 1024 * 1024)).toEqual(expected);
+    });
+  });
+
   it("reads complete files without installed packages, inherited hooks, or reparsing cached imports", () => {
     withTinyFileTree(
       {
+        "unterminated.ts": '// "\nconst value = "\\u{000',
         "large.mts": `${"// padding\n".repeat(220_000)}export type {\n Value\n } from "./barrel.js";\nimport(\n "./dynamic.mjs"\n);\nconst fixture = "scripts/tool.mts";\nnew URL(\n "./native-fixture.mjs?generation=1#child", import.meta.url,\n);\nnew URL("./other-base.mjs", "file:///elsewhere/");\nrequire("dependency/runtime");\nrequire.resolve("dependency/package.json");\nimport.meta.resolve("other-dependency");`,
       },
       (cwd) => {
         const files = [
           { file: "large.mts", parseImports: true },
+          { file: "unterminated.ts", parseImports: true },
           { file: "deleted.ts", parseImports: true },
         ];
+        const unterminatedFacts = { imports: [], typeOnlyImports: [], matches: [], references: [] };
         const expectedFacts = {
           imports: [
             "./barrel.js",
@@ -5379,6 +5452,7 @@ describe("test selector native source facts", () => {
         };
         for (const file of [
           "scripts/lib/test-selector-source-facts.mts",
+          "scripts/lib/test-source-term-matcher.mts",
           "src/infra/node-runtime-executable.ts",
         ]) {
           const target = path.join(cwd, file);
@@ -5393,10 +5467,12 @@ describe("test selector native source facts", () => {
           cwd,
           input: JSON.stringify({ files, terms: ["scripts/tool.mts", "scripts/tool"] }),
           encoding: "utf8",
+          // A malformed escape must not rewind the scanner's cursor forever.
+          timeout: 5_000,
         });
         expect(native.error).toBeUndefined();
         expect(native.status, native.stderr).toBe(0);
-        expect(JSON.parse(native.stdout)).toEqual([expectedFacts, null]);
+        expect(JSON.parse(native.stdout)).toEqual([expectedFacts, unterminatedFacts, null]);
         vi.stubEnv(
           "NODE_OPTIONS",
           "--import=data:text/javascript,throw%20Error('inherited-loader')",
@@ -5409,7 +5485,10 @@ describe("test selector native source facts", () => {
               ["scripts/tool.mts", "scripts/tool"],
               16 * 1024 * 1024,
             ),
-          ).toEqual([{ file: "large.mts", ...expectedFacts }]);
+          ).toEqual([
+            { file: "large.mts", ...expectedFacts },
+            { file: "unterminated.ts", ...unterminatedFacts },
+          ]);
           expect(
             readTestSelectorSourceFacts(
               cwd,
@@ -5756,7 +5835,9 @@ describe("scripts/test-projects full-suite sharding", () => {
     );
   });
 
-  it("expands untargeted local runs to leaf project configs by default", () => {
+  it("expands untargeted local runs to leaf project configs by default", async () => {
+    const infraConfig = "test/vitest/vitest.infra.config.ts";
+    const infraFiles = await listVitestConfigTestFiles(infraConfig);
     withEnv(
       {
         OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
@@ -5787,6 +5868,16 @@ describe("scripts/test-projects full-suite sharding", () => {
         const toolingPlans = targetedPlans("test/vitest/vitest.tooling.config.ts");
         expect(toolingPlans.length).toBeGreaterThan(1);
         expect(toolingPlans.every((plan) => plan.forwardedArgs.length <= 2)).toBe(true);
+        const infraPlans = plans.filter((plan) => plan.config === infraConfig);
+        expect(infraPlans.length).toBeGreaterThan(1);
+        expect(
+          infraPlans.every(
+            (plan) => plan.forwardedArgs.length > 0 && plan.forwardedArgs.length <= 64,
+          ),
+        ).toBe(true);
+        expect(infraPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
+          [...new Set(infraFiles)].toSorted(),
+        );
         const toolingTargets = toolingPlans.flatMap((plan) => plan.forwardedArgs);
         expect(toolingTargets.filter((file) => file.startsWith("test/fixtures/"))).toEqual([]);
         expect(plans.flatMap((plan) => plan.forwardedArgs)).toEqual(

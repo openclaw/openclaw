@@ -408,14 +408,14 @@ it.each(["transaction", "commit"] as const)(
     const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
     const observer = vi
       .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit) =>
+      .mockImplementation((admit, attachment) =>
         createAdmission((request, grant) => {
           requests.push(request.stage);
           if (request.stage === stage) {
             current = false;
           }
           admit(request, grant);
-        }),
+        }, attachment),
       );
     try {
       await expect(

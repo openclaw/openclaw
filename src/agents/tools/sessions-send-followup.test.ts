@@ -38,7 +38,6 @@ vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
 }));
 vi.mock("../../gateway/session-sharing-preparation.js", () => ({
   prepareSessionMutationFacts: mocks.prepare,
-  SessionMutationFactsUnavailableError: class extends Error {},
 }));
 vi.mock("../../plugins/runtime/gateway-request-scope.js", () => ({
   getPluginRuntimeGatewayRequestScope: () => ({ client: mocks.client() }),
@@ -70,7 +69,8 @@ beforeEach(() => {
     aliases: ["requester"],
     isCurrent: () => true,
   });
-  mocks.capture.mockReturnValue({
+  mocks.capture.mockResolvedValue({
+    assertCurrent: () => {},
     signal: new AbortController().signal,
     release: mocks.release,
     run: (work: () => unknown) => work(),
@@ -100,6 +100,11 @@ beforeEach(() => {
     });
   }
   mocks.prepare.mockImplementation(async ({ sessionKey }: { sessionKey: string }) => ({
+    storageTarget: {
+      agentId: "main",
+      canonicalKey: sessionKey,
+      storePath: "/synthetic/agent.sqlite",
+    },
     readCurrent: () => facts.get(sessionKey),
     release: () => {},
   }));
@@ -143,7 +148,6 @@ describe("followup retained session authorization", () => {
       markAccepted: unexpected,
       finishExecution: unexpected,
       ownsExecution: unexpected,
-      isLive: unexpected,
       activate: unexpected,
       promoteYield: unexpected,
       successor: unexpected,
@@ -160,6 +164,16 @@ describe("followup retained session authorization", () => {
       throw new Error("accepted but transport ACK lost");
     });
     const replyContext = {
+      callGateway,
+      targetSessionKey: input.targetSessionKey,
+      targetAgentId: "main",
+      displayKey: input.targetSessionKey,
+      message: "followup",
+      announceTimeoutMs: 30000,
+      maxPingPongTurns: 0,
+      replyMode: "one-way" as const,
+      requesterSessionKey: input.requesterSessionKey,
+      requesterAgentId: input.requesterAgentId,
       requesterSession: { sessionId: "requester-id", lifecycleRevision: "requester-revision" },
       requesterDeliveryGeneration: {
         agentId: "main",
@@ -235,16 +249,25 @@ describe("followup retained session authorization", () => {
     expect(mocks.capture).not.toHaveBeenCalled();
     expect(mocks.prepare).not.toHaveBeenCalled();
   });
-  it("uses the original operator and current prepared membership, and latches revocation", async () => {
-    const request = await prepare();
-    expect(() => request.custody.assertCurrent()).not.toThrow();
-    target().membership = new Set();
-    sessionChanges.emit({ sessionKey: input.targetSessionKey });
-    expect(request.custody.signal.aborted).toBe(true);
-    target().membership = new Set(["requester"]);
-    sessionChanges.emit({ sessionKey: input.targetSessionKey });
-    expect(() => request.custody.assertCurrent()).toThrow("revoked");
-  });
+  it.each(["canonical", "stored alias"])(
+    "latches original-operator access revocation on the %s key",
+    async (kind) => {
+      const changedKey = kind === "canonical" ? input.targetSessionKey : "legacy-worker-alias";
+      const preparedTarget = target().target;
+      if (!preparedTarget) {
+        throw new Error("Expected target facts");
+      }
+      preparedTarget.storeKeys.push(changedKey);
+      const request = await prepare();
+      expect(() => request.custody.assertCurrent()).not.toThrow();
+      target().membership = new Set();
+      sessionChanges.emit({ sessionKey: changedKey });
+      expect(request.custody.signal.aborted).toBe(true);
+      target().membership = new Set(["requester"]);
+      sessionChanges.emit({ sessionKey: changedKey });
+      expect(() => request.custody.assertCurrent()).toThrow("revoked");
+    },
+  );
   it("rejects an archived or replaced target without using the same key as authority", async () => {
     const request = await prepare();
     const row = target().target;

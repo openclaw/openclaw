@@ -547,6 +547,16 @@ export function collectModuleExportNames(
             namespaceImportsByLocalName,
           );
           if (aliasSource) {
+            if (ts.isIdentifier(constDeclaration.name) && aliasSource.importedName === name) {
+              // Const aliases keep runtime identity even when their declared type narrows.
+              // Retain the edge so real wrappers still resolve through this facade.
+              namedReExports.push({
+                exportedName: name,
+                importedName: aliasSource.importedName,
+                moduleSpecifier: aliasSource.moduleSpecifier,
+              });
+              continue;
+            }
             importedReferences.push(aliasSource);
           }
         }
@@ -687,6 +697,7 @@ const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
       "src/agents/sessions/session-manager-metadata.worker.ts",
       "src/config/sessions/session-accessor.sqlite-transcript-reports.worker.ts",
       "src/config/sessions/session-sharing-store.worker.ts",
+      "src/config/sessions/session-transcript-projection-publication.worker.ts",
       "src/infra/heartbeat-outcome-store.worker.ts",
     ]),
   ],

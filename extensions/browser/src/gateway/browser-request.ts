@@ -3,13 +3,25 @@
  * dispatch and local Browser control route dispatch.
  */
 import crypto from "node:crypto";
+import {
+  ErrorCodes,
+  errorShape,
+  isNodeCommandAllowed,
+  resolveNodeCommandAllowlist,
+  respondUnavailableOnNodeInvokeError,
+  safeParseJson,
+  type GatewayRequestHandlers,
+  type NodeSession,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   asNullableRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
+import { createBrowserControlContext } from "../browser-control-state.js";
 import {
   inspectBrowserDashboard,
   requestBrowserDashboard,
@@ -35,28 +47,18 @@ import {
   prepareBrowserProxyUploadRequest,
 } from "../browser-proxy-upload.js";
 import { applyBrowserTabToolBinding } from "../browser-tool-binding.js";
-import { normalizeBrowserRequestPath } from "../browser/request-policy.js";
-import type { BrowserRequest } from "../browser/routes/types.js";
+import { persistBrowserProxyResultFiles } from "../browser/proxy-files.js";
 import {
-  ErrorCodes,
-  createBrowserControlContext,
-  createBrowserRouteDispatcher,
-  errorShape,
-  getRuntimeConfig,
   isBrowserHostLocalRoute,
-  isNodeCommandAllowed,
   isPersistentBrowserProfileMutation,
-  persistBrowserProxyResultFiles,
-  resolveNodeCommandAllowlist,
+  normalizeBrowserRequestPath,
   resolveRequestedBrowserProfile,
-  respondUnavailableOnNodeInvokeError,
-  safeParseJson,
-  startBrowserControlServiceFromConfig,
-  withTimeout,
-  type GatewayRequestHandlers,
-  type NodeSession,
-} from "../core-api.js";
+} from "../browser/request-policy.js";
+import { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
+import type { BrowserRequest } from "../browser/routes/types.js";
+import { startBrowserControlServiceFromConfig } from "../control-service.js";
 import { describeBrowserControlUnavailable } from "../plugin-enabled.js";
+import { withTimeout } from "../sdk-node-runtime.js";
 
 const logger = createSubsystemLogger("browser");
 const dashboardRequestSchema = z.object({

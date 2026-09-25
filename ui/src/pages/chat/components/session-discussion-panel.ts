@@ -265,17 +265,15 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
       return nothing;
     }
     if (info.state === "available") {
-      return this.canOpen
-        ? renderPanelEmptyState({
-            icon: icons.messageSquare,
-            heading: t("chat.sidePanel.discussion"),
-            description: t("chat.sessionDiscussion.unavailable"),
-          })
-        : renderPanelEmptyState({
-            icon: icons.messageSquare,
-            heading: t("chat.sidePanel.discussion"),
-            description: t("chat.sessionDiscussion.requiresWriteAccess"),
-          });
+      return renderPanelEmptyState({
+        icon: icons.messageSquare,
+        heading: t("chat.sidePanel.discussion"),
+        description: t(
+          this.canOpen
+            ? "chat.sessionDiscussion.unavailable"
+            : "chat.sessionDiscussion.requiresWriteAccess",
+        ),
+      });
     }
     return this.renderOpen(info);
   }

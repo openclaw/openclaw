@@ -402,6 +402,16 @@ continuation records that result without rewriting the earlier turn's snapshot.
 The existing unknown-outcome audit diagnostic remains; cancellation and a
 command with no confirmed live owner retain their failure handling.
 
+These retained commands also appear in **Tasks**, where you can follow completion
+or stop an individual command. The task follows the native process after the
+foreground turn ends; its final status does not rewrite the earlier tool row.
+A known nonzero exit reports **Command failed**, even if a Stop request races
+with completion. A confirmed Stop with no native exit result reports **Command
+stopped**; this records the acknowledged request without attributing the exit to
+a particular signal. Task updates do not automatically start another model
+turn. If the native connection is lost before completion is confirmed, the task
+reports an unknown outcome instead of success.
+
 Stopping an active Codex run interrupts its turn. With the OpenClaw sandbox
 exec-server, cleanup stops the concrete processes admitted by that turn and
 preserves independent background work in the same reused thread. Each process

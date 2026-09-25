@@ -264,6 +264,128 @@ describe("mock server readiness diagnostics", () => {
 });
 
 describe("mock OpenAI response markers", () => {
+  it.each([false, true])(
+    "drives one Telegram topic spawn and current-turn acknowledgments (stream=%s)",
+    async (stream) => {
+      await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+        const run = "topic-proof";
+        const user = (text: string) => ({ role: "user", content: [{ type: "input_text", text }] });
+        const create = user(`TELEGRAM_BINDING_SPAWN_${run}`);
+        const tools = [
+          { type: "function", name: "sessions_spawn", parameters: { type: "object" } },
+        ];
+        const context = user(
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nRuntime facts.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        );
+        const request = async (input: unknown[], declaredTools: unknown[] = tools) => {
+          const response = await fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ model: "fixture-agent", input, tools: declaredTools, stream }),
+          });
+          expect(response.status).toBe(200);
+          if (!stream) {
+            return (await response.json()).output;
+          }
+          const events = (await response.text())
+            .split("\n\n")
+            .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+            .map((line) => JSON.parse(line.slice(6)));
+          return events.find((event) => event.type === "response.completed").response.output;
+        };
+        const expectText = (output: unknown, text: string) => {
+          expect(output).toEqual([
+            expect.objectContaining({
+              type: "message",
+              content: [{ type: "output_text", text, annotations: [] }],
+            }),
+          ]);
+        };
+
+        // Utility traffic must not consume the spawn slot.
+        expectText(await request([user("ordinary startup request")]), "OPENCLAW_E2E_OK");
+        const first = await request([create, context]);
+        expect(first).toHaveLength(1);
+        const call = first[0];
+        expect(call).toMatchObject({ type: "function_call", name: "sessions_spawn" });
+        const args = JSON.parse(call.arguments);
+        expect(args).toEqual({
+          task: `TELEGRAM_BINDING_CHILD_${run}. Reply with the child fixture acknowledgment.`,
+          taskName: `telegram-binding-${run}`,
+          runtime: "subagent",
+          thread: true,
+          mode: "session",
+          cleanup: "keep",
+          context: "isolated",
+        });
+        expectText(await request([create]), `TELEGRAM_BINDING_WAITING_${run}`);
+
+        const receipt = {
+          type: "function_call_output",
+          call_id: call.call_id,
+          output: JSON.stringify({
+            status: "accepted",
+            childSessionKey: "agent:main:subagent:synthetic-child",
+            taskName: args.taskName,
+            mode: "session",
+          }),
+        };
+        const completed = [create, call, receipt, context];
+        expectText(await request(completed), `TELEGRAM_BINDING_ACK_PARENT_${run}`);
+        expectText(
+          await request([create, call, { ...receipt, call_id: "unrelated" }]),
+          `TELEGRAM_BINDING_WAITING_${run}`,
+        );
+        expectText(
+          await request([create, call, { ...receipt, output: '{"status":"error"}' }]),
+          `TELEGRAM_BINDING_FAIL_SPAWN_${run}`,
+        );
+
+        // Child tasks and follow-ups may carry parent history and still expose spawn.
+        for (const phase of ["CHILD", "BEFORE", "AFTER"]) {
+          expectText(
+            await request([...completed, user(`TELEGRAM_BINDING_${phase}_${run}`), context]),
+            `TELEGRAM_BINDING_ACK_${phase}_${run}`,
+          );
+        }
+        expectText(
+          await request([...completed, user("ordinary later request")]),
+          "OPENCLAW_E2E_OK",
+        );
+        expectText(
+          await request([
+            user(
+              [
+                "[Chat messages since your last reply - for context]",
+                `TELEGRAM_BINDING_SPAWN_${run}`,
+                "",
+                "[Current message - respond to this]",
+                "ordinary latest message",
+              ].join("\n"),
+            ),
+          ]),
+          "OPENCLAW_E2E_OK",
+        );
+        expectText(
+          await request([user(`TELEGRAM_BINDING_SPAWN_${run} TELEGRAM_BINDING_CHILD_${run}`)]),
+          "TELEGRAM_BINDING_FAIL_AMBIGUOUS_MARKER",
+        );
+
+        // An old successful receipt cannot acknowledge or suppress a distinct new turn.
+        expectText(
+          await request([user("TELEGRAM_BINDING_SPAWN_second-proof")], []),
+          "TELEGRAM_BINDING_FAIL_TOOL_NOT_DECLARED_second-proof",
+        );
+        const next = await request([...completed, user("TELEGRAM_BINDING_SPAWN_second-proof")]);
+        expect(next).toHaveLength(1);
+        expect(next[0]).toMatchObject({ type: "function_call", name: "sessions_spawn" });
+        expect(JSON.parse(next[0].arguments).taskName).toBe("telegram-binding-second-proof");
+        const health = await (await fetch(`${baseUrl}/health`)).json();
+        expect(health.requests.selections.automaticTool).toBe(2);
+      });
+    },
+  );
+
   it.concurrent.for(
     [
       { api: "responses", stream: false },
@@ -398,7 +520,7 @@ describe("mock OpenAI response markers", () => {
               name: call.name,
               arguments: args,
             });
-            taskExpect(args.command).toBe("sleep 3 && echo openclaw-draft-proof");
+            taskExpect(args.command).toBe("sleep 2 && echo openclaw-draft-proof");
             let toolOutput = "openclaw-draft-proof\n";
             // The command is POSIX shell syntax; Windows still covers HTTP and native validation.
             if (process.platform !== "win32") {
@@ -412,7 +534,7 @@ describe("mock OpenAI response markers", () => {
               taskExpect(execution.child.exitCode, result.stderr).toBe(0);
               taskExpect(execution.child.signalCode).toBeNull();
               taskExpect(result.stdout).toBe(toolOutput);
-              taskExpect(performance.now() - startedAt).toBeGreaterThanOrEqual(2_900);
+              taskExpect(performance.now() - startedAt).toBeGreaterThanOrEqual(1_900);
               toolOutput = result.stdout;
             }
 

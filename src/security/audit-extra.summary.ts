@@ -23,15 +23,7 @@ import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credenti
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { listPotentialMultiUserSignals } from "./audit-extra.sync.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
-
-/** Lightweight audit finding shape used by summary-only audit helpers. */
-type SecurityAuditFinding = {
-  checkId: string;
-  severity: "info" | "warn" | "critical";
-  title: string;
-  detail: string;
-  remediation?: string;
-};
+import type { SecurityAuditFinding } from "./audit.types.js";
 
 const SMALL_MODEL_PARAM_B_MAX = 300;
 
@@ -96,14 +88,6 @@ function resolveToolPolicies(params: {
   });
 }
 
-function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  return hasConfiguredWebSearchCredential({
-    config: cfg,
-    env,
-    origin: "bundled",
-  });
-}
-
 function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   const enabled = cfg.tools?.web?.search?.enabled;
   if (enabled === false) {
@@ -112,15 +96,7 @@ function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolea
   if (enabled === true) {
     return true;
   }
-  return hasWebSearchKey(cfg, env);
-}
-
-function isWebFetchEnabled(cfg: OpenClawConfig): boolean {
-  const enabled = cfg.tools?.web?.fetch?.enabled;
-  if (enabled === false) {
-    return false;
-  }
-  return true;
+  return hasConfiguredWebSearchCredential({ config: cfg, env, origin: "bundled" });
 }
 
 function isBrowserEnabled(cfg: OpenClawConfig): boolean {
@@ -305,7 +281,10 @@ export function collectSmallModelRiskFindings(params: {
     ) {
       exposed.push("web_search");
     }
-    if (isWebFetchEnabled(params.cfg) && isToolAllowedByPolicies("web_fetch", policies)) {
+    if (
+      params.cfg.tools?.web?.fetch?.enabled !== false &&
+      isToolAllowedByPolicies("web_fetch", policies)
+    ) {
       exposed.push("web_fetch");
     }
     if (isBrowserEnabled(params.cfg) && isToolAllowedByPolicies("browser", policies)) {

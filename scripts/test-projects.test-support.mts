@@ -48,6 +48,7 @@ import {
 } from "../test/vitest/vitest.gateway-server-paths.mjs";
 import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
 import { packageContractTestFiles } from "../test/vitest/vitest.package-contract-paths.mjs";
+import { isSharedVitestExcludedPath } from "../test/vitest/vitest.pattern-file.ts";
 import {
   isPluginSdkLightTarget,
   pluginSdkLightTestFiles,
@@ -66,6 +67,7 @@ import {
   isControlUiSourcePath,
   isPluginControlUiPath,
   isUiBrowserTestFile,
+  uiE2eRealGatewayTestFiles,
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
 import {
@@ -184,6 +186,7 @@ type CacheAssignedSpec<T> = Omit<T, "env"> & {
 };
 type WatchableVitestSpecShape = VitestSpecShape & Pick<VitestRunSpec, "watchMode">;
 type ImportGraph = {
+  files: readonly string[];
   reverseImports: Map<string, string[]>;
   testFiles: Set<string>;
 };
@@ -476,6 +479,7 @@ const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
 ]);
 const BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE = 60;
 const FULL_SUITE_AGENTS_CORE_TEST_TARGET_CHUNK_COUNT = 6;
+const FULL_SUITE_INFRA_TEST_TARGET_CHUNK_SIZE = 64;
 const FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE = 2;
 const FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE = 70;
 const FULL_SUITE_UNIT_SRC_TEST_TARGET_CHUNK_SIZE = 150;
@@ -1114,6 +1118,21 @@ function listAgentsCoreFullSuiteTestTargets(cwd: string) {
     .filter((entry) => entry.isFile() && entry.name.endsWith(".test.ts"))
     .map((entry) => `src/agents/${entry.name}`)
     .filter((file) => !isolatedTests.has(file))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function listInfraFullSuiteTestTargets(cwd: string) {
+  const infraDir = path.join(cwd, "src/infra");
+  return uniqueOrdered([
+    ...(fs.existsSync(infraDir) ? listRepoFilesRecursive(infraDir, cwd) : []),
+    ...databaseWorkerCoreTestFiles.filter((file) => fs.existsSync(path.join(cwd, file))),
+  ])
+    .filter(
+      (file) =>
+        file.endsWith(".test.ts") &&
+        !isSharedVitestExcludedPath(file) &&
+        classifyTarget(file, cwd) === "infra",
+    )
     .toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -2158,6 +2177,17 @@ export function hasImportGraphConsumers(
     }
     termsByFile.set(file, [...new Set([...terms, ...aliasTerms])]);
   }
+  const cached = cachedImportGraphs.get(importGraphCacheKey(cwd, options));
+  if (
+    cached?.additionalPaths === "" &&
+    cached.graph.files.length === tracked.length &&
+    cached.graph.files.every((file, index) => file === tracked[index]) &&
+    changedPaths.every((file) => fs.existsSync(path.join(cwd, file)))
+  ) {
+    return changedPaths.some((file) =>
+      cached.graph.reverseImports.get(file)?.some((importer) => importer !== file),
+    );
+  }
   const terms = [...termsByFile.values()].flat();
   const matches = listImportGraphGrepMatches(cwd, terms, options);
   return changedPaths.some((file) => {
@@ -2274,7 +2304,7 @@ function getImportGraph(
     }
   }
 
-  const graph = { reverseImports, testFiles };
+  const graph = { files, reverseImports, testFiles };
   cachedImportGraphs.set(cacheKey, { graph, additionalPaths: missingKey });
   return graph;
 }
@@ -2343,17 +2373,9 @@ export function resolveAffectedTestsFromImportGraph(
   options: ImportGraphOptions & { forceFull?: boolean } = {},
 ) {
   const paths = typeof changedPath === "string" ? [changedPath] : changedPath;
-  const cached =
-    options.forceFull === true
-      ? cachedImportGraphs.get(importGraphCacheKey(cwd, options))
-      : undefined;
-  // Reuse the same complete traversal; cold and missing tests retain their precheck.
-  const cachedTests =
-    cached?.additionalPaths === "" &&
-    paths.every((file) => cached.graph.testFiles.has(file) && fs.existsSync(path.join(cwd, file)));
   if (
     !paths.length ||
-    (!cachedTests && paths.every(isTestFileTarget) && !hasImportGraphConsumers(paths, cwd, options))
+    (paths.every(isTestFileTarget) && !hasImportGraphConsumers(paths, cwd, options))
   ) {
     return [];
   }
@@ -2499,6 +2521,7 @@ function isVitestConfigTargetForKind(kind: string, targetArg: string, cwd: strin
 
 function isControlUiE2eTarget(relative: string) {
   return (
+    uiE2eRealGatewayTestFiles.includes(relative) ||
     relative === "ui/src/test-helpers/control-ui-e2e.ts" ||
     relative === "ui/src/e2e" ||
     relative.startsWith("ui/src/e2e/") ||
@@ -2885,6 +2908,8 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [
     "scripts/e2e/lib/upgrade-survivor/run.sh",
     [
+      packageAcceptance,
+      "upgrade-survivor-missing-load-path",
       "upgrade-survivor-assertions",
       "upgrade-survivor-mobile-pairing",
       "upgrade-survivor-recovery-cleanup",
@@ -3316,7 +3341,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [
     /^scripts\/lib\/build-metadata\.sh$/u,
     [
-      "src/docker-setup.e2e.test.ts",
+      "test/scripts/docker-setup.test.ts",
       "apple-release-source-check",
       "ios-version",
       "package-mac-app",
@@ -4963,6 +4988,13 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
           const targets = listUnitSrcFullSuiteTestTargets(cwd);
           const chunkCount = Math.ceil(targets.length / FULL_SUITE_UNIT_SRC_TEST_TARGET_CHUNK_SIZE);
           chunks = splitTargetChunks(targets, chunkCount);
+        } else if (config === INFRA_VITEST_CONFIG) {
+          // Isolated infra files can share the scheduler without sharing fork state.
+          const targets = listInfraFullSuiteTestTargets(cwd);
+          chunks = splitTargetChunks(
+            targets,
+            Math.ceil(targets.length / FULL_SUITE_INFRA_TEST_TARGET_CHUNK_SIZE),
+          );
         } else if (config === TOOLING_VITEST_CONFIG) {
           // Tooling tests spawn package managers and native helpers. Keep native
           // process lifetime short enough that unrelated files cannot crash together.

@@ -5,10 +5,7 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  asNonArrayRecord as asParamRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isGoogleMeetBrowserManualActionError } from "./browser-manual-action-error.js";
 import {
   resolveGoogleMeetGatewayOperationTimeoutMs,
@@ -18,8 +15,6 @@ import {
 } from "./config.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./transports/google-meet-platform-constants.js";
-
-export { asParamRecord };
 
 export const loadGoogleMeetPluginHelpers = createLazyRuntimeModule(
   () => import("./plugin-helpers.js"),

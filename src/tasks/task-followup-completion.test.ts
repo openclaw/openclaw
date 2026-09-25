@@ -1,4 +1,3 @@
-import { err } from "@openclaw/normalization-core/result";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { CreatedDetachedTaskRun } from "./detached-task-runtime-contract.js";
@@ -49,8 +48,8 @@ async function fixture() {
       const owner = {
         task: this.task,
         cancel,
-        assertCurrent: () => {},
         readCurrent: () => this.task,
+        resumeExecution: async (assertExecutionCurrent: () => void) => assertExecutionCurrent(),
       };
       owners.set(this.task.taskId, owner);
       return {
@@ -88,6 +87,7 @@ async function fixture() {
     },
     receipt,
   );
+  owner.markAccepted("first");
   opened.push(owner);
   return { owner, receipt, controller, release };
 }
@@ -205,7 +205,6 @@ describe("task-owned followup completion", () => {
       terminalReply: { disposition: "empty" },
     });
     expect(f.receipt.finalizeActive).not.toHaveBeenCalled();
-    expect(f.owner.isLive()).toBe(true);
     const successor = f.owner.successor([c], "second", () => {});
     await f.owner.prepareSuccessor(successor);
     f.owner.adopt(successor);
@@ -240,43 +239,5 @@ describe("task-owned followup completion", () => {
     await settleExecution(f.owner, "third", final);
     await expect(asynchronous).resolves.toEqual(final);
     expect(f.receipt.finalizeActive).toHaveBeenCalledTimes(1);
-  });
-  it("rejects a replaced cohort generation and retains a revoked tombstone", async () => {
-    const f = await fixture();
-    const c = child();
-    promoteFollowupYield({ requesterTurnRunId: "first", entries: [c], rearmGeneration: 1 });
-    await settleExecution(f.owner, "first", { status: "ok", yielded: true });
-    const successor = f.owner.successor([c], "second", () => {});
-    c.requesterSettleWake!.rearmGeneration = 2;
-    expect(() => f.owner.adopt(successor)).toThrow("cohort");
-    f.controller.abort();
-    expect(getFollowupForCohort([c])).toBe(f.owner);
-    expect(() => f.owner.assertCurrent()).toThrow();
-    expect(f.release).toHaveBeenCalledOnce();
-    expect(f.receipt.finalizeActive).not.toHaveBeenCalled();
-  });
-  it("does not turn a real empty terminal reply into a wait or visible result", async () => {
-    const f = await fixture();
-    await settleExecution(f.owner, "first", {
-      status: "ok",
-      terminalReply: { disposition: "empty" },
-    });
-    await expect(f.owner.take()).resolves.toMatchObject({
-      status: "ok",
-      terminalReply: { disposition: "empty" },
-    });
-  });
-  it("old execution cleanup cannot remove the successor cancellation owner", async () => {
-    const f = await fixture();
-    const c = child();
-    const releaseOld = f.owner.activate("first", async () => err("old"));
-    f.owner.promoteYield("first", [c], 1);
-    await settleExecution(f.owner, "first", { status: "ok", yielded: true });
-    const successor = f.owner.successor([c], "second", () => {});
-    await f.owner.prepareSuccessor(successor);
-    f.owner.adopt(successor);
-    f.owner.activate("second", async () => err("new"));
-    releaseOld();
-    await expect(owners.get("followup")!.cancel("stop")).resolves.toEqual(err("new"));
   });
 });

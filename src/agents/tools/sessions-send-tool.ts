@@ -97,6 +97,15 @@ const log = createSubsystemLogger("agents/sessions-send");
 type GatewayCaller = AgentToolGatewayRequestCaller;
 const NO_REPLY_MESSAGE = "No visible reply or pending announcement. Continue or retry if needed.";
 
+function sendFailure(status: "error" | "forbidden", error: string, sessionKey?: string) {
+  return jsonResult({
+    runId: crypto.randomUUID(),
+    status,
+    error,
+    ...(sessionKey !== undefined ? { sessionKey } : {}),
+  });
+}
+
 function resolveConfiguredAgentMainSessionKey(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -212,11 +221,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       const resumeCaller =
         mode === undefined || mode === "resume" ? captureSessionsSendResumeCaller() : undefined;
       if (mode === "resume" && !resumeCaller) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "forbidden",
-          error: "Task resume requires an admitted parent tool caller.",
-        });
+        return sendFailure("forbidden", "Task resume requires an admitted parent tool caller.");
       }
       if (
         mode === "resume" &&
@@ -248,11 +253,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           agentId: opts?.agentId,
         });
       } catch (err) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "forbidden",
-          error: formatErrorMessage(err),
-        });
+        return sendFailure("forbidden", formatErrorMessage(err));
       }
 
       const sessionKeyParam = readToolStringParam(params, "sessionKey");
@@ -261,11 +262,10 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       const normalizedLabelAgentId =
         labelAgentIdInput === undefined ? null : normalizeAgentIdStrict(labelAgentIdInput);
       if (normalizedLabelAgentId && !normalizedLabelAgentId.ok) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "error",
-          error: `Agent "${labelAgentIdInput}" not found. Run openclaw agents list to see configured agents.`,
-        });
+        return sendFailure(
+          "error",
+          `Agent "${labelAgentIdInput}" not found. Run openclaw agents list to see configured agents.`,
+        );
       }
       const explicitTargetAgentId = normalizedLabelAgentId?.value;
 
@@ -279,11 +279,10 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           mainKey,
         });
         if (!agentMainKey) {
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "error",
-            error: `Agent "${labelAgentIdInput}" not found. Run openclaw agents list to see configured agents.`,
-          });
+          return sendFailure(
+            "error",
+            `Agent "${labelAgentIdInput}" not found. Run openclaw agents list to see configured agents.`,
+          );
         }
         sessionKey = agentMainKey;
       }
@@ -291,28 +290,24 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         const requestedAgentId = explicitTargetAgentId;
 
         if (restrictToSpawned && requestedAgentId && requestedAgentId !== requesterAgentId) {
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "forbidden",
-            error: "Sandboxed sessions_send label lookup is limited to this agent",
-          });
+          return sendFailure(
+            "forbidden",
+            "Sandboxed sessions_send label lookup is limited to this agent",
+          );
         }
 
         if (requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId) {
           if (!a2aPolicy.enabled) {
-            return jsonResult({
-              runId: crypto.randomUUID(),
-              status: "forbidden",
-              error:
-                "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
-            });
+            return sendFailure(
+              "forbidden",
+              "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+            );
           }
           if (!a2aPolicy.isAllowed(requesterAgentId, requestedAgentId)) {
-            return jsonResult({
-              runId: crypto.randomUUID(),
-              status: "forbidden",
-              error: "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
-            });
+            return sendFailure(
+              "forbidden",
+              "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
+            );
           }
         }
 
@@ -339,40 +334,30 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               requesterSessionKey: effectiveRequesterKey,
               failure,
             });
-            return jsonResult({
-              runId: crypto.randomUUID(),
-              status: restrictToSpawned ? "forbidden" : "error",
-              error: restrictToSpawned
+            return sendFailure(
+              restrictToSpawned ? "forbidden" : "error",
+              restrictToSpawned
                 ? lookupFailedDenialMessage("send", failure.kind)
                 : lookupFailedOperationMessage("send", failure.kind),
-            });
+            );
           }
         }
 
         if (!resolvedKey) {
           if (restrictToSpawned) {
-            return jsonResult({
-              runId: crypto.randomUUID(),
-              status: "forbidden",
-              error: "Session not visible from this sandboxed agent session.",
-            });
+            return sendFailure(
+              "forbidden",
+              "Session not visible from this sandboxed agent session.",
+            );
           }
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "error",
-            error: `No session found with label: ${labelParam}`,
-          });
+          return sendFailure("error", `No session found with label: ${labelParam}`);
         }
         sessionKey = resolvedKey;
         resolvedLabelKey = resolvedKey;
       }
 
       if (!sessionKey) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "error",
-          error: "Either sessionKey or label is required",
-        });
+        return sendFailure("error", "Either sessionKey or label is required");
       }
       const allowMissingKey = isConfiguredAgentMainSessionKey({
         cfg,
@@ -399,11 +384,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             callGateway: gatewayCall,
           });
       if (!resolvedSession.ok) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: resolvedSession.status,
-          error: resolvedSession.error,
-        });
+        return sendFailure(resolvedSession.status, resolvedSession.error);
       }
       const resolutionAccess = createSessionVisibilityRowChecker({
         action: "send",
@@ -429,12 +410,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       });
       const unresolvedDisplayKey = sessionKey;
       if (!visibleSession.ok) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: visibleSession.status,
-          error: visibleSession.error,
-          sessionKey: unresolvedDisplayKey,
-        });
+        return sendFailure(visibleSession.status, visibleSession.error, unresolvedDisplayKey);
       }
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
@@ -456,12 +432,11 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         (isUnscopedSessionKeySentinel(sessionKeyParam.trim()) ||
           sessionKeyParam.trim().toLowerCase() === mainKey);
       if (persistedTargetOwner.kind === "retired") {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "forbidden",
-          error: "Session ownership could not be verified because its fixed-store owner retired.",
-          sessionKey: unresolvedDisplayKey,
-        });
+        return sendFailure(
+          "forbidden",
+          "Session ownership could not be verified because its fixed-store owner retired.",
+          unresolvedDisplayKey,
+        );
       }
       const resolvedTargetOwner =
         visibleSession.agentId ??
@@ -472,12 +447,11 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         resolvedTargetOwner &&
         normalizeAgentId(resolvedTargetOwner) !== persistedTargetOwner.agentId
       ) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "forbidden",
-          error: `Session belongs to agent "${persistedTargetOwner.agentId}", not "${normalizeAgentId(resolvedTargetOwner)}".`,
-          sessionKey: unresolvedDisplayKey,
-        });
+        return sendFailure(
+          "forbidden",
+          `Session belongs to agent "${persistedTargetOwner.agentId}", not "${normalizeAgentId(resolvedTargetOwner)}".`,
+          unresolvedDisplayKey,
+        );
       }
       const targetAgentId =
         (persistedTargetOwner.kind === "configured" ? persistedTargetOwner.agentId : undefined) ??
@@ -486,13 +460,11 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         (isLiteralUnscopedMainTarget ? requesterAgentId : undefined) ??
         compatibilityTargetAgentId;
       if (!targetAgentId) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "forbidden",
-          error:
-            "Session ownership could not be verified. Upgrade the gateway or use an agent-prefixed session key.",
-          sessionKey: unresolvedDisplayKey,
-        });
+        return sendFailure(
+          "forbidden",
+          "Session ownership could not be verified. Upgrade the gateway or use an agent-prefixed session key.",
+          unresolvedDisplayKey,
+        );
       }
       const mayUseRequesterForLiteralSentinel =
         isLiteralUnscopedMainTarget && normalizeAgentId(targetAgentId) === requesterAgentId;
@@ -654,13 +626,11 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         });
       }
       if (parseSessionThreadInfo(resolvedKey).threadId) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "error",
-          error:
-            "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.",
-          sessionKey: unresolvedDisplayKey,
-        });
+        return sendFailure(
+          "error",
+          "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.",
+          unresolvedDisplayKey,
+        );
       }
       const authorizationTargetKey = mayUseRequesterForLiteralSentinel
         ? effectiveRequesterKey
@@ -681,15 +651,14 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         callGateway: gatewayCall,
       });
       if (!access.allowed) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: access.status,
-          error: formatSessionToolAccessDenial(access, {
+        return sendFailure(
+          access.status,
+          formatSessionToolAccessDenial(access, {
             action: "send",
             targetSessionKey: unresolvedDisplayKey,
           }),
-          sessionKey: unresolvedDisplayKey,
-        });
+          unresolvedDisplayKey,
+        );
       }
       const expectedSessionId = opts?.expectedTargetSessionId ?? access.expectedSessionId;
       if (mode === "notify" && expectedSessionId) {
@@ -728,12 +697,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               useTrustedInProcessCreation: opts?.callGateway === undefined,
             });
             if (!createdSession.ok) {
-              return jsonResult({
-                runId: crypto.randomUUID(),
-                status: "error",
-                error: createdSession.error,
-                sessionKey: displayKey,
-              });
+              return sendFailure("error", createdSession.error, displayKey);
             }
           }
 
@@ -875,6 +839,8 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             replyMode === "one-way" &&
             mode !== "steer" &&
             targetSessionEntry?.spawnedBy === effectiveRequesterKey &&
+            // Key-only DM rerouting keeps its run-scoped contract, not new authority for another key.
+            replyRequesterSessionKey === effectiveRequesterKey &&
             replyRequesterSessionKey
               ? await prepareSessionsSendFollowup({
                   runId,
@@ -884,6 +850,22 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                   targetSessionKey: resolvedKey,
                 })
               : undefined;
+          const replyContext: Parameters<typeof startSessionsSendFollowup>[2] = {
+            callGateway: gatewayCall,
+            targetSessionKey: resolvedKey,
+            targetAgentId,
+            displayKey,
+            message,
+            announceTimeoutMs,
+            maxPingPongTurns: isIsolatedCronRequester ? 0 : 5,
+            replyMode,
+            requesterSessionKey: replyRequesterSessionKey,
+            requesterAgentId,
+            requesterSession: requesterContinuationSession,
+            requesterDeliveryGeneration,
+            requesterOrigin,
+            requesterChannel,
+          };
           const { start, completion } = await startSessionsSendFollowup(
             followup,
             {
@@ -907,12 +889,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                   }
                 : {}),
             },
-            {
-              requesterSession: requesterContinuationSession,
-              requesterDeliveryGeneration,
-              requesterOrigin,
-              requesterChannel,
-            },
+            replyContext,
           );
           if (!start.ok) {
             return start.result;
@@ -972,24 +949,13 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             notifyRequesterOnWaitFailure?: boolean;
           }) =>
             startSessionsSendReplyFlow({
+              ...replyContext,
               runId,
               completion,
               reply,
               skip: (reply ? delivery : delayedDelivery).status === "skipped",
-              callGateway: gatewayCall,
               targetSessionKey: acceptedTargetSessionKey,
-              targetAgentId,
               displayKey: start.a2aSessionKey ?? displayKey,
-              message,
-              announceTimeoutMs,
-              maxPingPongTurns: isIsolatedCronRequester ? 0 : 5,
-              replyMode,
-              requesterSessionKey: replyRequesterSessionKey,
-              requesterAgentId,
-              requesterSession: requesterContinuationSession,
-              requesterDeliveryGeneration,
-              requesterOrigin,
-              requesterChannel,
               notifyRequesterOnWaitFailure:
                 notifyRequesterOnWaitFailure && !isIsolatedCronRequester,
             });
@@ -1045,20 +1011,14 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 ...watchField,
               });
             }
-            return jsonResult({
-              runId,
-              status: "timeout",
-              error: result.error ?? "agent run timed out",
-              sentBeforeError: true,
-              sessionKey: displayKey,
-              ...watchField,
-            });
           }
-          if (result.status === "error") {
+          if (result.status === "timeout" || result.status === "error") {
             return jsonResult({
               runId,
-              status: "error",
-              error: result.error ?? "agent error",
+              status: result.status,
+              error:
+                result.error ??
+                (result.status === "timeout" ? "agent run timed out" : "agent error"),
               sentBeforeError: true,
               sessionKey: displayKey,
               ...watchField,

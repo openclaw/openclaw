@@ -122,9 +122,7 @@ function resolveGatewayAuthRequestContext(
     attributed?.clientIp ??
     resolveRequestClientIpFromHeaders(req, trustedProxies, params.allowRealIpFallback === true) ??
     req?.socket?.remoteAddress;
-  const localDirect = attributed
-    ? attributed.kind === "direct-local"
-    : isLocalDirectRequest(req, trustedProxies, params.allowRealIpFallback === true);
+  const localDirect = attributed ? attributed.kind === "direct-local" : isLocalDirectRequest(req);
 
   return {
     authSurface,

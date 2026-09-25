@@ -27,6 +27,7 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
     assertCurrent: () => void;
   };
   publish: (outcome: CronRuntimeMutationContracts[Type]["outcome"]) => void;
+  onSettled?: (outcome: "committed" | "not-committed" | "unknown") => void;
 }): Promise<void> {
   const nonce = randomUUID();
   let settlement: Promise<SqliteWorkerOperationSettlement> | undefined;
@@ -121,8 +122,20 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
       throw new Error("Cron mutation did not publish a committed outcome");
     }
   } finally {
-    await settlement;
-    publishCommitted();
-    bytes = undefined;
+    const settled = await settlement;
+    try {
+      publishCommitted();
+    } finally {
+      params.onSettled?.(
+        native?.committed
+          ? "committed"
+          : settled === undefined ||
+              settled.kind === "not-entered" ||
+              native?.settlement?.kind === "completed"
+            ? "not-committed"
+            : "unknown",
+      );
+      bytes = undefined;
+    }
   }
 }

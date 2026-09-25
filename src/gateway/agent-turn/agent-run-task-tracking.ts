@@ -166,6 +166,13 @@ export async function settleUnstartedGatewayAgentTask(params: {
             }
           },
         );
+      } else if (
+        !tracking.completion.accepted &&
+        tracking.completion.request.runId === params.runId
+      ) {
+        // Revocation closes execution custody, not the original creation receipt's cleanup obligation.
+        // A rejected successor must never use this to terminalize its paused predecessor.
+        await tracking.settleUnstarted(terminal, canSettle);
       }
       tracking.completion.finishExecution(params.runId);
     } else if (tracking.kind === "receipt") {
@@ -255,6 +262,7 @@ export async function prepareAgentRunTaskTracking(params: {
     try {
       params.assertResumeAdmissionCurrent();
       await registerPluginSubagentRunFromGateway({
+        assertAdmissionCurrent: params.assertResumeAdmissionCurrent,
         cfg: params.cfg,
         runId: params.runId,
         childSessionKey: params.resolvedSessionKey,
