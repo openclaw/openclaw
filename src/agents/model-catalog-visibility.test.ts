@@ -44,6 +44,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       "model-000",
       "model-001",
     ]);
+    expect(result).toHaveLength(300);
     expect(new Set(result.map((entry) => entry.id))).toEqual(
       new Set(catalog.map((entry) => entry.id)),
     );
