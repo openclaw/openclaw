@@ -13,7 +13,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome, isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
 import { createUpdateCommandAuthority } from "./update-command-authority.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
-import { restoreFailedUpdateDatabases } from "./update-command-database-backup.js";
 import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { parkForegroundUpdateForActivation } from "./update-command-handoff.js";
@@ -174,36 +173,13 @@ export async function finishUpdate(
       !isUpdateGatewayReadinessPending(result)
     ) {
       rollbackAttempted = true;
-      if (
-        beganSuccessfully &&
-        !gatewayStartAttempted &&
-        params.databaseBackup &&
-        params.packageTransaction &&
-        params.opts.run
-      ) {
-        try {
-          const restored = await restoreFailedUpdateDatabases({
-            backup: params.databaseBackup,
-            result,
-            runId: params.opts.run.runId,
-            env: params.ownedManagedUpdateEnv ?? params.opts.run.env,
-            assertCurrent: fence,
-          });
-          if (!restored) {
-            params.rollbackBlockedReason = "state-migrated-no-rollback";
-          }
-        } catch (cause) {
-          // A partial restore must not reopen the ledger through ordinary failure reporting.
-          throw new UpdateCommandPendingRecoveryFailure(result, formatErrorMessage(cause), {
-            cause,
-          });
-        }
-      }
       const rollback = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, () =>
         rollbackFailedUpdate({
           result,
           previousRoot: params.root,
           packageTransaction: params.packageTransaction,
+          databaseBackup:
+            beganSuccessfully && !gatewayStartAttempted ? params.databaseBackup : undefined,
           rollbackBlockedReason: params.rollbackBlockedReason,
           schemaVersions: params.schemaVersions,
           candidateSchemaVersions: params.candidateSchemaVersions,
