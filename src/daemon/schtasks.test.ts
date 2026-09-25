@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
+import { mockProcessPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
+import { resolveStartupEntryPaths } from "./schtasks-layout.js";
 import {
   isScheduledTaskDefinitelyNotRunning,
   isScheduledTaskEnabled,
@@ -15,6 +17,11 @@ import {
   readScheduledTaskRuntime,
   resolveTaskScriptPath,
 } from "./schtasks.js";
+import {
+  readGatewayServiceLoadState,
+  readGatewayServiceState,
+  resolveGatewayService,
+} from "./service.js";
 
 const schtasksResponses = vi.hoisted(
   (): Array<{ code: number; stdout: string; stderr: string }> => [],
@@ -51,6 +58,75 @@ beforeEach(() => {
   spawnSync.mockReset();
   resolveWindowsOemEncodingMock.mockReset();
   resolveWindowsOemEncodingMock.mockReturnValue(null);
+});
+
+describe("Windows startup-entry inspection", () => {
+  const env = { USERPROFILE: "C:\\Users\\fixture", OPENCLAW_PROFILE: "default" };
+
+  it.each(["EACCES", "EPERM", "EIO"])(
+    "keeps %s unknown through the public service status owner without exposing the path",
+    async (code) => {
+      const startupPath = resolveStartupEntryPaths(env)[0];
+      const access = vi.spyOn(fs, "access").mockRejectedValue(
+        Object.assign(new Error(`${code}: cannot access '${startupPath}'`), {
+          code,
+          path: startupPath,
+        }),
+      );
+      schtasksResponses.push({ code: 1, stdout: "", stderr: "Task not found" });
+      spawnSync.mockReturnValue({ status: 1, stdout: "-2147024894" });
+
+      const state = await withRestoredMocks([access, mockProcessPlatform("win32")], () =>
+        readGatewayServiceState(resolveGatewayService(), { env }),
+      );
+
+      expect(state.loadState).toMatchObject({
+        status: "unknown",
+        detail: expect.stringContaining(`Windows login item inspection failed (${code})`),
+      });
+      expect(state.runtime).toMatchObject({
+        status: "unknown",
+        inspectionFailure: {
+          code: "service-runtime-inspection-failed",
+          detail: expect.stringContaining(`Windows login item inspection failed (${code})`),
+        },
+      });
+      expect(state.runtime?.missingUnit).not.toBe(true);
+      expect(JSON.stringify({ loadState: state.loadState, runtime: state.runtime })).not.toContain(
+        startupPath,
+      );
+    },
+  );
+
+  it("reports missing only when every startup launcher is absent", async () => {
+    const access = vi
+      .spyOn(fs, "access")
+      .mockRejectedValue(Object.assign(new Error("Missing fixture launcher"), { code: "ENOENT" }));
+    schtasksResponses.push({ code: 1, stdout: "", stderr: "Task not found" });
+
+    const state = await withRestoredMocks([access, mockProcessPlatform("win32")], () =>
+      readGatewayServiceLoadState(resolveGatewayService(), { env }),
+    );
+
+    expect(state).toEqual({ status: "not-loaded" });
+  });
+
+  it.each(["EACCES", "ENOENT"])(
+    "recognizes an alternate launcher after the first inspection returns %s",
+    async (code) => {
+      const access = vi
+        .spyOn(fs, "access")
+        .mockRejectedValueOnce(Object.assign(new Error("First launcher unavailable"), { code }))
+        .mockResolvedValueOnce(undefined);
+      schtasksResponses.push({ code: 1, stdout: "", stderr: "Task not found" });
+
+      const state = await withRestoredMocks([access, mockProcessPlatform("win32")], () =>
+        readGatewayServiceLoadState(resolveGatewayService(), { env }),
+      );
+
+      expect(state).toEqual({ status: "loaded" });
+    },
+  );
 });
 
 describe("scheduled task runtime derivation", () => {

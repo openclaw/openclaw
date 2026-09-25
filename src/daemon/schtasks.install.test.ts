@@ -5,6 +5,8 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
+import { withRestoredMocks } from "../test-utils/vitest-spies.js";
+import { resolveStartupEntryPaths } from "./schtasks-layout.js";
 import {
   installScheduledTask,
   readScheduledTaskCommand,
@@ -129,6 +131,32 @@ describe("installScheduledTask", () => {
   function expectTaskRunCall(index: number, taskName = "OpenClaw Gateway"): void {
     expect(schtasksCalls[index]).toEqual(["/Run", "/TN", taskName]);
   }
+
+  it("leaves an existing launcher unchanged when Startup inspection is denied", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      const scriptPath = resolveTaskScriptPath(env);
+      const original = "@echo off\r\nnode existing-gateway.js\r\n";
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.writeFile(scriptPath, original);
+      const startupPath = resolveStartupEntryPaths(env)[0];
+      const access = vi.spyOn(fs, "access").mockRejectedValue(
+        Object.assign(new Error(`EACCES: cannot access '${startupPath}'`), {
+          code: "EACCES",
+          path: startupPath,
+        }),
+      );
+
+      await withRestoredMocks([access], async () => {
+        await expect(installDefaultGatewayTask(env)).rejects.toThrow(
+          "Windows login item inspection failed (EACCES)",
+        );
+      });
+
+      expect(schtasksCalls).toEqual([]);
+      expect(await fs.readFile(scriptPath, "utf8")).toBe(original);
+      expect(await fs.readdir(path.dirname(scriptPath))).toEqual([path.basename(scriptPath)]);
+    });
+  });
 
   it.each(["install", "stage"])(
     "%s redirects stdin from NUL so a hidden service console is never interactive (#112173)",

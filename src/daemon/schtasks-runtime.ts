@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
+import { hasErrnoCode, isErrno } from "../infra/errno.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
@@ -74,11 +75,25 @@ export async function assertSchtasksAvailable(): Promise<void> {
 }
 
 export async function isStartupEntryInstalled(env: GatewayServiceEnv): Promise<boolean> {
+  let inspectionError: Error | undefined;
   for (const startupEntryPath of resolveStartupEntryPaths(env)) {
     try {
       await fs.access(startupEntryPath);
       return true;
-    } catch {}
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT") && !inspectionError) {
+        const code = isErrno(error) ? error.code : undefined;
+        // Native errors contain the private Startup-folder path. Keep only errno.
+        inspectionError = new Error(
+          `Windows login item inspection failed${code ? ` (${code})` : ""}. Check permissions and retry.`,
+          { cause: code ? { code } : undefined },
+        );
+      }
+    }
+  }
+  // A readable alternate launcher establishes installation despite an earlier error.
+  if (inspectionError) {
+    throw inspectionError;
   }
   return false;
 }
