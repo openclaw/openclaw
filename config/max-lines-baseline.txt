@@ -713,7 +713,6 @@ src/secrets/runtime-state.test.ts
 src/secrets/runtime-state.ts
 src/secrets/runtime-web-tools.test.ts
 src/secrets/runtime-web-tools.ts
-src/security/audit-extra.async.ts
 src/security/audit-extra.sync.ts
 src/security/audit.ts
 src/shared/json-schema-defaults.ts

@@ -4,6 +4,7 @@ import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { maxBytesForKind, mediaKindFromMime, type MediaKind } from "@openclaw/media-core/constants";
 import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
@@ -28,7 +29,6 @@ import {
   type SessionStoreTargetsReadCache,
 } from "../config/sessions/targets-read-availability.js";
 import { resolveDeliveryQueueStateEnv } from "../infra/delivery-queue-sqlite.js";
-import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { collectReplyMediaEntries } from "../infra/outbound/reply-media-entries.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";

@@ -219,6 +219,11 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.gateway-database-workers.config.ts",
     },
     {
+      title: "routes the Gateway loopback and LAN producer to its worker owner",
+      target: "test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
+    },
+    {
       title: "routes the Gateway TLS producer to its worker owner",
       target: "test/e2e/qa-lab/runtime/gateway-tls-pinning.test.ts",
       config: "test/vitest/vitest.infra.config.ts",

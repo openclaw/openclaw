@@ -73,6 +73,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.conversation.conversationId === "string" &&
         (input.command.conversation.parentConversationId === undefined ||
           typeof input.command.conversation.parentConversationId === "string")) ||
+      (input.command.type === "cron.activeReceiptOwners" &&
+        typeof input.command.agentId === "string") ||
       (input.command.type === "cron.observeRunRecovery" &&
         typeof input.command.storeKey === "string" &&
         Array.isArray(input.command.proposals) &&
@@ -161,7 +163,10 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         Array.isArray(input.command.profileIds) &&
         input.command.profileIds.every((profileId) => typeof profileId === "string")) ||
       (input.command.type === "userProfiles.channelIdentity.resolve" &&
-        Check(UserChannelIdentitySchema, input.command.identity)) ||
+        (Check(UserChannelIdentitySchema, input.command.identity) ||
+          (isRecord(input.command.identity) &&
+            typeof input.command.identity.authorizationId === "string" &&
+            isRecord(input.command.identity.policy)))) ||
       (input.command.type === "userProfiles.email.resolve" &&
         typeof input.command.email === "string") ||
       (input.command.type === "audit.run.inspect" &&

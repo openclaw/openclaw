@@ -17,7 +17,7 @@ env:
 
 jobs:
   dispatch:
-    if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.OPENCLAW_RELEASE_PRIORITY_RUN == '')
+    if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

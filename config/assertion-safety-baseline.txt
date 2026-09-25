@@ -608,7 +608,7 @@ extensions/matrix/src/matrix/monitor/handler-helpers.ts	3
 extensions/matrix/src/matrix/monitor/handler-ingress-prefix.ts	3
 extensions/matrix/src/matrix/monitor/handler-state.ts	1
 extensions/matrix/src/matrix/monitor/handler.ts	2
-extensions/matrix/src/matrix/monitor/inbound-dedupe-migration.ts	2
+extensions/matrix/src/matrix/monitor/inbound-dedupe-migration.ts	1
 extensions/matrix/src/matrix/monitor/index.ts	3
 extensions/matrix/src/matrix/monitor/reaction-events.ts	1
 extensions/matrix/src/matrix/monitor/reply-context.ts	1
@@ -758,17 +758,17 @@ extensions/msteams/src/monitor-handler.ts	1
 extensions/msteams/src/monitor-handler/inbound-content.ts	1
 extensions/msteams/src/monitor-handler/inbound-dispatch.ts	1
 extensions/msteams/src/monitor-handler/inbound-facts.ts	1
-extensions/msteams/src/monitor.ts	6
+extensions/msteams/src/monitor.ts	5
 extensions/msteams/src/msteams-ingress.ts	1
 extensions/msteams/src/outbound.ts	1
 extensions/msteams/src/polls.ts	1
 extensions/msteams/src/probe.ts	1
 extensions/msteams/src/qa/adapter.runtime.ts	2
 extensions/msteams/src/qa/bot-framework-server.ts	3
-extensions/msteams/src/qa/private-runtime.ts	3
+extensions/msteams/src/qa/private-runtime.ts	1
 extensions/msteams/src/reply-stream-controller.ts	1
 extensions/msteams/src/sdk-proactive.ts	7
-extensions/msteams/src/sdk.ts	10
+extensions/msteams/src/sdk.ts	7
 extensions/msteams/src/setup-surface.ts	7
 extensions/msteams/src/sqlite-state.ts	1
 extensions/msteams/src/token-response.ts	2
@@ -2097,7 +2097,7 @@ src/cli/command-config-resolution.ts	2
 src/cli/command-format.ts	1
 src/cli/command-options.ts	1
 src/cli/command-secret-targets.ts	1
-src/cli/completion-runtime.ts	4
+src/cli/completion-runtime.ts	2
 src/cli/config-cli-input.ts	2
 src/cli/config-cli-path.ts	5
 src/cli/config-cli-runner.ts	2
@@ -2317,7 +2317,6 @@ src/commands/system-agent-with-inference.ts	2
 src/commands/tasks-json.ts	2
 src/commands/tasks.ts	2
 src/commands/telemetry-exporter-summary.ts	3
-src/config/agent-dirs.ts	1
 src/config/allowed-values.ts	1
 src/config/bundled-channel-config-metadata.generated.ts	1
 src/config/channel-alias-migration.ts	2
@@ -2376,7 +2375,7 @@ src/config/schema.ts	1
 src/config/sessions/cleanup-service.ts	3
 src/config/sessions/conversation-delivery-store.ts	2
 src/config/sessions/group.ts	1
-src/config/sessions/legacy-main-session-migration.ts	5
+src/config/sessions/legacy-main-session-migration.ts	4
 src/config/sessions/metadata.ts	1
 src/config/sessions/restart-recovery-state.ts	5
 src/config/sessions/session-accessor.entry-mutation.ts	2
@@ -2683,7 +2682,6 @@ src/gateway/watch-node-http.ts	3
 src/gateway/worker-environments/bundle.ts	6
 src/gateway/worker-environments/inference-control.ts	1
 src/gateway/worker-environments/inference-runtime.ts	2
-src/gateway/worker-environments/inference-store.ts	1
 src/gateway/worker-environments/live-event-projection.ts	1
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
 src/gateway/worker-environments/placement-state.ts	3
@@ -2763,7 +2761,6 @@ src/infra/heartbeat-runner-config.ts	1
 src/infra/heartbeat-visibility.ts	1
 src/infra/install-package-dir.ts	2
 src/infra/install-source-utils.ts	2
-src/infra/json-file.ts	1
 src/infra/json-utf8-bytes.ts	4
 src/infra/kysely-sync-cache-state.ts	1
 src/infra/kysely-sync.ts	7
@@ -3203,7 +3200,6 @@ src/secrets/runtime.ts	4
 src/secrets/store/secret-store.ts	2
 src/secrets/target-registry-query.ts	1
 src/security/audit-channel.ts	4
-src/security/audit-extra.async.ts	2
 src/security/audit-extra.summary.ts	2
 src/security/audit-extra.sync.ts	12
 src/security/audit-mcporter-registry.ts	1
@@ -3321,7 +3317,6 @@ src/tasks/task-registry.sqlite.shared.ts	1
 src/tasks/task-registry.ts	1
 src/tasks/task-registry.types.ts	2
 src/tasks/task-status.ts	1
-src/trajectory/command-export.ts	1
 src/trajectory/export.ts	22
 src/trajectory/runtime-store.sqlite.ts	1
 src/trajectory/runtime.ts	4

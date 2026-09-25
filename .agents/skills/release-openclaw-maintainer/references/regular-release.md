@@ -50,9 +50,9 @@ proven by diagnosis. A flake, an advisory lane, or a publish-tooling re-tag
 never does. Tooling,
 credentials, infrastructure or wrapper failure keeps the candidate and recovers
 the failed surface. Use [publication recovery](publication-recovery.md) for
-classification. While the parent runs, hold runner priority with the recipe
-in `docs/reference/RELEASING.md` (`pnpm frv prioritize` once #156305 lands)
-and restore cancelled runs after the seal.
+classification. Keep PR CI and supporting workflows running while the parent
+runs. Use the release recovery guidance in `docs/reference/RELEASING.md` only
+for runs already deferred by historical workflows.
 
 An early `OpenClaw Performance` run is optional beta confidence:
 `target_ref=<code-sha>`, `profile=release`, `repeat=3`, deep profiling/live OpenAI
@@ -174,8 +174,8 @@ on recovery; never rebuild or republish successful versions. Each npm child
 needs its own `npm-release` approval and ClawHub children must never be
 approved by hand; watch `pending_deployments` on every child per
 `$release-openclaw-ci` (Publish children). Children run on hosted
-`ubuntu-latest`; if that pool is saturated, apply the runner-priority recipe in
-`docs/reference/RELEASING.md` (Blacksmith testbox runs do not compete).
+`ubuntu-latest`; if that pool is saturated, let jobs queue normally without
+cancelling PR CI. Blacksmith testbox runs use a separate pool.
 
 After the core child logs `+ openclaw@<version>`, the package takes 5-6 minutes
 to appear in `npm view openclaw versions --json --prefer-online`; poll it before

@@ -487,31 +487,19 @@ The full checklist below explains each step; this section decides the default.
    hold npm/ClawHub publication, GitHub release finalization, or main closeout. `macos-swift` and Windows node-test CI lanes are advisory for
    the npm decision; retain their actual results and repair their owners in
    parallel without re-cutting.
-5. **Runner priority.** While a release FRV or publish parent is active, cancel
-   queued pull-request-event runs of the named non-release workflows and
-   restore them afterwards with the recipe below (the
-   `pnpm frv prioritize --run <parent>` / `--restore <record>` controller from
-   #156305 replaces it once it lands). Select by workflow name and
-   `pull_request` event, never by branch: release parents, children, Linux
-   requests, and Docker recovery are `workflow_dispatch` runs, some on `main`,
-   and must stay queued.
-
-   ```bash
-   gh run list --repo openclaw/openclaw --status queued --limit 500 \
-     --json databaseId,workflowName,headBranch,event \
-     --jq '.[] | select(.event | IN("pull_request","pull_request_target")) | select(.workflowName | IN("CI","Security Review","Auto response","PR context and evidence","Labeler","CodeQL","Periphery Dead Code Comment","Workflow Sanity")) | [.databaseId, .workflowName, .headBranch] | @tsv' \
-     > cancelled-for-release.tsv
-   cut -f1 cancelled-for-release.tsv | xargs -n1 gh run cancel --repo openclaw/openclaw
-   # after the release parent is terminal
-   cut -f1 cancelled-for-release.tsv | xargs -n1 gh run rerun --repo openclaw/openclaw
-   ```
+5. **Shared runner capacity.** Keep PR CI and supporting workflows running during
+   release validation and publication. Let GitHub Actions queue work normally;
+   do not cancel queued PR runs to prioritize a release. Use the
+   [release recovery guidance](#release-priority) only for runs already deferred
+   by historical workflows.
 
 6. **Flip GitHub as soon as npm is out.** The moment `openclaw@YYYY.M.PATCH`
    is visible on npm under the target dist-tag, publish the GitHub release:
    un-draft it and mark it latest for stable. Never wait for Docker, ClawHub,
-   the macOS/Windows/Linux app publishers, or the parent's finalize step; the
-   macOS publisher requires the public release, so a lingering draft blocks
-   apps. If the parent has not flipped it yet, do it by hand:
+   the macOS/Windows/Linux app publishers, or the parent's finalize step. The
+   macOS publisher attaches assets to a draft as well, so a lingering draft
+   hides the release from users but no longer blocks apps. If the parent has
+   not flipped it yet, do it by hand:
    `gh release edit vYYYY.M.PATCH --repo openclaw/openclaw --draft=false --latest`.
    Run the beta-to-stable dist-tag sync (`openclaw-npm-dist-tags.yml` in
    `openclaw/releases`, `mode=sync_beta_to_stable`) immediately after core npm
@@ -582,7 +570,7 @@ owner authorization; admission does not grant it.
 
 An explicit stable or full release request includes macOS publication unless the operator limits its scope. That authorization carries through macOS validation, signing, notarization, promotion, and verification without a separate macOS consent step. Follow the current owner-configured environment policy and retain all enforced rules and exact-source artifact checks.
 
-For every release profile, normal CI, plugin prerelease, all cross-OS, performance, and QA test results are advisory for npm/ClawHub. Preserve their actual conclusions and selected terminal evidence. The required publication proofs are listed in the [fast path](#fast-path-default). Native publication runs independently: macOS, Windows, Linux, and Android failures never delay npm/ClawHub, GitHub release finalization, or main closeout. Verify each platform's own artifacts and updater contract before claiming that platform is ready. Release children also hold hosted-runner priority over PR-side work; see [Release priority](#release-priority).
+For every release profile, normal CI, plugin prerelease, all cross-OS, performance, and QA test results are advisory for npm/ClawHub. Preserve their actual conclusions and selected terminal evidence. The required publication proofs are listed in the [fast path](#fast-path-default). Native publication runs independently: macOS, Windows, Linux, and Android failures never delay npm/ClawHub, GitHub release finalization, or main closeout. Verify each platform's own artifacts and updater contract before claiming that platform is ready. Release and PR jobs share runner capacity; see [Release priority](#release-priority) for recovery of historical deferred runs.
 
 1. Start from current `main`: pull latest, confirm the target commit is pushed, and confirm `main` CI is green enough to branch from.
 2. Create `release/YYYY.M.PATCH` from that commit. Backports are optional; apply only the operator-selected set of merged `main` PRs. Bump every required version location, run `pnpm release:prep`, finish release fixes and required forward-ports, and review `src/plugins/compat/registry.ts` plus `src/commands/doctor/shared/deprecation-compat.ts`.
@@ -657,43 +645,22 @@ complete.
 
 ### Release priority
 
-Release runs are always prioritized over PR-side work on GitHub-hosted runners.
-The repo variable `OPENCLAW_RELEASE_PRIORITY_RUN` names the active Full Release
-Validation parent run id:
+CI and supporting workflows run normally while Full Release Validation is active.
+`OPENCLAW_RELEASE_PRIORITY_RUN` no longer controls workflow admission or the CI
+gate. Release tooling may still set and clear this legacy variable, but a set or
+stale value does not pause new runs using the updated workflows.
 
-- `pnpm ci:full-release` writes `.artifacts/frv-release-priority-<parent>.json`
-  (the pause window) and then sets the variable once the parent dispatch is
-  observed; it clears the variable when the operation ends, sealed or failed.
-  `pnpm frv continue --failed` and `pnpm frv verify` clear it for the sealed
-  parent as well. A failure to set or clear the variable is a warning, never a
-  validation failure.
-- While it is set, the root jobs of the hosted-runner workflows `CI`, `Auto
-response`, `PR context and evidence`, `Labeler`, the `CodeQL` workflows,
-  `Periphery Dead Code Comment`, `Workflow Sanity`, `ClawSweeper Dispatch`, and
-  `Maintainer Command Reactions` skip through a job-level `if` (no runner is
-  consumed) unless the run is a `workflow_dispatch` or targets a `release*/`
-  branch. `Security Review` is never paused: it owns approval revocation for
-  `openclaw/ci-gate`. A deferred `CI` run keeps its `openclaw/ci-gate` failing
-  with `Deferred for release <run>` so the PR stays unmergeable until the rerun.
-- `pnpm frv prioritize --run <parent>` records the pause window and the queued
-  (not started) runs of those workflows on non-release branches, excluding
-  `release/*`, `release-ci/*`, `release-publish/*`, and every
-  `workflow_dispatch`; sets the variable; rechecks each run is still queued and
-  cancels it; then records what was actually cancelled (`--out <file>`,
-  `--dry-run`). Repeating the command keeps the original window and cancellations.
-- `pnpm frv prioritize --restore <file>` first clears the variable when it still
-  names that parent, then `gh run rerun`s the recorded cancelled runs plus every
-  run the gate deferred since the window opened (skipped gated runs, and `CI`
-  runs whose only executed jobs are `security-fast` and the failed gate),
-  coalesced to the newest run per workflow and branch so an obsolete run never
-  cancels validation of a newer head. Run it after the release seals; deferred
-  PR work is never re-dispatched automatically. Not yet proven live: GitHub
-  re-evaluating the `vars` gate on `gh run rerun`.
-- Publish children run on hosted `ubuntu-latest`; Blacksmith testbox runs are
-  a separate pool and do not compete. When the hosted pool is saturated, cancel
-  queued PR CI and ClawSweeper review runs, then restore them afterwards with
-  `pnpm frv prioritize --restore <record>` or by re-running each open PR's
-  latest cancelled CI run.
+For runs already deferred by the old workflows, use
+`pnpm frv prioritize --restore <record>` with the saved
+`.artifacts/frv-release-priority-<parent>.json` record. It clears the variable
+when it still names that parent and reruns the latest cancelled or deferred run
+per workflow and branch. Historical workflow revisions still contain the gate,
+so clear the variable before rerunning those revisions.
+
+Do not use `pnpm frv prioritize --run <parent>` for routine release validation:
+it still explicitly cancels queued non-release runs, but no longer reserves
+capacity or pauses newly arriving work. Runner capacity and normal GitHub Actions
+queueing determine when release and CI jobs start.
 
 ## Stable main closeout
 
@@ -954,7 +921,8 @@ design approval and package-manager integration proof before implementation.
   - Stable npm releases default to `beta`; stable npm publish can target `latest` explicitly via workflow input.
   - Token-based npm dist-tag mutation lives in `openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` because `npm dist-tag add` still needs `NPM_TOKEN` while the source repo keeps OIDC-only publish.
   - Public `macOS Release` is validation-only; when a tag lives only on a release branch but the workflow is dispatched from `main`, set `public_release_branch=release/YYYY.M.PATCH`.
-  - Real macOS publish must pass successful macOS `preflight_run_id` and `validate_run_id` in `openclaw/releases`. These app gates run independently and never hold npm or GitHub release finalization.
+  - Real macOS publish must pass successful macOS `preflight_run_id` and `validate_run_id` in `openclaw/releases`. These app gates run independently and never hold npm or GitHub release finalization; promotion attaches assets to the GitHub release whether it is still a draft or public.
+  - Re-dispatching a failed macOS preflight for the same tag and source resumes each variant from its newest checkpoint by default (`ignore_checkpoints=true` rebuilds); the explicit `resume_notarization_*` inputs only pin a specific run.
   - Real publish paths promote prepared artifacts instead of rebuilding them again.
 - For stable correction releases like `YYYY.M.PATCH-N`, the post-publish verifier also checks the same temp-prefix upgrade path from `YYYY.M.PATCH` to `YYYY.M.PATCH-N` so release corrections cannot silently leave older global installs on the base stable payload.
 - npm release preflight fails closed unless the tarball includes both `dist/control-ui/index.html` and a non-empty `dist/control-ui/assets/` payload, so we do not ship an empty browser dashboard again.

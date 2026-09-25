@@ -16,7 +16,7 @@ const auxiliaryNames = [
 ];
 const hourly = readWorkflow(".github/workflows/ci-hourly.yml");
 const ci = readCiWorkflow();
-const base = { repository: "openclaw/openclaw", runAttempt: 1 } as const;
+const base = { repository: "openclaw/openclaw", runAttempt: 1, releasePriorityRun: "123" } as const;
 type Context = Parameters<typeof evaluateWorkflowExpression>[1];
 
 function evaluate(expression: string, context: Context) {
@@ -71,15 +71,13 @@ describe("hourly main CI admission", () => {
     },
   );
 
-  it("admits hourly work only in the canonical repo and preserves release priority", () => {
+  it("admits hourly work only in the canonical repo even during release validation", () => {
     const context = { ...base, eventName: "schedule" } as const;
     expect(evaluate(hourly.jobs.dispatch.if, context)).toBe(true);
     expect(evaluate(hourly.jobs.dispatch.if, { ...context, repository: "fork/openclaw" })).toBe(
       false,
     );
-    expect(evaluate(hourly.jobs.dispatch.if, { ...context, releasePriorityRun: "123" })).toBe(
-      false,
-    );
+    expect(evaluate(hourly.jobs.dispatch.if, { ...context, releasePriorityRun: "123" })).toBe(true);
     expect(
       evaluate(hourly.jobs.dispatch.if, {
         ...context,

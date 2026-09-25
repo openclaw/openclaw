@@ -514,6 +514,25 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     },
     logger: workerEnvironmentLog,
   });
+  try {
+    await workerEnvironmentServiceBase.ready();
+  } catch (error) {
+    try {
+      await workerEnvironmentServiceBase.stop();
+    } catch (cleanupError) {
+      if (cleanupError !== error) {
+        if (cleanupError instanceof AggregateError && cleanupError.errors.includes(error)) {
+          throw cleanupError;
+        }
+        throw new AggregateError(
+          [error, cleanupError],
+          "Worker environment startup and cleanup failed",
+          { cause: cleanupError },
+        );
+      }
+    }
+    throw error;
+  }
   const workerEnvironmentService = workerEnvironmentServiceBase;
   bindDeviceWorkerAvailability(workerEnvironmentService, deviceRuntime.resolveAvailability);
   bindDeviceWorkerReconciliation(workerEnvironmentService, async (deviceId) => {

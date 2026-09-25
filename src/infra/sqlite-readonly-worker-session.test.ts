@@ -89,6 +89,35 @@ afterEach(async () => {
 });
 
 describe("SQLite read-only session operation custody", () => {
+  it.each([false, true])(
+    "attributes errors to startup only before the spawn event (spawned=%s)",
+    async (spawned) => {
+      const { session, child } = createSession();
+      const failure = Object.assign(new Error("fixture process refusal"), { code: "EACCES" });
+      const result = session.run("/fixture/snapshot", { mode: "staging-create" });
+      const observed = result.catch((error: unknown) => error);
+      const settled = observeSettlement(result);
+      if (spawned) {
+        child.emit("spawn");
+      }
+      child.emit("error", failure);
+      await nextTurn();
+      expect(settled()).toBe(false);
+      child.emit("close", -1, null);
+      const error = await observed;
+      if (spawned) {
+        expect(error).toBe(failure);
+      } else {
+        expect(error).toMatchObject({ code: "EACCES", cause: failure });
+        expect((error as Error).message).toContain(process.execPath);
+        expect((error as Error).message).toContain("/fixture/launch");
+        expect((error as Error).message).not.toContain("OPENCLAW_STATE_DIR");
+        expect((error as Error).message).not.toContain("--fixture-readonly-session");
+      }
+      await session.close();
+    },
+  );
+
   it.each([
     "staging-create",
     "staging-create-legacy",

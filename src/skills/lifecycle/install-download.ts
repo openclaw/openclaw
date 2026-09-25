@@ -1,15 +1,15 @@
 // Install download helpers fetch remote skill artifacts into temporary storage.
 import fs from "node:fs";
 import path from "node:path";
+import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
+import { isWithinDir } from "@openclaw/fs-safe/path";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { isWindowsDrivePath } from "../../infra/archive-path.js";
 import { sha256File } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { FsSafeError, root as fsRoot, type Root } from "../../infra/fs-safe.js";
 import { assertCanonicalPathWithinBase } from "../../infra/install-safe-path.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import { isWithinDir } from "../../infra/path-safety.js";
 import { withTempDownloadPath } from "../../infra/temp-download.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { ensureDir, resolveUserPath } from "../../utils.js";
