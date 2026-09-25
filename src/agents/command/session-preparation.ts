@@ -261,8 +261,9 @@ export async function prepareEmbeddedSessionState(params: {
     (params.opts.deliver === true || params.opts.sourceReplyDeliveryMode === "message_tool_only") &&
     buildDeliveryFormatPrompt({
       cfg: params.cfg,
-      channel: runContext.messageChannel,
-      accountId: runContext.accountId,
+      // Delivery preflight records the actual outbound target as reply* options.
+      channel: params.opts.replyChannel ?? runContext.messageChannel,
+      accountId: params.opts.replyAccountId ?? runContext.accountId,
       agentId: params.sessionAgentId,
       allowBootstrap: true,
     });

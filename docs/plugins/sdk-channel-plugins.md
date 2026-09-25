@@ -31,9 +31,10 @@ shared `message` tool. Your plugin owns:
 - **Heartbeat typing** - optional typing/busy signals for heartbeat delivery
   targets
 - **Formatting contract** - optional `agentPrompt.inboundFormattingHints`,
-  resolved per account. Despite its name, core gives it to every turn whose
-  visible output is delivered to the channel: replies, heartbeats, cron
-  announces, and subagent announces. Keep all formatting rules in this one hook.
+  resolved per delivering account. Despite its name, core gives it to every
+  OpenClaw agent turn whose visible output is delivered to the channel: replies,
+  heartbeats, cron announces, and subagent announces. External ACP agents do not
+  receive it. Keep all formatting rules in this one hook.
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch. For configured agent group

@@ -69,53 +69,63 @@ beforeEach(() => {
 });
 
 it.each([
-  { turn: "a delivered announce", mode: { deliver: true }, accountId: "rich" },
+  { turn: "a delivered announce", mode: { deliver: true }, accountId: "rich", rich: true },
+  {
+    turn: "a delivery through another account",
+    mode: { deliver: true, replyAccountId: "plain" },
+    accountId: "rich",
+    rich: false,
+  },
   {
     turn: "a message-tool announce",
     mode: { sourceReplyDeliveryMode: "message_tool_only" as const },
     accountId: "plain",
+    rich: false,
   },
-  { turn: "an undelivered turn", mode: {}, accountId: "rich" },
-])("gives $turn on the $accountId account its formatting contract", async (testCase) => {
-  await withTempHome(async (home) => {
-    configIoMocks.loadConfig.mockReturnValue({
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-6" },
-          models: { "anthropic/claude-opus-4-6": {} },
-          workspace: path.join(home, "openclaw"),
+  { turn: "an undelivered turn", mode: {}, accountId: "rich", rich: undefined },
+])(
+  "gives $turn from the $accountId account its delivering formatting contract",
+  async (testCase) => {
+    await withTempHome(async (home) => {
+      configIoMocks.loadConfig.mockReturnValue({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-6" },
+            models: { "anthropic/claude-opus-4-6": {} },
+            workspace: path.join(home, "openclaw"),
+          },
         },
-      },
-      session: { store: path.join(home, "sessions.json"), mainKey: "main" },
-      channels: {
-        telegram: { accounts: { rich: { richMessages: true }, plain: { richMessages: false } } },
-      },
-    } as OpenClawConfig);
+        session: { store: path.join(home, "sessions.json"), mainKey: "main" },
+        channels: {
+          telegram: { accounts: { rich: { richMessages: true }, plain: { richMessages: false } } },
+        },
+      } as OpenClawConfig);
 
-    await agentCommandFromIngress(
-      {
-        message: "child finished",
-        agentId: "main",
-        sessionKey: "agent:main:telegram:direct:1222",
-        to: "+1222",
-        channel: "telegram",
-        accountId: testCase.accountId,
-        extraSystemPrompt: "Announce the child result.",
-        allowModelOverride: false,
-        sessionEffects: "internal",
-        ...testCase.mode,
-      },
-      createThrowingTestRuntime(),
-    );
+      await agentCommandFromIngress(
+        {
+          message: "child finished",
+          agentId: "main",
+          sessionKey: "agent:main:telegram:direct:1222",
+          to: "+1222",
+          channel: "telegram",
+          accountId: testCase.accountId,
+          extraSystemPrompt: "Announce the child result.",
+          allowModelOverride: false,
+          sessionEffects: "internal",
+          ...testCase.mode,
+        },
+        createThrowingTestRuntime(),
+      );
 
-    const prompt = vi.mocked(runEmbeddedAgent).mock.calls.at(-1)?.[0].extraSystemPrompt ?? "";
-    if (!("deliver" in testCase.mode) && !("sourceReplyDeliveryMode" in testCase.mode)) {
-      expect(prompt).toBe("Announce the child result.");
-      return;
-    }
-    const markup = testCase.accountId === "rich" ? "markdown_telegram_rich" : "markdown";
-    expect(prompt.startsWith("Announce the child result.\n\n### Delivery Format")).toBe(true);
-    expect(prompt.split("### Delivery Format")).toHaveLength(2);
-    expect(prompt).toContain(`"text_markup": "${markup}"`);
-  });
-});
+      const prompt = vi.mocked(runEmbeddedAgent).mock.calls.at(-1)?.[0].extraSystemPrompt ?? "";
+      if (testCase.rich === undefined) {
+        expect(prompt).toBe("Announce the child result.");
+        return;
+      }
+      const markup = testCase.rich ? "markdown_telegram_rich" : "markdown";
+      expect(prompt.startsWith("Announce the child result.\n\n### Delivery Format")).toBe(true);
+      expect(prompt.split("### Delivery Format")).toHaveLength(2);
+      expect(prompt).toContain(`"text_markup": "${markup}"`);
+    });
+  },
+);
