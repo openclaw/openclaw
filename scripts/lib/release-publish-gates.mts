@@ -131,6 +131,15 @@ export function evaluateReleasePublishGates(input: {
     "Waived or advisory release evidence is no longer accepted.",
     "Fix failed selected lanes and rerun Full Release Validation without waivers.",
   );
+  if (consumer === "stable-closeout") {
+    for (const gate of gates) {
+      if (gate.status === "FAIL") {
+        gate.remediation =
+          "Use the original strict published evidence. Historical waiver-bearing closeout replay is unsupported; a fresh validation run cannot replace its published binding.";
+        gate.message += ` ${gate.remediation}`;
+      }
+    }
+  }
   return gates;
 }
 

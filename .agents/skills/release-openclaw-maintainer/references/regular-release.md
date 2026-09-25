@@ -2,7 +2,7 @@
 
 ## Orchestrated stable (default)
 
-`pnpm release:stable YYYY.M.PATCH` drives the whole fast path from
+`pnpm release:stable YYYY.M.PATCH` drives strict stable qualification and publication from
 `docs/reference/RELEASING.md` (cut → validate → publish → sync-beta →
 flip-github → macos → closeout) with state in
 `.artifacts/release-YYYY.M.PATCH/state.json`. Rerun to resume, `--from <phase>`

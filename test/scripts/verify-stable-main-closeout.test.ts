@@ -275,6 +275,26 @@ if (args[1] === 'view') {
 }
 
 describe("stable closeout Linux publication", () => {
+  it.each(["stableSoakWaiver", "laneWaiver"])(
+    "refuses historical %s replay without rewriting the published receipt",
+    (field) => {
+      const fixture = linuxCloseoutFixture();
+      expect(fixture.run().status).toBe(0);
+      const receipt = JSON.parse(readFileSync(fixture.outputPath, "utf8"));
+      const original = JSON.stringify({ ...receipt, [field]: "historical published authority" });
+      writeFileSync(fixture.originalPath, original);
+      const result = fixture.run(true);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "Historical waiver-bearing closeout receipt replay is unsupported",
+      );
+      expect(result.stderr).toContain(
+        "a fresh validation run cannot replace their published binding",
+      );
+      expect(readFileSync(fixture.originalPath, "utf8")).toBe(original);
+    },
+  );
+
   it("accepts only the validated exact late immutable Linux manifest", () => {
     const fixture = linuxCloseoutFixture();
     expect(fixture.run().status).toBe(0);

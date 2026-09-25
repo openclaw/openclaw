@@ -65,6 +65,11 @@ complete until `main` carries the actual shipped release state.
    Manual replay needs only `tag` when repository drill variables are configured.
    Replay requires successful stable/full evidence with soak and blocking
    performance; historical publication waivers do not authorize closeout.
+   Complete manifest/checksum pairs remain recorded without rewriting. Historical
+   waiver-bearing receipt replay and repair are intentionally unsupported: the
+   original postpublish evidence binds its validation run, which a fresh run
+   cannot replace. Preserve those artifacts and stop instead of overwriting
+   them or publishing again to repair a receipt.
    Push runs are never cancelled by later `main` pushes; verification serializes
    per resolved stable tag.
 7. A macOS build pulled from Sparkle on purpose (for example a crashing
