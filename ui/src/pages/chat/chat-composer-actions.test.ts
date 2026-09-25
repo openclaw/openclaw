@@ -53,6 +53,42 @@ describe("renderChatComposer controls", () => {
     },
   );
 
+  it.each([
+    { name: "pending attachment", overrides: { pendingAttachmentReads: 1 } },
+    { name: "send permission withheld", overrides: { canSend: false } },
+    { name: "send in progress", overrides: { sending: true } },
+    {
+      name: "history-gated command",
+      overrides: { draft: "/compact", submitDisabledReason: "Loading history" },
+    },
+  ])("keeps desktop and mobile Stop available with a held draft: $name", ({ overrides }) => {
+    const onAbort = vi.fn();
+    const onSend = vi.fn();
+    const onDraftChange = vi.fn();
+    const { container, props } = renderComposer({
+      canAbort: true,
+      canCompose: true,
+      draft: "Keep this draft",
+      onAbort,
+      onSend,
+      onDraftChange,
+      ...overrides,
+    });
+    const stop = primaryButton(container);
+
+    expect(stop.getAttribute("aria-label")).toBe(t("chat.runControls.stopGenerating"));
+    expect(stop.disabled).toBe(false);
+    expect(container.querySelector(".chat-mobile-primary-action > openclaw-tooltip > button")).toBe(
+      stop,
+    );
+    expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
+    stop.click();
+    expect(onAbort).toHaveBeenCalledOnce();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onDraftChange).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(props.draft);
+  });
+
   it.each([true, false])(
     "keeps command submission gated while history is pending: %s",
     (pending) => {

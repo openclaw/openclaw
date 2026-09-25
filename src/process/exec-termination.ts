@@ -158,7 +158,12 @@ export function createCommandTerminationController(params: {
           cleanup = "uncertain";
         }
       }
-      scheduleAdoptedChildZombieReapAfterExit(params.child, true);
+      // The first registration must outlive graceful cleanup and its force fallback.
+      scheduleAdoptedChildZombieReapAfterExit(
+        params.child,
+        true,
+        params.killGraceMs + COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+      );
       processTreeSettlement = new Promise<void>((resolve) => {
         const deadline = Date.now() + params.killGraceMs;
         const check = () => {

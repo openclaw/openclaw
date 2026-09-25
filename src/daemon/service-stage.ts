@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { z } from "zod";
 import { hasErrnoCode } from "../infra/errno.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 
 const fileState = z.strictObject({

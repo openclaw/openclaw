@@ -1,4 +1,4 @@
-import { safeFileURLToPath } from "../../../infra/local-file-access.js";
+import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import {
   isImageMediaFact,
   normalizeMediaFacts,

@@ -1,5 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -7,7 +9,7 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { OpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
 import type { UserProfileMutationChanges } from "./user-profile-mutation.js";
-import type { UserProfileEmailBinding } from "./user-profiles.types.js";
+import type { UserProfileEmailBinding, UserProfilesDatabase } from "./user-profiles.types.js";
 
 type EmailBindingChange = {
   db: DatabaseSync;
@@ -81,6 +83,20 @@ function observeAuthorityLifecycle(): void {
 
 /** Authority revisions belong to the profile writer, independently of display notifications. */
 export function publishUserProfileAuthorityChange(db: DatabaseSync, ...profileIds: string[]): void {
+  // Native and worker mutations retire recovery custody in their original transaction.
+  const schema = profileIds.length ? getAdmittedSqliteSchemaFacts(db) : undefined;
+  if (profileIds.length && !schema) {
+    throw new Error("Profile authority mutation requires admitted schema facts");
+  }
+  if (schema && schema.userVersion >= 19 && schema.tables.has("user_profile_identities")) {
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<UserProfilesDatabase>(db)
+        .updateTable("user_profile_identities")
+        .set({ authorization_id: null, authorization_basis_json: null })
+        .where("profile_id", "in", profileIds),
+    );
+  }
   observeAuthorityLifecycle();
   const store = changes.authorityHandles.get(db);
   if (!store || profileIds.length === 0) {
@@ -205,9 +221,8 @@ export async function captureUserProfileAuthorityRead(
     await Promise.all(pending);
   }
   admission.assertCurrent();
-  const subjectIsSettled = () =>
-    subjectKey === undefined ||
-    (!store.uncertain.has(subjectKey) && !store.pending.get(subjectKey)?.size);
+  const subjectIsSettled = (key = subjectKey) =>
+    key === undefined || (!store.uncertain.has(key) && !store.pending.get(key)?.size);
   if (!subjectIsSettled()) {
     throw new UserProfileMutationUnsettledError("pending");
   }
@@ -235,7 +250,10 @@ export async function captureUserProfileAuthorityRead(
         throw new UserProfileMutationUnsettledError("pending");
       }
     },
-    bind(profileIds: string | readonly string[]): (() => boolean) | undefined {
+    bind(
+      profileIds: string | readonly string[],
+      boundSubject = subject,
+    ): (() => boolean) | undefined {
       admission.assertCurrent();
       if (
         changes.authorityStores.get(admission.identity.key) !== store ||
@@ -255,7 +273,13 @@ export async function captureUserProfileAuthorityRead(
       if (profiles.some(({ key }) => store.pending.get(key)?.size)) {
         return undefined;
       }
-      const identity = subject === undefined ? undefined : store.channelIdentities.get(subject);
+      const identity =
+        boundSubject === undefined ? undefined : store.channelIdentities.get(boundSubject);
+      const boundKey =
+        boundSubject === undefined ? undefined : mutationKey("channel", boundSubject);
+      if (!subjectIsSettled(boundKey)) {
+        return undefined;
+      }
       return () => {
         try {
           admission.assertCurrent();
@@ -267,8 +291,9 @@ export async function captureUserProfileAuthorityRead(
                 !store.uncertain.has(profile.key) &&
                 !store.pending.get(profile.key)?.size,
             ) &&
-            (subject === undefined || store.channelIdentities.get(subject) === identity) &&
-            subjectIsSettled()
+            (boundSubject === undefined ||
+              store.channelIdentities.get(boundSubject) === identity) &&
+            subjectIsSettled(boundKey)
           );
         } catch {
           return false;

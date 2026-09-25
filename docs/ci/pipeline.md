@@ -138,6 +138,12 @@ existing CI resource budgets. Precise PR targets use the existing
 test-project planner to find their owners. Mixed or ambiguous selections retain
 Node, and no tests are removed from the selected inventory.
 
+Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`)
+also supports Bun when it is the entire exact selection in `agents-support`.
+Mixed and broad PR selections retain their original Node invocation. Dual-runtime
+validation keeps that complete Node selection and adds only the qualified recovery
+file when the original include patterns select it.
+
 Pull requests and their release-gate fallback run compatible selections on Bun.
 Ordinary manual CI, including Full Release Validation's `normal_ci` child, runs
 the complete original selection on Node and its compatible portion on Bun
@@ -213,7 +219,7 @@ newest patch. Compare exact versions when measuring a toolchain change, and
 measure setup separately from the test body.
 
 Preflight's manifest bootstrap uses the exact `NODE_VERSION` pin in `ci.yml`
-(24.19.0). Unlike the repository helper, `actions/setup-node` can satisfy a
+(24.21.0). Unlike the repository helper, `actions/setup-node` can satisfy a
 `24.x` request from an older cached patch below OpenClaw's support floor.
 
 CI's execution version does not define the supported user runtime matrix.
