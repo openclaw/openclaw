@@ -392,6 +392,8 @@ gh workflow run openclaw-performance.yml \
 - Record regressions in release evidence and investigate their product impact.
   Performance results are advisory for beta, stable, and full profiles; no
   performance waiver is needed for npm/ClawHub publication or main closeout.
+- Closeout replay reuses sealed waiver text without retyping; only new operator
+  text must carry the version prefix.
 - `npm-beta-v1` defers the performance child. Every selected child still needs
   terminal evidence and must prove artifact-only publication.
 

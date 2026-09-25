@@ -2885,6 +2885,8 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [
     "scripts/e2e/lib/upgrade-survivor/run.sh",
     [
+      packageAcceptance,
+      "upgrade-survivor-missing-load-path",
       "upgrade-survivor-assertions",
       "upgrade-survivor-mobile-pairing",
       "upgrade-survivor-recovery-cleanup",
