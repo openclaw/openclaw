@@ -10,6 +10,8 @@ mod connect_screen;
 mod events;
 pub(crate) mod gateway_manager;
 mod header;
+mod model_controls;
+mod model_controls_state;
 mod palette;
 mod panel_dock;
 mod session_actions;

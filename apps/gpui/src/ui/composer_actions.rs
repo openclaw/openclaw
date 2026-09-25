@@ -1,10 +1,11 @@
 use super::{AppView, composer_state::PendingSend};
 use crate::{
-    gateway::composer_rpc::{CatalogScope, ChatSend, CommandsList, CommandsResult, ModelsResult},
+    gateway::composer_rpc::{CatalogScope, ChatSend, CommandsList, CommandsResult},
     model::{
         attachments::{Attachment, AttachmentLimits, AttachmentOrigin, large_paste},
         commands::matching,
         composer::Draft,
+        model_controls::ModelControlsTarget,
     },
 };
 use gpui_kit::{
@@ -36,9 +37,10 @@ impl AppView {
         self.composer_state.error = None;
         self.composer_state.set_attachments(Vec::new());
         self.composer_state.commands.clear();
-        self.composer_state.models.clear();
+        self.model_controls.reset_connection();
         self.composer_state.catalog_cache.clear();
         self.composer_state.close_popups();
+        self.model_controls.close_popups();
         self.composer_state.recall.reset();
         for pending in self.composer_state.pending.values_mut() {
             pending.in_flight = false;
@@ -76,6 +78,7 @@ impl AppView {
         self.composer_state.reading = 0;
         self.composer_state.error = None;
         self.composer_state.close_popups();
+        self.model_controls.close_popups();
         self.composer_state.recall.reset();
         self.composer_state.set_attachments(draft.attachments);
         self.composer
@@ -123,22 +126,29 @@ impl AppView {
             return;
         };
         let agent = scope.agent_id.clone();
+        self.set_model_controls_target(
+            ModelControlsTarget {
+                agent_id: agent
+                    .clone()
+                    .or_else(|| self.sidebar_state.selected_agent.clone())
+                    .unwrap_or_else(|| "main".into()),
+                session_key: Some(scope.session_key.clone()),
+                draft_id: None,
+            },
+            cx,
+        );
         self.composer_state
             .catalog_cache
             .retain(|(epoch, _, _), _| *epoch == self.epoch);
         self.composer_state.catalog_generation += 1;
         let generation = self.composer_state.catalog_generation;
         let cache_key = (self.epoch, agent.clone(), scope.session_key.clone());
-        if let Some(entry) = self.composer_state.catalog_cache.get(&cache_key)
-            && let (Some(commands), Some(models)) = (&entry.commands, &entry.models)
-        {
+        if let Some(commands) = self.composer_state.catalog_cache.get(&cache_key) {
             self.composer_state.commands = commands.clone();
-            self.composer_state.models = models.clone();
             self.composer_state.catalogs_loading = false;
             return;
         }
         self.composer_state.commands.clear();
-        self.composer_state.models.clear();
         self.composer_state.catalogs_loading = true;
         let params = CommandsList {
             context: CatalogScope {
@@ -162,6 +172,7 @@ impl AppView {
                 {
                     return;
                 }
+                this.composer_state.catalogs_loading = false;
                 match result.and_then(|value| {
                     serde_json::from_value::<CommandsResult>(value)
                         .map_err(|error| error.to_string())
@@ -170,50 +181,10 @@ impl AppView {
                         this.composer_state.commands = result.commands.clone();
                         this.composer_state
                             .catalog_cache
-                            .entry(command_cache_key)
-                            .or_default()
-                            .commands = Some(result.commands);
+                            .insert(command_cache_key, result.commands);
                     }
                     Err(error) => {
                         this.composer_state.error = Some(format!("Commands unavailable: {error}"))
-                    }
-                }
-            },
-        );
-        let params = CatalogScope {
-            session_key: scope.session_key.clone(),
-            agent_id: agent.clone(),
-        };
-        self.request(
-            "models.list",
-            serde_json::to_value(params).expect("serialize model scope"),
-            cx,
-            move |this, result, _| {
-                if !this.chat.is_current(&scope)
-                    || this.sidebar_state.selected_agent != agent
-                    || this.composer_state.catalog_generation != generation
-                {
-                    return;
-                }
-                this.composer_state.catalogs_loading = false;
-                match result.and_then(|value| {
-                    serde_json::from_value::<ModelsResult>(value).map_err(|error| error.to_string())
-                }) {
-                    Ok(mut result) => {
-                        result.models.sort_by(|a, b| {
-                            a.provider
-                                .cmp(&b.provider)
-                                .then_with(|| a.name.cmp(&b.name))
-                        });
-                        this.composer_state.models = result.models.clone();
-                        this.composer_state
-                            .catalog_cache
-                            .entry(cache_key)
-                            .or_default()
-                            .models = Some(result.models);
-                    }
-                    Err(error) => {
-                        this.composer_state.error = Some(format!("Models unavailable: {error}"))
                     }
                 }
             },
@@ -314,11 +285,12 @@ impl AppView {
             return;
         }
         if key == "escape" {
-            if self.composer_state.model_open
-                || self.composer_state.effort_open
+            if self.model_controls.model_open
+                || self.model_controls.effort_open
                 || self.composer_state.usage_open
             {
                 self.composer_state.close_popups();
+                self.model_controls.close_popups();
             } else {
                 self.stop(cx);
             }
@@ -550,6 +522,7 @@ impl AppView {
     pub(super) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.session.is_none()
             || self.chat.loading
+            || self.model_controls.pending
             || self.composer_state.reading > 0
             || self.composer_is_composing(window, cx)
         {
@@ -612,6 +585,7 @@ impl AppView {
         self.composer_state.set_attachments(Vec::new());
         self.composer_state.error = None;
         self.composer_state.close_popups();
+        self.model_controls.close_popups();
         self.composer
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.composer_save_draft(cx);

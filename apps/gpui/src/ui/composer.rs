@@ -5,25 +5,24 @@ use gpui_kit::{
     component::{
         Disableable, Icon, Sizable, StyledExt,
         button::{Button, ButtonVariants},
-        input::{Input, Textarea},
+        input::Textarea,
         popover::Popover,
     },
     prelude::FluentBuilder as _,
     *,
 };
-use serde_json::json;
 
 impl AppView {
-    pub(super) fn choose_model(&mut self, model: Option<String>, cx: &mut Context<Self>) {
-        self.composer_state.model_open = false;
-        self.patch_selected_session(json!({"model": model}), cx);
-    }
-
-    pub(super) fn composer_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn composer_view(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let p = Palette::get(cx);
         let running = self.chat.active_run.is_some();
         let disabled = self.chat.loading || self.chat.selected_session.is_none();
         let send_disabled = disabled
+            || self.model_controls.pending
             || self.session.is_none()
             || self.composer_state.reading > 0
             || (self.composer.read(cx).value().trim().is_empty()
@@ -134,8 +133,11 @@ impl AppView {
                                             .items_center()
                                             .gap_1()
                                             .children(self.usage_control(cx))
-                                            .child(self.model_control(cx))
-                                            .children(self.effort_control(cx))
+                                            .children(self.model_controls.target.as_ref().map(
+                                                |target| {
+                                                    self.model_controls_view(target, window, cx)
+                                                },
+                                            ))
                                             .when(running, |this| {
                                                 this.child(
                                                     Button::new("stop-run")
@@ -373,190 +375,6 @@ impl AppView {
                             )
                     },
                 ))
-                .into_any_element(),
-        )
-    }
-
-    fn model_control(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let p = Palette::get(cx);
-        let current = self.selected_row().and_then(|row| row.model.as_deref());
-        let label = current
-            .and_then(|current| {
-                self.composer_state
-                    .models
-                    .iter()
-                    .find(|model| model.id == current || model.reference() == current)
-            })
-            .map(|model| model.name.clone())
-            .or_else(|| current.map(str::to_owned))
-            .unwrap_or_else(|| "Default model".into());
-        let query = self
-            .composer_state
-            .model_search
-            .read(cx)
-            .value()
-            .to_lowercase();
-        let models = self.composer_state.models.iter().filter(|model| {
-            self.composer_state.model_open
-                && format!("{} {} {}", model.provider, model.name, model.id)
-                    .to_lowercase()
-                    .contains(&query)
-        });
-        let target = cx.entity().downgrade();
-        let mut content = div()
-            .v_flex()
-            .w(px(320.))
-            .gap_2()
-            .child(
-                Input::new(&self.composer_state.model_search)
-                    .small()
-                    .appearance(false),
-            )
-            .child(
-                Button::new("default-model")
-                    .ghost()
-                    .small()
-                    .label("Default · follow agent setting")
-                    .on_click(cx.listener(|this, _, _, cx| this.choose_model(None, cx))),
-            );
-        let mut rows = div()
-            .id("model-results")
-            .v_flex()
-            .gap_1()
-            .max_h(px(300.))
-            .overflow_y_scroll();
-        let mut provider = String::new();
-        for (index, model) in models.enumerate() {
-            if provider != model.provider {
-                provider = model.provider.clone();
-                rows = rows.child(
-                    div()
-                        .text_xs()
-                        .text_color(p.muted)
-                        .pt_2()
-                        .px_2()
-                        .child(provider.clone()),
-                );
-            }
-            let reference = model.reference();
-            rows = rows.child(
-                Button::new(("model", index))
-                    .ghost()
-                    .small()
-                    .justify_start()
-                    .label(format!(
-                        "{}{}",
-                        model.name,
-                        if model.available == Some(false) {
-                            " · unavailable"
-                        } else {
-                            ""
-                        }
-                    ))
-                    .disabled(
-                        model.manual_selection_allowed == Some(false)
-                            || model.available == Some(false),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.choose_model(Some(reference.clone()), cx)
-                    })),
-            );
-        }
-        if self.composer_state.catalogs_loading {
-            rows = rows.child(div().text_sm().text_color(p.muted).child("Loading models…"));
-        }
-        content = content.child(rows);
-        Popover::new("model-picker")
-            .anchor(Anchor::BottomRight)
-            .open(self.composer_state.model_open)
-            .track_focus(&self.composer_state.model_search.focus_handle(cx))
-            .on_open_change(move |open, _, cx| {
-                let _ = target.update(cx, |this, cx| {
-                    this.composer_state.model_open = *open;
-                    cx.notify();
-                });
-            })
-            .trigger(
-                Button::new("model-picker-trigger")
-                    .ghost()
-                    .small()
-                    .label(label)
-                    .dropdown_caret(true)
-                    .h(px(30.))
-                    .max_w(px(180.))
-                    .tooltip("Choose model"),
-            )
-            .child(content)
-    }
-
-    fn effort_control(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let row = self.selected_row()?;
-        let current = row.model.as_deref()?;
-        let model = self
-            .composer_state
-            .models
-            .iter()
-            .find(|model| model.id == current || model.reference() == current)?;
-        if model.thinking_levels.is_empty() {
-            return None;
-        }
-        let selected = row
-            .thinking_level
-            .as_deref()
-            .or(model.thinking_default.as_deref())
-            .unwrap_or("Default");
-        let target = cx.entity().downgrade();
-        Some(
-            Popover::new("effort-picker")
-                .anchor(Anchor::BottomRight)
-                .open(self.composer_state.effort_open)
-                .on_open_change(move |open, _, cx| {
-                    let _ = target.update(cx, |this, cx| {
-                        this.composer_state.effort_open = *open;
-                        cx.notify();
-                    });
-                })
-                .trigger(
-                    Button::new("effort-trigger")
-                        .ghost()
-                        .small()
-                        .label(selected.to_owned())
-                        .dropdown_caret(true)
-                        .h(px(30.))
-                        .tooltip("Thinking effort"),
-                )
-                .child(
-                    div()
-                        .v_flex()
-                        .w(px(160.))
-                        .gap_1()
-                        .child(
-                            Button::new("effort-default")
-                                .ghost()
-                                .small()
-                                .label("Default")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.composer_state.effort_open = false;
-                                    this.patch_selected_session(json!({"thinkingLevel": null}), cx);
-                                })),
-                        )
-                        .children(model.thinking_levels.iter().enumerate().map(
-                            |(index, level)| {
-                                let id = level.id.clone();
-                                Button::new(("effort", index))
-                                    .ghost()
-                                    .small()
-                                    .label(level.label.clone())
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.composer_state.effort_open = false;
-                                        this.patch_selected_session(
-                                            json!({"thinkingLevel": id}),
-                                            cx,
-                                        );
-                                    }))
-                            },
-                        )),
-                )
                 .into_any_element(),
         )
     }

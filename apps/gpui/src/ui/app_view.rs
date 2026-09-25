@@ -19,6 +19,7 @@ use tokio::{runtime::Handle, sync::oneshot};
 use super::{
     attention_state::AttentionUi,
     composer_state::ComposerUi,
+    model_controls_state::ModelControlsUi,
     sidebar_state::SidebarState,
     theme::{self, Palette},
     transcript_state::TranscriptUi,
@@ -75,6 +76,7 @@ pub struct AppView {
     pub(super) transcript_list: ListState,
     pub(super) sidebar_state: SidebarState,
     pub(super) composer_state: ComposerUi,
+    pub(super) model_controls: ModelControlsUi,
     pub(super) transcript_state: TranscriptUi,
     pub(super) router: Router,
     pub(super) attention_state: AttentionUi,
@@ -191,7 +193,8 @@ impl AppView {
             chat: ChatState::default(),
             transcript_list,
             sidebar_state: SidebarState::new(window, cx),
-            composer_state: ComposerUi::new(window, cx),
+            composer_state: ComposerUi::default(),
+            model_controls: ModelControlsUi::new(window, cx),
             transcript_state: TranscriptUi::default(),
             router: Router::default(),
             attention_state: AttentionUi::default(),
@@ -386,6 +389,7 @@ impl AppView {
 
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_model_controls();
         if window.focused(cx).is_none() {
             self.focus_handle.focus(window, cx);
         }
@@ -421,7 +425,7 @@ impl Render for AppView {
                 }))
                 .child(self.transcript(cx))
                 .child(attention)
-                .child(self.composer_view(cx))
+                .child(self.composer_view(window, cx))
                 .into_any_element()
         };
         div()

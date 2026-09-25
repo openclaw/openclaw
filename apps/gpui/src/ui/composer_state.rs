@@ -1,6 +1,5 @@
-use super::AppView;
 use crate::{
-    gateway::composer_rpc::{ChatSend, ModelChoice},
+    gateway::composer_rpc::ChatSend,
     model::{
         attachments::Attachment,
         chat::{Message, RequestScope},
@@ -8,10 +7,7 @@ use crate::{
         composer::{Drafts, Recall},
     },
 };
-use gpui_kit::{
-    component::input::{InputEvent, InputState},
-    *,
-};
+use gpui_kit::*;
 use std::{collections::HashMap, sync::Arc};
 
 pub(super) struct PendingSend {
@@ -23,11 +19,6 @@ pub(super) struct PendingSend {
 }
 
 #[derive(Default)]
-pub(super) struct CatalogEntry {
-    pub commands: Option<Vec<Command>>,
-    pub models: Option<Vec<ModelChoice>>,
-}
-
 pub(super) struct ComposerUi {
     pub drafts: Drafts,
     pub restore_pending: bool,
@@ -35,10 +26,6 @@ pub(super) struct ComposerUi {
     pub previews: HashMap<String, Arc<Image>>,
     pub recall: Recall,
     pub commands: Vec<Command>,
-    pub models: Vec<ModelChoice>,
-    pub model_search: Entity<InputState>,
-    pub model_open: bool,
-    pub effort_open: bool,
     pub usage_open: bool,
     pub slash_dismissed: bool,
     pub slash_index: usize,
@@ -49,40 +36,10 @@ pub(super) struct ComposerUi {
     pub catalogs_loading: bool,
     pub pending: HashMap<String, PendingSend>,
     pub suppress_enter: bool,
-    pub catalog_cache: HashMap<(u64, Option<String>, String), CatalogEntry>,
-    _search_subscription: Subscription,
+    pub catalog_cache: HashMap<(u64, Option<String>, String), Vec<Command>>,
 }
 
 impl ComposerUi {
-    pub fn new(window: &mut Window, cx: &mut Context<AppView>) -> Self {
-        let model_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search models…"));
-        let subscription = cx.subscribe(&model_search, |_, _, _: &InputEvent, cx| cx.notify());
-        Self {
-            drafts: Drafts::default(),
-            restore_pending: false,
-            attachments: Vec::new(),
-            previews: HashMap::new(),
-            recall: Recall::default(),
-            commands: Vec::new(),
-            models: Vec::new(),
-            model_search,
-            model_open: false,
-            effort_open: false,
-            usage_open: false,
-            slash_dismissed: false,
-            slash_index: 0,
-            error: None,
-            catalog_generation: 0,
-            attachment_generation: 0,
-            reading: 0,
-            catalogs_loading: false,
-            pending: HashMap::new(),
-            suppress_enter: false,
-            catalog_cache: HashMap::new(),
-            _search_subscription: subscription,
-        }
-    }
-
     pub fn set_attachments(&mut self, attachments: Vec<Attachment>) {
         self.attachments = attachments;
         self.previews.retain(|id, _| {
@@ -103,8 +60,6 @@ impl ComposerUi {
     }
 
     pub fn close_popups(&mut self) {
-        self.model_open = false;
-        self.effort_open = false;
         self.usage_open = false;
         self.slash_dismissed = true;
     }

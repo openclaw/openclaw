@@ -79,8 +79,8 @@ impl AppView {
         let popup = self.web.error.is_some()
             || self.web.picker_open
             || self.sidebar_state.palette_open
-            || self.composer_state.model_open
-            || self.composer_state.effort_open
+            || self.model_controls.model_open
+            || self.model_controls.effort_open
             || self.composer_state.usage_open
             || (!self.composer_state.slash_dismissed
                 && self.composer.read(cx).value().starts_with('/'));

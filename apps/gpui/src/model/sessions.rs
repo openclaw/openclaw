@@ -1,3 +1,4 @@
+use crate::gateway::composer_rpc::{AgentRuntime, ContextWindowOption, FastMode, ThinkingLevel};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -77,7 +78,21 @@ pub struct SessionRow {
     pub children: Vec<SessionRow>,
     pub model: Option<String>,
     pub model_provider: Option<String>,
+    pub active_model: Option<String>,
+    pub active_model_provider: Option<String>,
+    pub model_override_source: Option<String>,
+    pub model_selection_locked: bool,
+    pub runtime_selection_locked: bool,
+    pub agent_runtime: Option<AgentRuntime>,
     pub thinking_level: Option<String>,
+    pub thinking_levels: Option<Vec<ThinkingLevel>>,
+    pub thinking_options: Option<Vec<String>>,
+    pub thinking_default: Option<String>,
+    pub fast_mode: Option<FastMode>,
+    pub effective_fast_mode: Option<FastMode>,
+    pub context_window: Option<String>,
+    pub context_windows: Option<Vec<ContextWindowOption>>,
+    pub context_window_default: Option<String>,
     pub permission_mode: Option<String>,
     pub total_tokens: Option<f64>,
     pub total_tokens_fresh: Option<bool>,
