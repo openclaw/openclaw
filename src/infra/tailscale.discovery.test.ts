@@ -50,4 +50,20 @@ describe("findTailscaleBinary", () => {
     expect(runExecMock).toHaveBeenCalledWith(binary, ["version"], { timeoutMs: 3000 });
     expect(runExecMock.mock.calls.some(([command]) => command === "which")).toBe(false);
   });
+
+  it.skipIf(process.platform === "darwin")(
+    "does not spawn the POSIX locate fallback when the macOS app path is absent",
+    async () => {
+      const root = tempDirs.make("openclaw-tailscale-nolocate-");
+      const binary = path.join(root, "tailscale");
+      fs.writeFileSync(binary, "", { mode: 0o755 });
+      vi.stubEnv("PATH", root);
+      runExecMock.mockImplementation(async (command: string) => {
+        throw new Error(`Unexpected command: ${command}`);
+      });
+
+      await expect(findTailscaleBinary()).resolves.toBeNull();
+      expect(runExecMock.mock.calls.some(([command]) => command === "locate")).toBe(false);
+    },
+  );
 });

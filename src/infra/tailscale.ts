@@ -105,7 +105,11 @@ export async function findTailscaleBinary(): Promise<string | null> {
     return macAppPath;
   }
 
-  // Strategy 3: locate command
+  // Strategy 3: locate command (POSIX installs only). The macOS app path is a
+  // fixed location, so `locate` can only add candidates on non-darwin hosts.
+  if (process.platform !== "darwin") {
+    return null;
+  }
   try {
     const { stdout } = await runExec("locate", ["Tailscale.app"]);
     const candidates = stdout
