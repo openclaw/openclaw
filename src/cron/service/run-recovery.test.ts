@@ -1,5 +1,5 @@
 import { serialize } from "node:v8";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../../infra/sqlite-worker-contract.js";
@@ -23,6 +23,7 @@ import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import {
+  createCronRecoveryFixture,
   claimCronRecoveryReceipt as claimReceipt,
   makeCronRecoveryState as makeState,
   observeCronRecoveryForTest,
@@ -45,7 +46,8 @@ function tryCreateCronTaskRun(
   return tryCreateCronTaskRunHandle(params)?.runId;
 }
 
-const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-recovery-" });
+const suite = setupCronServiceSuite({ prefix: "cron-run-recovery-" });
+const { logger, makeStorePath } = suite;
 
 async function commitCompletedJob(params: {
   storePath: string;
@@ -73,58 +75,70 @@ async function commitCompletedJob(params: {
 }
 
 describe("atomic cron run recovery", () => {
+  const fixtures = createCronRecoveryFixture(suite, onTestFinished);
+  afterEach(() => fixtures.finishAfterEach());
   it.each(["startup", "timer"] as const)(
     "retires a delayed %s recovery proposal across stop and restart",
-    async (source) => {
-      const { storePath } = await makeStorePath();
-      const startedAtMs = Date.now();
-      const job = makeJob(`retired-${source}-proposal`, startedAtMs);
-      job.enabled = false;
-      await writeCronStoreSnapshot({ storePath, jobs: [job] });
-      const receipt = claimReceipt(storePath, job, startedAtMs);
-      job.state.runningReceiptId = receipt.receiptId;
-      await writeCronStoreSnapshot({ storePath, jobs: [job] });
-      releaseLocalCronRunReceiptOwnership(receipt);
-      const before = await loadCronStore(storePath);
-      const onEvent = vi.fn();
-      const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
-      const reaperDiscovery = vi.fn(() => []);
-      const state = createCronServiceState({
-        ...makeState(logger, storePath, startedAtMs + 1).deps,
-        onEvent,
-        runCommandJob,
-        resolveSessionStoreAgentIds: reaperDiscovery,
-        resolveSessionStorePath: () => `${storePath}.sessions`,
-      });
-      const barriers = [
-        { entered: createDeferred(), release: createDeferred() },
-        { entered: createDeferred(), release: createDeferred() },
-      ];
-      let proposalCount = 0;
-      const execute = stateRead.executeExistingOpenClawStateRead;
-      const delayed = vi
-        .spyOn(stateRead, "executeExistingOpenClawStateRead")
-        .mockImplementation(async (context, command) => {
-          const result = await execute(context, command);
-          if (command.type === "cron.observeRunRecovery") {
-            const barrier = barriers[proposalCount++];
-            if (barrier) {
-              barrier.entered.resolve();
-              await barrier.release.promise;
-            }
-          }
-          return result;
+    async (source) =>
+      fixtures.run(async (fixture) => {
+        const { storePath } = await fixture.makeStorePath();
+        const startedAtMs = Date.now();
+        const job = makeJob(`retired-${source}-proposal`, startedAtMs);
+        job.enabled = false;
+        await writeCronStoreSnapshot({ storePath, jobs: [job] });
+        const receipt = claimReceipt(storePath, job, startedAtMs);
+        job.state.runningReceiptId = receipt.receiptId;
+        try {
+          await writeCronStoreSnapshot({ storePath, jobs: [job] });
+        } finally {
+          releaseLocalCronRunReceiptOwnership(receipt);
+        }
+        const before = await loadCronStore(storePath);
+        fixture.assertCurrent();
+        const onEvent = vi.fn();
+        const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
+        const reaperDiscovery = vi.fn(() => []);
+        const state = createCronServiceState({
+          ...makeState(logger, storePath, startedAtMs + 1).deps,
+          onEvent,
+          runCommandJob,
+          resolveSessionStoreAgentIds: reaperDiscovery,
+          resolveSessionStorePath: () => `${storePath}.sessions`,
         });
-      const admissions = observeCronTimerAdmissions(state);
-      const retired = source === "startup" ? start(state) : onTimer(state);
-      let restarted: Promise<void> | undefined;
-      try {
-        await barriers[0]!.entered.promise;
+        const barriers = [
+          { entered: createDeferred(), release: createDeferred() },
+          { entered: createDeferred(), release: createDeferred() },
+        ];
+        for (const barrier of barriers) fixture.release(() => barrier.release.resolve());
+        let proposalCount = 0;
+        const execute = stateRead.executeExistingOpenClawStateRead;
+        const delayed = vi
+          .spyOn(stateRead, "executeExistingOpenClawStateRead")
+          .mockImplementation(async (context, command) => {
+            const result = await execute(context, command);
+            if (command.type === "cron.observeRunRecovery") {
+              const barrier = barriers[proposalCount++];
+              if (barrier) {
+                barrier.entered.resolve();
+                await barrier.release.promise;
+              }
+            }
+            return result;
+          });
+        fixture.cleanup(async () => {
+          delayed.mockRestore();
+        });
+        const admissions = observeCronTimerAdmissions(state);
+        fixture.state(state);
+        const retired = fixture.track(source === "startup" ? start(state) : onTimer(state));
+        let restarted: Promise<void> | undefined;
+        await fixture.waitFor(barriers[0]!.entered.promise, retired);
         if (source === "timer") {
           await admissions.expectActive();
         }
         stop(state);
-        restarted = start(state);
+        fixture.assertCurrent();
+        restarted = fixture.track(start(state));
         expect(state.stopped).toBe(false);
         barriers[0]!.release.resolve();
         await retired;
@@ -139,7 +153,7 @@ describe("atomic cron run recovery", () => {
         expect(state.queuedRunReservationsByJobId.size).toBe(0);
         await admissions.expectReleased(source === "timer" ? 1 : 0);
 
-        await barriers[1]!.entered.promise;
+        await fixture.waitFor(barriers[1]!.entered.promise, restarted);
         barriers[1]!.release.resolve();
         await restarted;
         expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
@@ -149,15 +163,7 @@ describe("atomic cron run recovery", () => {
         });
         expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toHaveLength(1);
         expect(runCommandJob).not.toHaveBeenCalled();
-      } finally {
-        for (const barrier of barriers) {
-          barrier.release.resolve();
-        }
-        await Promise.allSettled([retired, ...(restarted ? [restarted] : [])]);
-        delayed.mockRestore();
-        stop(state);
-      }
-    },
+      }),
   );
 
   it("repairs a large unowned store without database work on the host", async () => {
@@ -457,105 +463,117 @@ describe("atomic cron run recovery", () => {
 
   it.each(["repair", "agent-deferral", "overflow-deferral"] as const)(
     "keeps one-shot recovery durable across restart after %s",
-    async (phase) => {
-      const { storePath } = await makeStorePath();
-      const nowMs = Date.now();
-      const startedAtMs = nowMs - 365 * 24 * 60 * 60_000;
-      const job = makeJob("pending-one-shot", startedAtMs);
-      job.schedule = { kind: "at", at: new Date(startedAtMs).toISOString() };
-      job.deleteAfterRun = true;
-      job.delivery = { mode: "none" };
-      if (phase === "agent-deferral") {
-        job.payload = { kind: "agentTurn", message: "recover pending work" };
-      }
-      await writeCronStoreSnapshot({ storePath, jobs: [job] });
-      const receipt = claimReceipt(storePath, job, startedAtMs);
-      const original = makeState(logger, storePath, nowMs);
-      tryCreateCronTaskRun({ state: original, job, startedAt: startedAtMs, runReceipt: receipt });
-      releaseLocalCronRunReceiptOwnership(receipt);
-      const finished = createDeferred();
-      const runJob = vi.fn(async () => ({ status: "ok" as const }));
-      const freshState = () =>
-        createCronServiceState({
-          ...original.deps,
-          nowMs: Date.now,
-          onEvent(event) {
-            if (event.action === "finished" && event.status === "ok") {
-              finished.resolve();
-            }
-          },
-          runCommandJob: runJob,
-          runIsolatedAgentJob: runJob,
-          ...(phase === "overflow-deferral" ? { maxMissedJobsPerRestart: 0 } : {}),
-        });
-      const first = freshState();
-      try {
-        if (phase === "repair") {
-          const proposal = await observeCronRecoveryForTest(first, job.id, undefined, startedAtMs);
-          expect(await recoverCronRunForTest(first, proposal, "startup")).toMatchObject({
-            kind: "repaired",
-          });
-          expect(await recoverCronRunForTest(first, proposal, "startup")).toMatchObject({
-            kind: "superseded",
-          });
-          await recomputeUnownedCronSchedules(first, { recomputeExpired: true });
-        } else {
-          await start(first);
+    async (phase) =>
+      fixtures.run(async (fixture) => {
+        const { storePath } = await fixture.makeStorePath();
+        const nowMs = Date.now();
+        const startedAtMs = nowMs - 365 * 24 * 60 * 60_000;
+        const job = makeJob("pending-one-shot", startedAtMs);
+        job.schedule = { kind: "at", at: new Date(startedAtMs).toISOString() };
+        job.deleteAfterRun = true;
+        job.delivery = { mode: "none" };
+        if (phase === "agent-deferral") {
+          job.payload = { kind: "agentTurn", message: "recover pending work" };
         }
-        expect(runJob).not.toHaveBeenCalled();
-        const pending = (await loadCronStore(storePath)).jobs[0];
-        expect(pending).toMatchObject({ enabled: true, state: { consecutiveErrors: 1 } });
-        const dueAt =
-          phase === "repair" ? startedAtMs : nowMs + (phase === "agent-deferral" ? 120_000 : 5_000);
-        expect(pending?.state.nextRunAtMs).toBe(dueAt);
-        expect(pending?.state.startupCatchupAtMs).toBe(dueAt);
-        expect(pending?.state.runningAtMs).toBeUndefined();
-      } finally {
-        stop(first);
-      }
-      if (phase !== "repair") {
-        for (let restart = 0; restart < 3; restart += 1) {
-          await vi.advanceTimersByTimeAsync(1);
-          const pendingState = freshState();
-          try {
-            await start(pendingState);
-            const pending = (await loadCronStore(storePath)).jobs[0];
-            const dueAt = nowMs + (phase === "agent-deferral" ? 120_000 : 5_000);
-            expect(pending).toMatchObject({
-              enabled: true,
-              state: { nextRunAtMs: dueAt, startupCatchupAtMs: dueAt, consecutiveErrors: 1 },
+        await writeCronStoreSnapshot({ storePath, jobs: [job] });
+        const receipt = claimReceipt(storePath, job, startedAtMs);
+        const original = makeState(logger, storePath, nowMs);
+        tryCreateCronTaskRun({ state: original, job, startedAt: startedAtMs, runReceipt: receipt });
+        releaseLocalCronRunReceiptOwnership(receipt);
+        const finished = createDeferred();
+        const runJob = vi.fn(async () => ({ status: "ok" as const }));
+        const freshState = () => {
+          fixture.assertCurrent();
+          return fixture.state(
+            createCronServiceState({
+              ...original.deps,
+              nowMs: Date.now,
+              onEvent(event) {
+                if (event.action === "finished" && event.status === "ok") {
+                  finished.resolve();
+                }
+              },
+              runCommandJob: runJob,
+              runIsolatedAgentJob: runJob,
+              ...(phase === "overflow-deferral" ? { maxMissedJobsPerRestart: 0 } : {}),
+            }),
+          );
+        };
+        const first = freshState();
+        try {
+          if (phase === "repair") {
+            const proposal = await observeCronRecoveryForTest(
+              first,
+              job.id,
+              undefined,
+              startedAtMs,
+            );
+            expect(await recoverCronRunForTest(first, proposal, "startup")).toMatchObject({
+              kind: "repaired",
             });
-            expect(runJob).not.toHaveBeenCalled();
-          } finally {
-            stop(pendingState);
+            expect(await recoverCronRunForTest(first, proposal, "startup")).toMatchObject({
+              kind: "superseded",
+            });
+            await recomputeUnownedCronSchedules(first, { recomputeExpired: true });
+          } else {
+            await fixture.track(start(first));
+          }
+          expect(runJob).not.toHaveBeenCalled();
+          const pending = (await loadCronStore(storePath)).jobs[0];
+          expect(pending).toMatchObject({ enabled: true, state: { consecutiveErrors: 1 } });
+          const dueAt =
+            phase === "repair"
+              ? startedAtMs
+              : nowMs + (phase === "agent-deferral" ? 120_000 : 5_000);
+          expect(pending?.state.nextRunAtMs).toBe(dueAt);
+          expect(pending?.state.startupCatchupAtMs).toBe(dueAt);
+          expect(pending?.state.runningAtMs).toBeUndefined();
+        } finally {
+          stop(first);
+        }
+        if (phase !== "repair") {
+          for (let restart = 0; restart < 3; restart += 1) {
+            await vi.advanceTimersByTimeAsync(1);
+            const pendingState = freshState();
+            try {
+              await fixture.track(start(pendingState));
+              const pending = (await loadCronStore(storePath)).jobs[0];
+              const dueAt = nowMs + (phase === "agent-deferral" ? 120_000 : 5_000);
+              expect(pending).toMatchObject({
+                enabled: true,
+                state: { nextRunAtMs: dueAt, startupCatchupAtMs: dueAt, consecutiveErrors: 1 },
+              });
+              expect(runJob).not.toHaveBeenCalled();
+            } finally {
+              stop(pendingState);
+            }
           }
         }
-      }
-      const second = freshState();
-      try {
-        await start(second);
-        if (phase !== "repair") {
-          expect(runJob).not.toHaveBeenCalled();
-          const delay = nowMs + (phase === "agent-deferral" ? 120_000 : 5_000) - Date.now();
-          await vi.advanceTimersByTimeAsync(delay - 1);
-          expect(runJob).not.toHaveBeenCalled();
-          await vi.advanceTimersByTimeAsync(1);
-          await finished.promise;
-          await second.op;
+        const second = freshState();
+        try {
+          await fixture.track(start(second));
+          if (phase !== "repair") {
+            expect(runJob).not.toHaveBeenCalled();
+            const delay = nowMs + (phase === "agent-deferral" ? 120_000 : 5_000) - Date.now();
+            await vi.advanceTimersByTimeAsync(delay - 1);
+            expect(runJob).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+            await fixture.waitFor(finished.promise, fixture.timerCompletion(second));
+            await second.op;
+          }
+          expect(runJob).toHaveBeenCalledOnce();
+          expect((await loadCronStore(storePath)).jobs).toHaveLength(0);
+        } finally {
+          stop(second);
         }
-        expect(runJob).toHaveBeenCalledOnce();
-        expect((await loadCronStore(storePath)).jobs).toHaveLength(0);
-      } finally {
-        stop(second);
-      }
-      const third = freshState();
-      try {
-        await start(third);
-        expect(runJob).toHaveBeenCalledOnce();
-      } finally {
-        stop(third);
-      }
-    },
+        const third = freshState();
+        try {
+          await fixture.track(start(third));
+          expect(runJob).toHaveBeenCalledOnce();
+        } finally {
+          stop(third);
+        }
+      }),
   );
 
   it("retires a stale settling receipt after its marker is already gone", async () => {

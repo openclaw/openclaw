@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
@@ -30,16 +31,50 @@ export function createNoopLogger(): NoopLogger {
   };
 }
 
-export function createCronStoreHarness(options?: { prefix?: string }) {
+type CronHarnessHooks = Record<
+  "beforeAll" | "beforeEach" | "afterEach" | "afterAll",
+  (callback: () => void | Promise<void>) => unknown
+>;
+
+const cronHarnessHooks: CronHarnessHooks = { beforeAll, beforeEach, afterEach, afterAll };
+
+export function createCronStoreHarness(options?: {
+  prefix?: string;
+  root?: string;
+  hooks?: CronHarnessHooks;
+}) {
   let fixtureRoot = "";
+  let owner: ReturnType<typeof createVitestResourceOwner> | undefined;
+  let closing = false;
   let caseId = 0;
   const stores = new Map<string, string>();
+  const hooks = options?.hooks ?? cronHarnessHooks;
 
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "openclaw-cron-"));
+  hooks.beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(
+      path.join(options?.root ?? os.tmpdir(), options?.prefix ?? "openclaw-cron-"),
+    );
+    owner = createVitestResourceOwner(fixtureRoot);
   });
 
+  function assertReleased() {
+    if (!owner) {
+      throw new Error("Cron fixture resource owner is unavailable");
+    }
+    owner.assertReleased();
+    return owner;
+  }
+
+  function assertAdmission() {
+    const current = assertReleased();
+    if (closing) {
+      throw new Error("Cron fixture acquisition is closed");
+    }
+    return current;
+  }
+
   async function cleanupStore(storePath: string, dir: string) {
+    assertReleased();
     if (!stores.has(storePath)) {
       return;
     }
@@ -48,34 +83,66 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
     stores.delete(storePath);
   }
 
-  afterEach(async () => {
+  hooks.afterEach(async () => {
+    assertReleased();
     for (const [storePath, dir] of stores) {
       await cleanupStore(storePath, dir);
     }
   });
 
-  afterAll(async () => {
-    for (const [storePath, dir] of stores) {
-      await cleanupStore(storePath, dir);
-    }
+  hooks.afterAll(async () => {
+    closing = true;
     if (!fixtureRoot) {
       return;
     }
+    assertReleased();
+    for (const [storePath, dir] of stores) {
+      await cleanupStore(storePath, dir);
+    }
+    assertReleased();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  async function makeStorePath() {
+  async function allocateStore(assertOpen: () => void) {
+    assertOpen();
     const dir = path.join(fixtureRoot, `case-${caseId++}`);
-    await fs.mkdir(dir, { recursive: true });
     const storePath = path.join(dir, "cron", "jobs.json");
+    // A late mkdir still belongs to this case, even when teardown closes admission.
     stores.set(storePath, dir);
+    await fs.mkdir(dir, { recursive: true });
+    assertOpen();
     return {
       storePath,
       cleanup: async () => await cleanupStore(storePath, dir),
     };
   }
 
-  return { makeStorePath };
+  return {
+    makeStorePath: () => allocateStore(assertAdmission),
+    assertReleased,
+    acquireFixture() {
+      const release = assertAdmission().claim();
+      let retired = false;
+      let verified: Promise<void> | undefined;
+      const closeAdmission = () => {
+        retired = true;
+      };
+      return {
+        closeAdmission,
+        makeStorePath: () =>
+          allocateStore(() => {
+            if (retired || closing) {
+              throw new Error("Cron fixture acquisition is closed");
+            }
+          }),
+        verifyQuiescence(body: () => Promise<void>) {
+          closeAdmission();
+          // A failed drain permanently retains its receipt; retry cannot certify it.
+          return (verified ??= Promise.resolve().then(body).then(release));
+        },
+      };
+    },
+  };
 }
 
 export async function writeCronStoreSnapshot(params: { storePath: string; jobs: CronJob[] }) {
@@ -88,8 +155,12 @@ export async function writeCronStoreSnapshot(params: { storePath: string; jobs: 
 export function installCronTestHooks(options: {
   logger: ReturnType<typeof createNoopLogger>;
   baseTimeIso?: string;
+  assertReleased?: () => void;
+  hooks?: CronHarnessHooks;
 }) {
-  beforeEach(() => {
+  const hooks = options.hooks ?? cronHarnessHooks;
+  hooks.beforeEach(() => {
+    options.assertReleased?.();
     vi.useFakeTimers();
     // Shared unit-thread workers run with isolate disabled, so leaked cron
     // timers from a previous file can still sit in the fake-timer queue.
@@ -102,20 +173,28 @@ export function installCronTestHooks(options: {
     options.logger.error.mockClear();
   });
 
-  afterEach(() => {
+  hooks.afterEach(() => {
+    options.assertReleased?.();
     vi.clearAllTimers();
     vi.useRealTimers();
   });
 }
 
-export function setupCronServiceSuite(options?: { prefix?: string; baseTimeIso?: string }) {
+export function setupCronServiceSuite(options?: {
+  prefix?: string;
+  baseTimeIso?: string;
+  root?: string;
+  hooks?: CronHarnessHooks;
+}) {
   const logger = createNoopLogger();
-  const { makeStorePath } = createCronStoreHarness({ prefix: options?.prefix });
+  const stores = createCronStoreHarness(options);
   installCronTestHooks({
     logger,
     baseTimeIso: options?.baseTimeIso,
+    assertReleased: stores.assertReleased,
+    hooks: options?.hooks,
   });
-  return { logger, makeStorePath };
+  return { logger, ...stores };
 }
 
 export function createFinishedBarrier() {

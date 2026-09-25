@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   openOpenClawStateDatabase,
@@ -27,11 +27,13 @@ import { locked } from "./locked.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { remove, update } from "./ops-mutations.js";
 import { run } from "./ops-run.js";
+import { createCronRecoveryFixture } from "./run-recovery.test-support.js";
 import { createCronServiceState, type CronServiceDeps } from "./state.js";
 import { tryCreateCronTaskRunHandle } from "./task-runs.js";
 import { MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
 
-const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-recovery-lifecycle-" });
+const suite = setupCronServiceSuite({ prefix: "cron-recovery-lifecycle-" });
+const { logger } = suite;
 
 describe.each([
   "stopped",
@@ -45,85 +47,101 @@ describe.each([
   "manual-write-failure-live",
   "manual-removed",
 ] as const)("one-shot recovery when %s", (mode) => {
+  const fixtures = createCronRecoveryFixture(suite, onTestFinished);
+  afterEach(() => fixtures.finishAfterEach());
   it.each(["ok", "error", "skipped"] as const)(
     "does not replay a run that finishes as %s after stopping",
-    async (status) => {
-      const { storePath } = await makeStorePath();
-      const nowMs = Date.now();
-      const atMs = nowMs + (mode === "manual-future" ? 60_000 : 0);
-      const manual = mode.startsWith("manual");
-      const writeFailure = mode.startsWith("manual-write-failure");
-      const job: CronJob = {
-        id: "shutdown-one-shot",
-        agentId: "alpha",
-        name: "shutdown one-shot",
-        enabled: true,
-        deleteAfterRun: !writeFailure,
-        createdAtMs: nowMs - 1,
-        updatedAtMs: nowMs - 1,
-        schedule: { kind: "at", at: new Date(atMs).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "command", argv: ["true"] },
-        delivery: { mode: "none" },
-        state: { nextRunAtMs: atMs },
-      };
-      if (mode === "manual" && status === "error") {
-        job.failureAlert = { after: 1, cooldownMs: 60_000, channel: "last" };
-      }
-      await writeCronStoreSnapshot({ storePath, jobs: [job] });
-      const failureDatabase = writeFailure ? openOpenClawStateDatabase().db : undefined;
-      const started = createDeferred();
-      const completion = createDeferred<{ status: CronRunStatus; error?: string }>();
-      const runCommandJob = vi.fn<NonNullable<CronServiceDeps["runCommandJob"]>>(async () => {
-        started.resolve();
-        return completion.promise;
-      });
-      const onEvent = vi.fn();
-      const sendCronFailureAlert = vi.fn(async () => undefined);
-      const freshState = () =>
-        createCronServiceState({
-          storePath,
-          cronEnabled: true,
-          log: logger,
-          nowMs: Date.now,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-          runCommandJob,
-          onEvent,
-          sendCronFailureAlert,
+    async (status) =>
+      fixtures.run(async (fixture) => {
+        const { storePath } = await fixture.makeStorePath();
+        const nowMs = Date.now();
+        const atMs = nowMs + (mode === "manual-future" ? 60_000 : 0);
+        const manual = mode.startsWith("manual");
+        const writeFailure = mode.startsWith("manual-write-failure");
+        const job: CronJob = {
+          id: "shutdown-one-shot",
+          agentId: "alpha",
+          name: "shutdown one-shot",
+          enabled: true,
+          deleteAfterRun: !writeFailure,
+          createdAtMs: nowMs - 1,
+          updatedAtMs: nowMs - 1,
+          schedule: { kind: "at", at: new Date(atMs).toISOString() },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "command", argv: ["true"] },
+          delivery: { mode: "none" },
+          state: { nextRunAtMs: atMs },
+        };
+        if (mode === "manual" && status === "error") {
+          job.failureAlert = { after: 1, cooldownMs: 60_000, channel: "last" };
+        }
+        await writeCronStoreSnapshot({ storePath, jobs: [job] });
+        const failureDatabase = writeFailure ? openOpenClawStateDatabase().db : undefined;
+        const started = createDeferred();
+        const completion = createDeferred<{ status: CronRunStatus; error?: string }>();
+        fixture.release(() => completion.resolve({ status }));
+        const runCommandJob = vi.fn<NonNullable<CronServiceDeps["runCommandJob"]>>(async () => {
+          started.resolve();
+          return completion.promise;
         });
-      const first = freshState();
-      // An earlier repair can commit before its interrupted-task notification.
-      // That orphan shares this start millisecond, but not this run's receipt.
-      tryCreateCronTaskRunHandle({ state: first, job, startedAt: nowMs });
-      const startup = manual
-        ? run(
-            first,
-            job.id,
-            mode === "manual-future" || mode === "manual-delayed-force" ? "force" : undefined,
-            mode === "manual-delayed-force" ? { scheduleOwnershipAtMs: nowMs - 1 } : undefined,
-          )
-        : start(first);
-      const settledStartup = startup.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      let successor: CronRunReceiptHandle | undefined;
-      let successorMarker: ReturnType<typeof markCronJobActive>;
-      try {
-        await started.promise;
+        const onEvent = vi.fn();
+        const sendCronFailureAlert = vi.fn(async () => undefined);
+        const freshState = () => {
+          fixture.assertCurrent();
+          return fixture.state(
+            createCronServiceState({
+              storePath,
+              cronEnabled: true,
+              log: logger,
+              nowMs: Date.now,
+              enqueueSystemEvent: vi.fn(),
+              requestHeartbeat: vi.fn(),
+              runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+              runCommandJob,
+              onEvent,
+              sendCronFailureAlert,
+            }),
+          );
+        };
+        const first = freshState();
+        // An earlier repair can commit before its interrupted-task notification.
+        // That orphan shares this start millisecond, but not this run's receipt.
+        tryCreateCronTaskRunHandle({ state: first, job, startedAt: nowMs });
+        const startup = fixture.track(
+          manual
+            ? run(
+                first,
+                job.id,
+                mode === "manual-future" || mode === "manual-delayed-force" ? "force" : undefined,
+                mode === "manual-delayed-force" ? { scheduleOwnershipAtMs: nowMs - 1 } : undefined,
+              )
+            : start(first),
+        );
+        let successor: CronRunReceiptHandle | undefined;
+        let successorMarker: ReturnType<typeof markCronJobActive>;
+        fixture.cleanup(async () => {
+          failureDatabase?.exec("DROP TRIGGER IF EXISTS reject_manual_terminal_row");
+          if (successor) {
+            finishCronRunReceipt({ handle: successor, status: "skipped", finishedAtMs: nowMs });
+            clearCronJobActive(job.id, successorMarker);
+          }
+        });
+
+        await fixture.waitFor(started.promise, startup);
         const admittedReceipt = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
         if (mode === "manual-removed") {
           const entered = createDeferred();
           const unblock = createDeferred();
-          const blocker = locked(first, async () => {
-            entered.resolve();
-            await unblock.promise;
-          });
-          await entered.promise;
-          const removal = remove(first, job.id);
+          fixture.release(() => unblock.resolve());
+          const blocker = fixture.track(
+            locked(first, async () => {
+              entered.resolve();
+              await unblock.promise;
+            }),
+          );
+          await fixture.waitFor(entered.promise, blocker);
+          const removal = fixture.track(remove(first, job.id));
           const queuedRemoval = first.op;
           completion.resolve({ status });
           try {
@@ -131,9 +149,9 @@ describe.each([
             await vi.waitFor(() => expect(first.op).not.toBe(queuedRemoval));
           } finally {
             unblock.resolve();
-            await blocker;
-            await removal;
           }
+          await blocker;
+          await removal;
         }
         if (mode === "rescheduled") {
           // A separate service owns the edit; the finishing service must reload
@@ -189,7 +207,7 @@ describe.each([
         }
         completion.resolve({ status, error: status === "error" ? "command failed" : undefined });
         if (writeFailure) {
-          expect(await settledStartup).toMatchObject({
+          await expect(startup).rejects.toMatchObject({
             message: expect.stringContaining("manual row unavailable"),
           });
           failureDatabase?.exec("DROP TRIGGER reject_manual_terminal_row");
@@ -197,7 +215,7 @@ describe.each([
             receiptId: admittedReceipt?.receiptId,
           });
         } else {
-          expect(await settledStartup).toBeUndefined();
+          await startup;
         }
         if (mode === "manual" && status === "error") {
           await vi.waitFor(() => expect(sendCronFailureAlert).toHaveBeenCalledOnce());
@@ -222,7 +240,7 @@ describe.each([
         for (let restart = 0; restart < 3; restart += 1) {
           const next = freshState();
           try {
-            await start(next);
+            await fixture.track(start(next));
             if (mode === "manual-delayed-force") {
               await vi.advanceTimersByTimeAsync(MIN_REFIRE_GAP_MS);
               await vi.waitFor(
@@ -276,16 +294,6 @@ describe.each([
             stop(next);
           }
         }
-      } finally {
-        stop(first);
-        completion.resolve({ status });
-        await settledStartup;
-        failureDatabase?.exec("DROP TRIGGER IF EXISTS reject_manual_terminal_row");
-        if (successor) {
-          finishCronRunReceipt({ handle: successor, status: "skipped", finishedAtMs: nowMs });
-          clearCronJobActive(job.id, successorMarker);
-        }
-      }
-    },
+      }),
   );
 });
