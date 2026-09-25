@@ -5,15 +5,11 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import type {
-  ModelDefinitionConfig,
-  ModelProviderConfig,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   type ProviderAuthMethodNonInteractiveContext,
-  type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/provider-setup";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 // Lmstudio tests cover setup plugin behavior.
@@ -32,6 +28,12 @@ import {
   prepareAppGuidedLmstudioSetup,
   promptAndConfigureLmstudioInteractive,
 } from "./setup.js";
+import {
+  buildConfig,
+  buildDiscoveryContext,
+  createModel,
+  runDiscovery,
+} from "./setup.test-support.js";
 
 const fetchLmstudioModelsMock = vi.hoisted(() => vi.fn());
 const discoverLmstudioModelsMock = vi.hoisted(() => vi.fn());
@@ -69,39 +71,6 @@ afterAll(() => {
   vi.resetModules();
 });
 
-function createModel(): ModelDefinitionConfig {
-  return {
-    id: "qwen3-8b-instruct",
-    name: "Qwen3 8B",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 8192,
-    maxTokens: 8192,
-  };
-}
-
-function buildConfig(
-  provider: Partial<ModelProviderConfig> = {
-    apiKey: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
-    api: "openai-completions",
-  },
-  config: Omit<OpenClawConfig, "models"> = {},
-): OpenClawConfig {
-  return {
-    ...config,
-    models: {
-      providers: {
-        lmstudio: {
-          baseUrl: LMSTUDIO_DEFAULT_INFERENCE_BASE_URL,
-          models: [],
-          ...provider,
-        },
-      },
-    },
-  };
-}
-
 function createWireModel(
   key: string,
   overrides: Omit<LmstudioModelWire, "key"> = {},
@@ -120,28 +89,6 @@ function mockFetchedModels(models: LmstudioModelWire[]): void {
 
 function mockFetchedModelsOnce(models: LmstudioModelWire[]): void {
   fetchLmstudioModelsMock.mockResolvedValueOnce({ reachable: true, status: 200, models });
-}
-
-function buildDiscoveryContext(params?: {
-  config?: OpenClawConfig;
-  apiKey?: string;
-  discoveryApiKey?: string;
-  env?: NodeJS.ProcessEnv;
-}): ProviderCatalogContext {
-  return {
-    config: params?.config ?? ({} as OpenClawConfig),
-    env: params?.env ?? {},
-    resolveProviderApiKey: () => ({
-      apiKey: params?.apiKey,
-      discoveryApiKey: params?.discoveryApiKey,
-    }),
-    resolveProviderAuth: () => ({
-      apiKey: params?.apiKey,
-      discoveryApiKey: params?.discoveryApiKey,
-      mode: "none" as const,
-      source: "none" as const,
-    }),
-  };
 }
 
 function buildNonInteractiveContext(params?: {
@@ -202,15 +149,6 @@ function runInteractive(
       ? options
       : { ...options, promptText: createPromptText() }),
   });
-}
-
-function runDiscovery(
-  provider: Partial<ModelProviderConfig>,
-  context: Omit<NonNullable<Parameters<typeof buildDiscoveryContext>[0]>, "config"> = {},
-) {
-  return discoverLmstudioProvider(
-    buildDiscoveryContext({ config: buildConfig(provider), ...context }),
-  );
 }
 
 type WizardPromptValues = {
@@ -1165,6 +1103,7 @@ describe("lmstudio setup", () => {
           ...expectedProviderPatch,
           models: explicitModels,
         },
+        outcomes: [],
       });
     },
   );

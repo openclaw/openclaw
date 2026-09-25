@@ -202,7 +202,7 @@ it.each([true, false])(
           `https://catalog.example.test/v1?api_key=${refresh}`,
         );
         expect(diagnostic).toContain("https://catalog.example.test");
-        expect(outcomes).toEqual([]);
+        expect(outcomes).toEqual([{ provider: "fixture", status: "ready" }]);
       } else {
         expect(selectedCredentials).toEqual([]);
         expect(providers).toEqual({});
