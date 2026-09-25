@@ -294,6 +294,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/compact.queued-resources.test.ts",
   "src/agents/embedded-agent-runner/compact.terminal-metadata.test.ts",
   "src/agents/embedded-agent-runner/transcript-rewrite-notifications.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-prompt-submit.admission.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-boundary.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
