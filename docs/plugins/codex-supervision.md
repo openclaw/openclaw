@@ -298,6 +298,15 @@ safe supervised branch, and a model-locked supervised Chat rejects those
 binding mutations. There is no `/codex continue` or `/codex archive` runtime
 command.
 
+A `/codex sessions --host <node> <filter>` search reads rollouts under a bounded
+scan, so on a large codex-home it can stop before every rollout is opened, and
+it summarizes an oversized rollout from a head and a tail window rather than
+reading it whole. When either happens the reply says so and offers
+`--search-all`, which reads every rollout on that node in full for that one
+request. A session id appears in its rollout filename, so an id filter is read
+first and reaches further back than a directory or message-text filter under the
+bounded scan.
+
 ## Branch from a local session
 
 Open a stored or idle session from the Gateway computer in the **Codex** sidebar
