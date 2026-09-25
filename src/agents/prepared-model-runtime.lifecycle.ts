@@ -1,4 +1,5 @@
 /** Process close owns every admitted model runtime and native catalog worker. */
+import { writeSync } from "node:fs";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
@@ -22,6 +23,12 @@ export function retirePreparedModelRuntimeGeneration(
 }
 
 type ModelRuntimeClose = (error: Error) => Promise<void>;
+function traceShutdown(phase: string, count?: number) {
+  if (!process.env.VITEST || process.env.OPENCLAW_GATEWAY_RESTART_TRACE !== "1") {
+    return;
+  }
+  writeSync(2, `${JSON.stringify({ phase, count, pid: process.pid, time: Date.now() })}\n`);
+}
 class ProcessModelRuntimeLifetimes {
   readonly closeCallbacks = new Set<ModelRuntimeClose>();
   retirePlugins?: () => Promise<void>;
@@ -67,11 +74,22 @@ export function closePreparedModelRuntimeSnapshots(): Promise<void> {
   lifetimes.closing = closed.promise;
   lifetimes.epoch += 1;
   const error = new Error("prepared model runtime process lifetime closed");
+  traceShutdown("model.close-callbacks.enter", lifetimes.closeCallbacks.size);
   void Promise.allSettled(
-    [...lifetimes.closeCallbacks].map(async (close) => await close(error)),
+    [...lifetimes.closeCallbacks].map(async (close, index) => {
+      traceShutdown("model.close-callback.enter", index);
+      try {
+        return await close(error);
+      } finally {
+        traceShutdown("model.close-callback.settled", index);
+      }
+    }),
   ).then(async (results) => {
+    traceShutdown("model.close-callbacks.exit");
     try {
+      traceShutdown("model.retire-plugins.enter");
       await lifetimes.retirePlugins?.();
+      traceShutdown("model.retire-plugins.exit");
       lifetimes.retirePlugins = undefined;
     } catch (reason) {
       results.push({ status: "rejected", reason });

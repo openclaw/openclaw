@@ -1,3 +1,4 @@
+import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import chokidar from "chokidar";
@@ -20,6 +21,17 @@ import { withTestTimeout } from "../promise.js";
 import { runQaGatewayFixture } from "../qa-gateway-cleanup.js";
 
 const GATEWAY_TOKEN = "config-rpc-synthetic-token";
+let traceFixture = 0;
+
+function traceShutdown(phase: string) {
+  if (!process.env.VITEST || process.env.OPENCLAW_GATEWAY_RESTART_TRACE !== "1") {
+    return;
+  }
+  writeSync(
+    2,
+    `${JSON.stringify({ phase, fixture: traceFixture, pid: process.pid, time: Date.now() })}\n`,
+  );
+}
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
@@ -74,6 +86,11 @@ async function startConfigRpcGateway({
   configRelativePath,
   watchConfigFiles = true,
 }: ConfigRpcGatewayOptions = {}) {
+  if (process.env.VITEST && process.env.OPENCLAW_GATEWAY_RESTART_TRACE === "1") {
+    traceFixture += 1;
+  }
+  traceShutdown("fixture.start.enter");
+  traceShutdown("fixture.state.enter");
   state = await createOpenClawTestState({
     label: "config-rpc",
     env: {
@@ -92,6 +109,7 @@ async function startConfigRpcGateway({
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve(import.meta.dirname, "../../../dist/extensions"),
     },
   });
+  traceShutdown("fixture.state.exit");
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
   const config = { agents: { entries: { main: {} } } };
   const configPath = configRelativePath ? state.statePath(configRelativePath) : state.configPath;
@@ -101,6 +119,7 @@ async function startConfigRpcGateway({
   } else {
     await state.writeConfig(config);
   }
+  traceShutdown("fixture.config-seeded");
   if (!watchConfigFiles) {
     const watch = chokidar.watch;
     vi.spyOn(chokidar, "watch").mockImplementation((paths, options) => {
@@ -115,12 +134,14 @@ async function startConfigRpcGateway({
   }
   hotReloadRecovery.mockClear();
   const port = await getFreePort();
+  traceShutdown("fixture.server-start.enter");
   server = await startGatewayServer(port, {
     auth: { mode: "token", token: GATEWAY_TOKEN },
     prepareConfigSnapshot: prepareHostConfigSnapshot,
     controlUiEnabled: false,
     hotReloadRecovery,
   });
+  traceShutdown("fixture.server-start.exit");
   const connected = createDeferredCore();
   client = new GatewayClient({
     url: `ws://127.0.0.1:${port}`,
@@ -141,21 +162,31 @@ async function startConfigRpcGateway({
     onClose: (code, reason) => connected.reject(new Error(`closed ${code}: ${reason}`)),
   });
   client.start();
+  traceShutdown("fixture.client-connect.enter");
   await withTestTimeout(connected.promise, 10_000, "gateway connect timeout");
+  traceShutdown("fixture.client-connect.exit");
+  traceShutdown("fixture.startup-settled.enter");
   await server.startupSettled;
+  traceShutdown("fixture.startup-settled.exit");
+  traceShutdown("fixture.start.exit");
 }
 
 async function stopConfigRpcGateway() {
+  traceShutdown("fixture.stop.enter");
   // This fixture has no run loop. Retire direct RPC restart timers before
   // teardown and after its owners drain so they cannot reach the next case.
   await runQaGatewayFixture(
     async () => resetGatewayRestartStateForInProcessRestart(),
     async () => {
+      traceShutdown("fixture.client-stop.enter");
       await client?.stopAndWait();
+      traceShutdown("fixture.client-stop.exit");
       client = undefined;
     },
     async () => {
+      traceShutdown("fixture.server-close.enter");
       await server?.close();
+      traceShutdown("fixture.server-close.exit");
       server = undefined;
     },
     () => Promise.all(unarmedConfigWatchers.splice(0).map((watcher) => watcher.close())),
@@ -166,6 +197,7 @@ async function stopConfigRpcGateway() {
     () => vi.restoreAllMocks(),
     () => expect(hotReloadRecovery).not.toHaveBeenCalled(),
   );
+  traceShutdown("fixture.stop.exit");
 }
 
 export async function resetTempDir(name: string): Promise<string> {

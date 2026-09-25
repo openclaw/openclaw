@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { isDeepStrictEqual } from "node:util";
 import { runOutsideSetupCredentialAccess } from "../agents/auth-profiles/setup-access.js";
@@ -1515,16 +1516,33 @@ export function startGatewayConfigReloader(opts: {
     applyPluginLifecycleChange,
     isReloading: () => activeReloads.size > 0,
     stop: async () => {
+      const traceShutdown = (phase: string) => {
+        if (!process.env.VITEST || process.env.OPENCLAW_GATEWAY_RESTART_TRACE !== "1") {
+          return;
+        }
+        writeSync(
+          2,
+          `${JSON.stringify({ phase, count: activeReloads.size, pid: process.pid, time: Date.now() })}\n`,
+        );
+      };
+      traceShutdown("config-reloader.stop.enter");
       stopped = true;
       lifecycle.abort(new GatewayConfigReloadSupersededError());
       settleApplication(pendingInProcessConfig, "stopped");
       settleApplication(activeInProcessConfig, "stopped");
       settleApplication(retryWriteCandidate, "stopped");
       clearReloadTimer();
+      traceShutdown("config-reloader.source-stop.enter");
       await source.stop();
+      traceShutdown("config-reloader.source-stop.exit");
+      traceShutdown("config-reloader.ready.enter");
       await ready.catch(() => {});
+      traceShutdown("config-reloader.ready.exit");
       // Timer callbacks detach runReload; shutdown owns their full transaction unwind.
+      traceShutdown("config-reloader.active-reloads.enter");
       await Promise.all(activeReloads);
+      traceShutdown("config-reloader.active-reloads.exit");
+      traceShutdown("config-reloader.stop.exit");
     },
     hotReloadStatus: () => (initialized ? source.status() : undefined),
   };

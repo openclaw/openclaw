@@ -1,3 +1,4 @@
+import { writeSync } from "node:fs";
 import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
@@ -56,6 +57,13 @@ import { createSessionViewerPresenceDeclarations } from "./session-viewer-presen
 
 type GatewayRuntimePreparation = Awaited<ReturnType<typeof prepareGatewayKernelState>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
+
+function traceShutdown(phase: string) {
+  if (!process.env.VITEST || process.env.OPENCLAW_GATEWAY_RESTART_TRACE !== "1") {
+    return;
+  }
+  writeSync(2, `${JSON.stringify({ phase, pid: process.pid, time: Date.now() })}\n`);
+}
 
 export async function prepareGatewayLifecycle(params: {
   runtime: GatewayRuntimePreparation;
@@ -441,6 +449,7 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.controlUiSessionPullRequests?.stop(),
       healthWork.drain(),
     ]);
+    traceShutdown("lifecycle.prelude.exit");
   };
   const runClosePrelude = async () => {
     await beginClosePrelude();

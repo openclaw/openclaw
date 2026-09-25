@@ -1,3 +1,4 @@
+import { writeSync } from "node:fs";
 import type { Server as HttpServer } from "node:http";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import type { WebSocketServer } from "ws";
@@ -642,7 +643,15 @@ async function closeGatewayResources(
   } finally {
     // Grace lets independent teardown advance; raw cleanup and its descendants
     // still join before registry and shared-state retirement.
+    const traceShutdown = (phase: string) => {
+      if (!process.env.VITEST || process.env.OPENCLAW_GATEWAY_RESTART_TRACE !== "1") {
+        return;
+      }
+      writeSync(2, `${JSON.stringify({ phase, pid: process.pid, time: Date.now() })}\n`);
+    };
+    traceShutdown("close.cleanup-idle.enter");
     await cleanupWork.runWhenIdle(() => {});
+    traceShutdown("close.cleanup-idle.exit");
     await pluginServicesCleanup;
     await params.finishRequestEntries?.();
     await waitForMediaCleanupDrainsToSettle();
@@ -655,12 +664,14 @@ async function closeGatewayResources(
     // A sibling Gateway retains metadata before its registry exists. Only the
     // final owner may retire shared state and process-wide plugin caches.
     try {
+      traceShutdown("close.registry.enter");
       const registryClose = await params.closePluginRegistry(async (retireRegistry) => {
         // SDK cleanup can use prepared donors; release its claims before model or registry disposal.
         await params.closeSdkResources?.().catch(recordResourceCleanupFailure);
         return params.pluginMetadata.close(async (retire) => {
           await closeSwarmScheduler().catch(recordResourceCleanupFailure);
           await closePreparedModelRuntimeSnapshots();
+          traceShutdown("close.model-snapshots.exit");
           await closeSessionTranscriptReconcileWorkerPool();
           await retire();
           await cleanupWork.runWhenIdle(() => {});
@@ -682,6 +693,7 @@ async function closeGatewayResources(
           }
         }, retireRegistry);
       });
+      traceShutdown("close.registry.exit");
       for (const error of registryClose.memoryErrors) {
         shutdownLog.warn(`memory-managers: ${formatErrorMessage(error)}`);
         recordShutdownWarning(warnings, "memory-managers");

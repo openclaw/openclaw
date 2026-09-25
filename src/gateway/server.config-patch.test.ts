@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configRpcWorkspacePath,
   getConfigHash,
@@ -42,6 +42,37 @@ import {
 } from "./server.config-patch.test-support.js";
 
 const reloadBarrier = vi.hoisted(() => ({ wait: undefined as Promise<void> | undefined }));
+
+// Temporary CI shutdown localization; remove these markers before landing.
+let originalShutdownTrace: string | undefined;
+let traceCase = 0;
+function traceShutdown(phase: string) {
+  if (!process.env.VITEST || process.env.OPENCLAW_GATEWAY_RESTART_TRACE !== "1") {
+    return;
+  }
+  fsNode.writeSync(
+    2,
+    `${JSON.stringify({ phase, case: traceCase, pid: process.pid, time: Date.now() })}\n`,
+  );
+}
+beforeAll(() => {
+  originalShutdownTrace = process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
+  process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
+});
+afterAll(() => {
+  if (originalShutdownTrace === undefined) {
+    delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
+  } else {
+    process.env.OPENCLAW_GATEWAY_RESTART_TRACE = originalShutdownTrace;
+  }
+});
+beforeEach(() => {
+  if (process.env.VITEST && process.env.OPENCLAW_GATEWAY_RESTART_TRACE === "1") {
+    traceCase += 1;
+  }
+  traceShutdown("test.scope.enter");
+});
+afterEach(() => traceShutdown("test.scope.exit"));
 
 vi.mock("./config-reload.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./config-reload.js")>();
@@ -208,6 +239,7 @@ describe("gateway config methods", () => {
   it.each(["plain", "unrelated-include", "include-only"] as const)(
     "openclaw.changes.list preserves an approved %s operation without a duplicate write",
     async (layout) => {
+      traceShutdown(`test.body.${layout}.enter`);
       const { executeSystemAgentOperation } = await import("../system-agent/operations.js");
       const { readConfigFileSnapshot } = await import("../config/config.js");
       const original = await getCurrentConfigObject();
@@ -266,6 +298,7 @@ describe("gateway config methods", () => {
       } else {
         expect(await fs.readFile(includePath, "utf8")).toBe(includeBefore);
       }
+      traceShutdown(`test.body.${layout}.exit`);
     },
   );
 });

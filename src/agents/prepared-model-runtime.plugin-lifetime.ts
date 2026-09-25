@@ -1,3 +1,4 @@
+import { writeSync } from "node:fs";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -42,6 +43,12 @@ import type {
 import { releaseRuntimePluginWork, retainRuntimePluginWork } from "./runtime-plugin-work.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
+function traceShutdown(phase: string, count?: number) {
+  if (!process.env.VITEST || process.env.OPENCLAW_GATEWAY_RESTART_TRACE !== "1") {
+    return;
+  }
+  writeSync(2, `${JSON.stringify({ phase, count, pid: process.pid, time: Date.now() })}\n`);
+}
 type Lifetime = ReturnType<typeof createLifetime>;
 // Source and compiled consumers can share the same generation and registry objects.
 // Share only cleanup ownership; model/auth snapshots keep their existing module identity.
@@ -89,6 +96,7 @@ function createLifetime(dispose: () => Promise<unknown>, retainWork?: () => () =
     },
     close(): Promise<void> {
       if (!closing) {
+        traceShutdown("generation.close.requested", references.size);
         const completion = (closing = createDeferredCore());
         retirements.add(completion.promise);
         void completion.promise.then(
@@ -318,6 +326,7 @@ export async function discardPreparedPluginGeneration(
 
 /** Process shutdown owns every outstanding generation and any earlier cleanup failure. */
 async function closePreparedPluginGenerations(): Promise<void> {
+  traceShutdown("generation.join.enter", active.size);
   const resourcesClosed = Promise.allSettled([closeEphemeralPreparedModelRuntimeResources()]);
   const pending = new Set([...active].map((lifetime) => lifetime.close()));
   for (const completion of retirements) {
@@ -328,13 +337,18 @@ async function closePreparedPluginGenerations(): Promise<void> {
     retirements.delete(completion);
   }
   const results = await Promise.allSettled(pending);
+  traceShutdown("generation.join.exit", pending.size);
+  traceShutdown("generation.ephemeral.enter");
   results.push(...(await resourcesClosed));
+  traceShutdown("generation.ephemeral.exit");
   const failures = results.flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],
   );
   let retained = failures.some(hasRetainedPluginRuntimeCloseError);
   try {
+    traceShutdown("generation.cache-retirement.enter");
     await waitForPluginCacheRetirement(true);
+    traceShutdown("generation.cache-retirement.exit");
   } catch (reason) {
     retained = true;
     failures.push(reason);

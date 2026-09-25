@@ -1,4 +1,5 @@
 /** Lifecycle-owned auth/model discovery snapshots for agent runs. */
+import { writeSync } from "node:fs";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -89,6 +90,12 @@ export type {
 export type { PreparedModelCatalogRefreshOptions } from "./prepared-model-runtime.types.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
+function traceShutdown(phase: string, count: number) {
+  if (!process.env.VITEST || process.env.OPENCLAW_GATEWAY_RESTART_TRACE !== "1") {
+    return;
+  }
+  writeSync(2, `${JSON.stringify({ phase, count, pid: process.pid, time: Date.now() })}\n`);
+}
 // Match channel startup grace. Startup releases its foreground wait at this
 // deadline; the completion chain continues to own acquisition and serialization.
 const DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS = 120_000;
@@ -143,11 +150,22 @@ async function closeModelRuntime(error: Error): Promise<void> {
   gatewayLifecycleActive = false;
   replyDispatchPublication.clear();
   refreshCancellation.abort(error);
-  const results = await Promise.allSettled([
+  const closingWork = [
     publicationQueue.settle(),
     ...agentBuildCompletions.values(),
     ...standaloneActivationTails.values(),
-  ]);
+  ];
+  if (process.env.VITEST && process.env.OPENCLAW_GATEWAY_RESTART_TRACE === "1") {
+    traceShutdown("model.work-join.enter", closingWork.length);
+    closingWork.forEach((work, index) => {
+      void work.then(
+        () => traceShutdown("model.work-join.exit", index),
+        () => traceShutdown("model.work-join.reject", index),
+      );
+    });
+  }
+  const results = await Promise.allSettled(closingWork);
+  traceShutdown("model.work-join.complete", closingWork.length);
   closingOwners.forEach(releasePreparedPluginPublication);
   releaseProcessLifetime?.();
   releaseProcessLifetime = undefined;
