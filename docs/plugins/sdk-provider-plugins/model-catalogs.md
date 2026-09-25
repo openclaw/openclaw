@@ -64,6 +64,8 @@ discovery results use `outcomes: []` so their fallback rows are not recorded as
 successful account discovery.
 Each outcome carries the profile selected for the actual request, when one
 supplied its credential. Family providers report each sibling independently.
+Provider-scoped refreshes preserve explicit outcomes reported under a registered
+alias of the selected provider; unrelated sibling outcomes remain excluded.
 With a positive cache lifetime, validated empty results use the same
 successful-observation lifetime as nonempty results. After expiry, ordinary
 catalog reads return retained rows while the existing inventory owner refreshes
@@ -85,9 +87,11 @@ without the selected credential.
 The strict and advisory paths share the same guarded transport and cache, with
 separate cache identities. Advisory calls still retain only nonempty results.
 Custom live builders can use `runLiveProviderCatalog` at their catalog hook
-to convert acquisition errors into outcomes. Keep metadata-feed fallback
-separate from account discovery; do not retry a rejected account request
+to report successful acquisition and convert acquisition errors into outcomes.
+Returning provider configuration alone does not establish a live discovery outcome.
+Keep metadata-feed fallback separate from account discovery; do not retry a rejected account request
 anonymously or substitute seed rows inside a strict builder.
+Legacy hooks that omit outcomes retain the compatibility behavior described above.
 
 Custom catalog hooks may receive optional `mode` metadata from
 `ctx.resolveProviderApiKey()`: `api_key`, `oauth`, or `token`. When present,
