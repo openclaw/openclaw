@@ -49,6 +49,10 @@ export type AppServerRuntimeModelBackendBinding = {
 const APP_SERVER_RUNTIME_MODEL_BACKEND_BINDINGS: readonly AppServerRuntimeModelBackendBinding[] = [
   // Codex app-server harness (extensions/codex) running OpenAI models.
   { provider: "openai", runtime: "codex" },
+  // OpenAI Agents API harness (extensions/agentsapi) running OpenAI models via
+  // hosted Agents API sessions — see agentsapi-harness.ts's `ctx.provider !==
+  // "openai"` gate.
+  { provider: "openai", runtime: "agentsapi" },
   // GitHub Copilot agent runtime (extensions/copilot). `github-copilot/*` models
   // opt into it with `agentRuntime.id: "copilot"` — see copilot-routing.ts.
   { provider: "github-copilot", runtime: "copilot" },

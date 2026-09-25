@@ -535,7 +535,7 @@ try {
   const { parseInlineSessionDirectives } = (await importSource(
     "src/auto-reply/reply/directive-handling.parse.ts",
   )) as DirectiveParseModule;
-  const { applySessionModelSelection } = (await importSource(
+  const { applySessionModelSelectionInternal: applySessionModelSelection } = (await importSource(
     "src/model-picker/apply-session-model-selection.ts",
   )) as ApplySelectionModule;
   const { resolveSessionRuntimeOverrideForProvider } = (await importSource(
