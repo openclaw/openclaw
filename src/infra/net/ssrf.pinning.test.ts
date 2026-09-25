@@ -381,6 +381,64 @@ describe("ssrf pinning", () => {
     ).rejects.toThrow(SsrFBlockedError);
   });
 
+  describe("allowUnspecifiedIpv4Range (narrower than allowPrivateNetwork)", () => {
+    it("allows a trusted hostname rebound into the 0.0.0.0/8 unspecified range", async () => {
+      // Regression for container runtimes whose synthetic host-gateway hostname
+      // (e.g. Docker's host.docker.internal under OrbStack) resolves here.
+      const lookup = vi.fn(async () => [
+        { address: "0.250.250.254", family: 4 },
+      ]) as unknown as LookupFn;
+
+      const pinned = await resolvePinnedHostnameWithPolicy("model.lan", {
+        lookupFn: lookup,
+        policy: { allowedHostnames: ["model.lan"], allowUnspecifiedIpv4Range: true },
+      });
+      expect(pinned.addresses).toEqual(["0.250.250.254"]);
+    });
+
+    it.each([
+      ["cloud metadata", "100.100.100.200", 4],
+      ["link-local (classic AWS/GCP/Azure metadata address)", "169.254.169.254", 4],
+      ["loopback", "127.0.0.1", 4],
+      ["IPv6 unspecified", "::", 6],
+      // The exemption is IPv4-family-only: an IPv6-embedded/mapped/NAT64 form of an
+      // unspecified IPv4 address is exactly the rebinding vector this check exists to
+      // catch, and reports family 6, not 4 — so it is not exempted either.
+      ["IPv4-mapped IPv6 unspecified", "::ffff:0.0.0.0", 6],
+      ["NAT64-embedded IPv4 unspecified", "64:ff9b::0.0.0.0", 6],
+      // Excluded even though it IS in the exempted range and IS family 4: most OS
+      // network stacks treat a literal 0.0.0.0 connect target as a loopback alias, so a
+      // rebound trusted hostname must not reach whatever is bound to loopback on the
+      // configured port this way.
+      ["literal 0.0.0.0", "0.0.0.0", 4],
+    ] as const)(
+      "still rejects a trusted hostname rebound to %s even with allowUnspecifiedIpv4Range",
+      async (_name, address, family) => {
+        const lookup = vi.fn(async () => [{ address, family }]) as unknown as LookupFn;
+
+        await expect(
+          resolvePinnedHostnameWithPolicy("model.lan", {
+            lookupFn: lookup,
+            policy: { allowedHostnames: ["model.lan"], allowUnspecifiedIpv4Range: true },
+          }),
+        ).rejects.toThrow(SsrFBlockedError);
+      },
+    );
+
+    it("does not by itself exempt a hostname that was never allowlisted/trusted", async () => {
+      const lookup = vi.fn(async () => [
+        { address: "0.42.42.42", family: 4 },
+      ]) as unknown as LookupFn;
+
+      await expect(
+        resolvePinnedHostnameWithPolicy("untrusted.example", {
+          lookupFn: lookup,
+          policy: { allowUnspecifiedIpv4Range: true },
+        }),
+      ).rejects.toThrow(SsrFBlockedError);
+    });
+  });
+
   describe("asynchronous delivery contract", () => {
     function createLookup() {
       return createPinnedLookup({
