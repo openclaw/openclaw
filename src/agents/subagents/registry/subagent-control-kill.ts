@@ -7,6 +7,7 @@ import {
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { runExclusiveSessionLifecycleMutation } from "../../../sessions/session-lifecycle-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
 import {
   captureTaskCancellationControl,
@@ -253,16 +254,45 @@ async function withSubagentKillScope<T>(
       },
     };
     scope.refresh();
-    const result = await run(scope, trees);
-    if (preparePublication) {
-      do {
-        await preparePublication.prepare();
-      } while (preparePublication.needsPreparation());
+    const complete = async (result: T) => {
+      if (preparePublication) {
+        do {
+          await preparePublication.prepare();
+        } while (preparePublication.needsPreparation());
+      }
+      if (publish) {
+        params.assertCurrent?.();
+      }
+      return publish ? publish(result, trees) : result;
+    };
+    const publicationTargets =
+      preparePublication && publish
+        ? trees.flatMap(({ entry, session }) =>
+            session
+              ? [
+                  {
+                    scope: session.storePath,
+                    identities: [entry.childSessionKey, session.entry?.sessionId],
+                  },
+                ]
+              : [],
+          )
+        : [];
+    let value: T;
+    if (publicationTargets.length) {
+      let result: T;
+      value = await runExclusiveSessionLifecycleMutation({
+        targets: publicationTargets,
+        // Keep the mutation fence through publication without holding lifecycle locks during drain.
+        prepare: async () => {
+          result = await run(scope, trees);
+        },
+        run: () => complete(result),
+      });
+    } else {
+      value = await complete(await run(scope, trees));
     }
-    if (publish) {
-      params.assertCurrent?.();
-    }
-    outcome = { ok: true, value: publish ? publish(result, trees) : result };
+    outcome = { ok: true, value };
   } catch (error) {
     outcome = { ok: false, error };
   }

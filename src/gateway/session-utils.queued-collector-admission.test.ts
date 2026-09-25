@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
+import * as subagentControlKill from "../agents/subagents/registry/subagent-control-kill.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { isSubagentRunQueued } from "../agents/subagents/registry/subagent-registry-read.js";
 import { spawnSubagentDirect } from "../agents/subagents/spawn/subagent-spawn.js";
@@ -17,6 +18,7 @@ import {
   getAgentRunContext,
   getAgentRunLifecycleGeneration,
 } from "../infra/agent-run-registry.js";
+import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
 import { unwrapGatewayMethodDispatchResponse } from "./server-in-process-dispatch.js";
 import { agentRunHandler } from "./server-methods/agent-run-handler.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
@@ -36,6 +38,13 @@ describe("queued collector native admission", () => {
       const context = requestContext();
       const entered = createDeferred();
       const dispatched = createDeferred();
+      const cleanupRequested = createDeferred();
+      const allowCleanup = createDeferred();
+      const cleanupDispatched = createDeferred();
+      const publicationEntered = createDeferred();
+      const allowPublication = createDeferred();
+      const publicationOrder: string[] = [];
+      let restorePublication = () => {};
       let nativeRunId: string | undefined;
       const agentResponse = vi.fn();
       const runtimeGate = vi
@@ -84,10 +93,17 @@ describe("queued collector native admission", () => {
           } else if (method === "chat.abort") {
             await handleChatAbortRequest(request);
           } else if (method === "sessions.delete") {
-            await expectDefined(
+            cleanupRequested.resolve();
+            await allowCleanup.promise;
+            const deletion = expectDefined(
               sessionDeleteHandlers["sessions.delete"],
               "sessions.delete handler",
             )(request);
+            cleanupDispatched.resolve();
+            await deletion;
+            if (respond.mock.calls[0]?.[0] === true) {
+              publicationOrder.push("deleted");
+            }
           } else {
             throw new Error(`Unexpected native cleanup method ${method}`);
           }
@@ -151,20 +167,75 @@ describe("queued collector native admission", () => {
           releaseCapacityWait?.();
         }
         expect(entry.execution.startedAt).toBeUndefined();
+        const target = loadGatewaySessionEntryReadOnly(entry.childSessionKey);
+        const kill = subagentControlKill.killSubagentRunAdmin;
+        const publication = vi
+          .spyOn(subagentControlKill, "killSubagentRunAdmin")
+          .mockImplementation((params, control) => {
+            if (!control?.preparePublication) {
+              return kill(params, control);
+            }
+            const preparation = control.preparePublication;
+            return kill(
+              {
+                ...params,
+                onResult: (result) => {
+                  const returned = params.onResult?.(result);
+                  publicationOrder.push("published");
+                  return returned;
+                },
+              },
+              {
+                ...control,
+                preparePublication: {
+                  ...preparation,
+                  prepare: async () => {
+                    publicationEntered.resolve();
+                    await allowPublication.promise;
+                    await preparation.prepare();
+                  },
+                },
+              },
+            );
+          });
+        restorePublication = () => publication.mockRestore();
         const respond = vi.fn();
-        await sessionAbortHandlers["sessions.abort"]!({
-          req: { type: "req", id: "stop-native-preaccept", method: "sessions.abort" },
-          params: {
-            key: entry.childSessionKey,
-            ...(exact ? { runId: entry.runId } : { clearQueued: true }),
-          },
-          context,
-          respond,
-          client: operatorClient(),
-          isWebchatConnect: () => false,
-        });
+        const aborting = Promise.resolve(
+          sessionAbortHandlers["sessions.abort"]!({
+            req: { type: "req", id: "stop-native-preaccept", method: "sessions.abort" },
+            params: {
+              key: entry.childSessionKey,
+              ...(exact ? { runId: entry.runId } : { clearQueued: true }),
+            },
+            context,
+            respond,
+            client: operatorClient(),
+            isWebchatConnect: () => false,
+          }),
+        );
+        try {
+          await Promise.race([
+            publicationEntered.promise,
+            aborting.then(() => {
+              throw new Error("Stop returned before cancellation publication preparation");
+            }),
+          ]);
+          await cleanupRequested.promise;
+          // A competing cleanup must remain outside the cancellation owner's publication fence.
+          // Observe before dispatching deletion so its own mutation cannot satisfy this invariant.
+          const publicationHeld = isSessionLifecycleMutationActive(target.storePath, [
+            entry.childSessionKey,
+            target.entry?.sessionId,
+          ]);
+          allowCleanup.resolve();
+          await cleanupDispatched.promise;
+          expect.soft(publicationHeld).toBe(true);
+        } finally {
+          allowCleanup.resolve();
+          allowPublication.resolve();
+          await aborting;
+        }
         await dispatched.promise;
-        await vi.waitFor(() => expect(entry.collectorCompletion?.status).toBe("killed"));
         expect
           .soft(respond.mock.calls[0]?.slice(0, 2), JSON.stringify(respond.mock.calls[0]?.[2]))
           .toEqual([true, { ok: true, status: "aborted", abortedRunId: entry.runId }]);
@@ -175,13 +246,18 @@ describe("queued collector native admission", () => {
         expect(context.chatAbortControllers.has(entry.runId)).toBe(false);
         // This unadopted launch still owns its provisional session; join its real cleanup.
         await closeSwarmScheduler();
+        expect(entry.collectorCompletion?.status).toBe("killed");
+        expect(publicationOrder).toEqual(["published", "deleted"]);
         expect(loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry).toBeUndefined();
       } finally {
+        allowCleanup.resolve();
+        allowPublication.resolve();
         if (nativeRunId) {
           context.chatAbortControllers.get(nativeRunId)?.controller.abort();
           await dispatched.promise;
           clearAgentRunContext(nativeRunId);
         }
+        restorePublication();
         runtimeGate.mockRestore();
       }
     },
