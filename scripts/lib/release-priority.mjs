@@ -7,9 +7,9 @@ import { dirname } from "node:path";
 export const RELEASE_PRIORITY_VARIABLE = "OPENCLAW_RELEASE_PRIORITY_RUN";
 export const RELEASE_PRIORITY_RECORD_KIND = "openclaw.frv-release-priority";
 const CI_GATE_JOB = "openclaw/ci-gate";
-// Hosted-runner workflows whose root jobs carry the variable gate.
+// Workflows retained for restoring runs deferred by the former variable gate.
 // Security Review stays live: it owns approval revocation for openclaw/ci-gate.
-export const RELEASE_PRIORITY_WORKFLOWS = Object.freeze([
+const RELEASE_PRIORITY_WORKFLOWS = Object.freeze([
   "CI",
   "Auto response",
   "PR context and evidence",

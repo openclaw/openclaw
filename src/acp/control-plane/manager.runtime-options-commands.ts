@@ -37,20 +37,25 @@ type RuntimeOptionCommandContext = RuntimeOptionCommandServices & {
   agentId: string;
 };
 
-/** Applies a backend runtime mode control and persists the selected mode. */
-export async function runSetManagerSessionRuntimeMode(
-  params: RuntimeOptionCommandContext & { runtimeMode: string },
-): Promise<AcpSessionRuntimeOptions> {
+function resolveRuntimeOptionSessionMeta(params: RuntimeOptionCommandContext) {
   if (!params.isCurrentActor()) {
     throw createSupersededActorError(params.sessionKey);
   }
   params.assertActive?.();
-  const resolution = params.resolveSession({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
-  const resolvedMeta = requireReadySessionMeta(resolution);
+  return requireReadySessionMeta(
+    params.resolveSession({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+    }),
+  );
+}
+
+/** Applies a backend runtime mode control and persists the selected mode. */
+export async function runSetManagerSessionRuntimeMode(
+  params: RuntimeOptionCommandContext & { runtimeMode: string },
+): Promise<AcpSessionRuntimeOptions> {
+  const resolvedMeta = resolveRuntimeOptionSessionMeta(params);
   const { runtime, handle, meta } = await params.ensureRuntimeHandle({
     assertActive: params.assertActive,
     cfg: params.cfg,
@@ -104,16 +109,7 @@ export async function runSetManagerSessionRuntimeMode(
 export async function runSetManagerSessionConfigOption(
   params: RuntimeOptionCommandContext & { key: string; value: string },
 ): Promise<AcpSessionRuntimeOptions> {
-  if (!params.isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
-  params.assertActive?.();
-  const resolution = params.resolveSession({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
-  const resolvedMeta = requireReadySessionMeta(resolution);
+  const resolvedMeta = resolveRuntimeOptionSessionMeta(params);
   const { runtime, handle, meta } = await params.ensureRuntimeHandle({
     assertActive: params.assertActive,
     cfg: params.cfg,
@@ -182,16 +178,7 @@ export async function runSetManagerSessionConfigOption(
 export async function runUpdateManagerSessionRuntimeOptions(
   params: RuntimeOptionCommandContext & { patch: Partial<AcpSessionRuntimeOptions> },
 ): Promise<AcpSessionRuntimeOptions> {
-  if (!params.isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
-  params.assertActive?.();
-  const resolution = params.resolveSession({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
-  const resolvedMeta = requireReadySessionMeta(resolution);
+  const resolvedMeta = resolveRuntimeOptionSessionMeta(params);
   const nextOptions = mergeRuntimeOptions({
     current: resolveRuntimeOptionsFromMeta(resolvedMeta),
     patch: params.patch,
@@ -208,16 +195,7 @@ export async function runUpdateManagerSessionRuntimeOptions(
 export async function runResetManagerSessionRuntimeOptions(
   params: RuntimeOptionCommandContext,
 ): Promise<AcpSessionRuntimeOptions> {
-  if (!params.isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
-  params.assertActive?.();
-  const resolution = params.resolveSession({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
-  requireReadySessionMeta(resolution);
+  resolveRuntimeOptionSessionMeta(params);
   const cached = params.runtimeHandles.get(params);
   if (cached) {
     await withAcpRuntimeErrorBoundary({

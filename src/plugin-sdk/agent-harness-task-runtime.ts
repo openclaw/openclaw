@@ -56,6 +56,8 @@ import {
 } from "../tasks/task-registry-records.js";
 import type { TaskPersistenceReceipt, TaskRunTransition } from "../tasks/task-registry.types.js";
 
+export { createAgentHarnessCommandTask } from "../tasks/agent-harness-command-task.js";
+
 export { createAgentHarnessTaskEventSink } from "../tasks/agent-harness-completion-custody.js";
 export type { AgentHarnessCompletionCustody };
 export {
@@ -109,7 +111,7 @@ function projectHarnessTaskContentForPersistence<T extends HarnessTaskContent>(
 /** Retains admitted completion work for this exact physical requester lifecycle. */
 export function captureAgentHarnessCompletionCustody(
   scope: AgentHarnessTaskRuntimeScope,
-): AgentHarnessCompletionCustody | undefined {
+): Promise<AgentHarnessCompletionCustody | undefined> {
   assertAgentHarnessTaskRuntimeScope(scope);
   const entry = loadRequesterSessionEntry(scope.requesterSessionKey).entry;
   const expected = { sessionId: entry?.sessionId, lifecycleRevision: entry?.lifecycleRevision };

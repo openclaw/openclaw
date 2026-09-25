@@ -59,7 +59,7 @@ export async function createBotHandlerWithOptions(options: {
   const runtimeError = options.runtimeError ?? vi.fn();
   const runtimeLog = options.runtimeLog ?? vi.fn();
   const effectiveProxyFetch = options.proxyFetch ?? (undiciFetchSpyRef as unknown as typeof fetch);
-  createTelegramBotRef({
+  await createTelegramBotRef({
     token: "tok",
     // Production always constructs the bot from getMe(), so inbound handlers may
     // resolve the bot user id from botInfo when a test ctx carries only a username.

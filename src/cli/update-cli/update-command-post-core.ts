@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
@@ -443,6 +442,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       handoffEnv[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV] = sentinelPath;
     }
     const child = spawn(nodeRunner, argv, {
+      cwd: params.root,
       stdio: childStdio,
       env: {
         ...handoffEnv,
@@ -608,15 +608,6 @@ export function shouldResumePostCoreUpdateInFreshProcess(params: {
   if (params.installKindChanged === true || isPackageManagerUpdateMode(result.mode)) {
     return true;
   }
-  if (result.mode !== "git") {
-    return false;
-  }
-  const beforeSha = normalizeOptionalString(result.before?.sha);
-  const afterSha = normalizeOptionalString(result.after?.sha);
-  if (beforeSha && afterSha && beforeSha !== afterSha) {
-    return true;
-  }
-  const beforeVersion = normalizeOptionalString(result.before?.version);
-  const afterVersion = normalizeOptionalString(result.after?.version);
-  return Boolean(beforeVersion && afterVersion && beforeVersion !== afterVersion);
+  // Successful Git activation replaces dist even when local commits leave HEAD unchanged.
+  return result.mode === "git";
 }

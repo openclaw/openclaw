@@ -117,12 +117,18 @@ sanitized issue body and defaults confirmation to **No**. After confirmation,
 OpenClaw checks the GitHub CLI's active `github.com` account with a silent,
 read-only request before issue creation. Fallback and pending outcomes retain the
 sanitized report locally; a confirmed issue keeps only its durable issue URL.
-If the CLI is missing or that check cannot confirm authentication, OpenClaw
-provides a prefilled issue link without starting issue creation. If the exact
-report exceeds the browser URL limit, OpenClaw keeps the sanitized body locally
-and returns to the action menu, where reporting can be chosen and confirmed
-again. A report preparation or submission
-error also returns to that menu; Diagnose runs only when selected explicitly.
+If the CLI is missing, authentication is unavailable, or GitHub rejects the
+upload, OpenClaw keeps the sanitized report locally and returns to the previous
+action menu. Fix the problem, then choose **Report update failure** and confirm
+again to retry the same report, or choose **Report in browser** to review and
+submit it with your browser's GitHub account. The browser choice is available
+when the prepared report fits a prefilled link and no uncertain upload is pending;
+it does not require the GitHub CLI. Completed update and Doctor checks are not
+rerun. Preparation or submission errors also return to the menu. An uncertain
+upload stays pending: **Check report status** looks for the existing issue without
+creating another one, and no browser handoff is offered.
+Successful submission, explicit exit, and cancellation retain their normal
+behavior; Diagnose runs only when selected explicitly.
 In the Control UI, an interrupted
 pre-create preparation becomes retryable after its local reservation expires.
 After an uncertain creation result, OpenClaw checks for an issue matching the
@@ -162,7 +168,15 @@ package once, then lets that candidate decide whether the live installation can
 be updated. Registry targets and explicit artifacts such as `--tag ./openclaw.tgz`
 use the same flow. The stage is reused for verification, canary rehearsal, and
 activation; a refusal or pre-mutation failure removes it and leaves the installed
-package and serving Gateway in place.
+package and serving Gateway in place. After admission and package verification,
+a matching installed version and artifact build identity remain a no-op unless
+the update needs to replace the installation method or a separate serving root.
+The temporary candidate is removed without activating it.
+
+When replacement is needed, the updater retains its running worker files before
+changing the installed package. Linux OverlayFS installations use private copies
+so hard-link copy-up cannot invalidate the retained files’ identity checks.
+Other supported filesystems keep the hard-link fast path and copy fallback.
 
 The installed updater reads the candidate's `package.json` before running its
 pending lifecycle scripts. `openclaw.updateAdmissionProtocol: 1` advertises the
@@ -290,14 +304,15 @@ Older targets retain their existing allowance and deadline behavior.
 When `--timeout` is omitted, current CLI and RPC finalization do not add an aggregate
 activation deadline. Explicit operator limits and inherited activation allowances
 still apply; older or unrecognized handoffs retain their existing finite-deadline
-behavior. Independent install, build, plugin-operation, readiness, and cleanup
-bounds still apply. An explicit `--timeout <seconds>` limits each finalization phase
+behavior. Probes, ownership admission, readiness, recovery, and cleanup retain
+their own bounds. An explicit `--timeout <seconds>` limits each finalization phase
 and its child commands. Admission and config phases scale with shared SQLite state.
 
 Post-plugin config validation and readiness checks use the measured shared and
-agent database sizes after Doctor finishes, including WAL files. Serial plugin
-operations retain individual deadlines. When an aggregate activation budget is
-present, it uses the measured database sizes, observed candidate startup, plugin
+agent database sizes after Doctor finishes, including WAL files. Post-core plugin
+installation and update work have no default deadline when `--timeout` is omitted;
+explicit operator limits and older caller allowances still apply. When an aggregate
+activation budget is present, it uses the measured database sizes, observed candidate startup, plugin
 count, and the caller's step allowance. Migrated finalization preserves explicit or
 inherited allowances. Aggregate expiry reports `update-activation-timeout` and
 retains ownership until writers settle; it does not authorize rollback or restart.
@@ -311,7 +326,7 @@ Use `openclaw update status` and Doctor for recovery guidance.
 | `--dry-run`                                      | Preview planned actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.                                                                                                                                                                                                                 |
 | `--admission <auto\|installed>`                  | Choose candidate admission when supported (`auto`, the default), or force installed admission checks. This option has no environment-variable form. Dry runs always use installed checks.                                                                                                                                                     |
 | `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                  |
-| `--timeout <seconds>`                            | Per-step timeout. Default `1800`.                                                                                                                                                                                                                                                                                                             |
+| `--timeout <seconds>`                            | Optional per-step deadline in seconds. Omit to let package installation, deferred lifecycle scripts, and candidate Doctor finish without a work deadline. Probes and recovery retain their own bounds.                                                                                                                                        |
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                               |
 | `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                           |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes during post-update sync. This acknowledges the exact staged capability surface; it does not disable capability checks or establish future trust.                                                                                                                                             |
@@ -425,7 +440,7 @@ freshness or dependencies. Those checks run when you apply the update; use
 
 | Flag                    | Default | Description                                                  |
 | ----------------------- | ------- | ------------------------------------------------------------ |
-| `--timeout <seconds>`   | `1800`  | Timeout for each update step.                                |
+| `--timeout <seconds>`   | Unset   | Optional deadline for each update step in seconds.           |
 | `--accept-capabilities` | `false` | Accept reviewed plugin capability changes during the update. |
 
 ## Detailed topics

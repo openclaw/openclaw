@@ -125,7 +125,7 @@ type DistJavaScriptFileListResult =
 
 type InstalledRootDistJavaScriptReadResult =
   | { error: string; ok: false }
-  | { ok: true; relativePath: string; source: string };
+  | { ok: true; relativePath: string; source: string | null };
 
 type PublishedInstallScenario = {
   name: string;
@@ -588,6 +588,11 @@ function readInstalledRootDistJavaScriptFile(
       ok: false,
     };
   }
+  if (SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS.has(relativePath)) {
+    // These artifacts have a dedicated closure/import guard before packaging.
+    // Avoid rebuilding their multi-million-node ASTs in generic root scans.
+    return { ok: true, relativePath, source: null };
+  }
   return { ok: true, relativePath, source: readFileSync(filePath, "utf8") };
 }
 
@@ -603,7 +608,8 @@ export function collectInstalledContextEngineRuntimeErrors(packageRoot: string):
     if (!file.ok) {
       return [file.error];
     }
-    if (file.source.includes(LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER)) {
+    const source = file.source ?? readFileSync(filePath, "utf8");
+    if (source.includes(LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER)) {
       return [
         "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
       ];
@@ -744,6 +750,9 @@ export function collectInstalledRootDependencyManifestErrors(
     const file = readInstalledRootDistJavaScriptFile(packageRoot, filePath);
     if (!file.ok) {
       return [file.error];
+    }
+    if (file.source === null) {
+      continue;
     }
     const parsedSpecifiers = extractJavaScriptImportSpecifiers(file.source, legacyOwnership);
     if (!parsedSpecifiers.ok) {

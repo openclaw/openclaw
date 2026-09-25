@@ -1,7 +1,9 @@
 // Authenticated HTTP avatar serving and Gravatar proxying for durable user profiles.
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { consumeResponseBytes } from "@openclaw/normalization-core";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -54,7 +56,7 @@ function resolveAvatarCorsOrigin(req: IncomingMessage, cfg: OpenClawConfig): str
   } catch {
     return undefined;
   }
-  const allowed = cfg.gateway?.controlUi?.allowedOrigins ?? [];
+  const allowed = resolveControlUiAllowedOrigins(cfg);
   return allowed.some((candidate) => candidate.trim() === "*" || candidate.trim() === origin)
     ? origin
     : undefined;
@@ -162,18 +164,16 @@ async function readBoundedGravatarBody(
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;
   try {
-    while (true) {
-      const next = await reader.read();
-      if (next.done) {
-        break;
-      }
-      totalBytes += next.value.byteLength;
-      if (totalBytes > MAX_GRAVATAR_BYTES) {
-        await reader.cancel();
-        return undefined;
-      }
-      chunks.push(next.value);
+    const { size, truncated } = await consumeResponseBytes({
+      maxBytes: MAX_GRAVATAR_BYTES,
+      read: () => reader.read(),
+      onChunk: (chunk) => chunks.push(chunk),
+      onLimit: () => reader.cancel(),
+    });
+    if (truncated) {
+      return undefined;
     }
+    totalBytes = size;
   } finally {
     reader.releaseLock();
   }

@@ -165,6 +165,7 @@ Options: `--force`, `--json`.
 - When the Gateway is reachable, deletion routes through the Gateway so config and session-store cleanup share the same writer as runtime traffic. If the Gateway is unreachable, the CLI falls back to the offline local path and removes the agent's scheduled jobs transactionally. If Gateway credentials are unavailable before the CLI can test reachability, deletion still falls back locally but warns that cron cleanup was skipped because a live scheduler may own the store.
 - If another agent's workspace is the same path, inside this workspace, or contains this workspace, the workspace is retained, and `--json` reports `workspaceRetained`, `workspaceRetainedReason`, and `workspaceSharedWith`.
 - Cleanup also retains directories containing another agent's registered database, so deleting a parent directory cannot discard the survivor's history.
+- Cleanup resolves symlink targets using their filesystem meaning, including `..` segments, so a dangling workspace link cannot select an unrelated neighboring directory.
 
 ## Routing bindings
 

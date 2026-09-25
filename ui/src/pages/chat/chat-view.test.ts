@@ -5614,6 +5614,33 @@ describe("chat model controls", () => {
     },
   );
 
+  it.each([1, 2])("identifies the selected sign-in method and email with %i accounts", (count) => {
+    const { state } = createChatHeaderState({
+      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+    });
+    const profiles = subscriptionProfiles.slice(0, count).map((profile, index) =>
+      Object.assign({}, profile, {
+        displayName: index === 0 ? "Sign in with ChatGPT" : "Codex sign-in",
+      }),
+    );
+    const container = renderModelControls(state, {
+      accountSelection: {
+        kind: "shared",
+        label: "Sign in with ChatGPT",
+        authProfileId: "openai:work",
+      },
+      modelAuthStatusResult: {
+        ts: 1,
+        providers: [{ ...authStatus.providers[0]!, profiles }],
+      },
+    });
+    expect(
+      container
+        .querySelector('[data-chat-model-provider="openai"] .chat-controls__auth-meta')
+        ?.textContent?.trim(),
+    ).toBe("Sign in with ChatGPT · work@example.com");
+  });
+
   it.each([
     ["personal", "openai:work", ["openai:personal"], "Subscription · work@example.com"],
     ["shared", "openai:personal", ["openai:work"], "Subscription · peter@steipete.me"],
@@ -5765,13 +5792,17 @@ describe("chat model controls", () => {
   });
 
   it.each([1, 2])(
-    "shows account emails only for multiple subscription profiles (%i)",
+    "identifies the selected account even before expanding %i subscription profiles",
     async (count) => {
-      const profiles = subscriptionProfiles.slice(0, count);
+      const profiles = subscriptionProfiles.slice(0, count).map((profile, index) =>
+        Object.assign({}, profile, {
+          displayName: index === 0 ? "Sign in with ChatGPT" : "Codex sign-in",
+        }),
+      );
       const accounts = profiles.map((profile) => ({
         authProfileId: profile.profileId,
         provider: "openai",
-        label: "Workspace",
+        label: profile.displayName,
         authType: profile.type,
         selected: false,
       }));
@@ -5811,6 +5842,9 @@ describe("chat model controls", () => {
           container,
         );
       draw();
+      expect(container.querySelector(".chat-controls__account-selection")?.textContent).toBe(
+        "work@example.com · Sign in with ChatGPT",
+      );
       container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
       await vi.waitFor(() =>
@@ -5820,10 +5854,10 @@ describe("chat model controls", () => {
         ...container.querySelectorAll("[data-chat-account-option]"),
       ].entries()) {
         expect(row.querySelector(".chat-controls__model-option-name")?.textContent?.trim()).toBe(
-          "Workspace",
+          profiles[index]!.displayName,
         );
         expect(row.querySelector(".chat-controls__auth-meta")?.textContent?.trim() ?? "").toBe(
-          count > 1 ? profiles[index]!.email : "",
+          profiles[index]!.email,
         );
         expect(row.textContent).not.toContain(profiles[index]!.profileId);
       }
@@ -6724,11 +6758,9 @@ describe("chat model controls", () => {
         ],
       });
       const onModelSelect = vi.fn(async () => true);
-      const onModelSetup = vi.fn();
-      const container = renderModelControls(state, {
-        onModelSelect,
-        onModelSetup,
-      });
+      const onProviderSettings = vi.fn();
+      const callbacks = { onModelSelect, onProviderSettings };
+      const container = renderModelControls(state, callbacks);
       document.body.append(container);
 
       const providerHeadings = Array.from(
@@ -6751,7 +6783,7 @@ describe("chat model controls", () => {
         ),
       ).toBe(true);
       providerSettings?.click();
-      expect(onModelSetup).toHaveBeenCalledOnce();
+      expect(onProviderSettings).toHaveBeenCalledExactlyOnceWith("openai");
       const anthropicModels = container.querySelector<HTMLElement>(
         '[data-chat-model-provider-group="anthropic"]',
       );
@@ -6807,7 +6839,7 @@ describe("chat model controls", () => {
         ...state.chatModelCatalog,
         { id: "new-match", name: "Anth new", provider: "openai" },
       ];
-      renderModelControls(state, { onModelSelect, onModelSetup, modelPickerOpen: true }, container);
+      renderModelControls(state, { ...callbacks, modelPickerOpen: true }, container);
       await Promise.resolve();
       expect(container.querySelector("[data-chat-model-search]")).toBe(search);
       expect(search?.value).toBe("anth");

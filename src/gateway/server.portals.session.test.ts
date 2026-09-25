@@ -31,6 +31,7 @@ import {
 import { invokeNodeWorkerPortalStream } from "../node-host/portal-stream-command.js";
 import { projectPluginContributions } from "../plugins/registry-contributions.js";
 import { adoptPluginRegistryRecords } from "../plugins/registry-lifecycle.js";
+import * as stateWorkerStore from "../state/openclaw-state-worker-store.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
@@ -387,7 +388,51 @@ it("carries authenticated session previews through the node and retires access b
             expect(response.status).toBe(200);
             expect(await response.text()).toBe("preview-ok");
             url.pathname = "/stream";
-            const streaming = await fetch(url);
+            const committed = createDeferred();
+            const publish = createDeferred();
+            const targetConnected = createDeferred();
+            const onTargetConnection = () => targetConnected.resolve();
+            const runOperation = stateWorkerStore.runOpenClawStateWorkerOperation;
+            const activity = vi
+              .spyOn(stateWorkerStore, "runOpenClawStateWorkerOperation")
+              .mockImplementation((workerContext, operation, options) =>
+                runOperation(
+                  workerContext,
+                  (scope) =>
+                    operation({
+                      execute: async (command, executeOptions) => {
+                        const result = await scope.execute(command, executeOptions);
+                        if (command.type === "workerEnvironments.reconcileSharedHost") {
+                          committed.resolve();
+                          await publish.promise;
+                        }
+                        return result;
+                      },
+                    }),
+                  options,
+                ),
+              );
+            const maintenance = store.reconcileSharedHost({
+              environmentId,
+              state: reconciled!.state,
+              leaseId: "preview-lease",
+              sharedHost: false,
+            });
+            let streaming: Response;
+            try {
+              await committed.promise;
+              destination.once("connection", onTargetConnection);
+              const requested = fetch(url);
+              await Promise.race([targetConnected.promise, requested]);
+              publish.resolve();
+              await maintenance;
+              streaming = await requested;
+            } finally {
+              publish.resolve();
+              await maintenance;
+              destination.off("connection", onTargetConnection);
+              activity.mockRestore();
+            }
             const reader = streaming.body!.getReader();
             expect(new TextDecoder().decode((await reader.read()).value)).toBe("preview-stream");
             const activePeersClosed = Promise.all(

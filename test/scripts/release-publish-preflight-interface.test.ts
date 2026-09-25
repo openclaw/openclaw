@@ -10,6 +10,33 @@ import {
 } from "../../scripts/lib/release-publish-preflight-interface.mts";
 
 describe("release publish preflight operator interface", () => {
+  it("accepts a full workflow SHA without a workflow ref", () => {
+    expect(
+      parsePublishPreflightArgs(["--tag", "v2026.9.5", "--workflow-sha", "a".repeat(40)])?.options,
+    ).toMatchObject({
+      workflowRef: "",
+      workflowSha: "a".repeat(40),
+    });
+  });
+
+  it.each([{ flags: [] }, { flags: ["--workflow-ref", "main", "--workflow-sha", "a".repeat(40)] }])(
+    "rejects missing or conflicting workflow selectors: $flags",
+    ({ flags }) => {
+      expect(() => parsePublishPreflightArgs(["--tag", "v2026.9.5", ...flags])).toThrow(
+        "--tag and exactly one of --workflow-ref or --workflow-sha are required.",
+      );
+    },
+  );
+
+  it.each(["a".repeat(12), "A".repeat(40), "g".repeat(40)])(
+    "rejects malformed workflow SHA %s",
+    (sha) => {
+      expect(() =>
+        parsePublishPreflightArgs(["--tag", "v2026.9.5", "--workflow-sha", sha]),
+      ).toThrow("--workflow-sha must be a lowercase 40-character commit SHA.");
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "prints a shell-safe POSIX dispatch that preserves waiver and exact resume inputs",
     () => {
