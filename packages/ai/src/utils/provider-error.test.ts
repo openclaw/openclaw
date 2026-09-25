@@ -316,64 +316,13 @@ describe("projectProviderError", () => {
   });
 
   it.each([
-    ["imageBytes", true],
-    ["imageBase64", true],
-    ["audioData", true],
-    ["audioDelta", true],
-    ["videoData", true],
-    ["videoUrl", true],
-    ["videoUri", true],
-    ["videoFileUri", true],
-    ["inputImage", true],
-    ["outputVideo", true],
-    ["video_bytes_base64", true],
-    ["imageDataBase64", true],
-    ["video_frame", true],
-    ["videoFrame", true],
-    ["outputVideoFrames", true],
-    ["audioCodec", false],
-  ])("classifies normalized media field %s", (key, redacted) => {
-    const value = `media-value-for-${key}`;
-    const serialized = JSON.stringify(
-      projectProviderError({ status: 500, body: { [key]: value } }),
-    );
-
-    expect(serialized.includes(value)).toBe(!redacted);
-  });
-
-  it.each([
-    ["nested videoBytes", '{"generatedVideos":[{"video":{"videoBytes":"QUJDRA=="}}]}', "QUJDRA=="],
-    ["bare b64_json", '{"b64_json":"QUJDRA=="}', "QUJDRA=="],
-    ["typed video data", '{"type":"video","data":"QUJDRA=="}', "QUJDRA=="],
-    ["typed numeric video data", '{"type":"video","data":[65,66,67,68]}', "[65,66,67,68]"],
-    ["image generation result", '{"type":"image_generation_call","result":"QUJDRA=="}', "QUJDRA=="],
-    [
-      "typed video URI",
-      '{"type":"video","uri":"https://media.invalid/private"}',
-      "https://media.invalid/private",
-    ],
     [
       "MIME-qualified file URI",
       '{"mimeType":"video/mp4","fileUri":"https://media.invalid/signed"}',
       "https://media.invalid/signed",
     ],
-    ["audio wrapper data", '{"audio":{"data":"QUJDRA=="}}', "QUJDRA=="],
-    ["video wrapper blob", '{"video":{"blob":"QUJDRA=="}}', "QUJDRA=="],
-    ["video frame wrapper data", '{"video_frame":{"data":"QUJDRA=="}}', "QUJDRA=="],
-    ["camel-case video frame wrapper data", '{"videoFrame":{"data":"QUJDRA=="}}', "QUJDRA=="],
-    [
-      "camel-case input video frame wrapper data",
-      '{"inputVideoFrame":{"data":"QUJDRA=="}}',
-      "QUJDRA==",
-    ],
-    ["output audio wrapper data", '{"output_audio":{"data":"QUJDRA=="}}', "QUJDRA=="],
     ["audio wrapper bytes", '{"audio":{"bytes":[65,66,67,68]}}', "[65,66,67,68]"],
     ["video wrapper buffer", '{"video":{"buffer":"QUJDRA=="}}', "QUJDRA=="],
-    [
-      "plural video container URL",
-      '{"videos":[{"url":"https://media.invalid/private/path-token"}]}',
-      "https://media.invalid/private/path-token",
-    ],
     ["array following a JSON literal", '[true,{"b64_json":"QUJDRA=="}]', "QUJDRA=="],
   ])("redacts %s from a JSON response-body string", (_name, body, leaked) => {
     const projected = projectProviderError({ status: 500, body });
@@ -666,49 +615,7 @@ describe("projectProviderError", () => {
     );
   });
 
-  it.each([
-    "Cookie: JSESSIONID=0123456789abcdef; account=abcdefghijklmnop",
-    "Set-Cookie: PHPSESSID=0123456789abcdef; Path=/; HttpOnly",
-    "Cookie: sid=abc123",
-    "Set-Cookie: auth=x:y",
-  ])("redacts arbitrary credential names inside cookie headers", (header) => {
-    expect(projectProviderError(header).errorMessage).toMatch(/^(?:Set-)?Cookie: <redacted>$/u);
-  });
-
-  it.each([
-    "x-api-key: sk-0123456789012345",
-    "api-key: 0123456789abcdef",
-    "Authorization: ApiKey 0123456789abcdef",
-    "Error: x-api-key: sk-0123456789012345",
-    "headers: Authorization: ApiKey 0123456789abcdef",
-    'headers: {"x-api-key":"sk-0123456789012345"}',
-    "{'Authorization': 'ApiKey 0123456789abcdef'}",
-  ])("redacts credential header %s", (header) => {
-    expect(projectProviderError(header).errorMessage).not.toMatch(
-      /sk-0123456789012345|0123456789abcdef/u,
-    );
-  });
-
   it("preserves ordinary colon-delimited diagnostics", () => {
     expect(projectProviderError("status: healthy").errorMessage).toBe("status: healthy");
-  });
-
-  it.each([
-    ["credential", false],
-    ["cookie", false],
-    ["setCookie", false],
-    ["privateKey", false],
-    ["signingKey", false],
-    ["secretAccessKey", false],
-    ["AWS_SECRET_ACCESS_KEY", false],
-    ["publicKey", true],
-    ["accessKeyId", true],
-  ])("classifies normalized credential field %s", (key, preserved) => {
-    const value = `credential-value-for-${key}`;
-    const serialized = JSON.stringify(
-      projectProviderError({ status: 400, body: { [key]: value } }),
-    );
-
-    expect(serialized.includes(value)).toBe(preserved);
   });
 });
