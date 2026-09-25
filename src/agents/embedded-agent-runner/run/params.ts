@@ -181,6 +181,8 @@ export type RunEmbeddedAgentParams = {
   authProfileIdSource?: "auto" | "user";
   /** Disable fallback from the user-selected auth profile for a verification run. */
   allowAuthProfileFallback?: boolean;
+  /** The current message explicitly selected thinking and takes precedence over routing hooks. */
+  thinkLevelExplicit?: boolean;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;

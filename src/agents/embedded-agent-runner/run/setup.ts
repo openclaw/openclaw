@@ -1,12 +1,14 @@
 /**
  * Resolves hook-selected model state and pre-model attachments for a run.
  */
+import { normalizeThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import type {
   PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
+  PluginHookBeforeModelResolveResult,
 } from "../../../plugins/types.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
@@ -45,7 +47,7 @@ type HookRunnerLike = {
   runBeforeModelResolve(
     input: PluginHookBeforeModelResolveEvent,
     context: HookContext,
-  ): Promise<{ providerOverride?: string; modelOverride?: string } | undefined>;
+  ): Promise<PluginHookBeforeModelResolveResult | undefined>;
 };
 
 /** Durable harness sessions run only with their exact persisted identity and runtime lock. */
@@ -107,7 +109,7 @@ export async function resolveHookModelSelection(params: {
   if (params.modelSelectionLocked === true) {
     return { provider, modelId };
   }
-  let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
+  let modelResolveOverride: PluginHookBeforeModelResolveResult | undefined;
   const hookRunner = params.hookRunner;
 
   // Run before_model_resolve hooks early so plugins can override the
@@ -132,9 +134,16 @@ export async function resolveHookModelSelection(params: {
     log.info(`[hooks] model overridden to ${modelId}`);
   }
 
+  const thinkingOverride = normalizeThinkLevel(
+    typeof modelResolveOverride?.thinkingOverride === "string"
+      ? modelResolveOverride.thinkingOverride
+      : undefined,
+  );
+
   return {
     provider,
     modelId,
+    ...(thinkingOverride !== undefined ? { thinkingOverride } : {}),
   };
 }
 

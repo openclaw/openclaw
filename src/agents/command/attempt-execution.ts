@@ -87,8 +87,10 @@ import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
+  resolveAttemptThinkingParams,
   resolveFallbackRetryPrompt,
   rebaseExecApprovalContinuationPromptRange,
+  shouldSuppressEmbeddedLiveStreamOutput,
 } from "./attempt-execution.helpers.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import {
@@ -99,10 +101,6 @@ import {
 import type { AgentCommandOpts } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-
-function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
-  return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
-}
 
 type HarnessAuthProfileSelection = {
   authProfileId?: string;
@@ -575,7 +573,7 @@ export function runAgentAttempt(params: {
       modelHasVision: params.modelHasVision,
       model: params.modelOverride,
       modelRoutingProvenance: params.modelRoutingProvenance,
-      thinkLevel: params.resolvedThinkLevel,
+      ...resolveAttemptThinkingParams(params.resolvedThinkLevel, params.opts),
       fastMode: params.fastMode,
       fastModeStartedAtMs: params.fastModeStartedAtMs,
       fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
@@ -1012,7 +1010,7 @@ export function runAgentAttempt(params: {
     execApprovalContinuationPromptRange: embeddedExecApprovalContinuationPromptRange,
     execApprovalContinuationTranscriptPromptRange: continuationTranscriptPromptRange,
     // Hidden internal runs lack an event consumer; visible lanes still feed UI and parent relays.
-    suppressLiveStreamOutput: shouldSuppressEmbeddedLiveStreamOutput(params),
+    suppressLiveStreamOutput: shouldSuppressEmbeddedLiveStreamOutput(params.opts),
     abortSignal: params.opts.abortSignal,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,

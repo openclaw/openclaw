@@ -7,6 +7,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import {
   isSilentReplyPrefixText,
   isSilentReplyText,
@@ -35,6 +36,23 @@ import { cliBackendLog } from "../cli-runner/log.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
 const CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS = 500;
+
+export function resolveAttemptThinkingParams(
+  thinkLevel: ThinkLevel | undefined,
+  options: { thinking?: string; thinkingOnce?: string },
+) {
+  return {
+    thinkLevel,
+    thinkLevelExplicit: Boolean(options.thinking || options.thinkingOnce),
+  };
+}
+
+export function shouldSuppressEmbeddedLiveStreamOutput(options: {
+  sessionEffects?: "visible" | "internal";
+  deliver?: boolean;
+}): boolean {
+  return options.sessionEffects === "internal" && options.deliver !== true;
+}
 
 function normalizeClaudeCliSessionId(sessionId: string | undefined): string | undefined {
   const trimmed = sessionId?.trim();

@@ -82,6 +82,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   const {
     requestedModelId,
     modelSelectionChangedByHook,
+    thinkingOverride,
     requestStreamTransportOverrides,
     expectedHarnessArtifact,
     pinnedHarnessId,
@@ -231,27 +232,30 @@ export async function prepareEmbeddedRunRuntime(input: {
     modelId,
     model: models.effective,
   });
-  const initialThinkLevel = modelSelectionChangedByHook
-    ? (resolveCandidateThinkingLevel({
-        cfg: params.config,
-        provider,
-        modelId,
-        level: requestedThinkLevel,
-        catalog: [
-          {
-            provider,
-            id: modelId,
-            api: models.effective.api,
-            reasoning: models.effective.reasoning,
-            params: models.effective.params,
-            compat: models.effective.compat,
-          },
-        ],
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        agentRuntime: agentHarness.id,
-      }) ?? requestedThinkLevel)
-    : requestedThinkLevel;
+  const hookThinkLevel = params.thinkLevelExplicit ? undefined : thinkingOverride;
+  const effectiveRequestedThinkLevel = hookThinkLevel ?? requestedThinkLevel;
+  const initialThinkLevel =
+    modelSelectionChangedByHook || hookThinkLevel !== undefined
+      ? (resolveCandidateThinkingLevel({
+          cfg: params.config,
+          provider,
+          modelId,
+          level: effectiveRequestedThinkLevel,
+          catalog: [
+            {
+              provider,
+              id: modelId,
+              api: models.effective.api,
+              reasoning: models.effective.reasoning,
+              params: models.effective.params,
+              compat: models.effective.compat,
+            },
+          ],
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          agentRuntime: agentHarness.id,
+        }) ?? effectiveRequestedThinkLevel)
+      : effectiveRequestedThinkLevel;
   const attemptedThinking = new Set<ThinkLevel>();
   const authState: EmbeddedRunAuthState = {
     models,

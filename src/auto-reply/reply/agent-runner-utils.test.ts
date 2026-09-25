@@ -339,6 +339,24 @@ describe("agent-runner-utils", () => {
     expect(resolved.terminalReplyExpectation).toBe("optional");
   });
 
+  it.each([
+    { thinkLevelOverride: undefined, thinkLevelExplicit: false },
+    { thinkLevelOverride: "high" as const, thinkLevelExplicit: true },
+  ])(
+    "marks current-message thinking authority as $thinkLevelExplicit",
+    async ({ thinkLevelOverride, thinkLevelExplicit }) => {
+      const resolved = await buildEmbeddedRunBaseParams({
+        run: makeRun({ thinkLevel: "high", thinkLevelOverride }),
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        runId: "run-thinking-authority",
+        authProfile: {},
+      });
+
+      expect(resolved).toMatchObject({ thinkLevel: "high", thinkLevelExplicit });
+    },
+  );
+
   it("threads prompt cache affinity through embedded execution params", async () => {
     const run = makeRun();
 

@@ -22,6 +22,7 @@ import {
   withAgentRunId,
   withoutIncognitoLlmContent,
 } from "./hook-agent-observations.js";
+import { mergeBeforeModelResolveResults } from "./hook-before-model-resolve.js";
 import { readClaimingHookAdmission, type ClaimingHookAdmission } from "./hook-claim-admission.js";
 import {
   type GateHookResult,
@@ -44,7 +45,6 @@ import type {
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
   PluginHookHandlerMap,
-  PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookInboundClaimContext,
@@ -389,15 +389,6 @@ export function createHookRunner(
   const lastDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => next ?? prev;
   const stickyTrue = (prev?: boolean, next?: boolean): true | undefined =>
     prev === true || next === true ? true : undefined;
-  const mergeBeforeModelResolve = (
-    acc: PluginHookBeforeModelResolveResult | undefined,
-    next: PluginHookBeforeModelResolveResult,
-  ): PluginHookBeforeModelResolveResult => ({
-    // Keep the first defined override so higher-priority hooks win.
-    modelOverride: firstDefined(acc?.modelOverride, next.modelOverride),
-    providerOverride: firstDefined(acc?.providerOverride, next.providerOverride),
-  });
-
   const normalizeHookToolsAllow = (value: unknown): string[] | undefined => {
     if (value === undefined) {
       return undefined;
@@ -1430,7 +1421,7 @@ export function createHookRunner(
   return {
     // Agent hooks
     runBeforeModelResolve: bindModifyingHook("before_model_resolve", {
-      mergeResults: mergeBeforeModelResolve,
+      mergeResults: mergeBeforeModelResolveResults,
     }),
     runAgentTurnPrepare: bindModifyingHook("agent_turn_prepare", {
       mergeResults: mergeAgentTurnPrepare,
