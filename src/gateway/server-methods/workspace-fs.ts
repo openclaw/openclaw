@@ -3,8 +3,8 @@
 // hardlink rejection) so no caller can access files outside a workspace root.
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 
