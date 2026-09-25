@@ -338,6 +338,21 @@ The heartbeat proves ownership, not migration progress. A live but stuck mainten
 
 `SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. Snapshot and integrity-child timeout errors include the applied budget and source file size; snapshot timeouts report an unknown size if the source stat failed. Integrity-child timeouts also retain `lastObservedPhase`. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
 
+### The state database is busy
+
+Wait for the other OpenClaw process to finish its database work, then retry the
+command. `state-lifecycle` contention normally clears after startup, a write, or
+maintenance finishes. `gateway-lifecycle` protects a running Gateway's ownership,
+and `state-handles` protects open database connections; those can remain held
+while the Gateway runs.
+
+If contention persists, run `openclaw gateway status` with the same profile and
+state-directory settings, and check for other OpenClaw processes using that state
+directory. Stop the blocking Gateway through its service manager or original
+terminal before retrying an operation that needs exclusive access. Prefer plain
+status here: `--deep` adds database preflight. Doctor also needs state coordination,
+so running it while the lock is held can fail with the same contention.
+
 ### Database paths cannot be compared
 
 `Cannot determine whether database paths alias` means OpenClaw could not safely

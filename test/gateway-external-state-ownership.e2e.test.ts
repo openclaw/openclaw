@@ -250,7 +250,15 @@ describe("Gateway external shared-state ownership", () => {
       }
       const refused = await instance.cli(["update", "repair", "--json"]);
       expect(refused.code).not.toBe(0);
-      expect(`${refused.stderr}\n${refused.stdout}`).toMatch(/remains recorded as running/u);
+      expect(JSON.parse(refused.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message: expect.stringContaining(
+            `Update ${recent.runId} remains recorded as running (requested); driver PID and host not recorded, liveness: not observed;`,
+          ),
+        },
+      });
       for (const run of [inactive, live, recent]) {
         expect(readUpdateOutcome(observer, run.runId)).toMatchObject({
           status: "running",

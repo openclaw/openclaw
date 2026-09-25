@@ -122,7 +122,7 @@ async function verifyIdentity(
   }
   owner.assertCurrent?.();
   owner.signal?.throwIfAborted();
-  return payload.sub;
+  return payload;
 }
 
 async function readCredential(params: {
@@ -148,10 +148,11 @@ async function readCredential(params: {
     throw new Error("ChatGPT did not return a complete renewable credential. Start sign-in again.");
   }
   // Initial identity is signature-verified; refresh may omit its unchanged ID token.
-  const subject =
+  const identity =
     json.id_token || !previous
       ? await verifyIdentity(idToken, clientId, owner, params.nonce)
-      : decodeJwt(idToken).sub;
+      : decodeJwt(idToken);
+  const subject = identity.sub;
   if (!subject || (previous?.idToken && decodeJwt(previous.idToken).sub !== subject)) {
     throw new Error("ChatGPT account changed during refresh. Sign in again to reconnect.");
   }
@@ -178,6 +179,7 @@ async function readCredential(params: {
       refresh,
       expires,
       idToken,
+      email: normalizeOptionalString(identity.email),
       clientId,
       issuer: TOKEN_SHARING_ISSUER,
       // The canonical OAuth owner retains this opaque identity in secret-free

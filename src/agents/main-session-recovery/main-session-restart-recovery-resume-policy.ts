@@ -1,4 +1,7 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { isMainSessionRestartRecoveryInputProvenance } from "../../sessions/input-provenance.js";
@@ -37,15 +40,11 @@ function readDeliveredTerminalSourceReplyToolCallId(
 function readCodeModeWaitCall(
   message: unknown,
 ): { runId: string; toolCallId?: string } | undefined {
-  if (
-    !message ||
-    typeof message !== "object" ||
-    getMessageRole(message) !== "assistant" ||
-    (message as { stopReason?: unknown }).stopReason !== "toolUse"
-  ) {
+  const record = asOptionalObjectRecord(message);
+  if (getMessageRole(message) !== "assistant" || record?.stopReason !== "toolUse") {
     return undefined;
   }
-  const content = (message as { content?: unknown }).content;
+  const content = record.content;
   if (!Array.isArray(content)) {
     return undefined;
   }
@@ -70,14 +69,11 @@ function readCodeModeWaitCall(
     return undefined;
   }
   const block = toolCalls[0] as Record<string, unknown>;
-  if (normalizeOptionalString((block as { name?: unknown }).name) !== CODE_MODE_WAIT_TOOL_NAME) {
+  if (normalizeOptionalString(block.name) !== CODE_MODE_WAIT_TOOL_NAME) {
     return undefined;
   }
-  const args = (block as { arguments?: unknown }).arguments ?? (block as { input?: unknown }).input;
-  const runId =
-    args && typeof args === "object"
-      ? normalizeOptionalString((args as { runId?: unknown }).runId)
-      : undefined;
+  const args = asOptionalObjectRecord(block.arguments ?? block.input);
+  const runId = normalizeOptionalString(args?.runId);
   if (!runId) {
     return undefined;
   }
@@ -90,15 +86,18 @@ function isResumableTailMessage(message: unknown): boolean {
   return role === "user" || role === "tool" || role === "toolResult";
 }
 
+function readPendingAssistantContent(message: unknown): unknown[] | undefined {
+  const record = asOptionalObjectRecord(message);
+  return getMessageRole(message) === "assistant" &&
+    normalizeOptionalString(record?.stopReason) === "toolUse" &&
+    Array.isArray(record?.content)
+    ? record.content
+    : undefined;
+}
+
 function isPendingAssistantToolCall(message: unknown): boolean {
-  if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
-    return false;
-  }
-  if (normalizeOptionalString((message as { stopReason?: unknown }).stopReason) !== "toolUse") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
+  const content = readPendingAssistantContent(message);
+  if (!content) {
     return false;
   }
   let hasToolCall = false;
@@ -166,13 +165,7 @@ function classifyDanglingToolCalls(content: unknown): DanglingToolCallClassifica
 function readResumablePendingToolCallTail(
   message: unknown,
 ): { forceRestartSafeTools: boolean } | undefined {
-  if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
-    return undefined;
-  }
-  if (normalizeOptionalString((message as { stopReason?: unknown }).stopReason) !== "toolUse") {
-    return undefined;
-  }
-  const classified = classifyDanglingToolCalls((message as { content?: unknown }).content);
+  const classified = classifyDanglingToolCalls(readPendingAssistantContent(message));
   return classified?.kind === "resumable"
     ? { forceRestartSafeTools: classified.forceRestartSafeTools }
     : undefined;
@@ -181,18 +174,16 @@ function readResumablePendingToolCallTail(
 function readCodeModeCheckpoint(
   message: unknown,
 ): { replaySafe: boolean; runId?: string } | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
+  const record = asOptionalObjectRecord(message);
   const role = getMessageRole(message);
-  if (role !== "tool" && role !== "toolResult") {
+  if (!record || (role !== "tool" && role !== "toolResult")) {
     return undefined;
   }
-  const toolName = normalizeOptionalString((message as { toolName?: unknown }).toolName);
+  const toolName = normalizeOptionalString(record.toolName);
   if (toolName !== CODE_MODE_EXEC_TOOL_NAME && toolName !== CODE_MODE_WAIT_TOOL_NAME) {
     return undefined;
   }
-  const content = (message as { content?: unknown }).content;
+  const content = record.content;
   if (!Array.isArray(content)) {
     return undefined;
   }
@@ -253,10 +244,11 @@ const LEGACY_RESTART_ABORT_ERROR_MESSAGES = new Set([
 const CODE_MODE_RESTART_ABORT_ERROR = "code mode execution aborted";
 
 function isRestartAbortAssistantMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
+  const record = asOptionalObjectRecord(message);
+  if (!record || getMessageRole(message) !== "assistant") {
     return false;
   }
-  const stopReason = normalizeOptionalString((message as { stopReason?: unknown }).stopReason);
+  const stopReason = normalizeOptionalString(record.stopReason);
   // Every row that reaches restart recovery was mid-run when the process went
   // down, so an "aborted" tail is that interruption whatever detail the
   // transport persisted with it ("Worker inference aborted.", a provider cancel
@@ -271,13 +263,11 @@ function isRestartAbortAssistantMessage(message: unknown): boolean {
   // gateway's own abort code through (transports copy the reason's `code` into
   // `errorCode`). A provider failure or a first-stream-event timeout carries a
   // different code and stays unresumable.
-  const errorCode = normalizeOptionalString((message as { errorCode?: unknown }).errorCode);
+  const errorCode = normalizeOptionalString(record.errorCode);
   if (errorCode !== undefined) {
     return errorCode === AGENT_RUN_RESTART_ABORT_ERROR_CODE;
   }
-  const errorMessage = normalizeOptionalString(
-    (message as { errorMessage?: unknown }).errorMessage,
-  );
+  const errorMessage = normalizeOptionalString(record.errorMessage);
   return errorMessage !== undefined && LEGACY_RESTART_ABORT_ERROR_MESSAGES.has(errorMessage);
 }
 
@@ -290,22 +280,18 @@ export function isRestartAbortTailArtifact(message: unknown): boolean {
 }
 
 function isRestartAbortedWaitFailure(message: unknown): boolean {
-  if (!message || typeof message !== "object" || getMessageRole(message) !== "toolResult") {
+  const record = asOptionalObjectRecord(message);
+  if (!record || getMessageRole(message) !== "toolResult") {
     return false;
   }
-  const record = message as Record<string, unknown>;
   if (
     normalizeOptionalString(record.toolName) !== CODE_MODE_WAIT_TOOL_NAME ||
     record.isError !== true
   ) {
     return false;
   }
-  const details = record.details;
-  if (
-    !details ||
-    typeof details !== "object" ||
-    (details as { status?: unknown }).status !== "failed"
-  ) {
+  const details = asOptionalObjectRecord(record.details);
+  if (details?.status !== "failed") {
     return false;
   }
   const content = record.content;
@@ -318,10 +304,8 @@ function isRestartAbortedWaitFailure(message: unknown): boolean {
         .map((block) => normalizeOptionalString((block as { text?: unknown }).text) ?? "")
         .join("\n")
     : "";
-  const errorText =
-    normalizeOptionalString((details as { error?: unknown }).error) ??
-    normalizeOptionalString(contentText);
-  const code = normalizeOptionalString((details as { code?: unknown }).code);
+  const errorText = normalizeOptionalString(details.error) ?? normalizeOptionalString(contentText);
+  const code = normalizeOptionalString(details.code);
   if (code === "aborted") {
     // Current Code Mode wait aborts use the runtime's explicit abort code and
     // message. Recovery already owns the restart boundary, so this exact pair
@@ -344,16 +328,12 @@ function isRestartAbortedWaitResultArtifact(message: unknown, waitMessage: unkno
 }
 
 function requiresRestartSafeToolResult(message: unknown): boolean {
-  if (!message || typeof message !== "object" || getMessageRole(message) !== "toolResult") {
+  const record = asOptionalObjectRecord(message);
+  if (!record || getMessageRole(message) !== "toolResult") {
     return false;
   }
-  const record = message as Record<string, unknown>;
-  const details = record.details;
-  if (!details || typeof details !== "object") {
-    return false;
-  }
-  const status = details as { reason?: unknown; status?: unknown };
-  return status.reason === "missing_tool_result" || status.status === "approval-pending";
+  const details = asOptionalObjectRecord(record.details);
+  return details?.reason === "missing_tool_result" || details?.status === "approval-pending";
 }
 
 type MainSessionResumePolicy =
@@ -400,13 +380,11 @@ export function resolveMainSessionResumePolicy(
   if (beforeAgentReplyState === "handled-silent") {
     return { action: "complete", reason: "handled-silent" };
   }
-  if (beforeAgentReplyState === "pending") {
-    return { action: "resume", forceRestartSafeTools: true };
-  }
-  if (beforeAgentReplyState === "handled-reply") {
-    return { action: "resume", forceRestartSafeTools: true };
-  }
-  if (beforeAgentReplyState === "handled-unrecoverable") {
+  if (
+    beforeAgentReplyState === "pending" ||
+    beforeAgentReplyState === "handled-reply" ||
+    beforeAgentReplyState === "handled-unrecoverable"
+  ) {
     return { action: "resume", forceRestartSafeTools: true };
   }
   // A fresh continuation must be able to inspect an interrupted side effect.

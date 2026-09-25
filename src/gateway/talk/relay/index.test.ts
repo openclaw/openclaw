@@ -18,8 +18,8 @@ import type { OpenClawConfig } from "../../../config/types.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { drainGlobalSingletonLifecycleState } from "../../../shared/global-singleton.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
+import { captureOpenClawStateDatabaseReadAdmission } from "../../../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import {
   authorizeClientVoiceConfirmation,
   bindAuthorizedClientVoiceConfirmation,
@@ -44,6 +44,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { registerChatAbortController, type ChatAbortControllerEntry } from "../../chat-abort.js";
 import { createChatRunState } from "../../server-chat-state.js";
 import { cleanupTalkConnection } from "../session-registry.js";
@@ -68,7 +69,11 @@ import {
   stopTalkRealtimeRelaySession as stopTalkRealtimeRelaySessionRaw,
   submitTalkRealtimeRelayToolResult,
 } from "./index.js";
-import { createIdleRelayProvider, makeRelayTransport } from "./index.test-support.js";
+import {
+  createIdleRelayProvider,
+  drainRelayTestSessions,
+  makeRelayTransport,
+} from "./index.test-support.js";
 import { resolveTalkRealtimeRelayPresentation } from "./issues.js";
 import { closeRelaySession } from "./operations.js";
 import { drainingRelaySessions, relaySessions } from "./state.js";
@@ -456,26 +461,15 @@ describe("talk realtime gateway relay", () => {
     }
   });
 
+  async function cleanupRelayStorage(stateDir: string) {
+    // Finish producers and exact database owners before restoring selectors or deleting files.
+    await drainRelayTestSessions(activeRelaySessions);
+    await cleanupSessionStateForTest({ stateDir });
+  }
+
   afterEach(async () => {
     try {
-      for (const [relaySessionId, connId] of activeRelaySessions) {
-        try {
-          await stopTalkRealtimeRelaySessionRaw({ relaySessionId, connId });
-        } catch (error) {
-          if (
-            !(error instanceof Error) ||
-            !error.message.includes("Unknown realtime relay session")
-          ) {
-            throw error;
-          }
-        }
-      }
-      await Promise.all(
-        [...drainingRelaySessions].map(
-          (session) =>
-            session.closing?.completion ?? session.voiceSessionClose ?? Promise.resolve(),
-        ),
-      );
+      await drainRelayTestSessions(activeRelaySessions);
     } finally {
       activeRelaySessions.clear();
       vi.useRealTimers();
@@ -705,9 +699,8 @@ describe("talk realtime gateway relay", () => {
       cleanupTalkConnection("conn-other", logGateway);
       expect(bridgeCloses[2]).toHaveBeenCalledOnce();
     } finally {
+      await cleanupRelayStorage(tempDir);
       clientVoiceSessionTesting.reset();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
       envSnapshot.restore();
     }
   });
@@ -893,6 +886,9 @@ describe("talk realtime gateway relay", () => {
   ])(
     "appends relay transcripts from %s to %s",
     async (sessionKey, canonicalKey, mainKey, scope) => {
+      const outerStateAdmission = captureOpenClawStateDatabaseReadAdmission(
+        resolveOpenClawStateSqlitePath(),
+      );
       const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
       const tempDir = await fs.realpath(
         await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-relay-voice-")),
@@ -968,11 +964,12 @@ describe("talk realtime gateway relay", () => {
           ),
         );
       } finally {
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
+        await cleanupRelayStorage(tempDir);
         envSnapshot.restore();
         await fs.rm(tempDir, { recursive: true, force: true });
       }
+      // Nested relay storage cannot revoke the beforeEach fixture or its worker leases.
+      expect(() => outerStateAdmission.assertCurrent()).not.toThrow();
     },
   );
 
@@ -1091,8 +1088,7 @@ describe("talk realtime gateway relay", () => {
       );
     } finally {
       releaseQueue();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      await cleanupRelayStorage(tempDir);
       envSnapshot.restore();
     }
   });
@@ -1148,9 +1144,8 @@ describe("talk realtime gateway relay", () => {
         ),
       );
     } finally {
+      await cleanupRelayStorage(tempDir);
       clientVoiceSessionTesting.reset();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
       envSnapshot.restore();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -1202,8 +1197,7 @@ describe("talk realtime gateway relay", () => {
       );
       expect(clientVoiceSessionTesting.readRecord("ops", session.relaySessionId)).toBeUndefined();
     } finally {
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      await cleanupRelayStorage(tempDir);
       envSnapshot.restore();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -1249,8 +1243,7 @@ describe("talk realtime gateway relay", () => {
       });
       expect(clientVoiceSessionTesting.readRecord("ops", session.relaySessionId)).toBeUndefined();
     } finally {
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      await cleanupRelayStorage(tempDir);
       envSnapshot.restore();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -1312,8 +1305,7 @@ describe("talk realtime gateway relay", () => {
       );
       expect(warn).toHaveBeenCalledTimes(1);
     } finally {
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      await cleanupRelayStorage(tempDir);
       envSnapshot.restore();
       await fs.rm(tempDir, { recursive: true, force: true });
     }

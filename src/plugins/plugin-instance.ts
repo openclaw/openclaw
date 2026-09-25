@@ -166,7 +166,11 @@ export class PluginInstance {
     return this.invoke(run);
   }
 
-  runInRegistry<T>(registry: PluginRegistry, run: () => T): T {
+  runInRegistry<T>(
+    registry: PluginRegistry,
+    run: () => T,
+    options?: { joinDisposal?: boolean },
+  ): T {
     const current = this.activeCall();
     if (current) {
       return this.enter(current.token, run);
@@ -175,7 +179,7 @@ export class PluginInstance {
     if (!this.accepting || this.owner?.revoked) {
       throw new PluginInstanceUnavailableError(this.pluginId);
     }
-    return this.invoke(run, this.lease(true, registry));
+    return this.invoke(run, this.lease({ registry, joinDisposal: options?.joinDisposal }));
   }
 
   /** Associates an identity-sensitive public value without replacing it with a view. */
@@ -295,7 +299,11 @@ export class PluginInstance {
           closing = completion.promise.finally(release);
           try {
             completion.resolve(
-              this.invoke(cleanup, this.lease(false, token.registry), this.disposalFailures),
+              this.invoke(
+                cleanup,
+                this.lease({ cleanup: true, registry: token.registry }),
+                this.disposalFailures,
+              ),
             );
           } catch (error) {
             completion.reject(error);
@@ -320,7 +328,7 @@ export class PluginInstance {
     // Cleanup must not join the disposal that is waiting for this invocation.
     return this.invoke(
       run,
-      current ? { token: current.token, release: () => undefined } : this.lease(false),
+      current ? { token: current.token, release: () => undefined } : this.lease({ cleanup: true }),
       this.disposalFailures,
     );
   }
@@ -400,10 +408,13 @@ export class PluginInstance {
   }
 
   private lease(
-    joinDisposal = true,
-    registry?: PluginRegistry,
-    hostCleanup = false,
+    options: { registry?: PluginRegistry } & (
+      | { cleanup?: false; joinDisposal?: boolean }
+      | { cleanup: true; hostCleanup?: boolean }
+    ) = {},
   ): PluginInstanceCallLease {
+    const { registry } = options;
+    const joinDisposal = !options.cleanup && options.joinDisposal !== false;
     // Nested callbacks and streams keep the consumer's exact token; ordinary
     // tokens could expire early or remain usable after that consumer closes.
     const current = this.activeCall();
@@ -411,12 +422,17 @@ export class PluginInstance {
       return { token: current.token, release: () => undefined };
     }
     const token = {};
-    if (hostCleanup || (current && this.hostCleanupCalls.has(current.token))) {
+    if (
+      (options.cleanup && options.hostCleanup) ||
+      (current && this.hostCleanupCalls.has(current.token))
+    ) {
       this.hostCleanupCalls.add(token);
     }
     this.calls.set(token, {
       registry,
-      cleanup: !joinDisposal || (current && this.calls.get(current.token)?.cleanup) === true,
+      // Not joining disposal never grants teardown authority to ordinary work.
+      cleanup:
+        options.cleanup === true || (current && this.calls.get(current.token)?.cleanup) === true,
     });
     return {
       token,
@@ -645,7 +661,7 @@ export class PluginInstance {
     let hostFailure: { error: unknown } | undefined;
     const runCleanup = (cleanup: () => void | Promise<void>, hostCleanup = false) =>
       cleanupWork.track(() =>
-        this.invoke(cleanup, this.lease(false, undefined, hostCleanup), terminalFailures),
+        this.invoke(cleanup, this.lease({ cleanup: true, hostCleanup }), terminalFailures),
       );
     try {
       await this.waitForCalls();
@@ -715,7 +731,7 @@ export class PluginInstance {
     await this.timedOutCalls?.settled.promise;
     for (const cleanup of moduleCleanups) {
       try {
-        await this.invoke(cleanup, this.lease(false));
+        await this.invoke(cleanup, this.lease({ cleanup: true }));
       } catch (error) {
         failures.push(error);
         terminalFailures.add(error);

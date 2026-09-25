@@ -158,7 +158,7 @@ describe("automatic native task history ownership", () => {
       const { client } = fixture;
       ensureCodexAppServerClientRuntime(client, { agentDir: stateDir });
       const deliver = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
-      const parent = codexNativeSubagentMonitorRuntime.register({
+      const parent = await codexNativeSubagentMonitorRuntime.register({
         client,
         parentThreadId: owner?.parentThreadId ?? "current-parent",
         requesterSessionKey,
@@ -297,7 +297,7 @@ it.each([
         deliverAgentHarnessTaskCompletion: deliver,
       },
     };
-    let replacement = codexNativeSubagentMonitorRuntime.register(registration);
+    let replacement = await codexNativeSubagentMonitorRuntime.register(registration);
     replacement.bindTurn("replacement-parent-turn");
     try {
       // Wait for actual recovered native custody, not just a scheduled history request.
@@ -316,7 +316,7 @@ it.each([
         await replacement.unregister();
       }
       if (reregisterReplacement) {
-        replacement = codexNativeSubagentMonitorRuntime.register(registration);
+        replacement = await codexNativeSubagentMonitorRuntime.register(registration);
       }
       if (retireReplacement) {
         codexNativeSubagentMonitorRuntime.retireParent(client, currentParent);

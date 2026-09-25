@@ -196,6 +196,10 @@ export function createConfigWriteReconciliation({
         applyConfigSnapshot(state, state.configSnapshot);
       } else if (flight.submission?.rejected && hasUnacknowledgedDraftWrite()) {
         // The rejected successor may have raced our own earlier commit. Read once; retry stays explicit.
+        if (state.configAutoSaveStatus === "rejected") {
+          state.configAutoSaveStatus = "error";
+          state.lastError = t("configView.writeUnconfirmed");
+        }
         void refreshSnapshot();
       }
     },

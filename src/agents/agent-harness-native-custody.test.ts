@@ -66,7 +66,7 @@ type NativeMonitorFixture = {
       taskRuntimeScope: ReturnType<typeof createAgentHarnessTaskRuntimeScope>;
       agentId: string;
       historyOwner?: NativeHistoryOwner;
-    }): { bindTurn(turnId: string): void; unregister(): Promise<void> };
+    }): Promise<{ bindTurn(turnId: string): void; unregister(): Promise<void> }>;
     retireParent(parentThreadId: string): void;
     dispose(): void;
   };
@@ -193,7 +193,7 @@ describe("native task event custody", () => {
                 receiptAuthority: () => !retired,
               },
               async () => {
-                const registration = monitor.registerParent({
+                const registration = await monitor.registerParent({
                   parentThreadId: "parent-thread",
                   requesterSessionKey,
                   taskRuntimeScope: scope,
@@ -607,7 +607,7 @@ describe("native task event custody", () => {
         );
         const warning = vi.spyOn(taskRegistryLog, "warn");
         const root = tryBeginGatewayRootWorkAdmission("test:native-parent")!;
-        let parent: ReturnType<typeof monitor.registerParent> | undefined;
+        let parent: Awaited<ReturnType<typeof monitor.registerParent>> | undefined;
         let retired = false;
         try {
           await root.run(async () => {
@@ -621,7 +621,7 @@ describe("native task event custody", () => {
                 gatewayContextResolver: resolver,
               },
               async () => {
-                parent = monitor.registerParent({
+                parent = await monitor.registerParent({
                   parentThreadId: "parent-thread",
                   requesterSessionKey,
                   taskRuntimeScope: scope,
@@ -742,7 +742,7 @@ describe("native task event custody", () => {
             gatewayContextResolver: resolver,
           },
           async () => {
-            const custody = captureAgentHarnessCompletionCustody(scope)!;
+            const custody = (await captureAgentHarnessCompletionCustody(scope))!;
             try {
               const runtime = createAgentHarnessTaskRuntime({
                 scope,

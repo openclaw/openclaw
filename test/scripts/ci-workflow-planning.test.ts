@@ -1392,15 +1392,7 @@ describe("ci workflow guards", () => {
       includeReleaseOnlyTests: false,
       uiRealGatewayShards: false,
     },
-    {
-      name: "frozen full release dispatches",
-      eventName: "workflow_dispatch" as const,
-      changedPaths: ["ui/src/components/app-sidebar.ts"],
-      includeReleaseOnlyTests: true,
-      frozenTarget: true,
-    },
   ])("forwards the UI release-tier selection for $name to all three test jobs", (scenario) => {
-    const frozenTarget = "frozenTarget" in scenario && scenario.frozenTarget;
     const uiRealGatewayShards =
       !("uiRealGatewayShards" in scenario) || scenario.uiRealGatewayShards;
     const manifest = runCiManifestFixture({
@@ -1412,7 +1404,7 @@ describe("ci workflow guards", () => {
       changedPaths: scenario.changedPaths,
       scopeEnv: {
         OPENCLAW_CI_RUN_UI_TESTS: "true",
-        OPENCLAW_CI_WORKFLOW_REVISION: (frozenTarget ? "b" : "a").repeat(40),
+        OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
       },
     });
     expect(manifest.status, manifest.output).toBe(0);
@@ -1472,7 +1464,7 @@ describe("ci workflow guards", () => {
         test_groups_gzip_base64: string;
       }>;
     } = JSON.parse(packedMatrix);
-    const sharded = !frozenTarget && uiRealGatewayShards;
+    const sharded = uiRealGatewayShards;
     expect(matrix.include.map(({ test_groups_gzip_base64: _groups, ...row }) => row)).toEqual(
       sharded
         ? [
@@ -7288,6 +7280,20 @@ describe("ci workflow guards", () => {
     expect(frozenMissingCurrentCapabilities.outputs.run_qa_smoke_ci).toBe("false");
     expect(frozenMissingCurrentCapabilities.outputs.run_protocol_event_coverage).toBe("false");
     expect(frozenMissingCurrentCapabilities.outputs.run_format_check).toBe("false");
+
+    const frozenUiPlannerWithoutGroupsCodec = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      nodeTestGroupsCodec: false,
+      uiReleaseTier: true,
+      scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true" },
+    });
+    expect(frozenUiPlannerWithoutGroupsCodec.status, frozenUiPlannerWithoutGroupsCodec.output).toBe(
+      0,
+    );
+    expect(frozenUiPlannerWithoutGroupsCodec.outputs.frozen_target).toBe("true");
+    expect(frozenUiPlannerWithoutGroupsCodec.outputs.ui_test_groups_gzip_base64).toBe("");
+    expect(frozenUiPlannerWithoutGroupsCodec.outputs.ui_e2e_test_groups_gzip_base64).toBe("");
 
     const releaseCandidateMissingSwiftWrappers = runCiManifestFixture({
       bundledPlanner: true,

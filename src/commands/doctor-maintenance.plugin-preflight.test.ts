@@ -137,7 +137,7 @@ module.exports = {
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     });
   try {
-    await expect(begin()).rejects.toThrow("another OpenClaw process owns gateway-lifecycle");
+    await expect(begin()).rejects.toThrow("OpenClaw state database is busy (gateway-lifecycle)");
     expect(markers()).toEqual([false, false, false, false]);
     expect(fs.readFileSync(databasePath)).toEqual(databaseBefore);
   } finally {

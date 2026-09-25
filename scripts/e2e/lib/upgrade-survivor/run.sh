@@ -517,6 +517,14 @@ on_exit() {
     status=1
     FAILURE_MESSAGE="upgrade survivor exited before all phases completed"
   fi
+  if [ "$SCENARIO" = "custom-plugin-siblings" ] &&
+    ! node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs cleanup-refusal; then
+    if [ "$status" -eq 0 ]; then
+      status=1
+      FAILURE_PHASE="sibling-refusal-cleanup"
+      FAILURE_MESSAGE="sibling refusal cleanup incomplete; inspect retained process identities"
+    fi
+  fi
   # Capture before stop/cleanup can replace the first failing service evidence.
   if [ "$status" -ne 0 ]; then
     node scripts/e2e/lib/upgrade-survivor/diagnostics.mjs capture \
@@ -1518,6 +1526,9 @@ update_candidate() {
     update_env+=(OPENCLAW_ALLOW_ROOT=1)
   fi
   local update_node_options="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"
+  if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
+    update_node_options+=" --import=$ARTIFACT_ROOT/sibling-refusal-preload.mjs"
+  fi
   if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
     update_node_options+=" --import=$PWD/scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs"
     update_env+=("OPENCLAW_UPGRADE_SURVIVOR_WORKSHOP_STATE_DIR=$OPENCLAW_STATE_DIR")
@@ -1585,6 +1596,16 @@ update_candidate() {
     echo "update did not leave the selected target installed: $installed_version (expected $expected_version)" >&2
     return 1
   fi
+}
+
+assert_sibling_published_refusal() {
+  local refusal_exit=0
+  node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs arm-refusal "$(package_root)" || return "$?"
+  update_candidate || refusal_exit=$?
+  cp "$UPDATE_JSON" "$ARTIFACT_ROOT/sibling-refusal-update.json"
+  cp "$UPDATE_ERR" "$ARTIFACT_ROOT/sibling-refusal-update.err"
+  node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-refusal \
+    "$(package_root)" "$refusal_exit"
 }
 
 assert_workshop_published_refusal() {
@@ -2276,6 +2297,9 @@ if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
   phase validate-baseline-config validate_baseline_config
   phase baseline-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs baseline
   phase resolve-sibling-candidate resolve_candidate_version
+  if [ "$baseline_version" = "2026.9.6" ]; then
+    phase refuse-sibling-candidate assert_sibling_published_refusal
+  fi
   phase update-sibling-candidate update_candidate
   phase canary-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-canary
   phase candidate-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs candidate
