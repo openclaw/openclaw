@@ -140,13 +140,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         .catch(() => null);
       headerPlatformByClient.set(client, platformRequest);
     }
-    try {
-      const platform = await platformRequest;
-      if (this.connectedClient === client && this.connectionGeneration === generation) {
-        this.headerPlatform = platform;
-      }
-    } catch {
-      // Optional label refinement. Generic file-manager copy remains correct.
+    const platform = await platformRequest;
+    if (this.connectedClient === client && this.connectionGeneration === generation) {
+      this.headerPlatform = platform;
     }
   }
 

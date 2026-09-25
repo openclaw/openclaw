@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as processExec from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -65,14 +66,22 @@ describe("classifySystemdUnavailableDetail", () => {
 describe.skipIf(process.platform === "win32")("systemd process availability", () => {
   beforeEach(() => vi.spyOn(process, "platform", "get").mockReturnValue("linux"));
   afterEach(() => vi.restoreAllMocks());
+  async function commandFixture(dir: string, command: "systemctl" | "busctl", script: string) {
+    await fs.writeFile(path.join(dir, `${command}.sh`), script, { mode: 0o600 });
+    // Execute an immutable launcher so a newly written script inode cannot be text-busy.
+    await fs.symlink(
+      fileURLToPath(new URL("../../test/fixtures/service-manager-command.sh", import.meta.url)),
+      path.join(dir, command),
+    );
+  }
   async function managerProbe(dir: string) {
-    await fs.writeFile(
-      path.join(dir, "busctl"),
+    await commandFixture(
+      dir,
+      "busctl",
       `#!/bin/sh
 [ "$*" = "--user --auto-start=no get-property org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager Version" ] || exit 91
 printf 's "252.39"\\n'
 `,
-      { mode: 0o700 },
     );
   }
   function systemctlEnv(dir: string) {
@@ -112,10 +121,10 @@ printf 's "252.39"\\n'
     { output: "Failed to connect to bus: No medium found", code: 1, available: false },
   ])("preserves manager status $output", async ({ output, code, available }) => {
     await withTempDir("openclaw-systemctl-", async (dir) => {
-      await fs.writeFile(
-        path.join(dir, "systemctl"),
+      await commandFixture(
+        dir,
+        "systemctl",
         `#!/bin/sh\nprintf '%s\\n' '${output}'\nexit ${code}\n`,
-        { mode: 0o700 },
       );
       const env = systemctlEnv(dir);
       await managerProbe(dir);
@@ -139,10 +148,10 @@ printf 's "252.39"\\n'
 
   it.each(["timeout", "signal"])("rejects partial status after %s", async (termination) => {
     await withTempDir("openclaw-systemctl-", async (dir) => {
-      await fs.writeFile(
-        path.join(dir, "systemctl"),
+      await commandFixture(
+        dir,
+        "systemctl",
         `#!/bin/sh\nprintf 'Could not find service\\n'\n${termination === "timeout" ? "exec /bin/sleep 10" : "kill -TERM $$"}\n`,
-        { mode: 0o700 },
       );
       const env = systemctlEnv(dir);
       await managerProbe(dir);
@@ -227,8 +236,9 @@ printf 's "252.39"\\n'
           await fs.mkdir(path.dirname(unitPath), { recursive: true });
           await fs.writeFile(unitPath, definition);
           if (availability !== "missing") {
-            await fs.writeFile(
-              path.join(dir, "systemctl"),
+            await commandFixture(
+              dir,
+              "systemctl",
               [
                 "#!/bin/sh",
                 'printf "%s\\n" "$*" >> "$HOME/systemctl.calls"',
@@ -240,7 +250,6 @@ printf 's "252.39"\\n'
                 disableFails ? "  kill -TERM $$ ;;" : "  exit 0 ;;",
                 "esac",
               ].join("\n"),
-              { mode: 0o700 },
             );
           }
           let output = "";
@@ -312,8 +321,9 @@ printf 's "252.39"\\n'
       const unitPath = path.join(dir, ".config", "systemd", "user", "openclaw-lisa.service");
       await fs.mkdir(path.dirname(unitPath), { recursive: true });
       await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Gateway (profile: lisa)\n");
-      await fs.writeFile(
-        path.join(dir, "systemctl"),
+      await commandFixture(
+        dir,
+        "systemctl",
         [
           "#!/bin/sh",
           'printf "%s\\n" "$*" >> "$HOME/systemctl.calls"',
@@ -322,7 +332,6 @@ printf 's "252.39"\\n'
           '*" disable "*) exit 0 ;;',
           "esac",
         ].join("\n"),
-        { mode: 0o700 },
       );
       let output = "";
       const stdout = new Writable({

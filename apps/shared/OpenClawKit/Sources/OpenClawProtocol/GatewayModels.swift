@@ -6174,6 +6174,8 @@ public struct DesktopObserveResult: Codable, Sendable {
     public let wspath: String
     public let expiresatms: Int
     public let control: Bool
+    public let audio: [String: AnyCodable]?
+    public let audiounavailablereason: String?
     public let canresize: Bool?
     public let vncpassword: String?
     public let auth: String?
@@ -6184,6 +6186,8 @@ public struct DesktopObserveResult: Codable, Sendable {
         wspath: String,
         expiresatms: Int,
         control: Bool,
+        audio: [String: AnyCodable]? = nil,
+        audiounavailablereason: String? = nil,
         canresize: Bool? = nil,
         vncpassword: String? = nil,
         auth: String? = nil,
@@ -6193,6 +6197,8 @@ public struct DesktopObserveResult: Codable, Sendable {
         self.wspath = wspath
         self.expiresatms = expiresatms
         self.control = control
+        self.audio = audio
+        self.audiounavailablereason = audiounavailablereason
         self.canresize = canresize
         self.vncpassword = vncpassword
         self.auth = auth
@@ -6204,6 +6210,8 @@ public struct DesktopObserveResult: Codable, Sendable {
         case wspath = "wsPath"
         case expiresatms = "expiresAtMs"
         case control
+        case audio
+        case audiounavailablereason = "audioUnavailableReason"
         case canresize = "canResize"
         case vncpassword = "vncPassword"
         case auth

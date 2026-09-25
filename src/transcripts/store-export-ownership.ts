@@ -2,6 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256File } from "../infra/crypto-digest.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
 import { isCaseSensitiveDirectory, TRANSCRIPT_EXPORT_FILE_NAMES } from "./store-artifacts.js";
 import {
@@ -75,10 +76,8 @@ export async function assertTranscriptExportPathAvailable(
       (row) => row.session_id === metadata.sessionId && row.started_at === metadata.startedAt,
     )?.selector;
   } catch (error) {
-    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
-      if (!(error instanceof SyntaxError)) {
-        throw error;
-      }
+    if (!hasErrnoCode(error, "ENOENT") && !(error instanceof SyntaxError)) {
+      throw error;
     }
   }
   if (!ownerSelector) {
@@ -107,7 +106,7 @@ export async function hasAliasedCanonicalTranscriptExportPathOwner(
   try {
     await fs.access(params.exportRootDir);
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return false;
     }
     throw error;
@@ -120,7 +119,7 @@ export async function hasAliasedCanonicalTranscriptExportPathOwner(
   try {
     entries = await fs.readdir(sessionDir, { withFileTypes: true });
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return true;
     }
     throw error;

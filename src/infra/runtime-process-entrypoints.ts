@@ -36,6 +36,7 @@ export const runtimeProcessEntrypoints = {
   stateMigrationSnapshot: runtimeProcessEntrypoint("infra/state-migrations.snapshot.worker"),
   githubExec: runtimeProcessEntrypoint("agents/github-exec-launcher"),
   sqliteReadOnly: runtimeProcessEntrypoint("infra/sqlite-readonly-location.worker"),
+  sqliteSourceRevision: runtimeProcessEntrypoint("infra/sqlite-source-revision.worker"),
   sqliteIntegrity: runtimeProcessEntrypoint("infra/sqlite-integrity.worker"),
   preparedModelCatalog: runtimeProcessEntrypoint("agents/prepared-model-catalog.worker"),
   updateRepair: runtimeProcessEntrypoint("infra/update-repair.worker"),

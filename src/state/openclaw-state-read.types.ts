@@ -135,6 +135,7 @@ export type OpenClawStateReadCommand =
     }
   | CronRunRecoveryReadCommand
   | { type: "cron.activeReceiptOwners"; agentId: string }
+  | { type: "cron.jobNames"; jobIds: string[]; storePath?: string }
   | { type: "subagents.forChildSession"; childSessionKey: string }
   | { type: "exec-approvals.read" }
   | {
@@ -322,6 +323,12 @@ export type OpenClawStateReadReply = (
       type: "cron.observeRunRecovery";
       sourceAdmitted: true;
       observation: CronRunRecoveryObservation;
+    }
+  | {
+      ok: true;
+      type: "cron.jobNames";
+      sourceAdmitted: true;
+      names: Map<string, string | undefined>;
     }
   | {
       ok: true;

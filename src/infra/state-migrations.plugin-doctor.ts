@@ -177,6 +177,7 @@ export async function collectPluginDoctorStateMigrationPlans(
           env,
           config,
           repairAuthority: params.repairAuthority,
+          trustedForDurableStores: entry.trustedForDurableStores ?? true,
           // Detection runs before exclusive state ownership, so it is handed
           // inspection-only ingress access and no mutation gate. Untrusted owners get
           // no ingress lane at all: Doctor must not widen the runtime's durable-store
@@ -291,6 +292,7 @@ async function migratePluginDoctorStatePlans(
             env: input.env,
             config: input.config,
             repairAuthority,
+            trustedForDurableStores: plan.trustedForDurableStores ?? true,
             ...((plan.trustedForDurableStores ?? true)
               ? {
                   channelIngress: {

@@ -110,7 +110,6 @@ SCENARIO="$1"
 UPDATE_RESTART_MODE="$2"
 baseline_version=2026.8.1
 COMMAND_TIMEOUT=1
-baseline_version=2026.8.1
 plugin_registry_pid=synthetic
 NPM_CONFIG_REGISTRY=initial-registry
 manager_registry="$NPM_CONFIG_REGISTRY"

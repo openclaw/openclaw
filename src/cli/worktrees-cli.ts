@@ -6,12 +6,6 @@ import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 type JsonOption = { json?: boolean };
 
-function printJson(value: unknown): void {
-  // writeJson targets process.stdout directly; runtime.log routes through the console
-  // logger and never reaches piped stdout, which breaks `--json | jq` consumers.
-  defaultRuntime.writeJson(value);
-}
-
 async function readExactStateRequest(filename: string | undefined) {
   if (!filename) {
     return undefined;
@@ -24,7 +18,7 @@ async function readExactStateRequest(filename: string | undefined) {
 
 function printRecord(record: ManagedWorktreeRecord, json: boolean): void {
   if (json) {
-    printJson(record);
+    defaultRuntime.writeJson(record);
     return;
   }
   defaultRuntime.log(`${record.id}\t${record.path}`);
@@ -43,7 +37,7 @@ export function registerWorktreesCli(program: Command): void {
       const { managedWorktrees } = await import("../agents/worktrees/service.js");
       const records = await managedWorktrees.list();
       if (opts.json) {
-        printJson({ worktrees: records });
+        defaultRuntime.writeJson({ worktrees: records });
         return;
       }
       if (records.length === 0) {
@@ -129,7 +123,7 @@ export function registerWorktreesCli(program: Command): void {
             (record) => record.id === id,
           )?.runEndCleanup;
           if (opts.json) {
-            printJson({ removed, cleanup });
+            defaultRuntime.writeJson({ removed, cleanup });
           } else {
             defaultRuntime.log(
               removed
@@ -147,7 +141,7 @@ export function registerWorktreesCli(program: Command): void {
           allowSnapshotLoss: opts.force,
         });
         if (opts.json) {
-          printJson(result);
+          defaultRuntime.writeJson(result);
         } else {
           defaultRuntime.log(
             result.recoveryPath
@@ -192,7 +186,7 @@ export function registerWorktreesCli(program: Command): void {
           expectedRetainedSourceOid: opts.retainedOid,
         });
         if (opts.json) {
-          printJson(result);
+          defaultRuntime.writeJson(result);
         } else {
           defaultRuntime.log(`Retired snapshot ${id}.`);
         }
@@ -209,7 +203,7 @@ export function registerWorktreesCli(program: Command): void {
       const { managedWorktrees } = await import("../agents/worktrees/service.js");
       const result = await managedWorktrees.recoverRemoval({ id, snapshot: opts.snapshot });
       if (opts.json) {
-        printJson(result);
+        defaultRuntime.writeJson(result);
       } else {
         defaultRuntime.log(`Completed removal of ${id}; original snapshot retained.`);
       }
@@ -251,7 +245,7 @@ export function registerWorktreesCli(program: Command): void {
         ...createManagedWorktreeOwnerPolicy(cfg),
       });
       if (opts.json) {
-        printJson(result);
+        defaultRuntime.writeJson(result);
       } else {
         defaultRuntime.log(formatWorktreeGcResult(result));
       }

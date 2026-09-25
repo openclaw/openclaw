@@ -5,6 +5,7 @@ import {
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
 } from "../agents/prepared-model-runtime.test-harness.js";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { revokeRuntimeAuthMaterializations } from "../agents/auth-profiles/runtime-materializations.js";
 import { reportEmbeddedRunSuccessfulAuthBinding } from "../agents/embedded-agent-runner/run/auth-profile-success.js";
@@ -997,9 +998,7 @@ describe("gateway chat metadata lifecycle composition", () => {
       await expect(lifecycle.read({ agentId: "main" })).rejects.toBe(failure);
       // Drain the completed publication's promise continuations before starting a new
       // transaction; this must not exercise two components of one queued transaction.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(phases).toEqual(["invalidated", "failed"]);
       phases.length = 0;
 
@@ -1018,9 +1017,7 @@ describe("gateway chat metadata lifecycle composition", () => {
         },
       );
       await expect(healthyDispatch).resolves.toMatchObject({ agentId: "main" });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(phases).toContain("invalidated");
       expect(phases).not.toContain("published");
       expect(getPreparedModelCatalogOwnerSnapshot({ agentId: "worker", config })).toBeUndefined();

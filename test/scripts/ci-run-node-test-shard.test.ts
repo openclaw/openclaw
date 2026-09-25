@@ -46,6 +46,9 @@ const bunTarget = "packages/markdown-core/src/chunk-text.test.ts";
 const nodeTarget = "test/scripts/update-restart-module-outcome.test.ts";
 const agentsSupportConfig = "test/vitest/vitest.agents-support.config.ts";
 const worktreeRecoveryTarget = "src/agents/worktrees/service.removal-recovery.test.ts";
+const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
+const gatewayClientConfig = "test/vitest/vitest.gateway-client.config.ts";
+const gatewayClientTarget = "src/gateway/talk/handlers/client-native-control.test.ts";
 
 function makeScratchDir(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-shard-test-"));
@@ -243,14 +246,23 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   );
 
   it.each([
-    { policy: undefined, expected: ["eligible", "mixed", "unknown", bunTarget] },
+    { policy: undefined, expected: ["eligible", "mixed", "unknown", "gateway-client", bunTarget] },
     {
       policy: "bun-compatible",
-      expected: ["bun:eligible", "mixed", "unknown", `bun:${bunTarget}`],
+      expected: ["bun:eligible", "mixed", "unknown", "bun:gateway-client", `bun:${bunTarget}`],
     },
     {
       policy: "dual",
-      expected: ["eligible", "bun:eligible", "mixed", "unknown", bunTarget, `bun:${bunTarget}`],
+      expected: [
+        "eligible",
+        "bun:eligible",
+        "mixed",
+        "unknown",
+        "gateway-client",
+        "bun:gateway-client",
+        bunTarget,
+        `bun:${bunTarget}`,
+      ],
     },
   ])("preserves complete process envelopes under $policy", async ({ policy, expected }) => {
     const persistentRoot = makeScratchDir();
@@ -267,6 +279,11 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         { configs: [bunConfig], shard_name: "eligible", includePatterns: [bunTarget] },
         { configs: [bunConfig, "unknown.config.ts"], shard_name: "mixed" },
         { configs: ["unknown.config.ts"], shard_name: "unknown" },
+        {
+          configs: [gatewayClientConfig],
+          shard_name: "gateway-client",
+          includePatterns: [gatewayClientTarget],
+        },
       ]),
     });
     const exitCode = await runShardPlans(
@@ -293,6 +310,11 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
               bunTarget,
             ]);
           }
+          if (label.endsWith("gateway-client")) {
+            expect(JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8"))).toEqual([
+              gatewayClientTarget,
+            ]);
+          }
           await Promise.resolve();
           active -= 1;
           return 0;
@@ -312,8 +334,135 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           ? [bunConfig, "unknown.config.ts"]
           : label === "unknown"
             ? ["unknown.config.ts"]
-            : [bunTarget];
+            : label.endsWith("gateway-client")
+              ? [gatewayClientConfig]
+              : [bunTarget];
       expect(args).toEqual([...targets, "--", "--maxWorkers=1"]);
+    }
+  });
+
+  it.each(["node", "bun-compatible", "dual"] as const)(
+    "preserves Gateway config coverage and execution budgets under %s",
+    async (policy) => {
+      const configs = [gatewayCoreConfig, gatewayClientConfig];
+      const expected =
+        policy === "node"
+          ? [{ runtime: "node", configs, prefix: "" }]
+          : [
+              {
+                runtime: "node",
+                configs: policy === "dual" ? configs : [gatewayCoreConfig],
+                prefix: policy === "dual" ? "" : "node-subset:",
+              },
+              { runtime: "bun", configs: [gatewayClientConfig], prefix: "bun:" },
+            ];
+      for (const includePatterns of [
+        undefined,
+        ["src/gateway/auth.test.ts", gatewayClientTarget],
+      ]) {
+        const group = {
+          configs,
+          includePatterns,
+          shard_name: "gateway",
+          timing_key: "gateway#include-original",
+          env: { OPENCLAW_VITEST_MAX_WORKERS: "2", OWNER: "gateway" },
+        };
+        const persistentRoot = makeScratchDir();
+        const seen: Array<{
+          runtime: string | undefined;
+          args: string[];
+          label: string;
+          timing: string;
+        }> = [];
+        let active = 0;
+        let peakActive = 0;
+        const jobEnv = { OPENCLAW_TEST_PROJECTS_PARALLEL: "2" };
+        expect(ciTestShardRequiresBun({ env: jobEnv, groups: [group] }, policy)).toBe(
+          policy !== "node",
+        );
+        await expect(
+          runShardPlans(
+            resolveShardPlans({ OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([group]) }),
+            {
+              concurrency: 1,
+              env: {
+                ...jobEnv,
+                OPENCLAW_CI_TEST_RUNTIME_POLICY: policy,
+                OPENCLAW_VITEST_MAX_WORKERS: "3",
+                OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: persistentRoot,
+                OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--hookTimeout=10000"]',
+              },
+              scratchDir: makeScratchDir(),
+              runChild: async (args, env, label, timing) => {
+                active += 1;
+                peakActive = Math.max(peakActive, active);
+                const runtime = env.OPENCLAW_VITEST_RUNTIME;
+                seen.push({ runtime, args, label, timing });
+                expect(env.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
+                expect(env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("1");
+                expect(env.OPENCLAW_VITEST_SHARD_NAME).toBe("gateway");
+                expect(env.OWNER).toBe("gateway");
+                expect(env.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT).toBe(
+                  path.join(
+                    persistentRoot,
+                    runtime === "bun" ? "vitest-cache-bun-0" : "vitest-cache-0",
+                  ),
+                );
+                expect(
+                  env.OPENCLAW_VITEST_INCLUDE_FILE
+                    ? JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE, "utf8"))
+                    : undefined,
+                ).toEqual(includePatterns);
+                await Promise.resolve();
+                active -= 1;
+                return 0;
+              },
+            },
+          ),
+        ).resolves.toBe(0);
+        expect(peakActive).toBe(1);
+        expect(seen).toEqual(
+          expected.map(({ runtime, configs: selectedConfigs, prefix }) => ({
+            runtime,
+            args: [...selectedConfigs, "--", "--hookTimeout=10000"],
+            label: `${prefix}gateway`,
+            timing: `${prefix}gateway#include-original`,
+          })),
+        );
+      }
+    },
+  );
+
+  it("keeps an explicitly parallel Gateway pair on Node under both Bun policies", async () => {
+    const configs = [gatewayCoreConfig, gatewayClientConfig];
+    const group = {
+      configs,
+      shard_name: "gateway",
+      env: { OPENCLAW_TEST_PROJECTS_PARALLEL: "2" },
+    };
+    for (const policy of ["bun-compatible", "dual"] as const) {
+      const runChild = vi.fn(async () => 0);
+      expect(ciTestShardRequiresBun({ groups: [group] }, policy)).toBe(false);
+      await expect(
+        runShardPlans(
+          resolveShardPlans({ OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([group]) }),
+          {
+            env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
+            scratchDir: makeScratchDir(),
+            runChild,
+          },
+        ),
+      ).resolves.toBe(0);
+      expect(runChild).toHaveBeenCalledTimes(1);
+      expect(runChild).toHaveBeenCalledWith(
+        configs,
+        expect.objectContaining({
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "2",
+          OPENCLAW_VITEST_RUNTIME: "node",
+        }),
+        "gateway",
+        "gateway",
+      );
     }
   });
 
@@ -577,6 +726,10 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     { env: { OPENCLAW_VITEST_INCLUDE_FILE: "external.json" } },
     { env: { OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE: "external.json" } },
     { configs: [bunConfig, "test/vitest/vitest.unit-fast-fake-timers.config.ts"] },
+    { configs: [gatewayClientConfig, gatewayCoreConfig] },
+    { configs: [gatewayCoreConfig, gatewayClientConfig, bunConfig] },
+    { configs: [gatewayClientConfig, gatewayClientConfig] },
+    { targets: [gatewayClientTarget] },
     { targets: ["packages/markdown-core/src"] },
     { targets: ["packages/markdown-core/src/*.test.ts"] },
     { targets: [bunTarget, nodeTarget] },
@@ -596,6 +749,15 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       { runtime: "node" },
     ]);
     expect(resolveCiTestRuntimeSelections(qualifiedShard, "dual")).toEqual([{ runtime: "node" }]);
+    for (const configs of [[gatewayClientConfig], [gatewayCoreConfig, gatewayClientConfig]]) {
+      const gatewaySelection = { configs, ...selection };
+      expect(resolveCiTestRuntimeSelections(gatewaySelection, "bun-compatible")).toEqual([
+        { runtime: "node" },
+      ]);
+      expect(resolveCiTestRuntimeSelections(gatewaySelection, "dual")).toEqual([
+        { runtime: "node" },
+      ]);
+    }
     if (!selection.targets) {
       expect(ciTestShardRequiresBun(shard, "dual")).toBe(false);
     }

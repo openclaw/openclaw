@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -27,7 +27,11 @@ import {
 } from "./release-stable.test-support.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
-const fixture = () => releaseFixture(directories.make(".release-stable-test-", REPO_ROOT));
+const fixture = () => {
+  const scratch = join(REPO_ROOT, ".tmp");
+  mkdirSync(scratch, { recursive: true });
+  return releaseFixture(directories.make(".release-stable-test-", scratch));
+};
 const fetchMain = () => step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]);
 const mainSha = () => step("git", ["rev-parse", "origin/main"], CUT_SHA);
 

@@ -56,6 +56,8 @@ import {
 } from "../tasks/task-registry-records.js";
 import type { TaskPersistenceReceipt, TaskRunTransition } from "../tasks/task-registry.types.js";
 
+export { createAgentHarnessCommandTask } from "../tasks/agent-harness-command-task.js";
+
 export { createAgentHarnessTaskEventSink } from "../tasks/agent-harness-completion-custody.js";
 export type { AgentHarnessCompletionCustody };
 export {
