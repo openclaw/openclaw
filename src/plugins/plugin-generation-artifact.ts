@@ -21,7 +21,6 @@ import {
   pluginSourceStatIdentity,
   verifyPluginSourceInputs,
   pluginSourceContentHash,
-  readPluginSourceBytes,
   createPluginPackageMetadataCapture,
   createPluginSourceCapture,
   type PluginDependencyResolution,
@@ -30,6 +29,7 @@ import {
   isPluginPackageFile as inPackage,
   findPluginCapturedPackage,
 } from "./plugin-package-metadata-capture.js";
+import { copyPluginSourceFile, hashPluginSourceFile } from "./plugin-source-file.js";
 import {
   capturedPluginModuleUrl,
   visitPluginSourceReferences,
@@ -155,13 +155,13 @@ export function capturePluginGenerationArtifact(
       }
       const stat = fs.statSync(real, { bigint: true });
       const captured = capturedPaths.get(real);
-      const recordContent = (content: Buffer | string[]) => {
+      const recordContent = (contentHash: string, sizeBytes = 0) => {
         if (!captured) {
-          // Filesystem ticks can hide edits. Retain the bytes or member names actually copied,
-          // not just stat fields; cached aliases must keep their first capture's facts.
+          // Filesystem ticks can hide edits; aliases retain their first captured content facts.
           inputs.set(real, {
             identity: pluginSourceStatIdentity(stat),
-            contentHash: pluginSourceContentHash(content),
+            contentHash,
+            sizeBytes,
             directory: stat.isDirectory(),
             boundary,
           });
@@ -187,7 +187,7 @@ export function capturePluginGenerationArtifact(
         ancestors.add(real);
         fs.mkdirSync(target, { recursive: true, mode: 0o700 });
         const names = fs.readdirSync(real).toSorted();
-        recordContent(names);
+        recordContent(pluginSourceContentHash(names));
         for (const name of names) {
           if (
             name !== "node_modules" &&
@@ -202,18 +202,21 @@ export function capturePluginGenerationArtifact(
         if (stat.nlink > 1n) {
           hardlinkedSources.add(target);
         }
-        let bytes: Buffer;
         fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
         if (captured) {
           // A second filename for a prefetched entry retains its first bytes and source identity.
-          bytes = fs.readFileSync(captured);
-          fs.copyFileSync(captured, target);
+          fs.copyFileSync(captured, target, fs.constants.COPYFILE_FICLONE);
         } else {
-          bytes = readPluginSourceBytes(real, boundary);
-          fs.writeFileSync(target, bytes, { mode: 0o600 | Number(stat.mode & 0o100n) });
+          copyPluginSourceFile(real, boundary, target);
+          fs.chmodSync(target, 0o600 | Number(stat.mode & 0o100n));
         }
-        recordContent(bytes);
-        digest.update(String(bytes.length)).update("\0").update(bytes);
+        const content = hashPluginSourceFile(
+          target,
+          directory,
+          digest,
+          captured ? inputs.get(real) : undefined,
+        );
+        recordContent(content.contentHash, content.sizeBytes);
         additions.add(target);
         if (path.basename(target) === "package.json") {
           metadataCapture.record(target, (manifest) => {

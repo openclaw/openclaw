@@ -6,11 +6,11 @@ import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { retainPluginSourceCaptureInstance } from "./plugin-source-capture-directory.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
+import { hashPluginSourceFile } from "./plugin-source-file.js";
 
 export function createPluginSourceLinkCapture() {
   const links = new Set<string>();
@@ -32,31 +32,13 @@ export function createPluginSourceLinkCapture() {
 export const pluginSourceStatIdentity = (stat: fs.BigIntStats): string =>
   `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 
-export function readPluginSourceBytes(source: string, boundary: string): Buffer {
-  const opened = openRootFileSync({
-    absolutePath: source,
-    rootPath: boundary,
-    boundaryLabel: "plugin build source",
-    rejectHardlinks: false,
-  });
-  if (!opened.ok) {
-    throw new Error(`Cannot capture plugin source ${source}`, { cause: opened.error });
-  }
-  try {
-    return fs.readFileSync(opened.fd);
-  } finally {
-    fs.closeSync(opened.fd);
-  }
-}
-
-export const pluginSourceContentHash = (content: Buffer | string[]) =>
-  createHash("sha256")
-    .update(Array.isArray(content) ? JSON.stringify(content) : content)
-    .digest("hex");
+export const pluginSourceContentHash = (content: string[]) =>
+  createHash("sha256").update(JSON.stringify(content)).digest("hex");
 
 export type PluginSourceInput = {
   identity: string;
   contentHash: string;
+  sizeBytes: number;
   directory: boolean;
   boundary: string;
 };
@@ -70,11 +52,9 @@ export function verifyPluginSourceInputs(
     if (
       fs.realpathSync(source) !== source ||
       pluginSourceStatIdentity(fs.statSync(source, { bigint: true })) !== input.identity ||
-      pluginSourceContentHash(
-        input.directory
-          ? fs.readdirSync(source).toSorted()
-          : readPluginSourceBytes(source, input.boundary),
-      ) !== input.contentHash
+      (input.directory
+        ? pluginSourceContentHash(fs.readdirSync(source).toSorted())
+        : hashPluginSourceFile(source, input.boundary).contentHash) !== input.contentHash
     ) {
       throw new Error(
         "Plugin source changed while preparing its reload; retry after the edit finishes.",
