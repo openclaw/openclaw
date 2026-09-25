@@ -65,6 +65,8 @@ function stripHeartbeatHtmlComments(content: string): string[] {
  * - Markdown ATX headers (`#`, `##`, ...)
  * - Markdown fence markers such as ``` or ```markdown
  * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
+ * - Bare documentation link list items (the legacy "Related" boilerplate,
+ *   e.g. `- [Heartbeat config](/gateway/config-agents)`)
  *
  * Note: Missing scratch returns false (not effectively empty) so the model can
  * still decide what to do. This function applies only when a scratch row exists.
@@ -83,13 +85,25 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
       !trimmed ||
       /^#+(\s|$)/.test(trimmed) ||
       /^[-*+]\s*(\[[\sXx]?\]\s*)?$/.test(trimmed) ||
-      /^```[A-Za-z0-9_-]*$/.test(trimmed)
+      /^```[A-Za-z0-9_-]*$/.test(trimmed) ||
+      isBareDocsLinkListItem(trimmed)
     ) {
       continue;
     }
     return false;
   }
   return true;
+}
+
+/**
+ * True when a line is a list item whose whole content is a single bare
+ * documentation link, such as the legacy monitor scratch "Related" section
+ * (`- [Heartbeat config](/gateway/config-agents)`). A docs reference is not a
+ * heartbeat task. Links with surrounding prose, multiple links, or external
+ * (non-docs) targets still count as content.
+ */
+function isBareDocsLinkListItem(trimmedLine: string): boolean {
+  return /^[-*+]\s*\[[^\]]+\]\((\/[^()\s]*|#[^()\s]*)\)\s*$/.test(trimmedLine);
 }
 
 /** Resolves configured heartbeat prompt text with the built-in default fallback. */

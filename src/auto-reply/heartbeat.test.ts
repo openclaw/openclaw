@@ -264,6 +264,31 @@ Keep this scratch empty unless you want a tiny checklist.
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
   });
 
+  it("returns true for the legacy task-free boilerplate scaffold", () => {
+    const legacyScaffold = `# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+\`\`\`
+
+## Related
+
+- [Heartbeat config](/gateway/config-agents)
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(legacyScaffold)).toBe(true);
+  });
+
+  it("returns true for a bare documentation link list item", () => {
+    expect(isHeartbeatContentEffectivelyEmpty("- [Heartbeat config](/gateway/config-agents)")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("* [top](#heartbeat)")).toBe(true);
+  });
+
+  it("returns false for links that carry real content", () => {
+    expect(isHeartbeatContentEffectivelyEmpty("- [read this](https://example.com/doc)")).toBe(false);
+    expect(
+      isHeartbeatContentEffectivelyEmpty("- [docs](/gateway/config-agents) before Friday"),
+    ).toBe(false);
+  });
+
   it("returns true for header with only empty lines", () => {
     expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch\n\n\n")).toBe(true);
   });
