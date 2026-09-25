@@ -70,7 +70,15 @@ export function resolveRatchetBase(root: string, options: { base?: string; stage
   try {
     return readGitText(root, ["merge-base", "HEAD", resolved]).trim();
   } catch {
-    return null;
+    // CI can report a base outside the checkout's history (for example after a
+    // fork history is recreated). Keep every ratchet active by comparing against
+    // the current commit's first parent, the nearest reachable pre-change state,
+    // instead of returning null and silently disabling shrink-only checks.
+    try {
+      return readGitText(root, ["rev-parse", "HEAD^1"]).trim();
+    } catch {
+      return null;
+    }
   }
 }
 
