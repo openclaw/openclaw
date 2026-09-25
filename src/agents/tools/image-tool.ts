@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { normalizeMediaProviderId } from "../../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
 import {
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
@@ -470,9 +471,11 @@ export function createImageTool(options?: {
     }),
     execute: async (_toolCallId, args, suppliedSignal) =>
       runWithAsyncWorkResources(async (onAcquired) => {
-        const { captureAmbientGatewayOperatorAuthority } =
-          await import("../../gateway/operator-invocation-authority.js");
-        const capturedOperator = captureAmbientGatewayOperatorAuthority({
+        const record: Record<string, unknown> = args && typeof args === "object" ? { ...args } : {};
+        if (Array.isArray(record.paths)) {
+          record.paths = [...record.paths];
+        }
+        const capturedOperator = await captureAmbientGatewayOperatorAuthority({
           missingBindingError: () =>
             new Error("Image analysis requires its current Gateway binding."),
           retainInherited: true,
@@ -492,8 +495,6 @@ export function createImageTool(options?: {
           signal?.throwIfAborted();
         };
         assertCurrent();
-        const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-
         // MARK: - Normalize path + paths input and dedupe while preserving order
         const pathCandidates: string[] = [];
         if (typeof record.path === "string") {

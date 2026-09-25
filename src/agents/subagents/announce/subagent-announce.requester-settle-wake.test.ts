@@ -846,6 +846,26 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     }
   });
 
+  it("records a transcript turn assertion as one permanent completion failure", async () => {
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      makeSettledChild({ runId: "run-a" }),
+      makeSettledChild({ runId: "run-b" }),
+    ]);
+    const error = "Session transcript keyed user is outside the current turn: old-input";
+    deliverSpy.mockRejectedValueOnce(new Error(error));
+
+    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
+      delivered: false,
+      path: "none",
+      disposition: "permanent_failure",
+      error,
+    });
+    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    expect(completeBatchSpy).toHaveBeenCalledOnce();
+  });
+
   it("does not retry an ambiguous delivery failure", async () => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
       makeSettledChild({ runId: "run-a" }),

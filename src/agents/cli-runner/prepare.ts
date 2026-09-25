@@ -239,14 +239,6 @@ const defaultPrepareDeps = {
 };
 const prepareDeps = { ...defaultPrepareDeps };
 
-function resolveCliSessionInvalidatedReason(
-  reusableCliSession: CliReusableSession,
-): Extract<CliReusableSession, { mode: "invalidate" }>["invalidatedReason"] | undefined {
-  return reusableCliSession.mode === "invalidate"
-    ? reusableCliSession.invalidatedReason
-    : undefined;
-}
-
 function prependCliSessionDriftUserContext(
   context: RunCliAgentParams["currentInboundContext"],
   reusableCliSession: CliReusableSession,
@@ -388,42 +380,6 @@ function shouldResolveAuthProfileForExecution(params: {
     return params.policy.oauthRefreshOwner === "core";
   }
   return params.authCredential.type === "api_key" || params.authCredential.type === "token";
-}
-
-type CliAuthProfileResolutionFailure =
-  | { kind: "unmaterialized" }
-  | { kind: "resolved-as-other"; resolvedProfileId: string };
-
-function describeCliAuthProfileResolutionFailure(
-  profileId: string,
-  failure: CliAuthProfileResolutionFailure,
-): string {
-  switch (failure.kind) {
-    case "resolved-as-other":
-      return `selected auth profile "${profileId}" resolved as "${failure.resolvedProfileId}"`;
-    case "unmaterialized":
-      return `could not materialize selected auth profile "${profileId}"`;
-  }
-  return failure satisfies never;
-}
-
-function buildCliAuthProfileResolutionError(params: {
-  backendId: string;
-  profileId: string;
-  provider: string;
-  agentDir: string;
-  failure: CliAuthProfileResolutionFailure;
-}): CliAuthProfilePreparationError {
-  const loginCommand = buildOAuthRefreshFailureLoginCommand(params.provider, {
-    profileId: params.profileId,
-  });
-  const reason = describeCliAuthProfileResolutionFailure(params.profileId, params.failure);
-  return new CliAuthProfilePreparationError({
-    message: `CLI backend "${params.backendId}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
-    profileId: params.profileId,
-    provider: params.provider,
-    agentDir: params.agentDir,
-  });
 }
 
 /** Builds the complete context required to execute a CLI-backed agent run. */
@@ -783,6 +739,21 @@ async function prepareCliRunContextWithinReadFence(
     })
   ) {
     const authProfileId = effectiveAuthProfileId;
+    const profileResolutionError = (provider: string, resolvedProfileId?: string) => {
+      const loginCommand = buildOAuthRefreshFailureLoginCommand(provider, {
+        profileId: authProfileId,
+      });
+      const reason =
+        resolvedProfileId !== undefined
+          ? `selected auth profile "${authProfileId}" resolved as "${resolvedProfileId}"`
+          : `could not materialize selected auth profile "${authProfileId}"`;
+      return new CliAuthProfilePreparationError({
+        message: `CLI backend "${backendResolved.id}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
+        profileId: authProfileId,
+        provider,
+        agentDir,
+      });
+    };
     const writableAuthStore = loadScopedAuthStore({ profileId: authProfileId, readOnly: false });
     const resolvedAuth = await prepareDeps.resolveApiKeyForProfile({
       cfg: params.config,
@@ -795,26 +766,19 @@ async function prepareCliRunContextWithinReadFence(
     });
     params.assertCurrent?.();
     if (!resolvedAuth && backendAuthPolicy?.strictSelectedProfile) {
-      throw buildCliAuthProfileResolutionError({
-        backendId: backendResolved.id,
-        profileId: authProfileId,
-        provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
-        agentDir,
-        failure: { kind: "unmaterialized" },
-      });
+      throw profileResolutionError(
+        writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+      );
     }
     if (
       resolvedAuth &&
       backendAuthPolicy?.strictSelectedProfile &&
       resolvedAuth.profileId !== authProfileId
     ) {
-      throw buildCliAuthProfileResolutionError({
-        backendId: backendResolved.id,
-        profileId: authProfileId,
-        provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
-        agentDir,
-        failure: { kind: "resolved-as-other", resolvedProfileId: resolvedAuth.profileId },
-      });
+      throw profileResolutionError(
+        writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+        resolvedAuth.profileId,
+      );
     }
     const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
     authStore = loadScopedAuthStore({ profileId: resolvedAuthProfileId });
@@ -824,13 +788,7 @@ async function prepareCliRunContextWithinReadFence(
       (!authCredential ||
         (authCredential.type === "oauth" && !hasUsableOAuthCredential(authCredential)))
     ) {
-      throw buildCliAuthProfileResolutionError({
-        backendId: backendResolved.id,
-        profileId: authProfileId,
-        provider: resolvedAuth?.provider ?? params.provider,
-        agentDir,
-        failure: { kind: "unmaterialized" },
-      });
+      throw profileResolutionError(resolvedAuth?.provider ?? params.provider);
     }
     if (resolvedAuth && authCredential) {
       effectiveAuthProfileId = resolvedAuthProfileId;
@@ -1853,7 +1811,8 @@ async function prepareCliRunContextWithinReadFence(
       ? { mode: "invalidate", invalidatedReason: claudeCliInvalidatedReason }
       : backendReusableCliSession;
     const reusableCliSessionId = resolveCliSessionId(reusableCliSession);
-    const invalidatedReason = resolveCliSessionInvalidatedReason(reusableCliSession);
+    const invalidatedReason =
+      reusableCliSession.mode === "invalidate" ? reusableCliSession.invalidatedReason : undefined;
     if (invalidatedReason) {
       cliBackendLog.info(
         `cli session reset: provider=${params.provider} reason=${invalidatedReason}`,

@@ -1503,95 +1503,6 @@ export function estimateToolResultReductionPotential(params: {
   };
 }
 
-async function truncateOversizedToolResultsInExistingSessionManager(params: {
-  sessionManager: SessionManager;
-  contextWindowTokens: number;
-  maxCharsOverride?: number;
-  aggregateMaxCharsOverride?: number;
-  protectTrailingToolResults?: boolean;
-  projectionState?: ToolResultPromptProjectionState;
-  sessionFile?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  storePath?: string;
-}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
-  const { sessionManager, contextWindowTokens } = params;
-  const branch = Array.from(
-    iterateSessionContextEntries(sessionManager.getBranch()),
-    ({ entry }) => entry,
-  );
-
-  if (branch.length === 0) {
-    return { truncated: false, truncatedCount: 0, reason: "empty session" };
-  }
-
-  const { maxChars, aggregateBudgetChars, plan } = buildRecoveryToolResultReplacementPlan({
-    branch,
-    contextWindowTokens,
-    maxCharsOverride: params.maxCharsOverride,
-    aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
-    protectTrailingToolResults: params.protectTrailingToolResults,
-    projectionState: params.projectionState,
-  });
-  if (plan.replacements.length === 0) {
-    return {
-      truncated: false,
-      truncatedCount: 0,
-      reason: "no oversized or aggregate tool results",
-    };
-  }
-  const rewriteResult = await rewriteTranscriptEntriesInSessionManager({
-    sessionManager,
-    replacements: plan.replacements,
-  });
-  if (rewriteResult.changed && params.projectionState) {
-    // Recovery changed canonical bytes; keeping their former source would undo the next TTL edit.
-    reconcileToolResultPromptProjectionState(
-      sessionManager.buildSessionContext().messages,
-      params.projectionState,
-    );
-  }
-  const target =
-    sessionManager.getSessionTarget() ??
-    (params.sessionId && params.sessionKey && params.agentId && params.storePath
-      ? {
-          agentId: params.agentId,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-        }
-      : undefined);
-  if (rewriteResult.changed && (params.sessionFile || target)) {
-    emitSessionTranscriptUpdate({
-      ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
-      ...(target
-        ? { target }
-        : {
-            sessionKey: params.sessionKey,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
-          }),
-    });
-  }
-
-  logToolResultSessionTruncation({
-    rewrittenEntries: rewriteResult.rewrittenEntries,
-    contextWindowTokens,
-    maxChars,
-    aggregateBudgetChars,
-    oversizedReplacementCount: plan.oversizedReplacementCount,
-    aggregateReplacementCount: plan.aggregateReplacementCount,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-  });
-
-  return {
-    truncated: rewriteResult.changed,
-    truncatedCount: rewriteResult.rewrittenEntries,
-    reason: rewriteResult.reason,
-  };
-}
-
 export async function truncateOversizedToolResultsInSessionManager(params: {
   sessionManager: SessionManager;
   contextWindowTokens: number;
@@ -1606,7 +1517,80 @@ export async function truncateOversizedToolResultsInSessionManager(params: {
   storePath?: string;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   try {
-    return await truncateOversizedToolResultsInExistingSessionManager(params);
+    const { sessionManager, contextWindowTokens } = params;
+    const branch = Array.from(
+      iterateSessionContextEntries(sessionManager.getBranch()),
+      ({ entry }) => entry,
+    );
+
+    if (branch.length === 0) {
+      return { truncated: false, truncatedCount: 0, reason: "empty session" };
+    }
+
+    const { maxChars, aggregateBudgetChars, plan } = buildRecoveryToolResultReplacementPlan({
+      branch,
+      contextWindowTokens,
+      maxCharsOverride: params.maxCharsOverride,
+      aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
+      protectTrailingToolResults: params.protectTrailingToolResults,
+      projectionState: params.projectionState,
+    });
+    if (plan.replacements.length === 0) {
+      return {
+        truncated: false,
+        truncatedCount: 0,
+        reason: "no oversized or aggregate tool results",
+      };
+    }
+    const rewriteResult = await rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: plan.replacements,
+    });
+    if (rewriteResult.changed && params.projectionState) {
+      // Recovery changed canonical bytes; keeping their former source would undo the next TTL edit.
+      reconcileToolResultPromptProjectionState(
+        sessionManager.buildSessionContext().messages,
+        params.projectionState,
+      );
+    }
+    const target =
+      sessionManager.getSessionTarget() ??
+      (params.sessionId && params.sessionKey && params.agentId && params.storePath
+        ? {
+            agentId: params.agentId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+          }
+        : undefined);
+    if (rewriteResult.changed && (params.sessionFile || target)) {
+      emitSessionTranscriptUpdate({
+        ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
+        ...(target
+          ? { target }
+          : {
+              sessionKey: params.sessionKey,
+              ...(params.agentId ? { agentId: params.agentId } : {}),
+            }),
+      });
+    }
+
+    logToolResultSessionTruncation({
+      rewrittenEntries: rewriteResult.rewrittenEntries,
+      contextWindowTokens,
+      maxChars,
+      aggregateBudgetChars,
+      oversizedReplacementCount: plan.oversizedReplacementCount,
+      aggregateReplacementCount: plan.aggregateReplacementCount,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+    });
+
+    return {
+      truncated: rewriteResult.changed,
+      truncatedCount: rewriteResult.rewrittenEntries,
+      reason: rewriteResult.reason,
+    };
   } catch (err) {
     const errMsg = formatErrorMessage(err);
     log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);

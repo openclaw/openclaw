@@ -260,7 +260,7 @@ export function useQueuedCollectorFixture() {
       queued: true,
       groupId,
     };
-    registerSubagentRun(registration);
+    await registerSubagentRun(registration);
     return {
       registration,
       entry: expectDefined(subagentRuns.get(runId), "registered reservation"),
