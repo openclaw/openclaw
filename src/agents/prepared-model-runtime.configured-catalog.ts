@@ -83,16 +83,9 @@ function createConfiguredModelCatalogSnapshot(params: {
     ],
     keyOf,
   );
-  const orderedEntries = assignProviderModelOrder(
-    configuredEntries,
-    loadManifestModelCatalog({
-      config: params.agentFacts.input.config,
-      metadataSnapshot: params.workspaceFacts.pluginMetadataSnapshot,
-    }),
-  );
   return {
-    entries: orderedEntries,
-    routeVariants: orderedEntries,
+    entries: configuredEntries,
+    routeVariants: configuredEntries,
     ...(runtimeEntries.length > 0 ? { staticEntries: runtimeEntries } : {}),
   };
 }
@@ -126,13 +119,14 @@ export function prepareCapturedRuntimeFacts(
     ],
     createModelCatalogIdentityKeyResolver(),
   );
-  const orderedEntries = assignProviderModelOrder(entries, [
-    ...loadManifestModelCatalog({
+  const orderedEntries = assignProviderModelOrder(
+    entries,
+    loadManifestModelCatalog({
       config: params.agentFacts.input.config,
       metadataSnapshot: params.workspaceFacts.pluginMetadataSnapshot,
     }),
-    ...facts.modelCatalog.entries,
-  ]);
+    { appendUnknown: false },
+  );
   return {
     ...facts,
     modelCatalog: { ...facts.modelCatalog, entries: orderedEntries, routeVariants: orderedEntries },
