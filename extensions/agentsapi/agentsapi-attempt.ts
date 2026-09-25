@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
 import type { AgentReasoningParam } from "openai/resources/beta/agents/agents";
 import {
   buildCurrentInboundPrompt,
@@ -16,10 +17,12 @@ import {
   awaitAgentEndSideEffects,
   buildAgentHookContextChannelFields,
   buildEmbeddedForegroundPromptContext,
+  buildBootstrapContextForFiles,
   clearActiveEmbeddedRun,
   embeddedAgentLog,
   formatErrorMessage,
   resolveAgentDir,
+  resolveBootstrapFilesForRun,
   runAgentEndSideEffects,
   runAgentHarnessLlmOutputHook,
   sanitizeToolArgs,
@@ -232,6 +235,9 @@ export async function runAgentsApiAttempt(
     const reasoningEffort = resolveAgentsApiReasoningEffort(params);
     const creatingSession = !remoteSessionId;
     if (!remoteSessionId) {
+      // The remote session owns this snapshot; continuation never reloads it.
+      const workspaceInstructions = await loadAgentsApiWorkspaceInstructions(params);
+      assertCurrent();
       remoteSessionId = await client.create(
         controller.signal,
         [
@@ -239,6 +245,7 @@ export async function runAgentsApiAttempt(
           "OpenClaw functions run in the Gateway and use its workspace; your hosted VM owns shell commands and VM files.",
           "Uploaded attachments are mapped to hosted VM paths in each user message. Files you finish writing under /workspace/outputs are transferred and attached to your final reply after your turn completes.",
           "Gateway messaging functions cannot open VM paths. Complete your assistant turn to deliver VM output attachments. Image generation is unavailable.",
+          workspaceInstructions,
           params.extraSystemPrompt,
         ]
           .filter(Boolean)
@@ -638,4 +645,36 @@ function resolveAgentsApiReasoningEffort(
     default:
       throw new Error(`Agents API does not support reasoning effort ${effort}`);
   }
+}
+
+async function loadAgentsApiWorkspaceInstructions(
+  params: AgentHarnessAttemptParamsV2,
+): Promise<string | undefined> {
+  const workspaceDir = params.bootstrapWorkspaceDir ?? params.workspaceDir;
+  const instructionsPath = path.join(path.resolve(workspaceDir), "AGENTS.md");
+  const warn = (message: string) => embeddedAgentLog.warn(message);
+  // Failed preparation must remain retryable instead of binding an empty snapshot.
+  const files = await resolveBootstrapFilesForRun({
+    workspaceDir,
+    config: params.config,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    agentId: params.agentId,
+    chatType: params.chatType,
+    contextMode: params.bootstrapContextMode,
+    runKind: params.bootstrapContextRunKind,
+    warn,
+  });
+  const contextFiles = buildBootstrapContextForFiles(
+    files.filter((file) => !file.missing && path.resolve(file.path) === instructionsPath),
+    { config: params.config, agentId: params.agentId, warn },
+  ).filter((file) => file.content.trim().length > 0);
+  if (contextFiles.length === 0) {
+    return undefined;
+  }
+  return [
+    "## OpenClaw Agent Workspace Instructions",
+    "OpenClaw loaded this bounded snapshot from the configured agent workspace.",
+    ...contextFiles.map((file) => `### ${file.path}\n\n${file.content}`),
+  ].join("\n\n");
 }

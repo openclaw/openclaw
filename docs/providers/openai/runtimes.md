@@ -126,6 +126,16 @@ and `/reset` start a fresh session on the next message. Reset and local session
 deletion retire the binding; the Agents API retains the remote history and
 workspace, which can be managed through its API.
 
+When creating a session, OpenClaw reads only `AGENTS.md` from the configured
+agent workspace on the Gateway and includes its bounded bootstrap snapshot in
+the agent instructions, alongside any extra system instructions. The execution
+workspace does not need a copy. Follow-up turns and resumed sessions retain the
+saved instructions without rereading the file or appending it to user input.
+Missing or blank files add no workspace instructions. Use `/new` or `/reset`
+to pick up later edits or to adopt this behavior in an existing session.
+If bootstrap preparation fails, the attempt fails before creating a remote
+session so the next attempt can retry the capture.
+
 If the event stream closes, the harness subscribes again and reconciles saved
 turns, saved items, and input receipts before accepting completion. It does not
 resubmit the user's message. Completion requires a terminal root turn and an
