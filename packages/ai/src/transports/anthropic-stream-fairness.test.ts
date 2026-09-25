@@ -16,7 +16,7 @@ afterEach(() => vi.useRealTimers());
 describe("Anthropic stream fairness", () => {
   it.each([false, true])("yields buffered events before completion (abort=%s)", async (abort) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const scheduled = createDeferred<void>();
+    const scheduled = createDeferred();
     const setTimer = globalThis.setTimeout;
     const timer = vi
       .spyOn(globalThis, "setTimeout")
