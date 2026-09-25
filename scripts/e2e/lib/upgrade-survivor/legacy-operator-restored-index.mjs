@@ -312,10 +312,25 @@ function rollback(proofPath) {
     ...fixture.originals.map((item) => ({ path: item.sourcePath, identity: item.identity })),
     { path: fixture.manifest, identity: fixture.receiptIdentity },
   ]) {
-    const restored = path.join(proof.restoredStateDir, path.relative(fixture.stateDir, file.path));
+    const relative = path.relative(fixture.stateDir, file.path);
+    const omitted = proof.omittedRawTranscripts.find((item) => item.relative === relative);
+    if (omitted) {
+      assert.equal(file.path, fixture.transcript, "only the raw fixture transcript may be omitted");
+      assert.equal(proof.baselineVersion, "2026.9.4");
+      assert.equal(omitted.reason, "published-2026.9.4-volatile-transcript");
+      assert.equal(omitted.sha256, file.identity.sha256);
+      assert.equal(proof.rawTranscriptRestoration, "unsupported-by-published-backup");
+      continue;
+    }
+    const restored = path.join(proof.restoredStateDir, relative);
     assert.equal(fileIdentity(restored).sha256, file.identity.sha256);
   }
-  writeJson(artifact("rollback.json"), { status: "passed", baseline: fixture.baseline });
+  writeJson(artifact("rollback.json"), {
+    status: "passed",
+    baseline: fixture.baseline,
+    rawTranscriptRestoration: proof.rawTranscriptRestoration,
+    omittedRawTranscripts: proof.omittedRawTranscripts,
+  });
 }
 
 const [command, ...args] = process.argv.slice(2);

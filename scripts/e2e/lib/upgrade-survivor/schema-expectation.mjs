@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
+  transcriptIdentity,
 } from "../../../lib/sqlite-transcript-payload.mjs";
 
 function readJson(file) {
@@ -89,28 +90,6 @@ function sessionIdentities(index) {
       return { sessionKey, sessionId: entry.sessionId };
     })
     .toSorted((a, b) => a.sessionKey.localeCompare(b.sessionKey));
-}
-
-function transcriptIdentity(event) {
-  // Doctor repairs metadata; the fixture's text-only turn must retain event IDs and messages.
-  return {
-    type: event.type,
-    id: event.id,
-    ...(event.type === "message"
-      ? {
-          role: event.message.role,
-          textHash: hashBytes(
-            JSON.stringify(
-              typeof event.message.content === "string"
-                ? [event.message.content]
-                : event.message.content
-                    .filter((part) => part.type === "text")
-                    .map((part) => part.text),
-            ),
-          ),
-        }
-      : {}),
-  };
 }
 
 function readSeededAgents(stateDir, configFile) {
