@@ -29,7 +29,10 @@ import { isRetiredSubagentSessionOwner } from "./subagent-registry-restart-recov
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
-import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
+import {
+  loadSubagentSessionEntry,
+  resolveSubagentRunOrphanReason,
+} from "./subagent-session-reconciliation.js";
 
 type RestoredQueuedFailureSettlementClaim = {
   entry: SubagentRunRecord;
@@ -324,6 +327,15 @@ export function createSubagentRegistryRestorer(config: {
         sessionEntry?.abortedLastRun === true ||
         isRetiredSubagentSessionOwner(entry, sessionEntry)
       ) {
+        continue;
+      }
+      if (
+        entry.execution.status !== "queued" &&
+        entry.execution.endedAt === undefined &&
+        resolveSubagentRunOrphanReason({ entry, includeStaleUnended: true })
+      ) {
+        // The sweeper owns active restored orphans so it can attribute a
+        // gateway death and publish a requester-visible terminal outcome.
         continue;
       }
       resumeRun(runId);

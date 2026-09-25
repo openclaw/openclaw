@@ -14,6 +14,7 @@ import {
   completeGatewayBootLifecycle,
   formatGatewayCrashLoopManualChannelStartHint,
   inspectGatewayCrashLoopBreaker,
+  readGatewayBootLifecycleSegments,
   readGatewayLastInstallationReplacement,
   readGatewayLastShutdown,
   recordGatewayBootStart,
@@ -74,6 +75,28 @@ function insertBootRows(
     ),
   );
 }
+
+describe("gateway boot lifecycle history", () => {
+  it("can read every retained row when an attribution caller overrides the diagnostic cap", () => {
+    const db = createLifecycleDb();
+    const rows = Array.from({ length: 70 }, (_, index) => ({
+      bootId: `boot-${index}`,
+      startedAtMs: 1_000_000 + index,
+    }));
+    insertBootRows(db, rows);
+
+    expect(readGatewayBootLifecycleSegments({ env: db.env })).toHaveLength(64);
+    const retained = readGatewayBootLifecycleSegments({
+      env: db.env,
+      sinceMs: 1_000_000,
+      limit: 2_147_483_647,
+    });
+
+    expect(retained).toHaveLength(70);
+    expect(retained[0]?.bootId).toBe("boot-0");
+    expect(retained.at(-1)?.bootId).toBe("boot-69");
+  });
+});
 
 describe("gateway crash-loop breaker", () => {
   it("projects replacement history only while it is the latest shutdown", () => {

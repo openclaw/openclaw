@@ -22,6 +22,7 @@ import { callGateway } from "../../../gateway/call.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import { withEnv } from "../../../test-utils/env.js";
+import { expectObjectFields } from "../../../test-utils/mock-call-assertions.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getLatestSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
@@ -59,16 +60,6 @@ vi.mock("./subagent-registry-state.js", async (importOriginal) => {
     await import("./subagent-registry.store.sqlite.js");
   return { ...actual, persistSubagentRunsToDisk: saveRegistryToSqlite };
 });
-
-function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
-}
 
 describe("subagent registry persistence", () => {
   const fixture = useSubagentPersistenceFixture();
@@ -459,13 +450,13 @@ describe("subagent registry persistence", () => {
 
     const liveRuns = listSubagentRunsForRequester("agent:main:main");
     expect(liveRuns).toHaveLength(1);
-    expectFields(liveRuns[0], {
+    expectObjectFields(liveRuns[0], {
       runId: "run-live",
       childSessionKey: "agent:main:subagent:live-child",
       controllerSessionKey: "agent:main:subagent:live-controller",
       requesterSessionKey: "agent:main:main",
     });
-    expectFields(getSubagentRunByChildSessionKey("agent:main:subagent:live-child"), {
+    expectObjectFields(getSubagentRunByChildSessionKey("agent:main:subagent:live-child"), {
       runId: "run-live",
     });
   });
@@ -798,6 +789,9 @@ describe("subagent registry persistence", () => {
   });
 
   registerSubagentOrphanTaskCases({
+    announceSpy,
+    flushQueuedRegistryWork,
+    readPersistedRegistry,
     writePersistedRegistry,
     writeChildSessionEntry,
     restartRegistry,
@@ -807,10 +801,10 @@ describe("subagent registry persistence", () => {
 
   it("finalizes restored interrupted runs without replay", async () => {
     vi.mocked(callGateway).mockImplementationOnce(async (request) => {
-      expectFields(request, {
+      expectObjectFields(request, {
         method: "agent.wait",
       });
-      expectFields((request as { params?: unknown }).params, {
+      expectObjectFields((request as { params?: unknown }).params, {
         runId: "run-stale-aborted-restore",
       });
       return {
@@ -927,7 +921,7 @@ describe("subagent registry persistence", () => {
       getSubagentRunByChildSessionKey(childSessionKey),
     );
 
-    expectFields(resolved, {
+    expectObjectFields(resolved, {
       runId: "run-active",
       childSessionKey,
     });
@@ -973,7 +967,7 @@ describe("subagent registry persistence", () => {
       getLatestSubagentRunByChildSessionKey(childSessionKey),
     );
 
-    expectFields(resolved, {
+    expectObjectFields(resolved, {
       runId: "run-current-ended",
       childSessionKey,
     });
