@@ -1258,9 +1258,10 @@ describe("config schema", () => {
 
   it("lists Matrix in messages.queue.byChannel schema lookup", () => {
     const lookup = lookupConfigSchema(baseSchema, "messages.queue.byChannel");
+    // Plugin channel ids are valid keys, so unlisted ids arrive as the "*" entry.
+    expect(lookup?.children.map((c) => c.key)).toEqual(expect.arrayContaining(["matrix", "*"]));
     expect(lookup?.path).toBe("messages.queue.byChannel");
-    expect(lookup?.children.map((child) => child.key)).toEqual(expect.arrayContaining(["matrix"]));
-    expect(lookup?.schema).toMatchObject({ additionalProperties: false });
+    expect(lookup?.schema).toMatchObject({ additionalProperties: { anyOf: expect.any(Array) } });
   });
 
   it("includes reload metadata when a resolver is provided", () => {

@@ -293,12 +293,29 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("rejects unknown queue byChannel providers", () => {
+  it("accepts plugin channel ids as queue byChannel providers", () => {
     const res = validateConfigObject({
       messages: {
         queue: {
           byChannel: {
-            unknown: "steer",
+            buzz: "collect",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.messages?.queue?.byChannel).toEqual({ buzz: "collect" });
+    }
+  });
+
+  it("still rejects invalid queue modes for plugin channel ids", () => {
+    const res = validateConfigObject({
+      messages: {
+        queue: {
+          byChannel: {
+            buzz: "nope",
           },
         },
       },

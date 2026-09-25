@@ -117,6 +117,21 @@ For mode selection, OpenClaw resolves:
 
 For options, inline or stored `/queue` options win over config. Then channel-specific debounce (`messages.queue.debounceMsByChannel`), plugin debounce defaults, and built-in defaults are applied, in that order. `cap` and `drop` are global/session options, not per-channel config keys.
 
+`byChannel` accepts any channel id, including channels provided by plugins. For a plugin channel, key the override by that channel's id:
+
+```json
+{
+  "messages": {
+    "queue": {
+      "mode": "steer",
+      "byChannel": { "buzz": "collect" }
+    }
+  }
+}
+```
+
+Without the per-channel entry, a plugin channel falls through to `messages.queue.mode`.
+
 ## Per-session overrides
 
 - Send `/queue <steer|followup|collect|interrupt>` as a standalone command to store the queue mode for the current session.

@@ -45,6 +45,12 @@ const QueueModeSchema = z.union([
   z.literal("interrupt"),
 ]);
 const QueueDropSchema = z.union([z.literal("old"), z.literal("new"), z.literal("summarize")]);
+// Channel ids are open-ended. Plugin channels (bundled or third-party) are valid
+// keys here exactly like core channels: the queue resolver already indexes this
+// map by the normalized channel key, so schema strictness was the only thing
+// rejecting them. The core ids stay enumerated so per-channel rows remain
+// discoverable in the Control UI schema lookup, and catchall keeps queue-mode
+// value validation for every other key.
 const QueueModeBySurfaceSchema = z
   .object({
     whatsapp: QueueModeSchema.optional(),
@@ -60,7 +66,7 @@ const QueueModeBySurfaceSchema = z
     webchat: QueueModeSchema.optional(),
     matrix: QueueModeSchema.optional(),
   })
-  .strict()
+  .catchall(QueueModeSchema)
   .optional();
 const DebounceMsBySurfaceSchema = z.record(z.string(), z.number().int().nonnegative()).optional();
 

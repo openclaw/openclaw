@@ -55,6 +55,29 @@ describe("resolveQueueSettingsCore", () => {
     });
   });
 
+  it("resolves plugin channel ids from the same byChannel map", () => {
+    expect(
+      resolveQueueSettingsCore({
+        cfg: {
+          messages: {
+            queue: {
+              mode: "steer",
+              byChannel: {
+                buzz: "collect",
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        channel: "buzz",
+      }),
+    ).toEqual({
+      mode: "collect",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+  });
+
   it("uses explicit steer mode from config", () => {
     expect(
       resolveQueueSettingsCore({
