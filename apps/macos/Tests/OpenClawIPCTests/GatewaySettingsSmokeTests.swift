@@ -13,8 +13,12 @@ struct GatewaySettingsSmokeTests {
                 name: "Project Gateway",
                 url: #require(URL(string: "wss://gateway.example.test:8443/control/")))
             try await withHostedSettings(GatewaySettings(profiles: [profile])) { hosting, window in
+                var requestOrdinal = 0
                 for (action, reconnecting) in [("Reconnect", true), ("Add Gateway", false)] {
-                    let buttons = try await AppKitTestSupport.accessibilityElements(in: hosting)
+                    requestOrdinal += 1
+                    let buttons = try await AppKitTestSupport.accessibilityElements(
+                        in: hosting,
+                        diagnosticContext: "action=\(action) phase=buttons request=\(requestOrdinal)")
                     let button = try #require(buttons.first {
                         $0.accessibilityRole?() == .button &&
                             [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].contains(action)
@@ -29,7 +33,10 @@ struct GatewaySettingsSmokeTests {
                     var connectEnabled: Bool?
                     repeat {
                         sheet.layoutSubtreeIfNeeded()
-                        let elements = try await AppKitTestSupport.accessibilityElements(in: sheet)
+                        requestOrdinal += 1
+                        let elements = try await AppKitTestSupport.accessibilityElements(
+                            in: sheet,
+                            diagnosticContext: "action=\(action) phase=fields request=\(requestOrdinal)")
                         values = elements.filter { $0.accessibilityRole?() == .textField }.map {
                             let value: Any? = $0.accessibilityValue?()
                             return value as? String ?? ""
@@ -53,7 +60,10 @@ struct GatewaySettingsSmokeTests {
                         let hasOnlyEmptyFields = values.allSatisfy(\.isEmpty)
                         #expect(hasOnlyEmptyFields)
                     }
-                    let cancel = try #require(try await AppKitTestSupport.accessibilityElements(in: sheet).first {
+                    requestOrdinal += 1
+                    let cancel = try #require(try await AppKitTestSupport.accessibilityElements(
+                        in: sheet,
+                        diagnosticContext: "action=\(action) phase=Cancel request=\(requestOrdinal)").first {
                         $0.accessibilityRole?() == .button &&
                             [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].contains("Cancel")
                     })
