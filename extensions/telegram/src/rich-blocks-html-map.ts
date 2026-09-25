@@ -31,6 +31,7 @@ const BLOCK_ISLAND_TAGS = new Set([
   "aside",
   "footer",
   "hr",
+  "pre",
   "tg-math-block",
   "tg-map",
   "tg-collage",
@@ -402,6 +403,35 @@ function collageToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRich
   };
 }
 
+const PRE_CHILDREN = new Set(["code"]);
+const CODE_LANGUAGE_CLASS_RE = /^language-(\S+)$/u;
+
+// Telegram's `<pre>` block, optionally wrapping one `<code class="language-x">`.
+// Tags inside stay literal text (the fragment parser does not match them).
+function preToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBlock | undefined {
+  const elements = node.children.filter(
+    (child): child is Extract<HtmlNode, { kind: "element" }> => child.kind === "element",
+  );
+  let body = node.children;
+  let language: string | undefined;
+  if (elements.length > 0) {
+    const [code] = elements;
+    if (elements.length > 1 || !code?.closed || hasStrayContent(node.children, PRE_CHILDREN)) {
+      return undefined;
+    }
+    body = code.children;
+    language = CODE_LANGUAGE_CLASS_RE.exec(parseHtmlAttrs(code.raw).get("class") ?? "")?.[1];
+  }
+  // Drop the line breaks that only frame the content next to the tags.
+  const text = nodeText(body)
+    .replace(/^\r?\n/u, "")
+    .replace(/\r?\n$/u, "");
+  if (text.trim() === "") {
+    return undefined;
+  }
+  return language ? { type: "pre", text, language } : { type: "pre", text };
+}
+
 function elementToBlock(
   node: Extract<HtmlNode, { kind: "element" }>,
   renderContent: HtmlContentRenderer,
@@ -412,6 +442,8 @@ function elementToBlock(
   switch (node.name) {
     case "hr":
       return { type: "divider" };
+    case "pre":
+      return preToBlock(node);
     case "details": {
       const summary = node.children.find(
         (child): child is Extract<HtmlNode, { kind: "element" }> =>
