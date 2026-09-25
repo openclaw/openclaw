@@ -66,7 +66,6 @@ export function reviewPrivateComposerDraft(params: {
               <button
                 type="button"
                 class="btn"
-                aria-label=${t("chat.privateDraftReload.download", { name: attachment.fileName ?? attachment.mimeType })}
                 @click=${() => {
                   if (!current()) {
                     finish(false);

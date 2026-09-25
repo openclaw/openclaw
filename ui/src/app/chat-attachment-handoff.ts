@@ -38,6 +38,10 @@ type PendingChatAttachmentHandoff = {
   >[0]["reviewPrivateDraft"];
 };
 
+const hasInput = (
+  draft: Pick<PendingChatAttachmentHandoff, "message" | "attachments" | "goalMode" | "mentions">,
+) => Boolean(draft.message || draft.attachments.length || draft.goalMode || draft.mentions?.length);
+
 export function createChatAttachmentHandoff(
   gateway: ApplicationGateway,
 ): ApplicationChatAttachmentHandoff {
@@ -78,15 +82,6 @@ export function createChatAttachmentHandoff(
   };
 
   const privateDraft = (entry: PendingChatAttachmentHandoff) => {
-    const hasInput = (
-      draft: Pick<
-        PendingChatAttachmentHandoff,
-        "message" | "attachments" | "goalMode" | "mentions"
-      >,
-    ) =>
-      Boolean(
-        draft.message || draft.attachments.length || draft.goalMode || draft.mentions?.length,
-      );
     if ((entry.incognito || entry.newSessionDraft?.incognito) && hasInput(entry)) {
       return { draft: entry, fallbackKey: undefined };
     }
@@ -102,8 +97,7 @@ export function createChatAttachmentHandoff(
   const retirePrivateOwners = () => {
     for (const [key, entry] of pending) {
       if (privateDraft(entry) && !entry.isConnectionCurrent()) {
-        const retired = take(key);
-        releaseHandoff(retired, retainedPayloadIds());
+        releaseHandoff(take(key), retainedPayloadIds());
       }
     }
   };
