@@ -50,7 +50,7 @@ import {
 import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
-import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
+import { resolveTuiShutdownDeadlineMs } from "./local-run-shutdown.js";
 import { editorTheme, tuiTheme as theme } from "./theme/theme.js";
 import { createTuiAuthChildOwner } from "./tui-auth-child.js";
 import { createTuiAutocompleteProvider } from "./tui-autocomplete.js";
@@ -497,7 +497,6 @@ type DrainableTui = {
 
 const TUI_SHUTDOWN_DRAIN_MAX_MS = 500;
 const TUI_SHUTDOWN_DRAIN_IDLE_MS = 100;
-const TUI_SHUTDOWN_HARD_EXIT_MS = 2000;
 const TUI_PROCESS_EXIT_AFTER_RETURN_MS = 2000;
 
 export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
@@ -536,7 +535,7 @@ export function resolveTuiToolsToggleActivityStatus(params: {
 }
 
 export function resolveTuiShutdownHardExitMs(params: { localMode?: boolean } = {}): number {
-  return TUI_SHUTDOWN_HARD_EXIT_MS + (params.localMode ? resolveLocalRunShutdownGraceMs() : 0);
+  return resolveTuiShutdownDeadlineMs(params.localMode === true);
 }
 
 export function scheduleProcessExitAfterTuiReturn(

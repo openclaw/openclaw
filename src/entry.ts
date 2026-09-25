@@ -14,7 +14,7 @@ import {
 } from "./cli/precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
-import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
+import { isNativeHookRelayArgv, isTerminalInteractiveRespawnArgv } from "./cli/respawn-policy.js";
 import {
   isUpdateAdmissionInvocation,
   tryRunUpdateAdmissionBeforeStartup,
@@ -37,6 +37,7 @@ import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
+import { formatOpenClawProcessTitle } from "./infra/openclaw-installation-id.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
 import {
   getManagedNodeHostStatePath,
@@ -212,8 +213,11 @@ if (
     if (!(await ensureCliRespawnReady())) {
       // Only the final child emits the diagnostic warning; parents still enforce admission.
       await assertSupportedRuntime(undefined, undefined, process.argv, true, inheritedRuntimeEnv);
-      // Idle respawn parents retain argv so offline maintenance can identify its launchers.
-      process.title = "openclaw";
+      // Only TUI identity belongs here. Other commands retain the established title
+      // contract so Gateway discovery can recognize both fast and Commander paths.
+      if (isTerminalInteractiveRespawnArgv(process.argv)) {
+        process.title = formatOpenClawProcessTitle("openclaw-tui", installRoot);
+      }
       const parsedContainer = parseCliContainerArgs(process.argv);
       if (!parsedContainer.ok) {
         await writeCapturedCliArgumentError(parsedContainer.error);

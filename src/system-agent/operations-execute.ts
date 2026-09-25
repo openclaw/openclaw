@@ -636,7 +636,9 @@ export async function executeSystemAgentOperation(
         return { applied: false, message: setupNotice };
       }
       const session = agentId ? buildAgentMainSessionKey({ agentId }) : undefined;
-      const runTui = opts.deps?.runTui ?? (await import("../tui/tui.js")).runTui;
+      const runTui =
+        opts.deps?.runTui ??
+        (await import("../tui/tui-update-gate.js")).runNestedTuiAfterUpdateGate;
       // A reachable Gateway owns the state lock, so embedded mode would fail during hatch.
       // Keep embedded mode only as the no-Gateway fallback for standalone sessions.
       const useEmbeddedTui = !overview.gateway.reachable;

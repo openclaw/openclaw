@@ -135,7 +135,7 @@ it.each([
   },
 );
 
-it("names the final executing CLI after startup respawn decisions", async () => {
+it("preserves the final non-TUI process title after startup respawn decisions", async () => {
   boundary.mode = "none";
   boundary.trace = false;
   process.argv = [process.execPath, "/fixture/openclaw/dist/entry.js", "--version"];
@@ -143,7 +143,7 @@ it("names the final executing CLI after startup respawn decisions", async () => 
   await import("./entry.js");
 
   expect(boundary.spawnTitle).toBeUndefined();
-  expect(process.title).toBe("openclaw");
+  expect(process.title).toBe("doctor-launcher-fixture");
 });
 
 it("runs internal admission with root options before runtime recovery, cache activation, or respawn", async () => {

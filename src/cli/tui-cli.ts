@@ -68,8 +68,8 @@ export async function runTuiCliAction(
         },
       })
     : undefined;
-  const { runTui } = await import("../tui/tui.js");
-  await runTui({
+  const { runTuiAfterUpdateGate } = await import("../tui/tui-update-gate.js");
+  await runTuiAfterUpdateGate({
     local: isLocal,
     ...(resolved?.gateway.url
       ? {
