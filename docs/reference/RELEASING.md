@@ -123,50 +123,127 @@ The companion `npm-package-locks.md` includes counts and a package table. Each
 entry records `bundleRuntimeDependencies` and direct dependency counts so
 packagers can identify lockless packages that need an external lock.
 
+## Maintainer procedures
+
+Release preparation, publishing commands, approvals, and recovery live in the
+[release-maintainer skill](https://github.com/openclaw/openclaw/tree/main/.agents/skills/release-openclaw-maintainer).
+Credential handling and emergency procedures remain in the private maintainer
+runbook. Former section links below lead to their corresponding procedures.
+
 <a id="linux-companion-publication" />
+
+[Linux publication](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/platform-publication.md#linux).
+
 <a id="release-changelog-artifacts" />
+
+[Release changelogs](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/preparation.md#changelog-and-release-notes).
+
 <a id="changelog-only-evidence-reuse" />
+
+[Changelog-only qualification](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/regular-release.md#qualify-publication-bytes).
+
 <a id="monthly-gateway-extended-stable-publication" />
 <a id="prepare-and-stabilize-the-candidate" />
 <a id="publish-the-release" />
+
+[Extended-stable preparation and publication](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/extended-stable-publish.md).
+
 <a id="verify-and-recover" />
+
+[Extended-stable recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/extended-stable-publish.md#trusted-main-npm-recovery).
+
 <a id="regular-release-operator-checklist" />
 <a id="fast-path-default" />
+<a id="fast-path-(default)" />
 <a id="stable-release-process" />
 <a id="full-checklist" />
+<a id="manual-fallback" />
+
+[Regular release checklist](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/regular-release.md#freeze-and-validate-code).
+
+<a id="orchestrated-stable-release" />
+
+[Resumable release orchestration](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/regular-release.md#orchestrated-stable-release).
+
 <a id="release-priority" />
+
+[Deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery).
+
+<a id="continuous-release-readiness" />
+
+[Nightly validation reuse](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#continuous-release-readiness).
+
+<a id="release-tooling-fast-lane" />
+
+[Release tooling CI scope](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#release-tooling-fast-lane).
+
 <a id="stable-main-closeout" />
+
+[Stable main closeout](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/stable-main-closeout.md).
+
 <a id="post-release-documentation-publication" />
+
+[Post-release documentation publication](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-changelog-update/SKILL.md#post-release-docs-mirrors).
+
 <a id="release-preflight" />
-<a id="previous-updater-compatibility" />
-<a id="design-proposal%3A-immutable-runtime-generations" />
 <a id="required-checks" />
+
+[Source and package gates](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/validation.md#source-and-package-gates).
+
+<a id="previous-updater-compatibility" />
+
+[Older updater verification](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/validation.md#older-updater-checks).
+
+<a id="design-proposal%3A-immutable-runtime-generations" />
+<a id="design-proposal-immutable-runtime-generations" />
+
+[Runtime generation design proposal (not shipped behavior)](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/validation.md#immutable-runtime-generation-proposal).
+
 <a id="release-test-boxes" />
 <a id="vitest" />
 <a id="docker" />
 <a id="qa-lab" />
+
+[Release validation lanes](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#dispatch).
+
 <a id="package" />
+
+[Package Acceptance](/ci/release-validation/package-acceptance).
+
 <a id="regular-release-publish-automation" />
 <a id="check-publication-gates" />
+
+[Publication qualification](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/regular-release.md#qualify-publication-bytes).
+
 <a id="probe-the-bootstrap-token" />
+
+[Bootstrap-token verification](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token).
+
 <a id="prepare-once%2C-then-use-the-release-button" />
+<a id="prepare-once-then-use-the-release-button" />
+
+[Prepared publication](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/regular-release.md#prepared-publication).
+
 <a id="recover-a-failed-download" />
+
+[Interrupted preparation and publication](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/publication-recovery.md#interrupted-preparation-and-publication).
+
 <a id="direct-publication-and-owner-recovery" />
+
+[Published-version recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/publication-recovery.md#published-version-failed-parent).
+
 <a id="npm-workflow-inputs" />
 <a id="regular-beta%2Flatest-stable-release-sequence" />
-<a id="public-references" />
-<a id="related" />
-<a id="design-proposal-immutable-runtime-generations" />
-<a id="prepare-once-then-use-the-release-button" />
 <a id="regular-beta/latest-stable-release-sequence" />
 
-<a id="fast-path-(default)" />
+[Regular publication and verification](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/regular-release.md#publish-and-verify).
+
 <a id="publication-modes%3A-strict-default-and-operator-fast-path" />
 <a id="publication-modes-strict-default-and-operator-fast-path" />
 
-## Maintainer procedures
+[Publication waivers](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#publication-waivers).
 
-Release preparation, publishing commands, approvals, and recovery belong in the
-repository's [release-maintainer skill](https://github.com/openclaw/openclaw/tree/main/.agents/skills/release-openclaw-maintainer),
-not this user guide. Credential handling and emergency procedures remain in the
-private maintainer runbook.
+<a id="public-references" />
+<a id="related" />
+
+[Release workflow reference](/reference/full-release-validation).

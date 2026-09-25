@@ -72,6 +72,9 @@ publication, not proof that the Linux app shipped; follow its `Linux App Release
 builder and verify the AppImage, `.deb`, signed `latest.json`, and
 `SHA256SUMS.linux-app.txt` before reporting Linux complete.
 
+A successful request is reused even if its independent builder later fails;
+recover the builder rather than expecting a core publication retry to rebuild it.
+
 The website resolves desktop download assets at build time. After Linux assets
 publish, rebuild `openclaw.ai` through its existing deployment owner and verify
 the deployed Apps card shows the intended version and both download URLs resolve
@@ -97,6 +100,10 @@ prerelease/non-latest when absent; ordinary PR validation never initializes it.
 This tooling does not change shipped updater or
 download URLs. Keep client cutover and signed installed-client migration under
 separate approval; never claim local helper tests or unsigned packages prove it.
+
+Creating `linux-stable` requires the release-owner GitHub App's contents and
+workflows permissions; `GITHUB_TOKEN` is insufficient. For an approved client
+migration, compare versions using the shipped old updater's comparator.
 
 Core finalization does not depend on canonical Linux metadata. After successful
 finalization/readback, a bounded detached mirror-only request uses the original

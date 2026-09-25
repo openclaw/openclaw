@@ -84,6 +84,50 @@ rewrites; an exceptional operator request must name its exact scope. Mac-only
 packaging recovery keeps the original tag and follows
 [platform publication](platform-publication.md).
 
+## Interrupted preparation and publication
+
+Keep `request.json`, `dispatch.json`, and `dispatch.next.json` when recovering.
+A missing child run ID means the dispatch is unconfirmed; inspect Actions before
+trying again. Resume partial preparation on the same protected tooling tag with the original
+`publish_inputs` and `preparation_request` containing the verified `npmRunId` and
+`clawhubRunId`. Missing or expired
+artifacts also require reconciliation; they do not authorize another dispatch.
+
+If reconciliation proves that a preparation child never existed, dispatch only
+that missing owner from the original protected tooling tag, with the exact source
+SHA as `ref` and `publish_scope=all-publishable`. For Plugin NPM Release, use
+`preflight_only=true`, `trusted_publisher_preflight=false`, and `npm_dist_tag=default`
+(`extended-stable` for that track). For Plugin ClawHub Release, use `dry_run=true`.
+Then supply both verified positive child IDs; adoption dispatches no new workflow.
+
+Publication records distinguish `unknown` (no confirmed publisher), `unverified`
+(a returned ID without an observed attempt), and `acknowledged` (verified original
+publisher and attempt). Preserve the original `release-button-dispatch-<run>-<attempt>`
+artifact before its 30-day expiration. For an acknowledged request, verification
+is read-only and repeatable from the same protected tooling:
+
+```bash
+node scripts/openclaw-release-ready.mjs verify --request /path/to/dispatch.json
+```
+
+Unknown, unverified, missing, or inconsistent records require manual reconciliation
+of the original button and publisher. Do not adopt a newer run or attempt, edit
+an uncertain record into a success receipt, or rerun the dispatch job. Retained
+`dispatch.next.json` is evidence to inspect, not publication authority.
+
+For a failed nonpublishing preparation child, rerun all of that child's jobs to
+produce a complete package set from one attempt, then only the outer **Verify
+and seal prepared publication** job. After publication has been dispatched,
+rerun only failed verification jobs when the publisher succeeded; otherwise
+inspect its children and follow the recovery route above. Never repeat an
+uncertain dispatch or rerun all publication jobs to fix a download failure.
+
+Explicit ClawHub recovery uses `recovered_clawhub_run_id` and
+`recovered_clawhub_run_attempt` to name the original child. Keep the original
+parent's tooling, inputs, run ID, and attempt. Do not reuse an approval from another
+child. Docker-only recovery does not recover canceled ClawHub publication;
+verify and recover that surface separately.
+
 ## Registry selectors
 
 Beta-to-stable promotion and stable selector recovery remain supported after the

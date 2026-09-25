@@ -166,7 +166,7 @@ With publication/tag-push authority, pass `--workflow-sha <tooling-sha>` to
 `pnpm release:candidate --` or `pnpm release:publish-preflight --` to reuse or
 mint the protected lightweight `release-publish/<tooling-sha12>-<epoch>` tag
 through the git refs API, verify it, and print the dispatch with `--ref <tag>`.
-Manual tag creation remains the fallback (see `docs/reference/RELEASING.md`). The push may print a
+Manual tag creation remains the fallback. The push may print a
 `Cannot create ref due to creations being restricted` ruleset warning while the
 tag still exists: verify with `gh api repos/openclaw/openclaw/git/ref/tags/<tag>`
 and, only if missing, create it with
@@ -224,6 +224,66 @@ validation, and notarization preflight through [platform publication](platform-p
 while npm/plugin publication proceeds. These preparation lanes do not need a
 published GitHub page; asset promotion waits for its required release state.
 Keep their exact run/attempt identities in the handoff's publication rows.
+
+## Prepared publication
+
+For a complete regular beta or stable release, use `OpenClaw Release Prepare`
+before publication and `OpenClaw Release Button` when ready to publish. Both run
+from the same frozen `release-publish/<sha12>-<id>` tooling tag. The existing
+release tag, successful npm preflight, exact Full Release Validation attempt,
+reviewed SDK evidence, and any explicitly selected Windows source evidence
+must already be available. The publisher consumes sealed acknowledgement defaults;
+the candidate helper retains its explicit SDK acknowledgement argument. This does not create a version or release tag.
+
+Run `pnpm release:candidate` with `--publish-workflow-ref` set to that protected
+tag. Its evidence bundle and terminal output include a **prepare once** command
+for complete regular releases. After creating the frozen release tag, run that
+command. It dispatches the existing npm and ClawHub preflight workflows in
+parallel, builds and qualifies their final package bytes, and seals a readiness
+receipt only after every package can be downloaded and verified. Preparation
+does not publish packages or change public selectors.
+
+Every ClawHub package must already have the normal trusted-publisher binding.
+Preparation refuses to issue a readiness receipt for packages needing bootstrap
+or publisher repair; use the existing ClawHub owner workflow to finish that setup
+first. The button rechecks this prerequisite before starting any plugin writer.
+
+When preparation succeeds, copy its summary's `prepared_artifact` JSON into
+**OpenClaw Release Button**, selecting the same protected tooling tag. This is
+the only input needed for a new publication: the receipt contains the release tag,
+channel, validation references, complete package inventories, and exact artifact
+IDs, digests, producer runs and attempts. The button invokes the existing
+protected publisher; existing environment approvals and registry authority
+checks remain in force. The receipt seals plugin readiness; the existing parent
+revalidates the core npm, Full Release Validation, and Windows evidence before
+dispatching publication.
+
+The publisher verifies the complete prepared npm and ClawHub package set before
+starting any plugin writer. Plugin jobs restore and upload those exact bytes;
+they do not install source dependencies, rebuild, or repack them. Packages that
+are already present must match the prepared integrity and canonical public
+tarball before they can be adopted. Core npm and Docker retain their existing
+prepared-artifact and release-evidence checks. Because ClawHub's publication
+authorization depends on terminal parent success, the outer button waits for
+the publisher and then verifies ClawHub's canonical public downloads. Only then
+does it make the GitHub draft release visible.
+
+Optional stable Windows promotion starts after that outer activation, using the
+same sealed source tag, installer digests, and protected tooling. The ordinary
+unprepared publisher retains its own post-finalization Windows job; the two
+routes do not both dispatch. Missing Windows selection skips promotion, an
+incomplete selection fails visibly, and alpha/beta never dispatch it. Windows
+failure does not undo npm or GitHub publication. Inspect the attempt-bound
+Windows dispatch artifact and linked child before an explicit manual retry;
+neither publisher waits for native completion.
+
+This button covers core and plugin npm, ClawHub, the existing Docker/Windows
+contracts, and GitHub release visibility. It does **not** claim that independent
+macOS signing/feed promotion, Android completion, app-store submission, or
+website publication is ready. Those owners retain their existing release steps.
+Alpha, selected-plugin repairs, and historical releases without a readiness
+receipt continue to use their existing owner workflows. Extended-stable uses
+the shared direct publisher with its dedicated track inputs, not this button.
 
 ## Publish and verify
 

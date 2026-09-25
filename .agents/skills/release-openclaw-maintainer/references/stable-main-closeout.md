@@ -90,3 +90,14 @@ new evidence. Invalid or mismatched assets remain blocking.
    replay preserves those fields byte-for-byte. Any other feed mismatch still
    fails. The later hotfix release (for example `2026.9.7`) verifies its own
    appcast at its own closeout; the withdrawn record is never rewritten.
+
+## Recover a failed publication parent
+
+If publication succeeded but its parent failed, first repair and verify npm,
+Docker, and GitHub publication. Manual closeout may then use
+`allow_failed_publish_recovery=true` for that completed failed parent; automatic
+closeout never enables it. Keep all publication evidence checks. If npm succeeded
+in the original run and Docker in a separate recovery run, the checksummed
+postpublish evidence must select both through `operatorRecovery.npmPublishRunId`
+and `operatorRecovery.dockerPromotionRunId`. Closeout verifies both runs for the
+exact requested tag; missing, expired, or mismatched evidence still blocks it.
