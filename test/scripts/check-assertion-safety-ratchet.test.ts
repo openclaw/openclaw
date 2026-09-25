@@ -39,7 +39,7 @@ const nestedGitEnvKeys = [
   "GIT_WORK_TREE",
 ] as const;
 
-function git(cwd: string, args: string[]) {
+function git(cwd: string, args: string[]): void {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     GIT_CONFIG_NOSYSTEM: "1",
@@ -53,6 +53,27 @@ function git(cwd: string, args: string[]) {
     env,
     stdio: "ignore",
   });
+}
+
+function gitOutput(cwd: string, args: string[]): string {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+  for (const key of nestedGitEnvKeys) {
+    delete env[key];
+  }
+  return execFileSync(
+    "git",
+    ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args],
+    {
+      cwd,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  ).trim();
 }
 
 afterEach(() => {
@@ -228,7 +249,7 @@ describe("check-assertion-safety-ratchet", () => {
     fs.writeFileSync(path.join(root, "unrelated.txt"), "unrelated\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "disconnected base"]);
-    const disconnectedBase = git(root, "rev-parse", "HEAD");
+    const disconnectedBase = gitOutput(root, ["rev-parse", "HEAD"]);
     git(root, ["checkout", "release"]);
 
     vi.spyOn(console, "error").mockImplementation(() => {});
