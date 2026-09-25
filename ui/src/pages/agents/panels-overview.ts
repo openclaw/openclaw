@@ -38,6 +38,7 @@ import {
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import type { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
+import { EMOJI_CATALOG } from "./emoji-catalog.ts";
 
 export type AgentIdentityDraft = {
   name: string | null;
@@ -197,6 +198,35 @@ export function renderAgentOverview(params: {
                   @input=${(e: Event) =>
                     params.onIdentityFieldChange("emoji", (e.target as HTMLInputElement).value)}
                 />
+              </label>
+              <label class="field agent-identity-editor__emoji-picker">
+                <span>${t("agents.identity.emojiPicker")}</span>
+                <select
+                  .value=${""}
+                  ?disabled=${identityBusy}
+                  @change=${(e: Event) => {
+                    const select = e.target as HTMLSelectElement;
+                    const value = select.value;
+                    select.value = "";
+                    if (value) {
+                      params.onIdentityFieldChange("emoji", value);
+                    }
+                  }}
+                >
+                  <option value="">${t("agents.identity.emojiPickerPlaceholder")}</option>
+                  ${EMOJI_CATALOG.map(
+                    (group) => html`
+                      <optgroup label=${group.label}>
+                        ${group.options.map(
+                          (option) =>
+                            html`<option value=${option.emoji}>
+                              ${option.emoji} ${option.label}
+                            </option>`,
+                        )}
+                      </optgroup>
+                    `,
+                  )}
+                </select>
               </label>
             </div>
           </div>
