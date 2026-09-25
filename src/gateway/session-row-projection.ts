@@ -213,6 +213,15 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   function referenced(ref: string) {
     return records.firstReferenced(ref, rows, byKey, stores.keys());
   }
+  function enqueue(row: records.Row | undefined) {
+    if (row) {
+      const id = records.identity(row);
+      dirty.add(id);
+      if (!isCold(row)) {
+        backfill.enqueue(id);
+      }
+    }
+  }
   function topology(): Promise<void> {
     if (disposed || !topologyDirty) {
       return Promise.resolve();
@@ -246,13 +255,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       stores = storeRead.sources;
       // Every stored identity must be visible before an earlier store selects a later parent.
       for (const { row, entry } of acquisitions) {
-        const current = acquireEntry(row, entry);
-        if (current) {
-          dirty.add(records.identity(current));
-          if (!isCold(current)) {
-            backfill.enqueue(records.identity(current));
-          }
-        }
+        enqueue(acquireEntry(row, entry));
       }
       storeRead.updateMembership();
       scope = prepareSessionRowScopes(
@@ -315,7 +318,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       const registryFactsReady = inOwnerContext(getSubagentSessionListReadSnapshotIdentity);
       for (const previous of new Set([...exact, ...matching(query, "id")])) {
         records.invalidateDatabaseFacts(previous);
-        if (previous.entry) {
+        if (previous.entry && change.scope !== "session-entry") {
           placementFacts.invalidate(previous.entry.sessionId);
         }
         const row = inOwnerContext(() => {
@@ -330,12 +333,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
             ? acquireEntry(previous, entry)
             : previous;
         });
-        if (row) {
-          dirty.add(records.identity(row));
-          if (!isCold(row)) {
-            backfill.enqueue(records.identity(row));
-          }
-        }
+        enqueue(row);
       }
       if (
         !exact.length &&
@@ -361,13 +359,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
             }
             return acquireEntry(row, entry);
           });
-          if (!admitted) {
-            continue;
-          }
-          dirty.add(records.identity(admitted));
-          if (!isCold(admitted)) {
-            backfill.enqueue(records.identity(admitted));
-          }
+          enqueue(admitted);
         }
       }
     }

@@ -1,5 +1,3 @@
-// Gateway restart timing trace helpers.
-// Emits opt-in restart handoff diagnostics with bounded metric formatting.
 import { performance } from "node:perf_hooks";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -9,9 +7,6 @@ const RESTART_TRACE_HANDOFF_STARTED_AT_ENV = "OPENCLAW_GATEWAY_RESTART_TRACE_STA
 const RESTART_TRACE_HANDOFF_LAST_AT_ENV = "OPENCLAW_GATEWAY_RESTART_TRACE_LAST_AT_MS";
 const RESTART_TRACE_HANDOFF_MAX_AGE_MS = 10 * 60_000;
 
-// Restart trace is an opt-in timing logger for gateway restart handoff paths.
-// It preserves elapsed time across process replacement through bounded env
-// handoff values and ignores stale/future handoffs.
 type RestartTraceMetricValue = boolean | number | string | null | undefined;
 type RestartTraceMetrics =
   | Readonly<Record<string, RestartTraceMetricValue>>
@@ -94,14 +89,6 @@ function emitRestartTrace(
   restartTraceLog.info(
     `restart trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms${formatMetrics(metrics)}`,
   );
-}
-
-function emitRestartTraceDetail(name: string, metrics: RestartTraceMetrics): void {
-  const formatted = formatMetrics(metrics).trim();
-  if (!formatted) {
-    return;
-  }
-  restartTraceLog.info(`restart trace: ${name} ${formatted}`);
 }
 
 /** Starts a restart trace sequence when OPENCLAW_GATEWAY_RESTART_TRACE is enabled. */
@@ -193,7 +180,10 @@ export function recordGatewayRestartTraceDetail(name: string, metrics: RestartTr
   if (!isGatewayRestartTraceActive()) {
     return;
   }
-  emitRestartTraceDetail(name, metrics);
+  const formatted = formatMetrics(metrics).trim();
+  if (formatted) {
+    restartTraceLog.info(`restart trace: ${name} ${formatted}`);
+  }
 }
 
 /** Collects process memory/resource metrics for restart trace diagnostics. */
@@ -207,14 +197,11 @@ export function collectGatewayProcessMemoryUsageMb(): ReadonlyArray<readonly [st
     ["externalMb", toMb(usage.external)],
     ["arrayBuffersMb", toMb(usage.arrayBuffers)],
   ];
-  const resources = collectGatewayProcessResourceCounts();
-  if (resources) {
-    metrics.push(...resources);
-  }
+  metrics.push(...collectGatewayProcessResourceCounts());
   return metrics;
 }
 
-function collectGatewayProcessResourceCounts(): ReadonlyArray<readonly [string, number]> | null {
+function collectGatewayProcessResourceCounts(): ReadonlyArray<readonly [string, number]> {
   const processWithResourceAccess = process as NodeJS.Process & {
     _getActiveHandles?: () => unknown[];
     _getActiveRequests?: () => unknown[];
@@ -242,7 +229,7 @@ function collectGatewayProcessResourceCounts(): ReadonlyArray<readonly [string, 
   if (activeTimersCount !== undefined) {
     metrics.push(["activeTimersCount", activeTimersCount]);
   }
-  return metrics.length > 0 ? metrics : null;
+  return metrics;
 }
 
 function countActiveTimersFromResourceInfo(activeResources: readonly string[]): number {

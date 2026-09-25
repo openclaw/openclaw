@@ -1,41 +1,40 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.NodeApp
+import ai.openclaw.app.chat.ChatPermissionMode
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.node.LocationCaptureManager
 import ai.openclaw.app.node.LocationDisclosure
-import ai.openclaw.app.ui.AppModalBottomSheet
 import ai.openclaw.app.ui.design.ClawTheme
-import ai.openclaw.app.ui.foldAwareSheet
 import android.Manifest
 import android.content.pm.PackageManager
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Photo
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,11 +44,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
@@ -59,94 +60,68 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import java.util.Locale
 
-private enum class AttachmentTab { Gallery, File, Location }
+private enum class AttachmentPage { Menu, Location }
 
 /** One owner-bound opening; external results still pass through the composer's media leases. */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun ChatAttachmentSheet(
+internal fun ChatAttachmentMenu(
   opening: ChatModelPickerSession,
+  composerAnchor: LayoutCoordinates?,
   admit: () -> Boolean,
   onDismiss: () -> Unit,
+  permissionMode: ChatPermissionMode?,
+  permissionModePending: Boolean,
+  permissionsEnabled: Boolean,
+  onOpenPermissions: () -> Unit,
+  onOpenCamera: () -> Unit,
   onBrowseGallery: () -> Unit,
   onPickFile: () -> Unit,
-  onPickVideo: () -> Unit,
   onLocation: (String) -> Unit,
 ) {
-  var tab by remember { mutableStateOf(AttachmentTab.Gallery) }
-  AppModalBottomSheet(
-    modifier = Modifier.foldAwareSheet(opening.geometry),
-    onDismissRequest = onDismiss,
-    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-    containerColor = ClawTheme.colors.surface,
-    contentColor = ClawTheme.colors.text,
-    properties = ModalBottomSheetProperties(shouldDismissOnBackPress = false),
-  ) {
-    BackHandler { onDismiss() }
-    Column(Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
-      Text(
-        text =
-          when (tab) {
-            AttachmentTab.Gallery -> nativeString("Gallery")
-            AttachmentTab.File -> nativeString("File")
-            AttachmentTab.Location -> nativeString("Location")
-          },
-        style = ClawTheme.type.label,
-        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-      )
-      Box(Modifier.fillMaxWidth().weight(1f).heightIn(min = 96.dp)) {
-        when (tab) {
-          AttachmentTab.Gallery -> {
-            // Embedded completion is not a settled URI selection; the activity result is.
-            AttachmentActions {
-              Button(onClick = { if (admit()) onBrowseGallery() }) { Text(nativeString("Choose from gallery")) }
-            }
-          }
-
-          AttachmentTab.File -> {
-            AttachmentActions {
-              Button(onClick = { if (admit()) onPickFile() }) { Text(nativeString("Files")) }
-              TextButton(onClick = { if (admit()) onPickVideo() }) { Text(nativeString("Videos")) }
-            }
-          }
-
-          AttachmentTab.Location -> {
-            LocationAttachment(admit = admit, onLocation = onLocation)
-          }
-        }
+  var page by remember { mutableStateOf(AttachmentPage.Menu) }
+  ChatComposerPopover(
+    geometry = opening.geometry,
+    title = nativeString("Add attachment"),
+    composerAnchor = composerAnchor,
+    admit = admit,
+    onDismiss = onDismiss,
+    maximumWidth = 280.dp,
+    horizontalAlignment = Alignment.Start,
+    shape = RoundedCornerShape(24.dp),
+  ) { admitAction ->
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(8.dp)) {
+      if (page != AttachmentPage.Menu) {
+        TextButton(onClick = { if (admitAction()) page = AttachmentPage.Menu }) { Text(nativeString("Back")) }
       }
-      Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        AttachmentTab.entries.forEach { item ->
-          Surface(
-            onClick = { if (admit()) tab = item },
-            modifier =
-              Modifier.weight(1f).semantics {
-                selected = tab == item
-                role = Role.Tab
-              },
-            shape = RoundedCornerShape(20.dp),
-            color = if (tab == item) ClawTheme.colors.primary else Color.Transparent,
-            contentColor = if (tab == item) ClawTheme.colors.primaryText else ClawTheme.colors.text,
+      when (page) {
+        AttachmentPage.Location -> {
+          LocationAttachment(admit = admitAction, onLocation = onLocation)
+        }
+
+        AttachmentPage.Menu -> {
+          AttachmentMenuAction(
+            nativeString("Camera"),
+            onClick = { if (admitAction()) onOpenCamera() },
           ) {
-            Column(Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-              Icon(
-                when (item) {
-                  AttachmentTab.Gallery -> Icons.Default.Photo
-                  AttachmentTab.File -> Icons.Default.Description
-                  AttachmentTab.Location -> Icons.Default.LocationOn
-                },
-                contentDescription = null,
-                modifier = Modifier.size(24.dp),
-              )
-              Text(
-                when (item) {
-                  AttachmentTab.Gallery -> nativeString("Gallery")
-                  AttachmentTab.File -> nativeString("File")
-                  AttachmentTab.Location -> nativeString("Location")
-                },
-                style = ClawTheme.type.caption,
-              )
-            }
+            Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(22.dp))
+          }
+          AttachmentMenuAction(nativeString("Gallery"), onClick = { if (admitAction()) onBrowseGallery() }) {
+            Icon(Icons.Default.Photo, contentDescription = null, modifier = Modifier.size(22.dp))
+          }
+          AttachmentMenuAction(nativeString("Files"), onClick = { if (admitAction()) onPickFile() }) {
+            Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(22.dp))
+          }
+          AttachmentMenuAction(nativeString("Location"), onClick = { if (admitAction()) page = AttachmentPage.Location }) {
+            Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(22.dp))
+          }
+          HorizontalDivider(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), color = ClawTheme.colors.border)
+          AttachmentMenuAction(
+            label = nativeString("Permissions"),
+            description = if (permissionModePending) nativeString("Applying permissions…") else chatPermissionModeLabel(permissionMode),
+            enabled = permissionsEnabled,
+            onClick = { if (admitAction()) onOpenPermissions() },
+          ) {
+            ChatPermissionIcon(permissionMode, null, Modifier.size(22.dp))
           }
         }
       }
@@ -155,12 +130,42 @@ internal fun ChatAttachmentSheet(
 }
 
 @Composable
-private fun AttachmentActions(content: @Composable () -> Unit) {
-  Column(
-    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-    horizontalAlignment = Alignment.CenterHorizontally,
-    verticalArrangement = Arrangement.Center,
-  ) { content() }
+private fun AttachmentMenuAction(
+  label: String,
+  onClick: () -> Unit,
+  description: String? = null,
+  enabled: Boolean = true,
+  icon: @Composable () -> Unit,
+) {
+  Surface(
+    onClick = onClick,
+    enabled = enabled,
+    modifier =
+      Modifier.fillMaxWidth().semantics {
+        contentDescription = label
+        if (description != null) stateDescription = description
+        role = Role.Button
+      },
+    shape = RoundedCornerShape(16.dp),
+    color = Color.Transparent,
+    contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
+  ) {
+    Row(
+      Modifier.heightIn(min = 56.dp).padding(horizontal = 12.dp, vertical = 8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Box(
+        Modifier.size(40.dp).background(ClawTheme.colors.text.copy(alpha = 0.06f), CircleShape),
+        contentAlignment = Alignment.Center,
+      ) { icon() }
+      Column(Modifier.weight(1f)) {
+        Text(label, style = ClawTheme.type.body)
+        if (description != null) Text(description, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      }
+      if (description != null) Icon(Icons.Default.ChevronRight, contentDescription = null, modifier = Modifier.size(20.dp))
+    }
+  }
 }
 
 @Composable
@@ -217,7 +222,7 @@ internal fun LocationAttachment(
     rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
       if (result.values.any { it }) capture() else permissionDenied = true
     }
-  AttachmentActions {
+  Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
     Text(nativeString("Add your current location to the draft. Review it before sending."))
     if (failed) Text(nativeString("Could not get your location. Check device location settings and try again."), color = ClawTheme.colors.warning)
     if (permissionDenied) Text(nativeString("Location permission is required. Allow it in Android settings or try again."), color = ClawTheme.colors.warning)

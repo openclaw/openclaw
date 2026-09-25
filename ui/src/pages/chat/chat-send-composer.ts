@@ -1,4 +1,9 @@
-import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueItem,
+  ChatReplyTarget,
+  HumanMention,
+} from "../../lib/chat/chat-types.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import {
@@ -39,6 +44,7 @@ export function clearSubmittedComposerState(
   submittedDraft: string,
   submittedAttachments: ChatAttachment[],
   submittedMentions: readonly HumanMention[] | undefined,
+  submittedReplyTarget: ChatReplyTarget | null | undefined,
   retainAttachments: "none" | "annotations" | "all" = "none",
 ) {
   if (
@@ -47,13 +53,21 @@ export function clearSubmittedComposerState(
       host.chatAttachments,
       undefined,
       host.chatMentions,
+      host.chatReplyTarget,
     ) !==
-    chatAttachmentDraftSignature(submittedDraft, submittedAttachments, undefined, submittedMentions)
+    chatAttachmentDraftSignature(
+      submittedDraft,
+      submittedAttachments,
+      undefined,
+      submittedMentions,
+      submittedReplyTarget,
+    )
   ) {
     return {};
   }
   host.chatMessage = "";
   host.chatMentions = [];
+  host.chatReplyTarget = null;
   if (retainAttachments !== "all") {
     host.chatAttachments =
       retainAttachments === "annotations"
@@ -67,6 +81,7 @@ export function clearSubmittedComposerState(
     previousAttachments: submittedAttachments,
     previousDraft: submittedDraft,
     previousMentions: submittedMentions,
+    previousReplyTarget: submittedReplyTarget,
   };
 }
 
@@ -85,6 +100,7 @@ export type ChatCommandComposerRecovery = {
     attachments: ChatAttachment[];
     draft: string;
     mentions?: readonly HumanMention[];
+    replyTarget?: ChatReplyTarget | null;
     fallbackOwnership?: ChatComposerMemoryFallbackOwnership;
   };
   connectionEpoch: ChatHost["connectionEpoch"];
@@ -102,7 +118,12 @@ function chatCommandRecoveryHost(host: ChatHost): ChatPageHost | undefined {
 export function captureChatCommandComposerRecovery(
   host: ChatHost,
   scope: StoredChatOutboxScope,
-  composer?: { draft: string; mentions?: readonly HumanMention[]; attachments: ChatAttachment[] },
+  composer?: {
+    draft: string;
+    mentions?: readonly HumanMention[];
+    replyTarget?: ChatReplyTarget | null;
+    attachments: ChatAttachment[];
+  },
 ): ChatCommandComposerRecovery {
   const fallbackHost = chatCommandRecoveryHost(host);
   return {
@@ -121,6 +142,7 @@ export function captureChatCommandComposerRecovery(
                     {
                       message: composer.draft,
                       mentions: composer.mentions,
+                      replyTarget: composer.replyTarget,
                       attachments: composer.attachments,
                     },
                   ),
@@ -258,6 +280,7 @@ function restoreFailedCommandComposer(
     const ownership = retainChatComposerMemoryFallback(fallbackHost, recovery.scope, {
       message: composer.draft,
       mentions: composer.mentions,
+      replyTarget: composer.replyTarget,
       attachments: composer.attachments,
     });
     composer.fallbackOwnership = ownership;
@@ -274,10 +297,12 @@ function restoreFailedCommandComposer(
     previousAttachments: composer.attachments,
     previousDraft: composer.draft,
     previousMentions: composer.mentions,
+    previousReplyTarget: composer.replyTarget,
   });
   if (restorePlan.draft) {
     owner.chatMessage = composer.draft;
     owner.chatMentions = composer.mentions ?? [];
+    owner.chatReplyTarget = composer.replyTarget ?? null;
   }
   if (restorePlan.attachments) {
     owner.chatAttachments = composer.attachments;
@@ -316,13 +341,15 @@ type PendingComposerSnapshot = {
   previousAttachments?: ChatAttachment[];
   previousDraft?: string;
   previousMentions?: readonly HumanMention[];
+  previousReplyTarget?: ChatReplyTarget | null;
 };
 
 function strictComposerRestore(host: ChatHost, snapshot: PendingComposerSnapshot) {
-  // An attachment-only edit is still a newer draft. Restoring old text beside it
+  // A quote-only or attachment-only edit is still a newer draft. Restoring old text beside it
   // would combine sends; annotations retained by this exact command are not edits.
   const composerBlank =
     !host.chatMessage.trim() &&
+    !host.chatReplyTarget &&
     (host.chatAttachments.length === 0 ||
       composerRetainsSubmittedAnnotations(host, snapshot.previousAttachments));
   const attachments = Boolean(snapshot.previousAttachments?.length && composerBlank);
@@ -349,6 +376,7 @@ export function cancelChatDelivery(
   if (plan.draft) {
     host.chatMessage = snapshot.previousDraft ?? "";
     host.chatMentions = snapshot.previousMentions ?? [];
+    host.chatReplyTarget = snapshot.previousReplyTarget ?? null;
   }
   if (plan.attachments) {
     host.chatAttachments = snapshot.previousAttachments ?? [];

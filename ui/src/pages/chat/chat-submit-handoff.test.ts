@@ -179,6 +179,8 @@ describe("chat submission handoff", () => {
         chatReplyTarget: { messageId: "quoted-message", text: "original quote" },
       });
       const accepted = await submitAcrossBrowserInput(host, (queued) => {
+        expect(host.chatMessage).toBe("");
+        expect(host.chatReplyTarget).toBeNull();
         expect(queued).toMatchObject({
           sendState: connected ? "waiting-idle" : "waiting-reconnect",
           sendAttempts: 0,

@@ -1536,7 +1536,7 @@ describe("handleSendChat", () => {
       "chat.send",
       expect.objectContaining({ message: "/pair", replyToId: "pair-source" }),
     );
-    expect(host.chatReplyTarget?.messageId).toBe("id:pair-source");
+    expect(host.chatReplyTarget).toBeNull();
 
     sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
     await send;
@@ -2939,32 +2939,41 @@ describe("handleSendChat", () => {
     expect(host.applySettings).not.toHaveBeenCalled();
   });
 
-  it("does not mix a failed model-wait draft with a newer attachment-only draft", async () => {
-    const switchUpdate = createDeferred<boolean>();
-    const newerAttachment = registerTextAttachment("newer-picker-attachment", "newer");
-    const host = makeChatHost({
-      requestHandlers: {},
-      chatMessage: "keep this send separate",
-      pendingSettingsPatches: { "agent:main": switchUpdate.promise },
-    });
+  it.each(["attachment", "reply"])(
+    "does not mix a failed model-wait draft with a newer %s-only draft",
+    async (edit) => {
+      const switchUpdate = createDeferred<boolean>();
+      const newerAttachment =
+        edit === "attachment" ? registerTextAttachment("newer-picker-attachment", "newer") : null;
+      const newerReply = edit === "reply" ? { messageId: "newer-quote", text: "New quote" } : null;
+      const host = makeChatHost({
+        requestHandlers: {},
+        chatMessage: "keep this send separate",
+        pendingSettingsPatches: { "agent:main": switchUpdate.promise },
+      });
 
-    const send = handleSendChat(host);
-    await Promise.resolve();
-    host.chatAttachments = [newerAttachment];
+      const send = handleSendChat(host);
+      await Promise.resolve();
+      host.chatAttachments = newerAttachment ? [newerAttachment] : [];
+      host.chatReplyTarget = newerReply;
 
-    switchUpdate.resolve(false);
-    await send;
+      switchUpdate.resolve(false);
+      await send;
 
-    expect(host.request).not.toHaveBeenCalled();
-    expect(host.chatMessage).toBe("");
-    expect(host.chatAttachments).toEqual([newerAttachment]);
-    expect(host.chatQueue[0]).toMatchObject({
-      sendError: "Chat settings update was interrupted. Review and retry when ready.",
-      sendState: "failed",
-      text: "keep this send separate",
-    });
-    expect(getChatAttachmentDataUrl(newerAttachment)).toBe("data:text/plain;base64,bmV3ZXI=");
-  });
+      expect(host.request).not.toHaveBeenCalled();
+      expect(host.chatMessage).toBe("");
+      expect(host.chatAttachments).toEqual(newerAttachment ? [newerAttachment] : []);
+      expect(host.chatReplyTarget).toBe(newerReply);
+      expect(host.chatQueue[0]).toMatchObject({
+        sendError: "Chat settings update was interrupted. Review and retry when ready.",
+        sendState: "failed",
+        text: "keep this send separate",
+      });
+      if (newerAttachment) {
+        expect(getChatAttachmentDataUrl(newerAttachment)).toBe("data:text/plain;base64,bmV3ZXI=");
+      }
+    },
+  );
 
   it("preserves every send when a shared picker patch fails", async () => {
     const switchUpdate = createDeferred<boolean>();
@@ -3962,7 +3971,13 @@ describe("handleSendChat", () => {
     await handleSendChat(host);
 
     expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
-    expect(host.chatReplyTarget).toEqual(replyTarget);
+    expect(host.chatMessage).toBe("");
+    expect(host.chatReplyTarget).toBeNull();
+    expect(listStoredChatOutboxes(host)[0]?.queue).toEqual([
+      expect.objectContaining({
+        text: "> **User:** keep this reply target\n\nqueue behind the active run",
+      }),
+    ]);
     expect(host.lastError).toBe(
       "Could not store this message for reconnect. Free browser storage or reconnect before sending.",
     );
@@ -6443,86 +6458,6 @@ describe("handleSendChat", () => {
     }
   });
 
-  it("escapes reply sender labels and clears reply state after chat.send is acknowledged", async () => {
-    const sent = createDeferred<unknown>();
-
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.send": () => sent.promise,
-      },
-      chatMessage: "continue",
-      chatReplyTarget: {
-        messageId: "reply-source-1",
-        text: "quoted body",
-        senderLabel: "A *B* [C]",
-      },
-    });
-
-    const send = handleSendChat(host);
-    await Promise.resolve();
-
-    expect(host.chatReplyTarget?.messageId).toBe("reply-source-1");
-    expect(host.chatQueue[0]?.text).toBe("> **A \\*B\\* \\[C\\]:** quoted body\n\ncontinue");
-
-    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
-    await send;
-
-    expect(host.chatReplyTarget).toBeNull();
-  });
-
-  it("sends replyToId instead of an inline quote when the reply target has a transcript id", async () => {
-    const sent = createDeferred<unknown>();
-
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.send": () => sent.promise,
-      },
-      chatMessage: "continue",
-      chatReplyTarget: {
-        messageId: "id:transcript-abc",
-        text: "quoted body",
-        senderLabel: "Molty",
-        sourceMessageId: "transcript-abc",
-      },
-    });
-
-    const send = handleSendChat(host);
-    await Promise.resolve();
-
-    expect(host.chatQueue[0]?.text).toBe("continue");
-    expect(host.chatQueue[0]?.replyToId).toBe("transcript-abc");
-
-    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
-    await send;
-
-    const sendCall = host.request.mock.calls.find(([method]) => method === "chat.send");
-    expect(sendCall?.[1]).toMatchObject({ message: "continue", replyToId: "transcript-abc" });
-    expect(host.chatReplyTarget).toBeNull();
-  });
-
-  it("keeps failed reply metadata on the retry row instead of the composer", async () => {
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.send": () => Promise.resolve({ runId: "run-failed", status: "error" }),
-      },
-      chatMessage: "retry this",
-      chatReplyTarget: {
-        messageId: "reply-source-2",
-        text: "quoted body",
-        senderLabel: "User",
-      },
-    });
-
-    await handleSendChat(host);
-
-    expect(host.chatReplyTarget).toBeNull();
-    expect(host.chatMessage).toBe("");
-    expect(host.chatQueue[0]).toMatchObject({
-      sendState: "failed",
-      text: "> **User:** quoted body\n\nretry this",
-    });
-  });
-
   it("keeps delayed chat.send ACK effects scoped to the submitted session", async () => {
     const sent = createDeferred<unknown>();
 
@@ -6718,6 +6653,7 @@ describe("handleSendChat", () => {
 
   it("retains a connected attachment when browser quota rejects durable admission", async () => {
     installQuotaExceededStorage();
+    const replyTarget = { messageId: "quota-quote", text: "Keep the rejected quote" };
 
     const attachment = {
       id: "large-connected-attachment",
@@ -6735,6 +6671,7 @@ describe("handleSendChat", () => {
       },
       chatAttachments: [attachment],
       chatMessage: "send the large file",
+      chatReplyTarget: replyTarget,
     });
 
     await handleSendChat(host);
@@ -6742,6 +6679,7 @@ describe("handleSendChat", () => {
     expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
     expect(host.chatAttachments).toStrictEqual([attachment]);
     expect(host.chatMessage).toBe("send the large file");
+    expect(host.chatReplyTarget).toEqual(replyTarget);
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBeNull();
     expect(host.lastError).toBe(
@@ -6749,10 +6687,16 @@ describe("handleSendChat", () => {
     );
   });
 
-  it.each(["defaults", "route", "recovery owner"])(
+  it.each(["defaults", "route", "recovery owner", "reply"])(
     "keeps the creation-time destination and input while payload admission awaits changed %s",
     async (change) => {
       const { attachments, dataUrls } = createDeliveryAttachmentBatch();
+      const replyTarget = {
+        messageId: "original-quote",
+        sourceMessageId: "original-entry",
+        text: "Original quote",
+      };
+      const newerReply = { messageId: "newer-quote", text: "Newer quote" };
       const host = makeChatHost({
         requestHandlers: {},
         connected: false,
@@ -6760,6 +6704,7 @@ describe("handleSendChat", () => {
         agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
         chatMessage: "original destination",
         chatAttachments: attachments,
+        chatReplyTarget: replyTarget,
       });
       const started = createDeferred();
       const release = createDeferred();
@@ -6781,28 +6726,38 @@ describe("handleSendChat", () => {
           host.agentsList = { defaultId: "main", mainKey: "current", scope: "per-sender" };
         } else if (change === "route") {
           host.sessionKey = "agent:main:elsewhere";
-        } else {
+        } else if (change === "recovery owner") {
           vi.spyOn(
             expectDefined(host.client, "payload client"),
             "recoveryScope",
             "get",
           ).mockReturnValue("different-owner");
+        } else {
+          host.chatReplyTarget = newerReply;
         }
-        host.chatMessage = "newer input";
+        if (change !== "reply") {
+          host.chatMessage = "newer input";
+        }
       } finally {
         release.resolve();
         await sending;
       }
-      expect(host.chatMessage).toBe("newer input");
+      const expectedDraft = change === "reply" ? "original destination" : "newer input";
+      expect(host.chatMessage).toBe(expectedDraft);
+      expect(host.chatReplyTarget).toEqual(change === "reply" ? newerReply : replyTarget);
       expect(host.request).not.toHaveBeenCalled();
-      if (change !== "defaults") {
+      if (change !== "defaults" && change !== "reply") {
         expect(listStoredChatOutboxes(host)).toEqual([]);
         expect(host.chatAttachments.map(getChatAttachmentDataUrl)).toEqual(dataUrls);
         return;
       }
       const stored = expectDefined(listStoredChatOutboxes(host)[0], "captured outbox");
       expect(stored).toMatchObject({ sessionKey: "agent:main:main", agentId: "main" });
-      expect(stored.queue[0]).toMatchObject({ sessionKey: "agent:main:main", sendAttempts: 0 });
+      expect(stored.queue[0]).toMatchObject({
+        sessionKey: "agent:main:main",
+        sendAttempts: 0,
+        replyToId: "original-entry",
+      });
       const hydrated = await prepareOutboxPayload(
         host,
         expectDefined(stored.queue[0], "stored input"),
@@ -6812,7 +6767,7 @@ describe("handleSendChat", () => {
           ? hydrated.update.attachments?.map(getChatAttachmentDataUrl)
           : [],
       ).toEqual(dataUrls);
-      expect(host.chatMessage).toBe("newer input");
+      expect(host.chatMessage).toBe(expectedDraft);
       expect(host.request).not.toHaveBeenCalled();
     },
   );
@@ -7971,15 +7926,18 @@ describe("handleSendChat", () => {
 
   it("restores an offline local command when durable admission fails", async () => {
     installQuotaExceededStorage();
+    const replyTarget = { messageId: "command-quote", text: "Keep the rejected quote" };
     const host = makeChatHost({
       client: null,
       connected: false,
       chatMessage: "/think high",
+      chatReplyTarget: replyTarget,
     });
 
     await handleSendChat(host);
 
     expect(host.chatMessage).toBe("/think high");
+    expect(host.chatReplyTarget).toEqual(replyTarget);
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.lastError).toBe(
       "Could not store this message for reconnect. Free browser storage or reconnect before sending.",

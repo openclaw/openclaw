@@ -1,11 +1,11 @@
 /**
  * Control UI gateway routing tests.
  */
+import { isControlUiFocusPath } from "@openclaw/session-url-contract";
 import { describe, expect, it } from "vitest";
 import {
   classifyControlUiRequest,
   isControlUiApprovalDocumentPath,
-  isControlUiFocusDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
 
@@ -45,7 +45,7 @@ describe("isControlUiApprovalDocumentPath", () => {
   });
 });
 
-describe("isControlUiFocusDocumentPath", () => {
+describe("isControlUiFocusPath", () => {
   it.each([
     { basePath: "", pathname: "/focus" },
     { basePath: "", pathname: "/focus/" },
@@ -53,7 +53,7 @@ describe("isControlUiFocusDocumentPath", () => {
     { basePath: "", pathname: "/focus/not-supported" },
     { basePath: "/openclaw", pathname: "/openclaw/focus/desktop/control" },
   ])("classifies $pathname", ({ basePath, pathname }) => {
-    expect(isControlUiFocusDocumentPath({ basePath, pathname })).toBe(true);
+    expect(isControlUiFocusPath(pathname, basePath)).toBe(true);
   });
 
   it.each([
@@ -62,7 +62,7 @@ describe("isControlUiFocusDocumentPath", () => {
     { basePath: "/openclaw", pathname: "/focus/terminal" },
     { basePath: "/openclaw", pathname: "/openclaw/focused" },
   ])("does not classify $pathname", ({ basePath, pathname }) => {
-    expect(isControlUiFocusDocumentPath({ basePath, pathname })).toBe(false);
+    expect(isControlUiFocusPath(pathname, basePath)).toBe(false);
   });
 });
 
