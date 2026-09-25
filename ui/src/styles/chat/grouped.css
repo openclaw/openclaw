@@ -823,8 +823,21 @@ img.chat-avatar {
     pointer-events: inherit;
   }
 
-  /* Links on the message's last line stay above that upward extension. */
-  :where(.chat-group-messages .chat-text a) {
+  /* Controls in message content win hit-testing over that upward extension.
+     Zero specificity keeps any position or stacking they already declare. */
+  :where(.chat-group-messages :is(.chat-text, .chat-image-frame):not(.chat-tool-card *))
+    :where(
+      a,
+      button,
+      summary,
+      [role="button"],
+      input:not(.oc-sensitive-input > input),
+      select,
+      textarea,
+      label,
+      video,
+      audio
+    ) {
     position: relative;
     z-index: 1;
   }
