@@ -3971,6 +3971,9 @@ describe("subagent registry seam flow", () => {
       expect(completedRun?.execution.outcome).toBeUndefined();
       expect(completedRun?.waitExpiryObservedAt).toBe(startedAt + 60_000);
     });
+    // The provisional announcement waits out a 250 ms terminal grace timer, which
+    // fake timers never fire on their own.
+    await vi.advanceTimersByTimeAsync(1_000);
     await settleRootWork();
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
