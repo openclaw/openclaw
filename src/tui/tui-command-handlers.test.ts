@@ -3270,7 +3270,6 @@ describe("tui command handlers", () => {
 
     expect(selector.items).toEqual([]);
     expect(harness.addSystem).not.toHaveBeenCalled();
-    expect(harness.pendingSystemNotices.size).toBe(0);
   });
 
   it.each(["models", "sessions"] as const)(
@@ -3303,7 +3302,6 @@ describe("tui command handlers", () => {
         expect(harness.openOverlay).not.toHaveBeenCalled();
       }
       expect(harness.addSystem).not.toHaveBeenCalled();
-      expect(harness.pendingSystemNotices.size).toBe(0);
     },
   );
 

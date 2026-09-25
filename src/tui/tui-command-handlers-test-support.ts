@@ -149,11 +149,6 @@ export function createTuiCommandHandlersHarness(params?: {
   const dropPendingUser = vi.fn();
   const rekeyPendingUser = vi.fn();
   const addSystem = vi.fn();
-  const pendingSystemNotices = new Map<string, string>();
-  const addPendingSystem = vi.fn((runId: string, text: string) => {
-    pendingSystemNotices.set(runId, text);
-  });
-  const dismissPendingSystem = vi.fn((runId: string) => pendingSystemNotices.delete(runId));
   const clearTools = vi.fn();
   const reserveAssistantSlot = vi.fn();
   const requestRender = vi.fn();
@@ -227,8 +222,6 @@ export function createTuiCommandHandlersHarness(params?: {
       dropPendingUser,
       rekeyPendingUser,
       addSystem,
-      addPendingSystem,
-      dismissPendingSystem,
       clearTools,
       reserveAssistantSlot,
     } as never,
@@ -286,9 +279,6 @@ export function createTuiCommandHandlersHarness(params?: {
     dropPendingUser,
     rekeyPendingUser,
     addSystem,
-    addPendingSystem,
-    dismissPendingSystem,
-    pendingSystemNotices,
     clearTools,
     reserveAssistantSlot,
     requestRender,
