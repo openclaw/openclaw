@@ -71,14 +71,19 @@ export function resolveRatchetBase(root: string, options: { base?: string; stage
     return readGitText(root, ["merge-base", "HEAD", resolved]).trim();
   } catch {
     // CI can report a base outside the checkout's history (for example after a
-    // fork history is recreated). Keep every ratchet active by comparing against
-    // the current commit's first parent, the nearest reachable pre-change state,
-    // instead of returning null and silently disabling shrink-only checks.
+    // fork history is recreated). Prefer the second parent of the most recent
+    // first-parent merge: a branch-sync merge preserves the complete local change
+    // range, unlike HEAD^1 which can already contain an earlier baseline expansion.
     try {
-      return readGitText(root, ["rev-parse", "HEAD^1"]).trim();
+      const merge = readGitText(root, ["rev-list", "--first-parent", "--merges", "-n", "1", "HEAD"]).trim();
+      if (merge) {
+        return readGitText(root, ["rev-parse", merge + "^2"]).trim();
+      }
     } catch {
-      return null;
+      // No usable merge parent means there is no trustworthy disconnected-history base.
     }
+    return null;
+  }
   }
 }
 
