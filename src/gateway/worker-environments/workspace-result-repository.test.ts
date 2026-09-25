@@ -20,6 +20,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
@@ -624,7 +625,7 @@ describe("repository workspace result ownership", () => {
             .where("environment_id", "=", owned.placement.environmentId),
         );
       }
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       const restarted = createWorkerSessionPlacementStore({
         database: openOpenClawStateDatabase(),
       });

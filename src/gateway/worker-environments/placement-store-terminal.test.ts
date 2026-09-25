@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   placementTurnOwner,
   type WorkerSessionPlacementIdentity,
@@ -40,7 +40,7 @@ describe("worker placement terminal persistence", () => {
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -194,7 +194,7 @@ describe("worker placement terminal persistence", () => {
     expect(closedClaims).toEqual([claim]);
     unregister();
 
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
     const reopened = store.get(SESSION.sessionId);

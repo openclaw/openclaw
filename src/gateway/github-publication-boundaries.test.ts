@@ -4,10 +4,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   GitHubPublicationRequesterUnavailableError,
   resolveGitHubPublicationFailure,
@@ -687,7 +685,7 @@ describe("Gateway GitHub publication boundaries", () => {
       status: "requested",
       repositoryFingerprint: "replaced-fingerprint",
     });
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     const reopened = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const resumed = createTestGitHubPublicationCoordinator({
       placements: createWorkerSessionPlacementStore({ database: reopened }),

@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type {
   WorkerPlacementExecutionMode,
   WorkerSessionPlacementIdentity,
@@ -38,7 +38,7 @@ describe("worker session placement store", () => {
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -505,7 +505,7 @@ describe("worker session placement store", () => {
       runId: "worker-restart-run",
     });
 
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
 
@@ -549,7 +549,7 @@ describe("worker session placement store", () => {
     });
     expect(store.validateTurnClaim(claim)).toBe(true);
 
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
 
@@ -973,7 +973,7 @@ describe("worker session placement store", () => {
       basePack,
     });
 
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
     expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);

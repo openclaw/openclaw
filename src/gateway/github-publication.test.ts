@@ -11,6 +11,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   BASE_HEAD,
   BRANCH,
@@ -136,7 +137,7 @@ describe("Gateway GitHub publication", () => {
     expect(JSON.stringify(persisted)).not.toContain("token");
 
     const commandCount = commands.length;
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     const reopened = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const afterRestart = createGitHubPublicationCoordinator({
       placements: createWorkerSessionPlacementStore({ database: reopened }),
@@ -795,7 +796,7 @@ describe("Gateway GitHub publication", () => {
       first.read("create-schema");
       const requestId = `publication-after-${phase.replaceAll(" ", "-")}`;
       seedLocalPublication(database, { requestId, status: "publishing" });
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
 
       let remotePublished = remoteInitiallyPublished;
       mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {

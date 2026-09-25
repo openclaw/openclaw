@@ -12,16 +12,14 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   disconnectUserGitHubConnection,
   readUserGitHubConnection,
   updateUserGitHubConnection,
 } from "../state/user-github-connections.js";
 import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   readPersonalGitHubPublication,
   requirePersonalGitHubPublicationConfirmation,
@@ -443,7 +441,7 @@ describe("personal publication authority and recovery", () => {
       ),
     ).toThrow("not found");
     const count = commands.length;
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     coordinator = createTestGitHubPublicationCoordinator({
       placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
     });
@@ -688,7 +686,7 @@ describe("personal publication authority and recovery", () => {
       publisher: { source: "personal", ...account },
     });
     const count = commands.length;
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
     coordinator = createTestGitHubPublicationCoordinator({ placements });
     requirePersonalGitHubPublicationConfirmation(placements.workspaceResultInstanceId());
