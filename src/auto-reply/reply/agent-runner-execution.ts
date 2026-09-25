@@ -46,6 +46,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
   clearRecoveredAutoFallbackPrimaryProbeSelection,
@@ -469,7 +470,11 @@ async function executeAgentTurnInternalLoop(
       const metaErrorMsg = finalEmbeddedError?.message ?? "";
       const rawErrorPayloadText =
         runResult.payloads?.find(
-          (p) => p.isError && hasNonEmptyString(p.text) && !p.text.startsWith("⚠️"),
+          (p) =>
+            p.isError &&
+            !getReplyPayloadMetadata(p)?.toolFailureExplanation &&
+            hasNonEmptyString(p.text) &&
+            !p.text.startsWith("⚠️"),
         )?.text ?? "";
       const errorCandidate = metaErrorMsg || rawErrorPayloadText;
       const candidateReason = errorCandidate ? classifyFailoverReason(errorCandidate) : null;
