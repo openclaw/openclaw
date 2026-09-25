@@ -41,7 +41,9 @@ import { seedAttachedPlacementEnvironment } from "../src/gateway/worker-environm
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "../src/plugin-sdk/codex-session-transcript-runtime.js";
 import { appendSessionTranscriptMessagesByIdentity } from "../src/plugin-sdk/session-transcript-runtime.js";
 import {
+  createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
+  type OpenAsyncKeyedStoreOptions,
   type OpenKeyedStoreOptions,
 } from "../src/plugin-state/plugin-state-store.js";
 import { createRuntimePluginManifestLookup } from "../src/plugins/active-runtime-registry.js";
@@ -193,8 +195,10 @@ async function withFixture(
       agent: createRuntimeAgent(),
       config: { current: () => config },
       state: {
+        openKeyedStore: <T>(storeOptions: OpenAsyncKeyedStoreOptions) =>
+          createPluginStateKeyedStore<T>("codex", { ...storeOptions, env: state.env }),
         openSyncKeyedStore: <T>(storeOptions: OpenKeyedStoreOptions) =>
-          createPluginStateSyncKeyedStore<T>("codex", storeOptions),
+          createPluginStateSyncKeyedStore<T>("codex", { ...storeOptions, env: state.env }),
       },
     });
     const admissions: Array<{ recorder: UserTurnTranscriptRecorder; before: unknown[] }> = [];

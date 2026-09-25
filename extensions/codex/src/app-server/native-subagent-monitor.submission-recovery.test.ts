@@ -1,12 +1,11 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createAgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -33,8 +32,8 @@ import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
   createCodexAppServerBindingStore,
-  type StoredCodexAppServerBinding,
 } from "./session-binding.js";
+import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 
 describe("CodexNativeSubagentMonitor", () => {
   it.each([
@@ -70,7 +69,7 @@ describe("CodexNativeSubagentMonitor", () => {
       };
       const openBindingStore = () =>
         createCodexAppServerBindingStore(
-          createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+          createCodexSqliteTestBindingStateStore({
             namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
             maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
             overflowPolicy: "reject-new",
@@ -97,6 +96,7 @@ describe("CodexNativeSubagentMonitor", () => {
         store: ReturnType<typeof openBindingStore>,
         owner: typeof nativeHistory,
         onRecord?: (receipt: CodexNativeSubagentSubmission, pending: Promise<boolean>) => void,
+        onConsume?: (pending: Promise<boolean>) => void,
       ): CodexNativeSubagentSubmissionStore => ({
         assertCurrent: () => {
           const current = store.read(identity);
@@ -114,12 +114,15 @@ describe("CodexNativeSubagentMonitor", () => {
           onRecord?.(receipt, pending);
           return pending;
         },
-        consume: (receipt, guard) =>
-          store.mutate(
+        consume: (receipt, guard) => {
+          const pending = store.mutate(
             identity,
             { kind: "consume-native-subagent-submission", owner, receipt },
             guard,
-          ),
+          );
+          onConsume?.(pending);
+          return pending;
+        },
       });
       const firstHost = await createAdmittedHostCapabilityTestFixture({
         ...hostAttempt,
@@ -141,6 +144,7 @@ describe("CodexNativeSubagentMonitor", () => {
       let firstRecord: Promise<boolean> | undefined;
       let capturedReceipt: CodexNativeSubagentSubmission | undefined;
       const firstDelivery = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+      const firstConsumption = createDeferred<{ pending: Promise<boolean> }>();
       const firstSubmissionStore = makeSubmissionStore(
         firstBindingStore,
         nativeHistory,
@@ -148,6 +152,7 @@ describe("CodexNativeSubagentMonitor", () => {
           capturedReceipt = receipt;
           firstRecord = pending;
         },
+        (pending) => firstConsumption.resolve({ pending }),
       );
       let releaseHeldConsume!: () => void;
       const consumeReleased = new Promise<void>((resolve) => {
@@ -305,6 +310,10 @@ describe("CodexNativeSubagentMonitor", () => {
           expect(taskRuntime.listTaskRecords()).toHaveLength(1);
         }
       }
+      if (scenario === "admitted") {
+        const { pending } = await firstConsumption.promise;
+        await expect(pending).resolves.toBe(true);
+      }
       const beforeRestart = readRows();
       const receiptsBeforeRestart = firstBindingStore.readNativeSubagentSubmissions(
         identity,
@@ -328,6 +337,7 @@ describe("CodexNativeSubagentMonitor", () => {
           capturedReceipt,
         ]);
       }
+      await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
 
       const reopenedBindingStore = openBindingStore();
@@ -440,6 +450,7 @@ describe("CodexNativeSubagentMonitor", () => {
         database.close();
         resumedHost.closeHost();
         resumedHost.closeAdmission();
+        await closeOpenClawStateDatabaseAsync();
         resetPluginStateStoreForTests();
       }
     });
