@@ -27,6 +27,12 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "OpenClawRustSidecar",
+            dependencies: [.product(name: "OpenClawKit", package: "OpenClawKit")]),
+        .testTarget(
+            name: "OpenClawRustSidecarTests",
+            dependencies: ["OpenClawRustSidecar"]),
+        .target(
             name: "OpenClawCameraPTZNative",
             path: "Sources/OpenClawCameraPTZNative",
             publicHeadersPath: "include",

@@ -22,6 +22,13 @@ public protocol NotificationCentering: Sendable {
     func deliveredNotifications() async -> [NotificationSnapshot]
 }
 
+package enum NotificationDeliveryFence {
+    package static func perform(_ enqueue: () -> Void) throws {
+        try Task.checkCancellation()
+        enqueue()
+    }
+}
+
 public struct LiveNotificationCenter: NotificationCentering, @unchecked Sendable {
     private let center: UNUserNotificationCenter
 
@@ -52,16 +59,18 @@ public struct LiveNotificationCenter: NotificationCentering, @unchecked Sendable
     public func add(_ request: UNNotificationRequest) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             // Permission reads do not cancel with their caller; retire its effect before enqueueing.
-            guard !Task.isCancelled else {
-                cont.resume(throwing: CancellationError())
-                return
-            }
-            self.center.add(request) { error in
-                if let error {
-                    cont.resume(throwing: error)
-                } else {
-                    cont.resume(returning: ())
+            do {
+                try NotificationDeliveryFence.perform {
+                    self.center.add(request) { error in
+                        if let error {
+                            cont.resume(throwing: error)
+                        } else {
+                            cont.resume(returning: ())
+                        }
+                    }
                 }
+            } catch {
+                cont.resume(throwing: error)
             }
         }
     }

@@ -169,6 +169,10 @@ pub struct Event {
     pub payload: Value,
     #[serde(default)]
     pub seq: Option<u64>,
+    #[serde(default, rename = "stateVersion")]
+    pub state_version: Option<Value>,
+    #[serde(default, rename = "recipientProfileId")]
+    pub recipient_profile_id: Option<String>,
 }
 
 /// Reason a request was rejected by an application-owned pre-dispatch guard.

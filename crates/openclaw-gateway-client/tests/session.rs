@@ -36,7 +36,8 @@ async fn connects_publishes_events_and_correlates_requests() {
         send_json(
             &mut socket,
             json!({
-                "type":"event", "event":"node.test", "payload":{"ready":true}, "seq":7
+                "type":"event", "event":"node.test", "payload":{"ready":true}, "seq":7,
+                "stateVersion":{"presence":9}, "recipientProfileId":"profile-1"
             }),
         )
         .await;
@@ -74,7 +75,9 @@ async fn connects_publishes_events_and_correlates_requests() {
         Event {
             event: "node.test".into(),
             payload: json!({"ready":true}),
-            seq: Some(7)
+            seq: Some(7),
+            state_version: Some(json!({"presence":9})),
+            recipient_profile_id: Some("profile-1".into()),
         }
     );
     assert_eq!(
@@ -897,6 +900,8 @@ async fn drains_a_queued_event_before_reporting_disconnect() {
             event: "node.final".into(),
             payload: json!({"ready":true}),
             seq: None,
+            state_version: None,
+            recipient_profile_id: None,
         }
     );
     assert!(matches!(

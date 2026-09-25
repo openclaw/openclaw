@@ -436,6 +436,11 @@ if [ -f "$MAC_CONTROL_CLI" ]; then
   echo "Signing macOS control CLI"; sign_plain_item "$MAC_CONTROL_CLI"
 fi
 
+RUST_NODE_SIDECAR="$APP_BUNDLE/Contents/MacOS/openclaw-mac-node-sidecar"
+if [ -f "$RUST_NODE_SIDECAR" ]; then
+  echo "Signing Rust node sidecar"; sign_plain_item "$RUST_NODE_SIDECAR"
+fi
+
 MLX_TTS_HELPER="$APP_BUNDLE/Contents/MacOS/openclaw-mlx-tts"
 if [ -f "$MLX_TTS_HELPER" ]; then
   echo "Signing MLX TTS helper"; sign_plain_item "$MLX_TTS_HELPER"

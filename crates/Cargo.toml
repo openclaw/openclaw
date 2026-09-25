@@ -1,3 +1,3 @@
 [workspace]
-members = ["openclaw-gateway-client", "openclaw-node-host"]
+members = ["openclaw-gateway-client", "openclaw-node-host", "../apps/macos/rust-sidecar"]
 resolver = "2"

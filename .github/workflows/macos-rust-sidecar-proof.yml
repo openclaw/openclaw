@@ -1,0 +1,119 @@
+name: macOS Rust Sidecar Proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Exact commit to prove; defaults to the dispatched ref
+        required: false
+        type: string
+  pull_request:
+    paths:
+      - ".github/workflows/macos-rust-sidecar-proof.yml"
+
+concurrency:
+  group: macos-rust-sidecar-proof-${{ github.event.pull_request.number || inputs.target_ref || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  OPENCLAW_BENCH_REPO: ${{ github.workspace }}
+  RFC54_BENCH_ROOT: /tmp/openclaw-rust-sidecar-proof-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  proof:
+    name: Native authority and package lifecycle
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+          ref: ${{ github.event.pull_request.head.sha || inputs.target_ref || github.sha }}
+
+      - name: Select Xcode 27
+        run: |
+          set -euo pipefail
+          source scripts/lib/swift-toolchain.sh
+          select_xcode_toolchain 27.0
+
+      - name: Verify exact clean source
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || inputs.target_ref || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          dependency-cache: "true"
+          install-bun: "false"
+
+      - name: Install Rust 1.93
+        run: rustup toolchain install 1.93.0 --profile minimal
+
+      - name: Build exact-head probes
+        env:
+          RUSTUP_TOOLCHAIN: 1.93.0
+        run: |
+          set -euo pipefail
+          python3 scripts/bench-macos-sidecar/build-probes.py \
+            --repo "$GITHUB_WORKSPACE" \
+            --output "$RFC54_BENCH_ROOT"
+
+      - name: Validate sandbox and native transport contracts
+        run: |
+          set -euo pipefail
+          cd scripts/bench-macos-sidecar
+          node validate-sandbox.cjs
+          RFC54_CHECK_RETIREMENT=helper \
+            node functional-smoke.cjs "$RFC54_BENCH_ROOT/bin/openclaw-mac-node-sidecar" helper-retirement
+          RFC54_CHECK_RETIREMENT=gateway \
+            node functional-smoke.cjs "$RFC54_BENCH_ROOT/bin/openclaw-mac-node-sidecar" gateway-retirement
+          node probe-runner.cjs aux "$RFC54_BENCH_ROOT/bin/openclaw-mac-node-sidecar" auxiliary-candidate
+          RFC54_CAPACITY_ONLY=1 RFC54_CAPACITY_BATCHES=1 \
+            node probe-runner.cjs aux "$RFC54_BENCH_ROOT/bin/openclaw-mac-node-sidecar" capacity
+          RFC54_EMPTY_MANIFEST=1 \
+            node probe-runner.cjs tls "$RFC54_BENCH_ROOT/bin/openclaw-mac-node-sidecar" tls
+
+      - name: Package signed validation bundle
+        env:
+          ALLOW_ADHOC_SIGNING: "1"
+          BUILD_CONFIG: debug
+          CODESIGN_TIMESTAMP: "off"
+          OPENCLAW_PACKAGE_APP_ROOT: ${{ github.workspace }}/dist/OpenClawSidecarProof.app
+          OPENCLAW_PACKAGE_RUST_NODE_SIDECAR: "1"
+          OPENCLAW_SKIP_MLX_TTS: "1"
+          RUSTUP_TOOLCHAIN: 1.93.0
+          SIGN_IDENTITY: "-"
+          SKIP_PNPM_INSTALL: "1"
+          SKIP_TEAM_ID_CHECK: "1"
+        run: |
+          set -euo pipefail
+          export BUILD_ARCHS="$(uname -m)"
+          scripts/package-mac-app.sh
+
+      - name: Prove bundle replacement and rejection behavior
+        run: >-
+          scripts/bench-macos-sidecar/package-lifecycle.sh
+          "$GITHUB_WORKSPACE/dist/OpenClawSidecarProof.app"
+
+      - name: Upload redacted proof records
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-rust-sidecar-proof
+          path: |
+            ${{ env.RFC54_BENCH_ROOT }}/*.json
+          if-no-files-found: warn
+          retention-days: 14
