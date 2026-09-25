@@ -227,7 +227,7 @@ export function createFullModelCatalogAccess(
     const catalog = project(nextInventory.catalog, configuredRuntimeModels);
     setCatalogAuth(catalog, getPreparedModelFullCatalogAuth(nextInventory.catalog) ?? currentAuth);
     catalog.authoritative =
-      acquiredNative && !catalog.refreshFailed ? nextInventory.catalog.authoritative : false;
+      acquiredNative && !catalog.refreshFailed ? catalog.authoritative : false;
     if (
       acquiredNative &&
       eligibleProviders.every((provider) => nextInventory.providers.has(provider))
