@@ -29,7 +29,7 @@ describe("Anthropic stream fairness", () => {
       ...getAiTransportHost(),
       buildModelFetch: () => async () =>
         createAnthropicResponse([
-          anthropicEvents[0],
+          ...anthropicEvents.slice(0, 1),
           { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
           ...Array.from({ length: 128 }, () => ({
             type: "content_block_delta",
