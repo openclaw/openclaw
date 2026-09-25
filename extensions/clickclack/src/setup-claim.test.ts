@@ -54,25 +54,7 @@ function claimResponse(extra: Record<string, unknown> = {}): Record<string, unkn
 describe("ClickClack setup-code claim", () => {
   it("claims over guarded HTTPS without bearer authentication", async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
-      Response.json({
-        token: "test-token",
-        bot: {
-          id: "usr_bot",
-          handle: "openclaw",
-          display_name: "OpenClaw",
-        },
-        workspace: {
-          id: "wsp_1",
-          route_id: "clickclack",
-          slug: "default",
-          name: "ClickClack",
-        },
-        defaults: {
-          defaultTo: "channel:general",
-          allowFrom: ["*"],
-          agentActivity: true,
-        },
-      }),
+      Response.json(claimResponse()),
     );
 
     await expect(
@@ -192,19 +174,7 @@ describe("ClickClack setup-code claim", () => {
   it("pins the validated loopback address when claiming over HTTP", async () => {
     const server = createServer((_request, response) => {
       response.setHeader("Content-Type", "application/json");
-      response.end(
-        JSON.stringify({
-          token: "test-token",
-          bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
-          workspace: {
-            id: "wsp_1",
-            route_id: "clickclack",
-            slug: "default",
-            name: "ClickClack",
-          },
-          defaults: {},
-        }),
-      );
+      response.end(JSON.stringify(claimResponse({ defaults: {} })));
     });
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", resolve);
