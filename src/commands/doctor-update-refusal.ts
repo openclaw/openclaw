@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { formatCliCommand } from "../cli/command-format.js";
 import { renderGatewayServiceStartHints } from "../cli/daemon-cli/shared.js";
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { resolveLaunchAgentLabel } from "../daemon/launchd-label.js";
-import { readFileWindowFully } from "../infra/file-read.js";
 import { executeGitCommand } from "../infra/git-exec.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { resolveDiagnosticProcessEnv } from "../infra/process-env.js";

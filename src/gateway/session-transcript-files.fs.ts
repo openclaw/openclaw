@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import {
@@ -18,7 +19,7 @@ import {
 } from "../config/sessions/paths.js";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { readFileWindowFully } from "../infra/file-read.js";
+import { openLocalFileSafely } from "../infra/fs-safe.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -121,23 +122,12 @@ async function resetArchiveHeaderMatchesSessionId(
   // Compressed archives must be probed through the materialized JSONL cache:
   // a raw prefix read of zstd bytes never matches a session header, which
   // would silently drop every compressed archive from fallback history.
-  let probePath: string;
   try {
-    probePath = materializeSessionArchiveForRead(archivePath);
-  } catch {
-    return false;
-  }
-  const stat = await fs.promises.stat(probePath).catch(() => null);
-  if (!stat?.isFile()) {
-    return false;
-  }
-  const handle = await fs.promises.open(probePath, "r").catch(() => null);
-  if (!handle) {
-    return false;
-  }
-  try {
+    await using opened = await openLocalFileSafely({
+      filePath: materializeSessionArchiveForRead(archivePath),
+    });
     const buffer = Buffer.alloc(64 * 1024);
-    const bytesRead = await readFileWindowFully(handle, buffer, 0);
+    const bytesRead = await readFileWindowFully(opened.handle, buffer, 0);
     const lines = buffer.toString("utf-8", 0, bytesRead).split(/\r?\n/);
     for (const line of lines) {
       const trimmed = line.trim();
@@ -156,8 +146,6 @@ async function resetArchiveHeaderMatchesSessionId(
     return false;
   } catch {
     return false;
-  } finally {
-    await handle.close().catch(() => undefined);
   }
 }
 

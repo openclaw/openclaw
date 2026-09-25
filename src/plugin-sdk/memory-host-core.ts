@@ -3,13 +3,13 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex, sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
-import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as createFsSafeRoot, walkDirectory } from "../infra/fs-safe.js";
 import {
   MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES,

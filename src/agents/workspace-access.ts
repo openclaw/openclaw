@@ -31,10 +31,10 @@ export type AgentWorkspaceAccess = {
   installSkillDependencies?: WorkspaceSkillLifecycle["installSkillDependencies"];
   /** Read native source tiers and execution-host facts without applying Gateway policy. */
   loadSkills?: (request: WorkspaceSkillSourceRequest) => Promise<WorkspaceSkillSources>;
-  /** Keep a host subscription alive until aborted; notify without transferring file contents. */
+  /** Keep the subscription alive until aborted; available certifies verified coverage after loss. */
   watchSkills?: (
     request: Pick<WorkspaceSkillSourceRequest, "sourcePlan" | "executionWorkspaceDir">,
-    onChange: (event: "change" | "unavailable") => void,
+    onChange: (event: "change" | "unavailable" | "available") => void,
     signal: AbortSignal,
   ) => Promise<void>;
   skillResources?: SkillResourceSourceReader;

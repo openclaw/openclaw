@@ -1,8 +1,9 @@
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { releasePluginCacheInstance, withPluginCache, type PluginCache } from "./plugin-cache.js";
+import { DisposalFailures, type DisposalCleanup } from "./plugin-instance-disposal.js";
 import {
   PluginInstanceDrainTimeoutError,
   PluginInstanceUnavailableError,
@@ -30,33 +31,6 @@ import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.j
 const { values: valueInstances } = pluginInstanceState;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 const log = createSubsystemLogger("plugins/cleanup");
-
-type DisposalCleanup = {
-  failures: unknown[];
-  hostFailure?: { error: unknown };
-  moduleCleanups: Array<() => void | Promise<void>>;
-};
-
-class DisposalFailures extends Set<unknown> {
-  private readonly hostErrors = new Set<unknown>();
-  private readonly instanceErrors = new Set<unknown>();
-
-  constructor(private readonly isHostCleanup: () => boolean) {
-    super();
-  }
-
-  override add(error: unknown): this {
-    (this.isHostCleanup() ? this.hostErrors : this.instanceErrors).add(error);
-    return super.add(error);
-  }
-
-  result(errors: readonly unknown[]): PluginInstanceDisposalResult {
-    const hostCleanupErrors = [...this.hostErrors].filter(
-      (error) => !this.instanceErrors.has(error),
-    );
-    return { errors, ...(hostCleanupErrors.length ? { hostCleanupErrors } : {}) };
-  }
-}
 
 export class PluginInstance {
   readonly slots = new Map<string | symbol, { runtime: unknown }>();
@@ -227,7 +201,45 @@ export class PluginInstance {
     }
     const token = {};
     this.retainedWork.add(token);
-    return () => void this.retainedWork.delete(token);
+    return () => {
+      if (this.retainedWork.delete(token)) {
+        this.waiters.forEach((wake) => wake());
+      }
+    };
+  }
+
+  get retainedWorkCount(): number {
+    return (
+      this.retainedWork.size +
+      [...this.consumers.values()].filter(({ kind }) => kind === "work").length
+    );
+  }
+
+  /** Observe host settlement without closing the callbacks that retained runs still need. */
+  async waitForRetainedWork(signal: AbortSignal, includeConsumers = true): Promise<void> {
+    signal.throwIfAborted();
+    const pending = () => (includeConsumers ? this.retainedWorkCount : this.retainedWork.size);
+    if (!pending()) {
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        this.waiters.delete(wake);
+        signal.removeEventListener("abort", abort);
+      };
+      const wake = () => {
+        if (!pending()) {
+          cleanup();
+          resolve();
+        }
+      };
+      const abort = () => {
+        cleanup();
+        reject(toErrorObject(signal.reason, `Plugin ${this.pluginId} retained work drain aborted`));
+      };
+      this.waiters.add(wake);
+      signal.addEventListener("abort", abort, { once: true });
+    });
   }
 
   /** Reserve replacement atomically before host owners invalidate or stop this instance. */
@@ -235,14 +247,6 @@ export class PluginInstance {
     if (this.hasActiveCall) {
       throw new Error(
         `Plugin ${this.pluginId} cannot replace itself from its own active call; retry after the call finishes.`,
-      );
-    }
-    if (
-      this.retainedWork.size ||
-      [...this.consumers.values()].some(({ kind }) => kind === "work")
-    ) {
-      throw new Error(
-        `Plugin ${this.pluginId} still has active retained work; retry after the work finishes.`,
       );
     }
     if (this.replacementReserved) {
@@ -267,7 +271,10 @@ export class PluginInstance {
     const current = this.activeCall();
     const parent = current && this.consumers.get(current.token);
     // Only an exact live retained consumer can derive admission after ordinary closure.
-    if (this.replacementReserved || ((!this.accepting || this.owner?.revoked) && !parent?.active)) {
+    if (
+      (this.replacementReserved && parent?.kind !== "work") ||
+      ((!this.accepting || this.owner?.revoked) && !parent?.active)
+    ) {
       throw new Error(`Plugin ${this.pluginId} is retiring`);
     }
     const released = createDeferredCore();
@@ -278,6 +285,7 @@ export class PluginInstance {
       token.active = false;
       if (this.consumers.delete(token)) {
         released.resolve();
+        this.waiters.forEach((wake) => wake());
       }
     };
     const run = <T>(consume: () => T): T => {

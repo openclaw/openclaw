@@ -1986,6 +1986,8 @@ describe("ci workflow guards", () => {
       );
       expect(actual.filter((job) => job === "checks-node-core-test-nondist-shard")).toHaveLength(1);
       expect(actual).toContain("preflight");
+      expect(actual).not.toContain("ci-gate");
+      expect(actual).not.toContain("check-lint-hosted-core-shard");
       expect(Number(qualification.outputs.hybrid_hosted_base_rows)).toBe(
         Number(ordinary.outputs.hybrid_hosted_base_rows) + 2,
       );
@@ -2059,6 +2061,8 @@ describe("ci workflow guards", () => {
           "build-artifacts",
           "android",
           "check-test-types-hosted-core-shard",
+          "check-lint-hosted-core-shard",
+          "ci-gate",
         ]) {
           expect(hosted, name).not.toContain(name);
         }
@@ -2361,6 +2365,8 @@ describe("ci workflow guards", () => {
       expect(base.filter((name) => name === "macos-node")).toHaveLength(3);
       expect(base.filter((name) => name === "ios-screenshot-shard")).toHaveLength(2);
       expect(base.filter((name) => name === "ios-screenshot-evidence")).toHaveLength(1);
+      expect(base).not.toContain("ci-gate");
+      expect(base).not.toContain("check-lint-hosted-core-shard");
       expect(base.filter((name) => name === "check-lint-hosted-extension-shard")).toHaveLength(
         runnerProfile === "hybrid" ? 6 : 0,
       );
@@ -5096,8 +5102,22 @@ describe("ci workflow guards", () => {
       expect(run.if).toBeUndefined();
       expect(run.run).not.toContain("cache-hit");
       expect(restore.with?.path).toBe(".artifacts/tsgo-cache");
-      expect(restore.with?.key).toContain("pnpm-lock.yaml");
-      expect(restore.with?.key).toContain("test/tsconfig/*.json");
+      for (const cache of steps.filter(
+        (step) =>
+          step.uses?.startsWith("actions/cache/restore@") &&
+          step.with?.path === ".artifacts/tsgo-cache",
+      )) {
+        const key = cache.with?.key;
+        const restoreKeys = cache.with?.["restore-keys"];
+        if (typeof key !== "string" || typeof restoreKeys !== "string") {
+          throw new Error(`${jobId} compiler cache keys must be strings`);
+        }
+        expect(key).toContain("pnpm-lock.yaml");
+        expect(key).toContain("test/tsconfig/*.json");
+        const commitSuffix = "${{ github.sha }}";
+        expect(key.endsWith(commitSuffix)).toBe(true);
+        expect(restoreKeys.trim().split(/\s*\n\s*/u)).toEqual([key.slice(0, -commitSuffix.length)]);
+      }
       expect(restore.with?.key).toContain(
         jobId === "check-shard" ? "matrix.task" : "matrix.stripe",
       );

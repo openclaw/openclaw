@@ -114,9 +114,11 @@ export function collectServiceInspectionFailureFacts(
         createUpdateFailureFact({
           check: "managed-service",
           code: verdict.inspectionReason ?? "service-inspection-unavailable",
-          message: verdict.inspectionReason
-            ? formatServiceInspectionReason(verdict.inspectionReason)
-            : verdict.message,
+          message:
+            verdict.inspectionReason &&
+            verdict.inspectionReason !== "windows-task-inspection-failed"
+              ? formatServiceInspectionReason(verdict.inspectionReason)
+              : verdict.message,
         }),
       ]
     : undefined;
