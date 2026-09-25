@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { bootstrapApplication } from "./bootstrap.ts";
-import { loadSettings, saveSettings, setSettingsChangeListener } from "./settings.ts";
+import {
+  loadSettings,
+  patchSettings,
+  saveSettings,
+  setSettingsChangeListener,
+  settingsKeyForGateway,
+} from "./settings.ts";
 
 describe("initial sidebar visibility", () => {
   it.each([
@@ -53,4 +59,43 @@ describe("initial sidebar visibility", () => {
       saveSettings(previousSettings);
     }
   });
+
+  it.each([{ destinationOrder: [] }, { destinationOrder: ["work", "main"] }])(
+    "uses the destination Gateway's agent order after a switch, even without a server delta ($destinationOrder)",
+    ({ destinationOrder }) => {
+      const previousSettings = loadSettings();
+      const first = "ws://sidebar-order-first.example";
+      const second = "ws://sidebar-order-second.example";
+      let runtime: ReturnType<typeof bootstrapApplication> | undefined;
+      try {
+        saveSettings({
+          ...loadSettings(first),
+          gatewayUrl: first,
+          sidebarAgentOrder: ["main", "work"],
+        });
+        saveSettings({
+          ...loadSettings(second),
+          gatewayUrl: second,
+          sidebarAgentOrder: destinationOrder,
+        });
+        patchSettings({ gatewayUrl: first });
+        runtime = bootstrapApplication();
+        expect(runtime.context.navigation.snapshot.sidebarAgentOrder).toEqual(["main", "work"]);
+
+        runtime.context.gateway.connect({ gatewayUrl: second });
+        expect(runtime.context.navigation.snapshot.sidebarAgentOrder).toEqual(destinationOrder);
+        runtime.context.navigation.update({
+          navWidth: runtime.context.navigation.snapshot.navWidth + 1,
+        });
+        expect(loadSettings(second).sidebarAgentOrder).toEqual(destinationOrder);
+        expect(loadSettings(first).sidebarAgentOrder).toEqual(["main", "work"]);
+      } finally {
+        runtime?.stop();
+        localStorage.removeItem(settingsKeyForGateway(first));
+        localStorage.removeItem(settingsKeyForGateway(second));
+        patchSettings({ gatewayUrl: previousSettings.gatewayUrl });
+        saveSettings(previousSettings);
+      }
+    },
+  );
 });

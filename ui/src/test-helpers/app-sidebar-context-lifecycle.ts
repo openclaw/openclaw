@@ -1,4 +1,5 @@
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
+import { createApplicationNavigationPreferences } from "../app/bootstrap-navigation-preferences.ts";
 import { createApplicationTheme } from "../app/bootstrap-theme.ts";
 import { createConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
 import type { ApplicationGateway } from "../app/context.ts";
@@ -38,7 +39,12 @@ export function createSidebarContextLifecycle(
     agentSelection.dispose();
     theme.dispose();
   });
-  return { theme, agentSelection, connectionBootstrap };
+  return {
+    theme,
+    agentSelection,
+    connectionBootstrap,
+    navigation: createApplicationNavigationPreferences(theme),
+  };
 }
 
 export function disposeSidebarContextLifecycles() {

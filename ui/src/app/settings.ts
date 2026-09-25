@@ -8,6 +8,7 @@ import { normalizeUiAppearancePreference } from "../../../packages/gateway-proto
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
+import { normalizeSidebarAgentOrder } from "../lib/agents/sidebar-order.ts";
 import { normalizeBoardSessionViews, type BoardSessionViews } from "../lib/board/settings.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 import {
@@ -20,9 +21,12 @@ import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
+import { normalizeChatMessageMaxWidth } from "./settings-chat-width.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
+
+export { normalizeChatMessageMaxWidth } from "./settings-chat-width.ts";
 
 // Control UI module implements storage behavior.
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
@@ -62,52 +66,6 @@ type PersistedUiSettings = Omit<
 
 export const TEXT_SCALE_STOPS = [90, 100, 110, 125, 140] as const;
 export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
-
-const CSS_WIDTH_KEYWORDS = new Set(["none", "min-content", "max-content"]);
-const CSS_WIDTH_FUNCTIONS = new Set(["calc", "clamp", "fit-content", "max", "min"]);
-const CSS_WIDTH_UNITS = new Set(["ch", "em", "rem", "vh", "vmax", "vmin", "vw", "px"]);
-const CSS_WIDTH_ALLOWED_CHARS = /^[0-9A-Za-z.%+\-*/(),\s]+$/;
-const CSS_WIDTH_IDENTIFIER_RE = /[A-Za-z][A-Za-z0-9-]*/g;
-const CSS_WIDTH_SIMPLE_RE = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|ch|vw|vh|vmin|vmax|%)$/i;
-const CSS_WIDTH_MAX_LENGTH = 96;
-
-function hasAllowedWidthIdentifiers(value: string): boolean {
-  for (const match of value.matchAll(CSS_WIDTH_IDENTIFIER_RE)) {
-    const identifier = match[0].toLowerCase();
-    if (
-      !CSS_WIDTH_FUNCTIONS.has(identifier) &&
-      !CSS_WIDTH_KEYWORDS.has(identifier) &&
-      !CSS_WIDTH_UNITS.has(identifier)
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-export function normalizeChatMessageMaxWidth(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().replace(/\s+/g, " ");
-  if (normalized.length === 0) {
-    return undefined;
-  }
-  if (normalized.length > CSS_WIDTH_MAX_LENGTH) {
-    return undefined;
-  }
-  if (CSS_WIDTH_KEYWORDS.has(normalized.toLowerCase()) || CSS_WIDTH_SIMPLE_RE.test(normalized)) {
-    return normalized;
-  }
-  if (
-    !CSS_WIDTH_ALLOWED_CHARS.test(normalized) ||
-    !CSS.supports("max-width", normalized) ||
-    !hasAllowedWidthIdentifiers(normalized)
-  ) {
-    return undefined;
-  }
-  return /^(?:calc|clamp|fit-content|max|min)\(.+\)$/i.test(normalized) ? normalized : undefined;
-}
 
 const CHAT_SEND_SHORTCUTS = ["enter", "modifier-enter"] as const;
 export type ChatSendShortcut = (typeof CHAT_SEND_SHORTCUTS)[number];
@@ -217,6 +175,7 @@ export type UiSettings = {
   sidebarPreTeamScope?: string | null; // null remembers All agents; undefined means unset.
   sidebarCollapsedAgentIds?: string[];
   sidebarEntries: string[]; // Ordered routes, plugin navigation, and pinned sessions below Home
+  sidebarAgentOrder?: string[]; // Manual order of whole team-sidebar agent sections
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
   showAdvancedSettings?: boolean; // Expand advanced schema settings (default false)
@@ -481,6 +440,7 @@ export function loadUiPreferences(
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarAgentsMode: "chip",
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
+    sidebarAgentOrder: [],
     sidebarLiveActivity: UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
     showAdvancedSettings: false,
     pinnedAgentIds: [],
@@ -577,6 +537,7 @@ export function loadUiPreferences(
       sidebarAgentsMode: parsed.sidebarAgentsMode === "roster" ? "roster" : "chip",
       sidebarPreTeamScope: normalizeSidebarPreTeamScope(parsed.sidebarPreTeamScope),
       sidebarCollapsedAgentIds: normalizeUniqueTrimmedStringList(parsed.sidebarCollapsedAgentIds),
+      sidebarAgentOrder: normalizeSidebarAgentOrder(parsedRecord.sidebarAgentOrder) ?? [],
       sidebarEntries:
         normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
         migratedSidebarEntries ??
@@ -746,6 +707,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
         }
       : {}),
     sidebarEntries: next.sidebarEntries,
+    sidebarAgentOrder: normalizeSidebarAgentOrder(next.sidebarAgentOrder) ?? [],
     ...(next.sidebarLiveActivity === false ? { sidebarLiveActivity: false } : {}),
     ...(normalizeChatMessageMaxWidth(next.chatMessageMaxWidth)
       ? { chatMessageMaxWidth: normalizeChatMessageMaxWidth(next.chatMessageMaxWidth) }

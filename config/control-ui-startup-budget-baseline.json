@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 370756,
-  "reason": "Main 05804bcf passes at 370,367 B under its 370,876 B limit; this PR adds 389 B for a 370,756 B startup bundle. Set the paired measured baseline and cap to main plus this PR delta. The unchanged 512 B growth and 64 B build-variance allowances give a 371,332 B enforcement limit; KiB rounding is display-only.",
-  "updatedAt": "2026-09-22"
+  "startupJsGzipBytes": 374690,
+  "reason": "Main a8063ce4 measures 374690 B in the pinned CI comparison build, above the old 370756 B cap; PR #155139 measures 375049 B (+359 B). Rebaseline to current main while retaining the 512 B growth and 64 B variance allowances.",
+  "updatedAt": "2026-09-24"
 }

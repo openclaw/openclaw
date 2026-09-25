@@ -13,6 +13,21 @@ import { loadSettings, saveSettings } from "./settings.ts";
 describe("sidebar preference persistence", () => {
   installSettingsStorageLifecycle();
 
+  it("normalizes agent order, preserves missing IDs and isolates Gateway mirrors", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+    const first = "ws://first.example";
+    const second = "ws://second.example";
+    saveSettings({
+      ...loadSettings(first),
+      gatewayUrl: first,
+      sidebarAgentOrder: ["work", "", "work", "missing"],
+    });
+    expect(loadSettings(first).sidebarAgentOrder).toEqual(["work", "missing"]);
+    expect(loadSettings(second).sidebarAgentOrder).toEqual([]);
+    saveSettings({ ...loadSettings(first), gatewayUrl: first, sidebarAgentOrder: [] });
+    expect(loadSettings(first).sidebarAgentOrder).toEqual([]);
+  });
+
   it("defaults old or invalid agent modes to chip and persists explicit roster mode", () => {
     setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
     const gatewayUrl = expectedGatewayUrl("");

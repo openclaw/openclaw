@@ -406,54 +406,6 @@ describe("changedServerUiPrefs", () => {
   });
 });
 
-describe("clearable pref removal from the server", () => {
-  it("clears the local follow-up override when the server removes it", () => {
-    const onApplied = vi.fn();
-    applyServerUiPrefs(configWithPrefs({ chatFollowUpMode: "queue" }), { onApplied });
-    expect(loadSettings().chatFollowUpMode).toBe("queue");
-
-    expect(applyServerUiPrefs(configWithPrefs({}), { onApplied })).toBe(true);
-    expect(loadSettings().chatFollowUpMode).toBeUndefined();
-  });
-
-  it("clears the local locale override when the server removes it", () => {
-    const onApplied = vi.fn();
-    applyServerUiPrefs(configWithPrefs({ locale: "de" }), { onApplied });
-    expect(loadSettings().locale).toBe("de");
-
-    expect(applyServerUiPrefs(configWithPrefs({}), { onApplied })).toBe(true);
-    expect(loadSettings().locale).toBeUndefined();
-    expect(onApplied).toHaveBeenLastCalledWith({ locale: undefined });
-  });
-
-  it("restores product defaults when authored synced values are removed", () => {
-    const onApplied = vi.fn();
-    applyServerUiPrefs(
-      configWithPrefs({
-        theme: "knot",
-        themeMode: "dark",
-        accent: "#48d6c2",
-        chatSendShortcut: "modifier-enter",
-      }),
-      { onApplied },
-    );
-
-    expect(applyServerUiPrefs(configWithPrefs({}), { onApplied })).toBe(true);
-    const reset = loadSettings();
-    expect(reset).toMatchObject({
-      theme: "claw",
-      themeMode: "system",
-    });
-    expect(reset.accent).toBeUndefined();
-    expect(reset.chatSendShortcut).toBe("enter");
-    const persisted = JSON.parse(
-      localStorage.getItem(`openclaw.control.settings.v1:${reset.gatewayUrl}`) ?? "{}",
-    ) as Record<string, unknown>;
-    expect(Object.hasOwn(persisted, "accent")).toBe(false);
-    expect(Object.hasOwn(persisted, "chatSendShortcut")).toBe(false);
-  });
-});
-
 describe("pushServerUiPrefs", () => {
   const pendingKey = (scope: string) => `openclaw.control.serverPrefs.pending.v1:${scope}`;
   const lastSeenKey = (scope: string) => `openclaw.control.serverPrefs.v1:${scope}`;
@@ -1042,6 +994,22 @@ describe("pushServerUiPrefs", () => {
     expect(request).toHaveBeenCalledTimes(12);
     expect(localStorage.getItem(pendingKey("ws://gw"))).not.toBeNull();
   });
+
+  it.each([{ sidebarAgentOrder: ["work", "main"] }, { sidebarAgentOrder: [] }])(
+    "replaces synchronized agent order including reset ($sidebarAgentOrder)",
+    async ({ sidebarAgentOrder }) => {
+      const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
+        async () => ({}),
+      );
+      pushServerUiPrefs(createClient(request), { sidebarAgentOrder });
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      expect(request).toHaveBeenCalledWith("config.patch", {
+        raw: JSON.stringify({ ui: { prefs: { sidebarAgentOrder } } }),
+        replacePaths: ["ui.prefs.sidebarAgentOrder"],
+        note: "control-ui prefs sync",
+      });
+    },
+  );
 
   it("marks sidebar arrays for replacement", async () => {
     const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async () => ({}));

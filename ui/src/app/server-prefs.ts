@@ -558,8 +558,15 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
               // matters: a pending whole-config save must commit before this merge.
               client.request<ConfigPatchAck>("config.patch", {
                 raw: JSON.stringify({ ui: { prefs: batch } }),
-                ...(batch.sidebarEntries !== undefined
-                  ? { replacePaths: ["ui.prefs.sidebarEntries"] }
+                ...(batch.sidebarEntries !== undefined || batch.sidebarAgentOrder !== undefined
+                  ? {
+                      replacePaths: [
+                        ...(batch.sidebarEntries !== undefined ? ["ui.prefs.sidebarEntries"] : []),
+                        ...(batch.sidebarAgentOrder !== undefined
+                          ? ["ui.prefs.sidebarAgentOrder"]
+                          : []),
+                      ],
+                    }
                   : {}),
                 note: "control-ui prefs sync",
               }),

@@ -2,6 +2,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { isThemeId, normalizeThemeMode } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
+import { normalizeSidebarAgentOrder } from "../lib/agents/sidebar-order.ts";
 import {
   normalizeAccentColor,
   normalizeChatFollowUpModeOverride,
@@ -53,6 +54,13 @@ const fontPrefSpec = (key: "fontUi" | "fontChat") =>
  * Each key owns server validation, local normalization, and applicability.
  */
 export const SYNCED_PREFS = {
+  sidebarAgentOrder: prefSpec<string[]>({
+    extract: normalizeSidebarAgentOrder,
+    local: (settings) => normalizeSidebarAgentOrder(settings.sidebarAgentOrder) ?? [],
+    write: (value) => ({ sidebarAgentOrder: value ?? [] }),
+    clearable: true,
+    reset: () => ({ sidebarAgentOrder: [] }),
+  }),
   theme: prefSpec<ThemeName>({
     extract: (value) => (value === "custom" || isThemeId(value) ? value : undefined),
     local: (settings) => settings.theme,
