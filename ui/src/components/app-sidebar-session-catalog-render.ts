@@ -225,7 +225,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
       >
         ${renderSidebarSessionSectionHeader({
           sectionId,
-          status: html`${
+          status:
             hasError || (collapsed && rows.length > 0)
               ? html`<span
                   class="sidebar-session-group-count ${
@@ -235,8 +235,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
                   aria-hidden="true"
                   >${hasError ? icons.alertTriangle : rows.length}</span
                 >`
-              : nothing
-          }`,
+              : undefined,
           disabledReason: params.sectionDragDisabledReason,
           onStartDrag: params.onStartSectionDrag,
           onFinishDrag: params.onFinishSectionDrag,

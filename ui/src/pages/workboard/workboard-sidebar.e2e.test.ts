@@ -1,8 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiElementScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   assertSessionSectionCountAlignment,
@@ -21,6 +22,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     try {
+      const artifactDir = captureProof ? createControlUiE2eArtifactDir("sidebar-workboard") : null;
       const sessions = ["infra", "infra", "fixes", ""].map<
         GatewaySessionRow & { updatedAt: number }
       >((category, index) => ({
@@ -95,15 +97,14 @@ suite.define(() => {
         .poll(async () => (await widths()).find((row) => row.label === "Workboard")?.width)
         .toBeGreaterThan(150);
       const initialWidths = await widths();
+      expect(await page.locator(".sidebar-session-group-status:empty").count()).toBe(0);
       const capture = async (name: string) => {
-        if (!captureProof) {
+        if (!artifactDir) {
           return;
         }
-        const dir = path.resolve(process.cwd(), ".artifacts/sidebar-workboard");
-        await mkdir(dir, { recursive: true });
         const sidebar = page.locator(".sidebar");
         await writeFile(
-          path.join(dir, name + ".png"),
+          path.join(artifactDir, name + ".png"),
           await takeControlUiElementScreenshot(page, sidebar, [workboard]),
         );
       };

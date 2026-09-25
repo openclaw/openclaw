@@ -207,29 +207,33 @@ export function renderSessionSection(params: {
       </span>`
     : nothing;
   const labelText = renderHoverMarquee(label, "sidebar-recent-sessions__label-text");
-  const headerStatus = html`${
-    collapsed && totalRowCount > 0
-      ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
-      : nothing
-  }${
-    collapsedRunningDot
-      ? html`<span
-          class="session-run-spinner sidebar-session-group-running"
-          role="img"
-          aria-label=${t("sessionsView.activeRun")}
-          title=${t("sessionsView.activeRun")}
-        ></span>`
-      : nothing
-  }${
-    collapsedAttentionDot
-      ? html`<span
-          class="sidebar-session-group-attention"
-          role="img"
-          aria-label=${t("sessionsView.attentionRequired")}
-          title=${t("sessionsView.attentionRequired")}
-        ></span>`
-      : nothing
-  }`;
+  const showCount = collapsed && totalRowCount > 0;
+  const headerStatus =
+    showCount || collapsedRunningDot || collapsedAttentionDot
+      ? html`${
+          showCount
+            ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
+            : nothing
+        }${
+          collapsedRunningDot
+            ? html`<span
+                class="session-run-spinner sidebar-session-group-running"
+                role="img"
+                aria-label=${t("sessionsView.activeRun")}
+                title=${t("sessionsView.activeRun")}
+              ></span>`
+            : nothing
+        }${
+          collapsedAttentionDot
+            ? html`<span
+                class="sidebar-session-group-attention"
+                role="img"
+                aria-label=${t("sessionsView.attentionRequired")}
+                title=${t("sessionsView.attentionRequired")}
+              ></span>`
+            : nothing
+        }`
+      : undefined;
   return html`
     <div
       class=${sectionClass}
