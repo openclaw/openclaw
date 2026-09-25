@@ -11,6 +11,12 @@ import { CUA_DRIVER_CONTRACT_FIXTURES } from "./cua-driver-contract.test-fixture
 import { ClickButton } from "./driver-client.js";
 import { createCuaMcpDriver } from "./mcp-driver-client.js";
 
+// Load the real transport before timing socket behavior, including its cold module graph.
+if (process.platform !== "win32") {
+  const { mcpStdioRuntime } = await import("openclaw/plugin-sdk/agent-harness-runtime");
+  await mcpStdioRuntime.load();
+}
+
 type RpcRequest = {
   id?: number;
   method: string;
