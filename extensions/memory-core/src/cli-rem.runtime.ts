@@ -8,7 +8,8 @@ import type { MemoryRemBackfillOptions, MemoryRemHarnessOptions } from "./cli.ty
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
 import { seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
-import { previewGroundedRemMarkdown } from "./rem-evidence.js";
+import { collectGroundedRemSourcesByRef } from "./rem-evidence-markdown.js";
+import { previewGroundedRemMarkdown, resolveGroundedRemSeedSnippet } from "./rem-evidence.js";
 import { previewRemHarness } from "./rem-harness.js";
 import { runSessionBackfill, type MemorySessionBackfillOptions } from "./session-backfill.js";
 import {
@@ -362,9 +363,12 @@ export async function runMemoryRemBackfill(
           let stagedShortTermEntries = 0;
           let replacedShortTermEntries = 0;
           if (opts.stageShortTerm) {
+            const shortTermSeedItems = await collectGroundedShortTermSeedItems(
+              scratchDir,
+              grounded.files,
+            );
             const cleared = await removeGroundedShortTermCandidates({ workspaceDir });
             replacedShortTermEntries = cleared.removed;
-            const shortTermSeedItems = collectGroundedShortTermSeedItems(grounded.files);
             if (shortTermSeedItems.length > 0) {
               await recordGroundedShortTermCandidates({
                 workspaceDir,
@@ -523,9 +527,10 @@ function parseGroundedRef(
     endLine: Math.max(1, Number(match[3] ?? match[2])),
   };
 }
-function collectGroundedShortTermSeedItems(
+async function collectGroundedShortTermSeedItems(
+  workspaceDir: string,
   previews: Awaited<ReturnType<typeof previewGroundedRemMarkdown>>["files"],
-): Parameters<typeof recordGroundedShortTermCandidates>[0]["items"] {
+): Promise<Parameters<typeof recordGroundedShortTermCandidates>[0]["items"]> {
   const items: Parameters<typeof recordGroundedShortTermCandidates>[0]["items"] = [];
   const seen = new Set<string>();
   for (const file of previews) {
@@ -548,30 +553,44 @@ function collectGroundedShortTermSeedItems(
           signalCount: 1,
         })),
     ];
+    let sourcesByRef: ReturnType<typeof collectGroundedRemSourcesByRef> | undefined;
     for (const signal of signals) {
       if (!signal.text.trim()) {
         continue;
       }
-      const firstRef = signal.refs.find((ref) => ref.trim().length > 0);
-      const parsedRef = firstRef ? parseGroundedRef(file.path, firstRef) : null;
-      if (!parsedRef) {
-        continue;
+      const refs = signal.refs.map((ref) => ref.trim()).filter(Boolean);
+      if (refs.length > 1 && !sourcesByRef) {
+        sourcesByRef = collectGroundedRemSourcesByRef(
+          file.path,
+          await fs.readFile(path.join(workspaceDir, file.path), "utf-8"),
+        );
       }
-      const key = `${parsedRef.path}:${parsedRef.startLine}:${parsedRef.endLine}:${signal.query}:${signal.text.toLowerCase()}`;
-      if (seen.has(key)) {
-        continue;
+      for (const ref of refs) {
+        const parsedRef = parseGroundedRef(file.path, ref);
+        const source = sourcesByRef?.get(ref);
+        if (!parsedRef || (refs.length > 1 && !source)) {
+          continue;
+        }
+        const snippet =
+          refs.length > 1 && source
+            ? resolveGroundedRemSeedSnippet(signal.text, source)
+            : signal.text;
+        const key = `${parsedRef.path}:${parsedRef.startLine}:${parsedRef.endLine}:${signal.query}:${snippet.toLowerCase()}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        items.push({
+          path: parsedRef.path,
+          startLine: parsedRef.startLine,
+          endLine: parsedRef.endLine,
+          snippet,
+          score: signal.score,
+          query: signal.query,
+          signalCount: signal.signalCount,
+          ...(dayBucket ? { dayBucket } : {}),
+        });
       }
-      seen.add(key);
-      items.push({
-        path: parsedRef.path,
-        startLine: parsedRef.startLine,
-        endLine: parsedRef.endLine,
-        snippet: signal.text,
-        score: signal.score,
-        query: signal.query,
-        signalCount: signal.signalCount,
-        ...(dayBucket ? { dayBucket } : {}),
-      });
     }
   }
   return items;
