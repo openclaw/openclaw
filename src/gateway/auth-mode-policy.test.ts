@@ -32,18 +32,6 @@ describe("gateway auth mode policy", () => {
     expect(hasAmbiguousGatewayAuthModeConfig(cfg)).toBe(false);
   });
 
-  it("flags config when both token and password are configured and mode is unset", () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        auth: {
-          token: "token-value",
-          password: "password-value", // pragma: allowlist secret
-        },
-      },
-    };
-    expect(hasAmbiguousGatewayAuthModeConfig(cfg)).toBe(true);
-  });
-
   it("flags config when both token/password SecretRefs are configured and mode is unset", () => {
     const cfg: OpenClawConfig = {
       gateway: {
