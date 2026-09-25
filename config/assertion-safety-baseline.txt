@@ -2436,7 +2436,6 @@ src/cron/stagger.ts	1
 src/cron/store/delivery-codec.ts	2
 src/cron/store/quarantine.ts	1
 src/cron/store/row-codec.ts	3
-src/cron/task-run-detail.ts	2
 src/daemon/arg-split.ts	2
 src/daemon/launchd-install.ts	4
 src/daemon/launchd-lifecycle.ts	4
@@ -2557,7 +2556,7 @@ src/gateway/server-methods/chat-transcript-persistence.ts	7
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	4
-src/gateway/server-methods/cron.ts	11
+src/gateway/server-methods/cron.ts	4
 src/gateway/server-methods/device-scope-upgrade.ts	2
 src/gateway/server-methods/devices.ts	4
 src/gateway/server-methods/doctor.ts	3
