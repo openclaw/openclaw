@@ -148,6 +148,16 @@ keys. Repeated stage visits contribute to the counts and totals. Parallel and
 nested stages can overlap, so their totals are neither an exclusive breakdown
 of request time nor CPU measurements.
 
+With diagnostics and warning logs enabled, `sessions.create` calls lasting at
+least one second emit `slow session create`. Its `elapsedMs` and
+`phaseDurationsMs` separate request preparation, admission, target discovery,
+worktree preparation, row snapshot and projection, transcript initialization,
+writer admission, commit, publication, initial-turn dispatch, and response work.
+These are elapsed times, including waits, with fixed phase names and no session
+keys or request values. Worktree preparation measures only work required before
+the response; provisioning already deferred to an initial turn stays with that
+turn's lifecycle.
+
 Two related info-level records help attribute slow worktree cleanup:
 `slow managed worktree removal` separates allocation admission, callback work,
 and final settlement, with preparation, snapshot, checkout removal, and body
