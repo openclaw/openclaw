@@ -708,6 +708,9 @@ it("keeps cross-agent inheritance bound to a stored qualified parent", async () 
         modelOverrideSource: "inherited",
       });
       expect(
+        projection.selectEntries({ agentId: "work", parentSessionKey: "agent:work:main" }),
+      ).toEqual([]);
+      expect(
         projection
           .selectEntries({ agentId: "main", parentSessionKey: "agent:work:main" })
           .map((row) => row.key),

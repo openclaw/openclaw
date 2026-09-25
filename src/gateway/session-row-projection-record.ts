@@ -282,11 +282,9 @@ export function publishTranscriptFields(
 }
 
 export function sort<T extends EntryRow>(rows: T[], sortBy: Query["sortBy"]): T[] {
-  if (sortBy === null) {
-    return rows;
-  }
-  // eslint-disable-next-line unicorn/no-array-sort -- Callers provide fresh selections, independent of resident indexes.
-  return rows.sort((a, b) => compareSessionEntryPairs([a.key, a.entry], [b.key, b.entry], sortBy));
+  return sortBy === null
+    ? rows
+    : rows.toSorted((a, b) => compareSessionEntryPairs([a.key, a.entry], [b.key, b.entry], sortBy));
 }
 
 function sameFallbackModelFacts(previous: Row["storedEntry"], current: SessionEntry) {
