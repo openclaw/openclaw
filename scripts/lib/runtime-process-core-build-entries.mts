@@ -34,6 +34,7 @@ export const runtimeProcessCoreBuildEntries = createRuntimeProcessBuildEntries(
 // Keep small helper processes out of the shared runtime bundle.
 export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEntries([
   runtimeProcessEntrypoints.sqliteReadOnly,
+  runtimeProcessEntrypoints.sqliteSourceRevision,
   runtimeProcessEntrypoints.stateRead,
   runtimeProcessEntrypoints.nativeHookRelayClient,
   runtimeProcessEntrypoints.spawnBroker,

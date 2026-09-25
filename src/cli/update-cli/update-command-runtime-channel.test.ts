@@ -61,6 +61,7 @@ it.each([
     const preflight = vi.spyOn(servicePlan, "resolvePackageRuntimePreflight");
 
     const options = {
+      admission: "installed" as const,
       channel: requestedChannel ?? undefined,
       json: true,
       yes: true,

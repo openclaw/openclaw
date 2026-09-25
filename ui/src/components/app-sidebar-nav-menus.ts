@@ -24,6 +24,21 @@ import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from
 
 type SidebarMenuPosition = { x: number; y: number };
 
+export function renderSidebarMenuTrigger(
+  position: SidebarMenuPosition,
+  label: string,
+  edge: "top" | "bottom" = "top",
+) {
+  return html`<button
+    slot="trigger"
+    type="button"
+    tabindex="-1"
+    aria-hidden="true"
+    aria-label=${label}
+    style="position: fixed; left: ${position.x}px; ${edge}: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+  ></button>`;
+}
+
 /** Settings routes highlight Settings; hub tabs highlight their hub entry. */
 export function isSidebarRouteActive(
   activeRouteId: NavigationRouteId | undefined,
@@ -196,14 +211,7 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
       @keydown=${(event: KeyboardEvent) => trackDropdownKeyboardDismissal(event, params.onTabAway)}
       @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
     >
-      <button
-        slot="trigger"
-        type="button"
-        tabindex="-1"
-        aria-hidden="true"
-        aria-label=${t("nav.more")}
-        style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-      ></button>
+      ${renderSidebarMenuTrigger(position, t("nav.more"))}
       ${moreRoutes.map((routeId) => renderMoreMenuRoute(params, routeId))}
       <div class="sidebar-customize-menu__separator" role="separator"></div>
       <wa-dropdown-item class="sidebar-customize-menu__item" value="customize">
@@ -253,14 +261,7 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
       @keydown=${(event: KeyboardEvent) => trackDropdownKeyboardDismissal(event, params.onTabAway)}
       @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
     >
-      <button
-        slot="trigger"
-        type="button"
-        tabindex="-1"
-        aria-hidden="true"
-        aria-label=${t("nav.customize")}
-        style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-      ></button>
+      ${renderSidebarMenuTrigger(position, t("nav.customize"))}
       <div class="sidebar-customize-menu__title">${t("nav.customize")}</div>
       ${
         params.preferencesBrowserOnly

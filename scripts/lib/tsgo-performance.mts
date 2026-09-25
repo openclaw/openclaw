@@ -194,7 +194,7 @@ function provenance(cwd: string, env: NodeJS.ProcessEnv) {
   try {
     const require = createRequire(path.join(root, "package.json"));
     compilerVersion =
-      JSON.parse(fs.readFileSync(require.resolve("typescript-native/package.json"), "utf8"))
+      JSON.parse(fs.readFileSync(require.resolve("typescript/package.json"), "utf8"))
         .version ?? null;
   } catch {
     /* A missing package manifest is not a compiler failure. */

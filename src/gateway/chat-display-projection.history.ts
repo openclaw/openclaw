@@ -63,10 +63,17 @@ export function isSubagentCoordinationHistoryInput(
 /** Keep coordination in the model transcript while projecting only human-facing outcomes. */
 export function createSubagentCoordinationHistoryProjection(
   resolver?: SubagentCoordinationDisplayResolver,
+  state: {
+    hiddenInputKeys: { add: (key: string) => unknown; has: (key: string) => boolean };
+    visibleInputKeys: { add: (key: string) => unknown; has: (key: string) => boolean };
+    visibleSteerRunIds: { add: (key: string) => unknown; has: (key: string) => boolean };
+  } = {
+    hiddenInputKeys: new Set<string>(),
+    visibleInputKeys: new Set<string>(),
+    visibleSteerRunIds: new Set<string>(),
+  },
 ) {
-  const hiddenInputKeys = new Set<string>();
-  const visibleInputKeys = new Set<string>();
-  const visibleSteerRunIds = new Set<string>();
+  const { hiddenInputKeys, visibleInputKeys, visibleSteerRunIds } = state;
   return (messages: unknown[]): unknown[] => {
     resolver?.assertCurrent?.();
     const projected = messages.map((message) => {

@@ -73,6 +73,36 @@ export function retainSnapshotWork<T>(work: Promise<T>, stop: () => void = () =>
   return work;
 }
 
+/** Keep signal cleanup behind the consumer, including private transforms and publication. */
+export async function withPreparedSqliteSnapshot<T>(
+  snapshot: PreparedSqliteReadOnlyLocation,
+  read: (location: string) => T | Promise<T>,
+): Promise<T> {
+  let outcome: { value: T } | { cause: unknown };
+  try {
+    outcome = {
+      value: await retainSnapshotWork(Promise.resolve().then(() => read(snapshot.location))),
+    };
+  } catch (cause) {
+    outcome = { cause };
+  }
+  if (!(await snapshot.cleanupAsync())) {
+    // An exit retry is best-effort, not proof that this private copy was removed.
+    const readFailure =
+      "cause" in outcome
+        ? `${outcome.cause instanceof Error ? outcome.cause.message : String(outcome.cause)}; `
+        : "";
+    throw new Error(
+      `${readFailure}SQLite snapshot cleanup failed: ${snapshot.cleanupRoot ?? path.dirname(snapshot.location)}. Check directory permissions and available storage before retrying.`,
+      "cause" in outcome ? outcome : undefined,
+    );
+  }
+  if ("cause" in outcome) {
+    throw outcome.cause;
+  }
+  return outcome.value;
+}
+
 export function registerSnapshotTempDirectory(
   directory: string,
   release?: SqliteStagingToken,

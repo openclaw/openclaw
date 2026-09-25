@@ -1,7 +1,7 @@
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
-// Zalouser plugin module implements send behavior.
 import { chunkTextRanges } from "openclaw/plugin-sdk/text-chunking";
 import { createZalouserSendReceipt } from "./send-receipt.js";
+import { sliceTextStyles } from "./text-styles-ranges.js";
 import { parseZalouserTextStyles } from "./text-styles.js";
 import type { ZaloEventMessage, ZaloSendOptions, ZaloSendResult } from "./types.js";
 import {
@@ -12,7 +12,6 @@ import {
   sendZaloTextMessage,
   sendZaloTypingEvent,
 } from "./zalo-js.js";
-import { TextStyle } from "./zca-constants.js";
 
 type ZalouserSendOptions = ZaloSendOptions & {
   /** Persist each concrete platform send before the next internal chunk starts. */
@@ -173,41 +172,4 @@ function splitStyledText(
     });
   }
   return chunks;
-}
-
-function sliceTextStyles(
-  styles: ZaloSendOptions["textStyles"],
-  start: number,
-  end: number,
-): ZaloSendOptions["textStyles"] {
-  if (!styles || styles.length === 0) {
-    return undefined;
-  }
-
-  const chunkStyles = styles
-    .map((style) => {
-      const overlapStart = Math.max(style.start, start);
-      const overlapEnd = Math.min(style.start + style.len, end);
-      if (overlapEnd <= overlapStart) {
-        return null;
-      }
-
-      if (style.st === TextStyle.Indent) {
-        return {
-          start: overlapStart - start,
-          len: overlapEnd - overlapStart,
-          st: style.st,
-          indentSize: style.indentSize,
-        };
-      }
-
-      return {
-        start: overlapStart - start,
-        len: overlapEnd - overlapStart,
-        st: style.st,
-      };
-    })
-    .filter((style): style is NonNullable<typeof style> => style !== null);
-
-  return chunkStyles.length > 0 ? chunkStyles : undefined;
 }

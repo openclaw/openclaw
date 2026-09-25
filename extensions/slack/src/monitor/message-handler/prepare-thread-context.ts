@@ -92,15 +92,11 @@ async function resolveSlackThreadUserMap(params: {
   messages: SlackThreadStarter[];
   eventScope?: SlackEventScope;
 }): Promise<Map<string, { name?: string }>> {
-  const uniqueUserIds: string[] = [];
-  const seen = new Set<string>();
-  for (const item of params.messages) {
-    if (!item.userId || seen.has(item.userId)) {
-      continue;
-    }
-    seen.add(item.userId);
-    uniqueUserIds.push(item.userId);
-  }
+  const uniqueUserIds = [
+    ...new Set(
+      params.messages.map((item) => item.userId).filter((id): id is string => Boolean(id)),
+    ),
+  ];
   const userMap = new Map<string, { name?: string }>();
   if (uniqueUserIds.length === 0) {
     return userMap;
@@ -209,13 +205,7 @@ export async function resolveSlackThreadContextData(params: {
       ? (await params.ctx.resolveUserName(starter.userId, params.eventScope))?.name
       : undefined;
   params.assertHistoryCurrent?.();
-  const starterIsCurrentBot = Boolean(
-    starter &&
-    isCurrentBotAuthor({
-      userId: starter.userId,
-      botId: starter.botId,
-    }),
-  );
+  const starterIsCurrentBot = Boolean(starter && isCurrentBotAuthor(starter));
   const starterAllowed =
     !starter ||
     (!starterIsCurrentBot &&
@@ -394,12 +384,7 @@ export async function resolveSlackThreadContextData(params: {
               mode: params.contextVisibilityMode,
               kind: "thread",
               isSenderAllowed: (historyMsg) => {
-                if (
-                  isCurrentBotAuthor({
-                    userId: historyMsg.userId,
-                    botId: historyMsg.botId,
-                  })
-                ) {
+                if (isCurrentBotAuthor(historyMsg)) {
                   return true;
                 }
                 const msgUser = historyMsg.userId ? userMapForFilter.get(historyMsg.userId) : null;
@@ -427,10 +412,7 @@ export async function resolveSlackThreadContextData(params: {
       const historyParts: string[] = [];
       for (const historyMsg of filteredThreadHistory) {
         const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
-        const isCurrentBot = isCurrentBotAuthor({
-          userId: historyMsg.userId,
-          botId: historyMsg.botId,
-        });
+        const isCurrentBot = isCurrentBotAuthor(historyMsg);
         const role = isCurrentBot || historyMsg.botId ? "assistant" : "user";
         const msgSenderName = isCurrentBot
           ? "Bot (this assistant)"

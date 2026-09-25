@@ -127,6 +127,7 @@ export function useNodeBootstrapArtifactFixtures() {
     await write(packageRoot, "gateway-run-argv.mjs", "export {};");
     await write(packageRoot, "gateway-shutdown-budget.mjs", "export {};");
     await write(packageRoot, "node-host-launcher.mjs", "export const launcher = true;");
+    await write(packageRoot, "node-compile-cache.mjs", "export {};");
     await write(packageRoot, "scripts/preinstall.mjs", "export {};\n");
     await write(
       packageRoot,

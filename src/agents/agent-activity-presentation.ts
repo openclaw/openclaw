@@ -1,6 +1,25 @@
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { groupToolCalls, type ToolCallIdentity } from "../chat/tool-call-grouping.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
+
+/** Only recorded, unambiguous children replace a successfully completed wrapper. */
+export function resolveCompletedActivityWrappers<
+  Call extends ToolCallIdentity & { activity?: { status?: string } },
+>(calls: readonly Call[]): Set<Call> {
+  const wrappers = new Set<Call>();
+  const pending = groupToolCalls(calls);
+  while (pending.length > 0) {
+    const group = pending.pop()!;
+    if (group.children.length > 0 && group.card.activity?.status === "completed") {
+      wrappers.add(group.card);
+    }
+    for (const child of group.children) {
+      pending.push(child);
+    }
+  }
+  return wrappers;
+}
 
 export function projectAgentActivityItem<
   Item extends {

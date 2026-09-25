@@ -652,11 +652,11 @@ class SecurePrefs(
     value: String,
   ): Boolean = securePrefs.edit().putString(key, value).commit()
 
-  internal fun commitSecureStrings(values: Map<String, String>): Boolean =
+  internal fun commitSecureStrings(values: Map<String, String?>): Boolean =
     synchronized(securePrefs) {
       val previous = values.keys.associateWith { securePrefs.getString(it, null) }
       val editor = securePrefs.edit()
-      values.forEach { (key, value) -> editor.putString(key, value) }
+      values.forEach { (key, value) -> if (value == null) editor.remove(key) else editor.putString(key, value) }
       val committed = runCatching { editor.commit() }.getOrDefault(false)
       if (!committed) {
         // commit(false) can still publish its changes in memory. Keep failed handoffs

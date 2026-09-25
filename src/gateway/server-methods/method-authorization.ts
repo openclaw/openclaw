@@ -8,6 +8,7 @@ import {
   resolveSessionMethodScope,
   type SessionOperatorScope,
 } from "../../shared/session-method-scopes-base.js";
+import { holdsCronManagementGrant } from "../cron-creator-authority-grant.js";
 import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
@@ -79,6 +80,15 @@ export function authorizeGatewayMethod(
       )
     : authorizeOperatorScopesForMethod(method, scopes, params);
   if (!scopeAuth.allowed) {
+    // A configured channel owner's automation management runs without operator.admin; its
+    // one-use grant, bound to this method and run, is the admitted authority instead.
+    const runtimeIdentity = client.internal?.agentRuntimeIdentity;
+    if (
+      runtimeIdentity?.cronManagementGrant &&
+      holdsCronManagementGrant(runtimeIdentity.cronManagementGrant, runtimeIdentity, method)
+    ) {
+      return { error: null };
+    }
     const resolvedRequiredScopes = isOperatorScope(registeredScope)
       ? [registeredScope]
       : resolveLeastPrivilegeOperatorScopesForMethod(method, params);

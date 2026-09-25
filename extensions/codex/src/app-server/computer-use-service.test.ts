@@ -43,30 +43,71 @@ const UNEXPECTED_IDENTITY = serviceIdentity({
 describe("Codex Computer Use native service", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("creates a fresh agent tree and installs beneath the isolated Codex home", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-");
-    const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-    const codexHome = path.join(root, "agent", "codex-home");
-    await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
+  it.each(["parent", "home"] as const)(
+    "creates a fresh agent tree with %s ownership",
+    async (ownership) => {
+      const root = tempDirs.make("openclaw-computer-use-service-");
+      const sourcePath = path.join(root, "source", "Codex Computer Use.app");
+      const codexHome = path.join(root, "agent", "codex-home");
+      await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
 
-    const result = await ensureCodexComputerUseServiceApp({
-      codexHome,
-      platform: "darwin",
-      sourceAppCandidates: [sourcePath],
-      copyServiceApp: copyServiceFixture,
-      inspectServiceApp: inspectServiceFixture,
-    });
+      const result = await ensureCodexComputerUseServiceApp({
+        codexHome,
+        ...(ownership === "home" ? { ownershipRoot: codexHome } : {}),
+        platform: "darwin",
+        sourceAppCandidates: [sourcePath],
+        copyServiceApp: copyServiceFixture,
+        inspectServiceApp: inspectServiceFixture,
+      });
 
-    expect(result).toMatchObject({
-      status: "installed",
-      changed: true,
-      sourcePath,
-      sourceBuild: "1000761",
-    });
-    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-    await fs.access(path.join(targetPath, CLIENT_RELATIVE_PATH));
-    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
-  });
+      expect(result).toMatchObject({
+        status: "installed",
+        changed: true,
+        sourcePath,
+        sourceBuild: "1000761",
+      });
+      const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
+      await fs.access(path.join(targetPath, CLIENT_RELATIVE_PATH));
+      await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves ancestor aliases, literal directory names, and existing permissions",
+    async () => {
+      const root = tempDirs.make("openclaw-computer-use-service-alias-");
+      const sourcePath = path.join(root, "source", "Codex Computer Use.app");
+      const physicalParent = path.join(root, "physical-parent");
+      const parentAlias = path.join(root, "parent-alias");
+      await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
+      await fs.mkdir(physicalParent);
+      await fs.symlink(physicalParent, parentAlias, "dir");
+      const ownershipRoot = path.join(parentAlias, "~");
+      await fs.mkdir(ownershipRoot);
+      await fs.chmod(ownershipRoot, 0o750);
+      const codexHome = path.join(ownershipRoot, "codex-home ");
+
+      await expect(
+        ensureCodexComputerUseServiceApp({
+          codexHome,
+          ownershipRoot,
+          platform: "darwin",
+          sourceAppCandidates: [sourcePath],
+          copyServiceApp: copyServiceFixture,
+          inspectServiceApp: inspectServiceFixture,
+        }),
+      ).resolves.toMatchObject({ status: "installed", changed: true });
+
+      expect((await fs.stat(ownershipRoot)).mode & 0o777).toBe(0o750);
+      expect((await fs.stat(codexHome)).mode & 0o777).toBe(0o700 & ~process.umask());
+      await expect(fs.readdir(ownershipRoot)).resolves.toEqual(["codex-home "]);
+      await expect(
+        inspectServiceFixture(
+          path.join(physicalParent, "~", "codex-home ", "computer-use", "Codex Computer Use.app"),
+        ),
+      ).resolves.toEqual(CURRENT_IDENTITY);
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "rejects a symlinked isolated Codex home without touching its external target",

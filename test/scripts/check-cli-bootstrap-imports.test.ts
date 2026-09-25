@@ -4,21 +4,30 @@ import fs, { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { performance } from "node:perf_hooks";
+import { Parser } from "acorn";
 import { build } from "tsdown";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createGatewayRunChunkMetadataPlugin,
+  GATEWAY_RUN_CHUNK_METADATA_PATH,
+  readGatewayRunChunks,
+} from "../../scripts/lib/gateway-run-chunk-metadata.mts";
+
+function snapshotAcornParserPrototype() {
+  return Reflect.ownKeys(Parser.prototype).map((key) => [
+    key,
+    Object.getOwnPropertyDescriptor(Parser.prototype, key),
+  ]);
+}
+const acornPrototypeBeforeCheck = snapshotAcornParserPrototype();
+const {
   checkCliBootstrapExternalImports,
   collectCliBootstrapExternalImportErrors,
   collectGatewayRunChunkBudgetErrors,
   collectNativeHookRelayBundleErrors,
   collectWorkerDeployArtifactErrors,
   listStaticImportSpecifiers,
-} from "../../scripts/check-cli-bootstrap-imports.mts";
-import {
-  createGatewayRunChunkMetadataPlugin,
-  GATEWAY_RUN_CHUNK_METADATA_PATH,
-  readGatewayRunChunks,
-} from "../../scripts/lib/gateway-run-chunk-metadata.mts";
+} = await import("../../scripts/check-cli-bootstrap-imports.mts");
 
 const tempRoots: string[] = [];
 const workerDeployArtifactNames = [
@@ -412,11 +421,89 @@ describe("check-cli-bootstrap-imports", () => {
     expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([]);
   });
 
+  it("keeps binding searches bounded while rejecting an early name redeclared in a large module", () => {
+    const root = makeTempRoot();
+    const bindings = 2048;
+    const source =
+      Array.from(
+        { length: bindings },
+        (_, index) => `const bootstrap_binding_${index} = ${index};`,
+      ).join("\n") + "\nlet bootstrap_binding_0;";
+    writeFixture(root, "dist/worker/worker.mjs", source);
+    let searchedSlots = 0;
+    const indexOf = Array.prototype.indexOf;
+    const observed = vi.spyOn(Array.prototype, "indexOf").mockImplementation(function (
+      this: unknown[],
+      value: unknown,
+      fromIndex?: number,
+    ) {
+      if (typeof value === "string" && value.startsWith("bootstrap_binding_")) {
+        searchedSlots += this.length;
+      }
+      return indexOf.call(this, value, fromIndex);
+    });
+    let errors: string[];
+    try {
+      errors = collectWorkerDeployArtifactErrors({
+        rootDir: root,
+        workerDeployEntrypoints: ["dist/worker/worker.mjs"],
+      });
+    } finally {
+      observed.mockRestore();
+    }
+    expect(errors).toEqual([
+      expect.stringContaining("Identifier 'bootstrap_binding_0' has already been declared"),
+    ]);
+    expect(searchedSlots).toBeLessThanOrEqual(bindings * 8);
+    expect(snapshotAcornParserPrototype()).toEqual(acornPrototypeBeforeCheck);
+  });
+
+  it("preserves var redeclarations, nested shadowing, catch ordering, and forward exports", () => {
+    const root = makeTempRoot();
+    writeFixture(
+      root,
+      "dist/worker/worker.mjs",
+      `
+      export { value };
+      var value; var value;
+      function shadow(value) { var value; { let value; } }
+      try {} catch (value) { var value; }
+      const named = function local(value) { return value; };
+      class Example { method(value) { let nested; return value; } }
+    `,
+    );
+    expect(
+      collectWorkerDeployArtifactErrors({
+        rootDir: root,
+        workerDeployEntrypoints: ["dist/worker/worker.mjs"],
+      }),
+    ).toEqual([]);
+    expect(snapshotAcornParserPrototype()).toEqual(acornPrototypeBeforeCheck);
+  });
+
   it.each([
     {
       label: "duplicate bindings across statements",
       source: 'let value; import "node:fs"; let value;',
       message: "Identifier 'value' has already been declared",
+    },
+    ...[
+      ["lexical then var", "let value; var value;"],
+      ["var then lexical", "var value; let value;"],
+      ["function then lexical", "function value() {} let value;"],
+      ["lexical then function", "let value; function value() {}"],
+      ["class then lexical", "class value {} let value;"],
+      ["destructured bindings", "const [value, value] = [];"],
+      ["destructured catch binding", "try {} catch ({ value }) { var value; }"],
+    ].map(([label, source]) => ({
+      label,
+      source: source!,
+      message: "Identifier 'value' has already been declared",
+    })),
+    {
+      label: "duplicate function parameters",
+      source: "function value(arg, arg) {}",
+      message: "Argument name clash",
     },
     {
       label: "duplicate exports across statements",

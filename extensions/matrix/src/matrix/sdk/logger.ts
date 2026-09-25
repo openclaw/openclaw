@@ -57,10 +57,6 @@ export class ConsoleLogger {
       runtimeLogger[level](message);
       return;
     }
-    if (level === "debug") {
-      console.debug(message);
-      return;
-    }
     console[level](message);
   }
 

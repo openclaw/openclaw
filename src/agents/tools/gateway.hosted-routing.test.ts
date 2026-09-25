@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { createTestApprovalManager } from "../../gateway/exec-approval-manager.test-support.js";
 import { sanitizeSystemRunParamsForForwarding } from "../../gateway/node-invoke-system-run-approval.js";
@@ -23,6 +23,8 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { callGatewayTool } from "./gateway.js";
@@ -41,6 +43,7 @@ describe("hosted Gateway tool routing", () => {
   let currentContext: GatewayRequestContext | undefined;
   let authority: AgentRunDelegatedAuthority;
   let callerActive: boolean;
+  let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 
   const runAsCaller = <T>(run: () => Promise<T>) =>
     withGatewayToolCallerIdentity(
@@ -61,7 +64,8 @@ describe("hosted Gateway tool routing", () => {
       run,
     );
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    state = await createOpenClawTestState({ prefix: "hosted-tool-routing-", layout: "state-only" });
     setRuntimeConfigSnapshot({ gateway: { mode: "local", port: 18789 } });
     context = {
       trackExecution: (run) => run(),
@@ -77,9 +81,10 @@ describe("hosted Gateway tool routing", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     releaseAgentRunDelegatedAuthority(authority);
     clearRuntimeConfigSnapshot();
+    await state.cleanup();
   });
 
   it.each([
@@ -380,7 +385,7 @@ describe("hosted Gateway tool routing", () => {
       withOperatorToolGatewayAuthority(
         {
           authenticatedUserProfile: {
-            profileId: "operator",
+            profileId: ensureProfileForEmail("operator@example.test").id,
             displayName: "operator",
             hasAvatar: false,
             updatedAt: 1,

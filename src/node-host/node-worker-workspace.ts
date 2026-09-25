@@ -32,6 +32,7 @@ import {
   runNodeWorkerWorkspaceTransfer,
   serializeNodeWorkerWorkspace,
 } from "./node-worker-transfer-client.js";
+import { workspaceCommandEnv } from "./node-worker-workspace-commands.js";
 import {
   assertWorkspaceArgv,
   removeNodeWorkerWorkspaceEntry,
@@ -63,6 +64,25 @@ const WORKSPACE_RETENTION_DELETE_LIMIT = 256;
 const ENVIRONMENT_HASH_PATTERN = /^[a-f0-9]{16}$/u;
 const SESSION_HASH_PATTERN = /^[a-f0-9]{32}$/u;
 const MANIFEST_FILE_PATTERN = /^[a-f0-9]{64}\.json$/u;
+
+function projectWorkspaceOperationResult(
+  workspaceDir: string,
+  stdout: string,
+  argv?: readonly string[],
+): NodeWorkerWorkspaceExecResult {
+  return projectNodeWorkerWorkspaceExecResult(
+    workspaceDir,
+    {
+      stdout,
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    },
+    argv,
+  );
+}
 
 /** Runs trusted worker transport commands only from a node-owned session workspace. */
 export class NodeWorkerWorkspaceRuntime {
@@ -97,15 +117,7 @@ export class NodeWorkerWorkspaceRuntime {
       this.workspaceHashMemos,
       options.ephemeral === true,
     );
-    this.env = {
-      ...snapshotNodeWorkerEnv(env),
-      GCM_INTERACTIVE: "Never",
-      GIT_ASKPASS: "",
-      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_TERMINAL_PROMPT: "0",
-      SSH_ASKPASS: "",
-    };
+    this.env = snapshotNodeWorkerEnv(env);
   }
 
   /** Only the fresh provisioning owner may register, before Gateway readiness is committed. */
@@ -530,16 +542,9 @@ export class NodeWorkerWorkspaceRuntime {
         // Drain proves prior queued work settled, including an interrupted prepared
         // mutation whose durable row is now retiring; it does not reopen that workspace.
         if (input.argv[0] === NODE_WORKSPACE_DRAIN_COMMAND) {
-          return projectNodeWorkerWorkspaceExecResult(
+          return projectWorkspaceOperationResult(
             prepared?.workspace_dir ?? path.join(sessionRootCandidate, String(input.generation)),
-            {
-              stdout: "drained\n",
-              stderr: "",
-              code: 0,
-              signal: null,
-              killed: false,
-              termination: "exit",
-            },
+            "drained\n",
           );
         }
         let sessionRoot: string;
@@ -593,14 +598,7 @@ export class NodeWorkerWorkspaceRuntime {
             seed: input.seed,
             signal,
           });
-          return projectNodeWorkerWorkspaceExecResult(workspacePath, {
-            stdout: `${stdout}\n`,
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          });
+          return projectWorkspaceOperationResult(workspacePath, `${stdout}\n`);
         }
         if (input.transfer) {
           if (input.resetWorkspace) {
@@ -634,14 +632,7 @@ export class NodeWorkerWorkspaceRuntime {
           ) {
             this.latestTransferredManifest.set(generationKey, stdout);
           }
-          return projectNodeWorkerWorkspaceExecResult(workspacePath, {
-            stdout: `${stdout}\n`,
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          });
+          return projectWorkspaceOperationResult(workspacePath, `${stdout}\n`);
         }
         if (isWorkspaceInspectionCommand(input.argv)) {
           const stat = fs.lstatSync(workspacePath, { throwIfNoEntry: false });
@@ -655,18 +646,7 @@ export class NodeWorkerWorkspaceRuntime {
           const stdout = await inspectSessionWorkspace(workspaceDir, input.input, () =>
             signal?.throwIfAborted(),
           );
-          return projectNodeWorkerWorkspaceExecResult(
-            workspaceDir,
-            {
-              stdout,
-              stderr: "",
-              code: 0,
-              signal: null,
-              killed: false,
-              termination: "exit",
-            },
-            input.argv,
-          );
+          return projectWorkspaceOperationResult(workspaceDir, stdout, input.argv);
         }
         if (input.resetWorkspace) {
           // Reset never accepts a caller path: only the identity-derived workspace can be removed.
@@ -676,11 +656,7 @@ export class NodeWorkerWorkspaceRuntime {
           ? workspacePath
           : ensureContainedDirectory(sessionRoot, workspaceName);
         assertWorkspaceArgv(workspaceDir, input.argv);
-        const commandEnv = {
-          ...this.env,
-          HOME: homeDir,
-          ...(process.platform === "win32" ? { USERPROFILE: homeDir } : {}),
-        };
+        const commandEnv = workspaceCommandEnv(homeDir, this.env);
         if (input.process) {
           return await this.processes.execute({
             input,

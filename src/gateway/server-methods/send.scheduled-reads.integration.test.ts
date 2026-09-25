@@ -20,7 +20,7 @@ import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
   resolveMessageActionTurnCapability,

@@ -371,6 +371,7 @@ export const usageHandlers: GatewayRequestHandlers = {
                 modelProvider: merged.storeEntry?.modelProvider,
                 model: merged.storeEntry?.model,
                 usage,
+                ...(!usage ? { computing: true } : {}),
                 hasContextWeight: Boolean(merged.contextWeight),
                 contextWeight: includeContextWeight ? (merged.contextWeight ?? null) : undefined,
               });

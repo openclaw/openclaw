@@ -33,8 +33,11 @@ export {
   listThreadBindingsForAccount,
   reconcileAcpThreadBindingsOnStartup,
   setThreadBindingIdleTimeoutBySessionKey,
+  setThreadBindingIdleTimeoutBySessionKeyAsync,
   setThreadBindingMaxAgeBySessionKey,
+  setThreadBindingMaxAgeBySessionKeyAsync,
   unbindThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKeyAsync,
 } from "./thread-bindings.lifecycle.js";
 
 export type { AcpThreadBindingReconciliationResult } from "./thread-bindings.lifecycle.js";

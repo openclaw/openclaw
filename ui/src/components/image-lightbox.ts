@@ -23,6 +23,15 @@ const DOUBLE_TAP_SCALE = 2.5;
 const SWIPE_THRESHOLD_PX = 56;
 const SWIPE_AXIS_THRESHOLD_PX = 8;
 const SLIDE_DURATION_MS = 180;
+const GALLERY_INPUTS = [
+  "src",
+  "originalSrc",
+  "gallery",
+  "loadFullResolution",
+  "imageWidth",
+  "imageHeight",
+  "mediaKind",
+] as const;
 
 function mimeTypeEssence(value: string): string {
   return value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -138,15 +147,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     if (!this.isConnected) {
       return;
     }
-    if (
-      changed.has("src") ||
-      changed.has("originalSrc") ||
-      changed.has("gallery") ||
-      changed.has("loadFullResolution") ||
-      changed.has("imageWidth") ||
-      changed.has("imageHeight") ||
-      changed.has("mediaKind")
-    ) {
+    if (GALLERY_INPUTS.some((key) => changed.has(key))) {
       this.cancelSwipe();
       this.resetGallery();
     }
@@ -157,13 +158,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       return;
     }
     const selectionChanged =
-      changed.has("src") ||
-      changed.has("originalSrc") ||
-      changed.has("gallery") ||
-      changed.has("loadFullResolution") ||
-      changed.has("imageWidth") ||
-      changed.has("imageHeight") ||
-      changed.has("mediaKind") ||
+      GALLERY_INPUTS.some((key) => changed.has(key)) ||
       this.displayedIndex !== this.galleryController.index;
     if (selectionChanged) {
       this.displayedIndex = this.galleryController.index;
@@ -361,7 +356,6 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     }
     this.destroyPanzoom();
     this.scale = 1;
-    this.imageReady = false;
   };
 
   private initializePanzoom(image: HTMLImageElement) {

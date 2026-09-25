@@ -507,36 +507,18 @@ function isSecretRefUnion(entry: JsonSchema): boolean {
   return variants.every((variant) => isSecretRefVariant(variant));
 }
 
-function normalizeSecretInputUnion(
-  schema: JsonSchema,
-  path: Array<string | number>,
-  remaining: JsonSchema[],
-  nullable: boolean,
-): ConfigSchemaAnalysis | null {
+function secretInputStringVariant(remaining: JsonSchema[]): JsonSchema | undefined {
   const stringIndex = remaining.findIndex((entry) => schemaType(entry) === "string");
   if (stringIndex < 0) {
-    return null;
+    return undefined;
   }
   const nonString = remaining.filter((_, index) => index !== stringIndex);
   const secretRefSchema = nonString[0];
   const stringSchema = remaining[stringIndex];
   if (nonString.length !== 1 || !secretRefSchema || !stringSchema) {
-    return null;
+    return undefined;
   }
-  if (!isSecretRefUnion(secretRefSchema)) {
-    return null;
-  }
-  return normalizeSchemaNode(
-    {
-      ...schema,
-      ...stringSchema,
-      nullable: nullable || stringSchema.nullable,
-      anyOf: undefined,
-      oneOf: undefined,
-      allOf: undefined,
-    },
-    path,
-  );
+  return isSecretRefUnion(secretRefSchema) ? stringSchema : undefined;
 }
 
 function normalizeUnion(
@@ -587,9 +569,21 @@ function normalizeUnion(
 
   // Config secrets accept either a raw key string or a structured secret ref object.
   // The form only supports editing the string path for now.
-  const secretInput = normalizeSecretInputUnion(schema, path, remaining, nullable);
-  if (secretInput) {
-    return secretInput;
+  const singleBranch =
+    secretInputStringVariant(remaining) ??
+    (literals.length === 0 && remaining.length === 1 ? remaining[0] : undefined);
+  if (singleBranch) {
+    return normalizeSchemaNode(
+      {
+        ...schema,
+        ...singleBranch,
+        nullable: nullable || singleBranch.nullable,
+        anyOf: undefined,
+        oneOf: undefined,
+        allOf: undefined,
+      },
+      path,
+    );
   }
 
   // An exact boolean branch is finite, except oneOf cannot absorb boolean literals
@@ -635,24 +629,6 @@ function normalizeUnion(
       },
       unsupportedPaths: [],
     };
-  }
-
-  if (remaining.length === 1) {
-    const remainingSchema = remaining[0];
-    if (!remainingSchema) {
-      return null;
-    }
-    return normalizeSchemaNode(
-      {
-        ...schema,
-        ...remainingSchema,
-        nullable: nullable || remainingSchema.nullable,
-        anyOf: undefined,
-        oneOf: undefined,
-        allOf: undefined,
-      },
-      path,
-    );
   }
 
   if (

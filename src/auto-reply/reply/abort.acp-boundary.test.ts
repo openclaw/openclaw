@@ -208,7 +208,7 @@ it.each(
         ["running", runningKey],
         ["queued", queuedKey],
       ] as const) {
-        registerSubagentRun({
+        await registerSubagentRun({
           runId,
           childSessionKey,
           requesterSessionKey: sourceKey,

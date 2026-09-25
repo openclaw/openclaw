@@ -164,7 +164,12 @@ export type ChatPageHost = ChatHost &
     handleCloseSidebar: (slot: "detail" | "workspace") => void;
     updateSidebarLayout: (
       layout: SidebarLayout,
-      options?: { persist?: boolean; dashboardPresentation?: "personal"; geometryOnly?: boolean },
+      options?: {
+        persist?: boolean;
+        dashboardPresentation?: "personal";
+        geometryOnly?: boolean;
+        automaticResource?: "desktop" | "browser";
+      },
     ) => void;
     beginImageOpen: () => number;
     handleOpenImage: (item: ImageLightboxItem, requestVersion?: number) => void;

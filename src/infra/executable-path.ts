@@ -1,6 +1,7 @@
 // Resolves executable paths from PATH and platform-specific install locations.
 import fs from "node:fs";
 import path from "node:path";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "./home-dir.js";
 import { pruneMapToMaxSize } from "./map-size.js";
@@ -63,11 +64,7 @@ function resolveWindowsExecutableExtSet(env: NodeJS.ProcessEnv | undefined): Set
 }
 
 export function isRegularFile(filePath: string): boolean {
-  try {
-    return fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
+  return safeStatSync(filePath)?.isFile() ?? false;
 }
 
 const WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"]);

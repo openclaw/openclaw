@@ -148,38 +148,26 @@ export async function deliverMatrixReplies(params: {
       // send path places them; a later chunk would attach them to the wrong event.
       const extraContent = resolveMatrixExtraContent(reply);
 
-      if (mediaUrls.length === 0) {
-        // The send owner prepares native formatting and reports each accepted chunk.
-        await sendMessageMatrix(params.roomId, rawText, {
+      // Text and media replies share the same accepted-event and reply-slot owner.
+      const targets = mediaUrls.length > 0 ? mediaUrls : [undefined];
+      for (const [index, mediaUrl] of targets.entries()) {
+        await sendMessageMatrix(params.roomId, index === 0 ? rawText : "", {
           client: params.client,
           cfg: params.cfg,
+          ...(mediaUrl !== undefined
+            ? {
+                mediaUrl,
+                mediaLocalRoots: params.mediaLocalRoots,
+                audioAsVoice: reply.audioAsVoice,
+              }
+            : {}),
           replyToId: replyToIdForReply,
           fallbackReplyToId,
           threadId: params.threadId,
           accountId: params.accountId,
-          extraContent,
+          extraContent: index === 0 ? extraContent : undefined,
           onDeliveryResult,
         });
-        continue;
-      }
-
-      let first = true;
-      for (const mediaUrl of mediaUrls) {
-        const caption = first ? rawText : "";
-        await sendMessageMatrix(params.roomId, caption, {
-          client: params.client,
-          cfg: params.cfg,
-          mediaUrl,
-          mediaLocalRoots: params.mediaLocalRoots,
-          replyToId: replyToIdForReply,
-          fallbackReplyToId,
-          threadId: params.threadId,
-          audioAsVoice: reply.audioAsVoice,
-          accountId: params.accountId,
-          extraContent: first ? extraContent : undefined,
-          onDeliveryResult,
-        });
-        first = false;
       }
     }
   } catch (error: unknown) {

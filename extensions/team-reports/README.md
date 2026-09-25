@@ -25,5 +25,12 @@ the connection.
 The Control UI tab opens at `/reports` (prefixed by the Control UI base path).
 Model summary calls are optional; set `summaries.enabled: false` for deterministic text.
 
+Failed activity collection preserves the previous daily report, per-person
+counts, and overlapping weekly/monthly reports during that generation. If no
+report exists yet, those periods stay unpublished. Inspect the failed
+run's source warnings with `openclaw team-reports status --json`, then regenerate
+the affected day after access or connectivity recovers. Later healthy runs use
+accepted historical reports under the usual partial-coverage policy.
+
 See the [Team Reports guide](https://docs.openclaw.ai/plugins/team-reports)
 for setup, configuration, attribution rules, exports, and troubleshooting.

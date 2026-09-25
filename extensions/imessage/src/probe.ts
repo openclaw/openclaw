@@ -193,39 +193,22 @@ function selectorsFromPayload(payload: Record<string, unknown>): Record<string, 
 // than trying a real send so the probe is side-effect-free, and we resolve
 // to `false` on any failure (timeout, non-zero exit, missing binary) so
 // callers fall back to the legacy throw rather than silently dropping.
-async function probeSendRichSupportsAttachment(
+async function probeIMessageCliFlag(
   cliPath: string,
   timeoutMs: number,
+  command: string[],
+  flag: RegExp,
 ): Promise<boolean> {
   try {
     const result = await runCommandWithTimeout(
-      [expandIMessageUserPath(cliPath), "send-rich", "--help"],
+      [expandIMessageUserPath(cliPath), ...command, "--help"],
       { timeoutMs },
     );
     if (result.code !== 0) {
       return false;
     }
     const combined = `${result.stdout}\n${result.stderr}`;
-    return /(?:^|\s)--file\b/m.test(combined);
-  } catch {
-    return false;
-  }
-}
-
-async function probePollSendSupportsNoComment(
-  cliPath: string,
-  timeoutMs: number,
-): Promise<boolean> {
-  try {
-    const result = await runCommandWithTimeout(
-      [expandIMessageUserPath(cliPath), "poll", "send", "--help"],
-      { timeoutMs },
-    );
-    if (result.code !== 0) {
-      return false;
-    }
-    const combined = `${result.stdout}\n${result.stderr}`;
-    return /(?:^|\s)--no-comment\b/m.test(combined);
+    return flag.test(combined);
   } catch {
     return false;
   }
@@ -282,11 +265,21 @@ export async function probeIMessagePrivateApi(
     // result is what gates whether reply-with-attachment can route through
     // the threaded send path. Treat any failure as "not supported" so
     // callers fall back to the legacy throw rather than silently dropping.
-    const sendRichSupportsAttachment = await probeSendRichSupportsAttachment(key, timeoutMs);
+    const sendRichSupportsAttachment = await probeIMessageCliFlag(
+      key,
+      timeoutMs,
+      ["send-rich"],
+      /(?:^|\s)--file\b/m,
+    );
     // Caption suppression is required for approval polls because OpenClaw
     // renders the details first. Published imsg 0.13.1 lacks --no-comment, so
     // probe the exact CLI contract instead of inferring it from poll selectors.
-    const pollSendSupportsNoComment = await probePollSendSupportsNoComment(key, timeoutMs);
+    const pollSendSupportsNoComment = await probeIMessageCliFlag(
+      key,
+      timeoutMs,
+      ["poll", "send"],
+      /(?:^|\s)--no-comment\b/m,
+    );
     const status: NonNullable<IMessageProbe["privateApi"]> = {
       available: result.code === 0 && advancedFeatures && v2Ready,
       v2Ready,

@@ -10,7 +10,7 @@ import type { PluginManifestSecretInputPath } from "../plugins/manifest-types.js
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import {
-  collectRuntimeSecretInputAssignment,
+  collectSecretInputAssignment,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
@@ -163,8 +163,8 @@ function collectConfiguredPluginSecretAssignments(params: {
 
       // SecretInput allows both explicit objects and inline env-template refs
       // like `${MCP_API_KEY}`. Non-ref strings remain untouched because
-      // collectRuntimeSecretInputAssignment ignores them.
-      collectRuntimeSecretInputAssignment({
+      // collectSecretInputAssignment ignores them.
+      collectSecretInputAssignment({
         value: match.value,
         path: fullPath,
         expected: secretPath.expected ?? "string",

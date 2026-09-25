@@ -52,6 +52,14 @@ export async function serveMemoryFiles(options: {
     const { MemoryFileWatcher } = await import("../memory/file-watcher.js");
     const lines = createInterface({ input: options.input, crlfDelay: Infinity });
     let watcher: InstanceType<typeof MemoryFileWatcher> | undefined;
+    let closing: Promise<void> | undefined;
+    const close = () => {
+      closing ??= watcher?.close();
+      // The stream can close while start awaits a directory probe. Stop new
+      // admission immediately; the finally block still joins and reports close.
+      void closing?.catch(() => undefined);
+    };
+    options.input.on("end", close).on("close", close);
     try {
       for await (const line of lines) {
         if (watcher) {
@@ -69,11 +77,16 @@ export async function serveMemoryFiles(options: {
           onChange: () => notify("change"),
           onUnavailable: () => notify("unavailable"),
         });
-        watcher.start();
+        if (options.input.readableEnded || options.input.destroyed) {
+          close();
+          break;
+        }
+        await watcher.start();
       }
     } finally {
+      options.input.off("end", close).off("close", close);
       lines.close();
-      await watcher?.close();
+      await (closing ?? watcher?.close());
     }
     return;
   }

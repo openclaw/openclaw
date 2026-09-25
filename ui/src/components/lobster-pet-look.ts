@@ -56,6 +56,16 @@ const PALETTE_FRAME_CLASSES: Partial<Record<LobsterPetPaletteId, string>> = {
   balloon: "lob-balloon-frame",
 };
 
+const PALETTE_GEOMETRY: Partial<Record<LobsterPetPaletteId, typeof PIXEL_LOBSTER>> = {
+  flatpack: FLATPACK_LOBSTER,
+  loading: LOADING_LOBSTER,
+  actual: ACTUAL_LOBSTER,
+  balloon: BALLOON_LOBSTER,
+  ascii: ASCII_LOBSTER,
+  portal: PORTAL_LOBSTER,
+  pixel: PIXEL_LOBSTER,
+};
+
 // A neutral look used to render catalog minis outside the pet lifecycle.
 export function canonicalLobsterLook(palette: LobsterPetPalette): LobsterPetLook {
   const paletteHash = fnv1aUtf16(palette.id);
@@ -283,14 +293,8 @@ export function renderLobsterSvg(
     reading?: boolean;
   } = {},
 ) {
-  const isPixel = look.palette.id === "pixel";
   const isFlatpack = look.palette.id === "flatpack";
-  const isLoading = look.palette.id === "loading";
-  const isActual = look.palette.id === "actual";
-  const isBalloon = look.palette.id === "balloon";
-  const isAscii = look.palette.id === "ascii";
-  const isPortal = look.palette.id === "portal";
-  const isNewReplacementGeometry = isBalloon || isAscii || isPortal;
+  const paletteGeometry = PALETTE_GEOMETRY[look.palette.id];
   const hasRetroGeometry = RETRO_GEOMETRY_PALETTES.has(look.palette.id);
   const eyesClosed = options.shell || (options.sleeping && !options.reading);
   const openEyeStyle = eyesClosed ? "display:none" : "";
@@ -309,21 +313,9 @@ export function renderLobsterSvg(
     >
       <g class=${PALETTE_FRAME_CLASSES[look.palette.id] ?? ""}>
         ${
-          isFlatpack
-            ? FLATPACK_LOBSTER(openEyeStyle, closedEyeStyle)
-            : isLoading
-              ? LOADING_LOBSTER(openEyeStyle, closedEyeStyle)
-              : isActual
-                ? ACTUAL_LOBSTER(openEyeStyle, closedEyeStyle)
-                : isBalloon
-                  ? BALLOON_LOBSTER(openEyeStyle, closedEyeStyle)
-                  : isAscii
-                    ? ASCII_LOBSTER(openEyeStyle, closedEyeStyle)
-                    : isPortal
-                      ? PORTAL_LOBSTER(openEyeStyle, closedEyeStyle)
-                      : isPixel
-                        ? PIXEL_LOBSTER(openEyeStyle, closedEyeStyle)
-                        : svg`
+          paletteGeometry
+            ? paletteGeometry(openEyeStyle, closedEyeStyle)
+            : svg`
               ${hasRetroGeometry ? RETRO_ANTENNAE : ANTENNAE_SPRITES[look.antennae]}
               ${look.tailFan ? TAIL_FAN : nothing}
               <g class="lob-claw lob-claw--l">
@@ -371,12 +363,7 @@ export function renderLobsterSvg(
           : nothing
       }
       ${
-        options.grumpy &&
-        !hasRetroGeometry &&
-        !isFlatpack &&
-        !isLoading &&
-        !isActual &&
-        !isNewReplacementGeometry
+        options.grumpy && !hasRetroGeometry && (!paletteGeometry || look.palette.id === "pixel")
           ? GRUMPY_FACE
           : nothing
       }
@@ -412,7 +399,7 @@ const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
 // twin, stranger passer). The seeded glint rides
 // --lob-glint-seed instead of --lob-glint so the class-driven palette and
 // offline overrides in lobster-pet.css still out-cascade it.
-function lobsterLookStyleVars(look: LobsterPetLook): string[] {
+export function lobsterLookStyle(look: LobsterPetLook): string {
   const crusher = look.crusherSide;
   const paletteHash = fnv1aUtf16(look.palette.id);
   const breatheDelayS = ((paletteHash >>> 8) % 34) / 10;
@@ -438,9 +425,5 @@ function lobsterLookStyleVars(look: LobsterPetLook): string[] {
         ]
       : []),
     ...(look.glint ? [`--lob-glint-seed:${look.glint}`] : []),
-  ];
-}
-
-export function lobsterLookStyle(look: LobsterPetLook): string {
-  return lobsterLookStyleVars(look).join(";");
+  ].join(";");
 }

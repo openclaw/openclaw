@@ -150,6 +150,8 @@ export async function withAuthenticatedTaskGateway(
   });
 
   try {
+    // Registry reset closes shared state; finish it before the Gateway captures its source.
+    initializeTasks();
     await withGatewayServer(async ({ port }) => {
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: OWNED_SESSION_KEY },
@@ -171,7 +173,6 @@ export async function withAuthenticatedTaskGateway(
           visibility: "shared",
         },
       );
-      initializeTasks();
       const stateDir = process.env.OPENCLAW_STATE_DIR;
       if (!stateDir) {
         throw new Error("OPENCLAW_STATE_DIR is required for the Gateway proof");

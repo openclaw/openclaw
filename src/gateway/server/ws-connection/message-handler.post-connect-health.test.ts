@@ -27,7 +27,7 @@ import {
   syncGitHubIdentity,
   linkEmail,
 } from "../../../state/user-profiles.js";
-import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";

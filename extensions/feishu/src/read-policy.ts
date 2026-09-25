@@ -11,7 +11,7 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeFeishuChatType } from "./chat-type.js";
+import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
 import {
   hasExplicitFeishuGroupConfig,
   normalizeFeishuAllowEntry,
@@ -200,6 +200,42 @@ export function resolveFeishuChatReadPreliminaryAuthorization(params: {
     return { chatId, decision: groupAllowed ? "allow" : "deny" };
   }
   return { chatId, decision: "needs-metadata" };
+}
+
+export async function readFeishuChatInfoWithAuthorization<
+  T extends { chat_mode?: unknown; chat_type?: unknown },
+>(
+  params: {
+    cfg: OpenClawConfig;
+    account: ResolvedFeishuAccount;
+    ctx: FeishuReadContext;
+    preliminary: ReturnType<typeof resolveFeishuChatReadPreliminaryAuthorization>;
+  },
+  readChatInfo: (chatId: string) => Promise<T>,
+): Promise<T> {
+  let chat: T;
+  try {
+    // Hide lookup failures only when type is needed, avoiding an existence oracle.
+    chat = await readChatInfo(params.preliminary.chatId);
+  } catch (error) {
+    if (params.preliminary.decision === "needs-metadata") {
+      assertFeishuChatReadAllowed({
+        cfg: params.cfg,
+        account: params.account,
+        chatId: params.preliminary.chatId,
+        ctx: params.ctx,
+      });
+    }
+    throw error;
+  }
+  assertFeishuChatReadAllowed({
+    cfg: params.cfg,
+    account: params.account,
+    chatId: params.preliminary.chatId,
+    chatType: resolveFeishuChatType(chat),
+    ctx: params.ctx,
+  });
+  return chat;
 }
 
 export type FeishuChatMemberReadAuthorization =

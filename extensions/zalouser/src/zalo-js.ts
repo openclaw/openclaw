@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-// Zalouser plugin module implements zalo js behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   asDateTimestampMs,
@@ -24,6 +23,7 @@ import {
   snapshotApiCredentials,
   type ZaloCredentialPayload,
 } from "./credential-persistence.js";
+import { buildZaloNameIndex } from "./directory-index.js";
 import { normalizeZaloReactionIcon } from "./reaction.js";
 import { sendZaloTextWithApi } from "./send-api.js";
 import { withZaloSendContext } from "./send-context.js";
@@ -1468,16 +1468,7 @@ export async function resolveZaloGroupsByEntries(params: {
   const groups = await listZaloGroups(params.profile, {
     credentialPersistence: params.credentialPersistence ?? "persist",
   });
-  const byName = new Map<string, ZaloGroup[]>();
-  for (const group of groups) {
-    const key = normalizeOptionalLowercaseString(group.name);
-    if (!key) {
-      continue;
-    }
-    const list = byName.get(key) ?? [];
-    list.push(group);
-    byName.set(key, list);
-  }
+  const byName = buildZaloNameIndex(groups, (group) => group.name);
 
   return params.entries.map((input) => {
     const trimmed = input.trim();
@@ -1501,16 +1492,7 @@ export async function resolveZaloAllowFromEntries(params: {
   const friends = await listZaloFriends(params.profile, {
     credentialPersistence: params.credentialPersistence ?? "persist",
   });
-  const byName = new Map<string, ZcaFriend[]>();
-  for (const friend of friends) {
-    const key = normalizeOptionalLowercaseString(friend.displayName);
-    if (!key) {
-      continue;
-    }
-    const list = byName.get(key) ?? [];
-    list.push(friend);
-    byName.set(key, list);
-  }
+  const byName = buildZaloNameIndex(friends, (friend) => friend.displayName);
 
   return params.entries.map((input) => {
     const trimmed = input.trim();

@@ -28,6 +28,7 @@ import { closeSessionMenus } from "./new-session-runtime.ts";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { PaletteSessionSettings } from "./palette-session-settings.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
+import { captureSessionNoticeOwner } from "./session-notice-owner.ts";
 
 registerCommandPaletteEnglish();
 
@@ -449,10 +450,7 @@ export class PaletteSessionDraft implements ReactiveController {
       return;
     }
     const { gateway } = context;
-    const client = gateway.snapshot.client;
-    const revision = gateway.connectionRevision;
-    const gatewayUrl = gateway.connection.gatewayUrl;
-    const recoveryScope = gateway.snapshot.hello?.auth?.recoveryScope;
+    const isCurrentOwner = captureSessionNoticeOwner(context);
     const row = context.sessions.state.result?.sessions.find(
       (candidate) => candidate.key === result.key,
     );
@@ -465,17 +463,7 @@ export class PaletteSessionDraft implements ReactiveController {
               : "sessionsView.statusIdle",
           );
     const openSession = () => {
-      if (
-        this.read().context !== context ||
-        context.gateway !== gateway ||
-        gateway.snapshot.phase !== "connected" ||
-        gateway.connection.gatewayUrl !== gatewayUrl ||
-        gateway.connectionRevision !== revision ||
-        gateway.snapshot.hello?.auth?.recoveryScope !== recoveryScope ||
-        // A transport reconnect does not retire a session owned by the same
-        // authenticated recovery scope. Unscoped actions stay connection-bound.
-        (!recoveryScope && gateway.snapshot.client !== client)
-      ) {
+      if (this.read().context !== context || !isCurrentOwner()) {
         return;
       }
       selectApplicationSession({

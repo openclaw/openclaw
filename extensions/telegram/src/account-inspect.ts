@@ -152,74 +152,23 @@ function inspectTelegramAccountPrimary(params: {
     accountId === DEFAULT_ACCOUNT_ID ||
     Boolean(accountConfig) ||
     !hasConfiguredTelegramAccounts(params.cfg);
-  const accountTokenFile = inspectTokenFile(
-    accountConfig?.tokenFile,
-    `channels.telegram.accounts.${accountId}.tokenFile`,
-  );
-  if (accountTokenFile) {
-    return {
-      accountId,
-      enabled,
-      name: normalizeOptionalString(merged.name),
-      token: accountTokenFile.token,
-      tokenSource: accountTokenFile.tokenSource,
-      tokenStatus: accountTokenFile.tokenStatus,
-      ...(accountTokenFile.credentialDiagnostics
-        ? { credentialDiagnostics: accountTokenFile.credentialDiagnostics }
-        : {}),
-      configured: accountTokenFile.tokenStatus !== "missing",
-      config: merged,
-    };
-  }
-
-  const accountToken = inspectTokenValue({ cfg: params.cfg, value: accountConfig?.botToken });
-  if (accountToken) {
-    return {
-      accountId,
-      enabled,
-      name: normalizeOptionalString(merged.name),
-      token: accountToken.token,
-      tokenSource: accountToken.tokenSource,
-      tokenStatus: accountToken.tokenStatus,
-      configured: accountToken.tokenStatus !== "missing",
-      config: merged,
-    };
-  }
-
-  if (allowChannelCredentialFallback) {
-    const channelTokenFile = inspectTokenFile(
-      params.cfg.channels?.telegram?.tokenFile,
-      "channels.telegram.tokenFile",
-    );
-    if (channelTokenFile) {
+  const credentialScopes = [
+    { config: accountConfig, path: `channels.telegram.accounts.${accountId}` },
+    ...(allowChannelCredentialFallback
+      ? [{ config: params.cfg.channels?.telegram, path: "channels.telegram" }]
+      : []),
+  ];
+  for (const { config, path } of credentialScopes) {
+    const credential =
+      inspectTokenFile(config?.tokenFile, `${path}.tokenFile`) ??
+      inspectTokenValue({ cfg: params.cfg, value: config?.botToken });
+    if (credential) {
       return {
         accountId,
         enabled,
         name: normalizeOptionalString(merged.name),
-        token: channelTokenFile.token,
-        tokenSource: channelTokenFile.tokenSource,
-        tokenStatus: channelTokenFile.tokenStatus,
-        ...(channelTokenFile.credentialDiagnostics
-          ? { credentialDiagnostics: channelTokenFile.credentialDiagnostics }
-          : {}),
-        configured: channelTokenFile.tokenStatus !== "missing",
-        config: merged,
-      };
-    }
-
-    const channelToken = inspectTokenValue({
-      cfg: params.cfg,
-      value: params.cfg.channels?.telegram?.botToken,
-    });
-    if (channelToken) {
-      return {
-        accountId,
-        enabled,
-        name: normalizeOptionalString(merged.name),
-        token: channelToken.token,
-        tokenSource: channelToken.tokenSource,
-        tokenStatus: channelToken.tokenStatus,
-        configured: channelToken.tokenStatus !== "missing",
+        ...credential,
+        configured: credential.tokenStatus !== "missing",
         config: merged,
       };
     }

@@ -527,6 +527,8 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         import fs from 'node:fs';
         import { createRequire } from 'node:module';
         const require = createRequire(import.meta.url);
+        const { registerSourceRunnerServiceFixture } = await import(${JSON.stringify(path.join(sourceRoot, "test/scripts/fixtures/source-runner-service.mjs"))});
+        registerSourceRunnerServiceFixture(${JSON.stringify(sourceRoot)});
         const { runNodeMain } = await import(${JSON.stringify(path.join(sourceRoot, "scripts/run-node.mts"))});
         process.exitCode = await runNodeMain({
           cwd: process.cwd(), args: ['artifact-fixture'],
@@ -571,7 +573,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     expect(fs.existsSync(path.join(resolveDistArtifactLockPath(root), "unjoined"))).toBe(false);
   });
 
-  it.for(["cause", "error", "cyclic aggregate"])(
+  it.for(["cause", "error", "cyclic aggregate", "bundler errors"])(
     "retains ownership for unjoined work nested in %s",
     async (kind, { signal }) => {
       // Retention deliberately keeps lock handles open; a joined child owns
@@ -589,6 +591,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           const aggregate = new AggregateError([], 'sibling cleanup');
           aggregate.errors.push(aggregate, new Error('command failed', { cause: uncertainty }));
           const error = kind === 'cyclic aggregate' ? aggregate
+            : kind === 'bundler errors' ? Object.assign(new Error('Build failed'), { errors: [aggregate] })
             : new Error('command failed', { cause: kind === 'cause' ? uncertainty : { error: uncertainty } });
           const outcome = await withDistArtifactOwnership(process.cwd(), async () => {
             throw error;

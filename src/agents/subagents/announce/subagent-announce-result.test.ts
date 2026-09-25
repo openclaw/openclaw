@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  isVisibleAssistantResultEventForRun,
+  matchesTranscriptEvent,
+} from "../../../sessions/transcript-visible-record.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
@@ -7,7 +11,6 @@ import {
   readChildCompletionFindings,
   readSubagentRunAnnounceResult,
 } from "./subagent-announce-output.test-support.js";
-import { isVisibleSubagentResultEventForRun } from "./subagent-announce-result.js";
 
 describe("exact-run announcement results", () => {
   type FindTranscriptEvent =
@@ -41,7 +44,9 @@ describe("exact-run announcement results", () => {
 
   function installTranscript(events: unknown[], archiveEvents?: unknown[], deletedSession = false) {
     const findTranscriptEvent = vi.fn<FindTranscriptEvent>(async (_scope, match) => {
-      const event = events.toReversed().find(match);
+      const event = events
+        .toReversed()
+        .find((candidate) => matchesTranscriptEvent(candidate, match));
       return event === undefined ? undefined : { event };
     });
     testing.setDepsForTest({
@@ -59,7 +64,7 @@ describe("exact-run announcement results", () => {
           sessionKey: "agent:main:subagent:completed",
         });
         const event = archiveEvents?.findLast((candidate) =>
-          isVisibleSubagentResultEventForRun(candidate, runId),
+          isVisibleAssistantResultEventForRun(candidate, runId),
         );
         return event === undefined ? undefined : { event };
       },
@@ -108,10 +113,10 @@ describe("exact-run announcement results", () => {
     expect(findings).not.toContain("older result");
     expect(findings).not.toContain("newer result");
     expect(findings).not.toContain("unfinished follow-up");
-    expect(findTranscriptEvent).toHaveBeenCalledWith(
-      child.execution.transcriptTarget,
-      expect.any(Function),
-    );
+    expect(findTranscriptEvent).toHaveBeenCalledWith(child.execution.transcriptTarget, {
+      kind: "visible-final",
+      runId: child.runId,
+    });
     expect(child.completion?.terminalReply).toBe(terminalReply);
     expect(terminalReply).toEqual({ disposition: "visible", text: `${text.slice(0, 4_095)}…` });
     expect(prepared.isCurrent()).toBe(true);
@@ -147,14 +152,17 @@ describe("exact-run announcement results", () => {
         sessionId: "replacement-session",
       };
       const event = assistant(originalRunId, "original answer");
-      return match(event) ? { event } : undefined;
+      return matchesTranscriptEvent(event, match) ? { event } : undefined;
     });
     testing.setDepsForTest({ findTranscriptEvent });
 
     await expect(readSubagentRunAnnounceResult(child)).rejects.toThrow(
       "transcript identity changed during announcement",
     );
-    expect(findTranscriptEvent).toHaveBeenCalledWith(originalTarget, expect.any(Function));
+    expect(findTranscriptEvent).toHaveBeenCalledWith(originalTarget, {
+      kind: "visible-final",
+      runId: originalRunId,
+    });
   });
 
   it.each(["silent replacement", "failed outcome"] as const)(
@@ -167,7 +175,7 @@ describe("exact-run announcement results", () => {
         started.resolve();
         await release.promise;
         const event = assistant(child.runId, "original answer");
-        return match(event) ? { event } : undefined;
+        return matchesTranscriptEvent(event, match) ? { event } : undefined;
       });
       testing.setDepsForTest({ findTranscriptEvent });
       const result = readSubagentRunAnnounceResult(child);
@@ -205,7 +213,7 @@ describe("exact-run announcement results", () => {
           await releaseSecond.promise;
         }
         const event = assistant(child.runId, child === first ? "first answer" : "second answer");
-        return match(event) ? { event } : undefined;
+        return matchesTranscriptEvent(event, match) ? { event } : undefined;
       });
       testing.setDepsForTest({ findTranscriptEvent });
       const result = readChildCompletionFindings([first, second]);
@@ -286,7 +294,7 @@ describe("exact-run announcement results", () => {
         sessionKey: child.childSessionKey,
         storePath: "/tmp/completed-session-store",
       },
-      expect.any(Function),
+      { kind: "visible-final", runId: child.runId },
     );
   });
 

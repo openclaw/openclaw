@@ -266,7 +266,7 @@ describe("protected iOS read-only inspection", () => {
       path.join(root, "bin/bundle"),
       String.raw`#!/bin/bash
 set -euo pipefail
-[[ "$1" == "_2.6.9_" ]]
+[[ "$1" == "_4.0.21_" ]]
 shift
 printf '%s:%s\n' "$1" "${"$"}{BUNDLE_DEPLOYMENT:-unset}" >> "$GITHUB_WORKSPACE/bundle-trace"
 [[ "${"$"}{BUNDLE_DEPLOYMENT:-}" == "true" ]]

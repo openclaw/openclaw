@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,7 +31,7 @@ import {
   collectStaleConfiguredAuthOrderWarnings,
   maybeRepairStaleConfiguredAuthOrders,
 } from "./stale-auth-order.js";
-import { repairStaleConfiguredAuthOrders } from "./stale-auth-order.test-support.js";
+import { repairStaleConfiguredAuthOrders, withStateDir } from "./stale-auth-order.test-support.js";
 
 const pluginMetadataMocks = vi.hoisted(() => {
   const snapshot = {
@@ -106,17 +105,6 @@ function repair(
     stores,
     ...(runtimeProfileIds ? { runtimeProfileIds } : {}),
   });
-}
-
-async function withStateDir<T>(prefix: string, run: (stateDir: string) => Promise<T>): Promise<T> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  try {
-    return await run(stateDir);
-  } finally {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
 }
 
 describe("repairStaleConfiguredAuthOrders", () => {

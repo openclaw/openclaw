@@ -46,20 +46,6 @@ type TelegramCommandMenuModelContext = {
   fastMode?: SessionEntry["fastMode"];
 };
 
-function buildTelegramCommandMenuModelContext(params: {
-  provider: string;
-  model: string;
-  thinkingLevel?: string;
-  fastMode?: SessionEntry["fastMode"];
-}): TelegramCommandMenuModelContext {
-  return {
-    provider: params.provider,
-    model: params.model,
-    ...(params.thinkingLevel ? { thinkingLevel: params.thinkingLevel } : {}),
-    ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
-  };
-}
-
 function resolveTelegramCommandMenuModelContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -76,12 +62,10 @@ function resolveTelegramCommandMenuModelContext(params: {
     const fastMode = entry?.fastMode;
     let context: TelegramCommandMenuModelContext;
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
-      context = buildTelegramCommandMenuModelContext({
+      context = {
         provider: defaultModel.provider,
         model: defaultModel.model,
-        ...(thinkingLevel ? { thinkingLevel } : {}),
-        ...(fastMode !== undefined ? { fastMode } : {}),
-      });
+      };
     } else {
       const override = resolveStoredModelOverride({
         sessionEntry: entry,
@@ -90,12 +74,10 @@ function resolveTelegramCommandMenuModelContext(params: {
         defaultProvider: defaultModel.provider,
       });
       if (override?.model) {
-        context = buildTelegramCommandMenuModelContext({
+        context = {
           provider: override.provider || defaultModel.provider,
           model: override.model,
-          ...(thinkingLevel ? { thinkingLevel } : {}),
-          ...(fastMode !== undefined ? { fastMode } : {}),
-        });
+        };
       } else {
         const provider =
           normalizeOptionalString(entry?.providerOverride) ??
@@ -105,13 +87,13 @@ function resolveTelegramCommandMenuModelContext(params: {
         context = {
           ...(provider ? { provider } : {}),
           ...(model ? { model } : {}),
-          ...(thinkingLevel ? { thinkingLevel } : {}),
-          ...(fastMode !== undefined ? { fastMode } : {}),
         };
       }
     }
     return {
       ...context,
+      ...(thinkingLevel ? { thinkingLevel } : {}),
+      ...(fastMode !== undefined ? { fastMode } : {}),
       agentRuntime: resolveEffectiveAgentRuntime({
         cfg: params.cfg,
         provider: context.provider ?? defaultModel.provider,

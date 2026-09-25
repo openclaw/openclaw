@@ -81,15 +81,6 @@ export type ShortTermLockEntry = {
   ownerStartTime?: number;
 };
 
-type PromotionComponents = {
-  frequency: number;
-  relevance: number;
-  diversity: number;
-  recency: number;
-  consolidation: number;
-  conceptual: number;
-};
-
 export type PromotionCandidate = {
   key: string;
   path: string;
@@ -113,7 +104,7 @@ export type PromotionCandidate = {
   score: number;
   recallDays: string[];
   conceptTags: string[];
-  components: PromotionComponents;
+  components: PromotionWeights;
   provenance?: MemoryEntryProvenance;
 };
 

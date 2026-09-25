@@ -220,9 +220,7 @@ suite.define(() => {
               return;
             }
             await gateway.setOnline(false);
-            await page
-              .locator(".agent-chat__composer-status-band", { hasText: "You can keep writing." })
-              .waitFor();
+            await page.locator(".agent-chat__input--offline").waitFor();
             await assertThemeFrames(page, expectedAppearance);
             await gateway.setOnline(true);
             await waitForControlUiGatewayReady(page);

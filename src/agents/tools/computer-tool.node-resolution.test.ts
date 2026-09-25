@@ -6,8 +6,18 @@
  * off the wrong machine.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { createWorkerComputerService } from "../../gateway/worker-environments/computer-service.js";
+import type { PreparedWorkerComputer } from "../../gateway/worker-environments/computer-transport.js";
+import { createHarness } from "../../gateway/worker-environments/computer-transport.test-support.js";
+import {
+  releaseAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ComputerToolTransport } from "./computer-tool.js";
+import { wrapToolWithGatewayCallerIdentity } from "./gateway-caller-context.js";
 
 const listNodesMock = vi.fn();
 const callGatewayToolMock = vi.fn();
@@ -214,6 +224,140 @@ describe("createComputerTool node resolution", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
     expect(listNodesMock).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "keeps cleanup custody when an attached binding resolves after cancellation (close fails=%s)",
+    async (closeFails) => {
+      const h = createHarness();
+      h.releaseClaim();
+      h.state.environment = { ...h.state.environment, state: "ready", attachedSessionIds: [] };
+      const computers = createWorkerComputerService(h.options);
+      const lifetime = new AbortController();
+      const closing = createDeferredCore<PromiseSettledResult<void>>();
+      let cleanup: ((reason: string) => Promise<void>) | undefined;
+      const failure = new Error("attached desktop close failed");
+      const close = vi.fn<PreparedWorkerComputer["close"]>();
+      const attachment = {
+        environmentId: h.state.environment.environmentId,
+        ownerEpoch: h.state.environment.ownerEpoch,
+        sessionId: h.claim.sessionId,
+        sessionKey: h.state.placement.sessionKey,
+        agentId: h.state.placement.agentId,
+        generation: 1,
+      };
+      const context = {
+        workerEnvironmentService: {
+          findSessionAttachment: () => attachment,
+          assertSessionAttachment: () => {},
+          touchSessionAttachment: async () => {},
+          prepareAttachedComputer: async (
+            authority: Parameters<typeof computers.prepareAttached>[0],
+          ) => {
+            const prepared = await computers.prepareAttached(authority);
+            if (!prepared) {
+              throw new Error("Expected attached computer");
+            }
+            const originalClose = prepared.close;
+            close.mockImplementation(async (reason) => {
+              if (closeFails && reason === "execution-complete") {
+                throw failure;
+              }
+              await originalClose(reason);
+            });
+            prepared.close = close;
+            const originalBind = prepared.bind.bind(prepared);
+            prepared.bind = (run) => {
+              const transport = originalBind(run);
+              return {
+                ...transport,
+                resolveNode: (query, signal) => {
+                  const resolved = transport.resolveNode(query, signal);
+                  // Retire after the resolver's final assertions, before its caller
+                  // receives the binding. Returning the same promise preserves that gap.
+                  void resolved.then(
+                    () =>
+                      queueMicrotask(() => {
+                        lifetime.abort();
+                        if (!cleanup) {
+                          closing.resolve({
+                            status: "rejected",
+                            reason: new Error("Computer cleanup was not registered"),
+                          });
+                          return;
+                        }
+                        void cleanup("cancellation").then(
+                          () => closing.resolve({ status: "fulfilled", value: undefined }),
+                          (reason: unknown) => closing.resolve({ status: "rejected", reason }),
+                        );
+                      }),
+                    (reason: unknown) => closing.resolve({ status: "rejected", reason }),
+                  );
+                  return resolved;
+                },
+              };
+            };
+            return prepared;
+          },
+        },
+      } as unknown as GatewayRequestContext;
+      const tool = wrapToolWithGatewayCallerIdentity(
+        createComputerTool({
+          registerRunCleanup: (registered) => {
+            cleanup = registered;
+          },
+        }),
+        {
+          agentId: attachment.agentId,
+          sessionKey: attachment.sessionKey,
+          operationalRunInstance: h.run,
+          approvalAuthority: h.authority,
+          approvalSignals: [lifetime.signal],
+          gatewayContextResolver: () => context,
+          receiptAuthority: () => validateAgentRunDelegatedAuthority(h.authority),
+        },
+      );
+      try {
+        if (!cleanup) {
+          throw new Error("Computer execution did not register cleanup");
+        }
+        await expect(
+          tool.execute(
+            "pending-binding",
+            {
+              action: "type",
+              text: "must not reach the desktop",
+              environmentId: attachment.environmentId,
+            },
+            lifetime.signal,
+          ),
+        ).rejects.toThrow("computer: execution is closed");
+        const outcome = await closing.promise;
+        await cleanup("cancellation").catch(() => {});
+
+        expect(h.nativeExecutionIds).toEqual([]);
+        expect.soft(close).toHaveBeenCalledExactlyOnceWith("execution-complete");
+        expect.soft(outcome).toMatchObject(
+          closeFails
+            ? {
+                status: "rejected",
+                reason: { message: "computer: session desktop cleanup failed", errors: [failure] },
+              }
+            : { status: "fulfilled" },
+        );
+        if (!closeFails) {
+          // Environment shutdown must not discover an owner abandoned by run cleanup.
+          const closedBeforeEnvironmentStop = close.mock.calls.length;
+          await computers.closeEnvironment(attachment.environmentId, attachment.ownerEpoch);
+          expect.soft(close.mock.calls.length - closedBeforeEnvironmentStop).toBe(0);
+        }
+      } finally {
+        await computers.close();
+        releaseAgentRunDelegatedAuthority(h.authority);
+        resetPluginRuntimeStateForTest();
+        vi.restoreAllMocks();
+      }
+    },
+  );
 
   it.each(["paired", "session"] as const)(
     "reports cleanup failure only to the bound owner of a %s desktop",

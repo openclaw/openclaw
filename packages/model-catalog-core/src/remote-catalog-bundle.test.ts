@@ -292,4 +292,14 @@ describe("remote model catalog v2", () => {
     expect(() => parseRemoteModelCatalogBundleV2({ ...validBundleV2, schemaVersion: 3 })).toThrow();
     expect(() => parseRemoteModelCatalogBundleV2({ ...validBundleV2, pricing: {} })).toThrow();
   });
+
+  it.each([
+    { name: "unsourced rate", upstreamPricing: { "vendor/model": { input: 1, output: 2 } } },
+    { name: "bare model key", upstreamPricing: { model: { input: 1, output: 2, source: "x" } } },
+  ])("rejects standalone pricing with $name", ({ upstreamPricing }) => {
+    expect(() => parseRemoteModelCatalogBundleV2({ ...validBundleV2, upstreamPricing })).toThrow();
+    expect(() =>
+      parseRemoteModelCatalogBundleV2({ ...validBundleV2, providerPricing: upstreamPricing }),
+    ).toThrow();
+  });
 });

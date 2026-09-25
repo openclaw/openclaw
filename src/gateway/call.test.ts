@@ -16,6 +16,7 @@ import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { registerGatewayCallDeadlineTests } from "./call-deadline.test-support.js";
+import { registerGatewayCallLocalBackendAuthTests } from "./call-local-backend-auth.test-support.js";
 import type { GatewayClientOptions, GatewayClientRequestOptions } from "./client.js";
 import { waitForFast } from "./client.test-support.js";
 import {
@@ -1357,87 +1358,19 @@ describe("callGateway url resolution", () => {
     expect(startCalls).toBe(0);
   });
 
-  it("uses local backend shared auth without a device identity when required", async () => {
-    setLocalLoopbackGatewayConfig();
-
-    await callGateway({
-      method: "node.list",
-      token: "explicit-token",
-      scopes: ["operator.read", "operator.pairing"],
-      requireLocalBackendSharedAuth: true,
-    });
-
-    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
-    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
-    expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
-    expect(lastClientOptions?.deviceIdentity).toBeNull();
-  });
-
-  it("uses local backend auth-none without a device identity when required", async () => {
-    setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "none" } });
-    setGatewayNetworkDefaults();
-
-    await callGateway({
-      method: "node.list",
-      scopes: ["operator.read", "operator.pairing"],
-      requireLocalBackendSharedAuth: true,
-    });
-
-    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
-    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
-    expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
-    expect(lastClientOptions?.token).toBeUndefined();
-    expect(lastClientOptions?.password).toBeUndefined();
-    expect(lastClientOptions?.deviceIdentity).toBeNull();
-  });
-
-  it("rejects required local backend shared auth for remote targets", async () => {
-    await expect(
-      callGateway({
-        method: "node.list",
-        url: "wss://remote.example.test",
-        token: "explicit-token",
-        scopes: ["operator.read", "operator.pairing"],
-        requireLocalBackendSharedAuth: true,
-      }),
-    ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
-
-    expect(lastClientOptions).toBeNull();
-  });
-
-  it("rejects required local backend shared auth for loopback URL overrides", async () => {
-    await expect(
-      callGateway({
-        method: "node.list",
-        url: "ws://127.0.0.1:18789",
-        token: "explicit-token",
-        scopes: ["operator.read", "operator.pairing"],
-        requireLocalBackendSharedAuth: true,
-      }),
-    ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
-
-    expect(lastClientOptions).toBeNull();
-  });
-
-  it("rejects required local backend shared auth for remote-mode loopback tunnels", async () => {
-    setGatewayConfig({
-      mode: "remote",
-      remote: {
-        url: "ws://127.0.0.1:18789",
-        token: "remote-token",
-      },
-    });
-    setGatewayNetworkDefaults();
-
-    await expect(
-      callGateway({
-        method: "node.list",
-        scopes: ["operator.read", "operator.pairing"],
-        requireLocalBackendSharedAuth: true,
-      }),
-    ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
-
-    expect(lastClientOptions).toBeNull();
+  registerGatewayCallLocalBackendAuthTests({
+    callGateway,
+    setGatewayConfig,
+    setGatewayNetworkDefaults,
+    setLocalLoopbackGatewayConfig,
+    getRuntimeConfig,
+    getClientOptions: () => lastClientOptions,
+    getDeviceIdentity: () => deviceIdentityState.value,
+    loadOrCreateDeviceIdentityMock,
+    loadDeviceIdentityIfPresentMock,
+    loadDeviceAuthTokenMock,
+    loadDeviceAuthTokenReadOnlyMock,
+    loadOriginDeviceTokenMock,
   });
 
   it("uses backend client metadata for explicit scoped default calls", async () => {

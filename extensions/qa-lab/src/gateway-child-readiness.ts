@@ -60,13 +60,13 @@ export function resolveQaGatewayStartupRetry(params: {
   };
 }
 
-async function fetchLocalGatewayHealth(params: {
+async function fetchLocalGatewayProbe(params: {
   baseUrl: string;
-  healthPath: "/readyz" | "/healthz";
+  kind: "health" | "listening";
   timeoutMs?: number;
 }): Promise<boolean> {
   const { response, release } = await fetchWithSsrFGuard({
-    url: `${params.baseUrl}${params.healthPath}`,
+    url: `${params.baseUrl}/${params.kind === "health" ? "readyz" : "healthz"}`,
     init: {
       method: "HEAD",
       headers: {
@@ -75,30 +75,13 @@ async function fetchLocalGatewayHealth(params: {
       signal: AbortSignal.timeout(params.timeoutMs ?? 2_000),
     },
     policy: { allowPrivateNetwork: true },
-    auditContext: "qa-lab-gateway-child-health",
+    auditContext: `qa-lab-gateway-child-${params.kind}`,
   });
   try {
-    return response.ok;
+    return params.kind === "listening" || response.ok;
   } finally {
     await release();
   }
-}
-
-async function fetchLocalGatewayListening(baseUrl: string): Promise<boolean> {
-  const { release } = await fetchWithSsrFGuard({
-    url: `${baseUrl}/healthz`,
-    init: {
-      method: "HEAD",
-      headers: {
-        connection: "close",
-      },
-      signal: AbortSignal.timeout(2_000),
-    },
-    policy: { allowPrivateNetwork: true },
-    auditContext: "qa-lab-gateway-child-listening",
-  });
-  await release();
-  return true;
 }
 
 export async function waitForQaGatewayRestartBoundary(params: {
@@ -143,9 +126,9 @@ export async function waitForGatewayReady(params: {
     // Listener liveness can turn green before the Gateway can admit startup or restart work.
     try {
       if (
-        await fetchLocalGatewayHealth({
+        await fetchLocalGatewayProbe({
           baseUrl: params.baseUrl,
-          healthPath: "/readyz",
+          kind: "health",
           timeoutMs: Math.min(2_000, remainingMs),
         })
       ) {
@@ -172,14 +155,14 @@ export async function waitForGatewayListening(params: {
   const startedAt = Date.now();
   while (Date.now() - startedAt < (params.timeoutMs ?? 60_000)) {
     throwQaGatewayChildFailure(params.getChildFailure, params.logs);
-    if (params.child.exitCode !== null || params.child.signalCode !== null) {
+    if (hasQaGatewayChildExited(params.child)) {
       throw new QaSuiteInfraError(
         "gateway_startup_unhealthy",
         `gateway exited before listening (exitCode=${String(params.child.exitCode)}, signal=${String(params.child.signalCode)}):\n${params.logs()}`,
       );
     }
     try {
-      if (await fetchLocalGatewayListening(params.baseUrl)) {
+      if (await fetchLocalGatewayProbe({ baseUrl: params.baseUrl, kind: "listening" })) {
         return;
       }
     } catch {

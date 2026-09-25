@@ -16,10 +16,17 @@ import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SessionPendingInputs } from "../../state/openclaw-agent-db.generated.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabase,
+  type OpenClawAgentDatabaseOptions,
+} from "../../state/openclaw-agent-db.js";
 import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { assertCapturedSessionEntryReadSource } from "./session-accessor.sqlite-exact-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import type { CapturedSessionEntryReadSource } from "./session-accessor.types.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 
 export type SessionPendingInputState = "queued" | "interrupted" | "cancelled";
@@ -93,10 +100,38 @@ export function registerSessionPendingInputOwner(owner: SessionPendingInputOwner
   owners.live.set(owner.inputId, owner);
 }
 
-export function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner): void {
+function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner): void {
   if (owners.live.get(owner.inputId) === owner) {
     owners.live.delete(owner.inputId);
   }
+}
+
+export function finishSessionPendingInputOwner(
+  owner: SessionPendingInputOwner,
+  disposition: Exclude<SessionPendingInputState, "queued">,
+  source: CapturedSessionEntryReadSource,
+  options: OpenClawAgentDatabaseOptions,
+): void {
+  // Release authority even if recording the terminal disposition fails.
+  releaseSessionPendingInputOwner(owner);
+  if (owner.consumed) {
+    return;
+  }
+  const capturedOptions = { ...options, agentId: source.agentId, path: source.path };
+  assertCapturedSessionEntryReadSource(source, getOpenClawAgentDatabaseIfOpen(capturedOptions));
+  runOpenClawAgentWriteTransaction((current) => {
+    assertCapturedSessionEntryReadSource(source, current);
+    executeSqliteQuerySync(
+      current.db,
+      getSessionKysely(current.db)
+        .updateTable("session_pending_inputs")
+        .set({ state: disposition })
+        .where("input_id", "=", owner.inputId)
+        .where("lifecycle_generation", "=", owner.lifecycleGeneration)
+        .where("state", "=", "queued")
+        .where("consumed_event_id", "is", null),
+    );
+  }, capturedOptions);
 }
 
 function assertPendingInputOwnerCurrent(owner: SessionPendingInputOwner): void {

@@ -48,7 +48,7 @@ import {
   getActiveSecretsRuntimeSnapshotRevisionState,
   hasSameSecretReloadContract,
   restoreSecretsRuntimeSourceSnapshotIfLineageCurrent,
-  restoreSecretsRuntimeSnapshotStateIfCurrent,
+  prepareSecretsRuntimeSnapshotRestoreState,
   setSecretsRuntimeSourceSnapshotIfCurrent,
   type PreparedSecretsRuntimeSnapshot,
 } from "./runtime-state.js";
@@ -155,17 +155,12 @@ function activateSnapshotIfCurrent(
   });
 }
 
-type RestoreIfCurrentOptions = Omit<
-  Parameters<typeof restoreSecretsRuntimeSnapshotStateIfCurrent>[0],
-  "snapshot" | "ownedSnapshot" | "expectedRevision" | "refreshContext" | "refreshHandler"
-> & { expectedRevision?: number };
-
 function restoreSnapshotIfCurrent(
   snapshot: PreparedSecretsRuntimeSnapshot,
   ownedSnapshot: PreparedSecretsRuntimeSnapshot,
-  options: RestoreIfCurrentOptions = {},
+  options: ActivateIfCurrentOptions = {},
 ): boolean {
-  return restoreSecretsRuntimeSnapshotStateIfCurrent({
+  const restoration = prepareSecretsRuntimeSnapshotRestoreState({
     snapshot,
     ownedSnapshot,
     expectedRevision: options.expectedRevision ?? getActiveSecretsRuntimeSnapshotRevisionState(),
@@ -173,6 +168,7 @@ function restoreSnapshotIfCurrent(
     refreshHandler: null,
     ...options,
   });
+  return restoration !== null && activateSecretsRuntimeSnapshotStateIfCurrent(restoration);
 }
 
 describe("secrets runtime state", () => {

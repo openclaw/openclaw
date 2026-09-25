@@ -1,9 +1,9 @@
 // Gateway tool runtime-identity tests keep current-turn authority fail closed.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { withAgentRuntimeExecutionLineage } from "../../gateway/agent-runtime-execution-lineage.js";
 import {
-  createAgentRuntimeApprovalAuthorityValidator,
   mintAgentRuntimeIdentityToken,
   verifyAgentRuntimeIdentityToken,
 } from "../../gateway/agent-runtime-identity-token.js";

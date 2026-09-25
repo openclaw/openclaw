@@ -116,50 +116,38 @@ async function runForm(
     if (!isActive(params)) {
       return { status: "cancelled", message: "Form input was cancelled before completion." };
     }
-    const field = fields[index]!;
-    if (field.question.isSecret) {
-      index += 1;
-      const result = await ask(params, [field.question], batch, intro);
-      batch += 1;
-      if (!isActive(params)) {
-        return { status: "cancelled", message: "Secret input was cancelled before commit." };
+    const secret = fields[index]!.question.isSecret;
+    const subject = secret ? "Secret input" : "Form input";
+    const batchFields: StructuredInputField[] = [];
+    if (secret) {
+      batchFields.push(fields[index++]!);
+    } else {
+      while (
+        index < fields.length &&
+        batchFields.length < QUESTION_BATCH_SIZE &&
+        !fields[index]?.question.isSecret
+      ) {
+        batchFields.push(fields[index++]!);
       }
-      if (result.status !== "answered") {
-        const cancellation = cancellationFor(result, "Secret input");
-        if (cancellation.message) {
-          await showStatus(params, cancellation.message);
-        }
-        return cancellation;
-      }
-      answers[field.question.id] = result.answers.answers[field.question.id] ?? [];
-      continue;
-    }
-    const ordinary: StructuredInputField[] = [];
-    while (
-      index < fields.length &&
-      ordinary.length < QUESTION_BATCH_SIZE &&
-      !fields[index]?.question.isSecret
-    ) {
-      ordinary.push(fields[index++]!);
     }
     const result = await ask(
       params,
-      ordinary.map((entry) => entry.question),
+      batchFields.map((entry) => entry.question),
       batch,
       intro,
     );
     batch += 1;
     if (!isActive(params)) {
-      return { status: "cancelled", message: "Form input was cancelled before commit." };
+      return { status: "cancelled", message: `${subject} was cancelled before commit.` };
     }
     if (result.status !== "answered") {
-      const cancellation = cancellationFor(result, "Form input");
+      const cancellation = cancellationFor(result, subject);
       if (cancellation.message) {
         await showStatus(params, cancellation.message);
       }
       return cancellation;
     }
-    for (const entry of ordinary) {
+    for (const entry of batchFields) {
       answers[entry.question.id] = result.answers.answers[entry.question.id] ?? [];
     }
   }

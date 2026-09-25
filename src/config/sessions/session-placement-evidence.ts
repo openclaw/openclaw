@@ -18,7 +18,7 @@ import {
 } from "./session-accessor.sqlite-entry-availability.js";
 import { normalizeSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
 import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";

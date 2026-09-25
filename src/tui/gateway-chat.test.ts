@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { GatewayClientOptions } from "../gateway/client.js";
+import {
+  createTuiCommandHandlersHarness,
+  firstMockArg,
+  flushAsyncSelect,
+} from "./tui-command-handlers-test-support.js";
 // Covers gateway-backed chat behavior used by the TUI backend.
 
 const { GatewayChatClient } = await import("./gateway-chat.js");
@@ -62,6 +68,94 @@ describe("GatewayChatClient", () => {
         );
       } finally {
         request.mockRestore();
+      }
+    },
+  );
+
+  it("retains agent-scoped choices during a held refresh but cannot republish after stop", async () => {
+    const models = [{ provider: "fixture", id: "known", name: "Known" }];
+    const held = createDeferred<{ models: typeof models }>();
+    const request = vi
+      .spyOn(GatewayClient.prototype, "request")
+      .mockResolvedValueOnce({ models })
+      .mockReturnValueOnce(held.promise);
+    const client = new GatewayChatClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
+    try {
+      await client.listModels({ agentId: "work" });
+      const refresh = client.listModels({ agentId: "work" });
+      const sharedRefresh = client.listModels({ agentId: "work" });
+      expect(client.getKnownModels({ agentId: "work" })).toEqual(models);
+      expect(client.getKnownModels({ agentId: "main" })).toBeUndefined();
+      await client.stop();
+      held.resolve({ models: [{ provider: "fixture", id: "obsolete", name: "Obsolete" }] });
+      await Promise.all([refresh, sharedRefresh]);
+      expect(client.getKnownModels({ agentId: "work" })).toBeUndefined();
+    } finally {
+      held.resolve({ models });
+      request.mockRestore();
+    }
+  });
+
+  it.each([
+    { remaining: ["first", "current", "highlighted"], expected: "highlighted" },
+    { remaining: ["first", "current"], expected: "current" },
+    { remaining: ["first"], expected: "first" },
+  ])(
+    "restores $expected after config.changed clears and refills an open picker",
+    async ({ remaining, expected }) => {
+      const models = ["first", "current", "highlighted"].map((id) => ({
+        provider: "fixture",
+        id,
+        name: id,
+      }));
+      const held = createDeferred<{ models: typeof models }>();
+      const request = vi.fn().mockResolvedValueOnce({ models }).mockReturnValue(held.promise);
+      let onEvent: GatewayClientOptions["onEvent"];
+      vi.resetModules();
+      vi.doMock("../gateway/client.js", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("../gateway/client.js")>();
+        return {
+          ...actual,
+          GatewayClient: class {
+            request = request;
+            constructor(opts: GatewayClientOptions) {
+              onEvent = opts.onEvent!;
+            }
+          },
+        };
+      });
+      try {
+        // Reload the client so its transport constructor uses this test's event source.
+        const { GatewayChatClient: CatalogClient } = await import("./gateway-chat.js");
+        const client = new CatalogClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
+        await client.listModels({ agentId: "main" });
+        const harness = createTuiCommandHandlersHarness({
+          getKnownModels: (opts) => client.getKnownModels(opts),
+          listModels: vi.fn((opts) => client.listModels(opts)),
+          sessionInfo: { modelProvider: "fixture", model: "current" },
+        });
+        client.onModelsChanged = harness.client.onModelsChanged;
+        await harness.handleCommand("/models");
+        const selector = firstMockArg(harness.openOverlay, "openOverlay") as {
+          handleInput(data: string): void;
+          render(width: number): string[];
+        };
+        selector.handleInput("\u001b[B");
+        selector.handleInput("\u001b[B");
+        onEvent!({ type: "event", event: "config.changed", payload: {} });
+        expect(selector.render(100).join("\n")).toContain("Checking models...");
+        held.resolve({ models: models.filter((model) => remaining.includes(model.id)) });
+        await client.listModels({ agentId: "main" });
+        selector.handleInput("\r");
+        await flushAsyncSelect();
+        expect(harness.patchSession).toHaveBeenCalledWith({
+          key: "agent:main:main",
+          model: `fixture/${expected}`,
+        });
+      } finally {
+        held.resolve({ models });
+        vi.doUnmock("../gateway/client.js");
+        vi.resetModules();
       }
     },
   );

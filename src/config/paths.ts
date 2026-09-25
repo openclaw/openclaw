@@ -401,7 +401,7 @@ export function resolveOAuthDir(
   return path.join(stateDir, "credentials");
 }
 
-function parseGatewayPortEnvValue(raw: string | undefined): number | null {
+export function parseGatewayPortEnvValue(raw: string | undefined): number | null {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return null;

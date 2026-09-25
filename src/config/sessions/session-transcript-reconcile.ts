@@ -372,7 +372,7 @@ async function reconcilePreparedTranscriptIndexes(
           externallySupervised: isGatewayExternallySupervised(params.env),
           ...(params.preferredSessionId ? { preferredSessionId: params.preferredSessionId } : {}),
         };
-    const task = operation.startTask(input);
+    const task = await operation.startTask(input);
     const worker = task.port;
     let handlingMessage: Promise<void> | undefined;
     let terminalReceived = false;
@@ -521,9 +521,10 @@ async function reconcilePreparedTranscriptIndexes(
       if (input.mode === "disk") {
         let cleanup = plannerRelease;
         if (!cleanup.released && !cleanup.releaseFailed) {
-          const releaseTask = operation.startTask({
+          const releaseTask = await operation.startTask({
             mode: "release",
             leaseId: input.leaseId,
+            path: input.path,
             stateDir: input.stateDir,
             externallySupervised: input.externallySupervised,
           });
@@ -550,6 +551,7 @@ async function reconcilePreparedTranscriptIndexes(
         operation.retainLeaseForCleanup({
           mode: "release",
           leaseId: input.leaseId,
+          path: input.path,
           stateDir: input.stateDir,
           externallySupervised: input.externallySupervised,
         });

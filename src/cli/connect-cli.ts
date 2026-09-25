@@ -1,5 +1,6 @@
 // One-paste node onboarding from setup codes or single-use Gateway join URLs.
 import fs from "node:fs/promises";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import type { Command } from "commander";
 import {
   buildCloudflareAccessHeaders,
@@ -14,7 +15,6 @@ import { isLoopbackHost } from "../gateway/net.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
-import { readRegularFile } from "../infra/regular-file.js";
 import { loadNodeHostConfig, type NodeHostGatewayConfig } from "../node-host/config.js";
 import {
   nodeHostCloudflareAccessConfigFromEnv,

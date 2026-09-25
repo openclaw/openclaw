@@ -18,6 +18,10 @@ import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { logWarn } from "../logger.js";
+import {
+  renderFileAttachmentOutcome,
+  resolveFileExtractionOutcome,
+} from "../media-understanding/file-attachment-outcomes.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import {
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
@@ -95,7 +99,6 @@ import {
   resolveUnsatisfiedToolChoiceMessage,
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
-import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
@@ -171,12 +174,7 @@ function matchesResponseSessionScope(
 }
 
 function pruneExpiredResponseSessions(now: number) {
-  while (responseSessionMap.size > 0) {
-    const oldest = responseSessionMap.entries().next().value;
-    if (!oldest) {
-      return;
-    }
-    const [oldestKey, oldestValue] = oldest;
+  for (const [oldestKey, oldestValue] of responseSessionMap) {
     if (now - oldestValue.ts <= RESPONSE_SESSION_TTL_MS) {
       return;
     }
@@ -457,22 +455,14 @@ export async function handleOpenResponsesHttpRequest(
               limits: limits.files,
               signal: abortController.signal,
             });
-            const rawText = file.text;
-            if (rawText?.trim()) {
+            const outcome = resolveFileExtractionOutcome(file);
+            const content = renderFileAttachmentOutcome(outcome);
+            if (content !== null) {
               fileContexts.push(
                 renderFileContextBlock({
                   filename: file.filename,
-                  content: wrapUntrustedFileContent(rawText),
-                }),
-              );
-            } else {
-              fileContexts.push(
-                renderFileContextBlock({
-                  filename: file.filename,
-                  content: file.images?.length
-                    ? "[PDF content rendered to images]"
-                    : "[No extractable text]",
-                  surroundContentWithNewlines: false,
+                  content,
+                  surroundContentWithNewlines: outcome.kind === "extracted",
                 }),
               );
             }

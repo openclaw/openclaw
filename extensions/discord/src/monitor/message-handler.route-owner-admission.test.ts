@@ -33,7 +33,7 @@ import { resolveDiscordAutoThreadContext } from "./threading.js";
 type Conversation = Parameters<SessionBindingAdapter["resolveByConversation"]>[0];
 let state: OpenClawTestState;
 let adapter: SessionBindingAdapter | undefined;
-let stopThreadManager: (() => void) | undefined;
+let stopThreadManager: (() => Promise<void>) | undefined;
 beforeAll(async () => {
   state = await createOpenClawTestState({
     label: "discord-route-owner-admission",
@@ -47,13 +47,13 @@ beforeEach(() => {
     createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
   );
 });
-afterEach(() => {
+afterEach(async () => {
   clearRuntimeConfigSnapshot();
   if (adapter) {
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "default", adapter });
     adapter = undefined;
   }
-  stopThreadManager?.();
+  await stopThreadManager?.();
   stopThreadManager = undefined;
   resetPluginRuntimeStateForTest();
 });

@@ -510,26 +510,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       gatewayAvailable = available;
     },
     captureReconciliation: () => observations.captureReconciliation(++requestRevision),
-    copyRow: observations.copyRow,
-    inheritRow: observations.inheritRow,
-    mergeRow: observations.mergeRow,
-    registerRow: observations.registerRow,
-    currentRow: observations.currentRow,
-    mergeRows: observations.mergeRows,
-    rowRevision: observations.rowRevision,
-    hasLiveObservation: observations.hasLiveObservation,
-    isCurrentRow: observations.isCurrentRow,
-    inherit: observations.inherit,
-    observeReadRows: observations.observeReadRows,
-    bindOwner: observations.bindOwner,
-    observeFields: observations.observeFields,
-    fieldObservation: observations.fieldObservation,
-    stageObservedRows: observations.stageObservedRows,
-    stageManagedResults: observations.stageManagedResults,
-    stageRunTerminal: observations.stageRunTerminal,
-    projectFields: observations.projectFields,
-    prepareProjection: observations.prepareProjection,
-    projectRows: observations.projectRows,
+    observations,
     captureEvent(payload: unknown) {
       const scope = host.connection.capture();
       const revision = ++requestRevision;
@@ -628,7 +609,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       );
     },
     reconcileMutation,
-    publishedRow: observations.publishedRow,
     /** Republishes every held list through `decorate` so a UI-owned overlay
      * reaches the archived/all snapshots too, not just the primary state. */
     redecorateLists(this: void) {

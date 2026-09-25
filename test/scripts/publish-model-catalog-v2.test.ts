@@ -32,7 +32,15 @@ function fixtureRoot() {
   fs.writeFileSync(
     path.join(dir, "openclaw.plugin.json"),
     JSON.stringify({
-      providers: ["anthropic", "openai", "fixture-native"],
+      providers: [
+        "anthropic",
+        "openai",
+        "fixture-native",
+        "gateway",
+        "mygate",
+        "openrouter",
+        "moonshot",
+      ],
       modelCatalog: {
         modelsDev: { "fixture-native": "upstream" },
         providers: {
@@ -51,7 +59,18 @@ function fixtureRoot() {
           },
         },
       },
-      modelPricing: { providers: { "fixture-native": { openCode: { provider: "upstream" } } } },
+      modelPricing: {
+        providers: {
+          "fixture-native": { openCode: { provider: "upstream" } },
+          // Bills the vendor's rate (like Cloudflare Unified Billing): no list of its own.
+          gateway: { modelsDev: { passthroughProviderModel: true }, liteLLM: false },
+          // Publishes its own price list (like Vercel or Kilo).
+          mygate: { modelsDev: { provider: "mygate-md", passthroughProviderModel: true } },
+          openrouter: { openRouter: { provider: "openrouter" }, modelsDev: false, liteLLM: false },
+          // models.dev names this vendor differently from its OpenClaw provider.
+          moonshot: { modelsDev: { provider: "moonshotai" } },
+        },
+      },
     }),
   );
   return root;
@@ -69,6 +88,27 @@ function fixtureFetch() {
             extra: { id: "extra", cost: { input: 5, output: 6 } },
           },
         },
+        openai: {
+          id: "openai",
+          models: { "seed-1": { id: "seed-1", cost: { input: 4, output: 20 } } },
+        },
+        "mygate-md": {
+          id: "mygate-md",
+          models: { "openai/seed-1": { id: "openai/seed-1", cost: { input: 3, output: 9 } } },
+        },
+        moonshotai: {
+          id: "moonshotai",
+          models: { "kimi-k3": { id: "kimi-k3", cost: { input: 3, output: 15 } } },
+        },
+      });
+    }
+    if (url === "https://openrouter.ai/api/v1/models") {
+      // OpenRouter runs a 50% promotion on OpenAI's model.
+      return Response.json({
+        data: [
+          { id: "vendorx/model-a", pricing: { prompt: "0.000002", completion: "0.000004" } },
+          { id: "openai/seed-1", pricing: { prompt: "0.000002", completion: "0.00001" } },
+        ],
       });
     }
     return Response.json({ data: [] });
@@ -194,6 +234,51 @@ describe("publish model catalog v2", () => {
     });
     expect(v1.pricing?.["fixture-native/extra"]).toBeDefined();
     expect(v2.models.some((model) => model.id === "extra")).toBe(false);
+    // Each route is priced from the list of whoever bills it (OpenRouter's 50% promotion).
+    expect(
+      v2.models.find((model) => model.provider === "openai" && model.id === "seed-1")?.pricing,
+    ).toMatchObject({ status: "known", input: 4, output: 20, source: "modelsDev" });
+    expect(v2.upstreamPricing?.["openai/seed-1"]).toMatchObject({
+      input: 4,
+      output: 20,
+      source: "modelsDev",
+      passthroughOnly: true,
+    });
+    expect(v2.providerPricing?.["openrouter/openai/seed-1"]).toMatchObject({
+      input: 2,
+      output: 10,
+      source: "openRouter",
+    });
+    expect(v2.providerPricing?.["mygate/openai/seed-1"]).toEqual({
+      input: 3,
+      output: 9,
+      source: "modelsDev",
+    });
+    expect(v1.pricing?.["gateway/openai/seed-1"]).toMatchObject({ input: 4, output: 20 });
+    expect(v1.pricing?.["mygate/openai/seed-1"]).toMatchObject({ input: 3, output: 9 });
+    expect(v1.pricing?.["openrouter/openai/seed-1"]).toMatchObject({ input: 2, output: 10 });
+    // Standalone v2 rates keep v1's resolvable prices without per-gateway copies.
+    expect(v2.providerPricing?.["fixture-native/extra"]).toEqual({
+      ...v1.pricing?.["fixture-native/extra"],
+      source: "openCode",
+    });
+    expect(v2.upstreamPricing).not.toHaveProperty("vendorx/model-a");
+    // Gateways pass through the vendor's models.dev slug, not its OpenClaw provider ID.
+    expect(v2.upstreamPricing?.["moonshotai/kimi-k3"]).toEqual({
+      input: 3,
+      output: 15,
+      source: "modelsDev",
+    });
+    expect(
+      Object.keys({ ...v2.upstreamPricing, ...v2.providerPricing }).some((key) =>
+        key.startsWith("mygate-md/"),
+      ),
+    ).toBe(false);
+    expect(
+      Object.keys({ ...v2.upstreamPricing, ...v2.providerPricing }).some((key) =>
+        key.startsWith("gateway/"),
+      ),
+    ).toBe(false);
     expect(
       fetchImpl.mock.calls.filter(([url]) => url === "https://models.opencode.ai/api.json"),
     ).toHaveLength(1);

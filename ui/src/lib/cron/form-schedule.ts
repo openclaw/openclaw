@@ -1,3 +1,4 @@
+import { resolveDefaultCronStaggerMs } from "../../../../src/cron/stagger.js";
 import type { CronJob } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { parseCronDurationMs } from "./decimal.ts";
@@ -94,7 +95,7 @@ export function hasUnchangedCronSchedule(form: CronFormState, job: CronJob): boo
   return true;
 }
 
-export function buildCronSchedule(form: CronFormState) {
+export function buildCronSchedule(form: CronFormState, previous?: CronJob["schedule"]) {
   if (form.scheduleKind === "at") {
     const ms = Date.parse(form.scheduleAt);
     if (!Number.isFinite(ms)) {
@@ -118,7 +119,15 @@ export function buildCronSchedule(form: CronFormState) {
   }
   const staggerAmount = form.staggerAmount.trim();
   if (!staggerAmount) {
-    return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined };
+    // Same-expression updates preserve omitted windows; new defaults must stay unspecified.
+    const clearsSavedWindow =
+      previous?.kind === "cron" && previous.expr === expr && previous.staggerMs !== undefined;
+    return {
+      kind: "cron" as const,
+      expr,
+      tz: form.cronTz.trim() || undefined,
+      staggerMs: resolveDefaultCronStaggerMs(expr) ?? (clearsSavedWindow ? 0 : undefined),
+    };
   }
   const staggerMs = parseCronDurationMs(staggerAmount, form.staggerUnit, true);
   if (staggerMs === undefined) {

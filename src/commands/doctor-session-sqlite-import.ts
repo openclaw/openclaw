@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { importSqliteSessionRowsBatch } from "../config/sessions/session-accessor.sqlite-import.js";
 import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
@@ -8,8 +9,15 @@ import { prepareLegacyAcpMigrationSource } from "../infra/legacy-acp-migration-s
 import {
   readMigrationArtifactIdentity,
   sameMigrationArtifact,
+  type MigrationArtifactIdentity,
 } from "../infra/session-sqlite-migration-artifact.js";
 import {
+  assertSafeSessionSqliteMigrationMove,
+  canonicalMigrationFilePath,
+  filterRestoreManifestTargets,
+  hasSymbolicLinkInDirectoryPath,
+  migrationMoveKey,
+  readSessionSqliteMigrationManifest,
   updateMigrationManifestTarget,
   type ActiveSessionSqliteMigrationRun,
 } from "../infra/session-sqlite-migration-manifest.js";
@@ -18,16 +26,28 @@ import {
   createTranscriptEventReader,
   readOnlySqliteValidationSnapshot,
   readTranscriptFingerprint,
+  resolveTargetSqlitePath,
   type ReadOnlySqliteValidationSnapshot,
 } from "../infra/session-sqlite-migration-readers.js";
 import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
+import type { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-inventory.js";
 import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
 const SESSION_IMPORT_BATCH_SIZE = 256;
 
 export async function importLegacySessionRecords(
-  target: SessionStoreTarget,
+  {
+    target,
+    env,
+    expectedIndexIdentity,
+    recoveryInventory,
+  }: {
+    target: SessionStoreTarget;
+    env: NodeJS.ProcessEnv;
+    expectedIndexIdentity?: MigrationArtifactIdentity;
+    recoveryInventory?: ReturnType<typeof collectRecoveryInventory>;
+  },
   records: readonly LegacySessionRecord[],
   report: DoctorSessionSqliteTargetReport,
   activeRun?: ActiveSessionSqliteMigrationRun,
@@ -36,22 +56,39 @@ export async function importLegacySessionRecords(
     return;
   }
   try {
+    const requireEmptyStore = Boolean(
+      recoveryInventory?.report.artifacts.some((artifact) =>
+        ["unreadable-manifest", "manifest-directory-alias"].includes(artifact.reason),
+      ),
+    );
+    const assertRestoredIndexCurrent = requireEmptyStore
+      ? undefined
+      : prepareRestoredSessionIndex({ target, env, expectedIndexIdentity, recoveryInventory });
+    // The exceptional empty-store admission and every row must share one transaction.
+    const batchSize = requireEmptyStore ? records.length : SESSION_IMPORT_BATCH_SIZE;
     const importedTranscriptSources = new Set<string>();
     const existingSnapshot = readOnlySqliteValidationSnapshot(target);
-    for (let offset = 0; offset < records.length; offset += SESSION_IMPORT_BATCH_SIZE) {
-      const pending = records
-        .slice(offset, offset + SESSION_IMPORT_BATCH_SIZE)
-        .flatMap((record) => {
-          const prepared = prepareLegacySessionImport(
-            target,
-            record,
-            report,
-            importedTranscriptSources,
-            existingSnapshot.ok ? existingSnapshot.snapshot : undefined,
-          );
-          return prepared ? [{ ...prepared, record }] : [];
-        });
-      const imported = await importSqliteSessionRowsBatch(pending.map((entry) => entry.params));
+    for (let offset = 0; offset < records.length; offset += batchSize) {
+      const pending = records.slice(offset, offset + batchSize).flatMap((record) => {
+        const prepared = prepareLegacySessionImport(
+          target,
+          record,
+          report,
+          importedTranscriptSources,
+          existingSnapshot.ok ? existingSnapshot.snapshot : undefined,
+        );
+        return prepared ? [{ ...prepared, params: { ...prepared.params, env }, record }] : [];
+      });
+      const imported = await importSqliteSessionRowsBatch(
+        pending.map((entry, index) => ({
+          ...entry.params,
+          requireEmptyStore,
+          historicalOnly: entry.params.historicalOnly || Boolean(assertRestoredIndexCurrent),
+          ...(index === 0 && assertRestoredIndexCurrent
+            ? { beforePersistentApply: assertRestoredIndexCurrent }
+            : {}),
+        })),
+      );
       for (const [index, result] of imported.entries()) {
         const record = pending[index]?.record;
         if (record && result.recovery) {
@@ -86,6 +123,95 @@ export async function importLegacySessionRecords(
     }
     throw error;
   }
+}
+
+function prepareRestoredSessionIndex(params: {
+  target: SessionStoreTarget;
+  env: NodeJS.ProcessEnv;
+  expectedIndexIdentity?: MigrationArtifactIdentity;
+  recoveryInventory?: ReturnType<typeof collectRecoveryInventory>;
+}): (() => void) | undefined {
+  const { expectedIndexIdentity, recoveryInventory, target } = params;
+  if (!expectedIndexIdentity || !recoveryInventory) {
+    return undefined;
+  }
+  const storePath = canonicalMigrationFilePath(target.storePath);
+  const sqlitePath = resolveTargetSqlitePath(target, params.env);
+  const receipts = new Map<string, MigrationArtifactIdentity>();
+  let hasSelectedOwner = false;
+  for (const refs of recoveryInventory.references.values()) {
+    for (const ref of refs) {
+      if (
+        ref.move.kind !== "legacy-store" ||
+        ref.move.sourcePath !== storePath ||
+        (!ref.consumedByRestore &&
+          !ref.run.manifest.restore?.restoredFiles.includes(storePath) &&
+          !ref.target.completedMoves.some(
+            (move) => migrationMoveKey(move) === migrationMoveKey(ref.move),
+          ))
+      ) {
+        continue;
+      }
+      const artifact = ref.move.artifact;
+      if (!artifact) {
+        throw new Error(`Restored session index has no recorded identity: ${storePath}`);
+      }
+      // A newly created legacy index is a different source, even at the same path.
+      if (
+        artifact.identity.dev !== expectedIndexIdentity.dev ||
+        artifact.identity.ino !== expectedIndexIdentity.ino
+      ) {
+        continue;
+      }
+      // Shared originals have several owners; explicit restore admission also covers
+      // custom stores outside automatic cleanup discovery.
+      const selectedOwner = filterRestoreManifestTargets(ref.run.manifest, [
+        { agentId: target.agentId, storePath, sqlitePath },
+      ]).includes(ref.target);
+      if (
+        !sameMigrationArtifact(artifact.identity, expectedIndexIdentity) ||
+        !ref.consumedByRestore ||
+        ref.target.storePath !== storePath ||
+        (ref.target.agentId === target.agentId && !selectedOwner) ||
+        artifact.disposal.state !== "retained"
+      ) {
+        throw new Error(`Restored session index evidence cannot be verified: ${storePath}`);
+      }
+      assertSafeSessionSqliteMigrationMove(ref.move, ref.target);
+      const identity = readMigrationArtifactIdentity(ref.run.manifestPath);
+      if (
+        JSON.stringify(readSessionSqliteMigrationManifest(ref.run.manifestPath)) !==
+          JSON.stringify(ref.run.manifest) ||
+        !sameMigrationArtifact(identity, readMigrationArtifactIdentity(ref.run.manifestPath))
+      ) {
+        throw new Error(`Session restore receipt changed: ${ref.run.manifestPath}`);
+      }
+      receipts.set(ref.run.manifestPath, identity);
+      hasSelectedOwner ||= selectedOwner;
+    }
+  }
+  if (receipts.size === 0) {
+    return undefined;
+  }
+  if (!hasSelectedOwner) {
+    throw new Error(`Restored session index evidence cannot be verified: ${storePath}`);
+  }
+  // A per-file restore can succeed during a partial or failed run. It proves provenance,
+  // not permission to replace the current node; the import transaction preserves that owner.
+  const assertCurrent = () => {
+    for (const filePath of [storePath, sqlitePath, ...receipts.keys()]) {
+      if (hasSymbolicLinkInDirectoryPath(path.dirname(filePath))) {
+        throw new Error(`Session restore path changed: ${filePath}`);
+      }
+    }
+    for (const [filePath, identity] of [[storePath, expectedIndexIdentity] as const, ...receipts]) {
+      if (!sameMigrationArtifact(identity, readMigrationArtifactIdentity(filePath))) {
+        throw new Error(`Session restore source or receipt changed: ${filePath}`);
+      }
+    }
+  };
+  assertCurrent();
+  return assertCurrent;
 }
 
 function prepareLegacySessionImport(

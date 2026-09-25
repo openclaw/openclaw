@@ -21,10 +21,6 @@ function normalizeConfiguredChannelKey(raw?: string | null): string {
   return normalizeChatChannelId(raw) ?? normalizeLowercaseStringOrEmpty(raw);
 }
 
-function normalizeRouteBindingChannelKey(raw?: string | null): string {
-  return normalizeLowercaseStringOrEmpty(raw);
-}
-
 function listConfiguredChannelIds(cfg: OpenClawConfig): string[] {
   if (!hasRecord(cfg.channels)) {
     return [];
@@ -73,7 +69,7 @@ export function collectChannelRouteTargets(cfg: OpenClawConfig): ChannelRouteTar
   const byAgent = new Map<string, Set<string>>();
 
   for (const binding of listRouteBindings(cfg)) {
-    addTarget(byAgent, binding.agentId, normalizeRouteBindingChannelKey(binding.match.channel));
+    addTarget(byAgent, binding.agentId, normalizeLowercaseStringOrEmpty(binding.match.channel));
   }
 
   for (const channel of listConfiguredChannelIds(cfg)) {

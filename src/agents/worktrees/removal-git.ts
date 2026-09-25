@@ -8,6 +8,7 @@ import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
 import { canonicalPathKey } from "./orphan-paths.js";
+import { WorktreeBranchMovedError } from "./removal-errors.js";
 import type { ExactStateRetirement } from "./snapshot-exact-state-contract.js";
 import type { ExactStateSnapshot } from "./snapshot-exact-state.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -19,8 +20,11 @@ export async function requireManagedWorktreeHead(
   options: GitOptions,
 ): Promise<string> {
   const branch = await runGit(record.path, ["symbolic-ref", "--quiet", "HEAD"], options);
+  if (branch.code !== 0 && branch.code !== 1) {
+    throw commandError("git symbolic-ref --quiet HEAD", branch);
+  }
   if (branch.code !== 0 || branch.stdout.trim() !== `refs/heads/${record.branch}`) {
-    throw new Error(
+    throw new WorktreeBranchMovedError(
       `Worktree HEAD no longer owns ${record.branch}; checkout and branch preserved.`,
     );
   }

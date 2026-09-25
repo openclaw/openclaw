@@ -63,7 +63,6 @@ import { withTempDir } from "../../test-utils/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
-import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { agentWaitHandler } from "./agent-wait.js";
 import { createScopedCliClient } from "./chat-client.test-support.js";
@@ -268,35 +267,7 @@ vi.mock("../session-utils.js", async () => {
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   const loadSessionEntry = (rawKey: string, opts?: { agentId?: string }) => {
     mockState.loadSessionEntryCalls.push({ rawKey, opts });
-    const canonicalKey =
-      typeof mockState.sessionEntry.canonicalKey === "string"
-        ? mockState.sessionEntry.canonicalKey
-        : rawKey === "main"
-          ? `agent:${opts?.agentId ?? "main"}:${mockState.mainSessionKey}`
-          : rawKey || `agent:${opts?.agentId ?? "main"}:${mockState.mainSessionKey}`;
-    const entry = mockState.sessionMissing
-      ? undefined
-      : {
-          sessionId: mockState.sessionIdsByKey.get(rawKey) ?? mockState.sessionId,
-          sessionFile: mockState.transcriptPath,
-          ...mockState.sessionEntry,
-        };
-    const cfg = {
-      ...mockState.config,
-      session: {
-        ...(mockState.config.session as Record<string, unknown> | undefined),
-        mainKey: mockState.mainSessionKey,
-      },
-    };
-    return {
-      cfg,
-      agentId: resolveSessionStoreAgentId(cfg, rawKey, opts?.agentId),
-      storePath: mockState.storePath,
-      store: entry ? { [canonicalKey]: entry } : {},
-      entry,
-      canonicalKey,
-      storeKeys: [canonicalKey],
-    };
+    return suiteResources.loadSessionEntry(mockState, rawKey, opts);
   };
   return {
     ...original,
@@ -512,17 +483,9 @@ vi.mock("../../plugins/hook-runner-global.js", () => {
 });
 
 vi.mock("../../sessions/transcript-events.js", async (importOriginal) => {
-  const {
-    attachSessionTranscriptRunId,
-    onInternalSessionTranscriptUpdate,
-    readSessionTranscriptRunId,
-    resolveTerminalAssistantTranscriptRunId,
-  } = await importOriginal<typeof import("../../sessions/transcript-events.js")>();
+  const actual = await importOriginal<typeof import("../../sessions/transcript-events.js")>();
   return {
-    attachSessionTranscriptRunId,
-    onInternalSessionTranscriptUpdate,
-    readSessionTranscriptRunId,
-    resolveTerminalAssistantTranscriptRunId,
+    ...actual,
     emitSessionTranscriptUpdate: vi.fn((update: TranscriptUpdate) => {
       mockState.emittedTranscriptUpdates.push(update);
     }),

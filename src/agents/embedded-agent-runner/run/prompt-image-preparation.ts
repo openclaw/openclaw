@@ -11,17 +11,6 @@ type PromptExecutionAttempt = Pick<
 > & { model: { input?: string[] } };
 type PromptImageResult = Awaited<ReturnType<typeof detectAndLoadPromptImages>>;
 
-function emptyPromptImages(): PromptImageResult {
-  return {
-    images: [],
-    imageFactIndexes: [],
-    detectedRefs: [],
-    failedMediaCount: 0,
-    loadedCount: 0,
-    skippedCount: 0,
-  };
-}
-
 /** Prepares ordered prompt images using the admitted media and filesystem policy. */
 export async function prepareEmbeddedAttemptPromptExecution(input: {
   attempt: PromptExecutionAttempt;
@@ -40,7 +29,14 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
   }
 > {
   if (input.skipPromptSubmission) {
-    return emptyPromptImages();
+    return {
+      images: [],
+      imageFactIndexes: [],
+      detectedRefs: [],
+      failedMediaCount: 0,
+      loadedCount: 0,
+      skippedCount: 0,
+    };
   }
 
   const { attempt } = input;

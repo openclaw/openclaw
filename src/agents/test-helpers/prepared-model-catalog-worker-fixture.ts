@@ -163,7 +163,12 @@ export async function refreshNativeCatalogDuringBoundedRead(params: {
   const { snapshot, inventoryOwner } = params;
   const previous = await snapshot.loadFullModelCatalog!({ refresh: true });
   const previousInventory = inventoryOwner.catalogInventory;
-  const previousModels = snapshot.readPublishedModels?.();
+  const previousProofId = "proof-refresh-1-sqlite-true-shared-true-unrelated-false";
+  const nextProofId = "proof-refresh-2-sqlite-true-shared-true-unrelated-false";
+  expect(previous.entries).toContainEqual(expect.objectContaining({ id: previousProofId }));
+  expect(previous.entries).toContainEqual(
+    expect.objectContaining({ nativeRuntime: params.harnessId }),
+  );
   const nativeHarness = snapshot.pluginRegistry?.agentHarnesses.find(
     ({ harness }) => harness.id === params.harnessId,
   )?.harness;
@@ -181,11 +186,23 @@ export async function refreshNativeCatalogDuringBoundedRead(params: {
   const refresh = snapshot.loadFullModelCatalog!({ refresh: true });
   try {
     await started.promise;
-    // A bounded read must keep one published generation while its native source is held.
-    expect(await snapshot.loadFullModelCatalog!()).toBe(previous);
-    expect(snapshot.readFullModelCatalog!()).toBe(previous);
-    expect(snapshot.readPublishedModels?.()).toBe(previousModels);
-    expect(inventoryOwner.catalogInventory).toBe(previousInventory);
+    // Provider completion publishes independently while the native source retains its last rows.
+    const held = await snapshot.loadFullModelCatalog!();
+    expect(held).not.toBe(previous);
+    expect(snapshot.readFullModelCatalog!()).toBe(held);
+    expect(inventoryOwner.catalogInventory).not.toBe(previousInventory);
+    expect(snapshot.readPublishedModels?.()).toBe(inventoryOwner.catalogInventory?.runtimeModels);
+    for (const key of ["entries", "routeVariants"] as const) {
+      expect(held[key]).toContainEqual(expect.objectContaining({ id: nextProofId }));
+      expect(held[key].some((entry) => entry.id === previousProofId)).toBe(false);
+      expect(held[key].filter((entry) => entry.nativeRuntime)).toEqual(
+        previous[key].filter((entry) => entry.nativeRuntime),
+      );
+      expect(inventoryOwner.catalogInventory?.catalog[key]).toContainEqual(
+        expect.objectContaining({ id: nextProofId }),
+      );
+    }
+    expect(held.nativeHostRows).toEqual(previous.nativeHostRows);
   } finally {
     release.resolve();
     try {

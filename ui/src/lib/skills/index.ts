@@ -420,7 +420,7 @@ export function updateSkillEdit(state: SkillsState, skillKey: string, value: str
 
 async function runSkillMutation(
   state: SkillsState,
-  skillKey: string,
+  operation: Exclude<ActiveSkillOperation, { kind: "refresh" }>,
   run: (client: GatewayBrowserClient) => Promise<SkillMessage>,
 ) {
   const client = state.client;
@@ -428,11 +428,14 @@ async function runSkillMutation(
     return;
   }
   const agentScope = captureSkillsAgentScope(state);
-  const operation = { kind: "skill", skillKey } as const;
   // All writes share one owner: overlapping refreshes can otherwise publish
   // a stale snapshot after both Gateway mutations have already succeeded.
   state.skillOperation = operation;
-  state.skillsError = null;
+  if (operation.kind === "skill") {
+    state.skillsError = null;
+  } else {
+    state.clawhubInstallMessage = null;
+  }
   try {
     const message = await run(client);
     if (!ownsSkillOperation(state, client, operation)) {
@@ -448,7 +451,11 @@ async function runSkillMutation(
     ) {
       return;
     }
-    setSkillMessage(state, skillKey, message);
+    if (operation.kind === "skill") {
+      setSkillMessage(state, operation.skillKey, message);
+    } else {
+      state.clawhubInstallMessage = { kind: message.kind, text: message.message };
+    }
   } catch (err) {
     if (
       !ownsSkillOperation(state, client, operation) ||
@@ -457,11 +464,16 @@ async function runSkillMutation(
       return;
     }
     const message = formatUiError(err);
-    state.skillsError = message;
-    setSkillMessage(state, skillKey, {
-      kind: "error",
-      message,
-    });
+    if (operation.kind === "skill") {
+      state.skillsError = message;
+      setSkillMessage(state, operation.skillKey, { kind: "error", message });
+    } else {
+      const trustDetails = getClawHubTrustDetailsFromError(err);
+      state.clawhubInstallMessage = {
+        kind: "error",
+        text: formatClawHubInstallMessage(message, trustDetails?.warning),
+      };
+    }
   } finally {
     if (
       ownsSkillOperation(state, client, operation) &&
@@ -495,7 +507,7 @@ async function runSkillConfigUpdate(
   message: string,
   canDispatch: () => boolean,
 ) {
-  await runSkillMutation(state, skillKey, async (client) =>
+  await runSkillMutation(state, { kind: "skill", skillKey }, async (client) =>
     skillConfigMutationSuccess(
       message,
       await runSkillConfigMutation(
@@ -533,7 +545,7 @@ export async function installSkill(
   installId: string,
   dangerouslyForceUnsafeInstall = false,
 ) {
-  await runSkillMutation(state, skillKey, async (client) => {
+  await runSkillMutation(state, { kind: "skill", skillKey }, async (client) => {
     const result = await client.request<{ message?: string }>("skills.install", {
       ...stateSkillsAgentParams(state),
       name,
@@ -585,59 +597,19 @@ export function closeClawHubDetail(state: SkillsState) {
 }
 
 export async function installFromClawHub(state: SkillsState, ref: string, version?: string) {
-  const client = state.client;
-  if (!client || !state.connected || state.skillsLoading || state.skillOperation) {
-    return;
-  }
-  const agentScope = captureSkillsAgentScope(state);
-  const operation = { kind: "clawhub", ref } as const;
-  state.skillOperation = operation;
-  state.clawhubInstallMessage = null;
-  try {
+  await runSkillMutation(state, { kind: "clawhub", ref }, async (client) => {
     const result = await client.request<{ message?: string; warning?: string }>("skills.install", {
       ...stateSkillsAgentParams(state),
       source: "clawhub",
       slug: ref,
       ...(version ? { version } : {}),
     });
-    if (!ownsSkillOperation(state, client, operation)) {
-      return;
-    }
-    if (!isSkillsAgentScopeCurrent(state, agentScope)) {
-      return;
-    }
-    await loadSkills(state, { operation });
-    if (
-      !ownsSkillOperation(state, client, operation) ||
-      !isSkillsAgentScopeCurrent(state, agentScope)
-    ) {
-      return;
-    }
-    state.clawhubInstallMessage = {
+    return {
       kind: "success",
-      text: formatClawHubInstallMessage(
+      message: formatClawHubInstallMessage(
         formatUiExternalText(result?.message, `Installed ${ref}`),
         result?.warning ? formatUiExternalText(result.warning) : undefined,
       ),
     };
-  } catch (err) {
-    if (
-      ownsSkillOperation(state, client, operation) &&
-      isSkillsAgentScopeCurrent(state, agentScope)
-    ) {
-      const trustDetails = getClawHubTrustDetailsFromError(err);
-      state.clawhubInstallMessage = {
-        kind: "error",
-        text: formatClawHubInstallMessage(formatUiError(err), trustDetails?.warning),
-      };
-    }
-  } finally {
-    if (
-      ownsSkillOperation(state, client, operation) &&
-      !isSkillsAgentScopeCurrent(state, agentScope)
-    ) {
-      await loadCurrentSkillsForOperation(state, client, operation);
-    }
-    releaseSkillOperation(state, operation);
-  }
+  });
 }

@@ -106,7 +106,7 @@ export class SessionHistorySseState {
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
     this.assistantErrorPending = snapshot.assistantErrorPending;
-    this.transcriptPath = normalizeTranscriptPathForComparison(snapshot.transcriptPath);
+    this.transcriptPath = resolveTranscriptPathForComparison(snapshot.transcriptPath);
   }
 
   snapshot(): PaginatedSessionHistory {
@@ -244,7 +244,7 @@ export class SessionHistorySseState {
   }
 
   shouldRefreshForTranscriptPath(updatePath: string | undefined): boolean {
-    const nextPath = normalizeTranscriptPathForComparison(updatePath);
+    const nextPath = resolveTranscriptPathForComparison(updatePath);
     return Boolean(this.transcriptPath && nextPath && this.transcriptPath !== nextPath);
   }
 
@@ -258,12 +258,8 @@ export class SessionHistorySseState {
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
     this.assistantErrorPending = snapshot.assistantErrorPending;
-    this.transcriptPath = normalizeTranscriptPathForComparison(snapshot.transcriptPath);
+    this.transcriptPath = resolveTranscriptPathForComparison(snapshot.transcriptPath);
     this.sentHistory = snapshot.history;
     return snapshot.history;
   }
-}
-
-function normalizeTranscriptPathForComparison(filePath: string | undefined): string | undefined {
-  return typeof filePath === "string" ? resolveTranscriptPathForComparison(filePath) : undefined;
 }

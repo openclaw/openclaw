@@ -358,7 +358,9 @@ struct OnboardingAISetupView: View {
                     .padding(.top, 6)
             }
         }
-        .openClawSelectableRowChrome(selected: selected && !Self.isFailed(status))
+        .openClawSelectableRowChrome(
+            selected: selected && !Self.isFailed(status),
+            enabled: self.model.canSelectCandidate(kind: candidate.kind))
     }
 
     private func subtitle(

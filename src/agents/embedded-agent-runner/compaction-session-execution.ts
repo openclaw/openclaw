@@ -53,7 +53,6 @@ import {
 } from "./compaction-diagnostics.js";
 import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
 import {
-  asCompactionHookRunner,
   buildBeforeCompactionHookMetrics,
   estimateTokensAfterCompaction,
   runAfterCompactionHooks,
@@ -424,7 +423,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         if (limited.length > 0) {
           session.agent.state.messages = limited;
         }
-        const hookRunner = asCompactionHookRunner(getGlobalHookRunner());
+        const hookRunner = getGlobalHookRunner();
         const observedTokenCount = normalizeObservedTokenCount(params.currentTokenCount);
         const beforeHookMetrics = buildBeforeCompactionHookMetrics({
           originalMessages,

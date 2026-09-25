@@ -67,6 +67,8 @@ services. Leaving the policy unset keeps strict behavior.
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`; OpenClaw also accepts the Telegram-owned `-1001234567890:123` shorthand. Direct RPC/config callers may pass `delivery.threadId` as a string or number. Slack/Discord/Mattermost targets use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
 
+For announce delivery in the Control UI Automations editor, choose a channel and an explicit **Account ID** under **Advanced** to see configured conversation targets in the **To** field. Selecting a target preserves your chosen account and does not infer a topic. These configured suggestions apply only to the primary announce destination; failure-alert routing remains separate. You can still enter a target that is not in the suggestions.
+
 On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <channel-plugin-id>` unless a provider-prefixed `--to` or a preserved session route selects the channel. Use `--best-effort-deliver` only when unresolved fallback delivery is acceptable; it does not choose a channel, and a delivery failure does not fail the job.
 
 Channel announcements retry transient failures only when no payload may have reached the recipient. A successful retry records delivery without retaining the earlier attempt's error, including with best-effort delivery. Partial or ambiguous sends are not replayed by the announcement retry loop.

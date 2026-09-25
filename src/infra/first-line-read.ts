@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
-import { readFileWindowFullySync } from "./file-read.js";
+import { readFileWindowFullySync } from "@openclaw/fs-safe/advanced";
 
 // A session header is one JSON line that may be longer than a single read. Scan it
 // in chunks and stop at the first newline: `StringDecoder` carries a multibyte

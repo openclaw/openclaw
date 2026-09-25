@@ -8,6 +8,7 @@ import {
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 export function registerExecutorRootOwnershipTests(
   fixture: () => { root: string; replaceOwner: (installationRoot?: string) => void },
@@ -74,17 +75,46 @@ export function registerExecutorRootOwnershipTests(
     });
   });
 
+  it("refuses to release a replaced preflight owner and preserves the new lease", async () => {
+    const { root, replaceOwner } = fixture();
+    let refusal: unknown;
+    await expect(
+      withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(root, { preflight: true });
+        replaceOwner();
+        try {
+          releaseUpdateCommandPreflightForHandoff(fence);
+        } catch (error) {
+          refusal = error;
+        }
+      }),
+    ).rejects.toThrow();
+    expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
+    expect(refusal).toMatchObject({ message: expect.stringContaining("no longer current") });
+    expect(createManagedHandoffLeaseStore().read(root)).toMatchObject({
+      kind: "current",
+      lease: { owner: "replacement" },
+    });
+  });
+
   it("invalidates the package fence if its service owner is replaced", async () => {
     const { root, replaceOwner } = fixture();
     const serviceRoot = path.join(root, "service-A");
     fs.mkdirSync(serviceRoot);
+    let refusal: unknown;
     await expect(
       withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(root, { serviceRoot });
         replaceOwner(serviceRoot);
-        expect(fence.assertCurrent).toThrow("no longer current");
+        try {
+          fence.assertCurrent();
+        } catch (error) {
+          refusal = error;
+        }
       }),
     ).rejects.toThrow();
+    expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
+    expect(refusal).toMatchObject({ message: expect.stringContaining("no longer current") });
     expect(createManagedHandoffLeaseStore().read(serviceRoot)).toMatchObject({
       kind: "current",
       lease: { owner: "replacement" },

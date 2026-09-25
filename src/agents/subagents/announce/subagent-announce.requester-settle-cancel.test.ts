@@ -78,9 +78,10 @@ it.each([
     });
   }
   const endedAt = Date.now();
-  const entries = childKeys.map((childSessionKey) => {
+  const entries = [];
+  for (const childSessionKey of childKeys) {
     const runId = childSessionKey.slice(childSessionKey.lastIndexOf(":") + 1);
-    registerSubagentRun({
+    await registerSubagentRun({
       runId,
       childSessionKey,
       requesterSessionKey: requesterKey,
@@ -107,8 +108,8 @@ it.each([
     entry.cleanupHandled = true;
     entry.cleanupCompletedAt = endedAt;
     entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
-    return entry;
-  });
+    entries.push(entry);
+  }
   const entry = entries[0]!;
   if (phase === "exact private retry") {
     const privateEntry = entries[1]!;
@@ -332,7 +333,7 @@ it.each([
         sessionKey,
         defaultSessionId: `${runId}-session`,
       });
-      registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey: sessionKey,
         requesterSessionKey,
@@ -418,7 +419,7 @@ it.each([
       }));
     }
     if (phase === "requester replacement") {
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: "replacement",
         childSessionKey: requesterKey,
         requesterSessionKey: owner,
@@ -481,7 +482,7 @@ it.each(["batch", "ordinary"] as const)(
       { runId: `sibling-${mode}`, childSessionKey: siblingKey, expectsCompletionMessage: true },
     ];
     for (const spawn of acceptedSessionSpawns) {
-      registerSubagentRun({
+      await registerSubagentRun({
         ...spawn,
         requesterSessionKey: parentKey,
         requesterAgentId: "main",

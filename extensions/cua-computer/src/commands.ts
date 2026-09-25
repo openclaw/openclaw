@@ -11,6 +11,7 @@ import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createRastermill } from "rastermill";
 import { z } from "zod";
+import type { CuaComputerActParams } from "./action-targets.js";
 import { normalizeModifiers, parseKeyChord, scalePoint } from "./actions.js";
 import {
   ClickButton,
@@ -32,7 +33,7 @@ import {
 } from "./frame.js";
 import { createCuaMcpDriver } from "./mcp-driver-client.js";
 import { closeRecordingExecution } from "./recording-actions.js";
-import { handleWindowAct, type CuaComputerActParams } from "./window-actions.js";
+import { handleWindowAct } from "./window-actions.js";
 
 const AVAILABILITY_POLL_MS = 5_000;
 const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
@@ -411,6 +412,7 @@ export function createCuaComputerProvider(
   const env = options.env ?? process.env;
   const macOsEndpoint = platform === "darwin" ? resolveMacOsMcpEndpoint(env) : undefined;
   let ownedAvailabilityDriver: CuaDriverSession | undefined;
+  let availabilityDisposal: Promise<void> | undefined;
   let stopped = false;
   const createDriver =
     options.createDriver ??
@@ -421,11 +423,14 @@ export function createCuaComputerProvider(
     }
     return options.driver ?? (ownedAvailabilityDriver ??= createDriver());
   };
-  const disposeAvailabilityDriver = async () => {
+  const disposeAvailabilityDriver = () => {
     stopped = true;
-    const current = ownedAvailabilityDriver;
-    ownedAvailabilityDriver = undefined;
-    await current?.dispose();
+    // Driver disposal is terminal; every stop must observe its actual result.
+    return (availabilityDisposal ??= Promise.resolve().then(async () => {
+      const current = ownedAvailabilityDriver;
+      ownedAvailabilityDriver = undefined;
+      await current?.dispose();
+    }));
   };
   const imageProcessor = options.imageProcessor ?? createImageProcessor(env);
   const interval = options.setInterval ?? setInterval;
@@ -476,7 +481,7 @@ export function createCuaComputerProvider(
       timer.unref?.();
       return () => {
         clear(timer);
-        void disposeAvailabilityDriver();
+        return disposeAvailabilityDriver();
       };
     },
     openExecution: async () => {

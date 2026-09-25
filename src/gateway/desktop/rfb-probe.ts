@@ -43,39 +43,6 @@ export function parseRfbVersionBanner(
   };
 }
 
-type ParsedRfbSecurity =
-  | { kind: "complete"; securityTypes: number[] }
-  | { kind: "incomplete"; requiredBytes: number };
-
-/** Parses the post-version RFB security offer from a standalone buffer. */
-function parseRfbSecurityTypes(buffer: Buffer, protocolMinor: number): ParsedRfbSecurity {
-  if (protocolMinor < RFB_37_MINOR) {
-    if (buffer.length < 4) {
-      return { kind: "incomplete", requiredBytes: 4 };
-    }
-    const securityType = buffer.readUInt32BE(0);
-    return {
-      kind: "complete",
-      securityTypes: securityType === 0 ? [] : [securityType],
-    };
-  }
-
-  if (buffer.length < 1) {
-    return { kind: "incomplete", requiredBytes: 1 };
-  }
-  const count = buffer.readUInt8(0);
-  if (count > 0) {
-    const requiredBytes = 1 + count;
-    return buffer.length < requiredBytes
-      ? { kind: "incomplete", requiredBytes }
-      : {
-          kind: "complete",
-          securityTypes: [...buffer.subarray(1, requiredBytes)],
-        };
-  }
-  return { kind: "complete", securityTypes: [] };
-}
-
 class SocketEndedError extends Error {
   constructor(readonly buffered: Buffer) {
     super("RFB server closed the handshake early");
@@ -256,15 +223,18 @@ export async function connectRfbServer(params: {
     }
     socket.write(version.reply);
 
-    const prefixBytes = version.minor < RFB_37_MINOR ? 4 : 1;
-    let securityBuffer = await reader.readExactly(prefixBytes);
-    let parsed = parseRfbSecurityTypes(securityBuffer, version.minor);
-    while (parsed.kind === "incomplete") {
-      securityBuffer = Buffer.concat([
-        securityBuffer,
-        await reader.readExactly(parsed.requiredBytes - securityBuffer.length),
-      ]);
-      parsed = parseRfbSecurityTypes(securityBuffer, version.minor);
+    let securityBuffer: Buffer;
+    let securityTypes: number[];
+    if (version.minor < RFB_37_MINOR) {
+      securityBuffer = await reader.readExactly(4);
+      const securityType = securityBuffer.readUInt32BE(0);
+      securityTypes = securityType === 0 ? [] : [securityType];
+    } else {
+      securityBuffer = await reader.readExactly(1);
+      const count = securityBuffer.readUInt8(0);
+      const offered = count > 0 ? await reader.readExactly(count) : Buffer.alloc(0);
+      securityBuffer = Buffer.concat([securityBuffer, offered]);
+      securityTypes = [...offered];
     }
     params.signal?.throwIfAborted();
     reader.detach();
@@ -273,7 +243,7 @@ export async function connectRfbServer(params: {
     // reply is consumed locally, since inspection already sent it to this peer.
     socket.unshift(Buffer.concat([bannerBytes, securityBuffer]));
     retained = true;
-    return { kind: "rfb", securityTypes: parsed.securityTypes, stream };
+    return { kind: "rfb", securityTypes, stream };
   } catch (error) {
     params.signal?.throwIfAborted();
     if (error instanceof SocketTimeoutError) {

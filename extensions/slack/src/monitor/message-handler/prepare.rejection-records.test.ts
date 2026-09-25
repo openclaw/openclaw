@@ -68,7 +68,8 @@ describe("Slack preparation rejection records", () => {
     },
     {
       reason: "bot-disabled",
-      change: ({ message }: ReturnType<typeof fixture>) => {
+      change: ({ ctx, message }: ReturnType<typeof fixture>) => {
+        ctx.cfg.channels!.slack!.allowBots = false;
         message.bot_id = "B_OTHER";
         message.subtype = "bot_message";
       },

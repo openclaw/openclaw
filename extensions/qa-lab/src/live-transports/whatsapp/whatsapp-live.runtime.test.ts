@@ -19,7 +19,7 @@ import {
   collectQaSuiteGatewayConfigPatches,
 } from "../../suite-planning.js";
 import { resolveLiveTransportQaScenarioIds } from "../shared/scenario-selection.js";
-import { createWhatsAppQaScenarioEnvironment } from "./scenario-environment.js";
+import { whatsappScenarioImplementations } from "./scenario-implementations.js";
 import { runWhatsAppApprovalScenario } from "./whatsapp-live.approvals.js";
 import { buildWhatsAppQaConfig, parseWhatsAppQaCredentialPayload } from "./whatsapp-live.config.js";
 import {
@@ -36,10 +36,6 @@ import {
   runWhatsAppStructuredInboundChecks,
   waitForScenarioObservedMessage,
 } from "./whatsapp-live.operations.js";
-import * as whatsappCapabilityScenarios from "./whatsapp-live.scenario-implementations.capabilities.js";
-import * as whatsappConversationScenarios from "./whatsapp-live.scenario-implementations.conversation.js";
-import * as whatsappDeliveryScenarios from "./whatsapp-live.scenario-implementations.delivery.js";
-import * as whatsappUserPathScenarios from "./whatsapp-live.scenario-implementations.user-path.js";
 import { unpackWhatsAppAuthArchive } from "./whatsapp-live.setup.js";
 
 const runExecSpy = vi.hoisted(() =>
@@ -201,64 +197,16 @@ function buildWhatsAppQaConfigFixture(
   });
 }
 
-async function prepareWhatsAppFlowFixture(params: {
-  config: Parameters<
-    ReturnType<typeof createWhatsAppQaScenarioEnvironment>["prepareFlow"]
-  >[0]["config"];
-  gatewayCall: unknown;
-  scenarioId: string;
-  scenarioTitle: string;
-}) {
-  const { prepareFlow } = createWhatsAppQaScenarioEnvironment({
-    accountId: "work",
-    driverAuthDir: "/tmp/whatsapp-driver",
-    explicitScenarioSelection: true,
-    getDriver: vi.fn(() => undefined as never),
-    replaceDriver: vi.fn(),
-    runtimeEnv: {
-      driverAuthArchiveBase64: "driver-auth",
-      driverPhoneE164: "+15550000001",
-      sutAuthArchiveBase64: "sut-auth",
-      sutPhoneE164: "+15550000002",
-    },
-    sutAuthDir: "/tmp/whatsapp-sut",
-  });
-  return await prepareFlow({
-    config: params.config,
-    gateway: { call: params.gatewayCall } as never,
-    outputDir: "/tmp/whatsapp-output",
-    primaryModel: "mock-openai/gpt-5.6-luna",
-    scenarioId: params.scenarioId,
-    scenarioTitle: params.scenarioTitle,
-    timeoutMs: 60_000,
-    waitForConfigRestartSettle: vi.fn(),
-  });
-}
-
 type WhatsAppScenarioIdFilter = string;
 
-const whatsappScenarioImplementations = {
-  ...whatsappCapabilityScenarios,
-  ...whatsappConversationScenarios,
-  ...whatsappDeliveryScenarios,
-  ...whatsappUserPathScenarios,
-} as Record<string, WhatsAppQaScenarioImplementation>;
-
-function toWhatsAppScenarioExportName(id: string) {
-  const suffix = id
-    .slice("whatsapp-".length)
-    .split("-")
-    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-    .join("");
-  return `whatsappQa${suffix}Scenario`;
-}
-
 function getWhatsAppScenario(id: string): WhatsAppScenarioDefinition {
-  const implementation = whatsappScenarioImplementations[toWhatsAppScenarioExportName(id)];
+  const scenario = requireFlowScenario(readQaScenarioById(id));
+  const name = scenario.execution.config?.whatsappScenario;
+  const implementation =
+    typeof name === "string" ? whatsappScenarioImplementations[name] : undefined;
   if (!implementation) {
     throw new Error(`missing WhatsApp test implementation for ${id}`);
   }
-  const scenario = requireFlowScenario(readQaScenarioById(id));
   return {
     ...implementation,
     id,
@@ -1106,68 +1054,6 @@ describe("WhatsApp QA live runtime", () => {
     }
   });
 
-  it("authorizes the exact active WhatsApp account allowlist replacement path", async () => {
-    const gatewayCall = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "config.get") {
-        return { config: {}, hash: "config-hash" };
-      }
-      if (method === "config.patch") {
-        return { noop: true };
-      }
-      if (method === "channels.status") {
-        return {
-          channelAccounts: {
-            whatsapp: [
-              {
-                accountId: "work",
-                busy: false,
-                connected: true,
-                lastConnectedAt: Date.now() - 30_000,
-                restartPending: false,
-                running: true,
-              },
-            ],
-          },
-        };
-      }
-      throw new Error(`unexpected gateway method: ${method}`);
-    });
-    const prepared = await prepareWhatsAppFlowFixture({
-      config: {},
-      gatewayCall,
-      scenarioId: "whatsapp-canary",
-      scenarioTitle: "WhatsApp DM canary",
-    });
-    await prepared.whatsappScenarioContext.configureScenario(
-      getWhatsAppScenario("whatsapp-canary"),
-    );
-
-    const patchCall = gatewayCall.mock.calls.find(([method]) => method === "config.patch");
-    if (!patchCall) {
-      throw new Error("config.patch was not called");
-    }
-    expect(patchCall[1]).toMatchObject({
-      replacePaths: expect.arrayContaining(["channels.whatsapp.accounts.work.allowFrom"]),
-    });
-    expect((patchCall[1] as { replacePaths?: string[] }).replacePaths).not.toContain(
-      "channels.whatsapp.accounts.sut.allowFrom",
-    );
-  });
-
-  it("leaves generic declarative flows to their own config preparation", async () => {
-    const gatewayCall = vi.fn();
-    const prepared = await prepareWhatsAppFlowFixture({
-      config: { policyKey: "dmPolicy", policyValue: "disabled" },
-      gatewayCall,
-      scenarioId: "whatsapp-access-control-dm-disabled",
-      scenarioTitle: "WhatsApp dmPolicy disabled stays quiet",
-    });
-    expect(prepared.whatsappScenarioContext.scenario.id).toBe(
-      "whatsapp-access-control-dm-disabled",
-    );
-    expect(gatewayCall).not.toHaveBeenCalled();
-  });
-
   it("patches the effective WhatsApp policy for default and named SUT accounts", async () => {
     const policy = (
       id: string,
@@ -1650,40 +1536,6 @@ describe("WhatsApp QA live runtime", () => {
     expect(recorded).toEqual([]);
   });
 
-  it("lets WhatsApp scenario waits use caller-specific sender matching", async () => {
-    const groupReply = createWhatsAppObservedMessage("group-reply-1", {
-      fromJid: "120363000000000000@g.us",
-      fromPhoneE164: null,
-      observedAt: "2026-06-05T01:00:01.000Z",
-      text: "group token",
-    });
-    const driver = createWhatsAppQaDriverMock({
-      waitForMessage: async (params) => {
-        expect(params.match(groupReply)).toBe(true);
-        return groupReply;
-      },
-    });
-    const recorded: unknown[] = [];
-    const context = createWhatsAppScenarioContext({
-      driver,
-      gatewayTarget: "120363000000000000@g.us",
-      gatewayWorkspaceDir: "/tmp/openclaw-whatsapp-qa-gateway",
-      recordedMessages: recorded,
-      requestStartedAt: new Date("2026-06-05T01:00:00.000Z"),
-      scenarioId: "whatsapp-mention-gating",
-      scenarioTitle: "WhatsApp group mention gating",
-      target: "120363000000000000@g.us",
-    });
-
-    await expect(
-      testing.waitForScenarioObservedMessage(context, {
-        expectedSender: (message) => message.fromJid === "120363000000000000@g.us",
-        match: (message) => message.text.includes("group token"),
-      }),
-    ).resolves.toBe(groupReply);
-    expect(recorded).toEqual([groupReply]);
-  });
-
   it("defines WhatsApp final-message accounting as a settled two-chunk assertion", () => {
     const { run } = requireWhatsAppMessageScenario("whatsapp-stream-final-message-accounting");
 
@@ -1920,71 +1772,16 @@ describe("WhatsApp QA live runtime", () => {
     ).toBe(true);
   });
 
-  it("applies WhatsApp QA config overrides for reply mode and status reactions", () => {
+  it("applies WhatsApp QA config overrides for reply mode and inbound debounce", () => {
     const cfg = buildWhatsAppQaConfigFixture({
       overrides: {
         inboundDebounceMs: 250,
         replyToMode: "all",
-        statusReactions: true,
       },
     });
 
     expect(cfg.channels?.whatsapp?.accounts?.sut?.replyToMode).toBe("all");
     expect(cfg.messages?.inbound?.byChannel?.whatsapp).toBe(250);
-    expect(cfg.channels?.whatsapp?.ackReaction).toMatchObject({
-      direct: true,
-      emoji: "👀",
-    });
-    expect(cfg.messages?.statusReactions?.enabled).toBe(true);
-  });
-
-  it("maps WhatsApp broadcast overrides without deleting existing agent defaults", () => {
-    const groupJid = "120363000000000000@g.us";
-    const broadcastOverrides = {
-      broadcast: {
-        agents: ["main", "qa-second"],
-        strategy: "sequential" as const,
-      },
-      groupPolicy: "open" as const,
-    };
-    const cfg = buildWhatsAppQaConfigFixture(
-      {
-        groupJid,
-        overrides: broadcastOverrides,
-      },
-      {
-        agents: {
-          defaults: {
-            maxConcurrent: 7,
-            model: "mock-openai/gpt-5.6-luna",
-            workspace: "/workspace/qa",
-          },
-          list: [
-            {
-              default: true,
-              id: "main",
-              identity: { name: "Main WhatsApp QA" },
-              model: "mock-openai/gpt-5.6-luna",
-            },
-          ],
-        },
-      },
-    );
-
-    expect(cfg.agents?.defaults).toEqual({
-      maxConcurrent: 7,
-      model: "mock-openai/gpt-5.6-luna",
-      workspace: "/workspace/qa",
-    });
-    expect(cfg.agents?.list?.map((agent) => agent.id)).toEqual(["main", "qa-second"]);
-    expect(cfg.agents?.list?.find((agent) => agent.id === "main")).toMatchObject({
-      default: true,
-      identity: { name: "Main WhatsApp QA" },
-      model: "mock-openai/gpt-5.6-luna",
-    });
-    expect(cfg.broadcast?.strategy).toBe("sequential");
-    expect(cfg.broadcast?.[groupJid]).toEqual(["main", "qa-second"]);
-    expect(cfg.channels?.whatsapp?.accounts?.sut?.groups?.[groupJid]?.requireMention).toBe(true);
   });
 
   it("keeps pending-history group context enabled through the supported config path", () => {

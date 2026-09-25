@@ -219,23 +219,13 @@ export const googlechatOutboundAdapter = {
     normalizePayload: ({ payload }: { payload: ReplyPayload }) =>
       shouldSuppressGoogleChatManualExecApprovalFollowupPayload(payload) ? null : payload,
     resolveTarget: ({ to }: { to?: string }) => {
-      const trimmed = normalizeOptionalString(to) ?? "";
-
-      if (trimmed) {
-        const normalized = normalizeGoogleChatTarget(trimmed);
-        if (!normalized) {
-          return {
+      const normalized = normalizeGoogleChatTarget(normalizeOptionalString(to));
+      return normalized
+        ? { ok: true as const, to: normalized }
+        : {
             ok: false as const,
             error: missingTargetError("Google Chat", "<spaces/{space}|users/{user}>"),
           };
-        }
-        return { ok: true as const, to: normalized };
-      }
-
-      return {
-        ok: false as const,
-        error: missingTargetError("Google Chat", "<spaces/{space}|users/{user}>"),
-      };
     },
   },
   attachedResults: {

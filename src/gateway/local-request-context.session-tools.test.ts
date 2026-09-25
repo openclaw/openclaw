@@ -9,6 +9,7 @@ import {
   callAgentToolGatewayRequest,
   callInProcessGatewayTool,
   type InProcessGatewayCaller,
+  type AgentToolGatewayRequestCaller,
   runWithGatewayToolCleanupContext,
 } from "../agents/tools/in-process-gateway.js";
 import { createSessionsListTool } from "../agents/tools/sessions-list-tool.js";
@@ -34,6 +35,11 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { ensureGatewayOwnerProfile } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
+import {
+  captureGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
+  readGatewayDeviceSourceAuthority,
+} from "./device-revocation.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
 import {
   runWithOperatorToolGatewayCleanupContext,
@@ -470,9 +476,9 @@ describe("built-in session tool role authority", () => {
     },
   );
 
-  it.each([false, true])(
-    "commits self-archive after caller closure (operator: %s)",
-    async (operator) => {
+  it.each(["system", "operator", "closed request", "revoked device"] as const)(
+    "settles self-archive with live source authority after caller closure (%s)",
+    async (caller) => {
       await withSessionToolsFixture(async (cfg) => {
         const context = getPluginRuntimeGatewayRequestScope()?.context;
         if (!context) {
@@ -494,6 +500,15 @@ describe("built-in session tool role authority", () => {
           assertAllowed: () => {},
         });
         let current = true;
+        const settled = createDeferredCore();
+        const client = roleClient("write");
+        const source = captureGatewayDeviceRevocation(
+          context,
+          { deviceId: "archive-device", role: "operator" },
+          () => current,
+          undefined,
+          { isCurrent: () => true, subscribe: () => () => {} },
+        );
         try {
           const archive = () =>
             withGatewayToolCallerIdentity(
@@ -510,31 +525,68 @@ describe("built-in session tool role authority", () => {
                     config: cfg,
                     agentSessionKey: REQUESTER,
                     agentSessionId: sessionId,
+                    callGateway: async <T>(
+                      request: Parameters<AgentToolGatewayRequestCaller>[0],
+                    ) => {
+                      try {
+                        const result = await callAgentToolGatewayRequest<T>(request);
+                        settled.resolve();
+                        return result;
+                      } catch (error) {
+                        settled.reject(error);
+                        throw error;
+                      }
+                    },
                   }).execute("archive-self", { action: "patch", archived: true }),
                 ),
             );
-          const client = roleClient("write");
           if (!client.authenticatedUserProfile) {
             throw new Error("expected operator profile");
           }
-          const result = await (operator
-            ? withOperatorToolGatewayAuthority(
+          const invoke = () =>
+            caller !== "system"
+              ? withOperatorToolGatewayAuthority(
+                  {
+                    authenticatedUserProfile: client.authenticatedUserProfile,
+                    scopes: client.connect.scopes ?? [],
+                  },
+                  archive,
+                )
+              : archive();
+          const result = await (caller === "closed request" || caller === "revoked device"
+            ? withPluginRuntimeGatewayRequestScope(
                 {
-                  authenticatedUserProfile: client.authenticatedUserProfile,
-                  scopes: client.connect.scopes ?? [],
+                  ...getPluginRuntimeGatewayRequestScope(),
+                  context,
+                  client,
+                  isWebchatConnect: () => false,
+                  hasCurrentClientAuthority: source.isCurrent,
                 },
-                archive,
+                invoke,
               )
-            : archive());
+            : invoke());
           expect(result.details).toMatchObject({ status: "scheduled", sessionKey: REQUESTER });
           expect(
             loadSessionEntry({ agentId: "main", sessionKey: REQUESTER })?.archivedAt,
           ).toBeUndefined();
+          if (caller === "revoked device") {
+            invalidateGatewayDeviceRevocation(context, "archive-device", "operator");
+          }
         } finally {
           current = false;
+          source.release();
           admission.release();
         }
+        if (caller === "revoked device") {
+          await expect(settled.promise).rejects.toThrow(/authority.*no longer active/);
+          expect(
+            loadSessionEntry({ agentId: "main", sessionKey: REQUESTER })?.archivedAt,
+          ).toBeUndefined();
+          return;
+        }
+        await settled.promise;
         await archived.promise;
+        expect(readGatewayDeviceSourceAuthority(source.isCurrent)?.()).toBe(false);
         expect(loadSessionEntry({ agentId: "main", sessionKey: REQUESTER })).toMatchObject({
           sessionId,
           archivedAt: expect.any(Number),

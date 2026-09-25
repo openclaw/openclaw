@@ -139,24 +139,11 @@ function createAcceptedWorkspacePublisher(params: {
       operation: "apply" | "commit",
       publicationFailure: unknown,
     ): Promise<AcceptedWorkspaceSettlementOutcome> => {
-      let settled: SpawnResult;
       try {
-        settled = await transactionCommand("settle");
-      } catch (observationFailure) {
-        throw new AcceptedWorkspacePublicationIndeterminateError(
-          operation,
-          publicationFailure,
-          observationFailure,
-        );
-      }
-      if (!workerWorkspaceCommandSucceeded(settled)) {
-        throw new AcceptedWorkspacePublicationIndeterminateError(
-          operation,
-          publicationFailure,
-          workspaceSyncError(settled),
-        );
-      }
-      try {
+        const settled = await transactionCommand("settle");
+        if (!workerWorkspaceCommandSucceeded(settled)) {
+          throw workspaceSyncError(settled);
+        }
         return parseAcceptedWorkspaceSettlement(settled.stdout);
       } catch (observationFailure) {
         throw new AcceptedWorkspacePublicationIndeterminateError(

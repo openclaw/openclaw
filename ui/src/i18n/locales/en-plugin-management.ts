@@ -21,7 +21,27 @@ const enPluginManagement = {
     installProgress: {
       title: "Installation progress",
       stopped: "Installation stopped",
-      failed: "Install failed",
+      rejected: {
+        title: "Plugin not installed",
+        recovery:
+          "This attempt did not install the plugin. Resolve the reported issue, then select Retry install.",
+      },
+      saved: {
+        title: "Installation saved",
+        recovery:
+          "The installation was saved. Resolve the reported issue before reloading the plugin; do not install it again.",
+      },
+      unknown: {
+        title: "Installation status unknown",
+        recovery:
+          "The Gateway did not confirm the installation outcome. Reconnect and check installed plugins before trying again.",
+      },
+      retry: {
+        title: "Installation failed",
+        recovery: "Resolve the reported issue, then select Retry install to try again.",
+      },
+      details: "Failure details",
+      viewStatus: "View status",
       failure: "Installation failed",
       resolve: {
         started: "Resolving package",
@@ -169,6 +189,7 @@ const enPluginManagement = {
     intentTrending: "Trending",
     intentOfficial: "Official",
     intentBundled: "Bundled",
+    loadingCategories: "Loading plugin categories…",
     categoriesLabel: "Plugin categories",
     categoriesTitle: "Categories",
     allCategories: "All categories",
@@ -287,6 +308,9 @@ const enPluginManagement = {
     bundlePlugin: "Bundle plugin",
     unavailable: "Unavailable",
     install: "Install",
+    retryInstall: "Retry install",
+    retryInstallNamed: "Retry install of {name}",
+    viewInstallStatusNamed: "View status of {name} installation",
     installing: "Installing",
     installNamed: "Install {name}",
     connectToChange: "Connect to the gateway to change plugins.",

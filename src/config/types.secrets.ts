@@ -7,6 +7,7 @@ import {
   DEFAULT_SECRET_PROVIDER_ALIAS,
   ENV_SECRET_REF_ID_RE,
   isSecretRef,
+  secretRefKey,
   type SecretRef,
   type SecretRefSource,
 } from "../secrets/ref-contract.js";
@@ -104,12 +105,7 @@ export function parseLegacySecretRefEnvMarker(
   const trimmed = value.trim();
   const prefix = trimmed.startsWith(LEGACY_SECRETREF_ENV_MARKER_PREFIX)
     ? LEGACY_SECRETREF_ENV_MARKER_PREFIX
-    : trimmed.startsWith(LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX)
-      ? LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX
-      : undefined;
-  if (!prefix) {
-    return null;
-  }
+    : LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX;
   const id = trimmed.slice(prefix.length);
   if (!ENV_SECRET_REF_ID_RE.test(id)) {
     return null;
@@ -135,11 +131,7 @@ export function coerceSecretRef(value: unknown, defaults?: SecretDefaults): Secr
       id: value.id,
     };
   }
-  const envTemplate = parseEnvTemplateSecretRef(value, defaults?.env);
-  if (envTemplate) {
-    return envTemplate;
-  }
-  return null;
+  return parseEnvTemplateSecretRef(value, defaults?.env);
 }
 
 /** Return whether a value contains either a literal secret string or resolvable SecretRef shape. */
@@ -155,10 +147,6 @@ export function normalizeSecretInputString(value: unknown): string | undefined {
   return normalizeOptionalString(value);
 }
 
-function formatSecretRefLabel(ref: SecretRef): string {
-  return `${ref.source}:${ref.provider}:${ref.id}`;
-}
-
 /** Error thrown when strict secret reads encounter a configured but unresolved SecretRef. */
 export class UnresolvedSecretInputError extends Error {
   readonly path: string;
@@ -166,7 +154,7 @@ export class UnresolvedSecretInputError extends Error {
 
   constructor(params: { path: string; ref: SecretRef }) {
     super(
-      `${params.path}: unresolved SecretRef "${formatSecretRefLabel(params.ref)}". Resolve this command against an active gateway runtime snapshot before reading it.`,
+      `${params.path}: unresolved SecretRef "${secretRefKey(params.ref)}". Resolve this command against an active gateway runtime snapshot before reading it.`,
     );
     this.name = "UnresolvedSecretInputError";
     this.path = params.path;
@@ -177,10 +165,6 @@ export class UnresolvedSecretInputError extends Error {
 /** Narrow errors from strict secret read sites without parsing user-facing messages. */
 export function isUnresolvedSecretInputError(value: unknown): value is UnresolvedSecretInputError {
   return value instanceof UnresolvedSecretInputError;
-}
-
-function createUnresolvedSecretInputError(params: { path: string; ref: SecretRef }): Error {
-  return new UnresolvedSecretInputError(params);
 }
 
 /** Throw when a secret field still contains an unresolved SecretRef at a read site. */
@@ -198,7 +182,7 @@ export function assertSecretInputResolved(params: {
   if (!ref) {
     return;
   }
-  throw createUnresolvedSecretInputError({ path: params.path, ref });
+  throw new UnresolvedSecretInputError({ path: params.path, ref });
 }
 
 /** Resolve a secret field to either a literal value, a configured-unavailable ref, or missing. */
@@ -230,7 +214,7 @@ export function resolveSecretInputString(params: {
     };
   }
   if ((params.mode ?? "strict") === "strict") {
-    throw createUnresolvedSecretInputError({ path: params.path, ref });
+    throw new UnresolvedSecretInputError({ path: params.path, ref });
   }
   return {
     status: "configured_unavailable",
@@ -246,14 +230,10 @@ export function normalizeResolvedSecretInputString(params: {
   defaults?: SecretDefaults;
   path: string;
 }): string | undefined {
-  const resolved = resolveSecretInputString({
+  return resolveSecretInputString({
     ...params,
     mode: "strict",
-  });
-  if (resolved.status === "available") {
-    return resolved.value;
-  }
-  return undefined;
+  }).value;
 }
 
 /** Resolve explicit `refValue` before inline secret references embedded in `value`. */

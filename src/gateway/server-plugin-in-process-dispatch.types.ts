@@ -14,15 +14,10 @@ import type {
   TrustedAgentToolCaller,
 } from "./server-methods/types.js";
 
-export type OperatorToolGatewayAuthority = {
-  authenticatedUserProfile?: NonNullable<
-    NonNullable<GatewayRequestOptions["client"]>["authenticatedUserProfile"]
-  >;
-  scopes: readonly string[];
-  operatorRoleActor?: GatewayOperatorRoleActor;
-  operatorRunAuthority?: AdmittedRunOperatorAuthority;
-  signal: AbortSignal;
-  assertCurrent?: () => void;
+export type PrepareInProcessAgentExecutionOptions = {
+  agentId: string;
+  pluginRuntimeOwnerId: string;
+  resolveGatewayContext?: GatewayContextResolver;
 };
 
 export type DispatchGatewayMethodInProcessOptions = {
@@ -72,4 +67,15 @@ export type ResolvedInProcessGatewayDispatch = {
   isWebchatConnect: NonNullable<GatewayRequestOptions["isWebchatConnect"]>;
   operatorSourceClient: NonNullable<GatewayRequestOptions["client"]>;
   hasCurrentClientAuthority?: GatewayRequestOptions["hasCurrentClientAuthority"];
+};
+
+export type OperatorToolGatewayAuthority = {
+  authenticatedUserProfile?: NonNullable<
+    NonNullable<GatewayRequestOptions["client"]>["authenticatedUserProfile"]
+  >;
+  scopes: readonly string[];
+  operatorRoleActor?: GatewayOperatorRoleActor;
+  operatorRunAuthority?: AdmittedRunOperatorAuthority;
+  signal: AbortSignal;
+  assertCurrent?: () => void;
 };

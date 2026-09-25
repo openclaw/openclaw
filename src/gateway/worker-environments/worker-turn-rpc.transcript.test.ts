@@ -95,7 +95,7 @@ describe("worker transcript claim fences", () => {
       let replacement: WorkerSessionTurnClaim | undefined;
       let replacementAuthority: ReturnType<typeof claimAgentRunDelegatedAuthority> | undefined;
       try {
-        bindWorkerTurnOwner(
+        await bindWorkerTurnOwner(
           store,
           claim,
           undefined,
@@ -142,7 +142,14 @@ describe("worker transcript claim fences", () => {
         });
         const replacementInstance = createOperationalRunInstanceRef(replacement.runId);
         replacementAuthority = claimAgentRunDelegatedAuthority(replacementInstance);
-        bindWorkerTurnOwner(store, replacement, undefined, replacementInstance, target, () => {});
+        await bindWorkerTurnOwner(
+          store,
+          replacement,
+          undefined,
+          replacementInstance,
+          target,
+          () => {},
+        );
         const credential = await workerService.acquireTurnCredential(replacement);
         expect(credential.ownerEpoch).toBe(identity.ownerEpoch);
         expect(await workerService.acknowledgeCredentialDelivery(credential)).toBe(true);
@@ -228,7 +235,7 @@ describe("worker transcript claim fences", () => {
       const instance = createOperationalRunInstanceRef(claim.runId);
       const authority = claimAgentRunDelegatedAuthority(instance);
       try {
-        bindWorkerTurnOwner(store, claim, undefined, instance, original, () => {
+        await bindWorkerTurnOwner(store, claim, undefined, instance, original, () => {
           resolveWorkerTurnTranscriptTarget({ ...original, sessionTarget: original });
         });
         support.testState.config.session = { store: replacement.storePath };

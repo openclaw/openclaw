@@ -4,9 +4,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { isCodeFile, isTestRelatedFile, listRepoFilesSync } from "./check-file-utils.js";
 import { renderFindingGroups } from "./lib/grouped-findings.js";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { parseInventoryReportCliArgs } from "./lib/report-cli-helpers.mts";
 
 type EnvMutationOperation = "assign" | "delete" | "replace" | "stubEnv";
@@ -120,10 +121,6 @@ function envKeysFromObjectLiteral(node: ts.Expression): string[] {
     .filter((key): key is string => key !== null && TRACKED_ENV_KEYS.has(key));
 }
 
-function isAssignmentOperator(kind: ts.SyntaxKind): boolean {
-  return kind >= ts.SyntaxKind.FirstAssignment && kind <= ts.SyntaxKind.LastAssignment;
-}
-
 function stubEnvKeyFromCall(node: ts.CallExpression): string | null {
   const expression = node.expression;
   if (
@@ -163,12 +160,10 @@ function createFinding(params: {
 function scanFile(params: {
   allowedFiles: ReadonlyMap<string, string>;
   file: string;
-  repoRoot: string;
+  sourceFile: ts.SourceFile;
 }): TestEnvMutationFinding[] {
-  const absolutePath = path.join(params.repoRoot, params.file);
-  const source = fs.readFileSync(absolutePath, "utf8");
-  const sourceFile = ts.createSourceFile(params.file, source, ts.ScriptTarget.Latest);
-  const lines = source.split(/\r?\n/u);
+  const { sourceFile } = params;
+  const lines = sourceFile.text.split(/\r?\n/u);
   const findings: TestEnvMutationFinding[] = [];
 
   function addFinding(node: ts.Node, key: string, operation: EnvMutationOperation): void {
@@ -189,7 +184,7 @@ function scanFile(params: {
   }
 
   function visit(node: ts.Node): void {
-    if (ts.isBinaryExpression(node) && isAssignmentOperator(node.operatorToken.kind)) {
+    if (ts.isBinaryExpression(node) && ts.isAssignmentOperator(node.operatorToken.kind)) {
       if (
         node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
         isProcessEnvExpression(node.left)
@@ -214,7 +209,7 @@ function scanFile(params: {
         addFinding(node, key, "stubEnv");
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);
@@ -230,7 +225,20 @@ export function collectTestEnvMutationReport(
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const allowedFiles = params.allowedFiles ?? DEFAULT_ALLOWED_FILES;
   const files = listCandidateFiles(repoRoot);
-  const findings = files.flatMap((file) => scanFile({ allowedFiles, file, repoRoot }));
+  const findings: TestEnvMutationFinding[] = [];
+  const parser = createNativeTypeScriptParser({ cwd: repoRoot });
+  try {
+    const sources = files.map((fileName) => ({
+      fileName,
+      text: fs.readFileSync(path.join(repoRoot, fileName), "utf8"),
+    }));
+    for (const sourceFile of parser.parseSourceFiles(sources)) {
+      const file = path.relative(repoRoot, sourceFile.fileName).split(path.sep).join("/");
+      findings.push(...scanFile({ allowedFiles, file, sourceFile }));
+    }
+  } finally {
+    parser.close();
+  }
   const activeFindings = findings.filter((finding) => !finding.allowed);
   const allowedFindings = findings.filter((finding) => finding.allowed);
   const activeFileCount = new Set(activeFindings.map((finding) => finding.file)).size;

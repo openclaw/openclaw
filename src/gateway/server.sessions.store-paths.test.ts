@@ -13,11 +13,23 @@ import {
   loadSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import * as agentDatabaseRegistry from "../state/openclaw-agent-db-registry.js";
+import { getGatewayContextResolver } from "../plugins/runtime/gateway-context-binding.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import * as agentDatabasePaths from "../state/openclaw-agent-db.paths.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
+import * as stateDatabase from "../state/openclaw-state-db.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
-import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+import * as readContexts from "./session-read-contexts.test-support.js";
+import {
+  bindSessionRowProjection,
+  getSessionRowProjection,
+} from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
@@ -27,7 +39,111 @@ import {
   setupGatewaySessionsTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, openClient, withSessionTestState } =
+  setupGatewaySessionsTestHarness();
+
+test.each([false, true])(
+  "nested state cleanup joins suite ACP reads (disposal fails=%s)",
+  async (disposalFails) => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const boundary = createDeferredCore<"joined" | "closed">();
+    let preparing: Promise<void> | undefined;
+    let closing = false;
+    let sharedPath: string | undefined;
+    const close = stateDatabase.closeOpenClawStateDatabaseByPathAsync;
+    const closeSpy = vi
+      .spyOn(stateDatabase, "closeOpenClawStateDatabaseByPathAsync")
+      .mockImplementation((...args) => {
+        if (closing && args[0] === sharedPath) {
+          boundary.resolve("closed");
+        }
+        return close(...args);
+      });
+    let restoreRead: (() => void) | undefined;
+    let restoreJoin: (() => void) | undefined;
+    const disposalFailure = new Error("synthetic read-context disposal failure");
+    const disposal = disposalFails
+      ? vi.spyOn(readContexts, "disposeSessionReadContexts").mockRejectedValueOnce(disposalFailure)
+      : undefined;
+    const fixture = withSessionTestState({ layout: "state-only" }, async (state) => {
+      sharedPath = state.statePath("state", "openclaw.sqlite");
+      const fixtureSignal = getAsyncWorkSignal();
+      ensureProfileForEmail("nested-state-reader@example.test");
+      const { storePath } = await createSessionStoreDir();
+      await writeSessionStore({
+        entries: { main: { sessionId: "nested-state-reader", updatedAt: 1 } },
+      });
+      const runtime = getGatewayRecoveryRuntime();
+      const projection = getSessionRowProjection(runtime && getGatewayContextResolver(runtime)?.());
+      if (!projection) {
+        throw new Error("Suite Gateway projection is missing");
+      }
+      await projection.ensureMaterialized();
+      const read = stateReads.executeExistingOpenClawStateRead;
+      let held = false;
+      const reads = vi
+        .spyOn(stateReads, "executeExistingOpenClawStateRead")
+        .mockImplementation((...args) => {
+          if (
+            !held &&
+            args[1].type === "acpSessions.metadata" &&
+            args[0].env?.OPENCLAW_STATE_DIR === state.stateDir &&
+            getAsyncWorkSignal() !== fixtureSignal
+          ) {
+            held = true;
+            entered.resolve();
+            // The suite continuation has not admitted its shared-state read yet.
+            return release.promise.then(() => read(...args));
+          }
+          return read(...args);
+        });
+      restoreRead = () => reads.mockRestore();
+      sessionChanges.emit({ all: true, scope: { storePath }, factsInvalidated: true });
+      preparing = projection.ensureMaterialized();
+      void preparing.catch(() => {});
+      await Promise.race([
+        entered.promise,
+        preparing.then(() => {
+          throw new Error("Suite projection completed without the fixture's ACP metadata read");
+        }),
+      ]);
+      const ensure = projection.ensureMaterialized;
+      const join = vi.spyOn(projection, "ensureMaterialized").mockImplementation(() => {
+        if (closing) {
+          boundary.resolve("joined");
+        }
+        return ensure();
+      });
+      restoreJoin = () => join.mockRestore();
+      closing = true;
+    });
+    void fixture.catch(() => {});
+    try {
+      const first = await Promise.race([
+        boundary.promise,
+        fixture.then(() => {
+          throw new Error("Fixture completed without joining or closing its database");
+        }),
+      ]);
+      expect(first).toBe("joined");
+      release.resolve();
+      await expect(preparing).resolves.toBeUndefined();
+      if (disposalFails) {
+        await expect(fixture).rejects.toBe(disposalFailure);
+      } else {
+        await fixture;
+      }
+    } finally {
+      release.resolve();
+      await Promise.allSettled([preparing, fixture]);
+      restoreRead?.();
+      restoreJoin?.();
+      closeSpy.mockRestore();
+      disposal?.mockRestore();
+    }
+  },
+);
 
 test("session RPC paths name the physical SQLite store", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -198,7 +314,7 @@ test("configured-only multi-store target preparation is reused across distinct l
     }
 
     expect((await directSessionReq("sessions.list", { configuredAgentsOnly: true })).ok).toBe(true);
-    const matcher = vi.spyOn(agentDatabaseRegistry, "createOpenClawAgentDatabasePathMatcher");
+    const matcher = vi.spyOn(agentDatabasePaths, "createOpenClawAgentDatabasePathMatcher");
     const lstat = vi.spyOn(fsSync, "lstatSync");
     const readlink = vi.spyOn(fsSync, "readlinkSync");
     const realpath = vi.spyOn(fsSync.realpathSync, "native");

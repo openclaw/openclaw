@@ -325,7 +325,7 @@ describe("Browser panel stream ownership", () => {
       url: NEXT_URL,
       metrics: { title: "Next", url: NEXT_URL },
     });
-    controller.setUrlDraftEditing(true);
+    controller.urlDraftEditing = true;
     controller.setState("urlDraft", "editing");
     socket.receive(JSON.stringify({ type: "meta", url: PAGE_URL, title: "Page again" }));
     expect(controller.urlDraft).toBe("editing");
@@ -623,9 +623,7 @@ describe("Browser panel stream ownership", () => {
   it("does not let continuous mismatched frames postpone the debounced viewport sync", async () => {
     const { controller, calls } = setup();
     controller.handleViewportResize(500, 300);
-    const schedule = vi.spyOn(controller, "scheduleViewportSync");
     const socket = await start(controller);
-    expect(schedule).toHaveBeenCalledTimes(1);
     for (let elapsed = 100; elapsed <= 600; elapsed += 100) {
       socket.receive(screencastFrame(PAGE_URL, 100, 100));
       await vi.advanceTimersByTimeAsync(100);
@@ -634,15 +632,47 @@ describe("Browser panel stream ownership", () => {
       calls("/act").filter(
         ([, params]) => (params as BrowserRequestEnvelope).body?.kind === "resize",
       );
-    // The sync fired at 300 ms and 600 ms despite a frame every 100 ms; frames
-    // arriving while a sync was pending joined it instead of postponing it.
     expect(resizes()).toHaveLength(1);
     expect(resizes()[0]?.[1]).toMatchObject({ body: { width: 500, height: 300 } });
-    expect(schedule).toHaveBeenCalledTimes(2);
     socket.receive(screencastFrame(PAGE_URL, 100, 100));
-    await flush();
-    expect(schedule).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(resizes()).toHaveLength(1);
   });
+
+  it.each([
+    { acknowledged: true, width: 1300, height: 800 },
+    { acknowledged: true, width: 100, height: 100 },
+    { acknowledged: false, width: 1300, height: 800 },
+  ])(
+    "restores the visible viewport after drift to $width × $height (acknowledged: $acknowledged)",
+    async ({ acknowledged, width, height }) => {
+      const { controller, calls } = setup();
+      controller.handleViewportResize(640, 480);
+      const socket = await start(controller);
+      await vi.advanceTimersByTimeAsync(300);
+      if (acknowledged) {
+        socket.receive(screencastFrame(PAGE_URL, 640, 480));
+        await flush();
+      }
+
+      socket.receive(screencastFrame(PAGE_URL, width, height));
+      await flush();
+      await vi.advanceTimersByTimeAsync(300);
+      const resizes = () =>
+        calls("/act").filter(
+          ([, params]) => (params as BrowserRequestEnvelope).body?.kind === "resize",
+        );
+      expect(resizes()).toHaveLength(2);
+      expect(resizes()[1]?.[1]).toMatchObject({ body: { width: 640, height: 480 } });
+
+      // Repeated frames from a browser that ignores the correction must settle.
+      for (let frame = 0; frame < 4; frame += 1) {
+        socket.receive(screencastFrame(PAGE_URL, width, height));
+        await vi.advanceTimersByTimeAsync(300);
+      }
+      expect(resizes()).toHaveLength(2);
+    },
+  );
 
   it("negotiates pixel density and restarts only after a large debounced width change", async () => {
     const { controller, host, calls } = setup();
@@ -671,6 +701,41 @@ describe("Browser panel stream ownership", () => {
     sockets[1]!.receive(screencastFrame(PAGE_URL, 800, 1200));
     await flush();
   });
+
+  it.each([false, true])(
+    "settles a resize before applying new dimensions (reopened: %s)",
+    async (reopened) => {
+      const firstResize = createDeferred<{ ok: true }>();
+      let resizeCount = 0;
+      const { controller, host, calls } = setup(async (envelope) => {
+        if (envelope.path === "/act" && envelope.body?.kind === "resize") {
+          resizeCount += 1;
+          return resizeCount === 1 ? firstResize.promise : { ok: true };
+        }
+        return undefined;
+      });
+      controller.handleViewportResize(500, 300);
+      await start(controller);
+      await vi.advanceTimersByTimeAsync(300);
+      if (reopened) {
+        host.open = false;
+        controller.suspendView();
+        host.open = true;
+        await start(controller);
+      }
+      controller.handleViewportResize(600, 400);
+      controller.handleViewportResize(640, 480);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(resizeCount).toBe(1);
+
+      firstResize.resolve({ ok: true });
+      await vi.advanceTimersByTimeAsync(300);
+      expect(resizeCount).toBe(2);
+      expect(calls("/act").at(-1)?.[1]).toMatchObject({
+        body: { kind: "resize", width: 640, height: 480 },
+      });
+    },
+  );
 
   it("does not let a retired decoder replace or revoke the new stream's frame", async () => {
     const { controller } = setup();

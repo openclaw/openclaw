@@ -68,6 +68,7 @@ const prepareDoctorDatabasePreflight = vi.hoisted(() =>
 const doctorMaintenanceRelease = vi.hoisted(() => vi.fn(async () => {}));
 const beginDoctorMaintenance = vi.hoisted(() =>
   vi.fn<typeof import("./doctor-maintenance.js").beginDoctorMaintenance>(async () => ({
+    signal: new AbortController().signal,
     run: <T>(operation: () => T): T => operation(),
     releaseState: vi.fn(async () => {}),
     release: doctorMaintenanceRelease,

@@ -95,32 +95,13 @@ export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
     return { defer: false };
   }
 
-  if (input.intent === "immediate") {
-    // Even immediate wakes get rate-limited if a real flood is happening — but
-    // manual operator intent is fully exempt above. System-event, task, hook,
-    // and cron wake-now paths come from external systems we trust but cannot
-    // prove are loop-free, so the flood guard remains a backstop.
-    const floodDefer = checkFloodGuard(input);
-    return floodDefer ?? { defer: false };
-  }
-
-  if (input.intent === "task") {
-    const floodDefer = checkFloodGuard(input);
-    if (floodDefer) {
-      return floodDefer;
-    }
-    const spacingRetryAtMs = resolveMinSpacingRetryAtMs(input);
-    if (spacingRetryAtMs !== undefined) {
-      return { defer: true, reason: "min-spacing", retryAtMs: spacingRetryAtMs };
-    }
-    return { defer: false };
-  }
-
-  // Flood guard applies to every non-immediate wake regardless of run history.
-  // It is the last line of defense against feedback loops.
+  // System wake-now paths can form feedback loops too; only manual intent is exempt.
   const floodDefer = checkFloodGuard(input);
   if (floodDefer) {
     return floodDefer;
+  }
+  if (input.intent === "immediate") {
+    return { defer: false };
   }
 
   if (input.intent === "scheduled") {
@@ -136,7 +117,7 @@ export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
     return { defer: false };
   }
 
-  if (!input.retainedWork && input.now < input.nextDueMs) {
+  if (input.intent !== "task" && !input.retainedWork && input.now < input.nextDueMs) {
     const spacingRetryAtMs = resolveMinSpacingRetryAtMs(input);
     return {
       defer: true,

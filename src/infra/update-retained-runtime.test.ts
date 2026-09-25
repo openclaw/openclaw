@@ -189,7 +189,7 @@ it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked"] as const)(
     let retainedStore: SqliteWorkerStore<Operations> | undefined;
     let acceptedWrite: Promise<string[]> | undefined;
     await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
-      await retain({
+      const metrics = await retain({
         mutationRoots: [root],
         ...(layout.startsWith("pnpm")
           ? {
@@ -204,6 +204,15 @@ it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked"] as const)(
         timeoutMs: 30_000,
         assertCurrent() {},
       });
+      assert.ok(metrics);
+      expect(metrics.inventoryMs).toBeGreaterThanOrEqual(0);
+      expect(metrics.materializationMs).toBeGreaterThanOrEqual(0);
+      expect(metrics.linked + metrics.copied).toBe(6);
+      expect(metrics.entries).toBeGreaterThan(6);
+      expect(metrics.estimatedBytes).toBeGreaterThanOrEqual(metrics.entries * 4096);
+      expect(
+        await retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} }),
+      ).toBeUndefined();
       const source = captureRuntimeWorkerSource(resolveRuntimeWorkerUrl(worker));
       retainedPath = fileURLToPath(source.moduleUrl);
       expect(retainedPath).not.toBe(path.join(root, "dist/state/store.js"));

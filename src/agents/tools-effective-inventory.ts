@@ -18,12 +18,14 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
+import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { acquireReadOnlyPreparedModelRuntime } from "./prepared-model-runtime.js";
+import { createToolAccessDiagnostics } from "./tool-access-diagnostics.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { buildRuntimeCompatibleToolInventory } from "./tools-effective-inventory-build.js";
 import { buildEffectiveToolInventoryGroups } from "./tools-effective-inventory-groups.js";
@@ -349,36 +351,51 @@ export function resolveEffectiveToolInventory(
     modelId: params.modelId,
   });
 
-  const effectiveTools = createOpenClawCodingTools({
-    agentId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    workspaceDir,
-    agentDir,
-    config: params.cfg,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-    modelApi: runtimeModelContext.modelApi,
-    modelBaseUrl: runtimeModelContext.runtimeModel?.baseUrl,
-    modelCompat,
-    messageProvider: params.messageProvider,
-    senderId: params.senderId,
-    senderName: params.senderName ?? undefined,
-    senderUsername: params.senderUsername ?? undefined,
-    senderE164: params.senderE164 ?? undefined,
-    agentAccountId: params.accountId ?? undefined,
-    currentChannelId: params.currentChannelId,
-    currentThreadTs: params.currentThreadTs,
-    currentMessageId: params.currentMessageId,
-    groupId: params.groupId ?? undefined,
-    groupChannel: params.groupChannel ?? undefined,
-    groupSpace: params.groupSpace ?? undefined,
-    replyToMode: params.replyToMode,
-    allowGatewaySubagentBinding: true,
-    modelHasVision: params.modelHasVision,
-    requireExplicitMessageTarget: params.requireExplicitMessageTarget,
-    disableMessageTool: params.disableMessageTool,
-  });
+  const capabilityProfile =
+    params.conversationCapabilityProfile ??
+    resolveConversationCapabilityProfile({
+      ...params,
+      config: params.cfg,
+      agentId,
+      agentAccountId: params.accountId,
+      modelApi: runtimeModelContext.modelApi ?? undefined,
+    });
+  const diagnostics = createToolAccessDiagnostics({ profiles: capabilityProfile.policy.profiles });
+  const effectiveTools = createOpenClawCodingToolsInternal(
+    {
+      conversationCapabilityProfile: capabilityProfile,
+      agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      workspaceDir,
+      agentDir,
+      config: params.cfg,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+      modelApi: runtimeModelContext.modelApi,
+      modelBaseUrl: runtimeModelContext.runtimeModel?.baseUrl,
+      modelCompat,
+      messageProvider: params.messageProvider,
+      senderId: params.senderId,
+      senderName: params.senderName ?? undefined,
+      senderUsername: params.senderUsername ?? undefined,
+      senderE164: params.senderE164 ?? undefined,
+      agentAccountId: params.accountId ?? undefined,
+      currentChannelId: params.currentChannelId,
+      currentThreadTs: params.currentThreadTs,
+      currentMessageId: params.currentMessageId,
+      groupId: params.groupId ?? undefined,
+      groupChannel: params.groupChannel ?? undefined,
+      groupSpace: params.groupSpace ?? undefined,
+      replyToMode: params.replyToMode,
+      allowGatewaySubagentBinding: true,
+      modelHasVision: params.modelHasVision,
+      requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+      disableMessageTool: params.disableMessageTool,
+    },
+    undefined,
+    diagnostics.onFilter,
+  );
   const projectedInventory = buildRuntimeCompatibleToolInventory({
     tools: effectiveTools,
     cfg: params.cfg,
@@ -403,5 +420,11 @@ export function resolveEffectiveToolInventory(
   ];
   const groups = buildEffectiveToolInventoryGroups(entries);
 
-  return { agentId, profile, groups, ...(notices.length > 0 ? { notices } : {}) };
+  return {
+    agentId,
+    profile,
+    groups,
+    toolAccess: diagnostics.finish(entries.map((entry) => entry.id)),
+    ...(notices.length > 0 ? { notices } : {}),
+  };
 }

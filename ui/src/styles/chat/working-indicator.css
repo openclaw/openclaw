@@ -70,17 +70,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.chat-working-indicator__status:has(> .chat-working-indicator__preamble) {
-  flex-wrap: nowrap;
-  white-space: nowrap;
-}
-
-.chat-working-indicator__preamble {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .chat-working-indicator__elapsed {
   color: var(--muted);
 }

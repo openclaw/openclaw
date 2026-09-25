@@ -1,5 +1,5 @@
-// Bridges TUI chat requests to gateway session APIs.
 import { randomUUID } from "node:crypto";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
@@ -59,6 +59,10 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { sleep } from "../utils/sleep.js";
 import { VERSION } from "../version.js";
+import {
+  refreshTuiGatewayModelCatalog,
+  type GatewayModelCatalogEntry,
+} from "./gateway-chat-models.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -84,8 +88,6 @@ type GatewayConnectionOptions = {
   allowConfiguredAuthForExactTarget?: boolean;
   suppressEnvAuthFallback?: boolean;
 };
-
-type GatewayEvent = TuiEvent;
 
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
@@ -153,25 +155,14 @@ async function hasStoredOriginDeviceAuth(deviceAuthScope: string): Promise<boole
   }
 }
 
-function isLegacyPreserveSideRunsError(err: unknown): boolean {
+function isLegacyParameterError(err: unknown, method: string, parameter: string): boolean {
   if (!(err instanceof GatewayClientRequestError) || err.gatewayCode !== "INVALID_REQUEST") {
     return false;
   }
   const message = err.message.toLowerCase();
-  return message.includes("invalid chat.abort params") && message.includes("preservesideruns");
+  return message.includes(`invalid ${method} params`) && message.includes(parameter);
 }
 
-function isLegacySucceedsParentError(err: unknown): boolean {
-  if (!(err instanceof GatewayClientRequestError) || err.gatewayCode !== "INVALID_REQUEST") {
-    return false;
-  }
-  const message = err.message.toLowerCase();
-  return message.includes("invalid sessions.create params") && message.includes("succeedsparent");
-}
-
-type GatewaySessionList = TuiSessionList;
-type GatewayAgentsList = TuiAgentsList;
-type GatewayModelChoice = TuiModelChoice;
 type HandoffSessionResolveParams = Required<
   Pick<SessionsResolveParams, "key" | "agentId" | "includeGlobal" | "allowMissing">
 >;
@@ -182,10 +173,12 @@ export class GatewayChatClient implements TuiBackend {
   private readyPromise: Promise<void>;
   private resolveReady?: () => void;
   private pendingConnectError?: Error;
+  private readonly modelCatalogs = new Map<string | undefined, GatewayModelCatalogEntry>();
   readonly connection: ResolvedGatewayConnection;
   hello?: HelloOk;
 
-  onEvent?: (evt: GatewayEvent) => void;
+  onEvent?: (evt: TuiEvent) => void;
+  onModelsChanged?: (agentId?: string) => void;
   onConnected?: () => void;
   onConnectError?: (error: Error) => void;
   onDisconnected?: (reason: string) => void;
@@ -228,6 +221,7 @@ export class GatewayChatClient implements TuiBackend {
         this.onConnected?.();
       },
       onEvent: (evt) => {
+        this.refreshModelsForEvent(evt);
         this.onEvent?.({
           event: evt.event,
           payload: evt.payload,
@@ -235,6 +229,7 @@ export class GatewayChatClient implements TuiBackend {
         });
       },
       onClose: (_code, reason) => {
+        this.modelCatalogs.clear();
         // Reset so waitForReady() blocks again until the next successful reconnect.
         this.readyPromise = new Promise((resolve) => {
           this.resolveReady = resolve;
@@ -314,6 +309,7 @@ export class GatewayChatClient implements TuiBackend {
 
   stop() {
     this.historyLifetime.abort();
+    this.modelCatalogs.clear();
     // Keep TUI teardown ordered after the transport closes. Otherwise the
     // late close callback can re-arm UI timers after shutdown cleared them.
     return this.client.stopAndWait();
@@ -364,7 +360,7 @@ export class GatewayChatClient implements TuiBackend {
     } catch (err) {
       // Protocol v4 peers reject unknown fields. Retry the shipped abort shape
       // so mixed-version TUI stops still work, even without BTW isolation.
-      if (!isLegacyPreserveSideRunsError(err)) {
+      if (!isLegacyParameterError(err, "chat.abort", "preservesideruns")) {
         throw err;
       }
       return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
@@ -428,7 +424,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async listSessions(opts?: SessionsListParams) {
-    return await this.client.request<GatewaySessionList>("sessions.list", opts ?? {});
+    return await this.client.request<TuiSessionList>("sessions.list", opts ?? {});
   }
 
   async resolveSession(opts: HandoffSessionResolveParams): Promise<SessionsResolveResult> {
@@ -472,7 +468,11 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async listAgents() {
-    return await this.client.request<GatewayAgentsList>("agents.list", {});
+    const result = await this.client.request<TuiAgentsList>("agents.list", {});
+    if (!this.modelCatalogs.has(result.defaultId)) {
+      void this.listModels({ agentId: result.defaultId }).catch(() => {});
+    }
+    return result;
   }
 
   async patchSession(opts: SessionsPatchParams): Promise<SessionsPatchResult> {
@@ -487,7 +487,10 @@ export class GatewayChatClient implements TuiBackend {
     try {
       return await this.client.request<TuiSessionMutationResult>("sessions.create", params);
     } catch (err) {
-      if (opts.succeedsParent === undefined || !isLegacySucceedsParentError(err)) {
+      if (
+        opts.succeedsParent === undefined ||
+        !isLegacyParameterError(err, "sessions.create", "succeedsparent")
+      ) {
         throw err;
       }
       const { succeedsParent: _succeedsParent, ...legacyParams } = params;
@@ -525,19 +528,45 @@ export class GatewayChatClient implements TuiBackend {
     return await this.client.request("status");
   }
 
-  async listModels(opts?: { agentId?: string }): Promise<GatewayModelChoice[]> {
-    const published = this.hello?.features.capabilities?.includes(
-      GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG,
-    );
-    const res = await this.client.request("models.list", {
-      ...opts,
-      ...(published ? { includeDetails: true } : {}),
+  getKnownModels(opts?: { agentId?: string }): TuiModelChoice[] | undefined {
+    return this.modelCatalogs.get(opts?.agentId)?.models;
+  }
+
+  listModels(opts?: { agentId?: string }): Promise<TuiModelChoice[]> {
+    return refreshTuiGatewayModelCatalog({
+      catalogs: this.modelCatalogs,
+      client: this.client,
+      agentId: opts?.agentId,
+      published:
+        this.hello?.features.capabilities?.includes(GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG) ===
+        true,
+      onChanged: this.onModelsChanged,
     });
-    const models: GatewayModelChoice[] = Array.isArray(res?.models) ? res.models : [];
-    // Released Gateways reject includeDetails and collapse unknown availability to false.
-    return published
-      ? models
-      : models.map(({ available: _available, unavailableReason: _reason, ...model }) => model);
+  }
+
+  private refreshModelsForEvent(event: TuiEvent) {
+    const payload = asNullableRecord(event.payload);
+    const clear =
+      event.event === "config.changed" ||
+      (event.event === "chat.metadata.changed" && payload?.modelSelectionChanged === true);
+    const refresh =
+      event.event === "chat.metadata.changed" && payload?.modelCatalogChanged !== false;
+    const scope = event.event === "models.snapshot" ? asNullableRecord(payload?.scope) : null;
+    if (!clear && !refresh && !scope) {
+      return;
+    }
+    for (const [agentId, entry] of this.modelCatalogs) {
+      if (scope && (scope.agentId !== agentId || scope.sessionKey || scope.authProfileId)) {
+        continue;
+      }
+      // An invalidation must not wait behind, or be overwritten by, an older held request.
+      entry.pending = undefined;
+      if (clear) {
+        entry.models = undefined;
+        this.onModelsChanged?.(agentId);
+      }
+      void this.listModels({ agentId }).catch(() => {});
+    }
   }
 
   async listCommands(opts?: CommandsListParams): Promise<CommandEntry[]> {

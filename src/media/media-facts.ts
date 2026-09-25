@@ -459,8 +459,7 @@ function resolveMediaFactsWithPrecedence(
   return Array.from({ length: count }, (_, index) => {
     const fact = canonical[index];
     const legacyPath = paths[index] ?? (index === 0 ? source.MediaPath : undefined);
-    const legacyUrl =
-      urls[index] ?? (paths.length > 0 || index === 0 ? source.MediaUrl : undefined);
+    const legacyUrl = urls[index] ?? (index === 0 ? source.MediaUrl : undefined);
     const legacyContentType =
       normalizeOptionalString(types[index]) ?? (index === 0 ? source.MediaType : undefined);
     return normalizeMediaFact(

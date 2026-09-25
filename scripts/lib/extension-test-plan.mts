@@ -227,7 +227,7 @@ function listTrackedTestFiles(rootPath: string) {
   return trackedFiles.filter((file) => file.startsWith(rootPrefix));
 }
 
-function listFilesystemTestFiles(rootPath: string) {
+function listFilesystemTestFiles(rootPath: string, cwd = repoRoot) {
   const files = [];
   const stack = [rootPath];
 
@@ -238,7 +238,7 @@ function listFilesystemTestFiles(rootPath: string) {
     }
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
-      if (isPluginControlUiPath(normalizeRelative(path.relative(repoRoot, fullPath)))) {
+      if (isPluginControlUiPath(normalizeRelative(path.relative(cwd, fullPath)))) {
         continue;
       }
       if (entry.isDirectory()) {
@@ -249,7 +249,7 @@ function listFilesystemTestFiles(rootPath: string) {
         continue;
       }
       if (entry.isFile() && (fullPath.endsWith(".test.ts") || fullPath.endsWith(".test.tsx"))) {
-        files.push(normalizeRelative(path.relative(repoRoot, fullPath)));
+        files.push(normalizeRelative(path.relative(cwd, fullPath)));
       }
     }
   }
@@ -258,12 +258,12 @@ function listFilesystemTestFiles(rootPath: string) {
 }
 
 /** List working-tree test files for extension roots, including new untracked tests. */
-export function listExtensionTestFilesForRoots(roots: string[]) {
+export function listExtensionTestFilesForRoots(roots: string[], cwd = repoRoot) {
   const files = roots.flatMap((root) => {
-    const rootPath = path.join(repoRoot, root);
+    const rootPath = path.join(cwd, root);
     return fs.existsSync(rootPath) && fs.statSync(rootPath).isFile()
       ? [root]
-      : listFilesystemTestFiles(rootPath);
+      : listFilesystemTestFiles(rootPath, cwd);
   });
   return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
 }
@@ -392,13 +392,14 @@ export function createExtensionTestProcessTargetChunks(
   config: string,
   roots: string[],
   vitestArgs: string[] = [],
+  cwd = repoRoot,
 ) {
   if (!shouldSplitExtensionTestProcesses(config, vitestArgs)) {
     return [roots];
   }
   // Explicit file targets replace Vitest's root discovery, so inventory the working tree.
   // Otherwise a newly authored untracked test would silently disappear from a broad run.
-  const discoveredFiles = listExtensionTestFilesForRoots(roots);
+  const discoveredFiles = listExtensionTestFilesForRoots(roots, cwd);
   if (discoveredFiles.length === 0) {
     return [roots];
   }

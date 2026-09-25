@@ -7,16 +7,13 @@ import {
   type TerminalUploadResult,
 } from "../../infra/terminal-file-upload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { spawnTerminalPty } from "../../process/terminal-pty.js";
 import {
   agentTerminalOwnerMatches,
   AgentTerminalSessionDrainTracker,
   terminalTaskOwnerMatches,
 } from "./agent-session-drain.js";
-import {
-  createLocalTerminalBackend,
-  type LocalTerminalBackendSpawner,
-  type TerminalBackend,
-} from "./backend.js";
+import type { TerminalBackend } from "./backend.js";
 import { TERMINAL_EVENT_DATA, TERMINAL_EVENT_EXIT } from "./gateway-transport.js";
 import { composeTerminalIntroBanner } from "./intro-banner.js";
 import { TerminalOutputController } from "./output-flow-control.js";
@@ -64,7 +61,7 @@ export class TerminalSessionManager {
   // orphan for a dead connection.
   private readonly emit: TerminalEventSink;
   private readonly getBufferedAmount: (connId: string) => number | undefined;
-  private readonly spawn?: LocalTerminalBackendSpawner;
+  private readonly spawn: typeof spawnTerminalPty;
   private readonly maxSessions: number;
   private detachGraceMs: number;
   private readonly maxDetachedSessions: number;
@@ -81,7 +78,7 @@ export class TerminalSessionManager {
     void ensureTerminalUploadCleanup();
     this.emit = options.emit;
     this.getBufferedAmount = options.getBufferedAmount ?? (() => undefined);
-    this.spawn = options.spawn;
+    this.spawn = options.spawn ?? spawnTerminalPty;
     this.maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
     this.detachGraceMs = options.detachGraceMs ?? 0;
     this.maxDetachedSessions = options.maxDetachedSessions ?? DEFAULT_MAX_DETACHED_SESSIONS;
@@ -159,20 +156,18 @@ export class TerminalSessionManager {
     request.signal?.addEventListener("abort", abortPending, { once: true });
     this.trackPendingOpen(request.owner, pending, request.viewerConnId);
     let backend: TerminalBackend;
+    const spawn = this.spawn;
     try {
       backend = request.createBackend
         ? await request.createBackend()
-        : await createLocalTerminalBackend(
-            {
-              file: request.shell,
-              args: request.args,
-              cwd: request.cwd,
-              env: request.env,
-              cols: request.cols,
-              rows: request.rows,
-            },
-            this.spawn,
-          );
+        : await spawn({
+            file: request.shell,
+            args: request.args,
+            cwd: request.cwd,
+            env: request.env,
+            cols: request.cols,
+            rows: request.rows,
+          });
     } catch (err) {
       this.spawning -= 1;
       releaseReservation();

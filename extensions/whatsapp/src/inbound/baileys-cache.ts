@@ -1,5 +1,6 @@
 // Whatsapp plugin module implements bounded Baileys cache behavior.
 import type { GroupMetadata, proto } from "baileys";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 
 const WHATSAPP_BAILEYS_CACHE_MAX_ENTRIES = 500;
 
@@ -31,13 +32,7 @@ export function rememberWhatsAppBaileysCacheEntry<T>(
     expiresAt: Date.now() + ttlMs,
     value,
   });
-  while (cache.size > WHATSAPP_BAILEYS_CACHE_MAX_ENTRIES) {
-    const oldest = cache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    cache.delete(oldest.value);
-  }
+  pruneMapToMaxSize(cache, WHATSAPP_BAILEYS_CACHE_MAX_ENTRIES);
 }
 
 export function readWhatsAppBaileysCacheEntry<T>(

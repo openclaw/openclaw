@@ -21,10 +21,8 @@ import {
   completeWorkerLaunchDescriptor,
   type WorkerLaunchDescriptor,
 } from "../../worker/launch-descriptor.js";
-import {
-  createAgentRuntimeApprovalAuthorityValidator,
-  verifyAgentRuntimeIdentityToken,
-} from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
+import { verifyAgentRuntimeIdentityToken } from "../agent-runtime-identity-token.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {

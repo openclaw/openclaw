@@ -21,7 +21,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { chunkText, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
-import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
+import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   buildBaseChannelStatusSummary,
   collectStatusIssuesFromLastError,
@@ -223,15 +223,6 @@ const signalMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
-function buildSignalBaseSessionKey(params: {
-  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
-  agentId: string;
-  accountId?: string | null;
-  peer: RoutePeer;
-}) {
-  return buildOutboundBaseSessionKey({ ...params, channel: "signal" });
-}
-
 function resolveSignalOutboundSessionRoute(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   agentId: string;
@@ -247,7 +238,8 @@ function resolveSignalOutboundSessionRoute(params: {
   const normalizedTarget = target.replace(/^signal:/i, "").trim();
   const recipientSessionExact: true | "direct-alias" =
     resolved.chatType === "group" || /^\+?\d{3,15}$/.test(normalizedTarget) ? true : "direct-alias";
-  const baseSessionKey = buildSignalBaseSessionKey({
+  const baseSessionKey = buildOutboundBaseSessionKey({
+    channel: "signal",
     cfg: params.cfg,
     agentId: params.agentId,
     accountId: params.accountId,
@@ -389,19 +381,9 @@ async function registerDeliveredSignalApprovalPayloadForReactions(
   if (!targetAuthor && !targetAuthorUuid) {
     return;
   }
-  const { registerSignalQuestionReactionTargetForDeliveredPayload } =
-    await import("./question-reactions.js");
-  registerSignalQuestionReactionTargetForDeliveredPayload({
-    cfg: params.cfg,
-    target: { ...params.target, accountId: account.accountId },
-    payload: params.payload,
-    results: params.results,
-    targetAuthor,
-    targetAuthorUuid,
-  });
-  const { registerSignalApprovalReactionTargetForDeliveredPayload } =
-    await loadSignalApprovalReactionsModule();
-  await registerSignalApprovalReactionTargetForDeliveredPayload({
+  const { registerSignalReactionTargetsForDeliveredPayload } =
+    await import("./reaction-targets.js");
+  await registerSignalReactionTargetsForDeliveredPayload({
     cfg: params.cfg,
     target: { ...params.target, accountId: account.accountId },
     payload: params.payload,

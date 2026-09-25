@@ -59,7 +59,12 @@ describe("cold native task identity across history reads", () => {
           recoveryPollDelaysMs: [],
           completionDeliveryRetryDelaysMs: [10],
         });
-        const parent = registerParent(monitor, "parent-thread", requesterSessionKey, historyOwner);
+        const parent = await registerParent(
+          monitor,
+          "parent-thread",
+          requesterSessionKey,
+          historyOwner,
+        );
         await vi.advanceTimersByTimeAsync(0);
         if (kind === "replaced") {
           rows = [replacement];
@@ -177,7 +182,12 @@ describe("native completion custody and recovery", () => {
       const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
       const requesterSessionKey = `agent:main:discord:channel:review8-settled-${outcome}`;
       const historyOwner = nativeHistoryOwner();
-      const owner = registerParent(monitor, "parent-thread", requesterSessionKey, historyOwner);
+      const owner = await registerParent(
+        monitor,
+        "parent-thread",
+        requesterSessionKey,
+        historyOwner,
+      );
       await notifyChildStarted(client);
       await owner.unregister();
       const task = runtime.listTaskRecords()[0]!;
@@ -222,7 +232,7 @@ describe("native completion custody and recovery", () => {
         lifecycleRevision: "revision-1",
         connectionFingerprint: "a".repeat(64),
       };
-      const owner = monitor.registerParent({
+      const owner = await monitor.registerParent({
         parentThreadId: "parent-thread",
         requesterSessionKey,
         taskRuntimeScope: createTaskScope(requesterSessionKey),
@@ -275,7 +285,12 @@ describe("native completion custody and recovery", () => {
       });
       const requesterSessionKey = `agent:main:discord:channel:review7-${phase}`;
       const historyOwner = nativeHistoryOwner();
-      const owner = registerParent(monitor, "parent-thread", requesterSessionKey, historyOwner);
+      const owner = await registerParent(
+        monitor,
+        "parent-thread",
+        requesterSessionKey,
+        historyOwner,
+      );
       await notifyChildStarted(client);
       await owner.unregister();
       const task = runtime.listTaskRecords()[0]!;
@@ -318,7 +333,7 @@ describe("native completion custody and recovery", () => {
       recoveryPollDelaysMs: [],
     });
     const requesterSessionKey = "agent:main:discord:channel:live-unrecorded";
-    const parent = monitor.registerParent({
+    const parent = await monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey,
       taskRuntimeScope: createTaskScope(requesterSessionKey),
@@ -378,7 +393,7 @@ describe("native completion custody and recovery", () => {
           recoveryPollDelaysMs: [],
           completionDeliveryRetryDelaysMs: [10],
         });
-        const parent = monitor.registerParent({
+        const parent = await monitor.registerParent({
           parentThreadId: "parent-thread",
           requesterSessionKey: task.requesterSessionKey,
           taskRuntimeScope: createTaskScope(task.requesterSessionKey),
@@ -419,7 +434,7 @@ describe("native completion custody and recovery", () => {
           const replacementMonitor = new CodexNativeSubagentMonitor(replacement as never, runtime, {
             recoveryPollDelaysMs: [],
           });
-          const replacementParent = replacementMonitor.registerParent({
+          const replacementParent = await replacementMonitor.registerParent({
             parentThreadId: "parent-thread",
             requesterSessionKey: task.requesterSessionKey,
             taskRuntimeScope: createTaskScope(task.requesterSessionKey),

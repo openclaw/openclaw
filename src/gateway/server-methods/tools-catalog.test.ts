@@ -6,6 +6,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { listCoreToolFactoryDescriptors } from "../../agents/core-tool-factory-descriptors.js";
+import { filterToolsByPolicy } from "../../agents/tool-policy-match.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
@@ -189,6 +191,26 @@ describe("tools.catalog handler", () => {
     ).toContain("agents_wait");
   });
 
+  it("lets the catalog's Disable All deny every configurable core factory tool", async () => {
+    const identityCount = vi
+      .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
+      .mockReturnValue(true);
+    try {
+      const { respond, invoke } = createInvokeParams({ includePlugins: false });
+      await invoke();
+      const deny = expectCatalogPayload(respond).groups.flatMap((group) =>
+        group.tools.map((tool) => tool.id),
+      );
+      // Collector output is required by its per-run schema, not operator tool policy.
+      const configurableTools = listCoreToolFactoryDescriptors().filter(
+        (tool) => tool.name !== "structured_output",
+      );
+      expect(filterToolsByPolicy(configurableTools, { allow: ["*"], deny })).toEqual([]);
+    } finally {
+      identityCount.mockRestore();
+    }
+  });
+
   it("includes plugin groups with plugin metadata", async () => {
     const { respond, invoke } = createInvokeParams({});
     await invoke();
@@ -258,16 +280,13 @@ describe("tools.catalog handler", () => {
         pluginName: "Same",
         source: "fixture",
         names: [],
-        declaredNames: ["b_a", "c_a"],
+        declaredNames: new Set(["b_a", "c_a"]),
         factory,
         optional: true,
       },
     );
     for (const entry of registry.tools) {
       Object.freeze(entry.names);
-      if (entry.declaredNames) {
-        Object.freeze(entry.declaredNames);
-      }
       Object.freeze(entry);
     }
     Object.freeze(tags);
@@ -304,6 +323,7 @@ describe("tools.catalog handler", () => {
       ["b_z", "resolved_z", "tts", "b_a"],
       [],
     ]);
+    expect(Array.from(registry.tools[1]?.declaredNames ?? [])).toEqual(["b_a", "c_a"]);
     expect(factory).not.toHaveBeenCalled();
     for (const tool of tools) {
       expect(tool.execute).not.toHaveBeenCalled();

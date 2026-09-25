@@ -321,7 +321,9 @@ function runSqliteCheck(
     return "ok";
   }
   const details = results.map((result) => String(result)).join("; ") || "no result";
-  throw createSqliteIntegrityError(`SQLite ${pragma} failed for ${databaseLabel}: ${details}`);
+  throw createSqliteIntegrityError(
+    `SQLite ${pragma} failed for ${databaseLabel}: ${details}. Run openclaw doctor --fix for explicit repair; if repair is refused, preserve the database and WAL and restore a verified backup.`,
+  );
 }
 
 function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string): void {

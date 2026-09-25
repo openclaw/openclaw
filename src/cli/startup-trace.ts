@@ -325,6 +325,27 @@ export function createGatewayDispatchStartupTrace(
   };
 }
 
+export async function configureCliStartupDiagnostics(
+  traces: Array<ReturnType<typeof createGatewayDispatchStartupTrace> | undefined>,
+  readConfig?: () => Promise<OpenClawConfig>,
+): Promise<void> {
+  const activeTraces = traces.filter(
+    (trace): trace is ReturnType<typeof createGatewayDispatchStartupTrace> => Boolean(trace),
+  );
+  if (
+    !(await Promise.all(activeTraces.map((trace) => trace.requiresDiagnosticsConfig()))).some(
+      Boolean,
+    )
+  ) {
+    return;
+  }
+  const { withConsoleLogsRoutedToStderr } = await import("./json-output-mode.js");
+  const { readSourceConfigBestEffort } = await import("../config/io.js");
+  // Clients need authored flags; Gateway admission supplies its isolated config reader.
+  const config = await withConsoleLogsRoutedToStderr(readConfig ?? readSourceConfigBestEffort);
+  await Promise.all(activeTraces.map((trace) => trace.configureDiagnosticsTimeline(config)));
+}
+
 export async function prepareGatewayStartupTraceConsoleFormatting(
   trace: ReturnType<typeof createGatewayDispatchStartupTrace>,
 ): Promise<() => void> {

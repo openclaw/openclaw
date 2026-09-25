@@ -276,17 +276,16 @@ describe("chat model runtime choices", () => {
         );
       try {
         draw();
-        const rows = () =>
-          Array.from(container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"));
-        expect(
-          rows().map((row) => row.querySelector(".chat-controls__model-option-name")?.textContent),
-        ).toEqual(["GPT-5.6 Sol", "GPT-5.6 Sol"]);
-        expect(rows().map((row) => row.getAttribute("aria-selected"))).toEqual(
-          initialRuntime === "codex" ? ["false", "true"] : ["true", "false"],
+        const runtimeRow = () =>
+          container.querySelector<HTMLButtonElement>('[data-chat-model-runtime="codex"]')!;
+        const defaultRow = () =>
+          container.querySelector<HTMLButtonElement>("[data-chat-model-default]")!;
+        expect(defaultRow().parentElement?.querySelector("[data-chat-model-option]")).toBe(
+          defaultRow(),
         );
-        expect(rows()[0]?.textContent).toContain("1M · OpenClaw");
-        expect(rows()[1]?.textContent).toContain("200k · Codex");
-        rows()[1]!.click();
+        expect(runtimeRow().getAttribute("aria-selected")).toBe(String(initialRuntime === "codex"));
+        expect(defaultRow().getAttribute("aria-selected")).toBe(String(initialRuntime !== "codex"));
+        runtimeRow().click();
         await selection;
         expect(host.request).toHaveBeenCalledWith("sessions.patch", {
           key: "main",
@@ -295,14 +294,15 @@ describe("chat model runtime choices", () => {
         });
         result.sessions[0]!.agentRuntime = { id: "codex", source: "session-key" };
         draw();
-        expect(rows().map((row) => row.getAttribute("aria-selected"))).toEqual(["false", "true"]);
+        expect(runtimeRow().getAttribute("aria-selected")).toBe("true");
+        expect(defaultRow().getAttribute("aria-selected")).toBe("false");
         const patches = () =>
           host.request.mock.calls.filter(([method]) => method === "sessions.patch");
         expect(patches()).toHaveLength(1);
-        rows()[1]!.click();
+        runtimeRow().click();
         await selection;
         expect(patches()).toHaveLength(1);
-        rows()[0]!.click();
+        defaultRow().click();
         await selection;
         expect(host.request).toHaveBeenCalledWith("sessions.patch", {
           key: "main",

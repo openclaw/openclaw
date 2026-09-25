@@ -6,6 +6,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { writeChannelSection } from "./config-helpers.js";
 import { resolveChannelSetupExecutionAdapter } from "./setup-contract.js";
 import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "./setup-helpers.js";
@@ -70,19 +71,13 @@ function createWizardAccountScope(params: {
 
   // Some shipped plugins ignore accountId and resolve through defaultAccount.
   // Scope their callbacks to this wizard run, then restore the operator's default.
-  const scopedCfg = {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      [params.channelKey]: {
-        ...channel,
-        // Legacy callbacks use this map to choose account-scoped writes even
-        // when there were no root values to promote into a default account.
-        accounts: channel.accounts ?? {},
-        defaultAccount: accountId,
-      },
-    },
-  } as OpenClawConfig;
+  const scopedCfg = writeChannelSection(cfg, params.channelKey, {
+    ...channel,
+    // Legacy callbacks use this map to choose account-scoped writes even
+    // when there were no root values to promote into a default account.
+    accounts: channel.accounts ?? {},
+    defaultAccount: accountId,
+  });
 
   return {
     cfg: scopedCfg,
@@ -92,13 +87,7 @@ function createWizardAccountScope(params: {
         previousDefaultAccount !== undefined
           ? { ...currentChannel, defaultAccount: previousDefaultAccount }
           : (({ defaultAccount: _ignored, ...rest }) => rest)(currentChannel);
-      return {
-        ...currentCfg,
-        channels: {
-          ...currentCfg.channels,
-          [params.channelKey]: restoredChannel,
-        },
-      } as OpenClawConfig;
+      return writeChannelSection(currentCfg, params.channelKey, restoredChannel);
     },
   };
 }
@@ -502,7 +491,22 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
               })
             : true;
 
-          if (!shouldPrompt) {
+          let keepCurrentValue = !shouldPrompt;
+          if (shouldPrompt) {
+            if (textInput.helpLines && textInput.helpLines.length > 0) {
+              await prompter.note(
+                textInput.helpLines.join("\n"),
+                textInput.helpTitle ?? textInput.message,
+              );
+            }
+            if (currentValue && textInput.confirmCurrentValue !== false) {
+              keepCurrentValue = await prompter.confirm({
+                message: resolveTextInputKeepMessage(textInput, currentValue),
+                initialValue: true,
+              });
+            }
+          }
+          if (keepCurrentValue) {
             if (currentValue) {
               credentialValues[textInput.inputKey] = currentValue;
               if (textInput.applyCurrentValue) {
@@ -518,33 +522,6 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
               }
             }
             continue;
-          }
-
-          if (textInput.helpLines && textInput.helpLines.length > 0) {
-            await prompter.note(
-              textInput.helpLines.join("\n"),
-              textInput.helpTitle ?? textInput.message,
-            );
-          }
-
-          if (currentValue && textInput.confirmCurrentValue !== false) {
-            const keep = await prompter.confirm({
-              message: resolveTextInputKeepMessage(textInput, currentValue),
-              initialValue: true,
-            });
-            if (keep) {
-              credentialValues[textInput.inputKey] = currentValue;
-              if (textInput.applyCurrentValue) {
-                next = await applyWizardTextInputValue({
-                  plugin,
-                  input: textInput,
-                  cfg: next,
-                  accountId,
-                  value: currentValue,
-                });
-              }
-              continue;
-            }
           }
 
           const initialValue =

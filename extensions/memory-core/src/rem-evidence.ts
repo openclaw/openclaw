@@ -2,6 +2,10 @@ import path from "node:path";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readWorkspaceText } from "./memory-workspace-files.js";
 import { collectMarkdownFiles } from "./rem-evidence-files.js";
+import {
+  normalizeMemoryPath,
+  normalizeSnippet as normalizeWhitespace,
+} from "./short-term-promotion-utils.js";
 
 const REM_BLOCKED_SECTION_RE =
   /\b(morning reminders|tasks? for today|to-?do|pickups?|action items?|next steps?|open questions?|stats|setup tasks?|priority contacts|visitors?|top priority candidates|timeline coverage|action items for morning review|test .* skill|heartbeat checks?|date semantics guardrail|still broken|last message (?:&|and) status|plugin \/ service warning|email triage cron)\b/i;
@@ -124,14 +128,6 @@ type SectionSummary = {
   };
 };
 
-function normalizeWhitespace(value: string): string {
-  return value.trim().replace(/\s+/g, " ");
-}
-
-function normalizePath(rawPath: string): string {
-  return rawPath.replaceAll("\\", "/").replace(/^\.\//, "");
-}
-
 function stripMarkdown(text: string): string {
   return normalizeWhitespace(
     text
@@ -223,7 +219,7 @@ function sectionToSnippets(section: ParsedMarkdownSection): SectionSnippet[] {
     }
     const bulletMatch = trimmed.match(/^(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s*)?(.*)$/);
     const candidateText = bulletMatch?.[1] ?? trimmed;
-    const text = normalizeWhitespace(stripMarkdown(candidateText));
+    const text = stripMarkdown(candidateText);
     if (text.length < 10) {
       continue;
     }
@@ -352,14 +348,8 @@ function joinSummaryParts(parts: string[]): string {
 function summarizeSection(
   pathValue: string,
   section: ParsedMarkdownSection,
+  snippets: SectionSnippet[],
 ): SectionSummary | null {
-  if (REM_BLOCKED_SECTION_RE.test(section.title)) {
-    return null;
-  }
-  const snippets = sectionToSnippets(section);
-  if (snippets.length === 0) {
-    return null;
-  }
   const selected = chooseSummarySnippets(section, snippets);
   if (selected.length === 0) {
     return null;
@@ -486,23 +476,23 @@ function scoreCandidateSnippet(text: string, title: string): number {
   return score;
 }
 
-function chooseFactSnippets(
+function chooseScoredSnippets(
   section: ParsedMarkdownSection,
   snippets: SectionSnippet[],
+  scoreFor: (text: string, title: string) => number,
+  minimumScore: number,
 ): SectionSnippet[] {
-  return [...snippets]
+  return snippets
     .map((snippet) => {
       const text = compactCandidateSnippetText(snippet.text, section.title);
-      const score =
-        scoreCandidateSnippet(text, section.title) + (REM_MEMORY_SIGNAL_RE.test(text) ? 0.6 : 0);
-      return { snippet: { ...snippet, text }, score };
+      return { snippet: { ...snippet, text }, score: scoreFor(text, section.title) };
     })
     .filter(
       (entry) =>
         !REM_MONITORING_SIGNAL_RE.test(`${section.title} ${entry.snippet.text}`) ||
         isDurableSignalSnippet(entry.snippet.text, section.title),
     )
-    .filter((entry) => entry.snippet.text.length >= 18 && entry.score >= 1.4)
+    .filter((entry) => entry.snippet.text.length >= 18 && entry.score >= minimumScore)
     .toSorted((left, right) => {
       if (right.score !== left.score) {
         return right.score - left.score;
@@ -531,44 +521,6 @@ function buildFactText(title: string, text: string): string {
     return `${compactTitle}: ${text}`;
   }
   return text;
-}
-
-function chooseCandidateSnippets(
-  section: ParsedMarkdownSection,
-  snippets: SectionSnippet[],
-): SectionSnippet[] {
-  return [...snippets]
-    .map((snippet) => {
-      const text = compactCandidateSnippetText(snippet.text, section.title);
-      const claimScores = atomizeClaimText(text).map((claim) =>
-        scoreCandidateSnippet(claim, section.title),
-      );
-      const score = Math.max(
-        scoreCandidateSnippet(text, section.title),
-        ...claimScores,
-        Number.NEGATIVE_INFINITY,
-      );
-      return { snippet: { ...snippet, text }, score };
-    })
-    .filter(
-      (entry) =>
-        !REM_MONITORING_SIGNAL_RE.test(`${section.title} ${entry.snippet.text}`) ||
-        isDurableSignalSnippet(entry.snippet.text, section.title),
-    )
-    .filter((entry) => entry.snippet.text.length >= 18 && entry.score >= 1.8)
-    .toSorted((left, right) => {
-      if (right.score !== left.score) {
-        return right.score - left.score;
-      }
-      return left.snippet.line - right.snippet.line;
-    })
-    .slice(0, 2)
-    .map((entry) => entry.snippet)
-    .toSorted((left, right) => left.line - right.line);
-}
-
-function buildCandidateSnippetText(title: string, text: string): string {
-  return buildFactText(title, text);
 }
 
 function findTopLevelDelimiter(text: string, delimiter: string): number {
@@ -731,23 +683,25 @@ export function previewGroundedRemForFile(params: {
       (REM_MONITORING_SIGNAL_RE.test(section.title) ? 1 : 0),
     0,
   );
-  const summaries = sectionScores
-    .map(({ section }) => summarizeSection(params.relPath, section))
+  const eligibleSections = sectionScores.filter(
+    ({ section, snippets }) => !REM_BLOCKED_SECTION_RE.test(section.title) && snippets.length > 0,
+  );
+  const summaries = eligibleSections
+    .map(({ section, snippets }) => summarizeSection(params.relPath, section, snippets))
     .filter((summary): summary is SectionSummary => summary !== null);
-  const factSummaries: FactSnippetSummary[] = sections.flatMap((section) => {
-    if (REM_BLOCKED_SECTION_RE.test(section.title)) {
-      return [];
-    }
-    const snippets = sectionToSnippets(section);
-    if (snippets.length === 0) {
-      return [];
-    }
-    return chooseFactSnippets(section, snippets).map((snippet) => ({
+  const factSummaries: FactSnippetSummary[] = eligibleSections.flatMap(({ section, snippets }) =>
+    chooseScoredSnippets(
+      section,
+      snippets,
+      (text, title) =>
+        scoreCandidateSnippet(text, title) + (REM_MEMORY_SIGNAL_RE.test(text) ? 0.6 : 0),
+      1.4,
+    ).map((snippet) => ({
       text: buildFactText(section.title, snippet.text),
       refs: [makeRef(params.relPath, snippet.line)],
       score: scoreCandidateSnippet(snippet.text, section.title),
-    }));
-  });
+    })),
+  );
 
   const memoryImplications = coalesceGroundedRemItems(
     summaries
@@ -758,29 +712,28 @@ export function previewGroundedRemForFile(params: {
       })),
   ).slice(0, REM_SUMMARY_MEMORY_LIMIT);
 
-  const candidateSnippets: CandidateSnippetSummary[] = sections.flatMap((section) => {
-    if (REM_BLOCKED_SECTION_RE.test(section.title)) {
-      return [];
-    }
-    const snippets = sectionToSnippets(section);
-    if (snippets.length === 0) {
-      return [];
-    }
-    return chooseCandidateSnippets(section, snippets).flatMap((snippet) =>
-      atomizeClaimText(snippet.text)
-        .map((claim) => {
-          const score = scoreCandidateSnippet(claim, section.title);
-          const text = buildCandidateSnippetText(section.title, claim);
-          return {
-            text,
+  const candidateSnippets: CandidateSnippetSummary[] = eligibleSections.flatMap(
+    ({ section, snippets }) =>
+      chooseScoredSnippets(
+        section,
+        snippets,
+        (text, title) =>
+          Math.max(
+            scoreCandidateSnippet(text, title),
+            ...atomizeClaimText(text).map((claim) => scoreCandidateSnippet(claim, title)),
+          ),
+        1.8,
+      ).flatMap((snippet) =>
+        atomizeClaimText(snippet.text)
+          .map((claim) => ({
+            text: buildFactText(section.title, claim),
             refs: [makeRef(params.relPath, snippet.line)],
             lean: classifyCandidateLeanFromText(claim, section.title),
-            score,
-          };
-        })
-        .filter((candidate) => candidate.text.length >= 12 && candidate.score >= 1.8),
-    );
-  });
+            score: scoreCandidateSnippet(claim, section.title),
+          }))
+          .filter((candidate) => candidate.text.length >= 12 && candidate.score >= 1.8),
+      ),
+  );
 
   const candidates = coalesceGroundedRemItems(
     candidateSnippets.toSorted((left, right) => {
@@ -1043,7 +996,7 @@ export async function previewGroundedRemMarkdown(params: {
   const previews: GroundedRemFilePreview[] = [];
   for (const filePath of files) {
     const content = await readWorkspaceText(workspaceDir, filePath);
-    const relPath = normalizePath(path.relative(workspaceDir, filePath));
+    const relPath = normalizeMemoryPath(path.relative(workspaceDir, filePath));
     previews.push(previewGroundedRemForFile({ relPath, content }));
   }
   return {

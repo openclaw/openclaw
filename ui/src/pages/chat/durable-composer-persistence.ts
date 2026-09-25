@@ -4,7 +4,10 @@ import type {
   DurableComposerDraftAttachment,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
-import type { DurableComposerDraftScope } from "../../lib/chat/composer-draft-store.runtime.ts";
+import type {
+  DurableComposerDraftScope,
+  DurableDraftModelSelection,
+} from "../../lib/chat/composer-draft-store.runtime.ts";
 import { readChatSelectionAnnotation } from "../../lib/chat/selection-annotation.ts";
 import { generateAttachmentId, getChatAttachmentBlob } from "./attachment-payload-store.ts";
 
@@ -17,6 +20,7 @@ export type DurableChatComposerSnapshot = {
   text: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
+  modelSelection?: DurableDraftModelSelection;
   storedAttachments: DurableComposerDraftAttachment[] | null;
   writeId: string;
 };
@@ -159,6 +163,7 @@ export async function writeDurableComposerSnapshot(snapshot: DurableChatComposer
       text: payloadUnavailable ? "" : snapshot.text,
       ...(snapshot.mentions?.length && !payloadUnavailable ? { mentions: snapshot.mentions } : {}),
       ...(snapshot.goalMode ? { goalMode: snapshot.goalMode } : {}),
+      ...(snapshot.modelSelection ? { modelSelection: snapshot.modelSelection } : {}),
       attachments: snapshot.storedAttachments ?? [],
     },
     {

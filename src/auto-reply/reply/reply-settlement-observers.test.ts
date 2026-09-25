@@ -4,9 +4,13 @@ import { getTotalPendingReplies } from "./dispatcher-registry.js";
 import { captureReplyDispatchDeliveryOutcome, createReplyDispatcher } from "./reply-dispatcher.js";
 
 describe("reply settlement observer isolation", () => {
-  it.each([false, true])(
-    "settles every reply when the observer and its error reporter fail (async=%s)",
-    async (asyncReporter) => {
+  it.each([
+    { asyncObserver: false, asyncReporter: false },
+    { asyncObserver: false, asyncReporter: true },
+    { asyncObserver: true, asyncReporter: true },
+  ])(
+    "settles replies independently of observer failure (asyncObserver=$asyncObserver, asyncReporter=$asyncReporter)",
+    async ({ asyncObserver, asyncReporter }) => {
       const initialPending = getTotalPendingReplies();
       const observerFailure = new Error("settlement observer failed");
       const reportFailure = new Error("error reporter failed");
@@ -17,9 +21,15 @@ describe("reply settlement observer isolation", () => {
         throw reportFailure;
       });
       const onIdle = vi.fn();
-      const onDeliverySettled = vi.fn(() => {
-        throw observerFailure;
-      });
+      const onDeliverySettled =
+        vi.fn<NonNullable<Parameters<typeof createReplyDispatcher>[0]["onDeliverySettled"]>>();
+      if (asyncObserver) {
+        onDeliverySettled.mockRejectedValue(observerFailure);
+      } else {
+        onDeliverySettled.mockImplementation(() => {
+          throw observerFailure;
+        });
+      }
       const deliver = vi.fn<Parameters<typeof createReplyDispatcher>[0]["deliver"]>(async () => ({
         visibleReplySent: true,
       }));
@@ -43,13 +53,15 @@ describe("reply settlement observer isolation", () => {
         "Final reply",
       ]);
       expect(onDeliverySettled).toHaveBeenCalledTimes(2);
+      expect(onIdle).toHaveBeenCalledOnce();
+      expect(getTotalPendingReplies()).toBe(initialPending);
       expect(onError).toHaveBeenNthCalledWith(1, observerFailure, { kind: "block" });
       expect(onError).toHaveBeenNthCalledWith(2, observerFailure, { kind: "final" });
-      expect(onIdle).toHaveBeenCalledOnce();
-      expect(onError.mock.invocationCallOrder[1]).toBeLessThan(
-        expectDefined(onIdle.mock.invocationCallOrder[0], "idle callback order"),
-      );
-      expect(getTotalPendingReplies()).toBe(initialPending);
+      if (!asyncObserver) {
+        expect(onError.mock.invocationCallOrder[1]).toBeLessThan(
+          expectDefined(onIdle.mock.invocationCallOrder[0], "idle callback order"),
+        );
+      }
     },
   );
 

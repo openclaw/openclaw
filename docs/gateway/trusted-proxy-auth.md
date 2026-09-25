@@ -101,7 +101,7 @@ read_when:
 
 `allowLoopback` trusts local processes on the Gateway host to the same degree as the reverse proxy. Enable it only when the Gateway is still firewalled from direct remote access and the local proxy strips or overwrites client-supplied identity headers.
 
-Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. `openclaw gateway status` selects this local password automatically when no `--url` override is supplied, including with `--json`. Non-loopback Control UI deployments still need explicit `gateway.controlUi.allowedOrigins`.
+Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. `openclaw gateway status` selects this local password automatically when no `--url` override is supplied, including with `--json`. For browser access, omit `gateway.controlUi.allowedOrigins` to use `gateway.publicOrigin` as the default, or configure an explicit list that overrides it.
 
 Update and restart health checks can also reuse the local CLI's existing paired device credentials when no shared credential is configured. These checks read existing identity and token state without creating an identity or saving replacement credentials.
 </Warning>
@@ -489,7 +489,7 @@ Before enabling trusted-proxy auth, verify:
 - [ ] **Proxy strips headers**: Your proxy overwrites (not appends) `x-forwarded-*` headers from clients.
 - [ ] **Client IP is attributable**: The proxy always rebuilds `X-Forwarded-For` with the original non-loopback client address.
 - [ ] **TLS termination**: Your proxy handles TLS; users connect via HTTPS.
-- [ ] **allowedOrigins is explicit**: Non-loopback Control UI uses explicit `gateway.controlUi.allowedOrigins`.
+- [ ] **Browser origins are configured**: Non-loopback Control UI uses `gateway.publicOrigin` with `gateway.controlUi.allowedOrigins` omitted, or an explicit allowlist.
 - [ ] **allowUsers is set** (recommended): Restrict to known users rather than allowing anyone authenticated.
 - [ ] **No mixed token config**: Do not set both `gateway.auth.token` and `gateway.auth.mode: "trusted-proxy"`.
 - [ ] **Local password fallback is private**: If you configure `gateway.auth.password` for internal direct callers, keep the Gateway port firewalled so non-proxy remote clients cannot reach it directly.

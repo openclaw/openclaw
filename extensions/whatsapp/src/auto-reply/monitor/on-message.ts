@@ -92,7 +92,7 @@ export function createWebOnMessageHandler(params: {
       statusReactionController?: StatusReactionController | null;
     },
   ) => {
-    const processParams: Parameters<typeof processMessage>[0] = {
+    return processMessage({
       cfg,
       msg,
       route,
@@ -108,26 +108,8 @@ export function createWebOnMessageHandler(params: {
       backgroundTasks: params.backgroundTasks,
       buildContext: params.buildContext,
       dispatchReplyFromConfig: params.dispatchReplyFromConfig,
-    };
-    if (opts?.groupHistory !== undefined) {
-      processParams.groupHistory = opts.groupHistory;
-    }
-    if (opts?.suppressGroupHistoryClear !== undefined) {
-      processParams.suppressGroupHistoryClear = opts.suppressGroupHistoryClear;
-    }
-    if (opts?.preflightAudioTranscript !== undefined) {
-      processParams.preflightAudioTranscript = opts.preflightAudioTranscript;
-    }
-    if (opts?.ackAlreadySent === true) {
-      processParams.ackAlreadySent = true;
-    }
-    if (opts?.ackReaction !== undefined) {
-      processParams.ackReaction = opts.ackReaction;
-    }
-    if (opts?.statusReactionController !== undefined) {
-      processParams.statusReactionController = opts.statusReactionController;
-    }
-    return processMessage(processParams);
+      ...opts,
+    });
   };
 
   return async (normalizedMsg: AdmittedWebInboundMessage) => {
@@ -323,10 +305,9 @@ export function createWebOnMessageHandler(params: {
       // message first; configured ACP routes also wait for backend readiness.
       recordAcceptedConfiguredGroupRoute = recordGroupRoute;
 
-      let gating = await applyGroupGating({
+      const gatingParams = {
         cfg,
         msg,
-        deferMissingMention: hasAudioBody && Boolean(msg.payload.media?.path),
         groupHistoryKey,
         agentId: route.agentId,
         sessionKey: route.sessionKey,
@@ -339,6 +320,10 @@ export function createWebOnMessageHandler(params: {
         groupMemberNames: params.groupMemberNames,
         logVerbose,
         replyLogger: params.replyLogger,
+      };
+      let gating = await applyGroupGating({
+        ...gatingParams,
+        deferMissingMention: hasAudioBody && Boolean(msg.payload.media?.path),
       });
       if (
         !gating.shouldProcess &&
@@ -347,23 +332,10 @@ export function createWebOnMessageHandler(params: {
       ) {
         await runAudioPreflightOnce();
         gating = await applyGroupGating({
-          cfg,
-          msg,
+          ...gatingParams,
           ...(typeof preflightAudioTranscript === "string"
             ? { mentionText: preflightAudioTranscript }
             : {}),
-          groupHistoryKey,
-          agentId: route.agentId,
-          sessionKey: route.sessionKey,
-          baseMentionConfig,
-          providerMentionPatterns: account.mentionPatterns,
-          authDir: account.authDir,
-          selfChatMode: account.selfChatMode,
-          groupHistories: params.groupHistories,
-          groupHistoryLimit: params.groupHistoryLimit,
-          groupMemberNames: params.groupMemberNames,
-          logVerbose,
-          replyLogger: params.replyLogger,
         });
       }
       if (!gating.shouldProcess) {

@@ -3,6 +3,7 @@
 import { isIpv6Address, parseCanonicalIpAddress } from "@openclaw/net-policy/ip";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 
@@ -84,8 +85,11 @@ export async function maybeAddTailnetOriginToControlUiAllowedOrigins(params: {
     return params.config;
   }
 
-  const existing = params.config.gateway?.controlUi?.allowedOrigins ?? [];
+  const existing = resolveControlUiAllowedOrigins(params.config);
   const updatedOrigins = appendAllowedOrigin(existing, tsOrigin);
+  if (updatedOrigins === existing) {
+    return params.config;
+  }
   // Preserve all unrelated gateway/controlUi config while adding the derived
   // tailnet origin, because setup writes partial gateway config objects.
   return {

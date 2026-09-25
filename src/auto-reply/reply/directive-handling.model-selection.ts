@@ -132,19 +132,21 @@ export function resolveModelSelectionFromDirective(params: {
           agentDir: params.agentDir,
         })
       : null;
+  const resolveSelection = (directive: string) =>
+    resolveModelDirectiveSelection({
+      raw: directive,
+      defaultProvider: params.defaultProvider,
+      defaultModel: params.defaultModel,
+      aliasIndex: params.aliasIndex,
+      allowedModelKeys: params.allowedModelKeys,
+      modelPolicy: params.modelPolicy,
+      operatorModelPolicy: params.operatorAuthority?.modelPolicy,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      rawRuntime: params.directives.rawModelRuntime,
+    });
   const storedNumericProfileSelection = storedNumericProfile
-    ? resolveModelDirectiveSelection({
-        raw: storedNumericProfile.modelRaw,
-        defaultProvider: params.defaultProvider,
-        defaultModel: params.defaultModel,
-        aliasIndex: params.aliasIndex,
-        allowedModelKeys: params.allowedModelKeys,
-        modelPolicy: params.modelPolicy,
-        operatorModelPolicy: params.operatorAuthority?.modelPolicy,
-        cfg: params.cfg,
-        agentId: params.agentId,
-        rawRuntime: params.directives.rawModelRuntime,
-      })
+    ? resolveSelection(storedNumericProfile.modelRaw)
     : null;
   const useStoredNumericProfile =
     Boolean(storedNumericProfileSelection?.selection) &&
@@ -169,18 +171,7 @@ export function resolveModelSelectionFromDirective(params: {
     };
   }
 
-  const resolved = resolveModelDirectiveSelection({
-    raw: modelRaw,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    aliasIndex: params.aliasIndex,
-    allowedModelKeys: params.allowedModelKeys,
-    modelPolicy: params.modelPolicy,
-    operatorModelPolicy: params.operatorAuthority?.modelPolicy,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    rawRuntime: params.directives.rawModelRuntime,
-  });
+  const resolved = resolveSelection(modelRaw);
   if (resolved.error) {
     return { errorText: resolved.error };
   }

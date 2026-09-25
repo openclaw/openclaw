@@ -30,32 +30,17 @@ export function deriveSessionTitle(
     return undefined;
   }
 
-  const label = normalizeOptionalString(entry.label);
-  if (label) {
-    return label;
-  }
-
-  const displayName =
-    normalizeOptionalString(externalDisplayName) ?? normalizeOptionalString(entry.displayName);
-  if (displayName) {
-    return displayName;
-  }
-
-  const subject = normalizeOptionalString(entry.subject);
-  if (subject) {
-    return subject;
-  }
-
   // When no model label was persisted, prefer a task-bearing sentence over a
   // raw first-bubble truncation so Control UI and gateway clients stay readable.
-  const goalTitle = deriveGoalSessionTitle(firstUserMessage);
-  if (goalTitle) {
-    return goalTitle;
-  }
-
   // Derived titles are human content only; UI/TUI/ACP own key-based fallbacks,
   // which an id prefix here would mask.
-  return undefined;
+  return (
+    normalizeOptionalString(entry.label) ??
+    normalizeOptionalString(externalDisplayName) ??
+    normalizeOptionalString(entry.displayName) ??
+    normalizeOptionalString(entry.subject) ??
+    (deriveGoalSessionTitle(firstUserMessage) || undefined)
+  );
 }
 
 export function prepareSessionTitleRead(
@@ -75,10 +60,6 @@ export function prepareSessionTitleRead(
     derivedTitle,
     needsTranscript: opts.includeLastMessage || !derivedTitle,
   };
-}
-
-export function resolvePositiveNumber(value: number | null | undefined): number | undefined {
-  return asPositiveFiniteNumber(value);
 }
 
 function resolveModelCostConfigCached(
@@ -116,10 +97,10 @@ export function resolveEstimatedSessionCostUsd(params: {
   if (explicitCostUsd !== undefined) {
     return explicitCostUsd;
   }
-  const input = resolvePositiveNumber(params.entry?.inputTokens);
-  const output = resolvePositiveNumber(params.entry?.outputTokens);
-  const cacheRead = resolvePositiveNumber(params.entry?.cacheRead);
-  const cacheWrite = resolvePositiveNumber(params.entry?.cacheWrite);
+  const input = asPositiveFiniteNumber(params.entry?.inputTokens);
+  const output = asPositiveFiniteNumber(params.entry?.outputTokens);
+  const cacheRead = asPositiveFiniteNumber(params.entry?.cacheRead);
+  const cacheWrite = asPositiveFiniteNumber(params.entry?.cacheWrite);
   if (
     input === undefined &&
     output === undefined &&

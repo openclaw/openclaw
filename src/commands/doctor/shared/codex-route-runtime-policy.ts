@@ -483,10 +483,6 @@ function clearLegacyAgentRuntimePolicy(
   if (!container) {
     return;
   }
-  if (asMutableRecord(container.embeddedHarness)) {
-    delete container.embeddedHarness;
-    changes.push(`Removed ${pathLabel}.embeddedHarness; runtime is now provider/model scoped.`);
-  }
   if (asMutableRecord(container.agentRuntime)) {
     delete container.agentRuntime;
     changes.push(`Removed ${pathLabel}.agentRuntime; runtime is now provider/model scoped.`);

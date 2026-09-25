@@ -26,7 +26,7 @@ import {
   type OpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-error.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "./openclaw-state-db-contract.js";
-import { resolveOpenClawStateSqliteDir } from "./openclaw-state-db.paths.js";
+import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 const OPENCLAW_QUARANTINE_SCHEMA_VERSION = 2;
 const OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS = 5_000;
@@ -269,10 +269,6 @@ function createOpenClawDatabaseVerificationError(
   return error;
 }
 
-export function resolveQuarantineStorePath(env: NodeJS.ProcessEnv): string {
-  return path.join(resolveOpenClawStateSqliteDir(env), "openclaw-quarantine.sqlite");
-}
-
 function ensureQuarantineStoreDirectory(storePath: string): void {
   const dir = path.dirname(storePath);
   mkdirSync(dir, { recursive: true, mode: OPENCLAW_QUARANTINE_DIR_MODE });
@@ -388,30 +384,6 @@ function readOpenClawDatabaseQuarantine(
     throw outcome.error;
   }
   return outcome.value;
-}
-
-/** Reject a known state quarantine while retaining best-effort metadata admission. */
-export function assertOpenClawStateDatabaseNotQuarantined(
-  pathname: string,
-  env: NodeJS.ProcessEnv,
-  onNativeCleanupFailure?: (error: OpenClawQuarantineReadCleanupError) => void,
-): void {
-  let quarantineFailure: Error | undefined;
-  try {
-    quarantineFailure = readOpenClawDatabaseQuarantineFailure("state", pathname, { env });
-  } catch (error) {
-    if (!(error instanceof OpenClawQuarantineReadCleanupError)) {
-      throw error;
-    }
-    onNativeCleanupFailure?.(error);
-    return;
-  }
-  if (quarantineFailure?.cause instanceof OpenClawQuarantineReadCleanupError) {
-    onNativeCleanupFailure?.(quarantineFailure.cause);
-  }
-  if (quarantineFailure) {
-    throw quarantineFailure;
-  }
 }
 
 function readQuarantineDecision(

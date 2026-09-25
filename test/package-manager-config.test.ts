@@ -3,11 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import {
-  mergeOverrides,
-  parsePnpmPackageKey,
-  readNpmLockOverrides,
-} from "../scripts/generate-npm-package-lock.mts";
+import { mergeOverrides, readNpmLockOverrides } from "../scripts/generate-npm-package-lock.mts";
 import { pnpmLockfileDocuments } from "../scripts/lib/pnpm-lockfile-documents.mjs";
 
 type PnpmBuildConfig = {
@@ -18,6 +14,7 @@ type PnpmBuildConfig = {
 };
 
 type RootPackageJson = {
+  dependencies: { tar: string };
   files?: string[];
   pnpm?: PnpmBuildConfig;
 };
@@ -53,26 +50,6 @@ function readPnpmEnvironmentLock(): PnpmEnvironmentLock {
     throw new Error("pnpm-lock.yaml is missing its environment document");
   }
   return parse(environment) as PnpmEnvironmentLock;
-}
-
-function collectPnpmLockPackages(): Set<string> {
-  const lockfile = parse(
-    pnpmLockfileDocuments(fs.readFileSync("pnpm-lock.yaml", "utf8")).dependencies,
-  ) as {
-    packages?: Record<string, { version?: unknown }>;
-  };
-  const packages = new Set<string>();
-  for (const [packageKey, metadata] of Object.entries(lockfile.packages ?? {})) {
-    const parsed = parsePnpmPackageKey(packageKey);
-    if (!parsed) {
-      continue;
-    }
-    packages.add(`${parsed.name}@${parsed.version}`);
-    if (typeof metadata.version === "string") {
-      packages.add(`${parsed.name}@${metadata.version}`);
-    }
-  }
-  return packages;
 }
 
 describe("package manager build policy", () => {
@@ -140,21 +117,17 @@ describe("package manager build policy", () => {
   });
 
   it("pins forked transitive dependencies with parent-scoped npm-lock overrides", () => {
-    const overrides = readNpmLockOverrides() as Record<string, unknown>;
+    const tarVersion = (readJson("package.json") as RootPackageJson).dependencies.tar;
+    const overrides = readNpmLockOverrides(
+      {
+        dependencies: { minipass: "3.3.6", tar: tarVersion },
+      },
+      process.cwd(),
+    );
 
-    const packages = collectPnpmLockPackages();
-
-    expect(overrides["lru-cache"]).toBeUndefined();
-    expect(overrides["lru-memoizer@2.3.0"]).toMatchObject({
-      "lru-cache": { ".": "6.0.0", yallist: "4.0.0" },
-    });
-    if (packages.has("lru-memoizer@3.0.0")) {
-      const lruCacheVersion = (overrides["lru-memoizer@3.0.0"] as Record<string, string>)[
-        "lru-cache"
-      ];
-      expect(lruCacheVersion).toMatch(/^11\.\d+\.\d+$/u);
-      expect(packages.has(`lru-cache@${lruCacheVersion}`)).toBe(true);
-    }
+    expect(overrides.yallist).toBeUndefined();
+    expect(overrides["minipass@3.3.6"]).toMatchObject({ yallist: "4.0.0" });
+    expect(overrides[`tar@${tarVersion}`]).toMatchObject({ yallist: "5.0.0" });
   });
 
   it("merges exact npm-lock pins with nested lock-derived pins", () => {

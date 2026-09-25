@@ -42,8 +42,10 @@ vi.mock("../paths.js", async (importOriginal) => ({
     paths: requestedPaths,
   }),
 }));
+vi.mock("../output-directories.js", () => ({
+  ensureOutputDirectory: async () => await preparation.output(),
+}));
 vi.mock("./output-paths.js", () => ({
-  ensureOutputRootDir: async () => await preparation.output(),
   resolveWritableOutputPathOrRespond: async ({ requestedPath }: { requestedPath: string }) =>
     requestedPath,
 }));

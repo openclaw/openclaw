@@ -93,17 +93,6 @@ function canonicalizeLoadedSkillRecord(
   };
 }
 
-function setSyncSourceForPluginSkill(
-  record: LoadedSkillRecord,
-  syncSourceDir: string,
-): LoadedSkillRecord {
-  return {
-    ...record,
-    syncSourceDir,
-    syncDirName: path.basename(record.skill.baseDir),
-  };
-}
-
 /** Loads one skill root under the configured discovery limits and symlink/hardlink policy. */
 export function loadSkillRootRecords(params: {
   dir: string;
@@ -198,7 +187,11 @@ export function loadGeneratedPluginSkillRecords(params: {
       rejectHardlinks: candidate.rejectHardlinks,
     });
     if (record) {
-      loadedSkills.push(setSyncSourceForPluginSkill(record, candidate.skillDirRealPath));
+      loadedSkills.push({
+        ...record,
+        syncSourceDir: candidate.skillDirRealPath,
+        syncDirName: path.basename(record.skill.baseDir),
+      });
     }
     if (loadedSkills.length >= maxSkillsLoadedPerSource) {
       break;

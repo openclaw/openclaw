@@ -1,6 +1,7 @@
 // Config snapshots and pre/post-update config restoration.
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
@@ -12,9 +13,10 @@ import {
 } from "../../config/config.js";
 import { resolveConfigEnvVars } from "../../config/env-substitution.js";
 import { resolveConfigIncludes } from "../../config/includes.js";
+import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
 import type { ConfigWriteOptions } from "../../config/io.types.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
-import { resolveIncludeRoots } from "../../config/paths.js";
+import { resolveConfigPath, resolveIncludeRoots } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { shouldWarnOnTouchedVersion } from "../../config/version.js";
 import { composeConfigWriteAssertions } from "../../config/write-authority.js";
@@ -341,18 +343,49 @@ function createUpdatedConfigSnapshot(
 }
 
 /** Read-only startup configuration, retaining the authored snapshot alongside any projection. */
-export async function readUpdateChannelConfig(channelRequested: boolean) {
-  const configSnapshot = await readConfigFileSnapshot({
-    skipPluginValidation: true,
-    observe: false,
-  });
+export async function readUpdateChannelConfig(
+  channelRequested: boolean,
+  options?: { tolerateReadFailure?: boolean },
+) {
+  let configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  let configReadFailure: Error | undefined;
+  try {
+    configSnapshot = await readConfigFileSnapshot({
+      skipPluginValidation: true,
+      observe: false,
+    });
+  } catch (error) {
+    if (!options?.tolerateReadFailure) {
+      throw error;
+    }
+    configReadFailure = toErrorObject(error, "Configuration could not be read.");
+    configSnapshot = createConfigFileSnapshot({
+      path: resolveConfigPath(),
+      exists: true,
+      raw: null,
+      parsed: null,
+      sourceConfig: {},
+      runtimeConfig: {},
+      valid: false,
+      issues: [{ path: "", message: "Configuration could not be read." }],
+      warnings: [],
+      legacyIssues: [],
+      readError: { code: null },
+    });
+  }
   const legacyConfigPlan = channelRequested
     ? await planUpdateChannelLegacyConfig(configSnapshot)
     : undefined;
   const plannedConfig =
-    legacyConfigPlan?.config ?? (configSnapshot.valid ? configSnapshot.config : undefined);
+    legacyConfigPlan?.config ??
+    (configSnapshot.valid
+      ? configSnapshot.config
+      : options?.tolerateReadFailure
+        ? configSnapshot.sourceConfig
+        : undefined);
   return {
     configSnapshot,
+    configReadFailure,
     legacyConfigPlan,
     storedChannel: normalizeUpdateChannel(plannedConfig?.update?.channel),
   };

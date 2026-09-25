@@ -910,7 +910,9 @@ suite.define(() => {
         .toBe(10);
 
       const alpha = page.locator('[data-session-section="category:Alpha"]');
-      const alphaToggle = alpha.getByRole("button", { name: "Alpha", exact: true });
+      const alphaToggle = alpha
+        .getByRole("button", { name: "Alpha", exact: true })
+        .and(alpha.locator(".sidebar-session-group-toggle"));
       await alphaToggle.click();
       await expect.poll(() => alpha.locator(".sidebar-recent-session").count()).toBe(0);
       await captureUiProof(suite, page, "sidebar-session-group-collapsed.png");

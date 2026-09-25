@@ -11,8 +11,9 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Theme and accent edits sync with a connected writable profile. Read-only or unknown-profile edits, including new edits after restarting offline, stay on the device; choose them again after connecting to sync. Already profile-bound edits wait for that profile to reconnect, without discarding or replacing newer device-local choices.
 - Choose **Text size** in **Settings → Appearance**: 90%, 100% (default), 110%, 125%, or 140%. This device-local choice survives restarting the app and does not sync to your profile. It combines with Android system font scaling, including nonlinear scaling, without changing spacing or typefaces.
 - Configure foreground on-device Voice Wake and Gateway-synced wake words in **Settings → Voice**.
+- Talk setup and startup failures stay visible in a dismissible Chat dialog. If the message reports a missing provider or invalid credentials, configure the Talk provider on the Gateway before trying again.
 - Use **Settings → OpenClaw** for guided Gateway setup and repair. New replies stay visible at the end of the conversation; scrolling back preserves your reading position until you return or tap **Jump to latest**.
-- Enable camera, location, and other phone capabilities through onboarding or Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
+- Setup offers optional notifications, microphone, camera, and location access; other permissions are under **Additional features**. Continue without granting access, or enable phone capabilities later in Settings. Blocked setup requests offer Android Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
 - View the phone's memory and disk meters on the Control UI Devices page. Connected Android nodes report host resource stats immediately and every 60 seconds; disk meters require an available storage sample and a Gateway that supports host stats.
 - Manage installed skills and Gateway-verified ClawHub releases, review Skill Workshop proposals, and inspect or edit automations with the required Gateway access.
 - Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
@@ -39,8 +40,10 @@ refits the image rather than restoring offsets from the old viewport.
 In the app's own conversation, agent main sessions, and dashboard conversations,
 completed commentary and tool activity fold into a **Worked** or **Worked for…**
 row. Tap the row to expand or collapse the details. Prompts, final answers,
-and attachments remain visible. Failures without a later answer stay visible;
-earlier tool failures remain available in expanded work. Active work stays expanded,
+and attachments remain visible. The summary keeps counts of failed, blocked, and
+unknown tool outcomes visible even when work is collapsed; these describe individual
+tools, not the overall answer. Failures without a later answer stay visible;
+earlier tool failure details remain available in expanded work. Active work stays expanded,
 including a run continued by a steering message. Channel conversations retain
 their full transcript.
 

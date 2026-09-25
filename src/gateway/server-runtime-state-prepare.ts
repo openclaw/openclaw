@@ -441,7 +441,7 @@ export async function prepareGatewayKernelState(params: {
     ...startupCheckerDeps,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     getStateDatabaseFailure: () =>
-      openClawStateDatabaseCache.getOpenClawStateDatabaseRuntimeFailure(resolveDatabasePath()),
+      openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(resolveDatabasePath()),
     getAgentDatabaseAdmissionRefusals: () => {
       const cfg = getRuntimeConfig();
       return listAgentDatabaseAdmissionRefusals().filter(

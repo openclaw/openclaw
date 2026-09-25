@@ -11,8 +11,6 @@ import {
 import { onAgentEvent } from "../infra/agent-events.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
@@ -25,6 +23,7 @@ import { cancelGatewayWorkerSessionWork } from "./server-worker-placement-cancel
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { admitWorkerStopChat } from "./server-worker-placement.test-harness.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
+import { closeSessionSqliteDatabasesForTest } from "./session-utils.test-support.js";
 const routing = vi.hoisted(() => ({ load: vi.fn() }));
 vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
@@ -87,6 +86,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
     } as unknown as import("./server-methods/types.js").GatewayRequestContext;
     routing.load.mockImplementation(() => ({
       ...target,
+      agentId: "main",
       canonicalKey: target.sessionKey,
       cfg: {},
       entry: loadSessionEntry(target),
@@ -151,6 +151,9 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         throw new Error("active admission missing");
       }
       const owned = active.value;
+      if (outcome !== "setup-failed-write") {
+        expect(owned.activeRunAbort.markExecutionStarted()).toBe(true);
+      }
       await replaceSessionEntry(target, {
         ...entry,
         status: "running",
@@ -257,7 +260,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         { phase: "end", status: "cancelled", aborted: true, stopReason: "rpc" },
       ]);
       expect(context.chatAbortControllers.has(runId)).toBe(false);
-      closeOpenClawAgentDatabasesForTest();
+      await closeSessionSqliteDatabasesForTest();
       const persisted = loadSessionEntry({ ...target, readConsistency: "latest" });
       expect(persisted).toMatchObject({ status: "killed", lastRunId: runId, abortedLastRun: true });
       expect(persisted?.endedAt).toBeTypeOf("number");
@@ -282,8 +285,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       subscriptions?.transcriptUnsub();
       subscriptions?.lifecycleUnsub();
       await subscriptions?.taskUnsub();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      await closeSessionSqliteDatabasesForTest();
       persistenceSpy?.mockRestore();
       routing.load.mockReset();
       await fs.rm(root, { recursive: true, force: true });

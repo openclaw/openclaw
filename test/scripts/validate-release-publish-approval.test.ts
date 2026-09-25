@@ -4,6 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import {
+  assertStableSoakWaiverStillHeld,
+  createStablePluginNpmBootstrapApproval,
+  validateStablePluginNpmBootstrapApproval,
+} from "../../scripts/plugin-npm-bootstrap-approval.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/validate-release-publish-approval.mjs";
@@ -915,5 +920,71 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
       );
       expect(result.stderr).toBe("");
     }
+  });
+});
+
+describe("stable npm bootstrap soak waiver authority", () => {
+  const toolingSha = "c".repeat(40);
+  const targetSha = "a".repeat(40);
+  const branch = `release-publish/${toolingSha.slice(0, 12)}-1`;
+  const approvalInput = (stableSoakWaiverSource: "explicit" | "sealed") => ({
+    repository: "openclaw/openclaw",
+    parentRunId: "123",
+    parentRunAttempt: 1,
+    workflowBranch: branch,
+    workflowFullRef: `refs/tags/${branch}`,
+    parentWorkflowSha: toolingSha,
+    releaseTag: "v2026.9.6",
+    targetSha,
+    publishTag: "latest",
+    releaseProfile: "beta",
+    stableSoakWaiver: "2026.9.6 ship the hotfix",
+    stableSoakWaiverSource,
+    validationRunId: "456",
+    validationRunAttempt: 1,
+    packages: ["@openclaw/team-reports"],
+  });
+  const expected = (currentStableSoakWaiver: string) => ({
+    repository: "openclaw/openclaw",
+    parentRunId: "123",
+    parentRunAttempt: 1,
+    workflowBranch: branch,
+    workflowFullRef: `refs/tags/${branch}`,
+    parentWorkflowSha: toolingSha,
+    targetSha,
+    publishTag: "latest",
+    packageName: "@openclaw/team-reports",
+    packageVersion: "2026.9.6",
+    currentStableSoakWaiver,
+  });
+
+  it("rejects a sealed soak waiver the repository variable no longer holds", () => {
+    const approval = createStablePluginNpmBootstrapApproval(approvalInput("sealed"));
+    expect(approval.stableSoakWaiverSource).toBe("sealed");
+    expect(() => validateStablePluginNpmBootstrapApproval(approval, expected(""))).toThrow(
+      "no longer holds",
+    );
+    expect(() =>
+      validateStablePluginNpmBootstrapApproval(approval, expected("2026.9.6 ship the hotfix")),
+    ).not.toThrow();
+    // The same check guards the token-backed publish step itself.
+    expect(() => assertStableSoakWaiverStillHeld(approval, "")).toThrow("no longer holds");
+    expect(() =>
+      assertStableSoakWaiverStillHeld(approval, "2026.9.6 ship the hotfix"),
+    ).not.toThrow();
+  });
+
+  it("keeps an explicit operator waiver valid without the repository variable", () => {
+    const approval = createStablePluginNpmBootstrapApproval(approvalInput("explicit"));
+    expect(() => validateStablePluginNpmBootstrapApproval(approval, expected(""))).not.toThrow();
+  });
+
+  it("requires a waiver source whenever a waiver is recorded", () => {
+    expect(() =>
+      createStablePluginNpmBootstrapApproval({
+        ...approvalInput("sealed"),
+        stableSoakWaiverSource: "",
+      }),
+    ).toThrow("soak waiver source");
   });
 });

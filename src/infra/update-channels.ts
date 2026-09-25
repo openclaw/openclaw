@@ -37,9 +37,6 @@ export function resolveDevUpstreamRefs(
 /** Normalizes config or CLI channel input to a supported update channel. */
 export function normalizeUpdateChannel(value?: string | null): UpdateChannel | null {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return null;
-  }
   if (
     normalized === "stable" ||
     normalized === "extended-stable" ||
@@ -53,16 +50,9 @@ export function normalizeUpdateChannel(value?: string | null): UpdateChannel | n
 
 /** Maps an OpenClaw update channel to the npm dist-tag used for package lookups. */
 export function channelToNpmTag(channel: UpdateChannel): string {
-  if (channel === "extended-stable") {
-    return "extended-stable";
-  }
-  if (channel === "beta") {
-    return "beta";
-  }
-  if (channel === "dev") {
-    return "dev";
-  }
-  return "latest";
+  return channel === "extended-stable" || channel === "beta" || channel === "dev"
+    ? channel
+    : "latest";
 }
 
 /** Beta follows the newest published beta or stable version, including plugin packages. */
@@ -181,10 +171,6 @@ export function resolveEffectiveUpdateChannel(params: {
       return { channel: "dev", source: "git-branch" };
     }
     return { channel: DEFAULT_GIT_CHANNEL, source: "default" };
-  }
-
-  if (params.installKind === "package") {
-    return { channel: DEFAULT_PACKAGE_CHANNEL, source: "default" };
   }
 
   return { channel: DEFAULT_PACKAGE_CHANNEL, source: "default" };

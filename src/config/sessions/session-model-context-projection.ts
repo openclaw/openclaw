@@ -73,13 +73,15 @@ const MODEL_CONTEXT_NAVIGATION_KEYS = [
   "name",
 ] as const;
 
-function jsonMemberValue(alias: "root_member" | "message_member"): RawBuilder<unknown> {
+type JsonMemberAlias = "root_member" | "message_member" | "archive_internal" | "archive_details";
+
+function jsonMemberValue(alias: JsonMemberAlias): RawBuilder<unknown> {
   const type =
-    /* kysely-allow-raw: both closed aliases are JSON member cursors created below. */ sql.ref(
+    /* kysely-allow-raw: closed aliases are JSON member cursors created below. */ sql.ref(
       `${alias}.type`,
     );
   const value =
-    /* kysely-allow-raw: both closed aliases are JSON member cursors created below. */ sql.ref(
+    /* kysely-allow-raw: closed aliases are JSON member cursors created below. */ sql.ref(
       `${alias}.value`,
     );
   return sql`CASE ${type}
@@ -92,7 +94,11 @@ function jsonMemberValue(alias: "root_member" | "message_member"): RawBuilder<un
 /** Stored navigation serves SQL's first-key lookup and JavaScript's last-key parse. */
 export function projectTranscriptPayloadNavigationSql(
   event: Expression<string | Uint8Array>,
+  options: { archive?: boolean } = {},
 ): RawBuilder<string> {
+  if (options.archive) {
+    return projectArchiveTranscriptNavigationSql(event);
+  }
   const memberValue =
     /* kysely-allow-raw: fixed JSON member cursor declared in the message projection below. */ sql.ref(
       "message_member.value",
@@ -108,6 +114,91 @@ export function projectTranscriptPayloadNavigationSql(
       THEN json(${message}) ELSE ${jsonMemberValue("root_member")} END)
     FROM json_each(${event}) AS root_member
     WHERE root_member.key IN (${sql.join([...MODEL_CONTEXT_NAVIGATION_KEYS, "message"])}))`;
+}
+
+/** Large identity rows use the payload owner's conservative native eligibility; callers require UTF-8 storage. */
+export function projectSupportedTranscriptPayloadNavigationSql(
+  event: Expression<string>,
+  maxBytes: number,
+): RawBuilder<string | null> {
+  const projection = projectTranscriptPayloadNavigationSql(event, { archive: true });
+  return /* kysely-allow-raw: strict JSON and Unicode admission precede native traversal; metadata is capped before JS hydration. */ sql<
+    string | null
+  >`(
+    WITH native_navigation AS MATERIALIZED (
+      SELECT CASE WHEN json_valid(${event}) THEN CASE
+        WHEN instr(${event}, ${"\\u"}) = 0 AND instr(${event}, char(0)) = 0 AND json_type(${event}) = 'object'
+          THEN ${projection} END END AS value
+    )
+    SELECT CASE WHEN octet_length(value) <= ${maxBytes} THEN value END FROM native_navigation
+  )`;
+}
+
+function lastArchiveMemberIds(
+  value: Expression<unknown>,
+  keys?: readonly string[],
+): RawBuilder<unknown> {
+  return /* kysely-allow-raw: duplicate selection sorts only decoded keys and native IDs, never payload values. */ sql`(
+    SELECT max(id) FROM json_each(${value})
+    ${keys ? sql`WHERE key IN (${sql.join(keys)})` : sql``}
+    GROUP BY key
+  )`;
+}
+
+function lastArchiveObjectMembers(
+  value: Expression<unknown>,
+  alias: JsonMemberAlias,
+  projected: Expression<unknown> = jsonMemberValue(alias),
+  keys?: readonly string[],
+): RawBuilder<string> {
+  const member =
+    /* kysely-allow-raw: private JsonMemberAlias union contains only fixed JSON cursor names. */ sql.ref(
+      alias,
+    );
+  return /* kysely-allow-raw: fixed archive envelope members retain JSON.parse's last duplicate key without hydrating discarded values. */ sql<string>`(
+    SELECT json_group_object(${/* kysely-allow-raw: fixed key column on the private JsonMemberAlias union. */ sql.ref(`${alias}.key`)}, ${projected})
+    FROM json_each(${value}) AS ${member}
+    WHERE ${/* kysely-allow-raw: fixed id column on the private JsonMemberAlias union. */ sql.ref(`${alias}.id`)} IN ${lastArchiveMemberIds(value, keys)}
+  )`;
+}
+
+function projectArchiveTranscriptNavigationSql(
+  event: Expression<string | Uint8Array>,
+): RawBuilder<string> {
+  const internal = lastArchiveObjectMembers(
+    /* kysely-allow-raw: fixed JSON cursor value declared by this projection. */ sql.ref(
+      "message_member.value",
+    ),
+    "archive_internal",
+    undefined,
+    ["runId", "steerTargetRunId", "contextFreeCommand", "idempotencyKey"],
+  );
+  const message = lastArchiveObjectMembers(
+    /* kysely-allow-raw: fixed JSON cursor value declared by this projection. */ sql.ref(
+      "root_member.value",
+    ),
+    "message_member",
+    sql`CASE WHEN message_member.key = '__openclaw' AND message_member.type = 'object'
+      THEN json(${internal}) ELSE ${jsonMemberValue("message_member")} END`,
+    ["role", "display", "idempotencyKey", "provenance", "excludeFromContext", "__openclaw"],
+  );
+  const details = lastArchiveObjectMembers(
+    /* kysely-allow-raw: fixed JSON cursor value declared by this projection. */ sql.ref(
+      "root_member.value",
+    ),
+    "archive_details",
+    undefined,
+    ["runId"],
+  );
+  return lastArchiveObjectMembers(
+    event,
+    "root_member",
+    sql`CASE WHEN root_member.key = 'message' AND root_member.type = 'object'
+      THEN json(${message})
+      WHEN root_member.key = 'details' AND root_member.type = 'object'
+      THEN json(${details}) ELSE ${jsonMemberValue("root_member")} END`,
+    [...MODEL_CONTEXT_NAVIGATION_KEYS, "message", "role", "details"],
+  );
 }
 
 /** Cursor resolution needs only tree facts, even when a row has an opaque body. */

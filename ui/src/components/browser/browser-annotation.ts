@@ -200,15 +200,7 @@ export function buildBrowserAnnotationContent(params: {
     );
   }
   if (element) {
-    lines.push(
-      t("browser.annotatePrompt.elementDetail", {
-        descriptor: element.descriptor,
-        width: element.width,
-        height: element.height,
-        x: element.x,
-        y: element.y,
-      }),
-    );
+    lines.push(t("browser.annotatePrompt.elementDetail", element));
   }
   lines.push(t("browser.annotatePrompt.outro"));
   return {

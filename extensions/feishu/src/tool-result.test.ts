@@ -17,11 +17,10 @@ describe("tool result errors", () => {
 
     expect(result.details).toBe(details);
     expect(result.details.title).toBe(hostile);
-    expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+    expect(text?.trimStart()).toMatch(/^<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(text).toContain("Source: API");
     expect(text).not.toContain("<|im_start|>");
     expect(text).not.toContain("deadbeef");
-    expect(text).not.toContain("SECURITY NOTICE:");
   });
 
   it("formats unknown action errors", () => {

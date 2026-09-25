@@ -12,6 +12,7 @@ import {
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import { loadTranscriptHeaderSync, readTranscriptMutationStateSync } from "./session-accessor.js";
+import { readSessionTranscriptHeaderStartedAt } from "./transcript-header.js";
 import {
   isTerminalSessionStatus,
   type InternalSessionEntry,
@@ -200,16 +201,6 @@ function resolvePositiveTimestamp(value: number | undefined): number | undefined
   return timestampMs !== undefined && timestampMs > 0 ? timestampMs : undefined;
 }
 
-function parseTimestampMs(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return resolveTimestamp(value);
-  }
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  return resolveTimestamp(Date.parse(value));
-}
-
 function readSessionHeaderStartedAtMs(params: {
   entry: SessionLifecycleEntry;
   agentId?: string;
@@ -225,23 +216,15 @@ function readSessionHeaderStartedAtMs(params: {
     return undefined;
   }
   try {
-    const header = (
-      params.readHeader
-        ? params.readHeader(sessionId)
-        : loadTranscriptHeaderSync({
-            agentId,
-            sessionId,
-            ...(params.storePath ? { storePath: params.storePath } : {}),
-            ...(sessionKey ? { sessionKey } : {}),
-          })
-    ) as { type?: unknown; id?: unknown; timestamp?: unknown } | undefined;
-    if (
-      header?.type !== "session" ||
-      (typeof header.id === "string" && header.id.trim() && header.id !== sessionId)
-    ) {
-      return undefined;
-    }
-    return parseTimestampMs(header.timestamp);
+    const header = params.readHeader
+      ? params.readHeader(sessionId)
+      : loadTranscriptHeaderSync({
+          agentId,
+          sessionId,
+          ...(params.storePath ? { storePath: params.storePath } : {}),
+          ...(sessionKey ? { sessionKey } : {}),
+        });
+    return readSessionTranscriptHeaderStartedAt(header, sessionId);
   } catch {
     return undefined;
   }

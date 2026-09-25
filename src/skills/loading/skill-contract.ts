@@ -86,14 +86,16 @@ export function compactSkillsPromptForContext(prompt: string, contextTokenBudget
   let lo = 64;
   let hi = COMPACT_DESCRIPTION_MAX_CHARS;
   let result = render(lo);
-  while (lo <= hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    const candidate = render(mid);
-    if (candidate.length <= targetChars) {
-      result = candidate;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
+  if (result.length <= targetChars) {
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const candidate = render(mid);
+      if (candidate.length <= targetChars) {
+        result = candidate;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
     }
   }
   return result.length < prompt.length ? result : prompt;

@@ -318,5 +318,5 @@
     }
   },
   "include": ["src/**/*", "ui/**/*", "extensions/**/*", "packages/**/*"],
-  "exclude": ["node_modules", "dist", "**/dist/**"]
+  "exclude": ["node_modules", "dist", "**/dist/**", "**/*.test-compat.d.ts"]
 }

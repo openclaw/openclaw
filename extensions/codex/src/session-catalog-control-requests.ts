@@ -47,7 +47,7 @@ export type CodexSessionCatalogRequestSnapshot = {
   archiveThread(threadId: string, assertCurrent?: () => void): Promise<void>;
 };
 
-export type CodexCatalogRequestMethod =
+type CodexCatalogRequestMethod =
   | typeof CODEX_CONTROL_METHODS.archiveThread
   | typeof CODEX_CONTROL_METHODS.forkThread
   | typeof CODEX_CONTROL_METHODS.listThreads

@@ -2,9 +2,9 @@
 import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import path from "node:path";
+import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
 import { retryAsync } from "../infra/retry.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
 import {

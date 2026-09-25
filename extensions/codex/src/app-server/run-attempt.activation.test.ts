@@ -12,6 +12,30 @@ import {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt activation ownership", () => {
+  it("observes accepted requests without spending the execution budget", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const harness = createStartedThreadHarness();
+    const turnAccepted = createDeferred<void>();
+    const params = createTestParams();
+    params.timeoutMs = 1;
+    params.onExecutionPhase = ({ phase }) => {
+      if (phase === "turn_accepted") {
+        turnAccepted.resolve();
+      }
+    };
+    const run = runCodexAppServerAttempt(params);
+    await Promise.race([turnAccepted.promise, run]);
+
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    expect(readAttemptTerminal(await run)).toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+    });
+  });
+
   it.each(["execution observer", "published backend"] as const)(
     "stops accepted native work when activation fails at %s",
     async (stage) => {

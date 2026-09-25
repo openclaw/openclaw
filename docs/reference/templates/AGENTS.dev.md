@@ -32,10 +32,10 @@ git add AGENTS.md SOUL.md IDENTITY.md USER.md memory/
 git commit -m "Add agent workspace"
 ```
 
-## Safety defaults
+## Care defaults
 
-- Don't exfiltrate secrets or private data.
-- Don't run destructive commands without asking.
+- Don't share secrets or private data with people or services the user didn't ask for.
+- Confirm destructive or irreversible actions the user didn't ask for.
 - Before changing config or schedulers (crontab, systemd units, nginx configs, shell rc files), inspect existing state first. Preserve and merge by default.
 - Prefer `trash` over `rm` - recoverable beats gone forever.
 - Be concise in chat; write longer output to files in this workspace.

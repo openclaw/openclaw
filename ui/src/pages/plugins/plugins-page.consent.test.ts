@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { retainGatewayResponsePayload } from "../../../../packages/gateway-client/src/protocol-request.js";
 import { buildCapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -62,7 +63,7 @@ describe("PluginsPage consent", () => {
     };
     const { page, request } = await mountPluginPage(async (method) => {
       if (method === "plugins.install") {
-        throw new GatewayRequestError({
+        const error = new GatewayRequestError({
           code: "INVALID_REQUEST",
           message: "The staged plugin changed before installation. Try installing again.",
           details: buildCapabilityConsentErrorDetails({
@@ -70,6 +71,8 @@ describe("PluginsPage consent", () => {
             reviewToken: "changed-artifact",
           }),
         });
+        retainGatewayResponsePayload(error, undefined);
+        throw error;
       }
       throw new Error(`Unexpected method ${method}`);
     });
@@ -78,7 +81,7 @@ describe("PluginsPage consent", () => {
     expect(page.querySelector("[data-plugin-consent]")).toBeNull();
     expect(page.messages["plugin:calendar-runtime"]).toMatchObject({
       kind: "error",
-      text: "The staged plugin changed before installation. Try installing again.",
+      text: "Resolve the reported issue, then select Retry install to try again.\nThe staged plugin changed before installation. Try installing again.",
     });
     expect(request.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(1);
     expect(request.mock.calls.some(([method]) => method === "plugins.inspect")).toBe(false);

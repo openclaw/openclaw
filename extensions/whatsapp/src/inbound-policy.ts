@@ -16,7 +16,7 @@ import { requireWhatsAppInboundAdmission } from "./inbound/admission.js";
 import { resolveWhatsAppGroupConversationId } from "./inbound/group-conversation.js";
 import type { AdmittedWebInboundMessage } from "./inbound/types.js";
 import { resolveWhatsAppRuntimeGroupPolicy } from "./runtime-group-policy.js";
-import { getWhatsAppChannelRuntime } from "./runtime.js";
+import { getWhatsAppRuntime } from "./runtime.js";
 import { isSelfChatMode, normalizeE164 } from "./text-runtime.js";
 
 type ResolvedWhatsAppInboundPolicy = {
@@ -123,7 +123,7 @@ export async function resolveWhatsAppIngressAccess(params: {
   includeCommand?: boolean;
   contextBinding?: ChannelIngressContextBinding;
 }) {
-  return await getWhatsAppChannelRuntime().inbound.ingress.resolveStable({
+  return await getWhatsAppRuntime().channel.inbound.ingress.resolveStable({
     channelId: "whatsapp",
     accountId: params.policy.account.accountId,
     identity: {

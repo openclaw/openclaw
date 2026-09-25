@@ -272,6 +272,77 @@ describe("generate-npm-package-lock", () => {
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.39", "4.0.0"]))).toBeNull();
   });
 
+  it("pins the published runtime graph independently of unrelated workspace versions", () => {
+    const root = tempDirs.make("openclaw-npm-runtime-policy-");
+    const localDir = path.join(root, "local");
+    mkdirSync(localDir);
+    writeFileSync(path.join(root, "pnpm-workspace.yaml"), "{}\n");
+    writeFileSync(
+      path.join(localDir, "package.json"),
+      JSON.stringify({
+        dependencies: { "local-child": "2.0.0" },
+        peerDependencies: { "absent-optional-peer": "^1.0.0" },
+        peerDependenciesMeta: { "absent-optional-peer": { optional: true } },
+      }),
+    );
+    const snapshots = {
+      "first@1.0.0": { dependencies: { helper: "8.0.0" } },
+      "second@1.0.0": { optionalDependencies: { helper: "8.0.0" } },
+      "helper@8.0.0": {},
+      "helper@7.0.0": {},
+      "host@3.1.0": {},
+      "local-child@2.0.0": {},
+      "packed@1.0.0": { dependencies: { helper: "8.0.0" } },
+    };
+    writeFileSync(
+      path.join(root, "pnpm-lock.yaml"),
+      JSON.stringify({
+        packages: Object.fromEntries(Object.keys(snapshots).map((key) => [key, {}])),
+        snapshots,
+      }),
+    );
+    const manifest = {
+      dependencies: {
+        alias: "npm:first@1.0.0",
+        local: "file:./local",
+        packed: "file:./packed.tgz",
+      },
+      optionalDependencies: { second: "1.0.0" },
+      peerDependencies: { host: "^3.0.0" },
+      devDependencies: { helper: "7.0.0" },
+    };
+    const script = `import { readNpmLockOverrides } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)};
+      const manifest = ${JSON.stringify(manifest)};
+      const artifacts = [{ name: "packed", version: "1.0.0", spec: "file:./packed.tgz", integrity: "sha512-fixture" }];
+      const read = (input) => readNpmLockOverrides(input, ${JSON.stringify(root)}, artifacts);
+      let missing;
+      try { read({ dependencies: { absent: "1.0.0" } }); } catch (error) { missing = error.message; }
+      console.log(JSON.stringify({
+        native: read(manifest),
+        legacy: read({ ...manifest, peerDependenciesMeta: { host: { optional: true } } }),
+        empty: read({ devDependencies: { helper: "7.0.0" } }),
+        missing,
+      }));`;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
+      { encoding: "utf8", env: { ...process.env, OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: root } },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const policy = JSON.parse(result.stdout);
+    expect(policy.native).toEqual({
+      first: "1.0.0",
+      second: "1.0.0",
+      helper: "8.0.0",
+      host: "3.1.0",
+      "local-child": "2.0.0",
+      packed: "1.0.0",
+    });
+    expect(policy.legacy).toEqual({ ...policy.native, host: undefined });
+    expect(policy.empty).toEqual({});
+    expect(policy.missing).toContain("no runtime resolution for absent@1.0.0");
+  });
+
   it("uses scoped forks unless peer contexts conflict under one parent", () => {
     const plan = resolvePnpmLockOverridePlan({
       packages: {
@@ -607,16 +678,24 @@ describe("generate-npm-package-lock", () => {
                   "fixture-child@1.0.0": {},
                   "fixture-child@2.0.0": {},
                   "fixture-extra@3.0.0": {},
+                  "fixture-sibling@1.0.0": {},
                 }
               : {}),
           },
-          ...(scenario === "valid"
-            ? {
-                snapshots: {
-                  "fixture-dep@1.0.0": { dependencies: { "fixture-child": "1.0.0" } },
-                },
-              }
-            : {}),
+          snapshots: {
+            "fixture-dep@1.0.0": {},
+            ...(scenario === "valid"
+              ? {
+                  "fixture-dep@1.0.0": {
+                    dependencies: { "fixture-child": "1.0.0", "fixture-sibling": "1.0.0" },
+                  },
+                  "fixture-child@1.0.0": {},
+                  "fixture-child@2.0.0": {},
+                  "fixture-extra@3.0.0": {},
+                  "fixture-sibling@1.0.0": { dependencies: { "fixture-child": "2.0.0" } },
+                }
+              : {}),
+          },
         }),
       );
       writeFileSync(
@@ -671,7 +750,7 @@ describe("generate-npm-package-lock", () => {
       );
       const script = `import { generateNpmPackageLock, readNpmLockOverrides } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)};
       const lock = JSON.parse(generateNpmPackageLock(${JSON.stringify(packageDir)}, { localPackageArtifacts: ${JSON.stringify([artifact])} }));
-      console.log(JSON.stringify({ lock, overrides: readNpmLockOverrides() }));`;
+      console.log(JSON.stringify({ lock, overrides: readNpmLockOverrides({ dependencies: { "fixture-dep": "1.0.0" } }, ${JSON.stringify(packageDir)}) }));`;
       const result = spawnSync(
         process.execPath,
         ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],

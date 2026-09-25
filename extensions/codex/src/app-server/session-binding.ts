@@ -150,11 +150,7 @@ type CodexAppServerBindingMutation =
       threadId?: string;
     };
 
-export type CodexSessionGenerationAdoptionResult = NativeSessionGenerationAdoptionResult;
-
 export type CodexSessionGenerationRetirementResult = "applied" | "absent" | "conflict";
-
-export type CodexSessionGenerationReclaimPlan = NativeSessionGenerationReclaimPlan;
 
 export function hashCodexAppServerBindingFingerprint(canonical: string): string {
   return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
@@ -287,12 +283,12 @@ export type CodexAppServerBindingStore = {
   ): Promise<boolean>;
   prepareSessionGenerationReclaim(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
-  ): Promise<CodexSessionGenerationReclaimPlan>;
+  ): Promise<NativeSessionGenerationReclaimPlan>;
   adoptSessionGeneration(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
     expectedPreviousSessionId: string,
     assertCurrent?: () => void,
-  ): Promise<CodexSessionGenerationAdoptionResult>;
+  ): Promise<NativeSessionGenerationAdoptionResult>;
   resetSessionGeneration(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
   ): Promise<CodexSessionGenerationRetirementResult>;

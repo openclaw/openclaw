@@ -118,6 +118,8 @@ control_ui = gateway.setdefault("controlUi", {})
 if not isinstance(control_ui, dict):
     raise SystemExit(f"{path}: expected gateway.controlUi object")
 allowed = control_ui.get("allowedOrigins")
+public_origin = gateway.get("publicOrigin")
+inherits_public_origin = "allowedOrigins" not in control_ui and isinstance(public_origin, str) and public_origin.strip()
 managed_localhosts = {"127.0.0.1", "localhost"}
 desired = [
     f"http://127.0.0.1:{port}",
@@ -138,7 +140,8 @@ for origin in allowed:
         if host in managed_localhosts:
             continue
     cleaned.append(normalized)
-control_ui["allowedOrigins"] = cleaned + desired
+if not inherits_public_origin:
+    control_ui["allowedOrigins"] = cleaned + desired
 with open(tmp, "w", encoding="utf-8") as fh:
     json.dump(data, fh, indent=2)
     fh.write("\n")

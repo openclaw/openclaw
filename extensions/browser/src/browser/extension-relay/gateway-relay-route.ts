@@ -1,19 +1,19 @@
 /** Direct Gateway extension relay with in-band Browser Relay Authentication v2. */
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   rejectWebSocketUpgrade,
   WebSocketServer,
   type WebSocket,
 } from "openclaw/plugin-sdk/websocket-runtime";
-import { getRuntimeConfig } from "../../config/config.js";
 import {
   getBrowserControlState,
   startBrowserControlServiceFromConfig,
 } from "../../control-service.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { describeBrowserControlUnavailable } from "../../plugin-enabled.js";
 import { resolveFirstExtensionProfileName, resolveProfile } from "../config.js";
 import { getProfileLifecycle } from "../server-context.lifecycle.js";

@@ -32,7 +32,7 @@ import {
 import {
   EMPTY_STABILITY_SNAPSHOT,
   startAgentTurnGateway,
-  startCronListGateway,
+  startCliReadGateway,
   startCronLookupMissGateway,
   startGatewayStabilityRpcServer,
   startNodePairingGateway,
@@ -628,7 +628,7 @@ describe("gateway-backed CLI process exit", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     const caTriggerPath = path.join(root, "load-default-ca.mjs");
     const token = "test-token";
-    const gateway = await startCronListGateway(token);
+    const gateway = await startCliReadGateway(token);
     await fs.mkdir(stateDir, { recursive: true });
     await fs.writeFile(
       caTriggerPath,

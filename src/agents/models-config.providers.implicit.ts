@@ -8,6 +8,7 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isUnresolvedSecretInputError } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -367,9 +368,6 @@ async function runProviderCatalogWithTimeout(
   },
 ): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
   const timeoutMs = params.timeoutMs ?? undefined;
-  const timeoutError = new Error(
-    `provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`,
-  );
   let timer: ReturnType<typeof setTimeout> | undefined;
   let active = true;
   const catalogParams = {
@@ -404,25 +402,25 @@ async function runProviderCatalogWithTimeout(
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           active = false;
-          reject(timeoutError);
+          reject(
+            new Error(`provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`),
+          );
         }, timeoutMs);
         timer.unref?.();
       }),
     ]);
   } catch (error) {
+    if (isUnresolvedSecretInputError(error)) {
+      throw error;
+    }
     if (await reportProviderCatalogSecretFailure(error, params)) {
       return undefined;
     }
-    if (error !== timeoutError) {
-      throw error;
-    }
+    // A failing hook owns only its selected providers, not the healthy siblings in this batch.
     for (const provider of params.providerIds ?? [params.provider.id]) {
       params.reportCatalogOutcome?.({ provider, status: "unavailable" });
     }
-    if (error === timeoutError) {
-      const message = formatErrorMessage(error);
-      log.warn(`${message}; skipping provider discovery`);
-    }
+    log.warn(`${formatErrorMessage(error)}; skipping provider discovery`);
     return undefined;
   } finally {
     // A timed-out hook can still finish; its late reports no longer own this publication.

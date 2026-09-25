@@ -9,6 +9,7 @@
  * session accessor: the user turn at start, tool calls/results as they
  * stream, and the final assistant snapshot at run end.
  */
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -166,7 +167,7 @@ export function createCliDispatchTranscriptRecorder(params: {
         toolCallId,
         toolName: event.toolName,
         content: normalizeToolResultContent(event.result),
-        details: readToolResultDetails(event.result),
+        details: asOptionalObjectRecord(asOptionalObjectRecord(event.result)?.details),
         isError: event.isError === true,
         timestamp: Date.now(),
         ...(event.resultContentSource
@@ -211,13 +212,10 @@ function normalizeToolResultContent(result: unknown): ToolResultContent[] {
   if (typeof result === "string") {
     return result ? [{ type: "text", text: result }] : [];
   }
-  if (!result || typeof result !== "object") {
-    return [];
-  }
   // Claude stream-json echoes MCP tool_result content as a bare block array;
   // dropping it starves transcript consumers (active-memory reads these
   // records to decide whether the recall summary is grounded in tool output).
-  const content = Array.isArray(result) ? result : (result as { content?: unknown }).content;
+  const content = Array.isArray(result) ? result : asOptionalObjectRecord(result)?.content;
   if (!Array.isArray(content)) {
     return [];
   }
@@ -227,28 +225,18 @@ function normalizeToolResultContent(result: unknown): ToolResultContent[] {
       blocks.push({ type: "text", text: block });
       continue;
     }
-    if (!block || typeof block !== "object") {
+    const record = asOptionalObjectRecord(block);
+    if (!record) {
       continue;
     }
-    const type = (block as { type?: unknown }).type;
-    const text = (block as { text?: unknown }).text;
+    const { type, text, data, mimeType } = record;
     if (type === "text" && typeof text === "string") {
       blocks.push({ type: "text", text });
       continue;
     }
-    const data = (block as { data?: unknown }).data;
-    const mimeType = (block as { mimeType?: unknown }).mimeType;
     if (type === "image" && typeof data === "string" && typeof mimeType === "string") {
       blocks.push({ type: "image", data, mimeType });
     }
   }
   return blocks;
-}
-
-function readToolResultDetails(result: unknown): unknown {
-  if (!result || typeof result !== "object") {
-    return undefined;
-  }
-  const details = (result as { details?: unknown }).details;
-  return details && typeof details === "object" ? details : undefined;
 }

@@ -49,32 +49,23 @@ const GOOGLE_CLIENT_CERTS_URL_PREFIX = "https://www.googleapis.com/robot/v1/meta
 const MAX_GOOGLE_AUTH_RESPONSE_BYTES = 1024 * 1024;
 let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
 
-function normalizeGoogleAuthPreparedRequestHeaders<T extends RequestInit & { headers?: unknown }>(
-  config: T,
+function normalizeGoogleAuthHeaders<T extends { headers?: unknown }>(
+  value: T,
 ): T & { headers: Headers } {
-  if (!(config.headers instanceof Headers)) {
-    config.headers = new Headers(config.headers as HeadersInit | undefined);
+  if (!(value.headers instanceof Headers)) {
+    value.headers = new Headers(value.headers as HeadersInit | undefined);
   }
-  return config as T & { headers: Headers };
-}
-
-function normalizeGoogleAuthResponseHeaders<T extends { headers?: unknown }>(
-  response: T,
-): T & { headers: Headers } {
-  if (!(response.headers instanceof Headers)) {
-    response.headers = new Headers(response.headers as HeadersInit | undefined);
-  }
-  return response as T & { headers: Headers };
+  return value as T & { headers: Headers };
 }
 
 function installGoogleAuthHeaderCompatibilityInterceptor(
   transport: GoogleAuthTransport,
 ): GoogleAuthTransport {
   transport.interceptors.request.add({
-    resolved: async (config) => normalizeGoogleAuthPreparedRequestHeaders(config),
+    resolved: async (config) => normalizeGoogleAuthHeaders(config),
   });
   transport.interceptors.response.add({
-    resolved: async (response) => normalizeGoogleAuthResponseHeaders(response),
+    resolved: async (response) => normalizeGoogleAuthHeaders(response),
   });
   return transport;
 }

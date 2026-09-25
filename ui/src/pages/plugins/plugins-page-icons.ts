@@ -5,7 +5,7 @@ import {
 } from "../../app/control-ui-auth.ts";
 import type { PluginDiscoveryDetailResult, PluginListResult } from "../../lib/plugins/index.ts";
 import type { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
-import { PluginIconController } from "./plugin-icon-controller.ts";
+import { PluginIconController, pluginIconFetchContext } from "./plugin-icon-controller.ts";
 
 type PluginsPageIconsHost = {
   getContext: () => ApplicationContext;
@@ -30,18 +30,7 @@ export class PluginsPageIcons {
 
   constructor(host: PluginsPageIconsHost) {
     const shared = {
-      getFetchContext: () => {
-        const context = host.getContext();
-        return {
-          resourceBasePath: context.resourceBasePath,
-          gatewayUrl: context.gateway.connection.gatewayUrl,
-          auth: {
-            hello: context.gateway.snapshot.hello,
-            settings: { token: context.gateway.connection.token },
-            password: context.gateway.connection.password,
-          },
-        };
-      },
+      getFetchContext: () => pluginIconFetchContext(host.getContext()),
       isConnected: host.isConnected,
     };
     this.installed = new PluginIconController({

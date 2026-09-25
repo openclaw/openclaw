@@ -65,6 +65,13 @@ function captureJsonWarningLogger() {
   return warn;
 }
 
+function captureInfoLogger() {
+  setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
+  const log = vi.fn();
+  loggingState.rawConsole = { log, info: log, warn: vi.fn(), error: vi.fn() };
+  return log;
+}
+
 function createSkillEntry(params: {
   name: string;
   description?: string;
@@ -329,7 +336,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
       description: "Shared metadata",
       body: "Bundled",
     });
-    const warn = captureJsonWarningLogger();
+    const warn = captureInfoLogger();
     for (const id of ["first", "second"]) {
       const workspaceDir = path.join(root, id);
       const dir = path.join(workspaceDir, "skills", name);
@@ -372,6 +379,74 @@ describe("buildWorkspaceSkillsPrompt", () => {
       skill: name,
       winnerPath: path.join(root, "first", "skills", name, "SKILL.md"),
       loserPath: path.join(bundledSkillsDir, name, "SKILL.md"),
+    });
+  });
+
+  it("reports a shared workspace override once at info across 50 worktrees", async () => {
+    const root = await fixtureSuite.createCaseDir("worktree-overrides");
+    const name = "shared-override";
+    const bundledSkillsDir = path.join(root, "bundled");
+    await writeSkill({
+      dir: path.join(bundledSkillsDir, name),
+      name,
+      description: name,
+      body: "Bundled",
+    });
+    const workspaces = Array.from({ length: 50 }, (_, index) => path.join(root, `tree-${index}`));
+    for (const workspaceDir of workspaces) {
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", name),
+        name,
+        description: name,
+        body: "Override",
+      });
+    }
+    const info = captureInfoLogger();
+    const warn = loggingState.rawConsole!.warn;
+    for (const workspaceDir of workspaces) {
+      const options = { bundledSkillsDir, managedSkillsDir: path.join(root, "managed") };
+      expect(
+        loadWorkspaceSkills(workspaceDir, options).find((entry) => entry.skill.name === name)?.skill
+          .source,
+      ).toBe("openclaw-workspace");
+      bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+      loadWorkspaceSkills(workspaceDir, options);
+    }
+    console.log(
+      `50-worktree collision counts: warn=${vi.mocked(warn).mock.calls.length}, info=${info.mock.calls.length}`,
+    );
+    expect(warn).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledOnce();
+  });
+
+  it("groups same-source collisions across 50 roots in a discovery pass", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("grouped-collisions");
+    const name = "same-tier-collision";
+    const extraDirs = Array.from({ length: 50 }, (_, index) =>
+      path.join(workspaceDir, `root-${index}`),
+    );
+    for (const [index, dir] of extraDirs.entries()) {
+      await writeSkill({
+        dir: path.join(dir, name),
+        name,
+        description: name,
+        body: `Variant ${index}`,
+      });
+    }
+    const warn = captureJsonWarningLogger();
+    const entries = loadWorkspaceSkills(workspaceDir, {
+      bundledSkillsDir: "",
+      managedSkillsDir: path.join(workspaceDir, "managed"),
+      config: { skills: { load: { extraDirs } } },
+    });
+    console.log(`50-root collision warning count: ${warn.mock.calls.length}`);
+    expect(entries.find((entry) => entry.skill.name === name)?.skill.filePath).toBe(
+      path.join(extraDirs[49]!, name, "SKILL.md"),
+    );
+    expect(warn).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(warn.mock.calls[0]?.[0]))).toMatchObject({
+      skill: name,
+      affectedRoots: 50,
     });
   });
   it("gates by bins, config, and always", async () => {

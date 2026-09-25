@@ -151,8 +151,8 @@ for (const { name, fault, replaceParent } of [
           ok: true,
           payload: { runId: parentRunId, status: "accepted" },
         });
-        await expect.poll(() => agentCommandMock.mock.calls.length, { timeout: 2_000 }).toBe(1);
         const parent = await parentStarted.promise;
+        expect(agentCommandMock).toHaveBeenCalledTimes(1);
 
         for (const runId of selected) {
           await writeSubagentSessionEntry({

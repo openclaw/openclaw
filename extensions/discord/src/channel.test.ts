@@ -12,6 +12,8 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedDiscordAccount } from "./accounts.js";
+import * as discordClient from "./client.js";
+import { RequestClient } from "./internal/rest.js";
 import { createDiscordLivePolicyReader } from "./monitor/live-policy.js";
 import type { MonitorDiscordOpts } from "./monitor/provider.js";
 import * as sendModule from "./send.js";
@@ -521,29 +523,82 @@ describe("discordPlugin outbound", () => {
     expect(result.messageId).toBe("video-1");
   });
 
-  it("forwards heartbeat typing through the run config and attached target", async () => {
-    const sendTypingDiscord = vi.fn(async () => ({ ok: true, channelId: "thread-123" }));
-    const sendTypingSpy = vi
-      .spyOn(sendModule, "sendTypingDiscord")
-      .mockImplementation(sendTypingDiscord);
-    try {
-      const cfg = createCfg();
+  it.each(["sendTyping", "sendTypingGuarded"] as const)(
+    "sends %s to the attached Discord thread",
+    async (method) => {
+      const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 204 }));
+      const rest = new RequestClient("synthetic-token", { fetch });
+      const resolveRest = vi.spyOn(discordClient, "resolveDiscordRest").mockReturnValue(rest);
+      try {
+        await discordPlugin.heartbeat![method]!({
+          cfg: createCfg(),
+          to: "channel:123",
+          accountId: "work",
+          threadId: "456",
+          signal: new AbortController().signal,
+          assertPlatformSendAuthorized: () => {},
+        });
+        expect(fetch).toHaveBeenCalledOnce();
+        expect(fetch.mock.calls[0]?.[0]).toBe("https://discord.com/api/v10/channels/456/typing");
+        expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
+      } finally {
+        resolveRest.mockRestore();
+      }
+    },
+  );
 
-      await discordPlugin.heartbeat!.sendTyping!({
-        cfg,
+  it.each(["cancelled", "revoked"] as const)(
+    "does not send queued typing after its owner is %s",
+    async (reason) => {
+      const firstResponse = createDeferred<Response>();
+      const typingQueued = createDeferred<void>();
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockReturnValueOnce(firstResponse.promise)
+        .mockResolvedValue(new Response(null, { status: 204 }));
+      const rest = new RequestClient("synthetic-token", {
+        fetch,
+        scheduler: { maxConcurrency: 1 },
+      });
+      const post = rest.post.bind(rest);
+      vi.spyOn(rest, "post").mockImplementation((...args) => {
+        const pending = post(...args);
+        typingQueued.resolve();
+        return pending;
+      });
+      const resolveRest = vi.spyOn(discordClient, "resolveDiscordRest").mockReturnValue(rest);
+      const first = rest.get("/channels/123/messages");
+      const controller = new AbortController();
+      let current = true;
+      const queued = discordPlugin.heartbeat!.sendTypingGuarded!({
+        cfg: createCfg(),
         to: "channel:123",
-        accountId: "work",
-        threadId: "thread-123",
+        signal: controller.signal,
+        assertPlatformSendAuthorized: () => {
+          if (!current) {
+            throw new Error("typing owner revoked");
+          }
+        },
       });
-
-      expect(sendTypingDiscord).toHaveBeenCalledWith("thread-123", {
-        cfg,
-        accountId: "work",
-      });
-    } finally {
-      sendTypingSpy.mockRestore();
-    }
-  });
+      const rejected = expect(queued).rejects.toThrow();
+      try {
+        await typingQueued.promise;
+        if (reason === "cancelled") {
+          controller.abort();
+        } else {
+          current = false;
+        }
+        firstResponse.resolve(Response.json([]));
+        await first;
+        await rejected;
+        expect(fetch).toHaveBeenCalledOnce();
+      } finally {
+        firstResponse.resolve(Response.json([]));
+        await Promise.allSettled([first, queued]);
+        resolveRest.mockRestore();
+      }
+    },
+  );
 
   it("uses direct Discord probe helpers for status probes", async () => {
     probeDiscordMock.mockResolvedValue({

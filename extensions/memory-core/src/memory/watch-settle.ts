@@ -1,6 +1,6 @@
-import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 
 export type MemoryWatchEventStats = {
   isDirectory?: () => boolean;
@@ -15,6 +15,8 @@ type WatchPathSnapshot = {
 
 export type MemoryWatchSettleQueue = Map<string, WatchPathSnapshot | null>;
 
+/** Overflow reconciles the source; keep watch bursts bounded in the owner. */
+export const MEMORY_WATCH_MAX_PATHS = 1024;
 const MEMORY_WATCH_SETTLE_RECHECK_MS = 100;
 
 function snapshotFromStats(stats?: MemoryWatchEventStats): WatchPathSnapshot | null {
@@ -34,9 +36,9 @@ function snapshotsMatch(left: WatchPathSnapshot | null, right: WatchPathSnapshot
   return left.size === right.size && left.mtimeMs === right.mtimeMs;
 }
 
-function snapshotPath(filePath: string): WatchPathSnapshot | null {
+async function snapshotPath(filePath: string): Promise<WatchPathSnapshot | null> {
   try {
-    const stats = fsSync.statSync(filePath);
+    const stats = await fs.stat(filePath);
     if (stats.isDirectory()) {
       return null;
     }
@@ -59,9 +61,16 @@ export function recordMemoryWatchEventPath(
     return;
   }
   queue.set(path.resolve(trimmed), snapshotFromStats(stats));
+  if (queue.size > MEMORY_WATCH_MAX_PATHS) {
+    queue.clear();
+  }
 }
 
-export async function settleMemoryWatchEventPaths(queue: MemoryWatchSettleQueue): Promise<boolean> {
+export async function settleMemoryWatchEventPaths(
+  queue: MemoryWatchSettleQueue,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  signal?.throwIfAborted();
   if (queue.size === 0) {
     return true;
   }
@@ -71,23 +80,36 @@ export async function settleMemoryWatchEventPaths(queue: MemoryWatchSettleQueue)
   const missingBaseline: Array<{ filePath: string; snapshot: WatchPathSnapshot }> = [];
 
   for (const [filePath, previousSnapshot] of entries) {
-    const currentSnapshot = snapshotPath(filePath);
+    signal?.throwIfAborted();
+    const currentSnapshot = await snapshotPath(filePath);
+    signal?.throwIfAborted();
     if (previousSnapshot === null) {
       if (currentSnapshot !== null) {
         missingBaseline.push({ filePath, snapshot: currentSnapshot });
       }
       continue;
     }
-    if (!snapshotsMatch(previousSnapshot, currentSnapshot)) {
+    if (
+      !snapshotsMatch(previousSnapshot, currentSnapshot) &&
+      !queue.has(filePath) &&
+      queue.size < MEMORY_WATCH_MAX_PATHS
+    ) {
       queue.set(filePath, currentSnapshot);
     }
   }
 
   if (missingBaseline.length > 0) {
-    await delay(MEMORY_WATCH_SETTLE_RECHECK_MS);
+    await sleepWithAbort(MEMORY_WATCH_SETTLE_RECHECK_MS, signal);
     for (const entry of missingBaseline) {
-      const currentSnapshot = snapshotPath(entry.filePath);
-      if (!snapshotsMatch(entry.snapshot, currentSnapshot)) {
+      signal?.throwIfAborted();
+      const currentSnapshot = await snapshotPath(entry.filePath);
+      signal?.throwIfAborted();
+      // A newer event owns its snapshot while this generation waits on I/O.
+      if (
+        !snapshotsMatch(entry.snapshot, currentSnapshot) &&
+        !queue.has(entry.filePath) &&
+        queue.size < MEMORY_WATCH_MAX_PATHS
+      ) {
         queue.set(entry.filePath, currentSnapshot);
       }
     }

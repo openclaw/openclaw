@@ -3,13 +3,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderRefOwnership } from "../../plugins/providers.js";
 import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
-import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
 import { resolveAgentHarnessAvailabilityDecision } from "./availability.js";
 import { BUILTIN_AGENT_HARNESS_METADATA } from "./builtin-openclaw-metadata.js";
 import { MissingAgentHarnessError } from "./errors.js";
 import type { AgentHarnessPolicy } from "./policy.js";
 import { listRegisteredAgentHarnesses, resolveAgentHarnessOwnerPluginId } from "./registry.js";
-import { buildAgentHarnessSupportContext, compareHarnessSupport } from "./support.js";
+import { buildAgentHarnessSupportContext, resolveAutoAgentHarnessSelection } from "./support.js";
 import type { AgentHarness, AgentHarnessSupport, AgentHarnessSupportContext } from "./types.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -77,15 +76,11 @@ export function resolveAgentHarnessDeliveryDefaults(
     : selection.harness.deliveryDefaults;
 }
 
-function listPluginAgentHarnesses(): AgentHarness[] {
-  return listRegisteredAgentHarnesses().map((entry) => entry.harness);
-}
-
 export function resolveAgentHarnessSelectionDecision(
   params: AgentHarnessSelectionDecisionParams,
 ): AgentHarnessSelectionDecision {
   // Keep the probed instance: owner validation must reject replacement during supports().
-  const pluginHarnesses = listPluginAgentHarnesses();
+  const pluginHarnesses = listRegisteredAgentHarnesses().map((entry) => entry.harness);
   const availability = resolveAgentHarnessAvailabilityDecision({
     ...params,
     resolveProviderOwnership: () =>
@@ -165,59 +160,23 @@ export function resolveAgentHarnessSelectionDecision(
     throw new MissingAgentHarnessError(runtime);
   }
 
-  const hintedCandidates = pluginHarnesses.map((harness) => ({
-    harness,
-    support: resolveAgentHarnessAutoSelectionHint({ harness, provider: params.provider }),
-  }));
-  const candidates = hintedCandidates.some((entry) => entry.support === undefined)
-    ? (() => {
-        const supportContext = buildAgentHarnessSupportContext({
+  const { candidates, selected } = resolveAutoAgentHarnessSelection(
+    pluginHarnesses,
+    params.provider,
+    () =>
+      buildAgentHarnessSupportContext({
+        ...params,
+        requestedRuntime: runtime,
+        providerOwnership: resolveProviderRefOwnership({
           provider: params.provider,
-          modelId: params.modelId,
-          modelProvider: params.modelProvider,
-          requestedRuntime: runtime,
           config: params.config,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          preparedModelProvider: params.preparedModelProvider,
-          providerOwnership: resolveProviderRefOwnership({
-            provider: params.provider,
-            config: params.config,
-          }),
-        });
-        return hintedCandidates.map(({ harness, support }) => ({
-          harness,
-          support: support ?? harness.supports(supportContext),
-        }));
-      })()
-    : hintedCandidates.map(({ harness, support }) => ({
-        harness,
-        // SAFETY: The preceding some() check established that every hint has support.
-        support: support as AgentHarnessSupport,
-      }));
-  const supported = candidates
-    .filter(
-      (
-        entry,
-      ): entry is {
-        harness: AgentHarness;
-        support: AgentHarnessSupport & { supported: true };
-      } => entry.support.supported,
-    )
-    .toSorted(compareHarnessSupport);
-
-  const selected = supported[0]?.harness;
-  if (selected) {
-    return buildAgentHarnessSelectionDecision({
-      harness: selected,
-      policy,
-      selectedReason: "auto_plugin",
-      candidates: candidates.map(toSelectionCandidate),
-    });
-  }
+        }),
+      }),
+  );
   return buildAgentHarnessSelectionDecision({
+    harness: selected,
     policy,
-    selectedReason: "auto_openclaw",
+    selectedReason: selected ? "auto_plugin" : "auto_openclaw",
     candidates: candidates.map(toSelectionCandidate),
   });
 }

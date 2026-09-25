@@ -289,7 +289,16 @@ export function createWorkerProjectPreparation(params: {
       if (!isRecord(installed) || installed.ready !== true) {
         throw new Error("Project checkout was not verified before capture");
       }
-      return { seedKey, cacheHit: false };
+      return {
+        seedKey,
+        cacheHit: false,
+        ...(installed.preparedWorkspace !== undefined
+          ? {
+              preparedWorkspace: readPreparedWorkspace(installed.preparedWorkspace),
+              captureRequired: true,
+            }
+          : {}),
+      };
     } finally {
       await fsp.rm(temporaryRoot, { recursive: true, force: true });
     }

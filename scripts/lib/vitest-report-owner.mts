@@ -57,7 +57,7 @@ function caseInventory(reports: JsonTestResults[]) {
     .toSorted();
 }
 
-/** Own file artifacts only; callers retain admission, retry, environment and process ownership. */
+/** Own file artifacts only; callers retain admission, environment and process ownership. */
 export async function createVitestReportOwner(invocations: Invocation[], cwd: string) {
   if (
     invocations.length < 2 ||

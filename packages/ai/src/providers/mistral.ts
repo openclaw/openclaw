@@ -13,6 +13,7 @@ import { Chat } from "@mistralai/mistralai/sdk/chat";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
+import { isImageWithMediaPayload } from "../media-payload.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 // Mistral provider adapts Mistral streams and tool calls to the runtime.
@@ -54,7 +55,6 @@ import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
   formatToolResultText,
-  isImageWithMediaPayload,
 } from "./tool-result-text.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
@@ -575,6 +575,23 @@ async function consumeChatStream(
     }
   };
 
+  const appendTextDelta = (text: string) => {
+    const textDelta = sanitizeSurrogates(text);
+    if (!currentBlock || currentBlock.type !== "text") {
+      finishCurrentBlock(currentBlock);
+      currentBlock = { type: "text", text: "" };
+      output.content.push(currentBlock);
+      stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+    }
+    currentBlock.text += textDelta;
+    stream.push({
+      type: "text_delta",
+      contentIndex: blockIndex(),
+      delta: textDelta,
+      partial: output,
+    });
+  };
+
   for await (const event of mistralStream) {
     notifyLlmRequestActivity(signal);
     const chunk = event.data;
@@ -621,20 +638,7 @@ async function consumeChatStream(
       const contentItems = typeof delta.content === "string" ? [delta.content] : delta.content;
       for (const item of contentItems) {
         if (typeof item === "string") {
-          const textDelta = sanitizeSurrogates(item);
-          if (!currentBlock || currentBlock.type !== "text") {
-            finishCurrentBlock(currentBlock);
-            currentBlock = { type: "text", text: "" };
-            output.content.push(currentBlock);
-            stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
-          }
-          currentBlock.text += textDelta;
-          stream.push({
-            type: "text_delta",
-            contentIndex: blockIndex(),
-            delta: textDelta,
-            partial: output,
-          });
+          appendTextDelta(item);
           continue;
         }
 
@@ -661,20 +665,7 @@ async function consumeChatStream(
         }
 
         if (item.type === "text") {
-          const textDelta = sanitizeSurrogates(item.text);
-          if (!currentBlock || currentBlock.type !== "text") {
-            finishCurrentBlock(currentBlock);
-            currentBlock = { type: "text", text: "" };
-            output.content.push(currentBlock);
-            stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
-          }
-          currentBlock.text += textDelta;
-          stream.push({
-            type: "text_delta",
-            contentIndex: blockIndex(),
-            delta: textDelta,
-            partial: output,
-          });
+          appendTextDelta(item.text);
         }
       }
     }

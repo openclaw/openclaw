@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveRepoBundledPluginEnv } from "./repo-bundled-plugin-env.js";
 import type { ConfigSchemaResponse } from "./schema.js";
@@ -438,29 +438,24 @@ function collectConfigDocBaselineEntries(
     );
   }
 
-  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
-    const wildcard = asSchemaObject(schema.additionalProperties);
-    if (wildcard) {
+  const visitWildcard = (value: unknown) => {
+    const child = asSchemaObject(value);
+    if (child) {
       const wildcardPath = normalizedPath ? `${normalizedPath}.*` : "*";
-      collectConfigDocBaselineEntries(wildcard, uiHints, wildcardPath, false, entries, visited);
+      collectConfigDocBaselineEntries(child, uiHints, wildcardPath, false, entries, visited);
     }
+  };
+
+  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+    visitWildcard(schema.additionalProperties);
   }
 
   if (Array.isArray(schema.items)) {
     for (const item of schema.items) {
-      const child = asSchemaObject(item);
-      if (!child) {
-        continue;
-      }
-      const itemPath = normalizedPath ? `${normalizedPath}.*` : "*";
-      collectConfigDocBaselineEntries(child, uiHints, itemPath, false, entries, visited);
+      visitWildcard(item);
     }
   } else if (schema.items && typeof schema.items === "object") {
-    const itemSchema = asSchemaObject(schema.items);
-    if (itemSchema) {
-      const itemPath = normalizedPath ? `${normalizedPath}.*` : "*";
-      collectConfigDocBaselineEntries(itemSchema, uiHints, itemPath, false, entries, visited);
-    }
+    visitWildcard(schema.items);
   }
 
   for (const branchSchema of [schema.oneOf, schema.anyOf, schema.allOf]) {

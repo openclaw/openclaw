@@ -1,6 +1,19 @@
 // Resolves allowed Control UI origins for gateway access.
+import { resolveGatewayPublicOrigin } from "./gateway-public-origin.js";
 import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
+
+/** An authored list overrides the advertised origin, including an empty list. */
+export function resolveControlUiAllowedOrigins(
+  config: Pick<OpenClawConfig, "gateway"> | undefined,
+): string[] {
+  const configured = config?.gateway?.controlUi?.allowedOrigins;
+  if (configured !== undefined) {
+    return configured;
+  }
+  const origin = resolveGatewayPublicOrigin(config);
+  return origin ? [origin] : [];
+}
 
 /** Non-loopback gateway bind modes that require explicit Control UI allowed origins. */
 export type GatewayNonLoopbackBindMode = "lan" | "tailnet" | "custom" | "auto";
@@ -14,13 +27,18 @@ export function isGatewayNonLoopbackBindMode(bind: unknown): bind is GatewayNonL
 export function hasConfiguredControlUiAllowedOrigins(params: {
   allowedOrigins: unknown;
   dangerouslyAllowHostHeaderOriginFallback: unknown;
+  publicOrigin?: unknown;
 }): boolean {
   if (params.dangerouslyAllowHostHeaderOriginFallback === true) {
     return true;
   }
+  const allowedOrigins =
+    params.allowedOrigins === undefined && typeof params.publicOrigin === "string"
+      ? resolveControlUiAllowedOrigins({ gateway: { publicOrigin: params.publicOrigin } })
+      : params.allowedOrigins;
   return (
-    Array.isArray(params.allowedOrigins) &&
-    params.allowedOrigins.some((origin) => typeof origin === "string" && origin.trim().length > 0)
+    Array.isArray(allowedOrigins) &&
+    allowedOrigins.some((origin) => typeof origin === "string" && origin.trim().length > 0)
   );
 }
 
@@ -89,6 +107,7 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
   if (
     hasConfiguredControlUiAllowedOrigins({
       allowedOrigins: config.gateway?.controlUi?.allowedOrigins,
+      publicOrigin: config.gateway?.publicOrigin,
       dangerouslyAllowHostHeaderOriginFallback:
         config.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback,
     })

@@ -8,8 +8,8 @@ import {
   isCodexAppServerLiveThreadClaimed,
   releaseCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
-  type CodexAppServerLiveThreadOwnership,
 } from "./client-runtime.js";
+import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
 import type {
   CodexAppServerBindingIdentity,

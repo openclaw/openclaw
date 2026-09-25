@@ -803,7 +803,7 @@ function installPackageLocalBundledDependencies(params: PluginPackageContext) {
   const patched = packPatchedDependencies(params.packageDir, params.patchedDependencies ?? []);
   const installPackageJson = packageJsonForNpmLock(
     installPackageJsonBase,
-    readNpmLockOverrides(),
+    readNpmLockOverrides(installPackageJsonBase, params.packageDir, patched.artifacts),
     patched.artifacts,
   );
   const installPackageJsonText = `${JSON.stringify(installPackageJson, null, 2)}\n`;

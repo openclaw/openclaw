@@ -213,12 +213,15 @@ and joins that worker before reporting `outcome-unknown`; it does the same when
 a completed reply cannot be decoded. Failed cleanup retains its original error
 while the worker is drained.
 
-The process-wide host starts lazily and permits at most four shared workers. Bun
-uses up to 64 dedicated workers until its native SQLite close fix ships. The host
-permits 64 opening or live store clients (including clients sharing a database), 128 outstanding
-operations, and 64 MiB of queued input. Each input message is limited to 32 MiB
-and capacity exhaustion rejects with `code: "overloaded"`. Larger execute inputs
-arrive in 8 MiB chunks; the backend runs once after the complete command is
+The process-wide host starts lazily and uses two to eight shared Node workers
+based on available CPUs. Bun uses up to 64 dedicated workers until its native
+SQLite close fix ships. The host permits 64 opening or live store clients
+(including clients sharing a database), 128 outstanding operations per worker,
+and 256 MiB of queued and retained input across all workers. Count-only overflow
+waits in FIFO order on its worker for up to ten seconds; an independent worker
+keeps its own request capacity. Byte, message, and store limits refuse immediately
+with `code: "overloaded"`. Each input message is limited to 32 MiB. Larger execute
+inputs arrive in 8 MiB chunks; the backend runs once after the complete command is
 validated. Factory initialization input remains a single bounded message.
 
 Commands retaining at most 64 MiB of serialized input can queue, with their full

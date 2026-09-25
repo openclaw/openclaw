@@ -6,15 +6,8 @@ import {
   volatileTabsBySession,
   type VolatileSessionTab,
 } from "./session-tab-process-state.js";
-import {
-  browserSessionTabNativeIdentity,
-  type BrowserSessionTabRecord,
-} from "./session-tab-store.js";
-
-type DurableTab = BrowserSessionTabRecord & {
-  kind: "durable";
-  storageKey: string;
-};
+import { browserSessionTabNativeIdentity } from "./session-tab-store.js";
+import type { DurableTab } from "./session-tab-tracking.js";
 
 type TrackedTab = VolatileSessionTab | DurableTab;
 

@@ -59,7 +59,7 @@ describe("Codex native hook relay managed policy", () => {
         hasProvider: (provider: string) =>
           provider === "provider-p" || (projected && provider === "provider-q"),
       };
-      const original = monitor.registerParent({
+      const original = await monitor.registerParent({
         parentThreadId: "parent-thread",
         modelSource: modelSource(["model-a"]),
         configurationQualification: oldConfiguration,
@@ -85,7 +85,7 @@ describe("Codex native hook relay managed policy", () => {
       const target = threadRead({ threadStatus: status });
       target.thread.modelProvider = "provider-q";
       client.setThreadRead("child-thread", target);
-      const next = monitor.registerParent({
+      const next = await monitor.registerParent({
         parentThreadId: "parent-thread",
         modelSource: system ? undefined : modelSource(["model-b"]),
         configurationQualification: newConfiguration,
@@ -129,7 +129,7 @@ describe("Codex native hook relay managed policy", () => {
       const qualification = { assertCurrent: () => {}, hasProvider: () => true };
       let targetQualification: typeof qualification | undefined;
       const source = modelSource(["model-b"]);
-      const parent = monitor.registerParent({
+      const parent = await monitor.registerParent({
         parentThreadId: "parent-thread",
         modelSource:
           change === "unknown active"
@@ -199,7 +199,7 @@ describe("Codex native hook relay managed policy", () => {
     const client = createClient();
     const foreign = createClient();
     const source = modelSource(["model-a"]);
-    const parent = codexNativeSubagentMonitorRuntime.register({
+    const parent = await codexNativeSubagentMonitorRuntime.register({
       client: client.client,
       parentThreadId: "parent-thread",
       modelSource: source,
@@ -230,7 +230,7 @@ describe("Codex native hook relay managed policy", () => {
         turnId: "turn-a",
       }),
     ).toBeUndefined();
-    const ambiguous = codexNativeSubagentMonitorRuntime.register({
+    const ambiguous = await codexNativeSubagentMonitorRuntime.register({
       client: client.client,
       parentThreadId: "other-root-with-unknown-source",
     });
@@ -284,12 +284,15 @@ describe("Codex native hook relay managed policy", () => {
     const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime(), {
       recoveryPollDelaysMs: [],
     });
-    const unknown = monitor.registerParent({ parentThreadId: "unknown" });
+    const unknown = await monitor.registerParent({ parentThreadId: "unknown" });
     unknown.bindTurn("unknown-turn");
     expect(
       await monitor.captureModelSource({ threadId: "unknown", turnId: "unknown-turn" }),
     ).toBeUndefined();
-    const system = monitor.registerParent({ parentThreadId: "system", modelSource: undefined });
+    const system = await monitor.registerParent({
+      parentThreadId: "system",
+      modelSource: undefined,
+    });
     system.bindTurn("system-turn");
     const systemCapture = requireCapture(
       await monitor.captureModelSource({ threadId: "system", turnId: "system-turn" }),
@@ -298,7 +301,10 @@ describe("Codex native hook relay managed policy", () => {
     systemCapture.release();
     await system.unregister();
     const aborted = new AbortController();
-    const waiting = monitor.registerParent({ parentThreadId: "waiting", modelSource: undefined });
+    const waiting = await monitor.registerParent({
+      parentThreadId: "waiting",
+      modelSource: undefined,
+    });
     const abortedCapture = monitor.captureModelSource({
       threadId: "waiting",
       turnId: "never-bound",
@@ -384,7 +390,7 @@ describe("Codex native hook relay managed policy", () => {
           recoveryPollDelaysMs: [],
         },
       );
-      const first = monitor.registerParent({
+      const first = await monitor.registerParent({
         parentThreadId: "parent-thread",
         modelSource: a,
         configurationQualification: qualification,
@@ -421,7 +427,7 @@ describe("Codex native hook relay managed policy", () => {
       if (order !== "active predecessor") {
         await completeOriginal();
       }
-      const second = monitor.registerParent({
+      const second = await monitor.registerParent({
         parentThreadId: "parent-thread",
         modelSource: b,
         configurationQualification: qualification,
@@ -484,7 +490,7 @@ describe("Codex native hook relay managed policy", () => {
           });
           pendingTarget.thread.modelProvider = "test-provider";
           client.setThreadRead("child-thread", pendingTarget);
-          const foreign = monitor.registerParent({
+          const foreign = await monitor.registerParent({
             parentThreadId: "parent-thread",
             modelSource: { ...b, sourceIdentity: {}, release: vi.fn() },
             configurationQualification: qualification,

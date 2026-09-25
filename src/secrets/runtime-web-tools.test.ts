@@ -158,6 +158,17 @@ function activateRuntimeWebToolsResult(
   });
 }
 
+function createWebCredentialEntry(
+  surface: "webSearch" | "webFetch",
+  apiKey: unknown,
+  options: { enabled?: boolean } = {},
+) {
+  return {
+    ...options,
+    config: { [surface]: { apiKey } },
+  };
+}
+
 function createProviderSecretRefConfig(
   provider: ProviderUnderTest,
   envRefId: string,
@@ -173,14 +184,11 @@ function createProviderSecretRefConfig(
     },
     plugins: {
       entries: {
-        [providerPluginId(provider)]: {
-          enabled: true,
-          config: {
-            webSearch: {
-              apiKey: { source: "env", provider: "default", id: envRefId },
-            },
-          },
-        },
+        [providerPluginId(provider)]: createWebCredentialEntry(
+          "webSearch",
+          { source: "env", provider: "default", id: envRefId },
+          { enabled: true },
+        ),
       },
     },
   });
@@ -289,13 +297,11 @@ describe("runtime web tools resolution", () => {
       config: asConfig({
         plugins: {
           entries: {
-            firecrawl: {
-              config: {
-                webFetch: {
-                  apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
-                },
-              },
-            },
+            firecrawl: createWebCredentialEntry("webFetch", {
+              source: "env",
+              provider: "default",
+              id: "FIRECRAWL_API_KEY",
+            }),
           },
         },
         tools: {
@@ -325,13 +331,11 @@ describe("runtime web tools resolution", () => {
       config: asConfig({
         plugins: {
           entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: { source: "env", provider: "default", id: "XAI_API_KEY_REF" },
-                },
-              },
-            },
+            xai: createWebCredentialEntry("webSearch", {
+              source: "env",
+              provider: "default",
+              id: "XAI_API_KEY_REF",
+            }),
           },
         },
         tools: {
@@ -399,13 +403,11 @@ describe("runtime web tools resolution", () => {
         },
         plugins: {
           entries: {
-            firecrawl: {
-              config: {
-                webFetch: {
-                  apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
-                },
-              },
-            },
+            firecrawl: createWebCredentialEntry("webFetch", {
+              source: "env",
+              provider: "default",
+              id: "FIRECRAWL_API_KEY",
+            }),
           },
         },
       }),
@@ -442,13 +444,11 @@ describe("runtime web tools resolution", () => {
         },
         plugins: {
           entries: {
-            firecrawl: {
-              config: {
-                webFetch: {
-                  apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
-                },
-              },
-            },
+            firecrawl: createWebCredentialEntry("webFetch", {
+              source: "env",
+              provider: "default",
+              id: "FIRECRAWL_API_KEY",
+            }),
           },
         },
       }),
@@ -625,13 +625,11 @@ describe("runtime web tools resolution", () => {
       tools: { web: { search: { enabled: true, provider: "dotted" } } },
       plugins: {
         entries: {
-          [pluginId]: {
-            config: {
-              webSearch: {
-                apiKey: { source: "env", provider: "default", id: "DOTTED_PROVIDER_REF" },
-              },
-            },
-          },
+          [pluginId]: createWebCredentialEntry("webSearch", {
+            source: "env",
+            provider: "default",
+            id: "DOTTED_PROVIDER_REF",
+          }),
         },
       },
     });
@@ -943,22 +941,16 @@ describe("runtime web tools resolution", () => {
         },
         plugins: {
           entries: {
-            brave: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY_REF" },
-                },
-              },
-            },
-            google: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: { source: "env", provider: "default", id: "MISSING_GEMINI_API_KEY_REF" },
-                },
-              },
-            },
+            brave: createWebCredentialEntry(
+              "webSearch",
+              { source: "env", provider: "default", id: "BRAVE_API_KEY_REF" },
+              { enabled: true },
+            ),
+            google: createWebCredentialEntry(
+              "webSearch",
+              { source: "env", provider: "default", id: "MISSING_GEMINI_API_KEY_REF" },
+              { enabled: true },
+            ),
           },
         },
       }),
@@ -997,22 +989,16 @@ describe("runtime web tools resolution", () => {
         },
         plugins: {
           entries: {
-            brave: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: { source: "env", provider: "default", id: "MISSING_BRAVE_API_KEY_REF" },
-                },
-              },
-            },
-            google: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY_REF" },
-                },
-              },
-            },
+            brave: createWebCredentialEntry(
+              "webSearch",
+              { source: "env", provider: "default", id: "MISSING_BRAVE_API_KEY_REF" },
+              { enabled: true },
+            ),
+            google: createWebCredentialEntry(
+              "webSearch",
+              { source: "env", provider: "default", id: "GEMINI_API_KEY_REF" },
+              { enabled: true },
+            ),
           },
         },
       }),
@@ -1045,18 +1031,15 @@ describe("runtime web tools resolution", () => {
         },
         plugins: {
           entries: {
-            google: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: {
-                    source: "env",
-                    provider: "default",
-                    id: "MISSING_GEMINI_API_KEY_REF",
-                  },
-                },
+            google: createWebCredentialEntry(
+              "webSearch",
+              {
+                source: "env",
+                provider: "default",
+                id: "MISSING_GEMINI_API_KEY_REF",
               },
-            },
+              { enabled: true },
+            ),
           },
         },
       }),
@@ -1171,14 +1154,11 @@ describe("runtime web tools resolution", () => {
         },
         plugins: {
           entries: {
-            google: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY_REF" },
-                },
-              },
-            },
+            google: createWebCredentialEntry(
+              "webSearch",
+              { source: "env", provider: "default", id: "GEMINI_API_KEY_REF" },
+              { enabled: true },
+            ),
           },
         },
       }),
@@ -1216,14 +1196,11 @@ describe("runtime web tools resolution", () => {
       },
       plugins: {
         entries: {
-          google: {
-            enabled: true,
-            config: {
-              webSearch: {
-                apiKey: { source: "env", provider: "default", id: "MISSING_GEMINI_API_KEY_REF" },
-              },
-            },
-          },
+          google: createWebCredentialEntry(
+            "webSearch",
+            { source: "env", provider: "default", id: "MISSING_GEMINI_API_KEY_REF" },
+            { enabled: true },
+          ),
         },
       },
     });
@@ -1268,14 +1245,11 @@ describe("runtime web tools resolution", () => {
         },
         plugins: {
           entries: {
-            google: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: { source: "env", provider: "default", id: "GEMINI_PROVIDER_REF" },
-                },
-              },
-            },
+            google: createWebCredentialEntry(
+              "webSearch",
+              { source: "env", provider: "default", id: "GEMINI_PROVIDER_REF" },
+              { enabled: true },
+            ),
           },
         },
       }),
@@ -1313,22 +1287,16 @@ describe("runtime web tools resolution", () => {
         },
         plugins: {
           entries: {
-            brave: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: { source: "env", provider: "default", id: "BRAVE_PROVIDER_REF" },
-                },
-              },
-            },
-            google: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: { source: "env", provider: "default", id: "GOOGLE_PROVIDER_REF" },
-                },
-              },
-            },
+            brave: createWebCredentialEntry(
+              "webSearch",
+              { source: "env", provider: "default", id: "BRAVE_PROVIDER_REF" },
+              { enabled: true },
+            ),
+            google: createWebCredentialEntry(
+              "webSearch",
+              { source: "env", provider: "default", id: "GOOGLE_PROVIDER_REF" },
+              { enabled: true },
+            ),
           },
         },
       }),
@@ -1359,14 +1327,11 @@ describe("runtime web tools resolution", () => {
       config: asConfig({
         plugins: {
           entries: {
-            google: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: { source: "env", provider: "default", id: "GOOGLE_PROVIDER_REF" },
-                },
-              },
-            },
+            google: createWebCredentialEntry(
+              "webSearch",
+              { source: "env", provider: "default", id: "GOOGLE_PROVIDER_REF" },
+              { enabled: true },
+            ),
           },
         },
       }),
@@ -1398,13 +1363,11 @@ describe("runtime web tools resolution", () => {
       config: asConfig({
         plugins: {
           entries: {
-            firecrawl: {
-              config: {
-                webFetch: {
-                  apiKey: { source: "env", provider: "default", id: "MISSING_FIRECRAWL_REF" },
-                },
-              },
-            },
+            firecrawl: createWebCredentialEntry("webFetch", {
+              source: "env",
+              provider: "default",
+              id: "MISSING_FIRECRAWL_REF",
+            }),
           },
         },
         tools: {
@@ -1440,14 +1403,11 @@ describe("runtime web tools resolution", () => {
         },
         plugins: {
           entries: {
-            google: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: { source: "env", provider: "default", id: "GEMINI_PROVIDER_REF" },
-                },
-              },
-            },
+            google: createWebCredentialEntry(
+              "webSearch",
+              { source: "env", provider: "default", id: "GEMINI_PROVIDER_REF" },
+              { enabled: true },
+            ),
           },
         },
       }),
@@ -1473,17 +1433,11 @@ describe("runtime web tools resolution", () => {
         },
         plugins: {
           entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: {
-                    source: "env",
-                    provider: "default",
-                    id: "DISABLED_WEB_SEARCH_GEMINI_API_KEY",
-                  },
-                },
-              },
-            },
+            google: createWebCredentialEntry("webSearch", {
+              source: "env",
+              provider: "default",
+              id: "DISABLED_WEB_SEARCH_GEMINI_API_KEY",
+            }),
           },
         },
       }),
@@ -1603,17 +1557,11 @@ describe("runtime web tools resolution", () => {
         },
         plugins: {
           entries: {
-            firecrawl: {
-              config: {
-                webFetch: {
-                  apiKey: {
-                    source: "env",
-                    provider: "default",
-                    id: "FIRECRAWL_API_KEY",
-                  },
-                },
-              },
-            },
+            firecrawl: createWebCredentialEntry("webFetch", {
+              source: "env",
+              provider: "default",
+              id: "FIRECRAWL_API_KEY",
+            }),
           },
         },
       }),
@@ -1645,13 +1593,11 @@ describe("runtime web tools resolution", () => {
         },
         plugins: {
           entries: {
-            firecrawl: {
-              config: {
-                webFetch: {
-                  apiKey: { source: "file", provider: "default", id: "/firecrawl/apiKey" },
-                },
-              },
-            },
+            firecrawl: createWebCredentialEntry("webFetch", {
+              source: "file",
+              provider: "default",
+              id: "/firecrawl/apiKey",
+            }),
           },
         },
         tools: {
@@ -1706,13 +1652,11 @@ describe("runtime web tools resolution", () => {
       config: asConfig({
         plugins: {
           entries: {
-            firecrawl: {
-              config: {
-                webFetch: {
-                  apiKey: { source: "env", provider: "default", id: refId },
-                },
-              },
-            },
+            firecrawl: createWebCredentialEntry("webFetch", {
+              source: "env",
+              provider: "default",
+              id: refId,
+            }),
           },
         },
         tools: { web: { fetch: { provider: "firecrawl" } } },
@@ -1753,13 +1697,11 @@ describe("runtime web tools resolution", () => {
         },
         plugins: {
           entries: {
-            firecrawl: {
-              config: {
-                webFetch: {
-                  apiKey: { source: "env", provider: "default", id: refId },
-                },
-              },
-            },
+            firecrawl: createWebCredentialEntry("webFetch", {
+              source: "env",
+              provider: "default",
+              id: refId,
+            }),
           },
         },
         tools: { web: { fetch: { provider: "firecrawl" } } },
@@ -1785,13 +1727,11 @@ describe("runtime web tools resolution", () => {
       config: asConfig({
         plugins: {
           entries: {
-            firecrawl: {
-              config: {
-                webSearch: {
-                  apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
-                },
-              },
-            },
+            firecrawl: createWebCredentialEntry("webSearch", {
+              source: "env",
+              provider: "default",
+              id: "FIRECRAWL_API_KEY",
+            }),
           },
         },
         tools: {
@@ -1823,13 +1763,11 @@ describe("runtime web tools resolution", () => {
       config: asConfig({
         plugins: {
           entries: {
-            firecrawl: {
-              config: {
-                webFetch: {
-                  apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
-                },
-              },
-            },
+            firecrawl: createWebCredentialEntry("webFetch", {
+              source: "env",
+              provider: "default",
+              id: "FIRECRAWL_API_KEY",
+            }),
           },
         },
       }),
@@ -1854,13 +1792,11 @@ describe("runtime web tools resolution", () => {
     const sourceConfig = asConfig({
       plugins: {
         entries: {
-          firecrawl: {
-            config: {
-              webFetch: {
-                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
-              },
-            },
-          },
+          firecrawl: createWebCredentialEntry("webFetch", {
+            source: "env",
+            provider: "default",
+            id: "FIRECRAWL_API_KEY",
+          }),
         },
       },
       tools: {
@@ -1894,13 +1830,11 @@ describe("runtime web tools resolution", () => {
     const sourceConfig = asConfig({
       plugins: {
         entries: {
-          firecrawl: {
-            config: {
-              webFetch: {
-                apiKey: { source: "env", provider: "default", id: "AWS_SECRET_ACCESS_KEY" },
-              },
-            },
-          },
+          firecrawl: createWebCredentialEntry("webFetch", {
+            source: "env",
+            provider: "default",
+            id: "AWS_SECRET_ACCESS_KEY",
+          }),
         },
       },
       tools: {
@@ -1940,14 +1874,9 @@ describe("runtime web tools resolution", () => {
             paths: ["/tmp/malicious-plugin"],
           },
           entries: {
-            firecrawl: {
+            firecrawl: createWebCredentialEntry("webFetch", "firecrawl-config-key", {
               enabled: true,
-              config: {
-                webFetch: {
-                  apiKey: "firecrawl-config-key",
-                },
-              },
-            },
+            }),
           },
         },
         tools: {
@@ -2034,13 +1963,10 @@ describe("runtime web tools resolution", () => {
           },
           plugins: {
             entries: {
-              brave: {
-                config: {
-                  webSearch: {
-                    apiKey: "brave-api-key", // pragma: allowlist secret
-                  },
-                },
-              },
+              brave: createWebCredentialEntry(
+                "webSearch",
+                "brave-api-key", // pragma: allowlist secret
+              ),
             },
           },
         }),

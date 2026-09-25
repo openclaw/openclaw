@@ -1,6 +1,6 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
-  buildSessionEntry,
+  readSessionResetRecallCutoff,
   loadArchivedSessions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
@@ -27,7 +27,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readSessionArchiveReasonFromHitPath,
-  readSessionResetRecallCutoffMetadata,
   type SessionResetRecallCutoff,
 } from "./session-reset-recall-metadata.js";
 
@@ -250,15 +249,12 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     if (!recallAgentId || !sessionId || !anchorSessionKey) {
       return Promise.resolve<SessionResetRecallCutoff>({ state: "invalid" });
     }
-    anchorResetCutoffPromise = buildSessionEntry(`${sessionId}.jsonl`, {
+    anchorResetCutoffPromise = readSessionResetRecallCutoff({
       agentId: recallAgentId,
       sessionId,
       sessionKey: anchorSessionKey,
       storePath,
-      updatedAtMs: anchorEntry?.updatedAt,
-    })
-      .then(readSessionResetRecallCutoffMetadata)
-      .catch(() => ({ state: "invalid" }));
+    }).catch(() => ({ state: "invalid" }));
     return anchorResetCutoffPromise;
   };
   const recallAuthorized = Boolean(

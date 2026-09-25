@@ -331,6 +331,20 @@ describe("openai completions params", () => {
     expect(disabled.enable_thinking).toBe(false);
     expect(enabled).not.toHaveProperty("reasoning_effort");
     expect(disabled).not.toHaveProperty("reasoning_effort");
+
+    const nearCapModel = { ...baseModel, contextWindow: 1016 };
+    const nearCapContext = { systemPrompt: "x".repeat(3200), messages: [], tools: [] };
+    expect(
+      buildOpenAICompletionsParams(nearCapModel, nearCapContext, { reasoning: "off" }),
+    ).toMatchObject({ enable_thinking: false, max_completion_tokens: 15 });
+    expect(() =>
+      buildOpenAICompletionsParams(nearCapModel, nearCapContext, { reasoning: "medium" }),
+    ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
+    expect(
+      buildOpenAICompletionsParams({ ...baseModel, contextWindow: 1000 }, nearCapContext, {
+        reasoning: "off",
+      }),
+    ).toMatchObject({ enable_thinking: false, max_completion_tokens: 1 });
   });
 
   it("maps qwen-chat-template thinking format to chat_template_kwargs", () => {

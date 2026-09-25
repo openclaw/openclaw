@@ -27,6 +27,7 @@ import {
   resolveSessionSuspensionReason,
   type SessionSuspensionParams,
 } from "../../session-suspension.js";
+import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
 import { isCurrentAttemptReplaySafe } from "./attempt-terminal-evidence.js";
@@ -96,6 +97,10 @@ export async function handleEmbeddedAssistantFailure(input: {
   // may drive retries, profile health, or failure copy.
   const failedAssistant =
     input.attemptAssistant?.stopReason === "error" ? input.attemptAssistant : undefined;
+  const transcriptError = failedAssistant?.errorMessage;
+  if (isSessionTranscriptTurnMismatchErrorMessage(transcriptError)) {
+    throw new Error(transcriptError);
+  }
   if (classifyGatewayStorageFailure(failedAssistant)) {
     return buildOutcome(input, { action: "proceed", assistantProfileFailureReason: null });
   }

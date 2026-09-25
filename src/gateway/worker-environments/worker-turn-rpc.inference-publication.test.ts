@@ -129,7 +129,7 @@ describe("worker inference inventory publication", () => {
       const instance = createOperationalRunInstanceRef(claim.runId);
       const authority = claimAgentRunDelegatedAuthority(instance);
       try {
-        bindWorkerTurnOwner(
+        await bindWorkerTurnOwner(
           placements,
           claim,
           undefined,

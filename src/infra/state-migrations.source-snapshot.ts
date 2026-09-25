@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Root } from "@openclaw/fs-safe";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import {
   pinDirectory,
@@ -147,9 +148,10 @@ export class LegacyMigrationSourceClaim<
     try {
       const sourcePath = path.join(parent.receipt.realPath, path.basename(from));
       const targetPath = path.join(parent.receipt.realPath, path.basename(to));
-      const opened = await root.open(from, { hardlinks: "reject", symlinks: "reject" });
       let identity: fs.BigIntStats;
-      try {
+      {
+        // Close before unlink: FUSE can retain an open source as a .fuse_hidden hardlink.
+        await using opened = await root.open(from, { hardlinks: "reject", symlinks: "reject" });
         identity = fs.fstatSync(opened.handle.fd, { bigint: true });
         await opened.handle.sync();
         const published = await publishFileExclusive({
@@ -160,9 +162,6 @@ export class LegacyMigrationSourceClaim<
           strategy: "link-required",
         });
         requireDirectorySync(published.directorySync, "Legacy migration claim directory");
-      } finally {
-        // FUSE can retain an unlinked open file as an extra .fuse_hidden hardlink.
-        await opened[Symbol.asyncDispose]();
       }
       await root.remove(from, {
         assertBeforeMutation: () => assertClaimLinkPair(sourcePath, targetPath, identity),
@@ -182,26 +181,20 @@ export class LegacyMigrationSourceClaim<
     const parent = await this.pinParent();
     try {
       let identity: fs.BigIntStats | undefined;
-      const source = await root.open(this.sourceRelativePath, {
-        hardlinks: "allow",
-        symlinks: "reject",
-      });
-      try {
-        const claim = await root.open(this.claimRelativePath, {
+      {
+        await using source = await root.open(this.sourceRelativePath, {
           hardlinks: "allow",
           symlinks: "reject",
         });
-        try {
-          const sourceStat = fs.fstatSync(source.handle.fd, { bigint: true });
-          if (isClaimLinkPair(sourceStat, fs.fstatSync(claim.handle.fd, { bigint: true }))) {
-            await source.handle.sync();
-            identity = sourceStat;
-          }
-        } finally {
-          await claim[Symbol.asyncDispose]();
+        await using claim = await root.open(this.claimRelativePath, {
+          hardlinks: "allow",
+          symlinks: "reject",
+        });
+        const sourceStat = fs.fstatSync(source.handle.fd, { bigint: true });
+        if (isClaimLinkPair(sourceStat, fs.fstatSync(claim.handle.fd, { bigint: true }))) {
+          await source.handle.sync();
+          identity = sourceStat;
         }
-      } finally {
-        await source[Symbol.asyncDispose]();
       }
       if (!identity) {
         return;
@@ -378,9 +371,6 @@ export async function readLegacyMigrationSourceSnapshot(params: {
     resolveLegacyMigrationRelativePath(params.stateDir, params.sourcePath, params.label),
     { hardlinks: "reject", maxBytes: params.maxBytes, symlinks: "reject" },
   );
-  if (!opened.stat.isFile() || opened.stat.size !== opened.buffer.byteLength) {
-    throw new Error(`legacy ${params.label} source is not a stable regular file`);
-  }
   const raw = opened.buffer.toString("utf8");
   return {
     buffer: opened.buffer,
@@ -391,48 +381,31 @@ export async function readLegacyMigrationSourceSnapshot(params: {
     sha256: createHash("sha256")
       .update(params.hashDecodedText ? raw : opened.buffer)
       .digest("hex"),
-    size: opened.stat.size,
+    size: opened.buffer.byteLength,
     sourcePath: params.sourcePath,
   };
 }
 
-/** Pin synchronous legacy files before and after parsing; never follow new links. */
+/** Read admitted legacy bytes; claim and cleanup owners verify the retained snapshot. */
 export function readLegacyMigrationSourceSnapshotSync(params: {
   sourcePath: string;
   label: string;
   followSymlinks?: boolean;
   maxBytes?: number;
 }): LegacyMigrationSourceSnapshot {
-  const stat = params.followSymlinks ? fs.statSync : fs.lstatSync;
-  const before = stat(params.sourcePath);
-  if (!before.isFile() || (!params.followSymlinks && before.isSymbolicLink())) {
-    throw new Error(
-      `legacy ${params.label} source is not a regular${params.followSymlinks ? "" : " non-symlink"} file`,
-    );
-  }
-  if (params.maxBytes !== undefined && before.size > params.maxBytes) {
-    throw new Error(`legacy ${params.label} source exceeds the metadata size limit`);
-  }
-  const raw = fs.readFileSync(params.sourcePath, "utf8");
-  const after = stat(params.sourcePath);
-  if (
-    !after.isFile() ||
-    (!params.followSymlinks && after.isSymbolicLink()) ||
-    before.dev !== after.dev ||
-    before.ino !== after.ino ||
-    before.size !== after.size ||
-    before.mtimeMs !== after.mtimeMs
-  ) {
-    throw new Error(`legacy ${params.label} source changed while doctor was reading it`);
-  }
+  const { buffer, stat } = readRegularFileSync({
+    filePath: params.followSymlinks ? fs.realpathSync(params.sourcePath) : params.sourcePath,
+    maxBytes: params.maxBytes,
+  });
+  const raw = buffer.toString("utf8");
   return {
     buffer: Buffer.from(raw),
-    dev: after.dev,
-    ino: after.ino,
-    mtimeMs: after.mtimeMs,
+    dev: stat.dev,
+    ino: stat.ino,
+    mtimeMs: stat.mtimeMs,
     raw,
     sha256: createHash("sha256").update(raw).digest("hex"),
-    size: after.size,
+    size: buffer.byteLength,
     sourcePath: params.sourcePath,
   };
 }

@@ -1,6 +1,5 @@
 // QA Lab tests cover cli plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isCrablineServerChannel, OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
@@ -8,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeRuntimeParitySummary } from "./agentic-parity-report-test-helpers.js";
 import { readQaScenarioById, type QaScenarioPack } from "./scenario-catalog.js";
 import * as taxonomyModule from "./scorecard-taxonomy.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const {
   runQaManualLane,
@@ -122,6 +122,7 @@ import type { QaSuiteRunParams } from "./suite.js";
 const DEFAULT_LIVE_FRONTIER_MODEL = defaultQaProviderModelForMode("live-frontier");
 const LEGACY_TEST_REPO_ROOT = path.resolve("/tmp/openclaw-repo");
 const nativeRealpath = fs.realpath.bind(fs);
+const tempDirs = createTempDirHarness();
 
 function resolveMockQaRuntimeModelPair(params: {
   providerMode: string;
@@ -323,7 +324,7 @@ describe("qa cli runtime", () => {
   }
 
   async function withMultipassSummary(summary: unknown, run: () => Promise<void>) {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-multipass-summary-"));
+    const repoRoot = await tempDirs.makeTempDir("qa-multipass-summary-");
     const summaryPath = path.join(repoRoot, "qa-suite-summary.json");
     if (summary !== undefined) {
       await fs.writeFile(
@@ -348,16 +349,15 @@ describe("qa cli runtime", () => {
       await run();
     } finally {
       process.exitCode = priorExitCode ?? 0;
-      await fs.rm(repoRoot, { recursive: true, force: true });
     }
   }
 
   beforeEach(async () => {
-    suiteArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-runtime-"));
+    suiteArtifactsDir = await tempDirs.makeTempDir("qa-suite-runtime-");
     suiteEvidencePath = path.join(suiteArtifactsDir, "qa-evidence.json");
     suiteReportPath = path.join(suiteArtifactsDir, "qa-suite-report.md");
     suiteSummaryPath = path.join(suiteArtifactsDir, "qa-suite-summary.json");
-    telegramArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-telegram-runtime-"));
+    telegramArtifactsDir = await tempDirs.makeTempDir("qa-telegram-runtime-");
     telegramSummaryPath = path.join(telegramArtifactsDir, QA_EVIDENCE_FILENAME);
     await fs.writeFile(suiteReportPath, "# QA Suite Report\n", "utf8");
     await fs.writeFile(
@@ -526,8 +526,7 @@ describe("qa cli runtime", () => {
     realpathSpy.mockRestore();
     vi.unstubAllEnvs();
     vi.clearAllMocks();
-    await fs.rm(suiteArtifactsDir, { recursive: true, force: true });
-    await fs.rm(telegramArtifactsDir, { recursive: true, force: true });
+    await tempDirs.cleanup();
   });
 
   it("runs selected Playwright scenarios through the suite command", async () => {
@@ -2545,7 +2544,7 @@ describe("qa cli runtime", () => {
   });
 
   it("sets a failing exit code when the parity gate fails", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-parity-"));
+    const repoRoot = await tempDirs.makeTempDir("qa-parity-");
     const priorExitCode = process.exitCode;
     process.exitCode = 0;
 
@@ -2576,7 +2575,6 @@ describe("qa cli runtime", () => {
       expect(process.exitCode).toBe(1);
     } finally {
       process.exitCode = priorExitCode ?? 0;
-      await fs.rm(repoRoot, { recursive: true, force: true });
     }
   });
 
@@ -2584,7 +2582,7 @@ describe("qa cli runtime", () => {
     { status: "pass", runtimeErrorClass: "tool-error" },
     { status: "skip", details: "known-harness-gap fixture: unavailable" },
   ])("writes a runtime-axis parity report preserving $status", async (cellOutcome) => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-runtime-parity-"));
+    const repoRoot = await tempDirs.makeTempDir("qa-runtime-parity-");
     const priorExitCode = process.exitCode;
     process.exitCode = 0;
 
@@ -2631,12 +2629,11 @@ describe("qa cli runtime", () => {
       );
     } finally {
       process.exitCode = priorExitCode ?? 0;
-      await fs.rm(repoRoot, { recursive: true, force: true });
     }
   });
 
   it("writes a runtime-axis token-efficiency report when requested", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-runtime-token-efficiency-"));
+    const repoRoot = await tempDirs.makeTempDir("qa-runtime-token-efficiency-");
     const priorExitCode = process.exitCode;
     process.exitCode = 0;
 
@@ -2725,7 +2722,6 @@ describe("qa cli runtime", () => {
       expect(tokenSummary.aggregate?.flaggedScenarios).toEqual(["runtime-tool-fs-read"]);
     } finally {
       process.exitCode = priorExitCode ?? 0;
-      await fs.rm(repoRoot, { recursive: true, force: true });
     }
   });
 
@@ -2779,7 +2775,7 @@ describe("qa cli runtime", () => {
   });
 
   it("rejects null tool coverage summary JSON", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-tool-coverage-null-"));
+    const repoRoot = await tempDirs.makeTempDir("qa-tool-coverage-null-");
     await fs.writeFile(path.join(repoRoot, "runtime-summary.json"), "null\n", "utf8");
     const priorExitCode = process.exitCode;
     process.exitCode = 0;
@@ -2795,37 +2791,32 @@ describe("qa cli runtime", () => {
       expect(process.exitCode).toBe(0);
     } finally {
       process.exitCode = priorExitCode ?? 0;
-      await fs.rm(repoRoot, { recursive: true, force: true });
     }
   });
 
   it("writes a curated mock JSONL replay report and summary", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-jsonl-replay-cli-"));
-    try {
-      await runQaJsonlReplayCommand({
-        repoRoot,
-        transcripts: path.resolve("qa/scenarios/jsonl-replay"),
-        outputDir: "jsonl-output",
-        runtimePair: "openclaw,codex",
-      });
+    const repoRoot = await tempDirs.makeTempDir("qa-jsonl-replay-cli-");
+    await runQaJsonlReplayCommand({
+      repoRoot,
+      transcripts: path.resolve("qa/scenarios/jsonl-replay"),
+      outputDir: "jsonl-output",
+      runtimePair: "openclaw,codex",
+    });
 
-      const report = await fs.readFile(
-        path.join(repoRoot, "jsonl-output", "qa-jsonl-replay-report.md"),
+    const report = await fs.readFile(
+      path.join(repoRoot, "jsonl-output", "qa-jsonl-replay-report.md"),
+      "utf8",
+    );
+    const summary = JSON.parse(
+      await fs.readFile(
+        path.join(repoRoot, "jsonl-output", "qa-jsonl-replay-summary.json"),
         "utf8",
-      );
-      const summary = JSON.parse(
-        await fs.readFile(
-          path.join(repoRoot, "jsonl-output", "qa-jsonl-replay-summary.json"),
-          "utf8",
-        ),
-      ) as { transcripts?: Array<{ userTurnCount?: number }> };
+      ),
+    ) as { transcripts?: Array<{ userTurnCount?: number }> };
 
-      expect(report).toContain("# OpenClaw JSONL Replay Report - openclaw vs codex");
-      expect(report).toContain("| plan-mode-boundaries.jsonl | 3 |  | none, none, none |");
-      expect(summary.transcripts).toHaveLength(7);
-    } finally {
-      await fs.rm(repoRoot, { recursive: true, force: true });
-    }
+    expect(report).toContain("# OpenClaw JSONL Replay Report - openclaw vs codex");
+    expect(report).toContain("| plan-mode-boundaries.jsonl | 3 |  | none, none, none |");
+    expect(summary.transcripts).toHaveLength(7);
   });
 
   it("preserves the canonical runtime order for JSONL replay", async () => {
@@ -2849,7 +2840,7 @@ describe("qa cli runtime", () => {
   it("exits nonzero when tool coverage summary is missing a required runtime tool call", async () => {
     const priorExitCode = process.exitCode;
     process.exitCode = 0;
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-tool-coverage-"));
+    const repoRoot = await tempDirs.makeTempDir("qa-tool-coverage-");
     try {
       await fs.writeFile(
         path.join(repoRoot, "runtime-summary.json"),
@@ -2906,7 +2897,6 @@ describe("qa cli runtime", () => {
       );
     } finally {
       process.exitCode = priorExitCode ?? 0;
-      await fs.rm(repoRoot, { recursive: true, force: true });
     }
   });
 

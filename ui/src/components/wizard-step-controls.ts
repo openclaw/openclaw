@@ -104,7 +104,7 @@ function renderSignIn(step: WizardStep) {
   `;
 }
 
-export function renderWizardSingleChoice(props: {
+function renderWizardSingleChoice(props: {
   options: WizardStepOption[];
   busy: boolean;
   label: string;
@@ -319,7 +319,6 @@ function renderTextStep(props: WizardStepControlsProps) {
 function renderOptionsStep(props: WizardStepControlsProps) {
   const options = props.step.options ?? [];
   const multiple = props.step.type === "multiselect";
-  const selected = multiple ? (Array.isArray(props.value) ? props.value : []) : [props.value];
   if (!multiple && props.presentation !== "channels") {
     return html`
       ${renderMessage(props)}
@@ -360,11 +359,8 @@ function renderOptionsStep(props: WizardStepControlsProps) {
       }
     `;
   }
-  const answer = multiple
-    ? props.presentation === "channels"
-      ? [...selected]
-      : selected
-    : props.value;
+  const selected = Array.isArray(props.value) ? props.value : [];
+  const answer = props.presentation === "channels" ? [...selected] : selected;
   return html`
     ${renderMessage(props)}
     <div
@@ -379,7 +375,7 @@ function renderOptionsStep(props: WizardStepControlsProps) {
       props,
       t("modelSetup.wizard.continue"),
       () => props.onAnswer(answer),
-      props.busy || (!multiple && props.value === undefined),
+      props.busy,
     )}
   `;
 }
@@ -435,8 +431,11 @@ export function renderWizardStepControls(
       return props.step.executor === "gateway"
         ? renderProgressStep(props)
         : renderContinueStep(props);
-    // These show whatever the step supplies behind a single Continue.
     case "note":
+      return props.busy && (props.step.externalUrl || props.step.deviceCode)
+        ? renderProgressStep(props)
+        : renderContinueStep(props);
+    // Actions require the user's acknowledgement even when they open a browser.
     case "action":
       return renderContinueStep(props);
   }

@@ -72,7 +72,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
     vi.unstubAllEnvs();
   });
 
-  it("does not start a worker when startup cleanup has nothing to reclaim", async () => {
+  it("uses one worker for empty startup archive planning without changing the session", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:current";
     const entry = { sessionId: "current-session", updatedAt: now };
@@ -99,7 +99,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
     } finally {
       workerChannel.unsubscribe(onWorker);
     }
-    expect(workersStarted).toBe(0);
+    expect(workersStarted).toBe(1);
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(entry);
   });
 
@@ -157,7 +157,10 @@ describe("SQLite lifecycle cleanup reclamation", () => {
         // Replacement may schedule maintenance; the stale deletion must not reach reclamation.
         const deletionPlans = reclaim.mock.calls
           .map(([{ plan }]) => plan)
-          .filter((plan) => !plan.kind.startsWith("maintenance-"));
+          .filter(
+            (plan) =>
+              !plan.kind.startsWith("maintenance-") && !plan.kind.startsWith("archive-publish-"),
+          );
         expect(deletionPlans).toMatchObject(
           mutation === "delete"
             ? [
@@ -304,6 +307,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
             archivedTranscriptArtifacts: 0,
           });
         }
+        expect(workersStarted).toBe(fail ? 0 : 1);
         const records = await readArtifactPreparationLogs(logPath);
         expect(records).toHaveLength(1);
         expect(records[0]?.message).toBe(
@@ -338,7 +342,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
         channel("worker_threads").unsubscribe(onWorker);
         database.db.exec("DROP VIEW temp.transcript_events");
       }
-      expect(workersStarted).toBe(0);
+      expect(workersStarted).toBe(fail ? 0 : 2);
       expect(loadSessionEntry({ sessionKey, storePath })).toEqual(before);
       await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual(
         events,

@@ -111,10 +111,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope);
       const now = Date.now();
       const { attachment, contentBase64 } = normalizeAttachmentInput(id, input, now);
@@ -148,10 +145,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     card: WorkboardCard;
     attachments: WorkboardAttachment[];
   }> {
-    const card = await this.get(id);
-    if (!card) {
-      throw new Error(`card not found: ${id}`);
-    }
+    const card = await this.requireCard(id);
     return { card, attachments: card.metadata?.attachments ?? [] };
   }
 
@@ -167,10 +161,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(cardId);
-      if (!existing) {
-        throw new Error(`card not found: ${cardId}`);
-      }
+      const existing = await this.requireCard(cardId);
       assertCanMutateClaimedCard(existing, scope);
       const attachments = existing.metadata?.attachments ?? [];
       if (!attachments.some((attachment) => attachment.id === attachmentId)) {
@@ -225,10 +216,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const card = await this.get(id);
-      if (!card) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const card = await this.requireCard(id);
       assertCanMutateClaimedCard(card, scope);
       const now = Date.now();
       const detail =

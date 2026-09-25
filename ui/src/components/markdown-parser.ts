@@ -128,14 +128,20 @@ function formatGitHubLinkLabel(url: URL): string {
   if (segments.length === 2) {
     return segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment).join("/");
   }
-  if (segments[2] === "blob" && segments.length > 4) {
-    const filename = decodeGitHubPathSegment(segments.at(-1) ?? "");
-    if (filename) {
-      return filename;
+  if ((segments[2] === "blob" || segments[2] === "tree") && segments.length > 4) {
+    const basename = decodeGitHubPathSegment(segments.at(-1) ?? "");
+    if (basename) {
+      // Tree URLs can contain slash-separated refs, not just folder paths.
+      // Show the omission rather than presenting the suffix as a folder name.
+      return segments[2] === "tree"
+        ? `${segments
+            .slice(0, 2)
+            .map((segment) => decodeGitHubPathSegment(segment) ?? segment)
+            .join("/")}/…/${basename}`
+        : basename;
     }
   }
-  const fallbackSegments = segments.length > 2 ? segments.slice(2) : segments;
-  const path = fallbackSegments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
+  const path = segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
   return ["github.com", ...path].join("/");
 }
 

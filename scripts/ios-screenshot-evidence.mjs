@@ -37,7 +37,7 @@ const EXPECTED_FAMILIES = Object.keys(FAMILY_SPECS).toSorted();
 const ATTEMPT_MODEL = Object.freeze({
   owner: "openclaw",
   unit: "capture_ios_screenshots invocation",
-  maxAttempts: 2,
+  maxAttempts: 1,
   fastlaneInternalRetries: "workflow-log",
 });
 
@@ -256,13 +256,10 @@ function collectCaptureAttempts({
     const attempts = ledgerEntries
       .filter((entry) => entry.deviceName === deviceName && entry.screenshotName === screenshotName)
       .toSorted((left, right) => left.attempt - right.attempt);
-    const attemptNumbers = attempts.map(({ attempt }) => attempt).join(",");
-    if (attemptNumbers !== "1" && attemptNumbers !== "1,2") {
-      fail(
-        `${deviceName} ${screenshotName} expected OpenClaw attempt 1 and optional retry 2; found ${attemptNumbers || "none"}`,
-      );
+    if (attempts.length !== 1 || attempts[0].attempt !== 1) {
+      fail(`${deviceName} ${screenshotName} expected exactly one OpenClaw capture attempt`);
     }
-    const summaries = attempts.map((entry, index) => {
+    const summaries = attempts.map((entry) => {
       const expectedKeys = ["attempt", "captureOutcome", "deviceName", "screenshotName"];
       const actualKeys =
         entry && typeof entry === "object" && !Array.isArray(entry)
@@ -272,26 +269,13 @@ function collectCaptureAttempts({
         fail(`${deviceName} ${screenshotName} has an invalid capture attempt record`);
       }
       const { attempt, captureOutcome } = entry;
-      const expectedOutcome = index === attempts.length - 1 ? "succeeded" : "failed";
-      if (captureOutcome !== expectedOutcome) {
-        fail(`${deviceName} ${screenshotName} has an unexpected capture outcome sequence`);
+      if (captureOutcome !== "succeeded") {
+        fail(`${deviceName} ${screenshotName} capture attempt did not succeed`);
       }
       const name = `${deviceName}-${screenshotName}-attempt-${attempt}.xcresult`;
       const source = path.join(xcresultDirectory, name);
       if (!fs.existsSync(source)) {
-        if (captureOutcome === "succeeded") {
-          fail(`${name} is missing for the successful final capture attempt`);
-        }
-        return {
-          screenshotName,
-          attempt,
-          captureOutcome,
-          artifactPath: null,
-          canonicalPath: null,
-          testResult: null,
-          failedTests: null,
-          sha256: null,
-        };
+        fail(`${name} is missing for the successful capture attempt`);
       }
       const summary = readXcresultSummary(source);
       if (!Number.isInteger(summary.failedTests) || summary.failedTests < 0) {
@@ -568,8 +552,7 @@ function verifyManifestFamily(manifestPath, manifest) {
     const attempts = manifest.captureAttempts
       ?.filter((entry) => entry.screenshotName === screenshotName)
       .toSorted((left, right) => left.attempt - right.attempt);
-    const attemptNumbers = attempts?.map((entry) => entry.attempt).join(",");
-    if (attemptNumbers !== "1" && attemptNumbers !== "1,2") {
+    if (attempts.length !== 1 || attempts[0].attempt !== 1) {
       fail(`${manifest.family} ${screenshotName} capture attempt union mismatch`);
     }
     const final = attempts.at(-1);
@@ -581,27 +564,7 @@ function verifyManifestFamily(manifestPath, manifest) {
     ) {
       fail(`${manifest.family} ${screenshotName} final xcresult is not passing`);
     }
-    if (
-      attempts.some(
-        (entry, index) =>
-          entry.captureOutcome !== (index === attempts.length - 1 ? "succeeded" : "failed"),
-      )
-    ) {
-      fail(`${manifest.family} ${screenshotName} has an unexpected capture outcome sequence`);
-    }
     for (const attempt of attempts) {
-      if (attempt.artifactPath === null) {
-        if (
-          attempt.captureOutcome !== "failed" ||
-          attempt.canonicalPath !== null ||
-          attempt.testResult !== null ||
-          attempt.failedTests !== null ||
-          attempt.sha256 !== null
-        ) {
-          fail(`${manifest.family} ${screenshotName} has invalid missing xcresult evidence`);
-        }
-        continue;
-      }
       requireString(attempt.testResult, `${manifest.family} ${screenshotName} test result`);
       if (!Number.isInteger(attempt.failedTests) || attempt.failedTests < 0) {
         fail(`${manifest.family} ${screenshotName} has invalid failedTests`);
@@ -675,9 +638,6 @@ export function reduceIosScreenshotEvidence({ inputDirectory, outputRoot, expect
       });
     }
     for (const attempt of manifest.captureAttempts) {
-      if (attempt.artifactPath === null) {
-        continue;
-      }
       canonicalEntries.push({
         ...verifyManifestEntry(manifestPath, attempt, "xcresult"),
         family: manifest.family,

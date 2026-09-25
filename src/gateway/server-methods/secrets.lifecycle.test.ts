@@ -19,7 +19,7 @@ import {
   writeSecretStoreEntry,
 } from "../../secrets/store/secret-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { QuestionManager } from "../question-manager.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createQuestionHandlers } from "./question.js";

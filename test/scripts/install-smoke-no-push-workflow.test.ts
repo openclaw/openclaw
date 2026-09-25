@@ -754,7 +754,7 @@ describe("install smoke no-push root image transport", () => {
     expect(bunVerify.run).toContain("install-smoke-candidate-payload.mts verify");
     expect(bunVerify.run).toContain('--run-id "$PRODUCER_RUN_ID"');
     expect(bunVerify.run).toContain('--run-attempt "$PRODUCER_RUN_ATTEMPT"');
-    expect(step(bunConsumer, "Install Bun for global smoke").run).toBe("npm install -g bun@1.4.0");
+    expect(step(bunConsumer, "Install Bun for global smoke").run).toBe("npm install -g bun@1.4.2");
     expect(step(bunConsumer, "Run Bun global install candidate-payload smoke")).toMatchObject({
       "working-directory": ".release-harness",
       env: {

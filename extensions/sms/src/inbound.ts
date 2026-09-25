@@ -311,13 +311,9 @@ export async function dispatchSmsInboundEvent(params: {
         },
       },
     });
+  } finally {
     if (adoptionState === "pending" || adoptionState === "abandoned") {
       await materialized.cleanup();
     }
-  } catch (error) {
-    if (adoptionState === "pending" || adoptionState === "abandoned") {
-      await materialized.cleanup();
-    }
-    throw error;
   }
 }

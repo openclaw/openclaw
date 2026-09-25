@@ -18,26 +18,43 @@ type UncaughtExceptionHandler = (error: unknown) => boolean;
 // state shared across instances, anchor the handlers Set on globalThis.
 const HANDLERS_GLOBAL_KEY = Symbol.for("openclaw.unhandledRejection.handlers");
 const EXCEPTION_HANDLERS_GLOBAL_KEY = Symbol.for("openclaw.uncaughtException.handlers");
-const handlers: Set<UnhandledRejectionHandler> = (() => {
+function createErrorHandlerRegistry(globalKey: symbol, failureMessage: string) {
   const g = globalThis as unknown as Record<symbol, Set<UnhandledRejectionHandler>>;
-  const existing = g[HANDLERS_GLOBAL_KEY];
-  if (existing instanceof Set) {
-    return existing;
+  let handlers = g[globalKey];
+  if (!(handlers instanceof Set)) {
+    handlers = new Set<UnhandledRejectionHandler>();
+    g[globalKey] = handlers;
   }
-  const created = new Set<UnhandledRejectionHandler>();
-  g[HANDLERS_GLOBAL_KEY] = created;
-  return created;
-})();
-const exceptionHandlers: Set<UncaughtExceptionHandler> = (() => {
-  const g = globalThis as unknown as Record<symbol, Set<UncaughtExceptionHandler>>;
-  const existing = g[EXCEPTION_HANDLERS_GLOBAL_KEY];
-  if (existing instanceof Set) {
-    return existing;
-  }
-  const created = new Set<UncaughtExceptionHandler>();
-  g[EXCEPTION_HANDLERS_GLOBAL_KEY] = created;
-  return created;
-})();
+  return {
+    register(handler: UnhandledRejectionHandler): () => void {
+      handlers.add(handler);
+      return () => {
+        handlers.delete(handler);
+      };
+    },
+    isHandled(error: unknown): boolean {
+      for (const handler of handlers) {
+        try {
+          if (handler(error)) {
+            return true;
+          }
+        } catch (err) {
+          console.error(failureMessage, err instanceof Error ? (err.stack ?? err.message) : err);
+        }
+      }
+      return false;
+    },
+  };
+}
+
+const rejectionRegistry = createErrorHandlerRegistry(
+  HANDLERS_GLOBAL_KEY,
+  "[openclaw] Unhandled rejection handler failed:",
+);
+const exceptionRegistry = createErrorHandlerRegistry(
+  EXCEPTION_HANDLERS_GLOBAL_KEY,
+  "[openclaw] Uncaught exception handler failed:",
+);
 
 const FATAL_ERROR_CODES = new Set([
   "ERR_OUT_OF_MEMORY",
@@ -323,49 +340,15 @@ export function isBenignUncaughtExceptionError(err: unknown): boolean {
 }
 
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
-  handlers.add(handler);
-  return () => {
-    handlers.delete(handler);
-  };
-}
-
-function isUnhandledRejectionHandled(reason: unknown): boolean {
-  for (const handler of handlers) {
-    try {
-      if (handler(reason)) {
-        return true;
-      }
-    } catch (err) {
-      console.error(
-        "[openclaw] Unhandled rejection handler failed:",
-        err instanceof Error ? (err.stack ?? err.message) : err,
-      );
-    }
-  }
-  return false;
+  return rejectionRegistry.register(handler);
 }
 
 export function registerUncaughtExceptionHandler(handler: UncaughtExceptionHandler): () => void {
-  exceptionHandlers.add(handler);
-  return () => {
-    exceptionHandlers.delete(handler);
-  };
+  return exceptionRegistry.register(handler);
 }
 
 export function isUncaughtExceptionHandled(error: unknown): boolean {
-  for (const handler of exceptionHandlers) {
-    try {
-      if (handler(error)) {
-        return true;
-      }
-    } catch (err) {
-      console.error(
-        "[openclaw] Uncaught exception handler failed:",
-        err instanceof Error ? (err.stack ?? err.message) : err,
-      );
-    }
-  }
-  return false;
+  return exceptionRegistry.isHandled(error);
 }
 
 export function installUnhandledRejectionHandler(): void {
@@ -383,7 +366,7 @@ export function installUnhandledRejectionHandler(): void {
   };
 
   process.on("unhandledRejection", (reason, _promise) => {
-    if (isUnhandledRejectionHandled(reason)) {
+    if (rejectionRegistry.isHandled(reason)) {
       return;
     }
 

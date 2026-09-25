@@ -26,7 +26,7 @@ import {
   isNonSecretApiKeyMarker,
   isSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
-import { isAuthModeAllowedForModel } from "./model-auth-openai.js";
+import { isAuthModeAllowedForModel } from "./model-auth-policy.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import {
   resolveApiKeyForProviderCore,
@@ -110,6 +110,7 @@ export async function hasAvailableAuthForProvider(params: {
   workspaceDir?: string;
   modelId?: string;
   modelApi?: string;
+  modelBaseUrl?: string;
 }): Promise<boolean> {
   const { provider, cfg, preferredProfile } = params;
 
@@ -137,6 +138,7 @@ export async function hasAvailableAuthForProvider(params: {
     isAuthModeAllowedForModel({
       provider,
       modelApi: params.modelApi,
+      modelBaseUrl: params.modelBaseUrl,
       mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
     }) &&
     (!authConfig.isConfigBackedInlineProviderApiKey({
@@ -191,13 +193,17 @@ export async function hasAvailableAuthForProvider(params: {
       ) {
         return true;
       }
-      const candidateType = store.profiles[candidate]?.type;
+      const candidateCredential = store.profiles[candidate];
+      const candidateType = candidateCredential?.type;
       if (
         candidateType &&
         !isAuthModeAllowedForModel({
           provider,
           modelApi: params.modelApi,
+          modelBaseUrl: params.modelBaseUrl,
           mode: authConfig.profileTypeToAuthMode(candidateType),
+          authFlow:
+            candidateCredential?.type === "oauth" ? candidateCredential.authFlow : undefined,
         })
       ) {
         continue;
@@ -208,13 +214,16 @@ export async function hasAvailableAuthForProvider(params: {
         profileId: candidate,
         agentDir: params.agentDir,
       });
-      const mode = resolved?.profileType ?? store.profiles[candidate]?.type;
+      const credential = resolved?.credential ?? store.profiles[candidate];
+      const mode = resolved?.profileType ?? credential?.type;
       if (
         resolved &&
         isAuthModeAllowedForModel({
           provider,
           modelApi: params.modelApi,
+          modelBaseUrl: params.modelBaseUrl,
           mode: mode ? authConfig.profileTypeToAuthMode(mode) : "api-key",
+          authFlow: credential?.type === "oauth" ? credential.authFlow : undefined,
         })
       ) {
         return true;

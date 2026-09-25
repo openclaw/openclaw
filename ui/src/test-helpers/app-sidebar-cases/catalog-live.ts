@@ -137,7 +137,6 @@ describe("AppSidebar session catalog pagination", () => {
 
     const section = sidebar.querySelector(`[data-session-section="catalog:${id}"]`);
     expect(section?.querySelector(".sidebar-session-catalog-new")).toBeNull();
-    expect(section?.querySelector(".sidebar-session-catalog-new-spacer")).not.toBeNull();
     const lead = section?.querySelector(".sidebar-session-group-toggle__lead");
     expect(lead?.querySelector(".sidebar-session-group-toggle__icon")).not.toBeNull();
     const providerIcon = lead?.querySelector(".sidebar-session-catalog-provider-icon");

@@ -6,11 +6,12 @@ import SwiftUI
 
 extension RootTabs {
     private static var sidebarPersistentWidthThreshold: CGFloat {
-        980
+        self.sidebarSplitIdealWidth + self.sidebarDetailMinimumWidth
     }
 
-    static let sidebarSplitIdealWidth: CGFloat = 316
-    static let sidebarSplitMaximumWidth: CGFloat = 340
+    static let sidebarSplitIdealWidth: CGFloat = 300
+    static let sidebarSplitMaximumWidth: CGFloat = 320
+    static let sidebarDetailMinimumWidth: CGFloat = 500
     // Keep the web drawer's 86% reveal while using more of current iPhone widths.
     static let sidebarDrawerMaximumWidth: CGFloat = 340
     static let sidebarShowButtonAccessibilityIdentifier = "RootTabs.Sidebar.Show"
@@ -163,14 +164,20 @@ extension RootTabs {
         windowSize ?? contentSize
     }
 
-    static func sidebarLayoutMode(containerSize: CGSize) -> SidebarLayoutMode {
-        containerSize.width < self.sidebarPersistentWidthThreshold || containerSize.height > containerSize.width
+    /// A content budget, not an OS-defined breakpoint. Keep phones and accessibility
+    /// text in one column even when their window is wider than the tablet threshold.
+    static func sidebarLayoutMode(
+        containerSize: CGSize,
+        isPad: Bool,
+        usesAccessibilityText: Bool = false) -> SidebarLayoutMode
+    {
+        !isPad || usesAccessibilityText || containerSize.width < self.sidebarPersistentWidthThreshold
             ? .drawer
             : .split
     }
 
-    static func preferredSidebarVisibility(layoutMode: SidebarLayoutMode) -> Bool {
-        layoutMode == .split
+    static func sidebarVisibility(layoutMode: SidebarLayoutMode, splitPreference: Bool?) -> Bool {
+        layoutMode == .split ? (splitPreference ?? true) : false
     }
 
     static func shouldCollapseSidebarAfterSelection(layoutMode: SidebarLayoutMode) -> Bool {
@@ -181,7 +188,10 @@ extension RootTabs {
         if isDrawerLayout {
             return min(self.sidebarDrawerMaximumWidth, containerWidth * 0.86)
         }
-        return min(self.sidebarSplitMaximumWidth, max(self.sidebarSplitIdealWidth, containerWidth * 0.25))
+        return min(
+            self.sidebarSplitMaximumWidth,
+            max(self.sidebarSplitIdealWidth, containerWidth * 0.25),
+            max(0, containerWidth - self.sidebarDetailMinimumWidth))
     }
 
     static func sidebarContentOffset(

@@ -1,6 +1,8 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { createGatewayBrowserClientFixture } from "../chat-pane.test-support.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
@@ -47,6 +49,74 @@ beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
 describe("task detail panel", () => {
+  it.each(["initial", "older"] as const)(
+    "shows permanent preview guidance without retry on an %s page failure",
+    async (page) => {
+      const task: TaskSummary = {
+        id: "capacity-task",
+        taskId: "capacity-task",
+        status: "completed",
+        runtime: "subagent",
+        agentId: "main",
+        childSessionKey: "agent:main:subagent:capacity",
+        title: "Synthetic report preview",
+      };
+      const failure = new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "This record exceeds the preview limit. Retained history is unchanged.",
+        details: { code: "TASK_HISTORY_PREVIEW_CAPACITY" },
+        retryable: false,
+      });
+      const request = vi.fn().mockRejectedValue(failure);
+      if (page === "older") {
+        request.mockResolvedValueOnce({
+          messages: [{ role: "assistant", content: "Current retained answer" }],
+          nextCursor: "older-page",
+        });
+      }
+      let updated = createDeferred();
+      const host: TaskDetailHost = {
+        sessionKey: "agent:main:main",
+        client: createGatewayBrowserClientFixture({ request }),
+        connected: true,
+        hello: null,
+        requestUpdate: () => updated.resolve(),
+      };
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () =>
+        render(
+          renderTaskDetailPanel({
+            backgroundTasks: backgroundTasks(task),
+            host,
+            task,
+          }),
+          container,
+        );
+      rerender();
+      // Loading schedules a synchronous update before the response settles.
+      updated = createDeferred();
+      await updated.promise;
+      rerender();
+      if (page === "older") {
+        const earlier = Array.from(container.querySelectorAll("button")).find((button) =>
+          button.textContent?.includes("Show earlier"),
+        );
+        expect(earlier).toBeDefined();
+        expectDefined(earlier, "earlier task history control").click();
+        updated = createDeferred();
+        await updated.promise;
+        rerender();
+        expect(container.textContent).toContain("Current retained answer");
+      }
+      expect(container.textContent).toContain(failure.message);
+      expect(
+        Array.from(container.querySelectorAll("button")).some((button) =>
+          button.textContent?.includes("Retry"),
+        ),
+      ).toBe(false);
+    },
+  );
+
   it.each(["task", "connection"])(
     "ignores a pending full reply after the %s changes",
     async (change) => {

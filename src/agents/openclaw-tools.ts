@@ -576,7 +576,14 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             // Match sessions_spawn: spawned children record the durable run
             // session as spawnedBy, so the parent check must use the same key.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentSessionId: options?.sessionId,
             agentChannel: options?.agentChannel,
+            requesterOrigin: {
+              channel: options?.agentChannel,
+              accountId: options?.agentAccountId,
+              to: options?.currentMessagingTarget ?? options?.currentChannelId ?? options?.agentTo,
+              threadId: options?.currentThreadTs ?? options?.agentThreadId,
+            },
             sandboxed: options?.sandboxed,
             config: sessionConfig,
           }),

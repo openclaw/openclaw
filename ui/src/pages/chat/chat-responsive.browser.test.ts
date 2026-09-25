@@ -1765,8 +1765,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const bubbleRect = bubble.getBoundingClientRect();
         const footerRect = footer.getBoundingClientRect();
         return {
-          avatarBottom: avatarRect.bottom,
-          bubbleBottom: bubbleRect.bottom,
+          avatarTop: avatarRect.top,
+          bubbleTop: bubbleRect.top,
           firstBottom: firstRect.bottom,
           footerBottom: footerRect.bottom,
           footerHeight: footerRect.height,
@@ -1775,7 +1775,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
 
       expect(layout.footerHeight).toBeGreaterThan(24);
-      expect(layout.bubbleBottom - layout.avatarBottom).toBeCloseTo(4, 0);
+      expect(layout.avatarTop - layout.bubbleTop).toBeCloseTo(0, 0);
       expect(layout.footerBottom).toBeLessThanOrEqual(layout.firstBottom + 1);
       expect(Math.abs(layout.secondTop - layout.firstBottom)).toBeLessThanOrEqual(1);
     });

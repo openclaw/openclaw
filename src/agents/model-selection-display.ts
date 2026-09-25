@@ -14,38 +14,20 @@ type ModelDisplaySelectionParams = {
 
 /** Resolves the most specific provider/model ref for display. */
 export function resolveModelDisplayRef(params: ModelDisplaySelectionParams): string | undefined {
-  const runtimeModel = normalizeOptionalString(params.runtimeModel);
-  const runtimeProvider = normalizeOptionalString(params.runtimeProvider);
-  if (runtimeModel) {
-    if (runtimeModel.includes("/")) {
-      return runtimeModel;
+  for (const [modelKey, providerKey] of [
+    ["runtimeModel", "runtimeProvider"],
+    ["overrideModel", "overrideProvider"],
+  ] as const) {
+    const model = normalizeOptionalString(params[modelKey]);
+    const provider = normalizeOptionalString(params[providerKey]);
+    if (model) {
+      return provider && !model.includes("/") ? `${provider}/${model}` : model;
     }
-    if (runtimeProvider) {
-      return `${runtimeProvider}/${runtimeModel}`;
+    if (provider) {
+      return provider;
     }
-    return runtimeModel;
   }
-  if (runtimeProvider) {
-    return runtimeProvider;
-  }
-
-  const overrideModel = normalizeOptionalString(params.overrideModel);
-  const overrideProvider = normalizeOptionalString(params.overrideProvider);
-  if (overrideModel) {
-    if (overrideModel.includes("/")) {
-      return overrideModel;
-    }
-    if (overrideProvider) {
-      return `${overrideProvider}/${overrideModel}`;
-    }
-    return overrideModel;
-  }
-  if (overrideProvider) {
-    return overrideProvider;
-  }
-
-  const fallbackModel = normalizeOptionalString(params.fallbackModel);
-  return fallbackModel || undefined;
+  return normalizeOptionalString(params.fallbackModel);
 }
 
 /** Resolves the model name shown in compact status output. */

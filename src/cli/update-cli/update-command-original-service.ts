@@ -317,7 +317,11 @@ export async function observeOriginalManagedServiceRuntime(
       defaultRuntime.error(original.packageFingerprintWarning);
     }
     assertCurrent();
-    const context = await captureTargetDatabaseSchemaContext(before.serviceEnv);
+    const context = await captureTargetDatabaseSchemaContext(before.serviceEnv, {
+      configValidation: params.opts.run?.candidateAdmissionChecks?.includes("config")
+        ? "candidate"
+        : undefined,
+    });
     assertCurrent();
     original.verified = await verifyPreviousGatewayForUpdate({
       root,

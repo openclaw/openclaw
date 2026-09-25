@@ -351,10 +351,10 @@ describe("shouldResumePostCoreUpdateInFreshProcess", () => {
     ).toBe(true);
   });
 
-  it("keeps a metadata-identical git update in process when the install kind is unchanged", () => {
+  it("does not resume a skipped git update with unchanged metadata", () => {
     expect(
       shouldResumePostCoreUpdateInFreshProcess({
-        result: unchangedGitResult,
+        result: { ...unchangedGitResult, status: "skipped" },
         downgradeRisk: false,
         installKindChanged: false,
       }),

@@ -1,14 +1,18 @@
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { FSWatcher } from "chokidar";
 
 // Retired roots leave the watcher registry before their asynchronous native closes settle.
-const pendingWatcherCloses = new Set<Promise<void>>();
+const pendingWatcherCloses = new Set<Promise<Result<void, unknown>>>();
 
-export function trackSkillsWatcherClose(close: () => void | Promise<void>): Promise<void> {
-  const closing = (async () => {
+export function trackSkillsWatcherClose(
+  close: () => void | Promise<void>,
+): Promise<Result<void, unknown>> {
+  const closing = (async (): Promise<Result<void, unknown>> => {
     try {
       await close();
-    } catch {
-      // Closing watchers is best effort, including during replacement and shutdown.
+      return ok(undefined);
+    } catch (error) {
+      return err(error);
     }
   })();
   pendingWatcherCloses.add(closing);
@@ -19,7 +23,7 @@ export function trackSkillsWatcherClose(close: () => void | Promise<void>): Prom
 export function teardownSkillsPathWatcher(state: {
   watcher: FSWatcher;
   timer?: ReturnType<typeof setTimeout>;
-}): Promise<void> {
+}): Promise<Result<void, unknown>> {
   const watcher = state.watcher;
   // Chokidar can recover removed paths after close, including from pending reads.
   // Only replacement watchers may admit roots once this instance is retired.
@@ -27,11 +31,15 @@ export function teardownSkillsPathWatcher(state: {
   clearTimeout(state.timer);
   return trackSkillsWatcherClose(async () => {
     const wasClosed = watcher.closed;
-    const closed = watcher.close();
-    if (!wasClosed) {
-      // Chokidar removes listeners before pending scans settle. Their late errors
-      // belong to the retired watcher and must not become unhandled events.
-      watcher.on("error", () => {});
+    let closed: ReturnType<FSWatcher["close"]>;
+    try {
+      closed = watcher.close();
+    } finally {
+      if (!wasClosed) {
+        // A synchronous close failure can follow listener removal too. Preserve
+        // its Result while fencing errors from the dependency's pending scans.
+        watcher.on("error", () => {});
+      }
     }
     await closed;
   });

@@ -203,6 +203,7 @@ export async function hydrateChatHistory(
         scope: { ...historyProjection.scope, ...readChatSessionProjectionScope(state) },
       });
       applyChatPendingInputs(state, response.pendingInputs, {
+        queriedRunIds: inputRunIds,
         receipts:
           !previousSessionId || previousSessionId === state.currentSessionId
             ? response.inputReceipts
@@ -309,6 +310,7 @@ export async function hydrateChatHistory(
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
     state.currentSessionId = nextSessionId;
     applyChatPendingInputs(state, res.pendingInputs, {
+      queriedRunIds: inputRunIds,
       receipts:
         !previousSessionId || previousSessionId === nextSessionId ? res.inputReceipts : undefined,
     });

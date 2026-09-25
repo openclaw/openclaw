@@ -15,7 +15,7 @@ import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-st
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
-  normalizeStringEntries,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeSessionIngestionState,
@@ -156,16 +156,10 @@ export function resolveAdmissionPolicy(
   if (!exclusions) {
     return undefined;
   }
-  const values = (key: keyof SessionAdmissionPolicy): string[] =>
-    Array.isArray(exclusions[key])
-      ? normalizeStringEntries(
-          exclusions[key].filter((value): value is string => typeof value === "string"),
-        )
-      : [];
   const policy = {
-    hookExternalContentSources: values("hookExternalContentSources"),
-    channels: values("channels"),
-    chatTypes: values("chatTypes"),
+    hookExternalContentSources: normalizeTrimmedStringList(exclusions.hookExternalContentSources),
+    channels: normalizeTrimmedStringList(exclusions.channels),
+    chatTypes: normalizeTrimmedStringList(exclusions.chatTypes),
   };
   return Object.values(policy).some((entries) => entries.length > 0) ? policy : undefined;
 }

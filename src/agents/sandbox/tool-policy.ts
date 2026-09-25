@@ -92,13 +92,6 @@ function pickAllowSource(params: {
   return params.allow;
 }
 
-function resolveExplicitSandboxReAllowPatterns(params: {
-  allow?: string[];
-  alsoAllow?: string[];
-}): string[] {
-  return uniqueStrings([...(params.allow ?? []), ...(params.alsoAllow ?? [])]);
-}
-
 function filterDefaultDenyForExplicitAllows(params: {
   deny: string[];
   explicitAllowPatterns: string[];
@@ -196,10 +189,10 @@ export function resolveSandboxToolPolicyForAgent(
   const alsoAllowConfig = pickConfiguredList("alsoAllow", agentPolicy, globalPolicy);
   const denyConfig = pickConfiguredList("deny", agentPolicy, globalPolicy);
 
-  const explicitAllowPatterns = resolveExplicitSandboxReAllowPatterns({
-    allow: allowConfig.values,
-    alsoAllow: alsoAllowConfig.values,
-  });
+  const explicitAllowPatterns = uniqueStrings([
+    ...(allowConfig.values ?? []),
+    ...(alsoAllowConfig.values ?? []),
+  ]);
 
   // Host-bound tools that operate inside this placement are sandbox capabilities.
   // Change defaults only; configured allow/deny lists retain their normal authority.

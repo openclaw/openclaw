@@ -88,25 +88,12 @@ const BROWSER_CLI_DESCRIPTOR = {
   machineOutput: isBrowserMachineOutput,
 };
 
+type BrowserToolOptions = NonNullable<
+  Parameters<typeof import("./src/browser-tool.js").createBrowserTool>[0]
+>;
+
 function createLazyBrowserTool(
-  opts?: {
-    sandboxBridgeUrl?: string;
-    allowHostControl?: boolean;
-    agentSessionKey?: string;
-    agentId?: string;
-    agentDir?: string;
-    workspaceDir?: string;
-    activeModel?: {
-      provider?: string;
-      model?: string;
-    };
-    mediaScope?: {
-      sessionKey?: string;
-      channel?: string;
-      chatType?: string;
-    };
-    runToolBinding?: unknown;
-  },
+  opts?: BrowserToolOptions,
   config?: OpenClawPluginToolContext["runtimeConfig"],
 ): AnyAgentTool {
   const bindingResult =
@@ -151,24 +138,7 @@ function createLazyBrowserTool(
   };
 }
 
-function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
-  sandboxBridgeUrl?: string;
-  allowHostControl?: boolean;
-  agentSessionKey?: string;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  activeModel?: {
-    provider?: string;
-    model?: string;
-  };
-  mediaScope?: {
-    sessionKey?: string;
-    channel?: string;
-    chatType?: string;
-  };
-  runToolBinding?: unknown;
-} {
+function createBrowserToolOptions(ctx: OpenClawPluginToolContext): BrowserToolOptions {
   const mediaChannel = ctx.deliveryContext?.channel ?? ctx.messageChannel;
   const mediaChatType = deriveChatTypeFromSessionKey(ctx.sessionKey);
   return {

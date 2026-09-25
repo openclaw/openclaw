@@ -9,6 +9,7 @@ import {
 } from "./attachment-payload-store.ts";
 import type { ChatComposerRecoveryOwner } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import {
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
   loadChatComposerDraftRevision,
@@ -26,6 +27,8 @@ type ComposerPresentation = {
   presented: () => boolean;
   pause: () => void;
   resume: (restore?: boolean) => void;
+  takeAttachmentReads: () => ChatAttachmentReadLifecycle;
+  adoptAttachmentReads: (reads: ChatAttachmentReadLifecycle) => void;
 };
 type ComposerOwnerScope = {
   owner: NonNullable<ChatAttachmentGatewayOwner>;
@@ -199,6 +202,8 @@ export class ChatPaneComposerHandoff {
     sourceState.chatQueuedEdit = null;
     sourceState.chatAttachments = [];
     sourceState.chatComposerFallbackByScope = {};
+    // Pending file reads move with the draft, including Send's preparation gate.
+    target.host.adoptAttachmentReads(this.host.takeAttachmentReads());
     this.ownsComposer = false;
     target.ownsComposer = true;
     target.custody = this.custody;

@@ -232,6 +232,14 @@ export async function executeFastAbortRequest(
     let aborted = false;
     let activeAbortRejected = false;
     const acpCancellations: Promise<void>[] = [];
+    const abortTarget = (key: string, sessionId: string | undefined) => {
+      const outcome = abortSessionRunTargetWithOutcome({ key, sessionId });
+      if (outcome.retirement) {
+        acpCancellations.push(outcome.retirement);
+      }
+      activeAbortRejected ||= outcome.active && !outcome.aborted;
+      aborted = outcome.aborted || aborted;
+    };
     try {
       const { stopped, failed } = await stopSubagentsForRequester({
         cfg,
@@ -259,30 +267,14 @@ export async function executeFastAbortRequest(
               ]),
             );
             for (const abortTargetKey of abortTargetKeys) {
-              const outcome = abortSessionRunTargetWithOutcome({
-                key: abortTargetKey,
-                sessionId: sessionIdsByKey.get(abortTargetKey),
-              });
-              if (outcome.retirement) {
-                acpCancellations.push(outcome.retirement);
-              }
-              activeAbortRejected ||= outcome.active && !outcome.aborted;
-              aborted = outcome.aborted || aborted;
+              abortTarget(abortTargetKey, sessionIdsByKey.get(abortTargetKey));
             }
             const sourceSessionId = sourceAbortKey
               ? (replyRunRegistry.resolveSessionId(sourceAbortKey) ??
                 resolveStoredSessionId({ cfg, sessionKey: sourceAbortKey }))
               : undefined;
             if (sourceAbortKey) {
-              const outcome = abortSessionRunTargetWithOutcome({
-                key: sourceAbortKey,
-                sessionId: sourceSessionId,
-              });
-              if (outcome.retirement) {
-                acpCancellations.push(outcome.retirement);
-              }
-              activeAbortRejected ||= outcome.active && !outcome.aborted;
-              aborted = outcome.aborted || aborted;
+              abortTarget(sourceAbortKey, sourceSessionId);
             }
             const cleared = clearSessionQueues(
               abortTargetKeys

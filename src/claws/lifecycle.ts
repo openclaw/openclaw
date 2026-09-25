@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { relative, resolve } from "node:path";
+import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { stableStringify } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
 import {

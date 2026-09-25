@@ -30,7 +30,6 @@ import { renderMapField } from "./config-form.node.collection-map.ts";
 import {
   renderCollectionDefaultDescription,
   renderFieldRow,
-  schemaWithDefault,
   type ConfigNodeRenderer,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
@@ -135,7 +134,7 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     fields: sorted.map(([propertyKey, node]) => {
       const hasInheritedChild = inherited && Object.hasOwn(objectValue, propertyKey);
       return {
-        schema: hasInheritedChild ? schemaWithDefault(node, objectValue[propertyKey]) : node,
+        schema: hasInheritedChild ? { ...node, default: objectValue[propertyKey] } : node,
         value: inherited ? undefined : objectValue[propertyKey],
         path: [...path, propertyKey],
         hints,
@@ -481,7 +480,7 @@ function renderArrayContent(
                       </button>
                     </openclaw-tooltip>`;
                     const valueControl = renderNode({
-                      schema: inherited ? schemaWithDefault(itemSchema, item) : itemSchema,
+                      schema: inherited ? { ...itemSchema, default: item } : itemSchema,
                       value: inherited ? undefined : item,
                       path: [...path, index],
                       hints,

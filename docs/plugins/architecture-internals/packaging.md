@@ -60,6 +60,11 @@ import another plugin package's `src/*` from core or from another plugin.
 Facade-loaded entry points prefer the active runtime config snapshot when one
 exists, then fall back to the resolved config file on disk.
 
+Setup and provider-discovery callbacks retain the loader's scoped SDK resolution
+for deferred imports, including private chunks in packaged plugins. These imports
+use the running host's SDK without requiring an `openclaw` dependency link inside
+the plugin. Retiring the owning inventory also retires its callbacks.
+
 Capability-specific subpaths such as `image-generation`, `media-understanding`,
 and `speech` exist because bundled plugins import them. They are not
 automatically long-term frozen external contracts — check the relevant SDK

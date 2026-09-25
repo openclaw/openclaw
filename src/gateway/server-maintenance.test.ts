@@ -1,6 +1,7 @@
 // Gateway maintenance tests cover periodic cleanup for media, dedupe records,
 // stale chat buffers, expired runs, health summaries, and timer disposal.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -358,6 +359,9 @@ describe("startGatewayMaintenanceTimers", () => {
       ],
       issueCount: 1,
       protectedCount: 0,
+      protectionReasons: {},
+      orphansRetired: 0,
+      retiredCheckoutPaths: [],
       limitsSatisfied: false,
     });
     const timers = startGatewayMaintenanceTimers(deps);
@@ -403,13 +407,7 @@ describe("startGatewayMaintenanceTimers", () => {
   it("passes owner activity to default managed worktree cleanup", async () => {
     vi.useFakeTimers();
     const gc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue({
-      removed: [],
-      orphansDeleted: 0,
-      snapshotsPruned: 0,
-      outcome: "completed",
-      issues: [],
-      issueCount: 0,
-      protectedCount: 0,
+      ...new WorktreeGcProgress().result,
       limitsSatisfied: true,
     });
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");

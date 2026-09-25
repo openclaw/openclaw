@@ -1,11 +1,13 @@
 // Install service observations before loading the real native stop owner.
 import "./update-command-service-maintenance.test-support.js";
+import "./update-command-service-maintenance-native.test-support.js";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import { hostname } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
@@ -34,16 +36,18 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
-import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 
 const { mocks, withServiceHome } =
   await import("./update-command-service-maintenance.test-support.js");
+const { runNativeMaintenanceUpdate } =
+  await import("./update-command-service-maintenance-native.test-support.js");
 
 it
   .runIf(process.platform === "darwin" || process.platform === "linux")
   .each([
     "direct helper",
     "activation helper",
+    "activation helper with retained service root",
     "ordinary nested caller",
     "tuple-only caller",
     "ordinary external Stop",
@@ -56,7 +60,19 @@ it
   ] as const)("enforces live handoff authority in the real LaunchAgent stop: %s", (scenario) =>
   withServiceHome(async (home) => {
     const root = await fs.realpath(process.cwd());
+    const retainedService = scenario === "activation helper with retained service root";
+    const callerRoot = retainedService ? path.join(home, "caller-install") : root;
+    if (retainedService) {
+      await fs.mkdir(callerRoot);
+      await fs.writeFile(
+        path.join(callerRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.9.6", bin: "openclaw.mjs" }),
+      );
+      await fs.writeFile(path.join(callerRoot, "openclaw.mjs"), "// Fixture package entrypoint.\n");
+    }
     const runId = randomUUID();
+    const productionCaller =
+      scenario === "activation helper" || retainedService || scenario === "revoked at native stop";
     const label = "ai.openclaw.native-stop-test";
     // Each case needs its own process: successful bootout must prove actual exit,
     // while refusal cases must leave that same serving identity alive.
@@ -79,19 +95,44 @@ it
         databasePath: resolveManagedUpdateLeaseDatabasePath(),
         serviceManagerEnv: process.env,
       });
-      const claim = store.acquire(root, "native-stop-handoff", { kind: "update" });
+      const claim = store.acquire(callerRoot, "native-stop-handoff", { kind: "update" });
       if (claim.kind !== "acquired") {
         throw new Error("fixture could not acquire its handoff lease");
       }
       createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
       await fs.writeFile(
         metaPath,
-        JSON.stringify({ version: 1, meta: { root, runId, handoffId: claim.lease.owner } }),
+        JSON.stringify({
+          version: 1,
+          meta: { root: callerRoot, runId, handoffId: claim.lease.owner },
+        }),
       );
       if (scenario === "ordinary nested caller" || scenario === "unrecorded helper") {
         expect(store.release(claim.lease)).toBe(true);
       }
       mockProcessPlatform("darwin");
+      if (productionCaller) {
+        // Model the completed helper→executor handoff. Admission still checks
+        // both live identities and the real lease before creating its fence.
+        const helperStart = pidAlive.getFileLockProcessStartTime(process.ppid);
+        expect(helperStart).not.toBeNull();
+        const leaseDb = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
+        try {
+          leaseDb
+            .prepare("UPDATE managed_update_handoffs SET payload_json=? WHERE install_root=?")
+            .run(
+              JSON.stringify({
+                version: 2,
+                helper: { pid: process.ppid, startIdentity: String(helperStart) },
+                executor: claim.lease.executor,
+                action: { kind: "update" },
+              }),
+              callerRoot,
+            );
+        } finally {
+          leaseDb.close();
+        }
+      }
       // Keep effective command parsing real; adapt only the native plist transport.
       vi.spyOn(exec, "runExec").mockImplementation(async (command, args, options) => {
         if (command !== "/usr/bin/plutil" || typeof options !== "object" || !options.input) {
@@ -204,6 +245,16 @@ it
           return { code: 0, termination: "exit", stdout: "", stderr: "" };
         }
         expect(args[0]).toBe("bootout");
+        if (retainedService) {
+          expect(store.read(callerRoot)).toMatchObject({
+            kind: "current",
+            lease: { owner: claim.lease.owner, executor: { pid: process.pid } },
+          });
+          expect(store.read(root)).toMatchObject({
+            kind: "current",
+            lease: { executor: { pid: process.pid } },
+          });
+        }
         atBootout = intent();
         await stopChildProcess(child, 5000);
         await closed;
@@ -232,7 +283,14 @@ it
             const nativeStop = service.stop;
             vi.spyOn(service, "stop").mockImplementation(async (args) => {
               // Revoke after caller inspection, immediately before the real guarded adapter.
-              expect(store.release(claim.lease)).toBe(true);
+              const leaseDb = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
+              try {
+                leaseDb
+                  .prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?")
+                  .run("revoked-native-stop-owner", root);
+              } finally {
+                leaseDb.close();
+              }
               await nativeStop(args);
             });
           }
@@ -245,36 +303,42 @@ it
               scenario === "revoked after disable",
             ...(scenario === "ordinary nested caller" ? {} : { updateHandoff: { root, runId } }),
           };
-          const invoke = () =>
-            scenario === "activation helper" || scenario === "revoked at native stop"
-              ? maybeStopManagedServiceBeforeMutableUpdate({
-                  root,
-                  updateInstallKind: "package",
-                  shouldRestart: true,
-                  jsonMode: true,
-                  phase: "prepare",
-                  updateRun: { runId, env: process.env },
-                }).then((result) =>
-                  expect(result, JSON.stringify(result)).toMatchObject({ stopped: true }),
-                )
-              : stopLaunchAgent(nativeArgs);
           const stop = () =>
-            scenario === "ordinary nested caller" ||
-            scenario === "tuple-only caller" ||
-            scenario === "ordinary external Stop"
-              ? service.stop(nativeArgs)
-              : withGatewayServiceOperationLock(process.env, (assertCurrent) =>
-                  withGatewayServiceUpdateAuthority(assertCurrent, invoke, { originalRoot: root }),
-                );
+            productionCaller
+              ? runNativeMaintenanceUpdate(
+                  callerRoot,
+                  runId,
+                  claim.lease.owner,
+                  retainedService ? root : undefined,
+                )
+              : scenario === "ordinary nested caller" ||
+                  scenario === "tuple-only caller" ||
+                  scenario === "ordinary external Stop"
+                ? service.stop(nativeArgs)
+                : withGatewayServiceOperationLock(process.env, (assertCurrent) =>
+                    withGatewayServiceUpdateAuthority(
+                      assertCurrent,
+                      () => stopLaunchAgent(nativeArgs),
+                      {
+                        originalRoot: root,
+                      },
+                    ),
+                  );
           const authorized =
             scenario === "direct helper" ||
             scenario === "activation helper" ||
+            retainedService ||
             scenario === "ordinary external Stop";
           if (authorized) {
             await stop();
+            if (retainedService) {
+              expect(store.read(root)).toEqual({ kind: "absent" });
+            }
           } else {
             await expect(stop()).rejects.toThrow(
-              `Refusing to stop LaunchAgent ${label} from inside the same launchd service`,
+              productionCaller
+                ? /Update executor ownership is no longer current/
+                : `Refusing to stop LaunchAgent ${label} from inside the same launchd service`,
             );
           }
           const target = `${launchdRuntime.resolveLaunchAgentGuiDomain()}/${label}`;

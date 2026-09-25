@@ -156,6 +156,7 @@ export function createNodeWorkerWorkspaceActions(params: {
               baseManifestRef: request.baseManifestRef,
               localPath: request.source.path,
               journal: request.source.journal,
+              assertCurrent: request.source.assertCurrent,
               stagedResult: request.source.stagedResult,
             },
             metrics,

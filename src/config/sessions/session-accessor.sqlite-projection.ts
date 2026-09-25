@@ -53,6 +53,7 @@ import {
 import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
   collectProjectedReferencedSessionIds,
+  collectSessionStateIdsForEntry,
   deleteMaterializedSessionStatePlans,
   deletePlannedLifecycleArtifactEntries,
   planSessionStateAfterEntryRemoval,
@@ -636,6 +637,7 @@ export async function purgeDeletedAgentSessionEntries(
         database,
         excludedSessionKeys: entryRemovals.map((removal) => removal.sessionKey),
         projectedStore: remainingStore,
+        candidateSessionIds: removedEntriesToArchive.flatMap(collectSessionStateIdsForEntry),
       });
       const deletePlans = removedEntriesToArchive.flatMap((entry) =>
         planSessionStateAfterEntryRemoval({

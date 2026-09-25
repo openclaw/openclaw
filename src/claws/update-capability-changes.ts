@@ -608,43 +608,6 @@ function summarizeMcpCapabilityEffect(server: unknown): Record<string, unknown> 
   };
 }
 
-export function mcpCapabilityChange(params: {
-  id: string;
-  action: ClawUpdateCapabilityChange["action"];
-  current?: unknown;
-  desired?: unknown;
-}): ClawUpdateCapabilityChange | undefined {
-  if (params.action === "unchanged") {
-    return undefined;
-  }
-  const reduction = params.desired === undefined;
-  return {
-    kind: "mcpServer",
-    id: params.id,
-    path: `mcpServers.${params.id}`,
-    action: params.action,
-    classification: reduction ? "reduction" : "escalation",
-    requiresDistinctConsent: !reduction,
-    reason: reduction
-      ? "Target manifest removes or releases an MCP tool surface."
-      : "Target manifest adds, restores, or changes an MCP tool surface.",
-    effect:
-      params.desired === undefined
-        ? { removed: true }
-        : summarizeMcpCapabilityEffect(params.desired),
-    ...(params.current === undefined
-      ? {}
-      : {
-          current: capabilityValue(summarizeMcpCapability(params.current), params.current),
-        }),
-    ...(params.desired === undefined
-      ? {}
-      : {
-          desired: capabilityValue(summarizeMcpCapability(params.desired), params.desired),
-        }),
-  };
-}
-
 function summarizeCronCapability(cron: unknown): string {
   if (!cron || typeof cron !== "object") {
     return "not configured";
@@ -675,7 +638,8 @@ function summarizeCronCapabilityEffect(cron: unknown): Record<string, unknown> {
   };
 }
 
-export function cronCapabilityChange(params: {
+export function resourceCapabilityChange(params: {
+  kind: "mcpServer" | "cronJob";
   id: string;
   action: ClawUpdateCapabilityChange["action"];
   current?: unknown;
@@ -684,30 +648,39 @@ export function cronCapabilityChange(params: {
   if (params.action === "unchanged") {
     return undefined;
   }
+  const isMcp = params.kind === "mcpServer";
+  const summarize = isMcp ? summarizeMcpCapability : summarizeCronCapability;
   const reduction = params.desired === undefined;
   return {
-    kind: "cronJob",
+    kind: params.kind,
     id: params.id,
-    path: `cronJobs.${params.id}`,
+    path: `${isMcp ? "mcpServers" : "cronJobs"}.${params.id}`,
     action: params.action,
     classification: reduction ? "reduction" : "escalation",
     requiresDistinctConsent: !reduction,
-    reason: reduction
-      ? "Target manifest removes a scheduled automation."
-      : "Target manifest adds, restores, or changes a scheduled automation.",
+    reason: isMcp
+      ? reduction
+        ? "Target manifest removes or releases an MCP tool surface."
+        : "Target manifest adds, restores, or changes an MCP tool surface."
+      : reduction
+        ? "Target manifest removes a scheduled automation."
+        : "Target manifest adds, restores, or changes a scheduled automation.",
     effect:
       params.desired === undefined
         ? { removed: true }
-        : summarizeCronCapabilityEffect(params.desired),
+        : isMcp
+          ? summarizeMcpCapabilityEffect(params.desired)
+          : summarizeCronCapabilityEffect(params.desired),
+    // Omitted values must stay absent: consent digests distinguish them from undefined fields.
     ...(params.current === undefined
       ? {}
       : {
-          current: capabilityValue(summarizeCronCapability(params.current), params.current),
+          current: capabilityValue(summarize(params.current), params.current),
         }),
     ...(params.desired === undefined
       ? {}
       : {
-          desired: capabilityValue(summarizeCronCapability(params.desired), params.desired),
+          desired: capabilityValue(summarize(params.desired), params.desired),
         }),
   };
 }

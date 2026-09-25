@@ -16,7 +16,10 @@ import {
 } from "../infra/plugin-approvals.js";
 import type { SystemAgentApprovalResolved } from "../infra/system-agent-approvals.js";
 import { buildApprovalResolvedReplyPayload } from "./approval-renderers.js";
-import { buildSystemAgentApprovalResolvedText } from "./approval-terminal.js";
+import {
+  buildSystemAgentApprovalResolvedText,
+  SYSTEM_AGENT_APPROVAL_EXPIRED_TEXT,
+} from "./approval-terminal.js";
 export {
   createChannelApprovalHandler,
   createChannelApprovalNativeRuntimeAdapter,
@@ -86,7 +89,7 @@ export function buildChannelApprovalExpiredText(params: {
 }): string {
   const request = normalizeApprovalRequest(params.request);
   if (request.approvalKind === "system-agent") {
-    return "⏱️ OpenClaw change expired. No change was made.";
+    return SYSTEM_AGENT_APPROVAL_EXPIRED_TEXT;
   }
   if (request.approvalKind === "plugin") {
     return buildPluginApprovalExpiredMessage(request);

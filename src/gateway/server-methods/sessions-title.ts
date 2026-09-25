@@ -12,6 +12,7 @@ import { prepareSessionCreateModelSelection } from "../session-create-model-sele
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { preparePersonalModelSelection } from "./users-model-account-access.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
@@ -20,10 +21,14 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
   "sessions.title.prepare": defineValidatedGatewayHandler(
     "sessions.title.prepare",
     validateSessionsTitlePrepareParams,
-    async ({ params, respond, context, client, signal, hasCurrentClientAuthority }) => {
-      const cfg = context.getRuntimeConfig();
+    async (options) => {
+      const { params, respond, context, client, signal, hasCurrentClientAuthority } = options;
+      const requestAuthority = readGatewayRequestMutationAuthority(options);
+      const request = { ...params };
+      const getCurrentConfig = context.getRuntimeConfig;
+      const cfg = getCurrentConfig();
       const agent = resolveAgentIdOrRespondError({
-        rawAgentId: params.agentId,
+        rawAgentId: request.agentId,
         respond,
         cfg,
         normalize: normalizeOptionalString,
@@ -40,7 +45,7 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
         respond(false, undefined, creationError);
         return;
       }
-      if (params.model && params.catalogId) {
+      if (request.model && request.catalogId) {
         respond(
           false,
           undefined,
@@ -51,27 +56,28 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      if (params.incognito || !params.message.trim() || params.message.trim().startsWith("/")) {
+      if (request.incognito || !request.message.trim() || request.message.trim().startsWith("/")) {
         respond(true, { title: null });
         return;
       }
-      const catalog = params.catalogId
-        ? resolveRegisteredCatalogCreateTarget(params.catalogId, agent.agentId, cfg)
+      const catalog = request.catalogId
+        ? resolveRegisteredCatalogCreateTarget(request.catalogId, agent.agentId, cfg)
         : undefined;
       if (catalog && !catalog.ok) {
         respond(true, { title: null });
         return;
       }
-      let capturedOperator: ReturnType<typeof captureGatewayOperatorRunAuthority>;
+      let capturedOperator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
       try {
         const personalSelection = preparePersonalModelSelection(
           { client, context, signal },
-          params.model,
+          request.model,
         );
         const assertCallerCurrent = () => {
           personalSelection?.assertCurrent();
+          requestAuthority.assertCurrent();
           const currentCreationError = authorizeGatewaySessionCreation({
-            cfg: context.getRuntimeConfig(),
+            cfg: getCurrentConfig(),
             client,
             agentId: agent.agentId,
           });
@@ -79,16 +85,17 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
             throw new SessionMutationAuthorizationChangedError(currentCreationError);
           }
         };
-        capturedOperator = captureGatewayOperatorRunAuthority({
+        capturedOperator = await captureGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority,
           invocationAuthority: { assertCurrent: assertCallerCurrent, signal },
         });
+        assertCallerCurrent();
         const selection = prepareSessionCreateModelSelection({
           cfg,
           agentId: agent.agentId,
-          input: catalog?.target ?? params.model,
+          input: catalog?.target ?? request.model,
           operatorAuthority: capturedOperator?.authority,
         });
         if (!selection.ok) {
@@ -112,7 +119,7 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
           cfg,
           agentId: agent.agentId,
           entry,
-          userMessage: params.message,
+          userMessage: request.message,
           abortSignal: signal,
           assertCurrent,
           operatorAuthority: capturedOperator?.authority,

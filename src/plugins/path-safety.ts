@@ -1,11 +1,12 @@
 /** Plugin-local re-export of shared path safety helpers for plugin install/runtime code. */
 import fs from "node:fs";
 import path from "node:path";
+import { isPathInside as isPathInsideLexical } from "@openclaw/fs-safe/path";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { FsSafeError } from "../infra/fs-safe.js";
-import { isPathInside as isPathInsideLexical } from "../infra/path-safety.js";
 
-export { safeRealpathSync, safeStatSync, formatPosixMode } from "../infra/path-safety.js";
+export { formatPosixMode } from "@openclaw/fs-safe/advanced";
+export { safeRealpathSync, safeStatSync } from "@openclaw/fs-safe/path";
 
 export type PhysicalPathInsideRoot = {
   rootPath: string;

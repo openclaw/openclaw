@@ -13,6 +13,7 @@ function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "
 
 export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
   private fileWatcher: MemoryFileWatcher | undefined;
+  private memoryWatcherReady: Promise<void> = Promise.resolve();
   protected get memoryWatchCapacityDegraded(): boolean {
     return this.fileWatcher?.capacityDegraded ?? false;
   }
@@ -31,7 +32,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
         if (subscription.signal.aborted || this.closed) {
           return;
         }
-        this.dirty = true;
+        this.markMemoryWatchDirty();
         this.memoryWatchUnavailable ||= event === "unavailable";
         // Remote notifications have already passed native file settling on the host.
         runDetachedMemorySync(() => this.sync({ reason: "watch" }), "watch");
@@ -67,22 +68,46 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       workspaceDir: this.workspaceDir,
       agentId: this.agentId,
       settings: this.settings,
-      onDirty: () => {
-        this.dirty = true;
+      onDirty: () => this.markMemoryWatchDirty(),
+      onChange: () => {
+        this.markMemoryWatchDirty();
+        return this.sync({ reason: "watch" });
       },
-      onChange: () => this.sync({ reason: "watch" }),
       onUnavailable: () => {
+        this.memoryWatchUnavailable = true;
         this.dirty = true;
       },
     });
-    this.fileWatcher.start();
+    this.memoryWatcherReady = this.fileWatcher.start().catch((error: unknown) => {
+      if (!this.closed) {
+        this.memoryWatchUnavailable = true;
+        this.dirty = true;
+        log.warn(`memory workspace watcher unavailable: ${String(error)}`);
+      }
+    });
   }
 
-  protected async closeMemoryWatcher(): Promise<void> {
+  protected async awaitMemoryWatcherReady(): Promise<void> {
+    await this.memoryWatcherReady;
+  }
+
+  protected async closeWatchResources(): Promise<void> {
+    if (this.sessionWatchTimer) {
+      clearTimeout(this.sessionWatchTimer);
+      this.sessionWatchTimer = null;
+    }
+    if (this.intervalTimer) {
+      clearInterval(this.intervalTimer);
+      this.intervalTimer = null;
+    }
     this.memoryWatchSubscription?.abort();
     this.memoryWatchSubscription = undefined;
     await this.fileWatcher?.close();
     this.fileWatcher = undefined;
+    if (this.sessionUnsubscribe) {
+      this.sessionUnsubscribe();
+      this.sessionUnsubscribe = null;
+    }
   }
 
   protected ensureIntervalSync() {

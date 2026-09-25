@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createReplyOperation,
-  isReplyRunEvidenceStale,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
   type ReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { isReplyRunEvidenceStale } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { testing as replyTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";

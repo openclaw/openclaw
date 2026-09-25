@@ -17,7 +17,6 @@ import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pair
 import { resolveChannelGroupsConfigPath } from "openclaw/plugin-sdk/channel-policy";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-// Zalouser plugin module implements monitor behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
@@ -39,6 +38,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildZaloNameIndex } from "./directory-index.js";
 import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
@@ -77,20 +77,6 @@ type ZalouserMonitorResult = {
 };
 
 const ZALOUSER_TEXT_LIMIT = 2000;
-
-function buildNameIndex<T>(items: T[], nameFn: (item: T) => string | undefined): Map<string, T[]> {
-  const index = new Map<string, T[]>();
-  for (const item of items) {
-    const name = normalizeOptionalLowercaseString(nameFn(item));
-    if (!name) {
-      continue;
-    }
-    const list = index.get(name) ?? [];
-    list.push(item);
-    index.set(name, list);
-  }
-  return index;
-}
 
 function resolveUserAllowlistEntries(
   entries: string[],
@@ -823,7 +809,7 @@ export async function monitorZalouserProvider(
 
     if (allowNameMatching && (allowFromEntries.length > 0 || groupAllowFromEntries.length > 0)) {
       const friends = await listZaloFriends(profile);
-      const byName = buildNameIndex(friends, (friend) => friend.displayName);
+      const byName = buildZaloNameIndex(friends, (friend) => friend.displayName);
       if (allowFromEntries.length > 0) {
         const { additions, mapping, unresolved } = resolveUserAllowlistEntries(
           allowFromEntries,
@@ -863,7 +849,7 @@ export async function monitorZalouserProvider(
     const groupKeys = Object.keys(groupsConfig).filter((key) => key !== "*");
     if (allowNameMatching && groupKeys.length > 0) {
       const groups = await listZaloGroups(profile);
-      const byName = buildNameIndex(groups, (group) => group.name);
+      const byName = buildZaloNameIndex(groups, (group) => group.name);
       const mapping: string[] = [];
       const unresolved: string[] = [];
       const nextGroups = { ...groupsConfig };

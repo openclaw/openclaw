@@ -1,8 +1,9 @@
 // Media store persists loaded media files and metadata for later references.
-import "../infra/fs-safe-defaults.js";
 import crypto from "node:crypto";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { createAsyncLock, sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
+import { fileStore } from "@openclaw/fs-safe/store";
 import {
   basenameFromAnyPath,
   extnameFromAnyPath,
@@ -16,8 +17,6 @@ import {
 } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { fileStore } from "../infra/file-store.js";
-import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, isPathInside, readLocalFileSafely } from "../infra/fs-safe.js";
 import { retryAsync } from "../infra/retry.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
@@ -45,7 +44,7 @@ const PLAYBACK_TRANSCODE_MAX_CACHE_BYTES = 512 * 1024 * 1024;
 const PLAYBACK_TRANSCODE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
-let playbackCacheOperationTail = Promise.resolve();
+const queuePlaybackCacheOperation = createAsyncLock();
 type CleanOldMediaOptions = {
   recursive?: boolean;
   pruneEmptyDirs?: boolean;
@@ -252,15 +251,6 @@ async function pruneNonPlaybackMedia(ttlMs: number, options: CleanOldMediaOption
       await fs.rmdir(scopedDir).catch(() => {});
     }
   }
-}
-
-async function queuePlaybackCacheOperation<T>(operation: () => Promise<T>): Promise<T> {
-  const run = playbackCacheOperationTail.then(operation);
-  playbackCacheOperationTail = run.then(
-    () => {},
-    () => {},
-  );
-  return await run;
 }
 
 /** Serializes cache publication with quota enforcement and propagates failures to the writer. */
@@ -690,7 +680,7 @@ export async function saveMediaStream(
  */
 export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Promise<string> {
   const relativePath = resolveMediaRelativePath(id, subdir, "resolveMediaBufferPath");
-  const opened = await openMediaStore()
+  await using opened = await openMediaStore()
     .open(relativePath)
     .catch(() => null);
   if (!opened?.stat.isFile()) {
@@ -698,11 +688,7 @@ export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Pr
       `resolveMediaBufferPath: media ID does not resolve to a file: ${JSON.stringify(id)}`,
     );
   }
-  try {
-    return opened.realPath;
-  } finally {
-    await opened.handle.close().catch(() => undefined);
-  }
+  return opened.realPath;
 }
 
 /** Read result for callers that need media bytes plus the resolved file path. */
@@ -720,28 +706,24 @@ export async function readMediaBuffer(
   maxBytes = MAX_BYTES,
 ): Promise<ReadMediaBufferResult> {
   const relativePath = resolveMediaRelativePath(id, subdir, "readMediaBuffer");
-  const opened = await openMediaStore(maxBytes)
+  await using opened = await openMediaStore(maxBytes)
     .open(relativePath)
     .catch(() => null);
   if (!opened?.stat.isFile()) {
     throw new Error(`readMediaBuffer: media ID does not resolve to a file: ${JSON.stringify(id)}`);
   }
-  try {
-    if (opened.stat.size > maxBytes) {
-      throw new Error(
-        `readMediaBuffer: media ID ${JSON.stringify(id)} is ${opened.stat.size} bytes; maximum is ${maxBytes} bytes`,
-      );
-    }
-    const buffer = await opened.handle.readFile();
-    if (buffer.byteLength > maxBytes) {
-      throw new Error(
-        `readMediaBuffer: media ID ${JSON.stringify(id)} read ${buffer.byteLength} bytes; maximum is ${maxBytes} bytes`,
-      );
-    }
-    return { id, path: opened.realPath, buffer, size: buffer.byteLength };
-  } finally {
-    await opened.handle.close().catch(() => undefined);
+  if (opened.stat.size > maxBytes) {
+    throw new Error(
+      `readMediaBuffer: media ID ${JSON.stringify(id)} is ${opened.stat.size} bytes; maximum is ${maxBytes} bytes`,
+    );
   }
+  const buffer = await opened.handle.readFile();
+  if (buffer.byteLength > maxBytes) {
+    throw new Error(
+      `readMediaBuffer: media ID ${JSON.stringify(id)} read ${buffer.byteLength} bytes; maximum is ${maxBytes} bytes`,
+    );
+  }
+  return { id, path: opened.realPath, buffer, size: buffer.byteLength };
 }
 
 /**

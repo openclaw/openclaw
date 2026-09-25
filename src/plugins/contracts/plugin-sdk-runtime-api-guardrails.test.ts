@@ -2,8 +2,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import { contractPluginPath, getBundledPluginRoots } from "./test-helpers/bundled-plugin-roots.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -16,7 +17,6 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
   "a2a",
   "acpx",
   "browser",
-  "buzz",
   "canvas",
   "clickclack",
   "copilot-proxy",
@@ -339,14 +339,19 @@ function collectRuntimeApiFiles(): string[] {
     );
 }
 
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
+
 function readExportStatements(path: string): string[] {
   const sourceText = readFileSync(resolve(ROOT_DIR, "..", path), "utf8");
-  const sourceFile = ts.createSourceFile(path, sourceText, ts.ScriptTarget.Latest, true);
+  const sourceFile = parser.parseSourceFile(path, sourceText);
 
   return sourceFile.statements.flatMap((statement) => {
     if (!ts.isExportDeclaration(statement)) {
-      const modifiers = ts.canHaveModifiers(statement) ? ts.getModifiers(statement) : undefined;
-      if (!modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
+      const isExported = statement.forEachChild((child) =>
+        child.kind === ts.SyntaxKind.ExportKeyword ? true : undefined,
+      );
+      if (!isExported) {
         return [];
       }
       return [statement.getText(sourceFile).replaceAll(/\s+/g, " ").trim()];

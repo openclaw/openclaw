@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
   errorShape,
@@ -14,7 +15,13 @@ import { resolveTextCommand } from "../../auto-reply/commands-registry.js";
 import {
   resolveAgentMainSessionKey,
   resolveSessionRoutingContract,
+  SESSION_ROUTING_CHANGED_ERROR_REASON,
 } from "../../config/sessions/main-session.js";
+import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/session-accessor.js";
+import type {
+  CapturedSessionEntryReadSource,
+  QualifiedSessionEntryAccessTarget,
+} from "../../config/sessions/session-accessor.types.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -32,7 +39,7 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
-import { hasGatewayAdminScope, resolveChatSendActiveScopeKey } from "./chat-origin-routing.js";
+import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { createRestartSafeChatRequest } from "./chat-restart-recovery.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
@@ -89,6 +96,9 @@ function loadChatSendSessionContext(params: {
   const { request, context } = params;
   const { p, explicitOrigin, normalizedAttachments } = request;
   const rawSessionKey = p.sessionKey;
+  if (!rawSessionKey.trim()) {
+    return { ok: false as const, error: "sessionKey must not be blank" };
+  }
   const agentIdOverride = normalizeOptionalChatText(p.agentId);
   const clientRunId = p.idempotencyKey;
   const pendingChatSendKey = pendingChatSendDedupeKey(clientRunId);
@@ -147,6 +157,12 @@ function loadChatSendSessionContext(params: {
       selectedAgent: requestedAgent,
       storePath,
       ...(sessionLoadResult.readSource ? { readSource: sessionLoadResult.readSource } : {}),
+      ...(sessionLoadResult.capturedReadSource
+        ? { capturedReadSource: sessionLoadResult.capturedReadSource }
+        : {}),
+      ...(sessionLoadResult.capturedReadSources
+        ? { capturedReadSources: sessionLoadResult.capturedReadSources }
+        : {}),
       entry,
       sessionKey,
       legacyKey,
@@ -171,7 +187,7 @@ export function prepareChatSendSession(params: {
   const loadedValue = loaded.value;
   const { request, client } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind, rawMessage } = request;
-  const { cfg, agentId, sessionKey, entry, legacyKey, selectedAgent } = loadedValue;
+  const { cfg, agentId, sessionKey, entry, legacyKey } = loadedValue;
   if (isIncognitoSessionKey(sessionKey) && !entry) {
     return { ok: false as const, error: `Incognito session "${sessionKey}" was not found.` };
   }
@@ -202,11 +218,6 @@ export function prepareChatSendSession(params: {
       return { ok: false as const, error: creationError };
     }
   }
-  const activeRunScopeKey = resolveChatSendActiveScopeKey({
-    sessionKey,
-    agentId: selectedAgent.agentId,
-    mainKey: cfg.session?.mainKey,
-  });
   const resolvedSessionModel = resolveSessionModelRef(cfg, entry, agentId);
   const resolvedSessionAuthProvider = resolveProviderIdForAuth(resolvedSessionModel.provider, {
     config: cfg,
@@ -241,7 +252,6 @@ export function prepareChatSendSession(params: {
       ...loadedValue,
       requestedSessionId,
       backingSessionId,
-      activeRunScopeKey,
       resolvedSessionModel,
       resolvedSessionAuthProvider,
       timeoutMs,
@@ -251,10 +261,60 @@ export function prepareChatSendSession(params: {
   };
 }
 
-export type PreparedChatSendSession = Extract<
+export type LoadedChatSendSession = Extract<
   ReturnType<typeof prepareChatSendSession>,
   { ok: true }
 >["value"];
+
+export type PreparedChatSendSession = LoadedChatSendSession & {
+  sessionTarget: QualifiedSessionEntryAccessTarget;
+  assertSessionTargetCurrent: () => void;
+  releaseSessionTarget: () => void;
+  activeRunScopeKey: string;
+  readSource?: CapturedSessionEntryReadSource;
+};
+
+export function qualifyChatSendSession(loaded: LoadedChatSendSession): PreparedChatSendSession {
+  const qualified = prepareQualifiedSessionEntryTarget(
+    {
+      ...loaded,
+      canonicalKey: loaded.sessionKey,
+      requestedKey: loaded.sessionLoadKey,
+      storeKey: loaded.legacyKey ?? loaded.sessionKey,
+      readSource: loaded.capturedReadSource,
+    },
+    loaded.capturedReadSources,
+  );
+  return {
+    ...loaded,
+    sessionTarget: qualified.target,
+    assertSessionTargetCurrent: qualified.assertCurrent,
+    releaseSessionTarget: qualified.release,
+    activeRunScopeKey: qualified.target.canonicalKey,
+    readSource: qualified.target.readSource,
+  };
+}
+
+/** Admission reloads once, retaining the original physical choice and logical identity. */
+export function loadCurrentChatSendSession(session: PreparedChatSendSession) {
+  const latest = loadSessionEntry(session.sessionLoadKey, {
+    ...session.sessionLoadOptions,
+    clone: false,
+  });
+  if (session.sessionRoutingChanged(latest.cfg)) {
+    throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
+  }
+  if (
+    latest.agentId !== session.sessionTarget.agentId ||
+    (latest.legacyKey ?? latest.canonicalKey) !== session.sessionTarget.storeKey ||
+    !isDeepStrictEqual(latest.capturedReadSource, session.sessionTarget.readSource) ||
+    !isDeepStrictEqual(latest.capturedReadSources, session.capturedReadSources)
+  ) {
+    throw new Error("Session storage changed while starting work. Retry.");
+  }
+  session.assertSessionTargetCurrent();
+  return latest;
+}
 
 /** Refuse before send admission so confirmation can retain the unsent composer. */
 export async function prepareChatSendNativeRuntimeRestriction(params: {
@@ -353,6 +413,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
     sessionEntry: prepared.entry,
     commitGuard: () => {
       params.assertCurrent?.();
+      session.assertSessionTargetCurrent();
       prepared.assertSkillSelection();
       const currentConfig = context.getRuntimeConfig();
       const current = loadSessionEntry(session.sessionLoadKey, session.sessionLoadOptions);

@@ -10,12 +10,23 @@ import { loadDeliveryQueueMediaRetentionSnapshotInDatabase } from "./outbound/de
 import { findDeliveryIntentOwnersInDatabase } from "./outbound/delivery-queue-ownership.kernel.js";
 import { executePendingDeliveryFailure } from "./outbound/delivery-queue-pending-failure.worker.js";
 import { executeDeliveryQueuePlatformLeaseCommand } from "./outbound/delivery-queue-platform-lease.worker.js";
+import { executeOutboundDeliveryStorageCommand } from "./outbound/delivery-queue-storage.worker.js";
 import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 
 export function isDeliveryQueueCommand(command: {
   type: string;
 }): command is { type: keyof DeliveryQueueWorkerOperations } {
   return (
+    command.type === "deliveryQueue.claimPreparation" ||
+    command.type === "deliveryQueue.replacePreparation" ||
+    command.type === "deliveryQueue.completePreparation" ||
+    command.type === "deliveryQueue.failPreparation" ||
+    command.type === "deliveryQueue.mutateOutbound" ||
+    command.type === "deliveryQueue.reserveOutbound" ||
+    command.type === "deliveryQueue.restoreOutbound" ||
+    command.type === "deliveryQueue.stageFailure" ||
+    command.type === "deliveryQueue.finalizeFailure" ||
+    command.type === "deliveryQueue.retireUnsent" ||
     command.type === "deliveryQueue.claimPlatformSend" ||
     command.type === "deliveryQueue.renewPlatformSendLease" ||
     command.type === "deliveryQueue.ack" ||
@@ -33,6 +44,17 @@ export function executeDeliveryQueueCommand(
   options: { database: OpenClawStateDatabase; env: NodeJS.ProcessEnv },
 ): DeliveryQueueWorkerOperations[keyof DeliveryQueueWorkerOperations]["output"] {
   switch (command.type) {
+    case "deliveryQueue.claimPreparation":
+    case "deliveryQueue.replacePreparation":
+    case "deliveryQueue.completePreparation":
+    case "deliveryQueue.failPreparation":
+    case "deliveryQueue.mutateOutbound":
+    case "deliveryQueue.reserveOutbound":
+    case "deliveryQueue.restoreOutbound":
+    case "deliveryQueue.stageFailure":
+    case "deliveryQueue.finalizeFailure":
+    case "deliveryQueue.retireUnsent":
+      return executeOutboundDeliveryStorageCommand(command, options);
     case "deliveryQueue.claimPlatformSend":
     case "deliveryQueue.renewPlatformSendLease":
       return executeDeliveryQueuePlatformLeaseCommand(command, options);

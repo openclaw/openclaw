@@ -16,7 +16,7 @@ import {
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
-import type { UpdateStepResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import * as processRunner from "../../process/exec.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";

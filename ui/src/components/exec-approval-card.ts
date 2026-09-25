@@ -108,20 +108,12 @@ function renderCommandWithSpans(request: ExecApprovalRequestPayload) {
         span.endIndex <= request.command.length,
     )
     .toSorted((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex);
-  const accepted: typeof spans = [];
+  const parts = [];
   let cursor = 0;
   for (const span of spans) {
-    if (span.startIndex >= cursor) {
-      accepted.push(span);
-      cursor = span.endIndex;
+    if (span.startIndex < cursor) {
+      continue;
     }
-  }
-  if (!accepted.length) {
-    return html`<div class="exec-approval-command mono">${request.command}</div>`;
-  }
-  const parts = [];
-  cursor = 0;
-  for (const span of accepted) {
     if (span.startIndex > cursor) {
       parts.push(request.command.slice(cursor, span.startIndex));
     }

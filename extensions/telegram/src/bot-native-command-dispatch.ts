@@ -107,7 +107,7 @@ export type TelegramCommandDispatch = TelegramCommandExecutorParams &
     loadDeliveryRuntime: () => Promise<TelegramNativeCommandDeliveryRuntime>;
   };
 
-async function resolveTelegramNativeCommandThreadContext(params: {
+export async function resolveTelegramNativeCommandThreadContext(params: {
   msg: NonNullable<Context["message"]>;
   bot: Bot;
 }) {

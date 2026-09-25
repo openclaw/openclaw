@@ -359,7 +359,6 @@ export async function prepareDirectCompactionAttempt(
   }
   const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
   await fs.mkdir(effectiveWorkspace, { recursive: true });
-  const isSqliteSessionTranscript = true;
   const { sessionAgentId: effectiveSkillAgentId } = earlyAgentIds;
 
   return {
@@ -397,7 +396,6 @@ export async function prepareDirectCompactionAttempt(
       sandbox,
       effectiveWorkspace,
       effectiveCwd,
-      isSqliteSessionTranscript,
       effectiveSkillAgentId,
     },
   };

@@ -478,6 +478,7 @@ function createCronPromptExecutor(
             skillsSnapshot: params.skillsSnapshot,
             messageChannel,
             agentAccountId: params.resolvedDelivery.accountId,
+            extraSystemPrompt: params.deliverySystemPrompt,
             sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
             scheduledToolPolicy,
@@ -570,6 +571,7 @@ function createCronPromptExecutor(
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
                   cliSessionBindingFacts: {
+                    extraSystemPromptStatic: params.deliverySystemPrompt,
                     sourceReplyDeliveryMode,
                     requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
                   },

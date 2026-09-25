@@ -324,7 +324,7 @@ const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
 const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
 const PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE =
-  "⚠️ The configured model is unavailable from the provider — it may have been renamed, retired, or is not offered on this account. This needs a config update (agents.defaults.model); retrying or starting a new session won't fix it.";
+  "⚠️ The selected model is unavailable from the provider — it may have been renamed, retired, or is not offered on this account. Select an available model or update the model configuration, then try again.";
 
 const PROVIDER_REQUEST_COPY = {
   provider_authentication_error: PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
@@ -481,8 +481,7 @@ export function renderBillingReplyCopy(params: {
       : params.authMode === "oauth" || params.authMode === "token"
         ? params
         : undefined;
-  return billingFailure &&
-    (billingFailure.authMode === "oauth" || billingFailure.authMode === "token")
+  return billingFailure
     ? formatBillingErrorMessage(
         billingFailure.provider,
         billingFailure.model,
@@ -596,42 +595,33 @@ const AUTH_PROFILE_COOLDOWN_COPY = {
   unknown: authProfileUnavailableCopy,
 } satisfies Record<FailoverReason, (provider: string) => string>;
 
-type AuthProfileReasonPolicy = {
-  direct: ((provider: string) => string) | undefined;
-  recovery: boolean;
+const AUTH_PROFILE_DIRECT_COPY: Partial<Record<FailoverReason, (provider: string) => string>> = {
+  auth: AUTH_PROFILE_COOLDOWN_COPY.auth,
+  auth_permanent: (provider) => `${provider} isn't accepting your saved login.`,
+  billing: AUTH_PROFILE_COOLDOWN_COPY.billing,
+  session_expired: AUTH_PROFILE_COOLDOWN_COPY.session_expired,
 };
 
-const AUTH_PROFILE_REASON_POLICY = {
-  auth: { direct: AUTH_PROFILE_COOLDOWN_COPY.auth, recovery: true },
-  auth_permanent: {
-    direct: (provider) => `${provider} isn't accepting your saved login.`,
-    recovery: true,
-  },
-  format: { direct: undefined, recovery: false },
-  rate_limit: { direct: undefined, recovery: false },
-  overloaded: { direct: undefined, recovery: false },
-  billing: { direct: AUTH_PROFILE_COOLDOWN_COPY.billing, recovery: true },
-  server_error: { direct: undefined, recovery: false },
-  timeout: { direct: undefined, recovery: false },
-  tls_certificate: { direct: undefined, recovery: false },
-  context_overflow: { direct: undefined, recovery: true },
-  model_not_found: { direct: undefined, recovery: false },
-  session_expired: { direct: AUTH_PROFILE_COOLDOWN_COPY.session_expired, recovery: true },
-  empty_response: { direct: undefined, recovery: true },
-  no_error_details: { direct: undefined, recovery: true },
-  unclassified: { direct: undefined, recovery: true },
-  unknown: { direct: undefined, recovery: true },
-} satisfies Record<FailoverReason, AuthProfileReasonPolicy>;
+const AUTH_PROFILE_RECOVERY_REASONS = new Set<FailoverReason>([
+  "auth",
+  "auth_permanent",
+  "billing",
+  "context_overflow",
+  "session_expired",
+  "empty_response",
+  "no_error_details",
+  "unclassified",
+  "unknown",
+]);
 
 export function renderAuthProfileFailoverCopy(params: AuthProfileFailureCopyParams): string {
-  const policy = AUTH_PROFILE_REASON_POLICY[params.reason];
   const description = params.allInCooldown
     ? AUTH_PROFILE_COOLDOWN_COPY[params.reason](params.provider)
-    : policy.direct?.(params.provider);
+    : AUTH_PROFILE_DIRECT_COPY[params.reason]?.(params.provider);
   if (!description) {
     return params.causeText?.trim() || authProfileUnavailableCopy(params.provider);
   }
-  const hint = policy.recovery ? params.recoveryHint : null;
+  const hint = AUTH_PROFILE_RECOVERY_REASONS.has(params.reason) ? params.recoveryHint : null;
   const causeText = params.causeText?.trim() ?? "";
   const suffix = causeText && !description.includes(causeText) ? ` (${causeText})` : "";
   return `${[description, hint].filter(Boolean).join(" ")}${suffix}`;

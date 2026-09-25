@@ -123,6 +123,15 @@ configured remote workspace during registration so callers cannot fall back to
 local files before its service starts. Register its bridge when ready and release
 it when the service stops. Callers keep their existing document authorization.
 
+The bridge's optional `createFileExclusive` operation publishes a complete file
+only if its path does not exist, returning `"created"` or `"exists"`. It must use
+an atomic exclusive-create operation, never a separate existence check followed
+by an ordinary write. Workspace access forwards this capability with the same
+service-lifetime checks as other bridge operations. Providers that omit it still
+support their existing reads and writes, but `agents.files.set` with
+`expectedMissing: true` visibly refuses creation without changing the file. Update
+the provider, or create the file on its host and reload it before editing.
+
 `createWorkspaceBootstrapFilePolicy({ workspaceDir, config })` lets adapters
 restrict this bridge to native bootstrap documents and the configured
 `bootstrap-extra-files` patterns. Check `canList` for directory metadata,
@@ -191,8 +200,13 @@ Hosts can provide `watchSkills(request, onChange, signal)` to notify the existin
 snapshot cache when admitted Skill sources change. Keep the subscription alive
 until aborted, and send `change` after the initial scan and later edits. Send
 `unavailable` if file watching stops: preparation then refreshes on each call,
-without reopening the subscription. Hosts without `watchSkills` use that same
-fallback. `skills.load.watch: false` disables the subscription and this fallback.
+without reopening the subscription. After recovery, send `available` only when
+all subscribed sources have verified watch coverage and edits made during the
+outage have been reconciled. This restores snapshot reuse without adding a content
+revision. A `change` alone never clears unavailable state. Hosts that only send
+`change` and `unavailable` retain preparation fallback after an outage. Hosts
+without `watchSkills` always use that fallback. `skills.load.watch: false`
+disables the subscription and this fallback.
 Gateway watches Workshop locally under the same snapshot invalidation lifecycle.
 
 The paired-node file-transfer adapter also connects Skill discovery, resource reads,

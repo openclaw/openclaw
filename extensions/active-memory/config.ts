@@ -8,7 +8,6 @@ import {
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   asOptionalRecord,
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeStringEntries,
   normalizeTrimmedStringList,
@@ -72,7 +71,7 @@ function normalizeTranscriptDir(value: unknown): string {
   return safeParts.length > 0 ? path.join(...safeParts) : DEFAULT_TRANSCRIPT_DIR;
 }
 
-function normalizeChatIdList(value: unknown): string[] {
+function normalizeIdentifierList(value: unknown): string[] {
   return uniqueStrings(normalizeTrimmedStringList(value).map((entry) => entry.toLowerCase()));
 }
 
@@ -80,40 +79,16 @@ function normalizeConfiguredToolsAllow(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const normalized = normalizeLowercaseStringOrEmpty(entry);
-    if (!normalized || isReservedActiveMemoryToolsAllowEntry(normalized) || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    out.push(normalized);
-    if (out.length >= MAX_ACTIVE_MEMORY_TOOLS_ALLOW) {
-      break;
-    }
-  }
-  return out.length > 0 ? out : undefined;
-}
-
-function isReservedActiveMemoryToolsAllowEntry(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
-  return normalized.startsWith("group:") || ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW.has(normalized);
+  const tools = normalizeIdentifierList(value)
+    .filter((name) => !name.startsWith("group:") && !ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW.has(name))
+    .slice(0, MAX_ACTIVE_MEMORY_TOOLS_ALLOW);
+  return tools.length > 0 ? tools : undefined;
 }
 
 function resolveDefaultToolsAllow(cfg: OpenClawConfig | undefined): string[] {
   return cfg?.plugins?.slots?.memory === "memory-lancedb"
     ? [...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW]
     : [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
-}
-
-function resolveToolsAllow(params: { pluginToolsAllow: unknown; cfg?: OpenClawConfig }): string[] {
-  return (
-    normalizeConfiguredToolsAllow(params.pluginToolsAllow) ?? resolveDefaultToolsAllow(params.cfg)
-  );
 }
 
 function hasDeprecatedModelFallbackPolicy(pluginConfig: unknown): boolean {
@@ -200,12 +175,12 @@ function normalizePluginConfig(
     model: normalizeOptionalString(raw.model),
     modelFallback: normalizeOptionalString(raw.modelFallback),
     allowedChatTypes: allowedChatTypes.length > 0 ? allowedChatTypes : ["direct"],
-    allowedChatIds: normalizeChatIdList(raw.allowedChatIds),
-    deniedChatIds: normalizeChatIdList(raw.deniedChatIds),
+    allowedChatIds: normalizeIdentifierList(raw.allowedChatIds),
+    deniedChatIds: normalizeIdentifierList(raw.deniedChatIds),
     thinking: resolveThinkingLevel(raw.thinking),
     fastMode: normalizeActiveMemoryFastMode(raw.fastMode),
     promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
-    toolsAllow: resolveToolsAllow({ pluginToolsAllow: raw.toolsAllow, cfg }),
+    toolsAllow: normalizeConfiguredToolsAllow(raw.toolsAllow) ?? resolveDefaultToolsAllow(cfg),
     promptOverride: normalizeOptionalString(raw.promptOverride),
     promptAppend: normalizeOptionalString(raw.promptAppend),
     timeoutMs: clampInt(

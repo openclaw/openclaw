@@ -49,6 +49,7 @@ type CoreToolDefinition = {
   description: string;
   sectionId: string;
   profiles: ToolProfileId[];
+  includeInSectionGroup?: boolean;
   includeInOpenClawGroup?: boolean;
 };
 
@@ -487,6 +488,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "transcripts",
+    description: "Inspect and manage meeting transcript captures",
+    sectionId: "media",
+    profiles: [],
+    // Catalog visibility must not change existing media group policies.
+    includeInSectionGroup: false,
+  },
+  {
     id: "tts",
     description: "Text-to-speech conversion",
     sectionId: "media",
@@ -537,6 +546,9 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
 function buildCoreToolGroupMap() {
   const sectionToolMap = new Map<string, string[]>();
   for (const tool of CORE_TOOL_DEFINITIONS) {
+    if (tool.includeInSectionGroup === false) {
+      continue;
+    }
     const groupId = `group:${tool.sectionId}`;
     const list = sectionToolMap.get(groupId) ?? [];
     list.push(tool.id);
@@ -580,10 +592,9 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
   };
 }
 
-/** Lists core tools grouped into UI sections. */
+/** Lists configurable core tools; per-run authorization belongs to runtime assembly. */
 export function listCoreToolSections(params?: {
   swarmEnabled?: boolean;
-  githubPublicationAvailable?: boolean;
   personalInstructionsEnabled?: boolean;
 }): CoreToolSection[] {
   // Callers resolve the swarm gate and pass the fact in; resolving config here
@@ -596,10 +607,7 @@ export function listCoreToolSections(params?: {
       .filter(
         (tool) =>
           (tool.id !== "agents_wait" || swarmEnabled) &&
-          (tool.id !== "personal_instructions" || params?.personalInstructionsEnabled === true) &&
-          (tool.id !== "github_identity_status" ||
-            params?.githubPublicationAvailable !== undefined) &&
-          (tool.id !== "github_publish" || params?.githubPublicationAvailable === true),
+          (tool.id !== "personal_instructions" || params?.personalInstructionsEnabled === true),
       )
       .map((tool) => ({
         id: tool.id,

@@ -113,6 +113,7 @@ it.each(
     if (result.status !== "rejected") {
       throw new Error("Superseded failed restoration unexpectedly succeeded");
     }
+    expect(result.reason.message).toContain(operationError.message);
     if (retires) {
       expect(result.reason).toBeInstanceOf(AggregateError);
       expect(result.reason.cause).toBe(operationError);

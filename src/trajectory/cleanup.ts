@@ -1,13 +1,12 @@
 // Trajectory cleanup helpers remove old trajectory files by retention policy.
 import fs from "node:fs";
 import path from "node:path";
+import { readFileWindowFullySync, readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionFilePathCore } from "../config/sessions/paths.js";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../infra/boundary-path.js";
-import { readFileWindowFullySync } from "../infra/file-read.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { readRegularFileSync } from "../infra/regular-file.js";
 import {
   TRAJECTORY_POINTER_FILE_MAX_BYTES,
   resolveTrajectoryFilePath,

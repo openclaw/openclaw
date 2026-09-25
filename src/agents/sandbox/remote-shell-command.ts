@@ -230,45 +230,65 @@ export function buildValidatedExecRemoteCommand(params: {
   return buildExecRemoteCommand(params);
 }
 
-const VALIDATE_REMOTE_WORKDIR_SCRIPT = [
-  "set -e",
-  'target="$1"',
-  'root="$2"',
-  'case "$target" in /*) ;; *) echo "remote directory must be absolute: $target" >&2; exit 1 ;; esac',
-  'case "$root" in /*) ;; *) echo "remote root must be absolute: $root" >&2; exit 1 ;; esac',
-  'target="${target%/}"',
-  'root="${root%/}"',
-  '[ -n "$target" ] || target="/"',
-  '[ -n "$root" ] || root="/"',
-  'if [ "$root" != "/" ]; then',
-  '  case "$target/" in "$root"/*|"$root/") ;; *) echo "remote directory must stay under root: $target" >&2; exit 1 ;; esac',
-  "fi",
-  'for path_to_check in "$target" "$root"; do',
-  '  relative="${path_to_check#/}"',
-  '  while [ -n "$relative" ]; do',
-  '    part="${relative%%/*}"',
-  '    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
-  '    [ -n "$part" ] || continue',
-  '    case "$part" in "."|"..") echo "unsafe remote directory component: $part" >&2; exit 1 ;; esac',
-  "  done",
-  "done",
-  'if [ -L "$root" ]; then echo "unsafe remote root symlink: $root" >&2; exit 1; fi',
-  'if [ ! -d "$root" ]; then echo "remote root not found: $root" >&2; exit 1; fi',
-  'canonical_root="$(cd "$root" && pwd -P)"',
-  'relative="${target#"$root"}"',
-  'relative="${relative#/}"',
-  'current="$canonical_root"',
-  'while [ -n "$relative" ]; do',
-  '  part="${relative%%/*}"',
-  '  if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
-  '  [ -n "$part" ] || continue',
-  '  if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi',
-  '  if [ -L "$next" ]; then echo "unsafe remote directory symlink: $next" >&2; exit 1; fi',
-  '  if [ ! -d "$next" ]; then echo "remote directory not found: $next" >&2; exit 1; fi',
-  '  current="$next"',
-  "done",
-  'printf "%s\\n" "$current"',
-].join("\n");
+function buildRemoteDirectoryScript(create: boolean): string {
+  return [
+    "set -e",
+    'target="$1"',
+    create ? 'root="${2:-$1}"' : 'root="$2"',
+    'case "$target" in /*) ;; *) echo "remote directory must be absolute: $target" >&2; exit 1 ;; esac',
+    'case "$root" in /*) ;; *) echo "remote root must be absolute: $root" >&2; exit 1 ;; esac',
+    'target="${target%/}"',
+    'root="${root%/}"',
+    '[ -n "$target" ] || target="/"',
+    '[ -n "$root" ] || root="/"',
+    ...(create
+      ? [
+          'case "$target/" in "$root"/*|"$root/") ;; *) echo "remote directory must stay under root: $target" >&2; exit 1 ;; esac',
+        ]
+      : [
+          'if [ "$root" != "/" ]; then',
+          '  case "$target/" in "$root"/*|"$root/") ;; *) echo "remote directory must stay under root: $target" >&2; exit 1 ;; esac',
+          "fi",
+        ]),
+    'for path_to_check in "$target" "$root"; do',
+    '  relative="${path_to_check#/}"',
+    '  while [ -n "$relative" ]; do',
+    '    part="${relative%%/*}"',
+    '    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
+    '    [ -n "$part" ] || continue',
+    '    case "$part" in "."|"..") echo "unsafe remote directory component: $part" >&2; exit 1 ;; esac',
+    "  done",
+    "done",
+    'if [ -L "$root" ]; then echo "unsafe remote root symlink: $root" >&2; exit 1; fi',
+    create
+      ? 'mkdir -p -- "$root"'
+      : 'if [ ! -d "$root" ]; then echo "remote root not found: $root" >&2; exit 1; fi',
+    'canonical_root="$(cd "$root" && pwd -P)"',
+    'relative="${target#"$root"}"',
+    'relative="${relative#/}"',
+    'current="$canonical_root"',
+    'while [ -n "$relative" ]; do',
+    '  part="${relative%%/*}"',
+    '  if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
+    '  [ -n "$part" ] || continue',
+    '  if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi',
+    '  if [ -L "$next" ]; then echo "unsafe remote directory symlink: $next" >&2; exit 1; fi',
+    ...(create
+      ? [
+          '  if [ -e "$next" ]; then',
+          '    if [ ! -d "$next" ]; then echo "unsafe remote directory component: $next" >&2; exit 1; fi',
+          "  else",
+          '    mkdir -- "$next"',
+          "  fi",
+        ]
+      : ['  if [ ! -d "$next" ]; then echo "remote directory not found: $next" >&2; exit 1; fi']),
+    '  current="$next"',
+    "done",
+    ...(create ? [] : ['printf "%s\\n" "$current"']),
+  ].join("\n");
+}
+
+const VALIDATE_REMOTE_WORKDIR_SCRIPT = buildRemoteDirectoryScript(false);
 
 export function buildRemoteWorkdirValidationCommand(params: {
   workdir: string;
@@ -469,43 +489,4 @@ function skipShellComment(command: string, index: number): number {
   return newlineIndex === -1 ? command.length : newlineIndex;
 }
 
-export const ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT = [
-  "set -e",
-  'target="$1"',
-  'root="${2:-$1}"',
-  'case "$target" in /*) ;; *) echo "remote directory must be absolute: $target" >&2; exit 1 ;; esac',
-  'case "$root" in /*) ;; *) echo "remote root must be absolute: $root" >&2; exit 1 ;; esac',
-  'target="${target%/}"',
-  'root="${root%/}"',
-  '[ -n "$target" ] || target="/"',
-  '[ -n "$root" ] || root="/"',
-  'case "$target/" in "$root"/*|"$root/") ;; *) echo "remote directory must stay under root: $target" >&2; exit 1 ;; esac',
-  'for path_to_check in "$target" "$root"; do',
-  '  relative="${path_to_check#/}"',
-  '  while [ -n "$relative" ]; do',
-  '    part="${relative%%/*}"',
-  '    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
-  '    [ -n "$part" ] || continue',
-  '    case "$part" in "."|"..") echo "unsafe remote directory component: $part" >&2; exit 1 ;; esac',
-  "  done",
-  "done",
-  'if [ -L "$root" ]; then echo "unsafe remote root symlink: $root" >&2; exit 1; fi',
-  'mkdir -p -- "$root"',
-  'canonical_root="$(cd "$root" && pwd -P)"',
-  'relative="${target#"$root"}"',
-  'relative="${relative#/}"',
-  'current="$canonical_root"',
-  'while [ -n "$relative" ]; do',
-  '  part="${relative%%/*}"',
-  '  if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
-  '  [ -n "$part" ] || continue',
-  '  if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi',
-  '  if [ -L "$next" ]; then echo "unsafe remote directory symlink: $next" >&2; exit 1; fi',
-  '  if [ -e "$next" ]; then',
-  '    if [ ! -d "$next" ]; then echo "unsafe remote directory component: $next" >&2; exit 1; fi',
-  "  else",
-  '    mkdir -- "$next"',
-  "  fi",
-  '  current="$next"',
-  "done",
-].join("\n");
+export const ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT = buildRemoteDirectoryScript(true);

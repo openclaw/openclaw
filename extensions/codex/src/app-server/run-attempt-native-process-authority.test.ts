@@ -344,8 +344,29 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
         }
       },
       run,
-      complete: async () => {
-        await harness.completeTurn({ threadId, turnId });
+      complete: async (answer?: string) => {
+        if (answer) {
+          await harness.notify({
+            method: "turn/completed",
+            params: {
+              threadId,
+              turn: {
+                id: turnId,
+                status: "completed",
+                items: [
+                  {
+                    id: `${actor}-answer`,
+                    type: "agentMessage",
+                    phase: "final_answer",
+                    text: answer,
+                  },
+                ],
+              },
+            },
+          });
+        } else {
+          await harness.completeTurn({ threadId, turnId });
+        }
         const result = await run;
         completed = true;
         return result;
@@ -487,7 +508,19 @@ describe("native background process source authority", () => {
     try {
       const staff = await f.begin("maintainer");
       await f.retainSecondConsumer();
-      expect(readAttemptTerminal(await staff.complete()).aborted).toBe(false);
+      const completed = await staff.complete("Retained the running process for the next turn.");
+      expect(readAttemptTerminal(completed).aborted).toBe(false);
+      expect(completed.messagesSnapshot).toContainEqual(
+        expect.objectContaining({
+          role: "toolResult",
+          toolCallId: staff.terminal.itemId,
+          isError: false,
+          content: [{ type: "text", text: expect.stringContaining("still running") }],
+          __openclaw: expect.objectContaining({
+            toolOutput: expect.objectContaining({ outcome: "unknown" }),
+          }),
+        }),
+      );
       expect(staff.terminal.alive).toBe(true);
       expect(f.terminated).toEqual([]);
       const guest = await f.begin("guest");

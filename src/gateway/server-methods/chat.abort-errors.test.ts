@@ -99,7 +99,7 @@ it.each(
       ["bad", badKey],
       ["healthy", healthyKey],
     ] as const) {
-      registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey: nested && runId !== "root" ? rootKey : sessionKey,
@@ -261,7 +261,7 @@ it.each(
         sessionKey: childSessionKey,
         defaultSessionId: `${runId}-session`,
       });
-      registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey,
@@ -456,7 +456,7 @@ it.each(["exact native new", "cascade native new", "RPC reset", "RPC delete"])(
       message: { role: "user", content: "old user turn", timestamp: Date.now() },
     });
     expect(seeded).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "child",
       childSessionKey: childKey,
       requesterSessionKey: sessionKey,

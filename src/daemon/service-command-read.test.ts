@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildLaunchAgentPlist,
@@ -20,6 +21,10 @@ import {
   resolveStartupEntryPaths,
   resolveTaskScriptPath,
 } from "./schtasks-layout.js";
+import {
+  sanitizeServiceInspectionError,
+  ServiceInspectionError,
+} from "./service-inspection-error.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnv,
@@ -182,6 +187,67 @@ describe("native service command inspection", () => {
     }
     await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow();
   });
+
+  it.each([
+    {
+      failure: "timeout",
+      response: { error: Object.assign(new Error("native-secret-canary"), { code: "ETIMEDOUT" }) },
+      diagnostic: { kind: "timeout", timeoutMs: 731 },
+      reported: "timed out after 731 ms",
+    },
+    {
+      failure: "spawn",
+      response: {
+        error: Object.assign(new Error("native-secret-canary"), { code: "EACCES", errno: -13 }),
+      },
+      diagnostic: { kind: "spawn", errno: -13 },
+      reported: "errno -13",
+    },
+    {
+      failure: "lookup access denied",
+      response: { status: 1, stdout: "-2147024891", stderr: "native-secret-canary" },
+      diagnostic: { kind: "native", exitCode: 1, hresult: -2147024891 },
+      reported: "HRESULT 0x80070005",
+    },
+    {
+      failure: "connection missing file",
+      response: { status: 2, stdout: "-2147024894", stderr: "native-secret-canary" },
+      diagnostic: { kind: "native", exitCode: 2, hresult: -2147024894 },
+      reported: "HRESULT 0x80070002",
+    },
+    {
+      failure: "malformed HRESULT",
+      response: { status: 1, stdout: "-2147024894 native-secret-canary" },
+      diagnostic: { kind: "native", exitCode: 1 },
+      reported: "Task Scheduler probe failed (exit 1)",
+    },
+    {
+      failure: "invalid response",
+      response: { status: 0, stdout: "native-secret-canary" },
+      diagnostic: { kind: "invalid-response" },
+      reported: "Task Scheduler probe returned an invalid response",
+    },
+  ])(
+    "preserves safe Windows $failure diagnostics through strict inspection",
+    async ({ response, diagnostic, reported }) => {
+      native.scheduler.mockReturnValue(response);
+      const error = await readScheduledTaskCommand(env, {
+        requireEffective: true,
+        timeoutMs: 731,
+      }).catch((caughtError: unknown) => caughtError);
+      expect(error).toBeInstanceOf(ServiceInspectionError);
+      expect(error).toMatchObject({
+        reason: "windows-task-inspection-failed",
+        message: expect.stringContaining("openclaw gateway status --deep"),
+      });
+      const sanitized = sanitizeServiceInspectionError(error);
+      expect(sanitized.message).toContain("openclaw gateway status --deep");
+      expect(sanitized.message).toContain(reported);
+      expect(sanitized.cause).toEqual(diagnostic);
+      expect(inspect(sanitized)).not.toContain("native-secret-canary");
+      expect(JSON.stringify(sanitized.cause)).not.toContain("native-secret-canary");
+    },
+  );
 
   it.each([
     "set MALFORMED",

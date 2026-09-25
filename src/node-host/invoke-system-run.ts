@@ -84,7 +84,10 @@ import {
   resolvePlannedAllowlistArgv,
   resolveSystemRunExecArgv,
 } from "./invoke-system-run-allowlist.js";
-import { hardenApprovedExecutionPaths } from "./invoke-system-run-plan.js";
+import {
+  buildEnvOverrideRejectionMessage,
+  hardenApprovedExecutionPaths,
+} from "./invoke-system-run-plan.js";
 import type {
   ExecEventPayload,
   ExecFinishedResult,
@@ -123,7 +126,6 @@ type SystemRunParsePhase = {
   shellPayload: string | null;
   shellWrapperInvocation: boolean;
   commandText: string;
-  commandPreview: string | null;
   approvalPlan: import("../infra/exec-approvals.js").SystemRunApprovalPlan | null;
   agentId: string | undefined;
   sessionKey: string;
@@ -152,8 +154,6 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   strictInlineEval: boolean;
   inlineEvalHit: InterpreterInlineEvalHit | null;
   allowlistMatches: ExecAllowlistEntry[];
-  analysisOk: boolean;
-  allowlistSatisfied: boolean;
   allowlistAuthorizationSatisfied: boolean;
   segments: ExecCommandSegment[];
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
@@ -487,22 +487,11 @@ async function parseSystemRunPhase(
     envOverrideDiagnostics.rejectedOverrideBlockedKeys.length > 0 ||
     envOverrideDiagnostics.rejectedOverrideInvalidKeys.length > 0
   ) {
-    const details: string[] = [];
-    if (envOverrideDiagnostics.rejectedOverrideBlockedKeys.length > 0) {
-      details.push(
-        `blocked override keys: ${envOverrideDiagnostics.rejectedOverrideBlockedKeys.join(", ")}`,
-      );
-    }
-    if (envOverrideDiagnostics.rejectedOverrideInvalidKeys.length > 0) {
-      details.push(
-        `invalid non-portable override keys: ${envOverrideDiagnostics.rejectedOverrideInvalidKeys.join(", ")}`,
-      );
-    }
     await opts.sendInvokeResult({
       ok: false,
       error: {
         code: "INVALID_REQUEST",
-        message: `SYSTEM_RUN_DENIED: environment override rejected (${details.join("; ")})`,
+        message: buildEnvOverrideRejectionMessage(envOverrideDiagnostics),
       },
     });
     return null;
@@ -516,7 +505,6 @@ async function parseSystemRunPhase(
     shellPayload,
     shellWrapperInvocation,
     commandText,
-    commandPreview: command.previewText,
     approvalPlan,
     agentId,
     sessionKey,
@@ -916,8 +904,6 @@ async function evaluateSystemRunPolicyPhase(
     strictInlineEval,
     inlineEvalHit,
     allowlistMatches,
-    analysisOk,
-    allowlistSatisfied,
     allowlistAuthorizationSatisfied,
     segments,
     segmentSatisfiedBy,

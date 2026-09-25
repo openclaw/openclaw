@@ -5,7 +5,7 @@ import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isMigrationArchiveArtifactName } from "../config/sessions/artifacts.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {

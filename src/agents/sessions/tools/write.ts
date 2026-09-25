@@ -12,7 +12,6 @@ import {
 import { dirname } from "node:path";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { structuredPatch, formatPatch, FILE_HEADERS_ONLY } from "diff";
-import { Type } from "typebox";
 import { isMissingPathError } from "../../../infra/errors.js";
 import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
@@ -38,41 +37,8 @@ import {
 } from "./render-utils.js";
 import type { WriteToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { writeSchema, WriteToolOutputSchema } from "./tool-schemas.js";
 
-const writeSchema = Type.Object({
-  path: Type.String({
-    description: "File path; relative/absolute.",
-  }),
-  content: Type.String({ description: "File content." }),
-});
-
-const WriteToolOutputSchema = Type.Union([
-  Type.Object({ changed: Type.Literal(false) }, { additionalProperties: false }),
-  Type.Object(
-    {
-      changed: Type.Literal(true),
-      created: Type.Literal(true),
-      diff: Type.String(),
-      patch: Type.String(),
-      firstChangedLine: Type.Optional(Type.Integer({ minimum: 1 })),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      changed: Type.Literal(true),
-      created: Type.Literal(false),
-      diff: Type.String(),
-      patch: Type.String(),
-      firstChangedLine: Type.Optional(Type.Integer({ minimum: 1 })),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    { changed: Type.Literal(true), created: Type.Optional(Type.Boolean()) },
-    { additionalProperties: false },
-  ),
-]);
 /**
  * Pluggable operations for the write tool.
  * Override these to delegate file writing to remote systems (for example SSH).

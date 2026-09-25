@@ -18,7 +18,7 @@ import {
 } from "../../cron/active-jobs.js";
 import { prepareCronPromptRunAdmission } from "../../cron/isolated-agent/run-admission.js";
 import { registerActiveCronTaskRun } from "../../cron/service/active-run-cancellation.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import type {
   GatewayRequestContext,

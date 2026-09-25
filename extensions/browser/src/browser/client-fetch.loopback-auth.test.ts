@@ -1,8 +1,8 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Browser tests cover client fetch.loopback auth plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserControlAuth } from "./control-auth.js";
 import type { BrowserDispatchResponse } from "./routes/dispatcher.js";
 
@@ -51,8 +51,10 @@ const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(async (): Promise<BrowserDispatchResponse> => okDispatchResponse()),
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
     getRuntimeConfig: mocks.loadConfig,
@@ -60,7 +62,8 @@ vi.mock("../config/config.js", async () => {
   };
 });
 
-vi.mock("./control-service.js", () => ({
+vi.mock("../control-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../control-service.js")>()),
   createBrowserControlContext: vi.fn(() => ({})),
   startBrowserControlServiceFromConfig: mocks.startBrowserControlServiceFromConfig,
 }));

@@ -211,17 +211,13 @@ function addTrustedSymlinkSkillWatchTargets(
   let watched = 0;
   let directoryScans = 0;
   let rawEntries = 0;
-  for (const queued of queue) {
+  for (const current of queue) {
     if (
       watched >= MAX_SYMLINK_WATCH_TARGETS_PER_ROOT ||
       directoryScans >= MAX_SYMLINK_WATCH_DIRECTORY_SCANS_PER_ROOT ||
       rawEntries >= MAX_SYMLINK_WATCH_RAW_ENTRIES_PER_ROOT
     ) {
       break;
-    }
-    const current = queued;
-    if (!current) {
-      continue;
     }
     const scan = readBudgetedDirEntries(
       current.dir,

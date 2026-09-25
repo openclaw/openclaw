@@ -1,8 +1,9 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
-// Matrix plugin module implements verification events behavior.
 import type { MatrixClient } from "../sdk.js";
+import type { MatrixVerificationSummary } from "../sdk/verification-manager.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
+import { setBoundedMap } from "./bounded-cache.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 import {
@@ -16,22 +17,6 @@ const SAS_NOTICE_RETRY_DELAY_MS = 750;
 const VERIFICATION_EVENT_STARTUP_GRACE_MS = 30_000;
 
 type MatrixVerificationStage = "request" | "ready" | "start" | "cancel" | "done" | "other";
-
-type MatrixVerificationSummaryLike = {
-  id: string;
-  transactionId?: string;
-  roomId?: string;
-  otherUserId: string;
-  updatedAt?: string;
-  completed?: boolean;
-  pending?: boolean;
-  phase?: number;
-  phaseName?: string;
-  sas?: {
-    decimal?: [number, number, number];
-    emoji?: Array<[string, string]>;
-  };
-};
 
 const loadMatrixDirectRoomDeps = createLazyRuntimeModule(() =>
   Promise.all([import("../direct-management.js"), import("../direct-room.js")]).then(
@@ -115,7 +100,7 @@ function formatVerificationStageNotice(params: {
   }
 }
 
-function formatVerificationSasNotice(summary: MatrixVerificationSummaryLike): string | null {
+function formatVerificationSasNotice(summary: MatrixVerificationSummary): string | null {
   const sas = summary.sas;
   if (!sas) {
     return null;
@@ -170,13 +155,13 @@ function resolveVerificationFlowCandidates(params: {
   return Array.from(candidates);
 }
 
-function resolveSummaryRecency(summary: MatrixVerificationSummaryLike): number {
+function resolveSummaryRecency(summary: MatrixVerificationSummary): number {
   const ts = Date.parse(summary.updatedAt ?? "");
   return Number.isFinite(ts) ? ts : 0;
 }
 
-function isActiveVerificationSummary(summary: MatrixVerificationSummaryLike): boolean {
-  if (summary.completed === true) {
+function isActiveVerificationSummary(summary: MatrixVerificationSummary): boolean {
+  if (summary.completed) {
     return false;
   }
   if (summary.phaseName === "cancelled" || summary.phaseName === "done") {
@@ -196,7 +181,7 @@ async function resolveVerificationSummaryForSignal(
     senderId: string;
     flowId: string | null;
   },
-): Promise<MatrixVerificationSummaryLike | null> {
+): Promise<MatrixVerificationSummary | null> {
   if (!client.crypto) {
     return null;
   }
@@ -271,7 +256,7 @@ async function resolveVerificationSasNoticeForSignal(
     stage: MatrixVerificationStage;
     sasNoticeRetryDelayMs?: number;
   },
-): Promise<{ summary: MatrixVerificationSummaryLike | null; sasNotice: string | null }> {
+): Promise<{ summary: MatrixVerificationSummary | null; sasNotice: string | null }> {
   const summary = await resolveVerificationSummaryForSignal(client, params);
   const immediateNotice =
     summary && isActiveVerificationSummary(summary) ? formatVerificationSasNotice(summary) : null;
@@ -411,13 +396,7 @@ export function createMatrixVerificationEventRouter(params: {
 
   function rememberVerificationRoom(roomId: string, event: MatrixRawEvent, flowId: string | null) {
     for (const candidate of resolveVerificationFlowCandidates({ event, flowId })) {
-      verificationFlowRooms.set(candidate, roomId);
-      if (verificationFlowRooms.size > MAX_TRACKED_VERIFICATION_EVENTS) {
-        const oldest = verificationFlowRooms.keys().next().value;
-        if (typeof oldest === "string") {
-          verificationFlowRooms.delete(oldest);
-        }
-      }
+      setBoundedMap(verificationFlowRooms, candidate, roomId, MAX_TRACKED_VERIFICATION_EVENTS);
     }
   }
 
@@ -428,18 +407,15 @@ export function createMatrixVerificationEventRouter(params: {
       return;
     }
     verificationUserRooms.delete(normalizedUserId);
-    verificationUserRooms.set(normalizedUserId, normalizedRoomId);
-    if (verificationUserRooms.size > MAX_TRACKED_VERIFICATION_EVENTS) {
-      const oldest = verificationUserRooms.keys().next().value;
-      if (typeof oldest === "string") {
-        verificationUserRooms.delete(oldest);
-      }
-    }
+    setBoundedMap(
+      verificationUserRooms,
+      normalizedUserId,
+      normalizedRoomId,
+      MAX_TRACKED_VERIFICATION_EVENTS,
+    );
   }
 
-  async function resolveSummaryRoomId(
-    summary: MatrixVerificationSummaryLike,
-  ): Promise<string | null> {
+  async function resolveSummaryRoomId(summary: MatrixVerificationSummary): Promise<string | null> {
     const mappedRoomId =
       normalizeNullableString(summary.roomId) ??
       normalizeNullableString(
@@ -477,7 +453,7 @@ export function createMatrixVerificationEventRouter(params: {
     return null;
   }
 
-  async function routeVerificationSummary(summary: MatrixVerificationSummaryLike): Promise<void> {
+  async function routeVerificationSummary(summary: MatrixVerificationSummary): Promise<void> {
     const roomId = await resolveSummaryRoomId(summary);
     if (!roomId || !isActiveVerificationSummary(summary)) {
       return;

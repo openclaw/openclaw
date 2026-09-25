@@ -221,7 +221,7 @@
   font-weight: 600;
   font-size: 13px;
   flex-shrink: 0;
-  align-self: flex-end;
+  align-self: flex-start;
   margin-bottom: 4px;
   border: 1px solid var(--border);
 }

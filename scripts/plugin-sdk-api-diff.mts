@@ -314,7 +314,7 @@ async function main(): Promise<void> {
     })
       ? 1
       : 2;
-    const rendered = await runTasksWithConcurrency({
+    const prepared = await runTasksWithConcurrency({
       limit,
       errorMode: "stop",
       // Drain aborted siblings before removing their registered worktrees.
@@ -327,6 +327,25 @@ async function main(): Promise<void> {
         git(worktree, ["sparse-checkout", "set", "src", "packages", "patches", "scripts"]);
         git(worktree, ["checkout", "--detach", commit]);
         await installRevisionDependencies(worktree, abortController.signal);
+        return worktree;
+      }),
+    });
+    if (prepared.hasError) {
+      throw prepared.firstError;
+    }
+    // pnpm can hardlink revision dependencies into its shared store. Finish every
+    // install before any compiler snapshots those files, or a sibling install can
+    // change inode metadata while the declaration renderer is proving immutability.
+    const rendered = await runTasksWithConcurrency({
+      limit,
+      errorMode: "stop",
+      throwOnError: false,
+      onTaskError: () => abortController.abort(),
+      tasks: commits.map((commit, index) => async () => {
+        const worktree = prepared.results[index];
+        if (!worktree) {
+          throw new Error(`Plugin SDK API worktree is missing for ${commit}`);
+        }
         const renderPath = path.join(temporaryRoot, `${commit}.json`);
         await renderRevision(repoRoot, worktree, renderPath, abortController.signal);
         surfaces.set(commit, parsePluginSdkApiDiffSurface(await fs.readFile(renderPath, "utf8")));

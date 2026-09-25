@@ -42,11 +42,6 @@ export interface FrvClient {
     runAttempt: number,
     options?: FrvReadOptions,
   ) => Promise<Record<string, unknown>>;
-  getManualRetryAuthority?: (
-    plan: Record<string, unknown>,
-    childKey: string,
-    operationDeadline: number,
-  ) => Promise<{ outcome: "not-attempted" | "rejected" }>;
   rerunFailed?: (runId: string) => Promise<unknown>;
   rerunJob?: (jobId: number) => Promise<unknown>;
   rerunParent?: (runId: string) => Promise<unknown>;
@@ -71,17 +66,7 @@ export interface FrvClient {
 }
 
 export type FrvConcreteClient = FrvClient &
-  Required<
-    Pick<
-      FrvClient,
-      | "getManualRetryAuthority"
-      | "rerunFailed"
-      | "rerunJob"
-      | "rerunParent"
-      | "verify"
-      | "verifySeal"
-    >
-  >;
+  Required<Pick<FrvClient, "rerunFailed" | "rerunJob" | "rerunParent" | "verify" | "verifySeal">>;
 
 export function prioritizeRelease(
   parentRunId: string,

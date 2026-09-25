@@ -52,7 +52,12 @@ import {
   completeFollowupRunLifecycle,
   retireFollowupRunCancellation,
 } from "./lifecycle.js";
-import { clearFollowupQueue, FOLLOWUP_QUEUES, trimSummaryElisionsToCap } from "./state.js";
+import {
+  clearFollowupQueue,
+  FOLLOWUP_QUEUES,
+  followupQueueSources,
+  trimSummaryElisionsToCap,
+} from "./state.js";
 import { consumeQueueSummaryDelivery } from "./summary-consumption.js";
 import { isFollowupRunAborted, isFollowupRunDeferredError, type FollowupRun } from "./types.js";
 
@@ -181,11 +186,7 @@ export function prepareStaleFollowupDrainRetirement(key: string): (() => void) |
         sourceRefs: new WeakMap<FollowupRun, FollowupRun>(),
       })),
     };
-    for (const source of [
-      ...replacement.items,
-      ...replacement.summarySources,
-      ...replacement.summaryElisions.flatMap((entry) => entry.sources),
-    ]) {
+    for (const source of followupQueueSources(replacement)) {
       source.queueAbortSignal = replacement.abortController.signal;
     }
     const hasPendingWork = replacement.items.length > 0 || replacement.droppedCount > 0;
@@ -258,26 +259,18 @@ function splitCollectItemsByDeliveryContext(items: FollowupRun[]): FollowupRun[]
   }
 
   const groups: FollowupRun[][] = [];
-  let currentGroup: FollowupRun[] = [];
   let currentKey: string | undefined;
 
   for (const item of items) {
     const itemKey = resolveFollowupDeliveryContextKey(item);
-    if (currentGroup.length === 0 || itemKey === currentKey) {
+    const currentGroup = groups.at(-1);
+    if (currentGroup && itemKey === currentKey) {
       currentGroup.push(item);
-      currentKey = itemKey;
-      continue;
+    } else {
+      groups.push([item]);
     }
-
-    groups.push(currentGroup);
-    currentGroup = [item];
     currentKey = itemKey;
   }
-
-  if (currentGroup.length > 0) {
-    groups.push(currentGroup);
-  }
-
   return groups;
 }
 
@@ -589,22 +582,17 @@ function resolveQueuedCronCreatorAuthorityUnavailable(
     : undefined;
 }
 
-type FollowupQueueSummaryState = {
-  cap: number;
-  inFlight: Set<FollowupRun>;
-  droppedCount: number;
-  summaryLines: string[];
-  summarySources: FollowupRun[];
-  activeSummarySources: WeakSet<FollowupRun>;
-  summaryElisions: Array<{
-    contextKey: string;
-    count: number;
-    sources: FollowupRun[];
-    summaryLines: string[];
-    sourceRefs: WeakMap<FollowupRun, FollowupRun>;
-  }>;
-  evictedSummaryCount: number;
-};
+type FollowupQueueSummaryState = Pick<
+  FollowupQueueState,
+  | "cap"
+  | "inFlight"
+  | "droppedCount"
+  | "summaryLines"
+  | "summarySources"
+  | "activeSummarySources"
+  | "summaryElisions"
+  | "evictedSummaryCount"
+>;
 
 type QueueSummaryDelivery = {
   prompt: string;
@@ -620,38 +608,6 @@ function resolveQueueSummaryLines(
     const sourceIndex = queue.summarySources.indexOf(source);
     return expectDefined(queue.summaryLines[sourceIndex], "summary line for retained source");
   });
-}
-
-function createQueueSummaryDelivery(params: {
-  queue: FollowupQueueSummaryState;
-  sources?: FollowupRun[];
-}): QueueSummaryDelivery | undefined {
-  const sources = params.sources ? [...params.sources] : [...params.queue.summarySources];
-  if (
-    params.sources &&
-    !sources.every((source, index) => params.queue.summarySources[index] === source)
-  ) {
-    return undefined;
-  }
-  const droppedCount = params.sources ? sources.length : params.queue.droppedCount;
-  const summaryLines = params.sources
-    ? resolveQueueSummaryLines(params.queue, sources)
-    : [...params.queue.summaryLines];
-  const prompt = previewQueueSummaryPrompt({
-    state: {
-      droppedCount,
-      summaryLines,
-    },
-    noun: "message",
-  });
-  if (!prompt) {
-    return undefined;
-  }
-  return {
-    prompt,
-    droppedCount,
-    sources,
-  };
 }
 
 function releaseQueueSummaryDeliveryForRetry(
@@ -1079,13 +1035,17 @@ async function drainOverflowSummaryGroup(params: {
   if (!source) {
     return false;
   }
-  const delivery = createQueueSummaryDelivery({
-    queue: params.queue,
-    sources,
+  const prompt = previewQueueSummaryPrompt({
+    state: {
+      droppedCount: sources.length,
+      summaryLines: resolveQueueSummaryLines(params.queue, sources),
+    },
+    noun: "message",
   });
-  if (!delivery) {
+  if (!prompt) {
     return false;
   }
+  const delivery = { prompt, droppedCount: sources.length, sources };
   await runQueueSummaryDelivery(params.queue, delivery, async ({ abortSignal, onAdmitted }) => {
     await runSyntheticOverflowSummary({
       source,
@@ -1215,13 +1175,8 @@ export function scheduleFollowupDrain(
               continue;
             }
             assertSingleAdmissionOwner(activeGroupItems);
-            const groupSource = activeGroupItems.at(-1);
-            const run = groupSource
-              ? resolveCollectedRun(activeGroupItems, groupSource.run)
-              : queue.lastRun;
-            if (!run) {
-              break;
-            }
+            const groupSource = expectDefined(activeGroupItems.at(-1), "active collect source");
+            const run = resolveCollectedRun(activeGroupItems, groupSource.run);
 
             const routing = resolveOriginRoutingMetadata(activeGroupItems);
             const prompt = buildCollectPrompt({
@@ -1272,9 +1227,7 @@ export function scheduleFollowupDrain(
                 transcriptPrompt,
                 ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
                 run,
-                messageId:
-                  groupSource?.messageId ??
-                  (groupSource ? resolveFollowupReplyAnchor(groupSource) : undefined),
+                messageId: groupSource.messageId ?? resolveFollowupReplyAnchor(groupSource),
                 enqueuedAt: Date.now(),
                 ...routing,
                 ...collectRuntimeMetadata(activeGroupItems, cancellation.signal),

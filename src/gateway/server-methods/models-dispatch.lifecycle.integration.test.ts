@@ -475,7 +475,7 @@ it("models.list retains executable rows on failed refresh and replaces them afte
     });
     await expect(fixture.send("account-a-only", "withdrawn-after-restart")).resolves.toMatchObject({
       status: "error",
-      error: expect.stringContaining("The configured model is unavailable from the provider"),
+      error: expect.stringContaining("The selected model is unavailable from the provider"),
     });
     expect(fixture.requests).toHaveLength(3);
   });
@@ -501,7 +501,7 @@ it("models.authRefresh revokes old executable rows before discovery and config.p
       );
       await expect(fixture.send("account-a-only", "during-replacement")).resolves.toMatchObject({
         status: "error",
-        error: expect.stringContaining("The configured model is unavailable from the provider"),
+        error: expect.stringContaining("The selected model is unavailable from the provider"),
       });
       expect(fixture.requests).toHaveLength(1);
     } finally {

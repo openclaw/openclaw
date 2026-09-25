@@ -39,6 +39,13 @@ type PluginRegistryLifecycleStore = {
   registryLoads?: WeakMap<PluginCache, PluginLoaderCacheState<PluginRegistry>>;
   registryResourceOwners?: WeakMap<PluginRegistry, PluginRegistry>;
   registryLifetimes?: WeakMap<PluginRegistry, PluginRegistryLifetime>;
+  gatewayOwners?: WeakMap<PluginRegistry, PluginRegistryGatewayOwner | null>;
+};
+
+/** The Gateway registry owner that admitted work in a registry generation. */
+export type PluginRegistryGatewayOwner = {
+  /** The owner's published registry while it stays open; closing owners return undefined. */
+  readonly current: () => PluginRegistry | undefined;
 };
 
 const lifecycle = resolveGlobalSingleton<PluginRegistryLifecycleStore>(
@@ -57,6 +64,8 @@ const loaderCaches = (lifecycle.loaderCaches ??= new WeakMap());
 const registryLoads = (lifecycle.registryLoads ??= new WeakMap());
 const registryResourceOwners = (lifecycle.registryResourceOwners ??= new WeakMap());
 const registryLifetimes = (lifecycle.registryLifetimes ??= new WeakMap());
+// Registries from a published build carry no owner link; recovery then stays strict.
+const gatewayOwners = (lifecycle.gatewayOwners ??= new WeakMap());
 const loadRegistryDisposer = (lifecycle.loadRegistryDisposer ??= createLazyRuntimeNamedExport(
   () => import("./runtime.js"),
   "disposePluginRegistryInstances",
@@ -81,6 +90,25 @@ export function bindPluginRegistryResourceOwner(
 
 export function getPluginRegistryResourceOwner(registry: PluginRegistry): PluginRegistry {
   return registryResourceOwners.get(registry) ?? registry;
+}
+
+/**
+ * Links a registry to the Gateway owner that published it or admitted a turn
+ * into it. A registry claimed by two owners keeps no owner.
+ */
+export function bindPluginRegistryGatewayOwner(
+  registry: PluginRegistry,
+  owner: PluginRegistryGatewayOwner,
+): void {
+  const key = getPluginRegistryResourceOwner(registry);
+  const existing = gatewayOwners.get(key);
+  gatewayOwners.set(key, existing === undefined || existing === owner ? owner : null);
+}
+
+export function getPluginRegistryGatewayOwner(
+  registry: PluginRegistry,
+): PluginRegistryGatewayOwner | undefined {
+  return gatewayOwners.get(getPluginRegistryResourceOwner(registry)) ?? undefined;
 }
 
 /** The creation owner lends existing custody; lookup never takes ownership of an external host. */

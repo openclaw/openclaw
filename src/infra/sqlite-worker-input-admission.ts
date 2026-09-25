@@ -14,6 +14,7 @@ export class SqliteWorkerInputAdmission {
       queuedBytes(): number;
       isClosing(): boolean;
       maxQueuedBytes: number;
+      maxQueuedInputBytes: number;
       maxMessageBytes: number;
     },
   ) {}
@@ -72,7 +73,8 @@ export class SqliteWorkerInputAdmission {
     if (this.owner.isClosing()) {
       throw new SqliteWorkerError("SQLite worker host is closing", "closed");
     }
-    const bytes = inputBytes > this.owner.maxQueuedBytes ? this.owner.maxMessageBytes : inputBytes;
+    const bytes =
+      inputBytes > this.owner.maxQueuedInputBytes ? this.owner.maxMessageBytes : inputBytes;
     if (this.owner.queuedBytes() + this.bytes + bytes > this.owner.maxQueuedBytes) {
       throw new SqliteWorkerError("SQLite worker input preparation capacity reached", "overloaded");
     }

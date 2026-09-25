@@ -17,14 +17,8 @@ const hostMockState = vi.hoisted(() => ({
 
 vi.mock("@microsoft/teams.apps", () => ({
   App: class {
-    tokenManager = {
-      getBotToken: async () => {
-        if (hostMockState.tokenError) {
-          throw hostMockState.tokenError;
-        }
-        return { toString: () => "token" };
-      },
-      getGraphToken: async () => {
+    tokenProvider = {
+      getAppToken: async () => {
         if (hostMockState.tokenError) {
           throw hostMockState.tokenError;
         }

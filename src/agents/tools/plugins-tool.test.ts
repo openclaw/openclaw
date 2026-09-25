@@ -318,6 +318,52 @@ describe("plugins tool", () => {
     },
   );
 
+  it.each([
+    { oversized: false, restartRequired: false },
+    { oversized: true, restartRequired: false },
+    { oversized: false, restartRequired: true },
+    { oversized: true, restartRequired: true },
+  ])(
+    "keeps selected-entry guidance with compact=$oversized and restart=$restartRequired",
+    async ({ oversized, restartRequired }) => {
+      callGateway.mockResolvedValue({
+        ok: true,
+        runtime: {
+          ...runtime,
+          selectedEntries: { "local-tool": "/plugins/local-tool/dist/index.js" },
+        },
+        restartRequired,
+        warnings: oversized
+          ? ["x".repeat(4_000)]
+          : restartRequired
+            ? ["Compiled bundled code needs a restart."]
+            : [],
+      });
+      const result = await createPluginsTool().execute("reload", {
+        action: "reload",
+        pluginId: "local-tool",
+      });
+      expect(result).toMatchObject({
+        details: {
+          restartRequired,
+          runtime: { generation: runtime.generation },
+          next: expect.stringContaining(
+            "Selected entry: /plugins/local-tool/dist/index.js. Rebuild compiled output after source edits.",
+          ),
+        },
+      });
+      if (restartRequired) {
+        expect(result.details).toMatchObject({
+          next: expect.stringMatching(/restart the Gateway/i),
+        });
+        expect(JSON.stringify(result)).not.toContain("Start a new conversation");
+      }
+      expect(
+        Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8"),
+      ).toBeLessThanOrEqual(3_840);
+    },
+  );
+
   it.each([undefined, false, true])(
     "retains the publication outcome and continuation when mutation details exceed the budget (%s)",
     async (committed) => {

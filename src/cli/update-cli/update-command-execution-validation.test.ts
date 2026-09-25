@@ -18,7 +18,8 @@ import {
   updateRunStepsFromResultStep,
   updateRunWarningMessages,
 } from "../../infra/update-run-step.js";
-import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import * as utils from "../../utils.js";
 import * as restartProbe from "../daemon-cli/restart-health-probe.js";

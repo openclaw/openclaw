@@ -62,14 +62,18 @@ export async function createFileEditorView(params: {
   let isEditable = params.editable === true;
   let isWrapped = params.wrap === true;
   let separator = detectLineSeparator(params.content);
+  let sourceContent = params.content;
+  const readContent = (state: EditorState) =>
+    state.doc.eq(sourceDocument)
+      ? sourceContent
+      : state.doc.sliceString(0, state.doc.length, separator ?? "\n");
 
   const buildState = (content: string) =>
     EditorState.create({
       doc: content,
       extensions: [
-        // The lineSeparator facet is static, so separator changes require a
-        // full state rebuild (see setContent below).
-        ...(separator ? [EditorState.lineSeparator.of(separator)] : []),
+        // Keep default newline parsing for typing and paste. The file's
+        // separator belongs to serialization, not incoming text interpretation.
         lineNumbers(),
         highlightSpecialChars(),
         history(),
@@ -93,12 +97,14 @@ export async function createFileEditorView(params: {
         lineDecorations,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
-            docChanged?.(update.state.sliceDoc());
+            docChanged?.(readContent(update.state));
           }
         }),
       ],
     });
 
+  const initialState = buildState(params.content);
+  let sourceDocument = initialState.doc;
   params.parent.replaceChildren();
   const view = new EditorView({
     parent: params.parent,
@@ -107,12 +113,11 @@ export async function createFileEditorView(params: {
     // theme where slotted light-DOM content can't see it. The panel lives in
     // the document's light DOM, so the document is the correct style root.
     root: document,
-    state: buildState(params.content),
+    state: initialState,
   });
 
   const clampLine = (line: number) => Math.max(1, Math.min(Math.floor(line), view.state.doc.lines));
-  // Compare through the configured separator: mixed line endings can serialize
-  // differently without changing the editor document or creating a draft.
+  // Compare logical lines without treating a read-only mixed-ending preview as an edit.
   const contentEquals = (content: string) => view.state.toText(content).eq(view.state.doc);
 
   return {
@@ -127,12 +132,14 @@ export async function createFileEditorView(params: {
         return;
       }
       const nextSeparator = detectLineSeparator(content);
+      sourceContent = content;
+      sourceDocument = view.state.toText(content);
       if (nextSeparator !== separator) {
         separator = nextSeparator;
         view.setState(buildState(content));
         return;
       }
-      if (contentEquals(content)) {
+      if (view.state.doc.eq(sourceDocument)) {
         return;
       }
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
@@ -202,9 +209,9 @@ export async function createFileEditorView(params: {
         }),
       });
     },
-    // sliceDoc serializes with the configured line separator; doc.toString()
-    // would normalize CRLF/CR files to LF and corrupt saves.
-    getContent: () => view.state.sliceDoc(),
+    // Preserve exact source bytes before edits and after undo; changed text
+    // adopts the loaded file's separator, including pasted multiline input.
+    getContent: () => readContent(view.state),
     onDocChanged: (callback) => {
       docChanged = callback;
     },

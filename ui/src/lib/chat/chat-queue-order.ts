@@ -3,8 +3,8 @@ import type { ChatQueueItem } from "./chat-types.ts";
 type ChatQueuePosition = Pick<ChatQueueItem, "createdAt" | "orderKey">;
 
 /**
- * Canonical queue position. `orderKey` is the operator-owned position; `createdAt`
- * is the arrival fact and stays the default so an untouched queue is FIFO.
+ * Canonical queue position. Admission resolves arrival collisions with `orderKey`;
+ * explicit reorders change it while `createdAt` remains the arrival timestamp.
  */
 export function chatQueueOrderKey(item: ChatQueuePosition): number {
   return item.orderKey ?? item.createdAt;

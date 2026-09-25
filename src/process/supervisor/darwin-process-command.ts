@@ -57,7 +57,7 @@ function loadNative() {
   };
 }
 
-function parseArguments(bytes: Buffer, pid: number): string[] {
+function parseArguments(bytes: Buffer, pid: number): ProcessCommand {
   const argc = bytes.readInt32LE();
   let offset = bytes.indexOf(0, 4);
   if (argc <= 0 || argc > bytes.length || offset <= 4) {
@@ -75,7 +75,15 @@ function parseArguments(bytes: Buffer, pid: number): string[] {
     argv.push(bytes.toString("utf8", offset, end));
     offset = end + 1;
   }
-  return argv;
+  // Retain only the service owner's marker; process environments may contain credentials.
+  const marker = bytes
+    .toString("utf8", offset)
+    .split("\0")
+    .find((entry) => entry.startsWith("OPENCLAW_SERVICE_MARKER="));
+  return {
+    argv,
+    ...(marker ? { serviceMarker: marker.slice("OPENCLAW_SERVICE_MARKER=".length) } : {}),
+  };
 }
 
 function isForeignNativeExecutable(executable: string, uid: number): boolean {
@@ -92,18 +100,25 @@ function isForeignNativeExecutable(executable: string, uid: number): boolean {
 }
 
 /** Exact argv, or explicit kernel-executable evidence for a foreign system service. */
-export function readDarwinProcessCommand(pid: number, uid: number): ProcessCommand | undefined {
+export function readDarwinProcessCommand(pid: number, uid?: number): ProcessCommand | undefined {
   native ??= loadNative();
   const result = native.readArguments(pid);
   if ("bytes" in result) {
-    return { argv: parseArguments(result.bytes, pid) };
+    return parseArguments(result.bytes, pid);
   }
   if (isPidDefinitelyDead(pid)) {
     return undefined;
   }
   const executable = native.executable(pid);
-  if (executable && isForeignNativeExecutable(executable, uid) && native.isPlatformBinary(pid)) {
+  if (
+    uid !== undefined &&
+    executable &&
+    isForeignNativeExecutable(executable, uid) &&
+    native.isPlatformBinary(pid)
+  ) {
     return { argvUnavailable: true, executable, uid };
   }
-  throw new Error(`Cannot inspect Darwin arguments for live PID ${pid} (errno ${result.errno})`);
+  throw new Error(
+    `Could not classify PID ${pid}: cannot inspect Darwin arguments (errno ${result.errno}).`,
+  );
 }

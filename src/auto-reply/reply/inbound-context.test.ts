@@ -430,6 +430,23 @@ describe("finalizeInboundContext media cleanup", () => {
     });
   });
 
+  it("keeps a singular legacy MediaUrl off the second inbound attachment slot", () => {
+    const ctx = finalizeInboundContext({
+      Body: "two attachments",
+      MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
+      MediaUrls: ["file:///tmp/a.png"],
+      MediaUrl: "file:///tmp/a.png",
+    });
+
+    expect(ctx.media).toHaveLength(2);
+    expect(ctx.media?.[0]).toMatchObject({
+      path: "/tmp/a.png",
+      url: "file:///tmp/a.png",
+    });
+    expect(ctx.media?.[1]).toMatchObject({ path: "/tmp/b.png" });
+    expect(ctx.media?.[1]?.url).toBeUndefined();
+  });
+
   it("adopts a singular SDK-staged path without losing canonical facts or metadata", () => {
     const ctx = finalizeInboundContext({
       Body: "hello",

@@ -14,7 +14,7 @@ import type {
   SharedGatewayAuthClient,
   SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
-import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
+import type { ActivateRuntimeSecrets } from "./server-startup-config.types.js";
 import type { HookClientIpConfig } from "./server/hooks-request-handler.js";
 
 export type RuntimeSecretsPreflightParams = Omit<

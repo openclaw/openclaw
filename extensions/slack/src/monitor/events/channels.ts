@@ -12,11 +12,7 @@ import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
 import { resolveSlackIngressTurnLifecycle } from "../ingress.js";
-import type {
-  SlackChannelCreatedEvent,
-  SlackChannelIdChangedEvent,
-  SlackChannelRenamedEvent,
-} from "../types.js";
+import type { SlackChannelIdChangedEvent, SlackChannelRenamedEvent } from "../types.js";
 import { resolveSlackListenerEventScope } from "./system-event-context.js";
 
 export function registerSlackChannelEvents(params: {
@@ -58,57 +54,34 @@ export function registerSlackChannelEvents(params: {
     });
   };
 
-  ctx.app.event(
-    "channel_created",
-    async (args: SlackEventMiddlewareArgs<"channel_created"> & AllMiddlewareArgs) => {
-      const { event, body, context, client } = args;
-      const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
-      if (eventScope === null) {
-        return;
-      }
-      if (ctx.shouldDropMismatchedSlackEvent(body)) {
-        return;
-      }
-      trackEvent?.();
+  for (const [eventName, kind] of [
+    ["channel_created", "created"],
+    ["channel_rename", "renamed"],
+  ] as const) {
+    ctx.app.event(
+      eventName,
+      async (
+        args: SlackEventMiddlewareArgs<"channel_created" | "channel_rename"> & AllMiddlewareArgs,
+      ) => {
+        const { event, body, context, client } = args;
+        const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
+        if (eventScope === null || ctx.shouldDropMismatchedSlackEvent(body)) {
+          return;
+        }
+        trackEvent?.();
 
-      const payload = event as SlackChannelCreatedEvent;
-      const channelId = payload.channel?.id;
-      const channelName = payload.channel?.name;
-      await enqueueChannelSystemEvent({
-        kind: "created",
-        channelId,
-        channelName,
-        eventId: body.event_id,
-        eventScope,
-      });
-    },
-  );
-
-  ctx.app.event(
-    "channel_rename",
-    async (args: SlackEventMiddlewareArgs<"channel_rename"> & AllMiddlewareArgs) => {
-      const { event, body, context, client } = args;
-      const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
-      if (eventScope === null) {
-        return;
-      }
-      if (ctx.shouldDropMismatchedSlackEvent(body)) {
-        return;
-      }
-      trackEvent?.();
-
-      const payload = event as SlackChannelRenamedEvent;
-      const channelId = payload.channel?.id;
-      const channelName = payload.channel?.name_normalized ?? payload.channel?.name;
-      await enqueueChannelSystemEvent({
-        kind: "renamed",
-        channelId,
-        channelName,
-        eventId: body.event_id,
-        eventScope,
-      });
-    },
-  );
+        const channel: SlackChannelRenamedEvent["channel"] = event.channel;
+        await enqueueChannelSystemEvent({
+          kind,
+          channelId: channel?.id,
+          channelName:
+            kind === "renamed" ? (channel?.name_normalized ?? channel?.name) : channel?.name,
+          eventId: body.event_id,
+          eventScope,
+        });
+      },
+    );
+  }
 }
 
 export function registerSlackChannelIdChangedEvent(params: {

@@ -14,6 +14,10 @@ type AgentHarnessPreparedEnvironment = Readonly<{
   localIdentityEnv: Readonly<Record<string, string>>;
   /** Local child destination facts; must not be projected into a remote or sandbox process. */
   localProcessEnv?: Readonly<Record<string, string>>;
+  /** Tool lookup on an owned local process; omit for remote, socket, or sandbox placement. */
+  localToolEnv?: Readonly<Record<string, string>>;
+  /** Prefix intent for runtimes with an explicitly authored native shell PATH. */
+  localToolPathPrepend?: readonly string[];
   /** Non-secret fact used to select the local GitHub identity overlay. */
   managedLocalIdentity: boolean;
 }>;
@@ -54,6 +58,18 @@ export type AgentHarnessHostCapabilities = Readonly<{
   annotateCurrentUserTurn?: (
     annotation: import("../../sessions/user-turn-transcript.types.js").UserTurnTranscriptAnnotation,
   ) => Promise<void>;
+  /** Execution-only document paths after the harness confirms unsandboxed local placement. */
+  prepareInputAttachments?: (request: {
+    placement: "local-host";
+    maxChars: number;
+    /** Omit for the admitted input; supply the current input for steering. */
+    turn?: Pick<
+      import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams,
+      "media" | "userTurnTranscriptRecorder"
+    >;
+    assertCurrent: () => void;
+    signal?: AbortSignal;
+  }) => Promise<string | undefined>;
   /** Rebuilds retained attachments under this host's captured media policy and run authority. */
   prepareContextMedia?: (request: {
     message: import("../runtime/index.js").AgentMessage;

@@ -4,10 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import type { SessionWorkerPlacementContext } from "../../gateway/worker-environments/session-placement-lifecycle.js";
-import type {
-  ConversationRef,
-  SessionBindingRecord,
-} from "../../infra/outbound/session-binding-service.js";
+import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
 import type {
   PluginHookBeforeDispatchResult,
@@ -131,23 +128,9 @@ const acpMocks = vi.hoisted(() => ({
   >(async () => null),
   requireAcpRuntimeBackend: vi.fn<() => unknown>(),
 }));
-const sessionBindingMocks = vi.hoisted(() => {
-  const resolveByConversation = vi.fn<
-    (ref: {
-      channel: string;
-      accountId: string;
-      conversationId: string;
-      parentConversationId?: string;
-    }) => SessionBindingRecord | null
-  >(() => null);
-  return {
-    listBySession: vi.fn<(targetSessionKey: string) => SessionBindingRecord[]>(() => []),
-    resolveByConversation,
-    resolveByConversationAsync: vi.fn(async (ref: Parameters<typeof resolveByConversation>[0]) =>
-      resolveByConversation(ref),
-    ),
-    touch: vi.fn(),
-  };
+const { mocks: sessionBindingMocks, module: sessionBindingModule } = await vi.hoisted(async () => {
+  const { createDispatchBindingMocks } = await import("./session-binding.test-mocks.js");
+  return createDispatchBindingMocks(vi);
 });
 
 export function mockPluginBindingClaim(
@@ -618,28 +601,7 @@ vi.mock("../../acp/runtime/registry.js", () => ({
   getAcpRuntimeBackend: acpMocks.getAcpRuntimeBackend,
   requireAcpRuntimeBackend: acpMocks.requireAcpRuntimeBackend,
 }));
-vi.mock("../../infra/outbound/session-binding-service.js", async () => ({
-  ...(await import("../../infra/outbound/session-binding-errors.js")),
-  readSessionBindingSelectionCurrent: (refs: readonly ConversationRef[]) =>
-    Promise.all(refs.map((ref) => sessionBindingMocks.resolveByConversationAsync(ref))),
-  getSessionBindingService: () => ({
-    bind: vi.fn(async () => {
-      throw new Error("bind not mocked");
-    }),
-    getCapabilities: vi.fn(() => ({
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: ["current", "child"] as const,
-    })),
-    listBySession: (targetSessionKey: string) =>
-      sessionBindingMocks.listBySession(targetSessionKey),
-    resolveByConversation: sessionBindingMocks.resolveByConversation,
-    resolveByConversationAsync: sessionBindingMocks.resolveByConversationAsync,
-    touchAsync: sessionBindingMocks.touch,
-    unbind: vi.fn(async () => []),
-  }),
-}));
+vi.mock("../../infra/outbound/session-binding-service.js", () => sessionBindingModule);
 vi.mock("../../infra/agent-events.js", () => ({
   assertAgentRunLifecycleGenerationCurrent: vi.fn(),
   captureAgentRunLifecycleGeneration: () => "test-generation",

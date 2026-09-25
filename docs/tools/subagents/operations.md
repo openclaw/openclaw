@@ -67,6 +67,11 @@ keep their existing owners. Orphaned runs settle their background task before
 cleanup, so retained child sessions do not leave phantom running activity. If the
 task update fails, completion remains available for retry.
 
+Startup session maintenance reports retained run/task owners in one informational
+summary. Those rows remain with registry recovery; the session-only orphan repair
+does not compete for their ownership. Ownership changes during a repair and failed
+ownership checks still produce warnings.
+
 The parent can inspect a retained child transcript and use `sessions_send` to
 continue that session, or spawn a replacement after confirming the old execution
 has stopped. Reusing a child restores its conversation context; it does not replay

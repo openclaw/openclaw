@@ -1,4 +1,5 @@
 name: OpenClaw NPM Release
+run-name: "openclaw-npm-release.yml [${{ inputs.tag }}] ${{ inputs.preflight_only && 'preflight' || 'publish' }} parent=${{ inputs.release_publish_run_id || 'manual' }}/${{ inputs.release_publish_run_attempt || '1' }}"
 
 on:
   workflow_dispatch:
@@ -31,6 +32,11 @@ on:
         type: string
       stable_soak_waiver:
         description: Operator reason for publishing a stable tag from Full Release Validation evidence recorded without soak; leave empty to require soak.
+        required: false
+        default: ""
+        type: string
+      lane_waiver:
+        description: Operator acknowledgement (reason) for publishing from Full Release Validation evidence sealed under an operator lane waiver; required when the manifest carries one.
         required: false
         default: ""
         type: string
@@ -104,7 +110,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
 
 jobs:
   # PLEASE DON'T ADD LONG-RUNNING OR FLAKY CHECKS TO THE npm RELEASE PATH.
@@ -131,7 +137,7 @@ jobs:
 
   validate_publish_request:
     if: ${{ !inputs.preflight_only }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read
@@ -883,6 +889,9 @@ jobs:
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
         env:
           STABLE_SOAK_WAIVER: ${{ inputs.stable_soak_waiver }}
+          # A sealed waiver stays authoritative only while the variable still holds it.
+          OPENCLAW_RELEASE_STABLE_SOAK_WAIVER: ${{ vars.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER }}
+          LANE_WAIVER: ${{ inputs.lane_waiver }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |

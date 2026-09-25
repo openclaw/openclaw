@@ -7,7 +7,7 @@ import {
   type WorkerNodeRuntimeIdentity,
   type WorkerProvider,
 } from "../../plugins/types.js";
-import { verifyWorkerAdmissionHandshake } from "./admission.js";
+import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createDedicatedNodeLeaseAttestations } from "./dedicated-node-lease-attestations.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
@@ -136,7 +136,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         }),
       );
       cancellation?.assertActive();
-      if (!verifyWorkerAdmissionHandshake(receipt, installation)) {
+      if (!sameWorkerBuild(receipt, installation)) {
         throw new Error("Worker bootstrap receipt does not match the expected build identity");
       }
     } catch (error) {
@@ -513,7 +513,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       try {
         currentBundle = await options.prepareInstallation("bundle", signal);
         if (record.bootstrapReceipt) {
-          if (verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
+          if (sameWorkerBuild(record.bootstrapReceipt, currentBundle)) {
             const sessionId = record.state === "attached" ? record.attachedSessionIds[0] : null;
             if (record.state !== "attached" || sessionId) {
               await ensurePendingCredential(record, sessionId ?? null);
@@ -639,10 +639,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           await failBootstrap(record, leaseId, provider, error).catch(() => undefined);
           return;
         }
-        if (
-          record.bootstrapReceipt &&
-          verifyWorkerAdmissionHandshake(record.bootstrapReceipt, installation)
-        ) {
+        if (record.bootstrapReceipt && sameWorkerBuild(record.bootstrapReceipt, installation)) {
           await ensurePendingCredential(record, null);
           return;
         }

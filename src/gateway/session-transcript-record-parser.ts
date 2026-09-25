@@ -1,10 +1,10 @@
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   extractJsonNullableStringFieldPrefix,
   extractJsonNumberFieldPrefix,
   extractJsonStringFieldPrefix,
-  readNonBlankStringPreservingWhitespace,
 } from "./session-transcript-json.js";
 
 export type TranscriptRecord = {
@@ -59,7 +59,7 @@ function extractJsonStringFieldWindow(
     }
     try {
       const decoded = JSON.parse(`"${match[1]}"`) as unknown;
-      return readNonBlankStringPreservingWhitespace(decoded);
+      return readNonBlankString(decoded);
     } catch {
       return undefined;
     }
@@ -247,7 +247,7 @@ export function parseTranscriptRecord(line: string): TranscriptRecord | null {
       if (!isRecord(record)) {
         return null;
       }
-      const id = readNonBlankStringPreservingWhitespace(record.id);
+      const id = readNonBlankString(record.id);
       return {
         byteLength,
         ...(id ? { id } : {}),

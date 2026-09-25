@@ -4,6 +4,7 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -173,6 +174,25 @@ export function resolveOperatorRolePolicy(
   const actor = resolveGatewayOperatorRoleActor(client);
   if (actor?.kind === "system") {
     return undefined;
+  }
+  const authority = client?.internal?.operatorRunAuthority;
+  if (actor?.kind === "operator" && authority) {
+    assertAdmittedRunOperatorAuthority(authority);
+    authority.assertCurrent();
+    if (authority.profileId !== actor.profileId) {
+      throw new Error("Gateway requester profile changed");
+    }
+    if (!cfg.gateway?.roles || authority.profileId === GATEWAY_OWNER_PROFILE_ID) {
+      return undefined;
+    }
+    if (!authority.readCurrentRoleAssignment) {
+      throw new Error("Operator role assignment was not prepared");
+    }
+    return resolveOperatorRolePolicyForAssignment(
+      authority.profileId,
+      authority.readCurrentRoleAssignment(),
+      cfg,
+    );
   }
   const prepared = client?.preparedSessionProfile;
   if (actor?.kind === "operator" && prepared?.aliases.has(actor.profileId)) {

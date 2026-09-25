@@ -1,5 +1,5 @@
 // Types script supports OpenClaw repository automation.
-import type ts from "typescript";
+import type { Checker, Project } from "typescript/unstable/sync";
 
 export type UsageBucket = "internal" | "production" | "test";
 
@@ -32,8 +32,9 @@ export type SymbolKind =
 export type ProgramContext = {
   repoRoot: string;
   tsconfigPath: string;
-  program: ts.Program;
-  checker: ts.TypeChecker;
+  project: Project;
+  checker: Checker;
+  close: () => void;
   normalizePath: (filePath: string) => string;
   relativeToRepo: (filePath: string) => string;
 };

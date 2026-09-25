@@ -2,11 +2,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readRegularFile, readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { parse as parseDotEnv } from "dotenv";
 import { resolveConfigDir } from "./config-dir.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeEnvVarKey } from "./host-env-security.js";
-import { readRegularFile, readRegularFileSync } from "./regular-file.js";
 
 /** Maximum bytes to read from any dotenv file. */
 const MAX_DOTENV_FILE_BYTES = 1024 * 1024;

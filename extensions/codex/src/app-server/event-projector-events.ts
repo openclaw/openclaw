@@ -584,20 +584,15 @@ export class CodexEventProjection {
     if (params.phase === "result") {
       this.toolProgress.recordNativeToolError({ item, name, meta, status });
     }
-    if (!event) {
-      if (params.phase === "result") {
-        this.toolTranscript.emitAfterToolCallObservation(item);
-        await this.onNativeToolResultRecorded?.();
+    if (event) {
+      const activity = projectCodexToolActivity(item, params.phase, meta);
+      if (activity && params.phase === "start") {
+        this.emitAgentEvent({ stream: "item", data: activity });
       }
-      return;
-    }
-    const activity = projectCodexToolActivity(item, params.phase, meta);
-    if (activity && params.phase === "start") {
-      this.emitAgentEvent({ stream: "item", data: activity });
-    }
-    this.emitAgentEvent(event);
-    if (activity && params.phase !== "start") {
-      this.emitAgentEvent({ stream: "item", data: activity });
+      this.emitAgentEvent(event);
+      if (activity && params.phase !== "start") {
+        this.emitAgentEvent({ stream: "item", data: activity });
+      }
     }
     if (params.phase === "result") {
       this.toolTranscript.emitAfterToolCallObservation(item);

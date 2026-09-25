@@ -161,6 +161,33 @@ describe("canonical persisted media", () => {
     ).toThrow("ambiguous sparse positional alignment");
   });
 
+  it("keeps a singular legacy URL off the second stored attachment when canonicalizing", () => {
+    const result = canonicalizePersistedUserMessageMedia({
+      id: "msg-1",
+      Body: "two attachments",
+      MediaPaths: ["/media/a.png", "/media/b.png"],
+      MediaUrls: ["file:///media/a.png"],
+      MediaUrl: "file:///media/a.png",
+      __openclaw: { traceId: "trace-1" },
+    });
+
+    expect(result.hadLegacy).toBe(true);
+    expect(result.changed).toBe(true);
+    expect(result.message).toEqual({
+      id: "msg-1",
+      Body: "two attachments",
+      __openclaw: {
+        traceId: "trace-1",
+        media: [
+          expect.objectContaining({ path: "/media/a.png", url: "file:///media/a.png" }),
+          expect.objectContaining({ path: "/media/b.png" }),
+        ],
+      },
+    });
+    const media = readPersistedMediaFacts(result.message);
+    expect(media?.[1]?.url).toBeUndefined();
+  });
+
   it("rejects under-cardinal compact types after dense attachment paths", () => {
     expect(() =>
       canonicalizePersistedUserMessageMedia({

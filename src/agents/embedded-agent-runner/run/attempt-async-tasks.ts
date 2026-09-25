@@ -1,15 +1,19 @@
 /**
  * Waits for completion-required async tasks before finalizing an attempt.
  */
-import { createAbortError as createNamedAbortError } from "../../../infra/abort-signal.js";
+import {
+  createAbortError as createNamedAbortError,
+  racePromiseWithAbortSignal,
+} from "../../../infra/abort-signal.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { toErrorObject } from "../../../infra/errors.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
-import { isTerminalTaskStatus, type TaskRecord } from "../../../tasks/task-registry.types.js";
+import { findTaskByRunIdAsync } from "../../../tasks/task-registry-query.js";
 import {
-  findTaskByRunIdForStatus,
-  listTasksForOwnerOrRequesterSessionKeyForStatus,
-} from "../../../tasks/task-status-access.js";
+  prepareTaskRegistryRead,
+  type TaskRegistryRead,
+} from "../../../tasks/task-registry-read.js";
+import { isTerminalTaskStatus, type TaskRecord } from "../../../tasks/task-registry.types.js";
 import { sleep } from "../../../utils/sleep.js";
 
 export type AsyncStartedToolMeta = {
@@ -82,6 +86,7 @@ function collectAsyncTaskRunIds(
   toolMetas: readonly AsyncStartedToolMeta[],
   sessionKey: string | undefined,
   alreadyWaited: ReadonlySet<string>,
+  read: TaskRegistryRead,
 ): string[] {
   const runIds: string[] = [];
   const seen = new Set<string>();
@@ -102,7 +107,7 @@ function collectAsyncTaskRunIds(
   }
   // Registry lookup catches completion-required tasks started before their
   // tool metadata reached the current attempt result.
-  for (const task of listTasksForOwnerOrRequesterSessionKeyForStatus(normalizedSessionKey)) {
+  for (const task of listCompletionTasks(read, normalizedSessionKey)) {
     if (!COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "")) {
       continue;
     }
@@ -114,28 +119,53 @@ function collectAsyncTaskRunIds(
   return runIds;
 }
 
-function findTerminalTasks(runIds: readonly string[]): {
+function listCompletionTasks(read: TaskRegistryRead, sessionKey: string): TaskRecord[] {
+  return read
+    .listTasksForRelatedSessionKey(sessionKey)
+    .filter((task) => task.requesterSessionKey === sessionKey || task.ownerKey === sessionKey);
+}
+
+async function prepareCompletionTaskRead(signal?: AbortSignal): Promise<TaskRegistryRead> {
+  throwIfAborted(signal);
+  // Abort only this observation; accepted registry mutations retain their settlement owner.
+  const read = await racePromiseWithAbortSignal(prepareTaskRegistryRead(), signal);
+  throwIfAborted(signal);
+  if (!read) {
+    throw new Error("Task activity did not stabilize before completion.");
+  }
+  return read;
+}
+
+async function findTerminalTasks(
+  runIds: readonly string[],
+  read: TaskRegistryRead,
+  signal?: AbortSignal,
+): Promise<{
   pendingRunIds: string[];
   terminalTasks: TaskRecord[];
-} {
+}> {
   const pendingRunIds: string[] = [];
   const terminalTasks: TaskRecord[] = [];
   for (const runId of runIds) {
-    const task = findTaskByRunIdForStatus(runId);
+    throwIfAborted(signal);
+    const task = await racePromiseWithAbortSignal(findTaskByRunIdAsync(runId, read), signal);
+    throwIfAborted(signal);
     if (task && isTerminalTaskStatus(task.status)) {
       terminalTasks.push(task);
       continue;
     }
     pendingRunIds.push(runId);
   }
+  read.assertCurrent();
   return { pendingRunIds, terminalTasks };
 }
 
 /** Returns whether a cron run has non-terminal generated-media tasks that must settle first. */
-export function requiresCompletionRequiredAsyncTaskWait(params: {
+export async function requiresCompletionRequiredAsyncTaskWait(params: {
   sessionKey: string | undefined;
   toolMetas: readonly AsyncStartedToolMeta[];
-}): boolean {
+  abortSignal?: AbortSignal;
+}): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
   if (!sessionKey || !isCronRunSessionKey(sessionKey)) {
     return false;
@@ -147,7 +177,8 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
   ) {
     return true;
   }
-  return listTasksForOwnerOrRequesterSessionKeyForStatus(sessionKey).some(
+  const read = await prepareCompletionTaskRead(params.abortSignal);
+  return listCompletionTasks(read, sessionKey).some(
     (task) =>
       COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "") &&
       !isTerminalTaskStatus(task.status) &&
@@ -156,11 +187,12 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
 }
 
 /** Returns whether the current attempt should synchronously wait for media tasks. */
-export function shouldWaitForCompletionRequiredAsyncTasks(params: {
+export async function shouldWaitForCompletionRequiredAsyncTasks(params: {
   sessionKey: string | undefined;
   toolMetas: readonly AsyncStartedToolMeta[];
   yieldDetected?: boolean;
-}): boolean {
+  abortSignal?: AbortSignal;
+}): Promise<boolean> {
   if (params.yieldDetected === true) {
     // sessions_yield pauses the turn so the completion event can wake it later;
     // waiting here would reuse the internal abort signal and turn the pause into AbortError.
@@ -169,6 +201,7 @@ export function shouldWaitForCompletionRequiredAsyncTasks(params: {
   return requiresCompletionRequiredAsyncTaskWait({
     sessionKey: params.sessionKey,
     toolMetas: params.toolMetas,
+    abortSignal: params.abortSignal,
   });
 }
 
@@ -196,9 +229,16 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
 
   while (true) {
     throwIfAborted(params.abortSignal);
+    let read = await prepareCompletionTaskRead(params.abortSignal);
+    throwIfAborted(params.abortSignal);
     // Re-read metadata every outer loop; tool calls may record async run ids
     // after an earlier task wait finished.
-    const runIds = collectAsyncTaskRunIds(params.getToolMetas(), params.sessionKey, waitedRunIds);
+    const runIds = collectAsyncTaskRunIds(
+      params.getToolMetas(),
+      params.sessionKey,
+      waitedRunIds,
+      read,
+    );
     if (runIds.length === 0) {
       return {
         waitedRunIds: [...waitedRunIds],
@@ -214,7 +254,8 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
     let pendingRunIds = runIds;
     while (pendingRunIds.length > 0) {
       throwIfAborted(params.abortSignal);
-      const terminalState = findTerminalTasks(pendingRunIds);
+      const terminalState = await findTerminalTasks(pendingRunIds, read, params.abortSignal);
+      throwIfAborted(params.abortSignal);
       for (const task of terminalState.terminalTasks) {
         const runId = task.runId?.trim();
         if (runId) {
@@ -240,6 +281,8 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
         };
       }
       await sleepWithAbort(Math.min(pollIntervalMs, remainingMs), params.abortSignal, sleepFn);
+      throwIfAborted(params.abortSignal);
+      read = await prepareCompletionTaskRead(params.abortSignal);
     }
   }
 }

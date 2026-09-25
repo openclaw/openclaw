@@ -4,12 +4,16 @@ import { afterEach, expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { createTranscriptEventReader } from "../../infra/session-sqlite-migration-readers.js";
 import * as sqliteDirectories from "../../infra/sqlite-private-directory.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { listSessionBranches } from "./session-accessor.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { loadExactSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { importSqliteSessionRowsBatch } from "./session-accessor.sqlite-import.js";
 import {
@@ -38,6 +42,33 @@ const message = {
   message: { role: "user", content: "preserved" },
 };
 afterEach(() => vi.restoreAllMocks());
+
+it("rechecks a required empty destination after staging before writing any batch rows", async () => {
+  await withOpenClawTestState({ label: "import-empty-admission" }, async (state) => {
+    const first = target(state, "first");
+    const second = target(state, "second");
+    const occupied = target(state, "occupied");
+    expect(loadExactSessionEntry(occupied)).toBeUndefined();
+    await expect(
+      importSqliteSessionRowsBatch([
+        {
+          ...first,
+          requireEmptyStore: true,
+          beforePersistentApply: () => {
+            runOpenClawAgentWriteTransaction(
+              (database) => writeSessionEntry(database, occupied.sessionKey, occupied.entry),
+              { agentId: "main", env: state.env },
+            );
+          },
+        },
+        { ...second, requireEmptyStore: true },
+      ]),
+    ).rejects.toThrow("SQLite destination is not empty");
+    expect(loadExactSessionEntry(first)).toBeUndefined();
+    expect(loadExactSessionEntry(second)).toBeUndefined();
+    expect(loadExactSessionEntry(occupied)?.entry.sessionId).toBe("occupied");
+  });
+});
 
 // Observe the real allocator on both POSIX and Windows without replacing its permission checks.
 function observeStages() {

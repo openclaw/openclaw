@@ -109,7 +109,7 @@ function projectHarnessTaskContentForPersistence<T extends HarnessTaskContent>(
 /** Retains admitted completion work for this exact physical requester lifecycle. */
 export function captureAgentHarnessCompletionCustody(
   scope: AgentHarnessTaskRuntimeScope,
-): AgentHarnessCompletionCustody | undefined {
+): Promise<AgentHarnessCompletionCustody | undefined> {
   assertAgentHarnessTaskRuntimeScope(scope);
   const entry = loadRequesterSessionEntry(scope.requesterSessionKey).entry;
   const expected = { sessionId: entry?.sessionId, lifecycleRevision: entry?.lifecycleRevision };

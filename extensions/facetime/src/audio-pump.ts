@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { Writable } from "node:stream";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   RealtimeVoiceAudioChunkMetadata,
@@ -231,18 +232,10 @@ export function startFaceTimeAudioPump(params: {
   let routeReadySettled = false;
   let routeReadyTimer: NodeJS.Timeout | undefined;
   let captureStderr = "";
-  let resolveCaptureReady = () => {};
-  let rejectCaptureReady = (_error: Error) => {};
-  const captureReadyPromise = new Promise<void>((resolve, reject) => {
-    resolveCaptureReady = resolve;
-    rejectCaptureReady = reject;
-  });
-  let resolveRouteReady = () => {};
-  let rejectRouteReady = (_error: Error) => {};
-  const routeReadyPromise = new Promise<void>((resolve, reject) => {
-    resolveRouteReady = resolve;
-    rejectRouteReady = reject;
-  });
+  const captureReady = createDeferred<void>();
+  const routeReady = createDeferred<void>();
+  const captureReadyPromise = captureReady.promise;
+  const routeReadyPromise = routeReady.promise;
   void captureReadyPromise.catch(() => {});
   void routeReadyPromise.catch(() => {});
 
@@ -253,9 +246,9 @@ export function startFaceTimeAudioPump(params: {
     captureReadySettled = true;
     clearTimeout(captureReadyTimer);
     if (error) {
-      rejectCaptureReady(error);
+      captureReady.reject(error);
     } else {
-      resolveCaptureReady();
+      captureReady.resolve();
     }
   };
   const settleRouteReady = (error?: Error) => {
@@ -268,9 +261,9 @@ export function startFaceTimeAudioPump(params: {
       routeReadyTimer = undefined;
     }
     if (error) {
-      rejectRouteReady(error);
+      routeReady.reject(error);
     } else {
-      resolveRouteReady();
+      routeReady.resolve();
     }
   };
   const reportFailure = (error: Error, suppressionLost: boolean) => {

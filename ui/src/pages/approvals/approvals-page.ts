@@ -26,10 +26,10 @@ import { parseApprovalResolvedEvent } from "../../app/exec-approval.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import {
   renderLearnMoreLink,
-  renderSettingsGroup,
   renderSettingsLoadingSkeleton,
   renderSettingsPage,
   renderSettingsPageHeader,
+  renderSettingsSection,
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, t } from "../../i18n/index.ts";
@@ -330,91 +330,93 @@ class ApprovalsPage extends OpenClawLightDomElement {
 
   private renderGrants() {
     const nowMs = Date.now();
-    return html`
-      <h2 id="standing-grants-title" class="settings-section-title">
-        ${t("standingGrants.title")}
-      </h2>
-      <p class="settings-section-subtitle">${t("standingGrants.description")}</p>
-      ${this.grantsError ? html`<div class="callout danger" role="alert">${this.grantsError}</div>` : nothing}
-      <div class="data-table-container">
-        <table
-          class="data-table standing-grants-table settings-table--stacked"
-          role="table"
-          aria-labelledby="standing-grants-title"
-        >
-          <thead>
-            <tr>
-              <th scope="col">${t("standingGrants.columns.automation")}</th>
-              <th scope="col">${t("standingGrants.columns.command")}</th>
-              <th scope="col">${t("standingGrants.columns.uses")}</th>
-              <th scope="col">${t("standingGrants.columns.state")}</th>
-              <th scope="col"><span class="sr-only">${t("standingGrants.revoke")}</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            ${
-              this.grants.length === 0
-                ? html`
-                    <tr>
-                      <td colspan="5" class="data-table-empty-cell">
-                        <div class="data-table-empty-state" role="status" aria-live="polite">
-                          ${t("standingGrants.empty")}
-                        </div>
-                      </td>
-                    </tr>
-                  `
-                : this.grants.map(
-                    (grant) => html`
+    return renderSettingsSection(
+      {
+        title: html`<span id="standing-grants-title">${t("standingGrants.title")}</span>`,
+        description: t("standingGrants.description"),
+        notice: this.grantsError
+          ? html`<div class="callout danger" role="alert">${this.grantsError}</div>`
+          : nothing,
+      },
+      html`
+        <div class="data-table-container">
+          <table
+            class="data-table standing-grants-table settings-table--stacked"
+            role="table"
+            aria-labelledby="standing-grants-title"
+          >
+            <thead>
+              <tr>
+                <th scope="col">${t("standingGrants.columns.automation")}</th>
+                <th scope="col">${t("standingGrants.columns.command")}</th>
+                <th scope="col">${t("standingGrants.columns.uses")}</th>
+                <th scope="col">${t("standingGrants.columns.state")}</th>
+                <th scope="col"><span class="sr-only">${t("standingGrants.revoke")}</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${
+                this.grants.length === 0
+                  ? html`
                       <tr>
-                        <td data-label=${t("standingGrants.columns.automation")}>
-                          ${grant.cronJobName ?? grant.cronJobId}
-                        </td>
-                        <td class="mono" data-label=${t("standingGrants.columns.command")}>
-                          ${grant.command}
-                        </td>
-                        <td data-label=${t("standingGrants.columns.uses")}>${grant.useCount}</td>
-                        <td data-label=${t("standingGrants.columns.state")} aria-live="polite">
-                          ${grantStateLabel(grant, nowMs)}
-                        </td>
-                        <td>
-                          ${
-                            grantIsActive(grant, nowMs)
-                              ? html`
-                                  <button
-                                    class="btn btn--sm"
-                                    aria-label=${`${
-                                      this.revokingGrantId === grant.grantId
-                                        ? t("standingGrants.revoking")
-                                        : t("standingGrants.revoke")
-                                    }: ${grant.cronJobName ?? grant.cronJobId} — ${grant.command}`}
-                                    ?disabled=${this.revokingGrantId !== null}
-                                    @click=${() => void this.revokeGrant(grant.grantId)}
-                                  >
-                                    ${
-                                      this.revokingGrantId === grant.grantId
-                                        ? t("standingGrants.revoking")
-                                        : t("standingGrants.revoke")
-                                    }
-                                  </button>
-                                `
-                              : nothing
-                          }
+                        <td colspan="5" class="data-table-empty-cell">
+                          <div class="data-table-empty-state" role="status" aria-live="polite">
+                            ${t("standingGrants.empty")}
+                          </div>
                         </td>
                       </tr>
-                    `,
-                  )
-            }
-          </tbody>
-        </table>
-      </div>
-    `;
+                    `
+                  : this.grants.map(
+                      (grant) => html`
+                        <tr>
+                          <td data-label=${t("standingGrants.columns.automation")}>
+                            ${grant.cronJobName ?? grant.cronJobId}
+                          </td>
+                          <td class="mono" data-label=${t("standingGrants.columns.command")}>
+                            ${grant.command}
+                          </td>
+                          <td data-label=${t("standingGrants.columns.uses")}>${grant.useCount}</td>
+                          <td data-label=${t("standingGrants.columns.state")} aria-live="polite">
+                            ${grantStateLabel(grant, nowMs)}
+                          </td>
+                          <td>
+                            ${
+                              grantIsActive(grant, nowMs)
+                                ? html`
+                                    <button
+                                      class="btn btn--sm"
+                                      aria-label=${`${
+                                        this.revokingGrantId === grant.grantId
+                                          ? t("standingGrants.revoking")
+                                          : t("standingGrants.revoke")
+                                      }: ${grant.cronJobName ?? grant.cronJobId} — ${grant.command}`}
+                                      ?disabled=${this.revokingGrantId !== null}
+                                      @click=${() => void this.revokeGrant(grant.grantId)}
+                                    >
+                                      ${
+                                        this.revokingGrantId === grant.grantId
+                                          ? t("standingGrants.revoking")
+                                          : t("standingGrants.revoke")
+                                      }
+                                    </button>
+                                  `
+                                : nothing
+                            }
+                          </td>
+                        </tr>
+                      `,
+                    )
+              }
+            </tbody>
+          </table>
+        </div>
+      `,
+    );
   }
 
   private renderTable() {
     if (this.loading && this.items.length === 0) {
-      return renderSettingsGroup(
-        renderSettingsLoadingSkeleton({ label: t("approvalHistory.loading") }),
-      );
+      return renderSettingsLoadingSkeleton({ label: t("approvalHistory.loading") });
     }
     return html`
       <div class="data-table-container">
@@ -536,12 +538,16 @@ class ApprovalsPage extends OpenClawLightDomElement {
         ${this.approvalsAccess ? this.renderGrants() : nothing}
         ${
           this.approvalsAccess
-            ? html`<h2 id="approval-history-title" class="settings-section-title">
-                ${t("standingGrants.historyTitle")}
-              </h2>`
+            ? renderSettingsSection(
+                {
+                  title: html`<span id="approval-history-title">
+                    ${t("standingGrants.historyTitle")}
+                  </span>`,
+                },
+                this.renderTable(),
+              )
             : nothing
         }
-        ${this.approvalsAccess ? this.renderTable() : nothing}
       `,
       { wide: true },
     );

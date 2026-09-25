@@ -11,8 +11,8 @@ import type {
   RunStepOptions,
   UpdateRunResult,
   UpdateStepInfo,
-  UpdateStepResult,
 } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export const MAX_LOG_CHARS = 8000;
 

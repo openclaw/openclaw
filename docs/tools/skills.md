@@ -59,6 +59,12 @@ source. A selected nested workspace stays nested: discovery does not walk up to
 its parent repository. Installing OpenClaw from a repository does not make that
 repository's `.agents/skills/` a global bundled skill source.
 
+Workspace and project skills overriding lower-priority sources are reported at
+info level. Other precedence collisions remain warnings. Each discovery pass
+groups collisions by skill name and winning/losing source, with the number of
+affected skill roots and representative paths. Identical content stays silent;
+already reported content pairs are not repeated on refresh.
+
 Skill roots support grouped layouts. OpenClaw discovers a skill whenever
 `SKILL.md` appears anywhere under a configured root (up to 6 levels deep):
 

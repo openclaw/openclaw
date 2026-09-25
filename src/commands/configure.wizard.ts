@@ -10,13 +10,13 @@ import {
 } from "../agents/agent-scope-config.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { parsePort } from "../cli/shared/parse-port.js";
 import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/config.js";
 import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createChannelSetupHooks } from "../flows/channel-setup.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -721,7 +721,7 @@ export async function runConfigureWizard(
         runtime,
         1,
       );
-      gatewayPort = parsePort(portInput) ?? gatewayPort;
+      gatewayPort = parseTcpPort(portInput) ?? gatewayPort;
     };
 
     let didConfigureGateway = false;

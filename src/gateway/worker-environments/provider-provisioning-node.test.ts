@@ -30,7 +30,7 @@ import * as support from "./service.test-support.js";
 import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 
 describe("node worker provider provisioning", () => {
-  support.setupWorkerEnvironmentServiceSuite();
+  support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
   afterEach(() => closeOpenClawAgentDatabases());
 
   it.each([

@@ -514,7 +514,7 @@ export function expectPluginSourcePrecedence(
     expectedDisabledOrigin: string;
     label: string;
     expectedDisabledError?: string;
-    expectDuplicateWarning?: boolean;
+    expectedDuplicateLevel?: "warn" | "info" | null;
   },
 ) {
   const entries = registry.plugins.filter((entry) => entry.id === scenario.pluginId);
@@ -522,16 +522,16 @@ export function expectPluginSourcePrecedence(
   const loaded = entries[0];
   expect(loaded?.origin, scenario.label).toBe(scenario.expectedLoadedOrigin);
   expect(loaded?.status, scenario.label).toBe("loaded");
-  const expectedWarning =
+  const expectedMessage =
     scenario.expectedDisabledError ??
     `${scenario.expectedDisabledOrigin} plugin will be overridden by ${scenario.expectedLoadedOrigin} plugin`;
-  const hasDuplicateWarning = registry.diagnostics.some(
+  const hasDuplicateDiagnostic = registry.diagnostics.some(
     (diag) =>
-      diag.level === "warn" &&
+      diag.level === (scenario.expectedDuplicateLevel ?? "warn") &&
       diag.pluginId === scenario.pluginId &&
-      diag.message.includes(expectedWarning),
+      diag.message.includes(expectedMessage),
   );
-  expect(hasDuplicateWarning, scenario.label).toBe(scenario.expectDuplicateWarning ?? true);
+  expect(hasDuplicateDiagnostic, scenario.label).toBe(scenario.expectedDuplicateLevel !== null);
 }
 
 export function expectPluginOriginAndStatus(params: {

@@ -2,6 +2,8 @@ name: Plugin NPM Release
 run-name: ${{ github.event_name == 'workflow_dispatch' && (inputs.preflight_only && inputs.trusted_publisher_preflight && format('Plugin NPM Trusted Publisher Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || inputs.preflight_only && format('Plugin NPM Artifact Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || format('Plugin NPM Release [{0}] {1}', inputs.npm_dist_tag, inputs.ref)) || format('Plugin NPM Release [default] {0}', github.sha) }}
 
 on:
+  schedule:
+    - cron: "23 * * * *"
   push:
     branches:
       - main
@@ -113,16 +115,18 @@ on:
           - extended-stable
 
 concurrency:
-  group: plugin-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+  group: plugin-npm-release-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
 
 jobs:
   preview_plugins_npm:
-    runs-on: ubuntu-latest
+    # Scheduled preview is nonpublishing and considers all unpublished packages.
+    if: (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true')
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read
@@ -561,7 +565,7 @@ jobs:
     name: Validate release publish approval
     needs: preview_plugins_npm
     if: github.event_name == 'workflow_dispatch' && !inputs.preflight_only && needs.preview_plugins_npm.outputs.has_candidates == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read
@@ -610,7 +614,7 @@ jobs:
   preview_plugin_pack:
     needs: preview_plugins_npm
     if: inputs.prepared_artifact == '' && ((needs.preview_plugins_npm.outputs.has_candidates == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.preflight_only)) || (github.event_name == 'workflow_dispatch' && inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.has_selection == 'true'))
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       contents: read
     strategy:
@@ -906,7 +910,7 @@ jobs:
     name: Preflight plugin npm package (${{ matrix.plugin.packageName }})
     needs: [preview_plugins_npm, preview_plugin_pack]
     if: ${{ inputs.prepared_artifact == '' && github.event_name == 'workflow_dispatch' && ((inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.has_selection == 'true') || (!inputs.preflight_only && needs.preview_plugins_npm.outputs.has_candidates == 'true')) }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read
@@ -1371,7 +1375,7 @@ jobs:
     name: Seal prepared plugin npm release
     needs: [preview_plugins_npm, verify_plugin_npm_preflight]
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && !inputs.trusted_publisher_preflight }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read
@@ -1886,6 +1890,8 @@ jobs:
           EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch }}
           EXPECTED_WORKFLOW_FULL_REF: ${{ inputs.release_publish_full_ref }}
           EXPECTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          # Revalidate a sealed soak waiver against the live variable before publishing.
+          OPENCLAW_RELEASE_STABLE_SOAK_WAIVER: ${{ vars.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER }}
         run: |
           set -euo pipefail
           if [[ "$PACKAGE_VERSION" == *"-beta."* && "$PUBLISH_TAG" == "beta" ]]; then
@@ -1931,6 +1937,7 @@ jobs:
           WORKFLOW_FULL_REF: ${{ github.ref }}
           WORKFLOW_REF: ${{ github.ref_name }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
+          BOOTSTRAP_APPROVAL_PATH: ${{ runner.temp }}/npm-stable-bootstrap-approval/approval.json
         run: |
           set -euo pipefail
           [[ -n "${NPM_TOKEN// }" ]] || {
@@ -1962,6 +1969,29 @@ jobs:
             --release-publish-ref "$RELEASE_PUBLISH_REF" \
             --release-publish-full-ref "$RELEASE_PUBLISH_FULL_REF" \
             --release-publish-parent-state-policy "$RELEASE_PUBLISH_PARENT_STATE_POLICY"
+          # Owner-held waiver authority is fetched afresh here, after every other
+          # verification and immediately before the token-backed publish.
+          if [[ -f "$BOOTSTRAP_APPROVAL_PATH" ]]; then
+            # A 404 means the owner cleared the variable (revoked). Any other read
+            # failure means current authority is unknown, so the publish is refused;
+            # grant the job token Variables read access rather than publishing blind.
+            current_waiver="$(gh api "repos/${GITHUB_REPOSITORY}/actions/variables/OPENCLAW_RELEASE_STABLE_SOAK_WAIVER" \
+              -H "Cache-Control: max-age=0" --jq '.value' 2>"${RUNNER_TEMP}/waiver-read.err")" || {
+              if grep -q "HTTP 404" "${RUNNER_TEMP}/waiver-read.err"; then
+                current_waiver=""
+              else
+                cat "${RUNNER_TEMP}/waiver-read.err" >&2
+                echo "::error::Could not read OPENCLAW_RELEASE_STABLE_SOAK_WAIVER before npm publish; refusing to publish on unverified waiver authority."
+                exit 1
+              fi
+            }
+            CURRENT_STABLE_SOAK_WAIVER="$current_waiver" node --input-type=module - "$BOOTSTRAP_APPROVAL_PATH" <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { assertStableSoakWaiverStillHeld } from "./scripts/plugin-npm-bootstrap-approval.mjs";
+          const approval = JSON.parse(readFileSync(process.argv[2], "utf8"));
+          assertStableSoakWaiverStillHeld(approval, process.env.CURRENT_STABLE_SOAK_WAIVER ?? "");
+          NODE
+          fi
           HOME="$publish_home" \
             NPM_CONFIG_GLOBALCONFIG=/dev/null \
             NPM_CONFIG_IGNORE_SCRIPTS=true \
@@ -2011,7 +2041,7 @@ jobs:
   verify_plugins_npm:
     needs: [preview_plugins_npm, publish_plugins_npm]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && !inputs.preflight_only && inputs.npm_dist_tag == 'extended-stable' && needs.preview_plugins_npm.result == 'success' && (needs.publish_plugins_npm.result == 'success' || (needs.preview_plugins_npm.outputs.has_candidates == 'false' && needs.publish_plugins_npm.result == 'skipped')) }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       contents: read
     strategy:

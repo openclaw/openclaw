@@ -501,7 +501,6 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     if (content.edit) {
       content.edit.hash = hash;
     }
-    this.visibleContent = content;
   }
 
   private async saveFileContent(

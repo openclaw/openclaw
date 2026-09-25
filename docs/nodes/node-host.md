@@ -144,6 +144,11 @@ openclaw node restart
 
 `node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--share-installed-apps` / `--no-share-installed-apps`, `--runtime <node|bun>` (default: `node`), and `--force` to reinstall. Bun requires version 1.4+ with WAL-reset-safe `node:sqlite` and is an explicit opt-in; Node remains recommended. `node status`, `node stop`, and `node uninstall` are also available.
 
+Node shutdown waits for plugin availability watchers and active computer executions
+to finish cleanup, and reports failures from those cleanup operations. If a command
+reports `Node plugin cleanup failed`, reconnect the node to retry disconnect cleanup
+before sending another command.
+
 ### Automatic node updates
 
 Packaged headless nodes check for updates hourly by default, in both foreground

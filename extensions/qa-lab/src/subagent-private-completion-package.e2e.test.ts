@@ -65,7 +65,15 @@ async function holdProviderRequests(baseUrl: string) {
       }
       const response = await fetch(`${baseUrl}${req.url}`, {
         method: req.method,
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(typeof req.headers.session_id === "string"
+            ? { session_id: req.headers.session_id }
+            : {}),
+          ...(typeof req.headers["x-session-affinity"] === "string"
+            ? { "x-session-affinity": req.headers["x-session-affinity"] }
+            : {}),
+        },
         ...(req.method === "POST" ? { body } : {}),
       });
       const bytes = Buffer.from(await response.arrayBuffer());
@@ -188,15 +196,19 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8")),
     );
     const candidateVersion = candidateManifest.version;
-    const candidateAgentSchemaVersion = record(
-      record(candidateManifest.openclaw).schemaVersions,
-    ).agent;
+    const candidateSchemaVersions = record(record(candidateManifest.openclaw).schemaVersions);
+    const candidateAgentSchemaVersion = candidateSchemaVersions.agent;
+    const candidateSharedSchemaVersion = candidateSchemaVersions.state;
     if (
       typeof candidateVersion !== "string" ||
       typeof candidateAgentSchemaVersion !== "number" ||
-      !Number.isSafeInteger(candidateAgentSchemaVersion)
+      !Number.isSafeInteger(candidateAgentSchemaVersion) ||
+      typeof candidateSharedSchemaVersion !== "number" ||
+      !Number.isSafeInteger(candidateSharedSchemaVersion)
     ) {
-      throw new Error("Candidate package must declare its version and agent schema version");
+      throw new Error(
+        "Candidate package must declare its version and agent/shared schema versions",
+      );
     }
     const published = JSON.parse(
       (await exec("npm", ["view", `openclaw@${releasedVersion}`, "version", "dist", "--json"]))
@@ -247,6 +259,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         },
         providerMode: "mock-openai",
         providerBaseUrl: `${heldProvider.baseUrl}/v1`,
+        mockSessionObserverUrl: mock.sessionObserverUrl,
         forcedRuntime: "openclaw",
         transport: { requiredPluginIds: [], createGatewayConfig: () => ({}) },
         transportBaseUrl: "http://127.0.0.1",
@@ -505,12 +518,12 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       });
     }
 
-    function assertSchema(version: number) {
-      expect(rows(agentDb, "PRAGMA user_version")[0]?.user_version).toBe(version);
+    function assertSchema(agentVersion: number, sharedVersion: number) {
+      expect(rows(agentDb, "PRAGMA user_version")[0]?.user_version).toBe(agentVersion);
       expect(rows(agentDb, "SELECT schema_version FROM schema_meta")[0]?.schema_version).toBe(
-        version,
+        agentVersion,
       );
-      expect(rows(stateDb, "PRAGMA user_version")[0]?.user_version).toBe(17);
+      expect(rows(stateDb, "PRAGMA user_version")[0]?.user_version).toBe(sharedVersion);
     }
 
     async function restartState(
@@ -528,7 +541,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
             env: gateway.runtimeEnv,
             targetPid: Number(info.pid),
             reason: "qa-package-version-cycle",
-            intent: { force: true },
+            intent: { force: true, waitMs: 0 },
           }),
         ).toBe(true);
       }
@@ -619,7 +632,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         sessionId: originalSessionId,
       });
 
-      assertSchema(19);
+      assertSchema(19, 17);
       const backupPath = path.join(prefix, "pre-upgrade.tar.gz");
       let upgradedIdentity: Awaited<ReturnType<typeof install>> | undefined;
       await restartState(async () => {
@@ -651,7 +664,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         // The target Doctor owns its declared schema upgrade; a released
         // schema-19 build cannot reopen that upgraded database.
         await runInstalled(["doctor", "--fix", "--non-interactive"]);
-        assertSchema(candidateAgentSchemaVersion);
+        assertSchema(candidateAgentSchemaVersion, candidateSharedSchemaVersion);
       });
       await assertOriginalOrdinaryState();
       const privateState = await privateChain("agent:qa:package-upgraded-private");
@@ -862,7 +875,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
           await rename(destination, path.join(prefix, `post-upgrade-asset-${index}`));
           await rename(path.join(target, String(asset.archivePath)), destination);
         }
-        assertSchema(19);
+        assertSchema(19, 17);
       });
       const rollbackSession = "agent:qa:package-rollback-ordinary";
       const rollbackChild = await ordinaryChild(rollbackSession);
@@ -913,7 +926,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       ).cursor;
       const probeEventCursor = events.length;
       await restartState(async () => {
-        assertSchema(19);
+        assertSchema(19, 17);
         const db = new DatabaseSync(stateDb);
         try {
           db.prepare(
@@ -992,7 +1005,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         }
         reopenedIdentity = await install(candidateTarball!);
         await runInstalled(["doctor", "--fix", "--non-interactive"]);
-        assertSchema(candidateAgentSchemaVersion);
+        assertSchema(candidateAgentSchemaVersion, candidateSharedSchemaVersion);
       });
       await ordinaryChild("agent:qa:package-reopened-ordinary");
       await assertOriginalOrdinaryState();

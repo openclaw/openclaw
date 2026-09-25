@@ -57,15 +57,6 @@ async function releaseSessionSubscription(
   }
 }
 
-/** Prepare exact binding deletion before the session owner commits either database. */
-export async function withCodexAppServerSessionDeletion<T>(
-  bindingStore: CodexAppServerBindingStore,
-  params: AgentHarnessSessionDeletionParams,
-  run: (mutation: AgentHarnessSessionDeletionMutation) => Promise<T>,
-): Promise<T> {
-  return withCodexAppServerSessionMutation(bindingStore, params, run);
-}
-
 /** Retire the old native context when the host commits a rewind or branch switch. */
 export async function withCodexAppServerSessionContextReset<T>(
   bindingStore: CodexAppServerBindingStore,
@@ -85,10 +76,11 @@ export async function withCodexAppServerSessionContextReset<T>(
     plan.kind === "verify" && plan.expectedPreviousSessionId === params.previousSessionId
       ? plan.expectedPreviousSessionId
       : params.sessionId;
-  return withCodexAppServerSessionMutation(bindingStore, { ...params, sessionId }, run);
+  return withCodexAppServerSessionDeletion(bindingStore, { ...params, sessionId }, run);
 }
 
-async function withCodexAppServerSessionMutation<T>(
+/** Prepare exact binding deletion before the session owner commits either database. */
+export async function withCodexAppServerSessionDeletion<T>(
   bindingStore: CodexAppServerBindingStore,
   params: AgentHarnessSessionDeletionParams,
   run: (mutation: AgentHarnessSessionDeletionMutation) => Promise<T>,

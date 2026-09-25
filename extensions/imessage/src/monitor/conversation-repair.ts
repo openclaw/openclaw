@@ -132,28 +132,6 @@ function projectionConflictKey(projection: AuthoritativeRecoveryProjection): str
   });
 }
 
-function applyAuthoritativeRecoveryProjection(
-  message: IMessagePayload,
-  projection: AuthoritativeRecoveryProjection,
-): IMessagePayload {
-  return {
-    ...message,
-    ...(projection.chat_id !== undefined ? { chat_id: projection.chat_id } : {}),
-    ...(projection.chat_guid !== undefined ? { chat_guid: projection.chat_guid } : {}),
-    ...(projection.chat_identifier !== undefined
-      ? { chat_identifier: projection.chat_identifier }
-      : {}),
-    ...(projection.chat_name !== undefined ? { chat_name: projection.chat_name } : {}),
-    ...(projection.participants !== undefined ? { participants: projection.participants } : {}),
-    is_group: projection.is_group,
-    sender: projection.sender,
-    // Exact-GUID history is authoritative for this outgoing-only field: when
-    // history omits it, clear any stale notification value instead of inheriting.
-    destination_caller_id: projection.destination_caller_id ?? null,
-    is_from_me: projection.is_from_me,
-  };
-}
-
 export async function repairIMessageConversationAnchor(
   params: RepairIMessageConversationAnchorParams,
 ): Promise<IMessagePayload | null> {
@@ -246,15 +224,15 @@ export async function repairIMessageConversationAnchor(
     return null;
   }
 
-  const repaired = applyAuthoritativeRecoveryProjection(message, projection);
-  if (isIMessageAnchorless(repaired)) {
-    runtime?.error?.(
-      `imessage: dropping anchorless message GUID=${guid} after recovery found no usable conversation anchor`,
-    );
-    return null;
-  }
+  const repaired = {
+    ...message,
+    ...projection,
+    // Exact-GUID history is authoritative for this outgoing-only field: when
+    // history omits it, clear any stale notification value instead of inheriting.
+    destination_caller_id: projection.destination_caller_id ?? null,
+  };
   runtime?.log?.(
-    `imessage: recovered anchorless message GUID=${guid} chat_id=${repaired.chat_id ?? "unknown"} is_group=${repaired.is_group === true}`,
+    `imessage: recovered anchorless message GUID=${guid} chat_id=${repaired.chat_id ?? "unknown"} is_group=${repaired.is_group}`,
   );
   return repaired;
 }

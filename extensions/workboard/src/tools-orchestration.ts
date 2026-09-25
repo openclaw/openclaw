@@ -6,7 +6,12 @@ import type { AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import { redactClaimToken } from "./card-redaction.js";
 import type { WorkboardStore } from "./store.js";
-import { cardIdField, claimTokenField, strictObject } from "./tools-card-mutations.js";
+import {
+  cardIdField,
+  claimTokenField,
+  strictObject,
+  workspaceField,
+} from "./tools-card-mutations.js";
 
 type ScopedCardParams = {
   record: Record<string, unknown>;
@@ -83,13 +88,7 @@ export function createWorkboardOrchestrationTools(params: {
             maxLength: 128,
           }),
         ),
-        defaultWorkspace: Type.Optional(
-          strictObject({
-            kind: Type.String({ description: "scratch, dir, or worktree." }),
-            path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
-            branch: Type.Optional(Type.String({ description: "Suggested branch." })),
-          }),
-        ),
+        defaultWorkspace: workspaceField(),
         orchestration: Type.Optional(
           strictObject({
             autoDecompose: Type.Optional(
@@ -169,13 +168,7 @@ export function createWorkboardOrchestrationTools(params: {
         boardId: Type.Optional(Type.String({ description: "Board id." })),
         tenant: Type.Optional(Type.String({ description: "Tenant or routing namespace." })),
         skills: Type.Optional(Type.Array(Type.String(), { description: "Suggested skills." })),
-        workspace: Type.Optional(
-          strictObject({
-            kind: Type.String({ description: "scratch, dir, or worktree." }),
-            path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
-            branch: Type.Optional(Type.String({ description: "Suggested branch." })),
-          }),
-        ),
+        workspace: workspaceField(),
         maxRuntimeSeconds: Type.Optional(Type.Number({ description: "Runtime budget." })),
         maxRetries: Type.Optional(Type.Number({ description: "Retry budget." })),
         summary: Type.Optional(Type.String({ description: "Specification summary comment." })),
@@ -215,13 +208,7 @@ export function createWorkboardOrchestrationTools(params: {
             boardId: Type.Optional(Type.String()),
             tenant: Type.Optional(Type.String()),
             skills: Type.Optional(Type.Array(Type.String())),
-            workspace: Type.Optional(
-              strictObject({
-                kind: Type.String({ description: "scratch, dir, or worktree." }),
-                path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
-                branch: Type.Optional(Type.String({ description: "Suggested branch." })),
-              }),
-            ),
+            workspace: workspaceField(),
             maxRuntimeSeconds: Type.Optional(Type.Number()),
             maxRetries: Type.Optional(Type.Number()),
             idempotencyKey: Type.Optional(Type.String()),

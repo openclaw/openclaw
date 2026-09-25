@@ -1197,6 +1197,33 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(store.usageStats?.["openai:default"]?.cooldownClassification).toBeUndefined();
   });
 
+  it.each(["chatgpt-token-sharing", "chatgpt-identity"])(
+    "keeps %s credentials out of Codex quota probes",
+    async (authFlow) => {
+      const now = 1_700_000_000_000;
+      const store = makeStore({});
+      const profile = store.profiles["openai:default"];
+      if (profile?.type !== "oauth") {
+        throw new Error("expected OpenAI OAuth fixture");
+      }
+      profile.authFlow = authFlow;
+      mockWhamResponse(401);
+
+      await markCodexFailureAt({ store, now });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 30_000);
+
+      const block = {
+        blockedUntil: now + 86_400_000,
+        blockedReason: "subscription_limit" as const,
+      };
+      store.usageStats = { "openai:default": { ...block } };
+      await maybeReprobeWhamBlockedProfiles({ store, profileIds: ["openai:default"], now });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(store.usageStats["openai:default"]).toEqual(block);
+    },
+  );
+
   it("skips WHAM probe for locally expired OAuth access tokens", async () => {
     const now = 1_700_000_000_000;
     const store = makeStore({});

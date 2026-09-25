@@ -15,6 +15,7 @@ import {
   createSessionColdStorageFixture,
   maintenanceConfig,
 } from "../config/sessions/session-cold-storage.test-support.js";
+import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import {
   prepareSessionEntryPresenceRead,
   withSessionHistoryWorkerDatabase,
@@ -217,10 +218,57 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
     messageId: undefined,
   };
   return {
+    target,
     path: resolveOpenClawAgentSqlitePath({ agentId, env: state.env }),
     read: () => readChatHistoryPage(params),
   };
 }
+
+it.each(["message-by-id", "message-count"] as const)(
+  "settles cancelled %s reads before reuse and joins their worker on close",
+  async (kind) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const fixture = await seed(state, "main", "cancel-message-read");
+      const controller = new AbortController();
+      const cancelled = new Error("history consumer closed");
+      let dispatched = false;
+      observed.dispatch = (message) => {
+        const input = asOptionalRecord(asOptionalRecord(message)?.input);
+        if (asOptionalRecord(input?.request)?.kind === kind) {
+          observed.dispatch = undefined;
+          dispatched = true;
+          controller.abort(cancelled);
+        }
+      };
+      const pending =
+        kind === "message-by-id"
+          ? readSessionHistoryPageInWorker(
+              {
+                kind,
+                params: { target: fixture.target, messageId: "cancel-message-read-message" },
+              },
+              controller.signal,
+            )
+          : readSessionHistoryPageInWorker(
+              { kind, params: { target: fixture.target } },
+              controller.signal,
+            );
+      await expect(pending).rejects.toBe(cancelled);
+      expect(dispatched).toBe(true);
+      const worker = observed.workers.at(-1)!;
+      expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
+        "cancel-message-read-message",
+      ]);
+      expect(observed.workers.at(-1)).toBe(worker);
+      await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
+      expect(worker.threadId).toBe(-1);
+      expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
+        "cancel-message-read-message",
+      ]);
+      expect(observed.workers.at(-1)).not.toBe(worker);
+    });
+  },
+);
 
 it.each(["no-commit", "metadata-refresh"] as const)(
   "keeps history readable across unchanged sibling registration (%s)",

@@ -30,6 +30,8 @@ import {
   buildForwardedExecResolvedPayload,
   buildForwardedPluginPendingPayload,
   buildForwardedPluginResolvedPayload,
+  buildForwardedSystemAgentPendingPayload,
+  buildForwardedSystemAgentResolvedPayload,
 } from "./exec-approval-forwarder.messages.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import {
@@ -37,9 +39,13 @@ import {
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "./plugin-approvals.js";
+import type {
+  SystemAgentApprovalRequest,
+  SystemAgentApprovalResolved,
+} from "./system-agent-approvals.js";
 
-// Approval forwarding mirrors foreground exec/plugin approvals into configured
-// chat targets, then sends resolution/expiry notices to the same targets.
+// Approval forwarding mirrors foreground approvals into chat targets, then sends
+// resolution/expiry notices to the same targets.
 const log = createSubsystemLogger("gateway/exec-approvals");
 type DeliverApprovalPayloads =
   typeof import("../channels/message/runtime.js").sendDurableMessageBatchCore;
@@ -73,11 +79,17 @@ type ApprovalRenderContext = {
 type ApprovalStrategy<TRequest, TResolved> = {
   kind: ChannelApprovalKind;
   config: (cfg: OpenClawConfig) => ExecApprovalForwardingConfig | undefined;
-  buildExpiredText: (request: TRequest) => string;
+  /** Omitted when the durable terminal publication owns expiry; no local timer runs. */
+  buildExpiredText?: (request: TRequest) => string;
   buildPendingPayload: (
     params: ApprovalRenderContext & { request: TRequest; nowMs: number },
   ) => ReplyPayload;
   buildResolvedPayload: (params: ApprovalRenderContext & { resolved: TResolved }) => ReplyPayload;
+  /**
+   * Answer only the live messaging chat that made the request: no saved session
+   * route, and no terminal notice without this forwarder's own pending entry.
+   */
+  liveOriginOnly?: boolean;
 };
 
 export type ExecApprovalForwarder = {
@@ -85,6 +97,8 @@ export type ExecApprovalForwarder = {
   handleResolved: (resolved: ExecApprovalResolved) => Promise<void>;
   handlePluginApprovalRequested?: (request: PluginApprovalRequest) => Promise<boolean>;
   handlePluginApprovalResolved?: (resolved: PluginApprovalResolved) => Promise<void>;
+  handleSystemAgentApprovalRequested?: (request: SystemAgentApprovalRequest) => Promise<boolean>;
+  handleSystemAgentApprovalResolved?: (resolved: SystemAgentApprovalResolved) => Promise<void>;
   stop: () => Promise<void>;
 };
 
@@ -364,6 +378,16 @@ function createApprovalHandlers<
     if (!shouldForwardRoute(paramsForRoute)) {
       return [];
     }
+    if (params.strategy.liveOriginOnly) {
+      const origin = normalizeMessageChannel(paramsForRoute.routeRequest.turnSourceChannel ?? "");
+      if (
+        !origin ||
+        !isDeliverableMessageChannel(origin) ||
+        !normalizeOptionalString(paramsForRoute.routeRequest.turnSourceTo)
+      ) {
+        return [];
+      }
+    }
     const targets = await resolveForwardTargets({
       ...paramsForRoute,
       approvalKind: params.strategy.kind,
@@ -430,21 +454,24 @@ function createApprovalHandlers<
     }
 
     pendingEntry.value = { routeRequest, targets: filteredTargets };
-    const expiresInMs = Math.max(0, request.expiresAtMs - params.nowMs());
-    pending.scheduleExpiry(pendingEntry, expiresInMs, (expired) =>
-      trackDelivery(() =>
-        deliverToTargets({
-          cfg,
-          targets: expired.value.targets,
-          buildPayload: () => ({ text: params.strategy.buildExpiredText(request) }),
-          deliver: params.deliver,
+    const buildExpiredText = params.strategy.buildExpiredText;
+    if (buildExpiredText) {
+      const expiresInMs = Math.max(0, request.expiresAtMs - params.nowMs());
+      pending.scheduleExpiry(pendingEntry, expiresInMs, (expired) =>
+        trackDelivery(() =>
+          deliverToTargets({
+            cfg,
+            targets: expired.value.targets,
+            buildPayload: () => ({ text: buildExpiredText(request) }),
+            deliver: params.deliver,
+          }),
+        ).catch((err: unknown) => {
+          log.error(
+            `${params.strategy.kind} approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
+          );
         }),
-      ).catch((err: unknown) => {
-        log.error(
-          `${params.strategy.kind} approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
-        );
-      }),
-    );
+      );
+    }
 
     void trackDelivery(() =>
       deliverToTargets({
@@ -492,7 +519,11 @@ function createApprovalHandlers<
       await settled.terminal(settled.entry);
       return;
     }
-    await deliverResolved(resolved);
+    // Only this forwarder's own entry proves the chat was asked; without it the
+    // request went to a native card or had no live chat to answer.
+    if (!params.strategy.liveOriginOnly) {
+      await deliverResolved(resolved);
+    }
   };
 
   return {
@@ -528,6 +559,21 @@ const pluginApprovalStrategy = {
   buildResolvedPayload: buildForwardedPluginResolvedPayload,
 } satisfies ApprovalStrategy<PluginApprovalRequest, PluginApprovalResolved>;
 
+// A delegated OpenClaw change blocks the requesting tool until someone decides,
+// so the requesting messaging chat always gets a reply path. A native card for
+// the same target suppresses this text through the shared fallback check.
+const SYSTEM_AGENT_FORWARDING: ExecApprovalForwardingConfig = { enabled: true, mode: "session" };
+
+const systemAgentApprovalStrategy = {
+  kind: "system-agent",
+  config: () => SYSTEM_AGENT_FORWARDING,
+  // No local expiry timer: an approved change may still be applying at the
+  // deadline, so only the Gateway's recorded expiry reports a lapse.
+  buildPendingPayload: buildForwardedSystemAgentPendingPayload,
+  buildResolvedPayload: buildForwardedSystemAgentResolvedPayload,
+  liveOriginOnly: true,
+} satisfies ApprovalStrategy<SystemAgentApprovalRequest, SystemAgentApprovalResolved>;
+
 export function createExecApprovalForwarder(
   deps: ExecApprovalForwarderDeps = {},
 ): ExecApprovalForwarder {
@@ -559,14 +605,24 @@ export function createExecApprovalForwarder(
     resolveSessionTarget,
     getNativeApprovalRouteCoordinator,
   });
+  const systemAgentHandlers = createApprovalHandlers({
+    strategy: systemAgentApprovalStrategy,
+    getConfig,
+    deliver,
+    nowMs,
+    resolveSessionTarget,
+    getNativeApprovalRouteCoordinator,
+  });
 
   return {
     handleRequested: execHandlers.handleRequested,
     handleResolved: execHandlers.handleResolved,
     handlePluginApprovalRequested: pluginHandlers.handleRequested,
     handlePluginApprovalResolved: pluginHandlers.handleResolved,
+    handleSystemAgentApprovalRequested: systemAgentHandlers.handleRequested,
+    handleSystemAgentApprovalResolved: systemAgentHandlers.handleResolved,
     stop: async () => {
-      await Promise.all([execHandlers.stop(), pluginHandlers.stop()]);
+      await Promise.all([execHandlers.stop(), pluginHandlers.stop(), systemAgentHandlers.stop()]);
     },
   };
 }

@@ -1,5 +1,5 @@
 // Builds compact plugin health summaries for chat status surfaces.
-import type { PluginDiagnosticCode } from "../plugins/manifest-types.js";
+import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 
 type StatusPluginDependencyStatus = {
@@ -17,12 +17,10 @@ export type PluginHealthRecord = {
   failurePhase?: string;
 };
 
-export type PluginDiagnosticRecord = {
-  level: "warn" | "error";
-  message: string;
-  pluginId?: string;
-  code?: PluginDiagnosticCode;
-};
+export type PluginDiagnosticRecord = Pick<
+  PluginDiagnostic,
+  "level" | "message" | "pluginId" | "code"
+>;
 
 type ContextEngineQuarantineRecord = {
   engineId: string;
@@ -421,11 +419,20 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
     lines.push(
       `Diagnostics: ${diagnosticCounts.errors} errors · ${diagnosticCounts.warnings} warnings`,
     );
-    for (const diagnostic of diagnostics.slice(0, 8)) {
+    for (const diagnostic of diagnostics.filter((entry) => entry.level !== "info").slice(0, 8)) {
       const target = diagnostic.pluginId ? `${diagnostic.pluginId}: ` : "";
       lines.push(`- ${diagnostic.level.toUpperCase()} ${target}${diagnostic.message}`);
     }
   }
+
+  appendSection(
+    "Information",
+    diagnostics.filter((entry) => entry.level === "info"),
+    (diagnostic) => {
+      const target = diagnostic.pluginId ? `${diagnostic.pluginId}: ` : "";
+      return `- INFO ${target}${diagnostic.message}`;
+    },
+  );
 
   appendSection("Compatibility notices", compatibilityNotices, (notice) => {
     const code = notice.code ? ` [${notice.code}]` : "";

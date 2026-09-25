@@ -32,14 +32,14 @@ type OperatorRunCancellationContext = Pick<
 >;
 
 /** Retain authority before its execution or queue owner can arm cancellation. */
-export function retainGatewayOperatorRun(
+export async function retainGatewayOperatorRun(
   params: Parameters<typeof captureGatewayOperatorRunAuthority>[0] & {
     context: OperatorRunCancellationContext;
     runId: string;
     entry?: ChatAbortControllerEntry;
   },
 ) {
-  const captured = captureGatewayOperatorRunAuthority(params);
+  const captured = await captureGatewayOperatorRunAuthority(params);
   const releaseSource =
     captured?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
   const signal = captured?.authority.signal;

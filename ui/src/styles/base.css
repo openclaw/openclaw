@@ -499,8 +499,14 @@
   }
 }
 
-/* The claw family deepens only the text-bearing destructive fill. */
+/* Named palette overrides win even when their stylesheet loads before the app. */
+:root:where([data-theme]) {
+  --primary-hover: var(--accent-hover);
+}
+
+/* The claw family deepens text-bearing primary and destructive fills. */
 :root[data-theme="dark"] {
+  --primary-hover: #c22e2e;
   --destructive: #d32f2f;
   --destructive-hover: #bc2a2a;
 }

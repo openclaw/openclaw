@@ -4,7 +4,7 @@
  * Provides an in-process request/response adapter so Gateway nodes can invoke
  * the same route handlers without opening an HTTP socket.
  */
-import { escapeRegExp } from "../../utils.js";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeBrowserRequestPath } from "../request-policy.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { registerBrowserRoutes } from "./index.js";

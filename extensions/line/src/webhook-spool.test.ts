@@ -77,8 +77,7 @@ describe("LINE webhook spool", () => {
       const body = JSON.stringify(callback(createEvent({ webhookEventId: "event-ack-fail" })));
       const channelSecret = "test-channel-secret";
       const handler = createLineNodeWebhookHandler({
-        channelSecret,
-        bot: { handleWebhook: spool.accept },
+        getTargets: () => [{ channelSecret, bot: { handleWebhook: spool.accept } }],
         runtime: runtime(),
         readBody: async () => body,
       });

@@ -67,11 +67,15 @@ describe("plugin lifecycle CLI transport", () => {
       const runtime = { operationId: "batch", generation: 2, pluginIds: ["demo"] };
       const targets = [{ pluginId: "demo", installHash: "a".repeat(64) }];
       const warnings = ["Previous plugin cleanup did not finish."];
-      mocks.call.mockResolvedValue(present ? { runtime, warnings } : {});
+      mocks.call.mockResolvedValue(present ? { runtime, warnings, restartRequired: true } : {});
       const reload = await resolvePluginBatchReload();
       expect(reload).toBeDefined();
       if (present) {
-        await expect(reload!(targets)).resolves.toEqual({ ...runtime, warnings });
+        await expect(reload!(targets)).resolves.toEqual({
+          ...runtime,
+          warnings,
+          restartRequired: true,
+        });
       } else {
         await expect(reload!(targets)).rejects.toThrow("did not confirm");
       }

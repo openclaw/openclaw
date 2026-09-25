@@ -21,11 +21,6 @@ import {
   computeWorkspaceFileSnapshot,
 } from "./workspace-manifest-worker.js";
 
-export {
-  isNodeWorkspaceTransferLimitError,
-  nodeWorkspaceTransferInvalidReason,
-} from "./node-workspace-upload-reader.js";
-
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 

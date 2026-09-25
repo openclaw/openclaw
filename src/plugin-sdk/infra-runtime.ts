@@ -323,7 +323,14 @@ export {
   type RequestBodyLimitGuardOptions,
 } from "../infra/http-body.js";
 export * from "../infra/json-files.js";
-export * from "../infra/local-file-access.js";
+export {
+  assertNoWindowsNetworkPath,
+  basenameFromMediaSource,
+  hasEncodedFileUrlSeparator,
+  isWindowsNetworkPath,
+  safeFileURLToPath,
+  trySafeFileURLToPath,
+} from "@openclaw/fs-safe/advanced";
 export * from "../infra/map-size.js";
 export * from "../infra/net/hostname.ts";
 export {

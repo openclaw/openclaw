@@ -46,13 +46,14 @@ export type PluginDiagnosticCode =
   | "configured-plugin-path-inspection-failed"
   | "configured-plugin-path-unavailable"
   | "dashboard-declaration-invalid"
+  | "explicit-config-plugin-selection"
   | "plugin-verification"
   | "sdk-incompatible"
   | "workspace-scope-omitted";
 
 /** Diagnostic emitted while discovering or validating plugins. */
 export type PluginDiagnostic = {
-  level: "warn" | "error";
+  level: "info" | "warn" | "error";
   message: string;
   pluginId?: string;
   source?: string;
@@ -660,6 +661,8 @@ export type PluginManifestProviderAuthChoice = {
   icon?: string;
   /** Optional HTTPS product or installation URL for onboarding surfaces. */
   website?: string;
+  /** Optional HTTPS guide comparing this provider's connection methods. */
+  docsUrl?: string;
   /** Lower values sort earlier in interactive assistant pickers. */
   assistantPriority?: number;
   /** Keep the choice out of interactive assistant pickers while preserving manual CLI support. */

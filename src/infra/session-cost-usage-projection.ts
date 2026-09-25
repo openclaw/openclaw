@@ -324,10 +324,10 @@ export async function projectSessionCostSummaries(
       continue;
     }
     latestScan = Math.max(latestScan, envelope.scannedAt);
-    const freshRequests = requests.filter(({ file }) =>
-      isUsageCostRollupFresh({ checkpoint: envelope.checkpoint, file }),
+    const usableRequests = requests.filter(({ file }) =>
+      canUseUsageCostRollupForPartial({ checkpoint: envelope.checkpoint, file }),
     );
-    if (freshRequests.length === 0) {
+    if (usableRequests.length === 0) {
       continue;
     }
     const entry = decodeUsageCostRollup(
@@ -339,22 +339,27 @@ export async function projectSessionCostSummaries(
       params.onInvalidBody(row.key);
       continue;
     }
-    for (const { index, session } of freshRequests) {
+    for (const { index, session, file } of usableRequests) {
       cachedFiles += 1;
-      summaries[index] = buildSessionCostSummaryFromRollup({
-        rollup: entry.rollup,
-        sessionId: session.sessionId,
-        sessionFile: session.sessionFile,
-        startMs,
-        endMs,
-        includeUntimestamped,
-        formatDay,
-      });
+      const fresh = isUsageCostRollupFresh({ checkpoint: entry.checkpoint, file });
+      summaries[index] = {
+        ...buildSessionCostSummaryFromRollup({
+          rollup: entry.rollup,
+          sessionId: session.sessionId,
+          sessionFile: session.sessionFile,
+          startMs,
+          endMs,
+          includeUntimestamped,
+          formatDay,
+        }),
+        computedAt: entry.scannedAt,
+        ...(!fresh ? { refreshing: params.refreshing, staleSince: file.mtimeMs } : {}),
+      };
     }
   }
   const staleSessionFiles = new Set<string>();
   for (const [index, session] of params.sessions.entries()) {
-    if (summaries[index] === null) {
+    if (summaries[index] === null || summaries[index]?.staleSince !== undefined) {
       staleSessionFiles.add(params.files[index]?.sourcePath ?? session.sessionFile);
     }
   }

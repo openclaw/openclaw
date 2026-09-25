@@ -44,7 +44,11 @@ import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { prepareGatewaySkillAuthoring } from "../skill-library-authoring.js";
 import { formatForLog } from "../ws-log.js";
-import { setAbortedAgentDedupeEntries, setGatewayDedupeEntries } from "./agent-dedupe.js";
+import {
+  buildAbortedAgentPayload,
+  setAbortedAgentDedupeEntries,
+  setGatewayDedupeEntries,
+} from "./agent-dedupe.js";
 import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
 import {
   yieldAfterAgentAcceptedAck,
@@ -80,7 +84,6 @@ export async function startAgentRunExecution(params: {
   resolvedSessionKey?: string;
   requestedSessionKey?: string;
   resolvedSessionId?: string;
-  storePath?: string;
   agentId?: string;
   activeSessionAgentId: string;
   delivery: AgentDeliveryPhaseResult;
@@ -271,21 +274,9 @@ export async function startAgentRunExecution(params: {
           runId: params.runId,
           stopReason,
         });
-        params.io.emitFinal(
-          [
-            true,
-            {
-              runId: params.runId,
-              status: "timeout" as const,
-              summary: "aborted",
-              stopReason,
-              timeoutPhase: "queue" as const,
-              providerStarted: false,
-            },
-            undefined,
-          ],
-          { runId: params.runId },
-        );
+        params.io.emitFinal([true, buildAbortedAgentPayload(params.runId, stopReason), undefined], {
+          runId: params.runId,
+        });
       };
       try {
         if (prepared.activeRunAbort.controller.signal.aborted) {

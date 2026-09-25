@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { render } from "lit";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
 import { card, mount, props, text } from "./view.test-support.ts";
@@ -23,7 +23,7 @@ it("offers only decision models, even without a chat provider, and retains an un
     },
     onDecisionChange,
   });
-  render(renderModelProviders(viewProps), container);
+  mount(viewProps, container);
   await updatePickers(container);
   const picker = container.querySelector<HTMLButtonElement>("#model-providers-decision-model")!;
   expect(picker.disabled).toBe(false);
@@ -51,21 +51,19 @@ it("offers only decision models, even without a chat provider, and retains an un
 it("retains a saved unavailable model without offering it for another default setting", async () => {
   const onUtilityChange = vi.fn();
   const container = document.createElement("div");
-  render(
-    renderModelProviders(
-      props({
-        configuredModels: [
-          { provider: "fixture", id: "ready", name: "Ready", available: true },
-          { provider: "fixture", id: "blocked", name: "Blocked", available: false },
-        ],
-        defaultModels: {
-          primary: "fixture/ready",
-          fallbacks: ["fixture/blocked"],
-          utilityModel: "fixture/blocked",
-        },
-        onUtilityChange,
-      }),
-    ),
+  mount(
+    props({
+      configuredModels: [
+        { provider: "fixture", id: "ready", name: "Ready", available: true },
+        { provider: "fixture", id: "blocked", name: "Blocked", available: false },
+      ],
+      defaultModels: {
+        primary: "fixture/ready",
+        fallbacks: ["fixture/blocked"],
+        utilityModel: "fixture/blocked",
+      },
+      onUtilityChange,
+    }),
     container,
   );
 
@@ -114,7 +112,7 @@ function selectSegment(group: SegmentedGroup, value: string) {
 describe("renderModelProviders", () => {
   it("surfaces a provider-usage failure on the provider list", () => {
     const container = document.createElement("div");
-    render(renderModelProviders(props({ providerUsageFailed: true })), container);
+    mount(props({ providerUsageFailed: true }), container);
 
     expect(container.textContent).toContain(
       "Provider usage is unavailable; the last request failed. Refresh to retry.",
@@ -149,13 +147,6 @@ describe("renderModelProviders", () => {
 
     expect(text(container)).not.toContain("Add provider");
     expect(container.querySelector('[data-model-readiness="model-required"]')).not.toBeNull();
-  });
-
-  afterEach(() => {
-    for (const container of document.body.querySelectorAll("div")) {
-      render(nothing, container);
-    }
-    document.body.replaceChildren();
   });
 
   it("shows inherited model policy, restores overrides, and preserves advanced thinking", () => {
@@ -903,6 +894,4 @@ it("filters provider access without hiding global defaults and exposes an empty 
   expect(text(container)).toContain("No providers match your search.");
   expect(container.querySelectorAll("[data-provider-id]")).toHaveLength(0);
   expect(container.querySelector("#settings-model-behavior")).not.toBeNull();
-  render(nothing, container);
-  container.remove();
 });

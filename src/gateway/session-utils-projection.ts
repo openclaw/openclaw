@@ -1,3 +1,4 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
@@ -22,7 +23,7 @@ import {
   type SessionActorProfileIdentity,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
-import { resolveEstimatedSessionCostUsd, resolvePositiveNumber } from "./session-utils-core.js";
+import { resolveEstimatedSessionCostUsd } from "./session-utils-core.js";
 import { resolveWorkerPlacementModelRuntime } from "./worker-environments/placement-session-runtime.js";
 
 export function buildSessionListRowMetadataContext(params: {
@@ -181,7 +182,7 @@ export function resolveTranscriptUsageFallbacks(params: {
         rowContext: params.rowContext,
       });
       fallbacks.set(fallbackModelRef, {
-        totalTokens: resolvePositiveNumber(snapshot.totalTokens),
+        totalTokens: asPositiveFiniteNumber(snapshot.totalTokens),
         totalTokensFresh: snapshot.totalTokensFresh === true,
         estimatedCostUsd,
       });

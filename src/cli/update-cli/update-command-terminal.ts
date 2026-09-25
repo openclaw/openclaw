@@ -11,7 +11,8 @@ import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledge
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -408,12 +409,13 @@ async function publishPreMutationUpdateOutcome(
 ): Promise<UpdateRunResult> {
   const run = params.opts.run;
   const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
-  if (run && active && params.message) {
+  const nextAction = params.nextAction ?? params.message;
+  if (run && active && nextAction) {
     recordUpdateRunPhase(
       run.runId,
       active.phase,
       {
-        origin: { nextAction: params.message },
+        origin: { nextAction },
         ...(params.installKind !== "unknown" ? { target: { kind: params.installKind } } : {}),
       },
       { env: run.env },
@@ -470,7 +472,7 @@ async function publishPreMutationUpdateOutcome(
   if (params.opts.json && params.message) {
     defaultRuntime.error(params.message);
   }
-  await printResult(result, params.opts, { nextAction: params.message });
+  await printResult(result, params.opts, { nextAction });
   return result;
 }
 

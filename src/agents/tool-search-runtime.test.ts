@@ -959,7 +959,7 @@ describe("Tool Search network error boundaries", () => {
       const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
       expect(text.length).toBeLessThan(21_000);
-      expect(text).toContain("SECURITY NOTICE:");
+      expect(text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
       expect(text).toContain("[truncated]");
       expect(text).not.toContain("<|im_start|>");
       expect(text.indexOf("[truncated]")).toBeLessThan(
@@ -990,7 +990,7 @@ describe("Tool Search network error boundaries", () => {
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
     expect(text.length).toBeLessThan(21_000);
-    expect(text).toContain("SECURITY NOTICE:");
+    expect(text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(text).toContain("[truncated]");
     expect(text).not.toContain("<s>");
     expect(result.details).toBe(payload);

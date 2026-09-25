@@ -7,7 +7,8 @@ import { openLocalFileSafely, type OpenResult } from "./fs-safe.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
 import { classifyPartialCloneGitFailure } from "./update-runner-git-target.js";
-import type { RunStepOptions, UpdateStepResult } from "./update-runner-types.js";
+import type { RunStepOptions } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const LARGE_CANDIDATE_PACK_WARNING_BYTES = 256 * 1024 * 1024;
 

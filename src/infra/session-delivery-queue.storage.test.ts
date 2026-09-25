@@ -1,7 +1,8 @@
-// Covers session delivery queue persistence state transitions.
-import { describe, expect, it, vi } from "vitest";
+import assert from "node:assert/strict";
+import { describe, expect, it } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   advanceSessionDeliveryAgentRun,
@@ -210,9 +211,7 @@ describe("session-delivery queue storage", () => {
         queueContext,
       );
       const entry = await loadPendingSessionDelivery(id, queueContext);
-      if (!entry) {
-        throw new Error("Expected pending session delivery");
-      }
+      assert(entry, "Expected pending session delivery");
 
       await markSessionDeliveryAttemptStarted(entry, queueContext);
       expect(await loadPendingSessionDelivery(id, queueContext)).toMatchObject({
@@ -300,14 +299,8 @@ describe("session-delivery queue storage", () => {
 
   it("advances only the agent run attempt and can focus its retry media", async () => {
     // Keep the one-time SQLite capability check outside the queue observation window.
-    const { DatabaseSync, StatementSync } = requireNodeSqlite();
-    const sqlCalls = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const sqlCalls = observeMainThreadSql();
     try {
       await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
         const id = await enqueueSessionDelivery(
@@ -379,13 +372,9 @@ describe("session-delivery queue storage", () => {
           suppressTextDelivery: true,
         });
       });
-      for (const call of sqlCalls) {
-        expect(call).not.toHaveBeenCalled();
-      }
+      sqlCalls.expectIdle();
     } finally {
-      for (const call of sqlCalls) {
-        call.mockRestore();
-      }
+      sqlCalls.restore();
     }
   });
 

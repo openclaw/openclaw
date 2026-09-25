@@ -2,9 +2,10 @@
 import fs, { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import ts from "typescript";
+import { transformSync } from "esbuild";
 import { describe, expect, it } from "vitest";
 import { collectModuleReferencesFromSource } from "../scripts/lib/guard-inventory-utils.mjs";
+import { createNativeTypeScriptParser } from "../scripts/lib/native-typescript.mts";
 import { loadSessionStore, saveSessionStore } from "./library.js";
 
 const libraryPath = new URL("./library.ts", import.meta.url);
@@ -17,17 +18,26 @@ const lazyRuntimeSpecifiers = [
 ] as const;
 
 function readLibraryModuleImports(sourceText = readFileSync(libraryPath, "utf8")) {
-  const { outputText } = ts.transpileModule(sourceText, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, verbatimModuleSyntax: true },
+  const { code } = transformSync(sourceText, {
+    loader: "ts",
+    format: "esm",
+    target: "esnext",
+    tsconfigRaw: { compilerOptions: { verbatimModuleSyntax: true } },
   });
   const staticImports = new Set<string>();
   const dynamicImports = new Set<string>();
-  for (const { kind, specifier } of collectModuleReferencesFromSource(outputText, { ts })) {
-    if (kind === "import" || kind === "export") {
-      staticImports.add(specifier);
-    } else if (kind === "dynamic-import") {
-      dynamicImports.add(specifier);
+  const parser = createNativeTypeScriptParser();
+  try {
+    const sourceFile = parser.parseSourceFile("library.mjs", code);
+    for (const { kind, specifier } of collectModuleReferencesFromSource(sourceFile)) {
+      if (kind === "import" || kind === "export") {
+        staticImports.add(specifier);
+      } else if (kind === "dynamic-import") {
+        dynamicImports.add(specifier);
+      }
     }
+  } finally {
+    parser.close();
   }
   return { dynamicImports, staticImports };
 }

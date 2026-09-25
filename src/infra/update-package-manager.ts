@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
+import { detectPackageManager } from "./detect-package-manager.js";
 import { readPackageManagerSpec } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
 
@@ -50,20 +50,6 @@ type ResolvedBuildManager =
       preferred: BuildManager;
       reason: UpdatePackageManagerFailureReason;
     };
-
-async function detectBuildManager(root: string): Promise<BuildManager> {
-  return (await detectPackageManagerImpl(root)) ?? "npm";
-}
-
-function managerPreferenceOrder(preferred: BuildManager): BuildManager[] {
-  if (preferred === "pnpm") {
-    return ["pnpm", "npm", "bun"];
-  }
-  if (preferred === "bun") {
-    return ["bun", "npm", "pnpm"];
-  }
-  return ["npm", "pnpm", "bun"];
-}
 
 async function isManagerAvailable(
   runCommand: PackageManagerCommandRunner,
@@ -172,7 +158,7 @@ export async function resolveUpdateBuildManager(
   // Version selection belongs to the target checkout, including preflight and rollback.
   const runCommand: PackageManagerCommandRunner = (argv, options) =>
     commandRunner(argv, { ...options, cwd: root });
-  const preferred = await detectBuildManager(root);
+  const preferred = (await detectPackageManager(root)) ?? "npm";
   const pin = await readPackageManagerSpec(root);
   const pnpmVersion = /^pnpm@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\+.*)?$/u.exec(pin ?? "")?.[1];
   if (preferred === "pnpm") {
@@ -219,7 +205,9 @@ export async function resolveUpdateBuildManager(
     return { kind: "missing-required", preferred, reason: "pnpm-corepack-enable-failed" };
   }
 
-  for (const manager of managerPreferenceOrder(preferred)) {
+  const managers: BuildManager[] =
+    preferred === "bun" ? ["bun", "npm", "pnpm"] : ["npm", "pnpm", "bun"];
+  for (const manager of managers) {
     if (
       await isManagerAvailable(
         runCommand,

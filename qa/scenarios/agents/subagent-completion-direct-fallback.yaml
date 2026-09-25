@@ -86,7 +86,7 @@ flow:
                     return json === undefined ? null : json.length > limit ? { omitted: true, serializedCharacters: json.length } : value;
                   };
                   return {
-                    cursor: request.cursor, body: bounded(request.body, 262144),
+                    cursor: request.cursor, sessionId: request.sessionId, body: bounded(request.body, 262144),
                     prompt: bounded(request.prompt, 32768), toolOutput: bounded(request.toolOutput, 32768),
                     requestKind: request.requestKind, outcome: request.outcome, errorCode: request.errorCode,
                     plannedToolName: request.plannedToolName, plannedWireToolName: request.plannedWireToolName,
@@ -365,7 +365,7 @@ flow:
                     expr: "`The actual private completion carrier lost the child's media reference: ${JSON.stringify({ carrier: privateCompletionCarrier.slice(0, 8192), childSessionKeys: privateTasks.map((task) => task.childSessionKey) })}`"
               - set: privateParentIds
                 value:
-                  expr: 'privateSpawns.map((request) => /Runtime:[^\n]*sessionId=([^\s|]+)/.exec(request.allInputText)?.[1])'
+                  expr: "privateSpawns.map((request) => request.sessionId)"
               - assert:
                   expr: "privateParentIds[0] && privateParentIds[0] === privateParentIds[1] && privateTasks[0].sessionKey === privateTasks[1].sessionKey && privateTasks[0].sessionKey === privateParentSessionKey"
                   message: Private continuation changed its parent session.

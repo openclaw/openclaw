@@ -4,7 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { format } from "oxfmt";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputPath = "docs/reference/database-schemas/worker-access-inventory.md";
@@ -169,11 +170,7 @@ function ownerOf(file) {
   return parts.slice(0, depth).join("/");
 }
 
-function findCalls(file, text) {
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-  if (source.parseDiagnostics.length > 0) {
-    throw new Error(`Cannot inventory invalid syntax in ${file}`);
-  }
+function findCalls(source) {
   const names = new Map([...primitives.keys()].map((name) => [name, name]));
   for (const statement of source.statements) {
     const bindings = ts.isImportDeclaration(statement)
@@ -205,13 +202,14 @@ function findCalls(file, text) {
         calls.push({ primitive, line: line + 1, column: character + 1 });
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
   visit(source);
   return calls;
 }
 
 function inventory() {
+  using parser = createNativeTypeScriptParser({ cwd: root });
   const candidates = execFileSync(
     "rg",
     [
@@ -240,10 +238,23 @@ function inventory() {
   )
     .trim()
     .split("\n");
-  return candidates
-    .filter((file) => !excluded.test(file))
-    .flatMap((file) => {
-      const calls = findCalls(file, fs.readFileSync(path.join(root, file), "utf8"));
+  const files = candidates.filter((file) => !excluded.test(file));
+  const sources = parser.parseSourceFiles(
+    files.map((fileName) => ({
+      fileName,
+      text: fs.readFileSync(path.join(root, fileName), "utf8"),
+    })),
+  );
+  const invalidSource = parser.getSyntacticDiagnostics()[0];
+  if (invalidSource) {
+    throw new Error(
+      `Cannot inventory invalid syntax in ${path.relative(root, invalidSource.fileName ?? root)}`,
+    );
+  }
+  return sources
+    .flatMap((source, index) => {
+      const file = files[index];
+      const calls = findCalls(source);
       return calls.length ? [{ file, owner: ownerOf(file), calls, ...classify(file) }] : [];
     })
     .toSorted(

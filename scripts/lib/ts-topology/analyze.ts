@@ -1,6 +1,6 @@
 // Analyze script supports OpenClaw repository automation.
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { expectDefined } from "../../../packages/normalization-core/src/expect.js";
 import {
   canonicalSymbolInfo,
@@ -146,7 +146,7 @@ function buildScopeMaps(context: ProgramContext, scope: TopologyScope) {
 
   for (const entrypoint of scope.entrypoints) {
     const absolutePath = path.join(context.repoRoot, entrypoint.sourcePath);
-    const sourceFile = context.program.getSourceFile(absolutePath);
+    const sourceFile = context.project.program.getSourceFile(absolutePath);
     if (!sourceFile) {
       continue;
     }
@@ -162,8 +162,8 @@ function buildScopeMaps(context: ProgramContext, scope: TopologyScope) {
         record = createRecord(info);
         recordByCanonicalKey.set(info.canonicalKey, record);
       }
-      addEntrypointMetadata(record, entrypoint, exportedSymbol.getName(), info.aliasName);
-      exportMap.set(exportedSymbol.getName(), record);
+      addEntrypointMetadata(record, entrypoint, exportedSymbol.name, info.aliasName);
+      exportMap.set(exportedSymbol.name, record);
     }
     recordBySpecifierAndExportName.set(entrypoint.importSpecifier, exportMap);
   }
@@ -178,8 +178,9 @@ function collectReferenceEvents(
   includeTests: boolean,
 ): ReferenceEvent[] {
   const events: ReferenceEvent[] = [];
-  for (const sourceFile of context.program.getSourceFiles()) {
-    if (sourceFile.isDeclarationFile) {
+  for (const fileName of context.project.program.getSourceFileNames()) {
+    const sourceFile = context.project.program.getSourceFile(fileName);
+    if (!sourceFile || sourceFile.isDeclarationFile) {
       continue;
     }
     const normalizedFileName = context.normalizePath(sourceFile.fileName);
@@ -208,7 +209,7 @@ function collectReferenceEvents(
       if (!clause?.namedBindings) {
         continue;
       }
-      if (clause.isTypeOnly) {
+      if (clause.phaseModifier === ts.SyntaxKind.TypeKeyword) {
         continue;
       }
 
@@ -342,59 +343,63 @@ export function analyzeTopology(options: {
   const includeTests = options.includeTests ?? true;
   const limit = options.limit ?? 25;
   const context = createProgramContext(options.repoRoot, options.tsconfigName);
-  const { recordByCanonicalKey, recordBySpecifierAndExportName } = buildScopeMaps(
-    context,
-    options.scope,
-  );
-  const events = collectReferenceEvents(
-    context,
-    options.scope,
-    recordBySpecifierAndExportName,
-    includeTests,
-  );
-  for (const event of events) {
-    const record = recordByCanonicalKey.get(event.canonicalKey);
-    if (record) {
-      bucketConsumer(record, event);
-    }
-  }
-  const allRecords = finalizeRecords([...recordByCanonicalKey.values()]);
-  const filteredRecords = filterRecordsForReport(allRecords, options.report);
-
-  return {
-    metadata: {
-      tool: "ts-topology",
-      version: 1,
-      generatedAt: new Date().toISOString(),
-      repoRevision: getRepoRevision(options.repoRoot),
-      tsconfigPath: context.tsconfigPath,
-    },
-    scope: {
-      id: options.scope.id,
-      description: options.scope.description,
-      repoRoot: options.repoRoot,
-      entrypoints: options.scope.entrypoints,
+  try {
+    const { recordByCanonicalKey, recordBySpecifierAndExportName } = buildScopeMaps(
+      context,
+      options.scope,
+    );
+    const events = collectReferenceEvents(
+      context,
+      options.scope,
+      recordBySpecifierAndExportName,
       includeTests,
-    },
-    report: options.report,
-    totals: {
-      exports: allRecords.length,
-      usedByProduction: allRecords.filter((record) => record.productionImportCount > 0).length,
-      usedByTests: allRecords.filter((record) => record.testImportCount > 0).length,
-      usedInternally: allRecords.filter((record) => record.internalImportCount > 0).length,
-      singleOwnerShared: allRecords.filter(
-        (record) => record.productionOwners.length === 1 && record.productionImportCount > 0,
-      ).length,
-      unused: allRecords.filter(
-        (record) =>
-          record.productionImportCount === 0 &&
-          record.testImportCount === 0 &&
-          record.internalImportCount === 0,
-      ).length,
-    },
-    rankedCandidates: buildRankedCandidates(allRecords, limit),
-    records: filteredRecords,
-  };
+    );
+    for (const event of events) {
+      const record = recordByCanonicalKey.get(event.canonicalKey);
+      if (record) {
+        bucketConsumer(record, event);
+      }
+    }
+    const allRecords = finalizeRecords([...recordByCanonicalKey.values()]);
+    const filteredRecords = filterRecordsForReport(allRecords, options.report);
+
+    return {
+      metadata: {
+        tool: "ts-topology",
+        version: 1,
+        generatedAt: new Date().toISOString(),
+        repoRevision: getRepoRevision(options.repoRoot),
+        tsconfigPath: context.tsconfigPath,
+      },
+      scope: {
+        id: options.scope.id,
+        description: options.scope.description,
+        repoRoot: options.repoRoot,
+        entrypoints: options.scope.entrypoints,
+        includeTests,
+      },
+      report: options.report,
+      totals: {
+        exports: allRecords.length,
+        usedByProduction: allRecords.filter((record) => record.productionImportCount > 0).length,
+        usedByTests: allRecords.filter((record) => record.testImportCount > 0).length,
+        usedInternally: allRecords.filter((record) => record.internalImportCount > 0).length,
+        singleOwnerShared: allRecords.filter(
+          (record) => record.productionOwners.length === 1 && record.productionImportCount > 0,
+        ).length,
+        unused: allRecords.filter(
+          (record) =>
+            record.productionImportCount === 0 &&
+            record.testImportCount === 0 &&
+            record.internalImportCount === 0,
+        ).length,
+      },
+      rankedCandidates: buildRankedCandidates(allRecords, limit),
+      records: filteredRecords,
+    };
+  } finally {
+    context.close();
+  }
 }
 
 export function filterRecordsForReport(

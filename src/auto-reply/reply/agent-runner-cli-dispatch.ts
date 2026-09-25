@@ -29,7 +29,7 @@ import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../reply-payloa
 import { formatToolAggregate } from "../tool-meta.js";
 import type { GetReplyOptions } from "../types.js";
 import {
-  type AgentEventDeliveryStartOrder,
+  type AgentEventBridgeParams,
   createAgentEventBridge,
   createAgentEventDeliveryStartOrder,
 } from "./agent-event-bridge.js";
@@ -40,10 +40,7 @@ type RunCliAgentInternalParams = RunCliAgentParams & {
   mediaImageLayout?: MediaImageLayout;
 };
 
-type AgentEventBridge = {
-  unsubscribe: () => void;
-  drain: () => Promise<void>;
-};
+type AgentEventBridge = ReturnType<typeof createAgentEventBridge>;
 
 async function stopAgentEventBridges(bridges: readonly AgentEventBridge[]): Promise<void> {
   for (const bridge of bridges) {
@@ -78,18 +75,12 @@ export function createCliReasoningStreamBridge(
   };
 }
 
-function createReasoningTextBridge(params: {
-  runId: string;
-  suppressed?: boolean;
-  deliver?: (payload: ReasoningTextPayload) => Promise<void>;
-  startOrder?: AgentEventDeliveryStartOrder;
-}) {
+function createReasoningTextBridge(
+  params: Omit<AgentEventBridgeParams<ReasoningTextPayload>, "read">,
+) {
   let lastText: string | undefined;
   return createAgentEventBridge({
-    runId: params.runId,
-    suppressed: params.suppressed,
-    deliver: params.deliver,
-    startOrder: params.startOrder,
+    ...params,
     read: (evt) => {
       if (evt.stream !== "thinking") {
         return undefined;
@@ -107,18 +98,12 @@ function createReasoningTextBridge(params: {
   });
 }
 
-function createReasoningProgressBridge(params: {
-  runId: string;
-  suppressed?: boolean;
-  deliver?: (payload: ReasoningProgressPayload) => Promise<void>;
-  startOrder?: AgentEventDeliveryStartOrder;
-}) {
+function createReasoningProgressBridge(
+  params: Omit<AgentEventBridgeParams<ReasoningProgressPayload>, "read">,
+) {
   let lastProgressTokens: number | undefined;
   return createAgentEventBridge({
-    runId: params.runId,
-    suppressed: params.suppressed,
-    deliver: params.deliver,
-    startOrder: params.startOrder,
+    ...params,
     read: (evt) => {
       if (evt.stream !== "thinking") {
         return undefined;
@@ -199,41 +184,26 @@ export function keepCliSessionBindingOnlyWhenReused(params: {
   };
 }
 
-function createToolEventBridge(params: {
-  runId: string;
-  suppressed?: boolean;
-  deliver?: (payload: CliToolEventPayload) => Promise<void>;
-  startOrder?: AgentEventDeliveryStartOrder;
-}) {
-  return createAgentEventBridge({
-    runId: params.runId,
-    suppressed: params.suppressed,
-    deliver: params.deliver,
-    startOrder: params.startOrder,
-    read: (evt) => {
-      if (evt.stream !== "tool") {
-        return undefined;
-      }
-      const phaseValue = evt.data.phase;
-      if (phaseValue !== "start" && phaseValue !== "update" && phaseValue !== "result") {
-        return undefined;
-      }
-      const phase: CliToolEventPayload["phase"] =
-        phaseValue === "start" ? "start" : phaseValue === "update" ? "update" : "result";
-      return {
-        name: typeof evt.data.name === "string" ? evt.data.name : undefined,
-        phase,
-        args: isRecord(evt.data.args) ? evt.data.args : undefined,
-        toolCallId: typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined,
-        ...(phase === "result"
-          ? {
-              isError: evt.data.isError === true,
-              result: evt.data.result,
-            }
-          : {}),
-      };
-    },
-  });
+function readToolEventPayload(evt: AgentEventPayload): CliToolEventPayload | undefined {
+  if (evt.stream !== "tool") {
+    return undefined;
+  }
+  const phase = evt.data.phase;
+  if (phase !== "start" && phase !== "update" && phase !== "result") {
+    return undefined;
+  }
+  return {
+    name: typeof evt.data.name === "string" ? evt.data.name : undefined,
+    phase,
+    args: isRecord(evt.data.args) ? evt.data.args : undefined,
+    toolCallId: typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined,
+    ...(phase === "result"
+      ? {
+          isError: evt.data.isError === true,
+          result: evt.data.result,
+        }
+      : {}),
+  };
 }
 
 /**
@@ -302,71 +272,20 @@ export function createCliToolSummaryTracker(params: {
   };
 }
 
-function createCommentaryEventBridge(params: {
-  runId: string;
-  suppressed?: boolean;
-  deliver?: (payload: CommentaryTextPayload) => Promise<void>;
-  startOrder?: AgentEventDeliveryStartOrder;
-}) {
-  return createAgentEventBridge({
-    runId: params.runId,
-    suppressed: params.suppressed,
-    deliver: params.deliver,
-    startOrder: params.startOrder,
-    read: readCommentaryTextPayload,
-  });
-}
-
-function createPlanUpdateBridge(params: {
-  runId: string;
-  suppressed?: boolean;
-  deliver?: GetReplyOptions["onPlanUpdate"];
-  startOrder?: AgentEventDeliveryStartOrder;
-}) {
-  const deliver = params.deliver;
-  return createAgentEventBridge({
-    runId: params.runId,
-    suppressed: params.suppressed,
-    // GetReplyOptions callbacks may return void; the bridge awaits promises.
-    deliver: deliver
-      ? async (payload: Parameters<NonNullable<GetReplyOptions["onPlanUpdate"]>>[0]) => {
-          await deliver(payload);
-        }
-      : undefined,
-    startOrder: params.startOrder,
-    read: (evt) => {
-      if (evt.stream !== "plan") {
-        return undefined;
-      }
-      return {
-        phase: normalizeOptionalString(evt.data.phase),
-        title: normalizeOptionalString(evt.data.title),
-        explanation: normalizeOptionalString(evt.data.explanation),
-        ...(evt.data.explanationFormat === "plain" ? { explanationFormat: "plain" as const } : {}),
-        steps: normalizeAgentPlanSteps(evt.data.steps),
-        source: normalizeOptionalString(evt.data.source),
-      };
-    },
-  });
-}
-
-function createToolBoundaryBridge(params: {
-  runId: string;
-  suppressed?: boolean;
-  deliver?: () => Promise<void>;
-}) {
-  return createAgentEventBridge({
-    runId: params.runId,
-    suppressed: params.suppressed,
-    deliver: params.deliver,
-    read: (evt) => {
-      if (evt.stream !== "tool") {
-        return undefined;
-      }
-      const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-      return ["completed", "end", "error", "result"].includes(phase) ? true : undefined;
-    },
-  });
+function readPlanUpdatePayload(
+  evt: AgentEventPayload,
+): Parameters<NonNullable<GetReplyOptions["onPlanUpdate"]>>[0] | undefined {
+  if (evt.stream !== "plan") {
+    return undefined;
+  }
+  return {
+    phase: normalizeOptionalString(evt.data.phase),
+    title: normalizeOptionalString(evt.data.title),
+    explanation: normalizeOptionalString(evt.data.explanation),
+    ...(evt.data.explanationFormat === "plain" ? { explanationFormat: "plain" as const } : {}),
+    steps: normalizeAgentPlanSteps(evt.data.steps),
+    source: normalizeOptionalString(evt.data.source),
+  };
 }
 
 type RunCliAgentWithLifecycleParams = {
@@ -481,19 +400,18 @@ async function runCliAgentWithLifecycleInternal(
     });
   };
   const emitLifecycleTerminal = params.emitLifecycleTerminal ?? true;
+  const emitLifecycleEvent = ({ phase, ...data }: AgentEventPayload["data"]) =>
+    emitAgentEvent({
+      runId: params.runId,
+      ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
+      ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+      ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
+      ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
+      stream: "lifecycle",
+      data: { phase, startedAt, ...data },
+    });
   params.onAgentRunStart?.();
-  emitAgentEvent({
-    runId: params.runId,
-    ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
-    ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
-    ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
-    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
-    stream: "lifecycle",
-    data: {
-      phase: "start",
-      startedAt,
-    },
-  });
+  emitLifecycleEvent({ phase: "start" });
   // One delivery-independent activity seam for every CLI agent event.
   // Suppressed (silentExpected) runs still emit real events and must keep
   // stamping, or a healthy silent stream looks stale to the takeover window.
@@ -509,35 +427,32 @@ async function runCliAgentWithLifecycleInternal(
   const progressStartOrder = createAgentEventDeliveryStartOrder({
     preserveCallbackStartOrder: params.preserveProgressCallbackStartOrder === true,
   });
-  const assistantBridge = createAssistantTextBridge({
+  const progressBridgeParams = {
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
+    startOrder: progressStartOrder,
+  };
+  const assistantBridge = createAssistantTextBridge({
+    ...progressBridgeParams,
     deliver: params.onAssistantText,
     deliverCompleted: params.onCompletedReply,
-    startOrder: progressStartOrder,
   });
   let finalReasoningText: string | undefined;
   const reasoningBridge = createReasoningTextBridge({
-    runId: params.runId,
-    suppressed: params.suppressAssistantBridge,
-    startOrder: progressStartOrder,
+    ...progressBridgeParams,
     deliver: async (payload: ReasoningTextPayload) => {
       finalReasoningText = normalizeOptionalString(payload.text);
       await params.onReasoningText?.(payload);
     },
   });
   const reasoningProgressBridge = createReasoningProgressBridge({
-    runId: params.runId,
-    suppressed: params.suppressAssistantBridge,
+    ...progressBridgeParams,
     deliver: params.onReasoningProgress,
-    startOrder: progressStartOrder,
   });
   const compactionBridge = createAgentEventBridge<
     { phase: "start" } | { completed: boolean; phase: "end" }
   >({
-    runId: params.runId,
-    suppressed: params.suppressAssistantBridge,
-    startOrder: progressStartOrder,
+    ...progressBridgeParams,
     deliver: async (event) => {
       if (event.phase === "start") {
         await params.onCompactionStart?.();
@@ -557,22 +472,18 @@ async function runCliAgentWithLifecycleInternal(
         : undefined;
     },
   });
-  const toolBridge = createToolEventBridge({
-    runId: params.runId,
-    suppressed: params.suppressAssistantBridge,
+  const toolBridge = createAgentEventBridge({
+    ...progressBridgeParams,
     deliver: params.onToolEvent,
-    startOrder: progressStartOrder,
+    read: readToolEventPayload,
   });
-  const commentaryBridge = createCommentaryEventBridge({
-    runId: params.runId,
-    suppressed: params.suppressAssistantBridge,
+  const commentaryBridge = createAgentEventBridge({
+    ...progressBridgeParams,
     deliver: params.onCommentaryText,
-    startOrder: progressStartOrder,
+    read: readCommentaryTextPayload,
   });
   const itemBridge = createAgentEventBridge({
-    runId: params.runId,
-    suppressed: params.suppressAssistantBridge,
-    startOrder: progressStartOrder,
+    ...progressBridgeParams,
     read: (evt) =>
       evt.stream === "item" &&
       evt.data.kind !== "preamble" &&
@@ -585,16 +496,27 @@ async function runCliAgentWithLifecycleInternal(
         }
       : undefined,
   });
-  const planBridge = createPlanUpdateBridge({
-    runId: params.runId,
-    suppressed: params.suppressAssistantBridge,
-    deliver: params.onPlanUpdate,
-    startOrder: progressStartOrder,
+  const onPlanUpdate = params.onPlanUpdate;
+  const planBridge = createAgentEventBridge({
+    ...progressBridgeParams,
+    deliver: onPlanUpdate
+      ? async (payload) => {
+          await onPlanUpdate(payload);
+        }
+      : undefined,
+    read: readPlanUpdatePayload,
   });
-  const toolBoundaryBridge = createToolBoundaryBridge({
+  const toolBoundaryBridge = createAgentEventBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
     deliver: maybeAnnounceFastModeAutoOff,
+    read: (evt) => {
+      if (evt.stream !== "tool") {
+        return undefined;
+      }
+      const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+      return ["completed", "end", "error", "result"].includes(phase) ? true : undefined;
+    },
   });
   const bridges = [
     activityBridge,
@@ -641,20 +563,11 @@ async function runCliAgentWithLifecycleInternal(
     }
 
     if (emitLifecycleTerminal) {
-      emitAgentEvent({
-        runId: params.runId,
-        ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
-        ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
-        ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
-        ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
-        stream: "lifecycle",
-        data: {
-          phase: "end",
-          startedAt,
-          endedAt: Date.now(),
-          ...resolveAgentLifecycleTerminalMetadata(result.meta),
-          ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
-        },
+      emitLifecycleEvent({
+        phase: "end",
+        endedAt: Date.now(),
+        ...resolveAgentLifecycleTerminalMetadata(result.meta),
+        ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
       });
       lifecycleTerminalEmitted = true;
     }
@@ -663,20 +576,11 @@ async function runCliAgentWithLifecycleInternal(
     await stopAgentEventBridges(bridges);
     await params.onErrorBeforeLifecycle?.(err);
     if (emitLifecycleTerminal) {
-      emitAgentEvent({
-        runId: params.runId,
-        ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
-        ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
-        ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
-        ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
-        stream: "lifecycle",
-        data: {
-          phase: "error",
-          startedAt,
-          endedAt: Date.now(),
-          error: String(err),
-          ...resolveAgentRunErrorLifecycleFields(err, params.runParams.abortSignal),
-        },
+      emitLifecycleEvent({
+        phase: "error",
+        endedAt: Date.now(),
+        error: String(err),
+        ...resolveAgentRunErrorLifecycleFields(err, params.runParams.abortSignal),
       });
       lifecycleTerminalEmitted = true;
     }
@@ -689,20 +593,11 @@ async function runCliAgentWithLifecycleInternal(
       await maybeEmitFastModeAutoReset();
     }
     if (emitLifecycleTerminal && !lifecycleTerminalEmitted) {
-      emitAgentEvent({
-        runId: params.runId,
-        ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
-        ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
-        ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
-        ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
-        stream: "lifecycle",
-        data: {
-          phase: "error",
-          startedAt,
-          endedAt: Date.now(),
-          error: "CLI run completed without lifecycle terminal event",
-          ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
-        },
+      emitLifecycleEvent({
+        phase: "error",
+        endedAt: Date.now(),
+        error: "CLI run completed without lifecycle terminal event",
+        ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
       });
     }
   }

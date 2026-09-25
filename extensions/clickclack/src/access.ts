@@ -15,7 +15,7 @@ import {
   type RoutePeer,
 } from "openclaw/plugin-sdk/routing";
 import { resolveClickClackDiscussionRoute } from "./discussions/routing.js";
-import { resolveClickClackBotPolicy, resolveClickClackGroupPolicy } from "./group-policy.js";
+import { resolveClickClackGroupPolicy } from "./group-policy.js";
 import { resolveClickClackMentionFacts } from "./mention-facts.js";
 import { getClickClackRuntime } from "./runtime.js";
 import { buildClickClackTarget } from "./target.js";
@@ -199,7 +199,6 @@ export async function resolveClickClackInboundAccess(params: {
     cfg,
   );
 
-  // Resolve group policy and mention facts for the channel.
   const effectiveGroupPolicy = resolveClickClackGroupPolicy({
     account: params.account,
     channelId: params.message.channel_id,
@@ -222,10 +221,6 @@ export async function resolveClickClackInboundAccess(params: {
       preparedRoute,
     };
   }
-  const effectiveBotPolicy = resolveClickClackBotPolicy({
-    account: params.account,
-    channelId: params.message.channel_id,
-  });
   // Older ClickClack servers may omit author classification. Preserve the
   // legacy ingress path for those responses and apply bot-only policy only to
   // messages positively classified as bot-authored.
@@ -238,8 +233,8 @@ export async function resolveClickClackInboundAccess(params: {
     : params.account.allowFrom;
   const botMentionAllowed =
     !isBotAuthor ||
-    effectiveBotPolicy.allowBots === true ||
-    (effectiveBotPolicy.allowBots === "mentions" &&
+    effectiveGroupPolicy.allowBots === true ||
+    (effectiveGroupPolicy.allowBots === "mentions" &&
       (preparedRoute.isDirect || mentionFacts.wasMentioned));
   if (!botMentionAllowed) {
     return {
@@ -266,7 +261,7 @@ export async function resolveClickClackInboundAccess(params: {
           receiverId: params.account.botUserId,
           eventId: params.message.id,
           ...(botLoopNowMs !== undefined ? { nowMs: botLoopNowMs } : {}),
-          config: effectiveBotPolicy.botLoopProtection,
+          config: effectiveGroupPolicy.botLoopProtection,
           defaultsConfig: cfg.channels?.defaults?.botLoopProtection,
           defaultEnabled: true,
         }

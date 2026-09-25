@@ -14,7 +14,8 @@ import {
 const { warn } = vi.hoisted(() => ({ warn: vi.fn<(message: string) => void>() }));
 
 // Observe diagnostics before any additional logger redaction; keep the SDK and cleanup real.
-vi.mock("../logging/subsystem.js", () => ({
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>()),
   createSubsystemLogger: () => ({ child: () => ({ warn }) }),
 }));
 

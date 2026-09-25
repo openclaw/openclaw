@@ -1,5 +1,6 @@
+import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createBackgroundTaskRecord } from "../acp/control-plane/manager.background-task.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -17,7 +18,6 @@ import { createAcpTaskBackingDetail } from "../tasks/task-backing-records.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "../tasks/task-executor-create.async.js";
 import { readResidentTaskFlow } from "../tasks/task-flow-registry.js";
 import { upsertTaskFlowRegistryRecordToSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
-import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
   deleteTaskFlowRecordById,
   reloadTaskFlowRegistryFromStoreAsync,
@@ -34,83 +34,26 @@ import {
   getTaskRegistryStore,
 } from "../tasks/task-registry.store.js";
 import { upsertTaskWithDeliveryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import type { SqliteWorkerOperations, SqliteWorkerStore } from "./sqlite-worker-contract.js";
-import * as workerStore from "./sqlite-worker-store.js";
+import {
+  interceptTaskWorkerCommands,
+  taskWorkerFlow as flow,
+  taskWorkerOwnerKey as ownerKey,
+  taskWorkerRecord as task,
+  useTaskWorkerState,
+} from "./sqlite-worker-task.test-support.js";
 
-const ownerKey = "agent:main:async-reader";
-let state: OpenClawTestState;
-
-function task(taskId: string, overrides: Partial<TaskRecord> = {}): TaskRecord {
-  return {
-    taskId,
-    runtime: "acp",
-    requesterSessionKey: ownerKey,
-    ownerKey,
-    scopeKind: "session",
-    task: "Synthetic task",
-    status: "running",
-    deliveryStatus: "not_applicable",
-    notifyPolicy: "silent",
-    createdAt: 100,
-    parentFlowId: "flow-a",
-    runId: "run-a",
-    requesterAgentId: "main",
-    ...overrides,
-  };
-}
-
-function flow(flowId: string, overrides: Partial<TaskFlowRecord> = {}): TaskFlowRecord {
-  return {
-    flowId,
-    syncMode: "managed",
-    controllerId: "tests/async-reads",
-    ownerKey,
-    revision: 1,
-    status: "running",
-    notifyPolicy: "silent",
-    goal: "Synthetic flow",
-    createdAt: 100,
-    updatedAt: 100,
-    ...overrides,
-  };
-}
+useTaskWorkerState("openclaw-task-async-", resetRuntimeTaskTestState);
 
 function observeTaskWorkerReplies(observe: (type: PropertyKey) => Promise<void> | undefined) {
-  const original = workerStore.runSqliteWorkerStoreOperation;
-  vi.spyOn(workerStore, "runSqliteWorkerStoreOperation").mockImplementation(
-    <Operations extends SqliteWorkerOperations, T>(
-      store: SqliteWorkerStore<Operations>,
-      operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-      stateContext?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[2],
-      assertCurrent?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[3],
-      createAdmission?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[4],
-      requireStateLifecycle?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[5],
-    ) =>
-      original(
-        store,
-        (scope) =>
-          operation({
-            execute: async (command, options) => {
-              const result = await scope.execute(command, options);
-              const pending = observe(command.type);
-              if (pending) {
-                await pending;
-              }
-              return result;
-            },
-          }),
-        stateContext,
-        assertCurrent,
-        createAdmission,
-        requireStateLifecycle,
-      ),
-  );
+  interceptTaskWorkerCommands(async (type, execute) => {
+    const result = await execute();
+    const pending = observe(type);
+    if (pending) {
+      await pending;
+    }
+    return result;
+  });
 }
 
 function holdFlowWorkerReply(target: "flows.current" | "flows.updateManaged") {
@@ -127,17 +70,6 @@ function holdFlowWorkerReply(target: "flows.current" | "flows.updateManaged") {
   });
   return { held, release };
 }
-
-beforeEach(async () => {
-  state = await createOpenClawTestState({ prefix: "openclaw-task-async-", applyEnv: true });
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await closeOpenClawStateDatabaseAsync();
-  await resetRuntimeTaskTestState();
-  await state.cleanup();
-});
 
 describe("registered task flow reconciliation", () => {
   it("settles active task fanout through the registered worker without host task or flow writes", async () => {
@@ -162,9 +94,10 @@ describe("registered task flow reconciliation", () => {
     const first = await create("First active task");
     const second = await create("Second active task");
     const other = await create("Other active task", "agent:main:other-child");
-    if (!first || !second || !other || !first.task.parentFlowId || !second.task.parentFlowId) {
-      throw new Error("Expected task and flow receipts");
-    }
+    assert(
+      first && second && other && first.task.parentFlowId && second.task.parentFlowId,
+      "Expected task and flow receipts",
+    );
     const { db } = openOpenClawStateDatabase();
     const sql = getNodeSqliteKysely<DB>(db);
     const tracker = trackSqliteStatementExecutions(db, ["task", "flow"] as const, (statement) => {
@@ -268,15 +201,11 @@ describe("registered task flow reconciliation", () => {
       await secondReceipt.promise;
       releaseFirstRead.resolve();
       const firstResult = await first;
-      if (!firstResult.created) {
-        throw new Error("Expected the first managed child");
-      }
+      assert(firstResult.created, "Expected the first managed child");
       expect(events).toEqual([{ taskId: firstResult.task.taskId, task: "First child" }]);
       releaseSecondReceipt.resolve();
       const secondResult = await second;
-      if (!secondResult.created) {
-        throw new Error("Expected the second managed child");
-      }
+      assert(secondResult.created, "Expected the second managed child");
       const secondTaskId = secondResult.task.taskId;
       expect(events).toEqual([
         { taskId: firstResult.task.taskId, task: "First child" },
@@ -288,9 +217,7 @@ describe("registered task flow reconciliation", () => {
         runId: "publication-b",
         task: "Second child",
       });
-      if (!reused.created) {
-        throw new Error("Expected the existing managed child");
-      }
+      assert(reused.created, "Expected the existing managed child");
       expect(reused.task.taskId).toBe(secondTaskId);
       expect(events).toEqual([]);
       const updated = await managed.runTask({
@@ -299,9 +226,7 @@ describe("registered task flow reconciliation", () => {
         task: "Second child",
         sourceId: "publication-source",
       });
-      if (!updated.created) {
-        throw new Error("Expected the updated managed child");
-      }
+      assert(updated.created, "Expected the updated managed child");
       expect(updated.task.taskId).toBe(secondTaskId);
       expect(events).toEqual([{ taskId: secondTaskId, task: "Second child" }]);
       expect(getTaskById(secondTaskId)).toMatchObject({
@@ -395,9 +320,7 @@ describe("registered task flow reconciliation", () => {
         controllerId: "tests/backing-projection",
         goal: "Track the current ACP instance",
       });
-      if (!target) {
-        throw new Error("Expected the managed projection flow");
-      }
+      assert(target, "Expected the managed projection flow");
       const createExisting = () =>
         createTaskRecord({
           runtime: "acp",
@@ -430,9 +353,7 @@ describe("registered task flow reconciliation", () => {
         const created = await measure("pending-generation-new", () =>
           createBackgroundTaskRecord(context, 2_000, "new-instance"),
         );
-        if (!created) {
-          throw new Error("Expected the new ACP background task");
-        }
+        assert(created, "Expected the new ACP background task");
         expect(getTaskById(created.taskId)).toMatchObject({
           detail: { instanceId: "new-instance", generation: generations + 1 },
         });
@@ -454,9 +375,10 @@ describe("registered task flow reconciliation", () => {
             status: "running",
           });
         const firstProjection = await measure("pending-project", project);
-        if (!firstProjection.created || !firstProjection.task) {
-          throw new Error("Expected the first managed ACP projection");
-        }
+        assert(
+          firstProjection.created && firstProjection.task,
+          "Expected the first managed ACP projection",
+        );
         const firstProjectionTask = firstProjection.task;
         expect(firstProjectionTask.detail).toMatchObject({
           taskId: created.taskId,
@@ -466,16 +388,15 @@ describe("registered task flow reconciliation", () => {
         const successor = await measure("pending-generation-successor", () =>
           createBackgroundTaskRecord(context, 2_002, "successor-instance"),
         );
-        if (!successor) {
-          throw new Error("Expected the successor ACP background task");
-        }
+        assert(successor, "Expected the successor ACP background task");
         expect(getTaskById(successor.taskId)).toMatchObject({
           detail: { instanceId: "successor-instance", generation: generations + 2 },
         });
         const nextProjection = await measure("pending-project-fresh", project);
-        if (!nextProjection.created || !nextProjection.task) {
-          throw new Error("Expected the successor managed ACP projection");
-        }
+        assert(
+          nextProjection.created && nextProjection.task,
+          "Expected the successor managed ACP projection",
+        );
         expect(nextProjection.task.taskId).not.toBe(firstProjectionTask.taskId);
         expect(nextProjection.task.detail).toMatchObject({
           taskId: successor.taskId,

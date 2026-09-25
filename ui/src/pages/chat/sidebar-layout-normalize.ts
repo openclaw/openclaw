@@ -197,5 +197,6 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
     activeSidePanel
       ? { expandedSide: true }
       : {}),
+    ...(value.resourceAutoOpenDismissed === true ? { resourceAutoOpenDismissed: true } : {}),
   };
 }

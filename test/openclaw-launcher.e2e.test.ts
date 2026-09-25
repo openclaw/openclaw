@@ -33,6 +33,10 @@ async function makeLauncherFixture(
     path.join(fixtureRoot, "node-host-launcher.mjs"),
   );
   await fs.copyFile(
+    path.resolve(process.cwd(), "node-compile-cache.mjs"),
+    path.join(fixtureRoot, "node-compile-cache.mjs"),
+  );
+  await fs.copyFile(
     path.resolve(process.cwd(), "node-version.mjs"),
     path.join(fixtureRoot, "node-version.mjs"),
   );
@@ -1785,7 +1789,7 @@ describe("openclaw launcher", () => {
       path.join(fixtureRoot, "dist", "entry.js"),
       [
         'import module from "node:module";',
-        'process.stdout.write(module.getCompileCacheDir?.() ?? "cache:disabled");',
+        "process.stdout.write(JSON.stringify({ directory: module.getCompileCacheDir?.(), respawn: process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED }));",
       ].join("\n"),
       "utf8",
     );
@@ -1799,7 +1803,19 @@ describe("openclaw launcher", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(path.join(".node-compile-cache", "openclaw", "2026.4.29"));
+    const original = JSON.parse(result.stdout) as { directory: string };
+    expect(original.directory).toContain(path.join(".node-compile-cache", "openclaw", "2026.4.29"));
+
+    const child = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+      cwd: fixtureRoot,
+      env: launcherEnv({
+        NODE_COMPILE_CACHE: path.dirname(original.directory),
+        OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: undefined,
+      }),
+      encoding: "utf8",
+    });
+    expect(child.status).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ directory: original.directory });
   });
 
   it("falls back to the default packaged launcher compile cache when NODE_COMPILE_CACHE is empty", async () => {

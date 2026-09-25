@@ -116,7 +116,7 @@ async function runCodeModeAgent(params: {
                 name: waiting ? "wait" : "exec",
                 arguments: waiting
                   ? { runId: readToolResultDetails(context.messages.at(-1))?.runId }
-                  : { code },
+                  : { title: "Run the recovery step", code },
               },
             ],
       );

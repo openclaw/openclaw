@@ -18,6 +18,13 @@ Gateway, it saves the installation for the next start. A lost reply or failed
 runtime activation does not trigger a second local install; inspect the reported
 state and use `plugins reload <id>` after fixing an activation failure.
 
+Use `--no-enable` when configuration already owns plugin activation. It installs
+and records the plugin without adding it to `plugins.allow`, removing it from
+`plugins.deny`, enabling its entry, or selecting its exclusive slot. Existing
+enabled entries stay enabled; this flag does not disable a plugin. Required
+configuration checks still apply, and plugins missing required configuration
+remain disabled. Hook-pack installs do not support this flag.
+
 Local paths, archives, npm-pack tarballs, and local Git repositories must be on
 the Gateway host. Marketplace requests also require a local connection because
 marketplace names can resolve to host-local registrations. The CLI resolves local
@@ -41,6 +48,7 @@ openclaw plugins install <plugin>@<marketplace>             # marketplace shorth
 openclaw plugins install <plugin> --marketplace <name>      # marketplace (explicit)
 openclaw plugins install <package> --force                  # confirm source / overwrite existing
 openclaw plugins install <package> --pin                    # pin resolved npm version
+openclaw plugins install <package> --no-enable              # preserve activation policy
 openclaw plugins install <package> --acknowledge-install-policy-warning
 ```
 
@@ -221,6 +229,10 @@ the same per-plugin managed npm project path used by registry installs,
 including `package-lock.json` verification, hoisted dependency scanning,
 and npm install records. Plain archive paths still install as local
 archives under the plugin extensions root.
+
+For registered archive plugins in the extensions root, `openclaw doctor --fix`
+repairs stale or dangling `node_modules/openclaw` host links using the installed
+package. This repair does not require the original archive or reinstall the plugin.
 
 Claude marketplace installs are also supported.
 

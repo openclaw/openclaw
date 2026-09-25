@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  type AgentsFilesGetParams,
   ErrorCodes,
   errorShape,
   validateAgentsFilesGetParams,
@@ -62,7 +63,7 @@ function respondAgentNotFound(respond: RespondFn, agentId: string): void {
 }
 
 function resolveAgentWorkspaceFileOrRespondError(
-  params: Record<string, unknown>,
+  params: AgentsFilesGetParams,
   respond: RespondFn,
   cfg: OpenClawConfig,
 ): {
@@ -70,19 +71,12 @@ function resolveAgentWorkspaceFileOrRespondError(
   workspaceDir: string;
   name: string;
 } | null {
-  const rawAgentId = params.agentId;
-  const agentId = resolveAgentIdOrError(
-    typeof rawAgentId === "string" || typeof rawAgentId === "number" ? String(rawAgentId) : "",
-    cfg,
-  );
+  const agentId = resolveAgentIdOrError(params.agentId, cfg);
   if (!agentId) {
-    respondAgentNotFound(respond, String(rawAgentId));
+    respondAgentNotFound(respond, params.agentId);
     return null;
   }
-  const rawName = params.name;
-  const name = (
-    typeof rawName === "string" || typeof rawName === "number" ? String(rawName) : ""
-  ).trim();
+  const name = params.name.trim();
   if (!ALLOWED_FILE_NAMES.has(name)) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unsupported file "${name}"`));
     return null;
@@ -430,8 +424,29 @@ export const agentFileHandlers: Pick<
           throw new Error("Workspace access changed while saving an Agent document");
         }
       };
+      const createFileExclusive = access.bridge.createFileExclusive;
+      if (params.expectedMissing && !createFileExclusive) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "This workspace host cannot safely create a missing Agent document. Update its workspace provider, or create the file on that host and reload it before saving.",
+          ),
+        );
+        return;
+      }
       conflict = await enqueueWorkspaceFileUpdate(async () => {
         assertCurrent();
+        if (params.expectedMissing && createFileExclusive) {
+          const result = await createFileExclusive({
+            filePath: name,
+            data: content,
+            mkdir: true,
+          });
+          assertCurrent();
+          return result === "exists" ? { currentHash: undefined } : undefined;
+        }
         const expectedHash = params.expectedHash?.toLowerCase();
         if (expectedHash) {
           const stat = await access.bridge.stat({ filePath: name });
@@ -465,6 +480,17 @@ export const agentFileHandlers: Pick<
         const writeRoot = workspaceRoot;
         const expectedHash = params.expectedHash?.toLowerCase();
         conflict = await enqueueWorkspaceFileUpdate(async () => {
+          if (params.expectedMissing) {
+            try {
+              await writeRoot.create(name, content, { encoding: "utf8", atomic: true });
+            } catch (err) {
+              if (err instanceof FsSafeError && err.code === "already-exists") {
+                return { currentHash: undefined };
+              }
+              throw err;
+            }
+            return undefined;
+          }
           if (expectedHash) {
             const currentHash = await readWorkspaceFileHash(writeRoot, name);
             if (currentHash !== expectedHash) {

@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { linkUserChannelIdentity } from "../../state/user-channel-identities.js";
+import { publishCanonicalUserChannelPolicy } from "../../state/user-channel-identity-operations.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
 import {
   withOpenClawTestState,
@@ -64,6 +65,12 @@ async function createFixture(state: OpenClawTestState, authority: "role" | "iden
     linkUserChannelIdentity(profile.id, identity);
     return { profile, identity };
   });
+  const activatePolicy = async (update: Partial<NonNullable<OpenClawConfig["gateway"]>>) => {
+    const gateway = { ...cfg.gateway, ...update };
+    await publishCanonicalUserChannelPolicy(gateway);
+    cfg.gateway = gateway;
+  };
+  await activatePolicy({});
   let live = true;
   const gateway = createCommandOwnerTestGateway(cfg);
   const owner = {
@@ -115,6 +122,7 @@ async function createFixture(state: OpenClawTestState, authority: "role" | "iden
   };
   return {
     cfg,
+    activatePolicy,
     state,
     admins,
     context,

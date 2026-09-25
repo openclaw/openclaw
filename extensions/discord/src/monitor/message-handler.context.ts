@@ -33,7 +33,10 @@ import {
   buildDiscordInboundAccessContext,
   createDiscordSupplementalContextAccessChecker,
 } from "./inbound-context.js";
-import { resolveDiscordMessageStickers } from "./message-forwarded.js";
+import {
+  resolveDiscordMessageStickers,
+  resolveDiscordReferencedReplyMessageId,
+} from "./message-forwarded.js";
 import {
   createDiscordHistorySenderProvenance,
   filterDiscordHistoryEntriesForContext,
@@ -445,8 +448,6 @@ export async function buildDiscordMessageProcessContext(params: {
     channelIngress,
     channel: "discord",
     resolveSupplementalMedia: true,
-    // User-selected bot text is reply context, not a new bot-authored event.
-    suppressSelfQuoteBody: false,
     contextVisibility: contextVisibilityMode,
     accountId: route.accountId,
     messageId: canonicalMessageId ?? message.id,
@@ -491,6 +492,7 @@ export async function buildDiscordMessageProcessContext(params: {
     },
     reply: {
       to: effectiveTo,
+      replyToId: resolveDiscordReferencedReplyMessageId(message) ?? undefined,
       ...(originatingTo !== effectiveTo ? { originatingTo } : {}),
     },
     message: {

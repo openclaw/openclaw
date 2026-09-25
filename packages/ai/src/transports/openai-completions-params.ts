@@ -107,8 +107,8 @@ const MIN_USEFUL_OUTPUT_TOKENS = 16;
 // Used only to bound `max_completion_tokens` below the effective context cap
 // for strict OpenAI-compatible servers (e.g. vLLM, StepFun). The CJK-aware
 // helper avoids undercounting non-Latin prompts enough to trigger server-side
-// context rejections; wrong-high here just trims output a little. Estimate the
-// final shaped payload, not the raw context, so compat transforms and dropped
+// context rejections; exhausted estimates enter the existing overflow recovery.
+// Estimate the final shaped payload, not the raw context, so compat transforms and dropped
 // replay turns are reflected in the output cap.
 function estimateOpenAICompletionsInputTokens(payload: {
   messages?: unknown;
@@ -470,6 +470,26 @@ export function buildOpenAICompletionsRequest(
       params.tool_choice = toolChoice;
     }
   }
+  const isOpenRouter = compat.thinkingFormat === "openrouter";
+  // Only model metadata can declare a missing effort selector; endpoint defaults cannot.
+  const usesBinaryOpenRouterThinking =
+    isOpenRouter &&
+    (model.compat?.supportsReasoningEffort === false ||
+      model.compat?.supportedReasoningEfforts?.length === 0);
+  const simpleReasoning = options?.reasoning;
+  const requestedEffort =
+    policy.mode === "direct"
+      ? options?.reasoningEffort
+      : (options?.reasoningEffort ??
+        (simpleReasoning === "none"
+          ? "none"
+          : resolveOpenAISimpleReasoningEffort(
+              { ...model, compat: model.compat ?? undefined },
+              simpleReasoning,
+            )) ??
+        (usesBinaryOpenRouterThinking ? undefined : "high"));
+  const reasoning = resolveOpenAIRequestReasoning(model, requestedEffort);
+  const { effort, thinkingEnabled } = reasoning;
   {
     const maxTokenBudget =
       policy.mode === "direct"
@@ -511,6 +531,15 @@ export function buildOpenAICompletionsRequest(
             `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
         );
         if (remainingBudget < MIN_USEFUL_OUTPUT_TOKENS) {
+          if (model.reasoning && thinkingEnabled !== false) {
+            throw Object.assign(
+              new Error(
+                `Context window exceeded: estimated input ${estimatedInputTokens} leaves only ` +
+                  `${remainingBudget} output tokens within the ${effectiveContextTokens}-token context.`,
+              ),
+              { code: "context_length_exceeded" },
+            );
+          }
           log.warn(
             `[completions] insufficient_output_budget provider=${model.provider} api=${model.api} ` +
               `model=${model.id} output=${clampedMaxTokens} ` +
@@ -527,26 +556,6 @@ export function buildOpenAICompletionsRequest(
       }
     }
   }
-  const isOpenRouter = compat.thinkingFormat === "openrouter";
-  // Only model metadata can declare a missing effort selector; endpoint defaults cannot.
-  const usesBinaryOpenRouterThinking =
-    isOpenRouter &&
-    (model.compat?.supportsReasoningEffort === false ||
-      model.compat?.supportedReasoningEfforts?.length === 0);
-  const simpleReasoning = options?.reasoning;
-  const requestedEffort =
-    policy.mode === "direct"
-      ? options?.reasoningEffort
-      : (options?.reasoningEffort ??
-        (simpleReasoning === "none"
-          ? "none"
-          : resolveOpenAISimpleReasoningEffort(
-              { ...model, compat: model.compat ?? undefined },
-              simpleReasoning,
-            )) ??
-        (usesBinaryOpenRouterThinking ? undefined : "high"));
-  const reasoning = resolveOpenAIRequestReasoning(model, requestedEffort);
-  const { effort, thinkingEnabled } = reasoning;
   if (isOpenRouter && model.reasoning) {
     if (usesBinaryOpenRouterThinking && thinkingEnabled !== undefined) {
       params.reasoning = { enabled: thinkingEnabled };

@@ -94,59 +94,6 @@ async function closeCustomizeUi(page: Page) {
 }
 
 suite.define(() => {
-  it.each([true, false])(
-    "keeps page-only reload on Plugins without an idle floating control (admin: %s)",
-    async (admin) => {
-      await suite.withPage(
-        { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
-        async ({ page }) => {
-          const gateway = await installMockGateway(page, {
-            operatorScopes: admin ? ["operator.admin"] : ["operator.read"],
-            featureMethods: [
-              ...defaultControlUiFeatureMethods,
-              "plugins.controlUi.list",
-              "plugins.controlUi.report",
-              "plugins.controlUi.reload",
-            ],
-            methodResponses: {
-              "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: admin },
-              "plugins.controlUi.list": catalog("one"),
-              "plugins.controlUi.report": { ok: true },
-              "plugins.controlUi.reload": catalog("two"),
-            },
-          });
-          await page.route("**/__openclaw__/plugins/control-ui/ui-fixture/*/index.js", (route) =>
-            route.fulfill({
-              status: 200,
-              contentType: "text/javascript",
-              body: pluginModule(new URL(route.request().url()).pathname.split("/").at(-2)!, false),
-            }),
-          );
-          await page.goto(`${suite.server.baseUrl}plugin?plugin=ui-fixture&id=proof`);
-          await page.getByRole("heading", { name: "Fixture revision one" }).waitFor();
-          expect(
-            await page.getByRole("button", { name: "Customize UI", exact: true }).count(),
-          ).toBe(0);
-          await page.getByRole("link", { name: "Plugins", exact: true }).click();
-          await page.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
-          if (!admin) {
-            expect(
-              await page.getByRole("button", { name: "Customize UI", exact: true }).count(),
-            ).toBe(0);
-            return;
-          }
-          await openCustomizeUi(page);
-          await gateway.setMethodResponse("plugins.controlUi.list", catalog("two"));
-          await page.getByRole("button", { name: "Reload plugin UI", exact: true }).click();
-          await gateway.waitForRequest("plugins.controlUi.reload");
-          await closeCustomizeUi(page);
-          await page.getByRole("link", { name: "UI fixture", exact: true }).click();
-          await page.getByRole("heading", { name: "Fixture revision two" }).waitFor();
-        },
-      );
-    },
-  );
-
   it("retires withdrawn action registrations without reviving pending invocations on reuse", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
@@ -450,6 +397,8 @@ suite.define(() => {
           });
           await gateway.waitForRequest("plugins.controlUi.list");
           await expectLoading();
+          // The sidebar owns manager registration and loads independently of the plugin page.
+          await page.getByRole("link", { name: "Plugins", exact: true }).waitFor();
           expect(
             await page.evaluate(() => ({
               contributions: Boolean(customElements.get("openclaw-plugin-contributions")),

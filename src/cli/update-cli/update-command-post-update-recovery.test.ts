@@ -157,6 +157,7 @@ async function finishFailedUpdate(
     failure?: { cause: unknown; detail: string };
     json?: boolean;
     stopped?: boolean;
+    mutationStarted?: boolean;
     run?: FinishUpdateParams["opts"]["run"];
     originalRoot?: string;
     previousInstallRoot?: string;
@@ -171,7 +172,7 @@ async function finishFailedUpdate(
   } = {},
 ): Promise<UpdateCommandFailure> {
   return await finishUpdate({
-    mutationStarted: true,
+    mutationStarted: options.mutationStarted ?? true,
     result,
     ...(options.failure ? { failure: options.failure } : {}),
     root: options.originalRoot ?? result.root ?? "/repo",
@@ -358,6 +359,22 @@ describe("failed update recovery restart", () => {
     await finishFailedUpdate(failedResult(undefined));
     expect(mocks.restart).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { mutationStarted: false, stopped: false, waitForStartup: false },
+    { mutationStarted: false, stopped: true, waitForStartup: true },
+    { mutationStarted: true, stopped: false, waitForStartup: true },
+  ])(
+    "retains recorded activation effects in recovery (mutation=$mutationStarted, stop=$stopped)",
+    async ({ mutationStarted, stopped, waitForStartup }) => {
+      const root = tempDirs.make("update-recovery-startup-policy-");
+      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "1.0.0" }));
+      await finishFailedUpdate({ ...failedResult(undefined), root }, { mutationStarted, stopped });
+      expect(mocks.verifyGateway).toHaveBeenCalledWith(expect.objectContaining({ waitForStartup }));
+      expect(mocks.restart).not.toHaveBeenCalled();
+      expect(mocks.restartCandidate).not.toHaveBeenCalled();
+    },
+  );
 
   it("retains structured mutation errors without authorizing service recovery", async () => {
     const restoreError = new Error("task enable denied");

@@ -6,6 +6,7 @@ import {
 import { WorkerTaskError } from "../infra/worker-task-pool-core.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { yieldSessionListWork } from "./session-projection-work.js";
 import { isColdArchivedSessionRow as isCold } from "./session-row-projection-archive.js";
 import { createSessionRowMaterializer } from "./session-row-projection-materialize.js";
 import { withSessionRowDatabaseFacts } from "./session-row-projection-read.js";
@@ -42,6 +43,9 @@ export function createSessionRowRefresh(
   });
   const exactReads = new Map<string, ExactRowPreparation>();
   const queuedExactReads = new Map<string, ExactRowPreparation>();
+  // Each row has one in-flight worker read: bulk batches skip exact-owned rows,
+  // and exact preparations join a bulk read already holding their row.
+  const bulkReads = new Map<string, Promise<void>>();
   let activeExactReads = 0;
   let exactReadBytes = 0;
   function releaseExactRead(id: string, read: ExactRowPreparation) {
@@ -112,7 +116,7 @@ export function createSessionRowRefresh(
     }
     return selected;
   }
-  function prepareExactRows(queries: readonly records.Lookup[]) {
+  function prepareExactRows(queries: readonly records.Lookup[]): Promise<void> | undefined {
     if (owner.state().disposed) {
       return undefined;
     }
@@ -120,7 +124,8 @@ export function createSessionRowRefresh(
     if (selected.size === 0) {
       return undefined;
     }
-    const missing = [...selected].filter((id) => !exactReads.has(id));
+    const joined = new Set([...selected].flatMap((id) => bulkReads.get(id) ?? []));
+    const missing = [...selected].filter((id) => !exactReads.has(id) && !bulkReads.has(id));
     const bytes = missing.reduce((total, id) => total + 6 * id.length + 3, 0);
     if (
       exactReads.size + missing.length >
@@ -146,9 +151,14 @@ export function createSessionRowRefresh(
       }
     }
     queueMicrotask(dispatchExactReads);
-    return Promise.all([...selected].map((id) => exactReads.get(id)!.completion.promise)).then(
-      () => undefined,
+    const exact = Promise.all(
+      [...selected].flatMap((id) => exactReads.get(id)?.completion.promise ?? []),
     );
+    if (joined.size === 0) {
+      return exact.then(() => undefined);
+    }
+    // The bulk read may reject its facts; recheck the rows once it settles.
+    return Promise.all([exact, ...joined]).then(() => prepareExactRows(queries));
   }
   function readExactRows(selected: ReadonlySet<string>) {
     return withSessionRowDatabaseFacts(
@@ -192,10 +202,40 @@ export function createSessionRowRefresh(
     ) {
       return;
     }
-    await withSessionRowDatabaseFacts(
-      { rows: owner.rows, dirty: owner.dirty, cfg: owner.state().cfg, revision },
-      materializer,
-    );
+    const selected = new Set<string>();
+    const held = new Set<Promise<void>>();
+    for (const id of owner.dirty) {
+      const exact = exactReads.get(id);
+      // Accepted facts finish without a worker read, even while their exact read settles.
+      if (exact && !owner.rows.get(id)?.pendingDatabaseFacts) {
+        held.add(exact.completion.promise);
+      } else if (selected.add(id).size === MAX_SESSION_ROW_FACTS_KEYS) {
+        break;
+      }
+    }
+    const read = createDeferredCore();
+    for (const id of selected) {
+      bulkReads.set(id, read.promise);
+    }
+    try {
+      await withSessionRowDatabaseFacts(
+        { rows: owner.rows, dirty: owner.dirty, selected, cfg: owner.state().cfg, revision },
+        materializer,
+      );
+    } finally {
+      for (const id of selected) {
+        if (bulkReads.get(id) === read.promise) {
+          bulkReads.delete(id);
+        }
+      }
+      read.resolve();
+    }
+    if (selected.size === 0) {
+      // Only exact-owned rows remain dirty; wait for them instead of spinning the drain.
+      await Promise.allSettled(held);
+      // Let exact callers install their held snapshots before preparing placements again.
+      await yieldSessionListWork();
+    }
   }
   return {
     refresh: materializer.refresh,

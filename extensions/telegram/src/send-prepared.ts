@@ -2,6 +2,7 @@ import type { InputFile } from "grammy";
 import type { InlineKeyboardMarkup, Message } from "grammy/types";
 import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { runAuthorizedTelegramRequest } from "./account-throttler.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isTelegramSkippableChunkSendError,
@@ -18,7 +19,6 @@ import {
   withTelegramNativeQuoteFallback,
   isTelegramQuoteParamError,
 } from "./reply-parameters.js";
-import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "./retry-after.js";
 import {
   removeTelegramRichNativeQuoteParam,
   toTelegramRichMessageContextParams,
@@ -46,7 +46,6 @@ export function createTelegramReplyRequest(runtime: RuntimeEnv): PreparedRequest
   const retry = createChannelApiRetryRunner({
     shouldRetry: shouldRetryTelegramSendError,
     strictShouldRetry: true,
-    retryAfterMaxDelayMs: TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS,
   });
   return (send, operation, options) =>
     withTelegramApiErrorLogging({
@@ -149,7 +148,9 @@ export function createTelegramPreparedSender(config: {
         config.request(
           () => {
             config.assertPlatformSendAuthorized?.();
-            return send(effective);
+            return runAuthorizedTelegramRequest(config.assertPlatformSendAuthorized, () =>
+              send(effective),
+            );
           },
           operation,
           {

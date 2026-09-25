@@ -35,6 +35,17 @@ function hasRetiredApprovalPolicy(value: unknown): boolean {
   return approvalPolicy === "on-failure" || approvalPolicy === "untrusted";
 }
 
+function hasBlankNetworkProxyOptionalFields(value: unknown): boolean {
+  const appServer = asNullableRecord(value);
+  const networkProxy = asNullableRecord(appServer?.networkProxy);
+  return (
+    networkProxy?.enabled === true &&
+    [networkProxy.profileName, appServer?.remoteWorkspaceRoot].some(
+      (field) => typeof field === "string" && !field.trim(),
+    )
+  );
+}
+
 // These keys shipped in v2026.8.1; only Doctor consumes them after retirement.
 const RETIRED_TURN_IDLE_TIMEOUT_KEYS = [
   "turnCompletionIdleTimeoutMs",
@@ -76,10 +87,16 @@ export const legacyConfigRules: LegacyConfigRule[] = [
       'Codex app-server turn idle timeouts are retired; native Codex owns provider liveness and turn completion. The existing agents.defaults.timeoutSeconds run limit remains unchanged. Run "openclaw doctor --fix" to remove the old settings.',
     match: hasRetiredTurnIdleTimeout,
   },
+  {
+    path: ["plugins", "entries", "codex", "config", "appServer"],
+    message:
+      'Blank plugins.entries.codex.config.appServer.networkProxy.profileName or appServer.remoteWorkspaceRoot must be removed to use the defaults with network restrictions. Run "openclaw doctor --fix".',
+    match: hasBlankNetworkProxyOptionalFields,
+  },
 ];
 
 /**
- * Removes retired Codex plugin config keys while preserving unrelated config.
+ * Repairs legacy Codex plugin config while preserving unrelated config.
  */
 export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
   config: OpenClawConfig;
@@ -94,12 +111,14 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   const shouldRewriteDestructivePolicy = hasLegacyPluginDestructivePolicy(rawCodexPlugins);
   const shouldRewriteApprovalPolicy = hasRetiredApprovalPolicy(rawAppServer);
   const shouldRemoveTurnIdleTimeouts = hasRetiredTurnIdleTimeout(rawAppServer);
+  const shouldRemoveBlankNetworkProxyFields = hasBlankNetworkProxyOptionalFields(rawAppServer);
   if (
     !rawPluginConfig ||
     (!shouldRemoveDynamicToolsProfile &&
       !shouldRewriteDestructivePolicy &&
       !shouldRewriteApprovalPolicy &&
-      !shouldRemoveTurnIdleTimeouts)
+      !shouldRemoveTurnIdleTimeouts &&
+      !shouldRemoveBlankNetworkProxyFields)
   ) {
     return { config: cfg, changes: [] };
   }
@@ -147,6 +166,21 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
         delete nextAppServer[key];
         changes.push(
           `Removed retired plugins.entries.codex.config.appServer.${key}; native Codex owns provider liveness and turn completion. agents.defaults.timeoutSeconds was not changed.`,
+        );
+      }
+    }
+  }
+
+  if (nextAppServer && shouldRemoveBlankNetworkProxyFields) {
+    const nextNetworkProxy = asNullableRecord(nextAppServer.networkProxy);
+    for (const [target, key, configPath] of [
+      [nextNetworkProxy, "profileName", "networkProxy.profileName"],
+      [nextAppServer, "remoteWorkspaceRoot", "remoteWorkspaceRoot"],
+    ] as const) {
+      if (target && typeof target[key] === "string" && !target[key].trim()) {
+        delete target[key];
+        changes.push(
+          `Removed blank plugins.entries.codex.config.appServer.${configPath}; the default now applies.`,
         );
       }
     }

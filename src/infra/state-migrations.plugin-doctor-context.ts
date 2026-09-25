@@ -377,6 +377,7 @@ export function createPluginDoctorStateMigrationContext(params: {
   env: NodeJS.ProcessEnv;
   config: OpenClawConfig;
   repairAuthority?: PluginDoctorRepairAuthority;
+  trustedForDurableStores?: boolean;
   channelIngress?: PluginDoctorChannelIngressAccessOptions;
 }): PluginDoctorStateMigrationContext {
   const { pluginId, env } = params;
@@ -420,6 +421,25 @@ export function createPluginDoctorStateMigrationContext(params: {
   };
   if (params.channelIngress) {
     context.channelIngressQueues = buildChannelIngressQueueAccess(params.channelIngress);
+  }
+  if (params.trustedForDurableStores) {
+    context.inspectCronJobs = async () => {
+      params.repairAuthority?.assertCurrent();
+      const { inspectCronJobsForDoctor } = await import("../cron/store/doctor.js");
+      params.repairAuthority?.assertCurrent();
+      const inventory = await inspectCronJobsForDoctor(params);
+      params.repairAuthority?.assertCurrent();
+      return inventory;
+    };
+    if (params.repairAuthority) {
+      const authority = params.repairAuthority;
+      context.repairCronJobs = async (inventory, changes) => {
+        authority.assertCurrent();
+        const { repairCronJobsForDoctor } = await import("../cron/store/doctor.js");
+        authority.assertCurrent();
+        return repairCronJobsForDoctor(params, authority, inventory, changes);
+      };
+    }
   }
   if (params.repairAuthority) {
     const authority = params.repairAuthority;

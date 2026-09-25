@@ -157,7 +157,7 @@ it.each(["pending", "applied"] as const)(
       };
       await fs.mkdir(skillDir, { recursive: true });
       await fs.writeFile(record.target.skillFile, content);
-      importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: source.env } });
+      await importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: source.env } });
       const config: OpenClawConfig = {
         agents: { entries: { main: { workspace: source.workspaceDir } } },
       };
@@ -193,3 +193,52 @@ it.each(["pending", "applied"] as const)(
     });
   },
 );
+
+it("releases copied Workshop readers before removing a rehearsal", async () => {
+  const { openSqliteWorkerStore } = await import("../infra/sqlite-worker-store.js");
+  const { closeOpenClawStateDatabaseByPathAsync } =
+    await import("../state/openclaw-state-db-cache.js");
+  await withOpenClawTestState({ scenario: "minimal" }, async (source) => {
+    openOpenClawStateDatabase({ env: source.env });
+    closeOpenClawStateDatabaseForTest();
+    const rehearsal = await prepareUpdateCandidateRehearsal({
+      config: {},
+      stateDir: source.stateDir,
+      candidateRoot: source.root,
+      env: source.env,
+    });
+    const copied = path.join(rehearsal.stateDir, "state", "openclaw.sqlite");
+    const retained = path.join(source.root, "retained-rehearsal.sqlite");
+    const successor = path.join(source.root, "successor.sqlite");
+    let store:
+      | import("../infra/sqlite-worker-store.js").SqliteWorkerStore<
+          import("../infra/sqlite-worker-store.test-support.js").FixtureOperations
+        >
+      | undefined;
+    try {
+      await collectDoctorSkillWorkshopBackupResources({
+        config: {},
+        env: { ...rehearsal.env, OPENCLAW_UPDATE_IN_PROGRESS: "0" },
+      });
+      await fs.link(copied, retained);
+      await rehearsal.cleanup();
+      await expect(fs.stat(copied)).rejects.toMatchObject({ code: "ENOENT" });
+      // A real link preserves physical identity without depending on allocator inode reuse.
+      store = await openSqliteWorkerStore<
+        import("../infra/sqlite-worker-store.test-support.js").FixtureOperations
+      >({
+        moduleUrl: new URL("../infra/sqlite-worker-store.test-support.ts", import.meta.url),
+        databasePath: successor,
+        input: { type: "link", existingPath: retained },
+      });
+      await store.execute({ type: "append", input: { value: "after rehearsal cleanup" } });
+      expect(await store.execute({ type: "read", input: undefined })).toEqual([
+        "after rehearsal cleanup",
+      ]);
+    } finally {
+      await store?.close();
+      await closeOpenClawStateDatabaseByPathAsync(copied);
+      await rehearsal.cleanup();
+    }
+  });
+});

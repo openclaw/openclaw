@@ -50,7 +50,7 @@ async function setup(
   state: OpenClawTestState,
   terminalStatus: "succeeded" | "failed" | "cancelled" = "succeeded",
 ) {
-  resetTaskRegistryForTests();
+  resetTaskRegistryForTests({ persist: false });
   const scope = createAgentHarnessTaskRuntimeScope({ requesterSessionKey: key });
   const runtime = createAgentHarnessTaskRuntime({
     runtime: "subagent",

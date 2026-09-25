@@ -13,7 +13,11 @@ import {
   isCronSessionKey,
   isSubagentSessionKey,
 } from "../../routing/session-key.js";
-import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
+import { interruptAdmittedMainSessionRecovery } from "./main-session-recovery-admitted-interruption.js";
+import {
+  buildMainSessionRecoveryClearPatch,
+  removeMainSessionRecoveryForegroundClaim,
+} from "./main-session-recovery-clear.js";
 import type {
   MainSessionRecoveryCommand,
   MainSessionRecoveryConflict,
@@ -560,38 +564,19 @@ export function transitionMainSessionRecovery(
           Object.assign(entry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
         }
       }
-      return { kind: "admitted_recovery" };
+      return {
+        kind: "admitted_recovery",
+        admission: {
+          cycleId: state.cycleId,
+          attempt: state.chargedAttempts,
+          lifecycleGeneration: command.lifecycleGeneration,
+          runId: command.runId,
+          sessionId: command.sessionId,
+        },
+      };
     }
-    case "mark_admitted_recovery_interrupted": {
-      const state = entry.mainRestartRecovery;
-      if (entry.sessionId !== command.sessionId) {
-        return { kind: "rejected", reason: "session_replaced" };
-      }
-      if (
-        !state ||
-        state.reservation ||
-        !entry.restartRecoveryRuns?.some(
-          (run) =>
-            run.runId === command.runId && run.lifecycleGeneration === command.lifecycleGeneration,
-        )
-      ) {
-        return { kind: "rejected", reason: "stale_reservation" };
-      }
-      entry.status = "running";
-      entry.lifecycleRunId = undefined;
-      entry.lastRunId = undefined;
-      entry.abortedLastRun = true;
-      entry.startedAt = undefined;
-      entry.endedAt = undefined;
-      entry.runtimeMs = undefined;
-      if (entry.restartRecoveryDeliveryRunId === command.runId) {
-        // Gateway accepted this RPC id before setup failed. Rotate it on retry
-        // or the dedupe cache replays that terminal pre-dispatch failure.
-        entry.restartRecoveryDeliveryRunId = undefined;
-      }
-      entry.updatedAt = command.now;
-      return { kind: "applied" };
-    }
+    case "mark_admitted_recovery_interrupted":
+      return interruptAdmittedMainSessionRecovery(entry, command);
     case "claim_foreground": {
       if (
         entry.sessionId === command.sessionId &&
@@ -689,26 +674,15 @@ export function transitionMainSessionRecovery(
       if (!state || !claims || !ownsForegroundClaim(state, command.claim)) {
         return { kind: "no_change" };
       }
-      const tokens = claims.tokens.filter((token) => token !== command.claim.claimId);
-      const runIdsByClaimId = Object.fromEntries(
-        Object.entries(claims.runIdsByClaimId ?? {}).filter(
-          ([token]) => token !== command.claim.claimId,
-        ),
+      const foregroundClaims = removeMainSessionRecoveryForegroundClaim(
+        claims,
+        command.claim.claimId,
       );
-      if (tokens.length === 0 && entry.abortedLastRun !== true) {
+      if (!foregroundClaims && entry.abortedLastRun !== true) {
         Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
         return { kind: "applied" };
       }
-      updateRecoveryState(entry, state, {
-        foregroundClaims:
-          tokens.length > 0
-            ? {
-                lifecycleGeneration: command.claim.lifecycleGeneration,
-                tokens,
-                ...(Object.keys(runIdsByClaimId).length > 0 ? { runIdsByClaimId } : {}),
-              }
-            : undefined,
-      });
+      updateRecoveryState(entry, state, { foregroundClaims });
       return { kind: "applied" };
     }
     case "tombstone": {

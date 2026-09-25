@@ -67,6 +67,11 @@ import {
   OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
 } from "./shared.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
+import {
+  isSIWCAuthFlow,
+  TOKEN_SHARING_AUTH_FLOW,
+  TOKEN_SHARING_RESOURCE,
+} from "./token-sharing.js";
 
 type OpenAILiveModelReaders = Pick<
   typeof import("openclaw/plugin-sdk/provider-catalog-live-runtime"),
@@ -915,6 +920,12 @@ export function buildOpenAIProvider(): ProviderPlugin {
     wizard: apiKeyDefinition.wizard,
   });
   for (const method of providerDefinition.auth) {
+    if (method.id === "siwc") {
+      method.starterModel = OPENAI_DEFAULT_MODEL;
+      method.run = async (ctx) =>
+        (await import("./token-sharing-oauth.runtime.js")).loginTokenSharing(ctx);
+      continue;
+    }
     if (method.id === "oauth" || method.id === "device-code") {
       method.starterModel = OPENAI_CODEX_DEFAULT_MODEL;
       method.run = chatGPTAuthRuns[method.id];
@@ -940,6 +951,31 @@ export function buildOpenAIProvider(): ProviderPlugin {
           return null;
         }
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+        if (isSIWCAuthFlow(auth.authFlow)) {
+          // Token sharing authorizes Responses, not either model-discovery endpoint.
+          const sharing = auth.authFlow === TOKEN_SHARING_AUTH_FLOW;
+          const provider = buildOpenAIStaticPlatformProviderConfig(
+            undefined,
+            TOKEN_SHARING_RESOURCE,
+          );
+          return {
+            providers: {
+              [PROVIDER_ID]: {
+                ...provider,
+                models: sharing
+                  ? provider.models.filter((model) => model.api === "openai-responses")
+                  : [],
+              },
+            },
+            outcomes: [
+              {
+                provider: PROVIDER_ID,
+                profileId: auth.profileId,
+                status: sharing ? ("unavailable" as const) : ("auth-rejected" as const),
+              },
+            ],
+          };
+        }
         if (auth.preparationFailed) {
           return null;
         }
@@ -1103,6 +1139,14 @@ export function buildOpenAIProvider(): ProviderPlugin {
     },
     ...responsesHooks,
     prepareExtraParams: (ctx) => {
+      if (ctx.auth?.mode === "oauth" && ctx.auth.authFlow === TOKEN_SHARING_AUTH_FLOW) {
+        return {
+          ...ctx.extraParams,
+          transport: "sse",
+          store: false,
+          responsesServerCompaction: false,
+        };
+      }
       const providerConfig = ctx.config?.models?.providers?.[PROVIDER_ID];
       const useCodexTransport =
         shouldUseCodexResponsesHooks({
@@ -1117,7 +1161,12 @@ export function buildOpenAIProvider(): ProviderPlugin {
     },
     resolveUsageAuth: codexHooks.resolveUsageAuth,
     fetchUsageSnapshot: codexHooks.fetchUsageSnapshot,
-    refreshOAuth: codexHooks.refreshOAuth,
+    refreshOAuth: async (credential) =>
+      isSIWCAuthFlow(credential.authFlow)
+        ? (await import("./token-sharing-oauth.runtime.js")).refreshTokenSharingCredential(
+            credential,
+          )
+        : codexHooks.refreshOAuth(credential),
     buildUnknownModelHint: ({ modelId }) => buildOpenAIUnknownModelHint(modelId),
     buildMissingAuthMessage: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {

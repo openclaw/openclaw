@@ -2,16 +2,33 @@ import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-run
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTelegramRuntime } from "./runtime.js";
-import {
-  normalizeCachedStickerForStore,
-  TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
-  TELEGRAM_STICKER_CACHE_NAMESPACE,
-  type CachedSticker,
-} from "./sticker-cache-store.legacy-state.js";
 
-export type { CachedSticker };
+const TELEGRAM_STICKER_CACHE_NAMESPACE = "telegram.sticker-cache";
+const TELEGRAM_STICKER_CACHE_MAX_ENTRIES = 10_000;
+
+export interface CachedSticker {
+  fileId: string;
+  fileUniqueId: string;
+  emoji?: string;
+  setName?: string;
+  description: string;
+  cachedAt: string;
+  receivedFrom?: string;
+}
 
 type TelegramStickerCacheStore = PluginStateKeyedStore<CachedSticker>;
+
+function normalizeCachedStickerForStore(sticker: CachedSticker): CachedSticker {
+  return {
+    fileId: sticker.fileId,
+    fileUniqueId: sticker.fileUniqueId,
+    description: sticker.description,
+    cachedAt: sticker.cachedAt,
+    ...(sticker.emoji !== undefined ? { emoji: sticker.emoji } : {}),
+    ...(sticker.setName !== undefined ? { setName: sticker.setName } : {}),
+    ...(sticker.receivedFrom !== undefined ? { receivedFrom: sticker.receivedFrom } : {}),
+  };
+}
 
 function openStickerCacheStore(): TelegramStickerCacheStore {
   return getTelegramRuntime().state.openKeyedStore<CachedSticker>({

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
@@ -26,8 +26,7 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-it("admits a worker operation after the previous turn's schema probe expires", async () => {
-  vi.useFakeTimers({ toFake: ["setImmediate"] });
+it("rechecks a foreign commit before the next worker operation", async () => {
   const context = captureOpenClawStateWorkerContext();
   const backend = runWithSqliteWorkerStateContext(context, () =>
     createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
@@ -36,22 +35,12 @@ it("admits a worker operation after the previous turn's schema probe expires", a
   try {
     peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
     const command = { type: "database.inspectIdle" as const, input: undefined };
-    const result = Promise.resolve(backend.prepare?.(command))
-      .then(() => runWithSqliteWorkerStateContext(context, () => backend.execute(command)))
-      .then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-    await Promise.resolve();
-    vi.runOnlyPendingTimers();
-    expect(await result).toMatchObject({
-      message: expect.stringContaining("newer schema version"),
-    });
+    expect(() => runWithSqliteWorkerStateContext(context, () => backend.execute(command))).toThrow(
+      "newer schema version",
+    );
   } finally {
     peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
     peer.close();
-    vi.runOnlyPendingTimers();
-    vi.useRealTimers();
     await backend.close();
   }
 });

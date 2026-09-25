@@ -510,9 +510,12 @@ export const sharedVitestConfig = {
     isolate: false,
     pool: workerConfig.pool,
     // Native imports keep the invocation owner's isolated source-cache policy.
-    execArgv: process.versions.bun
-      ? resolveVitestBunSourceArgs()
-      : ["--import", resolveTsxImport(repoRoot)],
+    execArgv: [
+      ...(process.versions.bun
+        ? resolveVitestBunSourceArgs()
+        : ["--import", resolveTsxImport(repoRoot)]),
+      `--import=${new URL("./vitest.jsdom-preload.mts", import.meta.url).href}`,
+    ],
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,
     fileParallelism: workerConfig.fileParallelism,

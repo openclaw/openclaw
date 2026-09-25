@@ -10,7 +10,7 @@
  */
 
 import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
-import { formatFrontmatterValue } from "./frontmatter-format.js";
+import { rebuildMdRaw } from "./emit.js";
 import { formatOcPath, type OcPath } from "./oc-path.js";
 import { guardSentinel } from "./sentinel.js";
 
@@ -113,31 +113,4 @@ function rebuildBlockBody(block: AstBlock, newItems: readonly AstItem[]): string
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-export function rebuildMdRaw(ast: MdAst): MdAst {
-  const parts: string[] = [];
-  if (ast.frontmatter.length > 0) {
-    parts.push("---");
-    for (const fm of ast.frontmatter) {
-      parts.push(`${fm.key}: ${formatFrontmatterValue(fm.value)}`);
-    }
-    parts.push("---");
-  }
-  if (ast.preamble.length > 0) {
-    if (parts.length > 0) {
-      parts.push("");
-    }
-    parts.push(ast.preamble);
-  }
-  for (const block of ast.blocks) {
-    if (parts.length > 0) {
-      parts.push("");
-    }
-    parts.push(`## ${block.heading}`);
-    if (block.bodyText.length > 0) {
-      parts.push(block.bodyText);
-    }
-  }
-  return { ...ast, raw: parts.join("\n") };
 }

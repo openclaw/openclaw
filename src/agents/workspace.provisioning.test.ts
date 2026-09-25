@@ -7,11 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import * as commandExec from "../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { nodeFilePath } from "../test-utils/node-file-path.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import * as workspaceBootstrap from "./workspace-bootstrap-publish.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
 import * as workspaceState from "./workspace-state-store.js";
 import {
@@ -174,41 +174,42 @@ function startGitProvisioning(directories: string[], retryAfterFailure = false) 
   if (!retryAfterFailure) {
     lateCaller.resolve();
   }
-  const realWrite = fs.writeFile.bind(fs);
-  const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
-    const filePath = nodeFilePath(file);
-    const parent = filePath ? path.dirname(filePath) : undefined;
-    const workspaceDir =
-      parent && initGates.has(parent)
-        ? parent
-        : parent &&
-            path.basename(parent).startsWith("openclaw-bootstrap-") &&
-            initGates.has(path.dirname(parent))
-          ? path.dirname(parent)
-          : undefined;
-    if (workspaceDir && filePath && path.basename(filePath) === DEFAULT_AGENTS_FILENAME) {
-      if (++agentsWrites === dirs.length) {
-        admitted.resolve();
-      }
-      // No seeding until all callers passed the real new-workspace admission.
-      await admitted.promise;
-    }
-    try {
-      return await realWrite(file, data, options);
-    } finally {
-      if (workspaceDir && filePath && path.basename(filePath) === DEFAULT_USER_FILENAME) {
-        const last = ++userWrites === dirs.length;
-        if (last) {
-          templates.resolve();
+  const realInstructions = workspaceBootstrap.publishAgentInstructions;
+  const instructionsSpy = vi
+    .spyOn(workspaceBootstrap, "publishAgentInstructions")
+    .mockImplementation(async (...args) => {
+      if (initGates.has(path.dirname(args[0]))) {
+        if (++agentsWrites === dirs.length) {
+          admitted.resolve();
         }
-        // Finish real template writes before any caller can inspect customization.
-        await templates.promise;
-        if (last) {
-          await lateCaller.promise;
+        // No seeding until all callers passed the real new-workspace admission.
+        await admitted.promise;
+      }
+      return await realInstructions(...args);
+    });
+  const realPublish = workspaceBootstrap.publishBootstrapFile;
+  const publishSpy = vi
+    .spyOn(workspaceBootstrap, "publishBootstrapFile")
+    .mockImplementation(async (...args) => {
+      try {
+        return await realPublish(...args);
+      } finally {
+        if (
+          initGates.has(path.dirname(args[0])) &&
+          path.basename(args[0]) === DEFAULT_USER_FILENAME
+        ) {
+          const last = ++userWrites === dirs.length;
+          if (last) {
+            templates.resolve();
+          }
+          // Finish real publication before any caller can inspect customization.
+          await templates.promise;
+          if (last) {
+            await lateCaller.promise;
+          }
         }
       }
-    }
-  });
+    });
   const realMerge = workspaceState.mergeWorkspaceSetupState;
   const mergeSpy = vi
     .spyOn(workspaceState, "mergeWorkspaceSetupState")
@@ -290,7 +291,7 @@ function startGitProvisioning(directories: string[], retryAfterFailure = false) 
       gate.resolve();
     }
     await Promise.allSettled(calls);
-    for (const spy of [commandSpy, statSpy, mergeSpy, writeSpy]) {
+    for (const spy of [commandSpy, statSpy, mergeSpy, publishSpy, instructionsSpy]) {
       spy.mockRestore();
     }
   };

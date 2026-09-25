@@ -11,66 +11,95 @@ const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
 installCronTestHooks({ logger: noopLogger });
 
+function createCronFixture(storePath: string) {
+  const finished = createFinishedBarrier();
+  const schedulerTurns: Promise<unknown>[] = [];
+  const cron = new CronService({
+    storePath,
+    cronEnabled: true,
+    log: noopLogger,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    onEvent: finished.onEvent,
+    runSchedulerOwned: (run) => {
+      const turn = run();
+      schedulerTurns.push(turn);
+      return turn;
+    },
+  });
+  return {
+    cron,
+    finished,
+    joinSchedulerTurns: async () => {
+      const failures: unknown[] = [];
+      // The finished event precedes post-run maintenance and timer re-arming.
+      for (const turn of schedulerTurns) {
+        try {
+          await turn;
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Cron fixture scheduler failed");
+      }
+    },
+  };
+}
+
 describe("update() must not drop a due every-job's pending run", () => {
   it("preserves a due every-job nextRunAtMs on an idempotent schedule re-save", async () => {
     const store = await makeStorePath();
     const base = Date.parse("2025-12-13T00:00:00.000Z");
 
-    const finished = createFinishedBarrier();
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      onEvent: finished.onEvent,
-    });
+    const { cron, finished, joinSchedulerTurns } = createCronFixture(store.storePath);
 
-    await cron.start();
+    try {
+      await cron.start();
 
-    const job = await cron.add({
-      name: "every 10s",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 10_000 },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "tick" },
-    });
-    const jobId = job.id;
-    expect(job.state.nextRunAtMs).toBe(base + 10_000);
+      const job = await cron.add({
+        name: "every 10s",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 10_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "tick" },
+      });
+      const jobId = job.id;
+      expect(job.state.nextRunAtMs).toBe(base + 10_000);
 
-    // Fire once so the job carries lastRunAtMs and a real next due slot.
-    vi.setSystemTime(new Date(base + 10_000 + 5));
-    const firstRun = finished.waitForOk(jobId);
-    await vi.runOnlyPendingTimersAsync();
-    await firstRun;
+      // Fire once so the job carries lastRunAtMs and a real next due slot.
+      vi.setSystemTime(new Date(base + 10_000 + 5));
+      const firstRun = finished.waitForOk(jobId);
+      await vi.runOnlyPendingTimersAsync();
+      await firstRun;
+      await joinSchedulerTurns();
 
-    let current = (await cron.list({ includeDisabled: true })).find((j) => j.id === jobId)!;
-    const lastRunAtMs = current.state.lastRunAtMs!;
-    const dueSlot = current.state.nextRunAtMs!;
-    expect(dueSlot).toBe(lastRunAtMs + 10_000);
+      let current = (await cron.list({ includeDisabled: true })).find((j) => j.id === jobId)!;
+      const lastRunAtMs = current.state.lastRunAtMs!;
+      const dueSlot = current.state.nextRunAtMs!;
+      expect(dueSlot).toBe(lastRunAtMs + 10_000);
 
-    // Advance past the next slot so it is now due, before the timer services it.
-    vi.setSystemTime(new Date(dueSlot + 50));
-    const nowDue = dueSlot + 50;
+      // Advance past the next slot so it is now due, before the timer services it.
+      vi.setSystemTime(new Date(dueSlot + 50));
+      const nowDue = dueSlot + 50;
 
-    // User edits the job and the control UI resubmits the unchanged schedule
-    // (a normal idempotent re-save, e.g. while changing the message). This must
-    // not advance the already-due slot.
-    await cron.update(jobId, { schedule: { kind: "every", everyMs: 10_000 } });
+      // User edits the job and the control UI resubmits the unchanged schedule
+      // (a normal idempotent re-save, e.g. while changing the message). This must
+      // not advance the already-due slot.
+      await cron.update(jobId, { schedule: { kind: "every", everyMs: 10_000 } });
 
-    current = (await cron.list({ includeDisabled: true })).find((j) => j.id === jobId)!;
-    // Correct: the due slot is preserved so the pending run still fires.
-    // Buggy (current main): nextRunAtMs jumps to dueSlot + 10_000 (> nowDue),
-    // silently dropping this slot's run.
-    expect(current.state.lastRunAtMs).toBe(lastRunAtMs);
-    expect(current.state.nextRunAtMs).toBe(dueSlot);
-    expect(current.state.nextRunAtMs).toBeLessThanOrEqual(nowDue);
-    // The cadence anchor must not re-phase to "now" on an idempotent re-save.
-    expect(current.schedule).toMatchObject({ kind: "every", anchorMs: base });
-
-    cron.stop();
+      current = (await cron.list({ includeDisabled: true })).find((j) => j.id === jobId)!;
+      expect(current.state.lastRunAtMs).toBe(lastRunAtMs);
+      expect(current.state.nextRunAtMs).toBe(dueSlot);
+      expect(current.state.nextRunAtMs).toBeLessThanOrEqual(nowDue);
+      // The cadence anchor must not re-phase to "now" on an idempotent re-save.
+      expect(current.schedule).toMatchObject({ kind: "every", anchorMs: base });
+    } finally {
+      cron.stop();
+      await joinSchedulerTurns();
+    }
   });
 
   it.each([
@@ -100,62 +129,57 @@ describe("update() must not drop a due every-job's pending run", () => {
       const store = await makeStorePath();
       const base = Date.parse("2025-12-13T00:00:00.000Z");
 
-      const finished = createFinishedBarrier();
-      const cron = new CronService({
-        storePath: store.storePath,
-        cronEnabled: true,
-        log: noopLogger,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-        onEvent: finished.onEvent,
-      });
+      const { cron, finished, joinSchedulerTurns } = createCronFixture(store.storePath);
 
-      await cron.start();
+      try {
+        await cron.start();
 
-      const job = await cron.add({
-        name: "every 10s",
-        enabled: true,
-        schedule: { kind: "every", everyMs: previousEveryMs },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "tick" },
-      });
-      const jobId = job.id;
-      expect(job.schedule).toMatchObject({ kind: "every", anchorMs: base });
+        const job = await cron.add({
+          name: "every 10s",
+          enabled: true,
+          schedule: { kind: "every", everyMs: previousEveryMs },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "tick" },
+        });
+        const jobId = job.id;
+        expect(job.schedule).toMatchObject({ kind: "every", anchorMs: base });
 
-      let editTime = base + 3_000;
-      if (completedRun) {
-        vi.setSystemTime(new Date(base + previousEveryMs + 5));
-        const firstRun = finished.waitForOk(jobId);
-        await vi.runOnlyPendingTimersAsync();
-        await firstRun;
-        const completedJob = (await cron.list({ includeDisabled: true })).find(
-          (candidate) => candidate.id === jobId,
-        )!;
-        editTime = completedJob.state.lastRunAtMs! + 3_000;
-      }
+        let editTime = base + 3_000;
+        if (completedRun) {
+          vi.setSystemTime(new Date(base + previousEveryMs + 5));
+          const firstRun = finished.waitForOk(jobId);
+          await vi.runOnlyPendingTimersAsync();
+          await firstRun;
+          await joinSchedulerTurns();
+          const completedJob = (await cron.list({ includeDisabled: true })).find(
+            (candidate) => candidate.id === jobId,
+          )!;
+          editTime = completedJob.state.lastRunAtMs! + 3_000;
+        }
 
-      vi.setSystemTime(new Date(editTime));
-      const futureAnchorMs =
-        futureAnchorOffsetMs === undefined ? undefined : editTime + futureAnchorOffsetMs;
-      await cron.update(jobId, {
-        schedule: {
+        vi.setSystemTime(new Date(editTime));
+        const futureAnchorMs =
+          futureAnchorOffsetMs === undefined ? undefined : editTime + futureAnchorOffsetMs;
+        await cron.update(jobId, {
+          schedule: {
+            kind: "every",
+            everyMs: nextEveryMs,
+            ...(futureAnchorMs === undefined ? {} : { anchorMs: futureAnchorMs }),
+          },
+        });
+
+        const current = (await cron.list({ includeDisabled: true })).find((j) => j.id === jobId)!;
+        expect(current.schedule).toMatchObject({
           kind: "every",
           everyMs: nextEveryMs,
-          ...(futureAnchorMs === undefined ? {} : { anchorMs: futureAnchorMs }),
-        },
-      });
-
-      const current = (await cron.list({ includeDisabled: true })).find((j) => j.id === jobId)!;
-      expect(current.schedule).toMatchObject({
-        kind: "every",
-        everyMs: nextEveryMs,
-        anchorMs: futureAnchorMs ?? editTime,
-      });
-      expect(current.state.nextRunAtMs).toBe(futureAnchorMs ?? editTime + nextEveryMs);
-
-      cron.stop();
+          anchorMs: futureAnchorMs ?? editTime,
+        });
+        expect(current.state.nextRunAtMs).toBe(futureAnchorMs ?? editTime + nextEveryMs);
+      } finally {
+        cron.stop();
+        await joinSchedulerTurns();
+      }
     },
   );
 
@@ -163,42 +187,34 @@ describe("update() must not drop a due every-job's pending run", () => {
     const store = await makeStorePath();
     vi.setSystemTime(new Date("2025-12-13T08:59:00.000Z"));
 
-    const finished = createFinishedBarrier();
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      onEvent: finished.onEvent,
-    });
+    const { cron, joinSchedulerTurns } = createCronFixture(store.storePath);
 
-    await cron.start();
+    try {
+      await cron.start();
 
-    const job = await cron.add({
-      name: "daily 9am",
-      enabled: true,
-      schedule: { kind: "cron", expr: "0 9 * * *" },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "report" },
-    });
-    const jobId = job.id;
-    const dueSlot = job.state.nextRunAtMs!;
+      const job = await cron.add({
+        name: "daily 9am",
+        enabled: true,
+        schedule: { kind: "cron", expr: "0 9 * * *" },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "report" },
+      });
+      const jobId = job.id;
+      const dueSlot = job.state.nextRunAtMs!;
 
-    // Advance past the 09:00 slot so it is now due, before the timer fires it.
-    vi.setSystemTime(new Date(dueSlot + 50));
-    const nowDue = dueSlot + 50;
+      // Advance past the 09:00 slot so it is now due, before the timer fires it.
+      vi.setSystemTime(new Date(dueSlot + 50));
+      const nowDue = dueSlot + 50;
 
-    await cron.update(jobId, { schedule: { kind: "cron", expr: "0 9 * * *" } });
+      await cron.update(jobId, { schedule: { kind: "cron", expr: "0 9 * * *" } });
 
-    const current = (await cron.list({ includeDisabled: true })).find((j) => j.id === jobId)!;
-    // Correct: the due slot is preserved. Buggy main: nextRunAtMs jumps to the
-    // next day, dropping today's run.
-    expect(current.state.nextRunAtMs).toBe(dueSlot);
-    expect(current.state.nextRunAtMs).toBeLessThanOrEqual(nowDue);
-
-    cron.stop();
+      const current = (await cron.list({ includeDisabled: true })).find((j) => j.id === jobId)!;
+      expect(current.state.nextRunAtMs).toBe(dueSlot);
+      expect(current.state.nextRunAtMs).toBeLessThanOrEqual(nowDue);
+    } finally {
+      cron.stop();
+      await joinSchedulerTurns();
+    }
   });
 });

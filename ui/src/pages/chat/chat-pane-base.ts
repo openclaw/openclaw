@@ -298,7 +298,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     replacementSessionKey: string,
     preserveDraft?: boolean,
   ) => void;
-  @property({ attribute: false }) paneTitle = "";
+  @property({ attribute: false }) presentationTitle: string | undefined;
   @property({ attribute: false }) narrow = false;
   @property({ attribute: false }) mergedChrome = false;
   @property({ attribute: false }) navDrawerOpen = false;

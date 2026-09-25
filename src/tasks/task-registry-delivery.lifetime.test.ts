@@ -5,16 +5,20 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { MessageSendResult } from "../infra/outbound/message.js";
 import {
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  runWithGatewayDetachedWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
+import { observeAsyncWorkScopeRuns } from "../shared/async-work-scope.test-support.js";
 import {
   maybeDeliverTaskStateChangeUpdate,
   maybeDeliverTaskTerminalUpdate,
 } from "./task-registry-delivery.js";
+import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
 import type { TaskDeliveryState, TaskEventRecord, TaskRecord } from "./task-registry.types.js";
 
 const storage = vi.hoisted(() => ({
@@ -224,11 +228,22 @@ it.each([
 ] as const)(
   "owns $kind delivery and its cleanup after the $parent producer closes",
   async ({ kind, parent }) => {
+    using deliveries = captureTaskDeliveryWork();
+    // A shorter observer must leave this fixture subscribed to later deliveries.
+    const siblingObserver = observeAsyncWorkScopeRuns();
+    siblingObserver[Symbol.dispose]();
     const task = seed(kind);
     const caller = await closeCaller(parent);
     const started = createDeferred();
     const send = createDeferred<MessageSendResult>();
     const cleanup = createDeferred();
+    const releaseUnrelated = createDeferred();
+    const unrelated = runWithGatewayDetachedWorkAdmission(
+      () => releaseUnrelated.promise,
+      "fixture:unrelated",
+    );
+    let settlement: Promise<void> | undefined;
+    let fixtureSettled = false;
     let cleanupWork: Promise<void> | undefined;
     let deliverySignal: AbortSignal | undefined;
     storage.send.mockImplementation(async () => {
@@ -253,11 +268,15 @@ it.each([
       expect(deliverySignal).toBeDefined();
       expect(deliverySignal).not.toBe(caller.signal);
       expect(deliverySignal?.aborted).toBe(false);
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
       expect(storage.tasks.get(task.taskId)?.deliveryStatus).toBe("pending");
       send.resolve(sent);
       expect(await result).toMatchObject({ ok: true });
+      settlement = deliveries.settle().then(() => {
+        fixtureSettled = true;
+      });
       await setImmediate();
+      expect(fixtureSettled).toBe(false);
       expect(storage.send).toHaveBeenCalledOnce();
       expect(storage.send).toHaveBeenCalledWith(
         expect.objectContaining({ ...origin, agentId: "main" }),
@@ -271,12 +290,20 @@ it.each([
         expect(storage.tasks.get(task.taskId)?.deliveryStatus).toBe("pending");
       }
       expect(deliverySignal?.aborted).toBe(false);
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      cleanup.resolve();
+      await cleanupWork;
+      await setImmediate();
+      expect(fixtureSettled).toBe(true);
+      expect(getActiveGatewayRootWorkHolders()).toEqual(["fixture:unrelated"]);
     } finally {
       send.resolve(sent);
       cleanup.resolve();
+      releaseUnrelated.resolve();
       await cleanupWork;
       await result;
+      await unrelated;
+      await settlement;
       await setImmediate();
     }
     expect(deliverySignal?.aborted).toBe(true);

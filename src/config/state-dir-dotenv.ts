@@ -1,13 +1,13 @@
 // Loads state-directory dotenv entries used by config and runtime startup.
 import fs from "node:fs";
 import path from "node:path";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { parse as parseDotEnv } from "dotenv";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
-import { readRegularFileSync } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { collectConfigServiceEnvVars } from "./config-env-vars.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "./future-version-guard.js";

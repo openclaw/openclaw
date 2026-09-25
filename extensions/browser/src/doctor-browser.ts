@@ -4,11 +4,14 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { formatCliCommand, note } from "openclaw/plugin-sdk/cli-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   asNullableRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CONFIG_DIR, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parseBrowserMajorVersion, readBrowserVersion } from "./browser/chrome.executable-probe.js";
 import {
   resolveBrowserExecutableForPlatform,
@@ -16,9 +19,6 @@ import {
 } from "./browser/chrome.executables.js";
 import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME, resolveBrowserConfig } from "./browser/config.js";
 import { movePathToTrash } from "./browser/trash.js";
-import type { OpenClawConfig } from "./config/config.js";
-import { formatCliCommand, note } from "./sdk-setup-tools.js";
-import { CONFIG_DIR, resolveUserPath } from "./utils.js";
 
 const CHROME_MCP_MIN_MAJOR = 144;
 const LEGACY_CLAWD_BROWSER_PROFILE_NAME = "clawd";

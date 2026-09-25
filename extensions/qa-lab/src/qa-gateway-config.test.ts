@@ -2,6 +2,10 @@
 import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
+  QA_SESSION_OBSERVER_HEADER,
+  registerQaSessionObserver,
+} from "./providers/shared/session-observer-registry.js";
+import {
   buildQaGatewayConfig,
   DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
   mergeQaControlUiAllowedOrigins,
@@ -60,6 +64,90 @@ function expectQaLabPluginEnabled(cfg: ReturnType<typeof buildQaGatewayConfig>) 
 }
 
 describe("buildQaGatewayConfig", () => {
+  it("uses only active full-mock observer registrations across endpoint aliases", () => {
+    const baseUrl = "http://127.0.0.1:44082";
+    const observerUrl = `${baseUrl}/debug/session`;
+    const build = (providerBaseUrl: string) =>
+      buildQaGatewayConfig({
+        bind: "loopback",
+        gatewayPort: 18789,
+        gatewayToken: "token",
+        providerBaseUrl,
+        workspaceDir: "/tmp/qa-workspace",
+      }).models?.providers?.["mock-openai"]?.request;
+    const dispose = registerQaSessionObserver(baseUrl, observerUrl);
+    try {
+      for (const endpoint of [baseUrl, `${baseUrl}/`, `${baseUrl}/v1`, `${baseUrl}/v1/`]) {
+        expect(build(endpoint)).toEqual({
+          allowPrivateNetwork: true,
+          headers: { [QA_SESSION_OBSERVER_HEADER]: observerUrl },
+        });
+      }
+      expect(build(`${baseUrl}/other`)).toEqual({ allowPrivateNetwork: true });
+      const successorUrl = `${baseUrl}/debug/successor`;
+      const disposeSuccessor = registerQaSessionObserver(`${baseUrl}/v1/`, successorUrl);
+      try {
+        dispose();
+        expect(build(baseUrl)).toEqual({
+          allowPrivateNetwork: true,
+          headers: { [QA_SESSION_OBSERVER_HEADER]: successorUrl },
+        });
+      } finally {
+        disposeSuccessor();
+      }
+      expect(build(baseUrl)).toEqual({ allowPrivateNetwork: true });
+    } finally {
+      dispose();
+    }
+  });
+
+  it.each(["openclaw", "codex"] as const)(
+    "keeps explicit observer routing scoped to the mock provider (%s)",
+    (forcedRuntime) => {
+      const sessionObserverUrl = "http://127.0.0.1:44081/debug/session";
+      const dispose = registerQaSessionObserver(
+        "http://127.0.0.1:44080",
+        "http://127.0.0.1:44080/debug/session",
+      );
+      try {
+        const cfg = buildQaGatewayConfig({
+          bind: "loopback",
+          gatewayPort: 18789,
+          gatewayToken: "token",
+          providerBaseUrl: "http://127.0.0.1:44080/v1",
+          mockSessionObserverUrl: sessionObserverUrl,
+          forcedRuntime,
+          enabledPluginIds: ["qa-lab"],
+          workspaceDir: "/tmp/qa-workspace",
+        });
+
+        expect(cfg.plugins?.entries?.["qa-lab"]).toEqual({
+          enabled: true,
+        });
+        expect(cfg.models?.providers?.["mock-openai"]?.request).toEqual(
+          forcedRuntime === "codex"
+            ? undefined
+            : {
+                allowPrivateNetwork: true,
+                headers: { [QA_SESSION_OBSERVER_HEADER]: sessionObserverUrl },
+              },
+        );
+        expect(
+          cfg.models?.providers?.openai?.request?.headers?.[QA_SESSION_OBSERVER_HEADER],
+        ).toBeUndefined();
+        if (forcedRuntime === "openclaw") {
+          expect(
+            cfg.models?.providers?.["mock-openai"]?.models.find(
+              (model) => model.id === "gpt-5.6-luna",
+            )?.compat?.sendSessionIdHeader,
+          ).toBe(true);
+        }
+      } finally {
+        dispose();
+      }
+    },
+  );
+
   it.each([false, true])("requires explicit ACP fixture selection (selected=%s)", (selected) => {
     const cfg = buildQaGatewayConfig({
       bind: "loopback",
@@ -429,6 +517,9 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.mode).toBe("merge");
     expect(cfg.models?.providers?.openai?.baseUrl).toBe("https://api.openai.com/v1");
     expect(cfg.models?.providers?.openai?.request).toBeUndefined();
+    for (const model of cfg.models?.providers?.openai?.models ?? []) {
+      expect(model).not.toHaveProperty("compat");
+    }
     expect(cfg.memory?.search?.remote).toEqual({
       baseUrl: "http://127.0.0.1:44080/v1",
       apiKey: "test",

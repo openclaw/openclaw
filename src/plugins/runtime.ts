@@ -34,11 +34,13 @@ import { settlePreparedMessageToolCatalog } from "./prepared-message-tool-catalo
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   adoptPluginRegistryRecords,
+  bindPluginRegistryGatewayOwner,
   getPluginRegistryResourceOwner,
   markPluginRegistryActive,
   markPluginRegistryRetired,
   preparePluginRegistryCacheShutdown,
   quiescePluginRegistry,
+  type PluginRegistryGatewayOwner,
 } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginChannelRegistrySnapshotFromState } from "./runtime-channel-state.js";
@@ -421,6 +423,10 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
     activeRegistry: registry,
   };
   registryOwners.add(owner);
+  const gatewayOwner: PluginRegistryGatewayOwner = {
+    current: () => (registryOwners.has(owner) && !owner.closing ? owner.activeRegistry : undefined),
+  };
+  bindPluginRegistryGatewayOwner(registry, gatewayOwner);
   return {
     get registry() {
       return owner.activeRegistry;
@@ -431,6 +437,7 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
       }
       const previous = owner.activeRegistry;
       Object.assign(owner, captureActivePluginRegistrySnapshot());
+      bindPluginRegistryGatewayOwner(next, gatewayOwner);
       retirePluginRegistryIfUnused(previous, () =>
         registryOwners.has(owner) ? owner.activeRegistry : null,
       );

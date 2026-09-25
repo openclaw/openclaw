@@ -1,7 +1,7 @@
 import { BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES } from "openclaw/plugin-sdk/chat-channel-ids";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { escapeRegExp, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const MEDIA_NOTE_HEADER = /^\[media attached(?: \d+\/\d+)?: /;
 
@@ -42,9 +42,7 @@ const LEADING_CHRONOLOGICAL_MARKER_HEADER_RE =
   /^\s*[^\n]*chronological[^\n]*⟦openclaw:ctx⟧[ \t]*(?:\n|$)/;
 
 const MESSAGE_TOOL_DELIVERY_HINT_RE = new RegExp(
-  `^\\s*(?:${MESSAGE_TOOL_DELIVERY_HINTS.map((hint) =>
-    hint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-  ).join("|")})\\s*$`,
+  `^\\s*(?:${MESSAGE_TOOL_DELIVERY_HINTS.map(escapeRegExp).join("|")})\\s*$`,
   "m",
 );
 const HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]";
@@ -138,9 +136,8 @@ const INBOUND_ENVELOPE_PREFIX_RE =
  * known-channel detector is disabled and only the marker-aware regex above
  * applies.
  */
-const ENVELOPE_KNOWN_CHANNEL_PATTERN = BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES.map((prefix) =>
-  prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-).join("|");
+const ENVELOPE_KNOWN_CHANNEL_PATTERN =
+  BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES.map(escapeRegExp).join("|");
 const INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE: RegExp | null = ENVELOPE_KNOWN_CHANNEL_PATTERN
   ? new RegExp(
       `^\\[((?:${ENVELOPE_KNOWN_CHANNEL_PATTERN})\\s+[^\\]\\n\\s][^\\]\\n]{0,299})\\]\\s`,
@@ -191,42 +188,19 @@ function matchKnownChannelMarkerFreeEnvelopePrefix(
  * transport metadata that should never be persisted as a long-term memory.
  */
 export function looksLikeEnvelopeSludge(text: string): boolean {
-  if (!text) {
-    return false;
-  }
-
   // Generic line-anchored sentinel match; precompiled at module scope so the
   // hot-path callers (capture gating, recall filtering) do not pay a regex
   // compile per invocation.
-  if (MARKER_HEADER_LINE_RE.test(text)) {
-    return true;
-  }
-
-  if (MESSAGE_TOOL_DELIVERY_HINT_RE.test(text)) {
-    return true;
-  }
-
-  if (
-    HISTORY_CONTEXT_MARKERS.some((marker) => text.includes(marker)) ||
-    CURRENT_MESSAGE_MARKERS.some((marker) => text.includes(marker))
-  ) {
-    return true;
-  }
-
-  if (ACTIVE_TURN_RECOVERY_RE.test(text)) {
-    return true;
-  }
-
-  // Check for JSON blobs that look like envelope metadata (payload-based, header-independent).
-  if (ENVELOPE_JSON_LINE_RE.test(text)) {
-    return true;
-  }
-
-  // Check for the leading `[Channel sender +elapsed ...]` bracket emitted by
-  // formatInboundEnvelope. Marker-free channel brackets need a stronger
-  // group/thread or body-sender signal so user prose like `[Signal Hill] ...`
-  // is not treated as transport metadata.
   return (
+    MARKER_HEADER_LINE_RE.test(text) ||
+    MESSAGE_TOOL_DELIVERY_HINT_RE.test(text) ||
+    HISTORY_CONTEXT_MARKERS.some((marker) => text.includes(marker)) ||
+    CURRENT_MESSAGE_MARKERS.some((marker) => text.includes(marker)) ||
+    ACTIVE_TURN_RECOVERY_RE.test(text) ||
+    // Bare envelope payloads need no header marker.
+    ENVELOPE_JSON_LINE_RE.test(text) ||
+    // Marker-free channel brackets need a stronger group/thread or sender signal
+    // so user prose like `[Signal Hill] ...` remains ordinary text.
     INBOUND_ENVELOPE_PREFIX_RE.test(text) ||
     matchKnownChannelMarkerFreeEnvelopePrefix(text) !== null
   );
@@ -268,8 +242,7 @@ function stripEnvelopeBodySenderPrefix(body: string, headerInside: string): stri
   ) {
     return body.slice(match[0].length);
   }
-  const headerTokens = headerInside.split(/\s+/);
-  if (headerTokens.includes(label) || headerInside.includes(label)) {
+  if (headerInside.includes(label)) {
     return body.slice(match[0].length);
   }
   return body;
@@ -324,11 +297,7 @@ function stripPendingHistoryContextBeforeCurrentMessage(text: string): string {
   if (!HISTORY_CONTEXT_MARKERS.some((marker) => candidateText.startsWith(marker))) {
     return text;
   }
-  const currentMarker = findLastContextMarker(candidateText, CURRENT_MESSAGE_MARKERS);
-  if (!currentMarker) {
-    return text;
-  }
-  return candidateText.slice(currentMarker.index + currentMarker.marker.length);
+  return stripToCurrentMessageMarker(candidateText) ?? text;
 }
 
 function stripToCurrentMessageMarker(text: string): string | null {

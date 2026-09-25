@@ -1,4 +1,4 @@
-import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
+import { isProvisionalSubagentKillTask } from "./task-cancellation-state.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 
 export function shouldAutoDeliverTaskTerminalUpdate(task: TaskRecord): boolean {
@@ -9,11 +9,7 @@ export function shouldAutoDeliverTaskTerminalUpdate(task: TaskRecord): boolean {
     // Subagent lifecycle owns provider-result publication.
     return false;
   }
-  if (
-    task.runtime === "subagent" &&
-    task.status === "cancelled" &&
-    task.error === SUBAGENT_KILL_TASK_ERROR
-  ) {
+  if (isProvisionalSubagentKillTask(task)) {
     // A direct kill is provisional until lifecycle reconciliation settles.
     return false;
   }

@@ -1,8 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -41,11 +48,13 @@ afterEach(async () => {
 
 describe("session sharing group mutations", () => {
   it.each([
-    { retiredOwner: false, logicalAgent: "research", discoveryAgent: "main" },
-    { retiredOwner: true, logicalAgent: "ops", discoveryAgent: "ops" },
+    { retiredOwner: false, logicalAgent: "research", discoveryAgent: "main", archived: false },
+    { retiredOwner: false, logicalAgent: "research", discoveryAgent: "main", archived: true },
+    { retiredOwner: true, logicalAgent: "ops", discoveryAgent: "ops", archived: false },
+    { retiredOwner: true, logicalAgent: "ops", discoveryAgent: "ops", archived: true },
   ])(
-    "preserves shared-store group selection and defaults access (retired physical owner=$retiredOwner)",
-    async ({ retiredOwner, logicalAgent, discoveryAgent }) => {
+    "preserves shared-store group selection and defaults access (retired physical owner=$retiredOwner, archived=$archived)",
+    async ({ retiredOwner, logicalAgent, discoveryAgent, archived }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const storePath = state.statePath("shared.sqlite");
         const cfg = {
@@ -58,14 +67,13 @@ describe("session sharing group mutations", () => {
         };
         openOpenClawAgentDatabase({ agentId: "main", path: storePath });
         const sessionKey = `agent:${logicalAgent}:group-member`;
-        await upsertSessionEntryCore(
-          { agentId: logicalAgent, storePath, sessionKey },
-          {
-            sessionId: "research-group-member",
-            updatedAt: 1,
-            category: "Research",
-          },
-        );
+        const scope = { agentId: logicalAgent, storePath, sessionKey };
+        await upsertSessionEntryCore(scope, {
+          sessionId: "research-group-member",
+          updatedAt: 1,
+          category: "Research",
+          ...(archived ? { archivedAt: 1 } : {}),
+        });
         await putSessionGroups({ cfg, names: ["Research"] });
         const viewer = client({ user: "viewer" });
         const refs = new Map(readSessionGroupMembership(cfg, process.env).groups).get("Research");
@@ -86,23 +94,50 @@ describe("session sharing group mutations", () => {
         );
         await projection.prepareMembership();
         expect(projection.sessionGroupTargets().get("Research")).toEqual(refs);
-        const respond = vi.fn();
-        const defaults = sessionGroupHandlers["sessions.groups.defaults"]!({
-          params: {},
-          client: viewer,
-          context,
-          respond,
-        } as never);
+        const query = { agentId: logicalAgent, key: sessionKey };
+        const row = expectDefined(projection.capture(query), "shared-store projected row");
+        expect(row.storeTarget).toMatchObject({ agentId: "main", storePath });
+        expect(row.entry?.archivedAt).toBe(archived ? 1 : undefined);
+        expect(Boolean(row.materialized)).toBe(!archived);
+        const readDefaults = async (visible = true) => {
+          const respond = vi.fn();
+          const defaults = sessionGroupHandlers["sessions.groups.defaults"]!({
+            params: {},
+            client: viewer,
+            context,
+            respond,
+          } as never);
+          if (retiredOwner) {
+            await defaults;
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
+              true,
+              { defaults: visible ? [{ name: "Research" }] : [] },
+              undefined,
+            );
+          } else {
+            await expect(defaults).rejects.toThrow(AgentSelectionRequiredError);
+            expect(respond).not.toHaveBeenCalled();
+          }
+          if (archived) {
+            expect(projection.capture(query)?.materialized).toBeUndefined();
+            expect(projection.materializedCount).toBe(0);
+          }
+        };
+        await readDefaults();
+        const sql = observeHostDataSql();
+        try {
+          await readDefaults();
+          expect(sql.queries).toEqual([]);
+        } finally {
+          sql.restore();
+        }
         if (retiredOwner) {
-          await defaults;
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            { defaults: [{ name: "Research" }] },
-            undefined,
-          );
-        } else {
-          await expect(defaults).rejects.toThrow(AgentSelectionRequiredError);
-          expect(respond).not.toHaveBeenCalled();
+          await upsertSessionEntryCore(scope, { visibility: "read-only" });
+          await readDefaults(false);
+          addSessionMember(scope, { identityId: "viewer", addedBy: "owner", addedAt: 1 });
+          await readDefaults();
+          removeSessionMember(scope, "viewer");
+          await readDefaults(false);
         }
       });
     },

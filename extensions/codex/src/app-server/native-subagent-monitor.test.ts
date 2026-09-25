@@ -48,7 +48,7 @@ describe("Native completion delivery settlement", () => {
     deliver: NativeSubagentMonitorRuntime["deliverAgentHarnessTaskCompletion"],
     run: (fixture: {
       client: ReturnType<typeof createClient>;
-      parent: ReturnType<typeof registerCodexNativeSubagentMonitor>;
+      parent: Awaited<ReturnType<typeof registerCodexNativeSubagentMonitor>>;
       register: (turnId: string) => ReturnType<typeof registerCodexNativeSubagentMonitor>;
       readTask: (runId?: string) => Record<string, unknown> | undefined;
     }) => Promise<void>,
@@ -73,9 +73,9 @@ describe("Native completion delivery settlement", () => {
         throw new Error(`unexpected request: ${method}`);
       });
       ensureCodexAppServerClientRuntime(client as never, { agentDir: stateDir });
-      const registrations: Array<ReturnType<typeof registerCodexNativeSubagentMonitor>> = [];
-      const register = (turnId: string) => {
-        const parent = registerCodexNativeSubagentMonitor({
+      const registrations: Awaited<ReturnType<typeof registerParent>>[] = [];
+      const register = async (turnId: string) => {
+        const parent = await registerCodexNativeSubagentMonitor({
           client: client as never,
           parentThreadId: "parent-thread",
           requesterSessionKey,
@@ -90,7 +90,7 @@ describe("Native completion delivery settlement", () => {
         registrations.push(parent);
         return parent;
       };
-      const parent = register("parent-turn");
+      const parent = await register("parent-turn");
       let database: DatabaseSync | undefined;
       try {
         await notifyChildStarted(client);
@@ -188,7 +188,7 @@ describe("Native completion delivery settlement", () => {
         await client.notify(completedTurn("predecessor result"));
         await parent.unregister();
         expect(deliver).toHaveBeenCalledOnce();
-        const nextParent = register("parent-followup-turn");
+        const nextParent = await register("parent-followup-turn");
         await client.notify(completedTurn("duplicate predecessor result"));
         await client.notify({
           method: "turn/started",
@@ -250,14 +250,14 @@ describe("Native completion delivery settlement", () => {
 describe("CodexNativeSubagentMonitor", () => {
   it.each([4321, undefined])(
     "passes the transport process identity (%s) to task ownership",
-    (pid) => {
+    async (pid) => {
       const fixture = createFakeCodexAppServerClient();
       vi.spyOn(fixture.client, "getTransportPid").mockReturnValue(pid);
       const runtime = createRuntime();
       const monitor = new CodexNativeSubagentMonitor(fixture.client, runtime);
       onTestFinished(() => fixture.close());
 
-      registerParent(monitor);
+      await registerParent(monitor);
 
       expect(runtime.createAgentHarnessTaskRuntime).toHaveBeenCalledWith(
         pid === undefined
@@ -275,7 +275,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
       retainParentThread,
     });
-    const parent = registerParent(monitor);
+    const parent = await registerParent(monitor);
 
     await notifyChildStarted(client, "parent-thread", "child-a");
     await notifyChildStarted(client, "parent-thread", "child-b");
@@ -317,7 +317,7 @@ describe("CodexNativeSubagentMonitor", () => {
       retainParentThread,
     });
     onTestFinished(() => monitor.dispose());
-    registerParent(monitor).bindTurn("parent-turn");
+    (await registerParent(monitor)).bindTurn("parent-turn");
 
     await notifyChildStarted(client);
     await client.notify({
@@ -409,7 +409,7 @@ describe("CodexNativeSubagentMonitor", () => {
       retainChildThread,
       captureChildThreadForget,
     });
-    registerParent(monitor).bindTurn("parent-turn");
+    (await registerParent(monitor)).bindTurn("parent-turn");
 
     await notifyChildStarted(client);
     await client.notify(nativeCompletionNotification({ turnId: "parent-turn" }));
@@ -434,7 +434,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
       retainParentThread: () => releaseParentThread,
     });
-    registerParent(monitor).bindTurn("parent-turn");
+    (await registerParent(monitor)).bindTurn("parent-turn");
 
     await notifyChildStarted(client);
     await client.notify(closeAgentNotification({ method: "item/started" }));
@@ -458,7 +458,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
       retainParentThread: () => releaseParentThread,
     });
-    const parent = registerParent(monitor);
+    const parent = await registerParent(monitor);
     await notifyChildStarted(client);
 
     monitor.retireParent("parent-thread");
@@ -478,7 +478,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     const runtime = createRuntime();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    registerParent(monitor);
+    await registerParent(monitor);
 
     await notifyChildStarted(client);
     await client.notify({
@@ -506,7 +506,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const runtime = createRuntime();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
     const claimDirectChild = vi.fn(() => () => undefined);
-    const owner = monitor.registerParent({
+    const owner = await monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:main",
       taskRuntimeScope: createTaskScope("agent:main:main"),
@@ -582,11 +582,11 @@ describe("CodexNativeSubagentMonitor", () => {
     const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
     const firstClaim = vi.fn(() => () => undefined);
     const secondClaim = vi.fn(() => () => undefined);
-    const first = monitor.registerParent({
+    const first = await monitor.registerParent({
       parentThreadId: "parent-thread",
       claimDirectChild: firstClaim,
     });
-    const second = monitor.registerParent({
+    const second = await monitor.registerParent({
       parentThreadId: "parent-thread",
       claimDirectChild: secondClaim,
     });
@@ -621,7 +621,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     const runtime = createRuntime();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    registerParent(monitor, "parent-thread", "agent:main:main");
+    await registerParent(monitor, "parent-thread", "agent:main:main");
 
     await notifyChildStarted(client, "parent-thread", "child-thread", "");
     await client.notify(turnStartedNotification("child-turn"));
@@ -668,7 +668,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     const runtime = createRuntime();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    const parent = monitor.registerParent({
+    const parent = await monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:discord:channel:C123",
       taskRuntimeScope: createTaskScope(),
@@ -718,7 +718,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const runtime = createRuntime();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
     try {
-      const parent = registerParent(monitor);
+      const parent = await registerParent(monitor);
       await notifyChildStarted(client);
       await parent.unregister();
       await client.notify({
@@ -800,7 +800,7 @@ describe("CodexNativeSubagentMonitor", () => {
       monitor.retireParent("parent-thread");
       monitor.dispose();
     });
-    registerParent(monitor).bindTurn("parent-turn");
+    (await registerParent(monitor)).bindTurn("parent-turn");
     await notifyChildStarted(client, "parent-thread", "receiver-thread", "receiver-thread");
     await client.notify({
       method: "turn/started",
@@ -1012,10 +1012,10 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
     try {
-      const parent = monitor.registerParent({ parentThreadId: "parent-thread" });
+      const parent = await monitor.registerParent({ parentThreadId: "parent-thread" });
       await notifyChildStarted(client, "parent-thread", "ownerless-child");
       await parent.unregister();
-      monitor.registerParent({ parentThreadId: "parent-thread", agentId: "research" });
+      await monitor.registerParent({ parentThreadId: "parent-thread", agentId: "research" });
       await notifyChildStarted(client, "parent-thread", "owned-child");
 
       for (const threadId of ["ownerless-child", "owned-child"]) {
@@ -1093,7 +1093,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     const runtime = createRuntime();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    monitor.registerParent({
+    await monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:discord:channel:C123",
       taskRuntimeScope: createTaskScope(),
@@ -1133,7 +1133,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     const runtime = createRuntime();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    monitor.registerParent({
+    await monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:discord:channel:C123",
       taskRuntimeScope: createTaskScope(),
@@ -1546,7 +1546,7 @@ describe("CodexNativeSubagentMonitor", () => {
           recoveryPollDelaysMs: [10],
         });
         onTestFinished(() => monitor.dispose());
-        const owner = monitor.registerParent({
+        const owner = await monitor.registerParent({
           parentThreadId: "parent-thread",
           requesterSessionKey: current.requesterSessionKey,
           taskRuntimeScope: createTaskScope(current.requesterSessionKey),
@@ -1743,7 +1743,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     const runtime = createRuntime();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    const parent = registerParent(monitor);
+    const parent = await registerParent(monitor);
     await notifyChildStarted(client, "parent-thread", "child-thread", "1.2", {
       directParentField: false,
     });
@@ -1761,7 +1761,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     const runtime = createRuntime();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    registerParent(monitor);
+    await registerParent(monitor);
 
     await client.notify(nativeCompletionNotification({ agentPath: "unknown-child" }));
 
@@ -1805,8 +1805,8 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     const runtime = createRuntime();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    const parent = registerParent(monitor, "parent-a", "agent:main:a");
-    registerParent(monitor, "parent-b", "agent:main:b");
+    const parent = await registerParent(monitor, "parent-a", "agent:main:a");
+    await registerParent(monitor, "parent-b", "agent:main:b");
     await notifyChildStarted(client, "parent-a", "child-thread");
     await notifyChildStarted(client, "parent-b", "child-thread");
 
@@ -1833,7 +1833,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const firstClient = createClient();
     const firstRuntime = createRuntime();
     const firstMonitor = new CodexNativeSubagentMonitor(firstClient as never, firstRuntime);
-    firstMonitor.registerParent({
+    await firstMonitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:discord:channel:C123",
       agentId: "main",
@@ -1902,7 +1902,7 @@ describe("CodexNativeSubagentMonitor", () => {
       await client.notify(nativeCompletionNotification());
 
       expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
-      const parent = registerParent(monitor);
+      const parent = await registerParent(monitor);
       await vi.advanceTimersByTimeAsync(0);
       expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
 
@@ -1945,7 +1945,7 @@ describe("CodexNativeSubagentMonitor", () => {
         replacementClient as never,
         runtime,
       );
-      registerParent(replacementMonitor);
+      await registerParent(replacementMonitor);
       await readStarted;
       await vi.advanceTimersByTimeAsync(0);
 
@@ -2009,7 +2009,7 @@ describe("CodexNativeSubagentMonitor", () => {
           client.close();
         } else {
           client.setLoadedThreads([]);
-          const closingParent = registerParent(monitor);
+          const closingParent = await registerParent(monitor);
           closingParent.bindTurn("parent-turn");
           await client.notify(closeAgentNotification({ method: "item/started" }));
           await client.notify(closeAgentNotification({ method: "item/completed" }));
@@ -2084,7 +2084,7 @@ describe("CodexNativeSubagentMonitor", () => {
           phase === "pending" ? 0 : 1,
         );
         client.setLoadedThreads([]);
-        const closingParent = registerParent(monitor);
+        const closingParent = await registerParent(monitor);
         closingParent.bindTurn("parent-turn");
         await client.notify(closeAgentNotification({ method: "item/started" }));
         await client.notify(closeAgentNotification({ method: "item/completed" }));
@@ -2215,7 +2215,7 @@ describe("CodexNativeSubagentMonitor", () => {
       retainClient,
       recoveryPollDelaysMs: [],
     });
-    registerParent(monitor);
+    await registerParent(monitor);
 
     await notifyChildStarted(client);
     expect(retainClient).toHaveBeenCalledTimes(1);
@@ -2234,7 +2234,7 @@ describe("CodexNativeSubagentMonitor", () => {
       retainClient: () => releaseClient,
       recoveryPollDelaysMs: [],
     });
-    registerParent(monitor);
+    await registerParent(monitor);
     await notifyChildStarted(client, "parent-thread", "child-a");
     await notifyChildStarted(client, "parent-thread", "child-b");
 
@@ -2245,12 +2245,12 @@ describe("CodexNativeSubagentMonitor", () => {
     client.close();
   });
 
-  it("rejects a second requester for the same parent thread", () => {
+  it("rejects a second requester for the same parent thread", async () => {
     const client = createClient();
     const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
-    registerParent(monitor, "shared-parent", "agent:main:first");
+    await registerParent(monitor, "shared-parent", "agent:main:first");
 
-    expect(() => registerParent(monitor, "shared-parent", "agent:main:second")).toThrow(
+    await expect(registerParent(monitor, "shared-parent", "agent:main:second")).rejects.toThrow(
       "already bound to another session",
     );
     client.close();
@@ -2289,7 +2289,7 @@ describe("CodexNativeSubagentMonitor", () => {
           recoveryPollDelaysMs: [],
           completionDeliveryRetryDelaysMs: [10],
         });
-        const parent = registerParent(monitor, undefined, undefined, historyOwner);
+        const parent = await registerParent(monitor, undefined, undefined, historyOwner);
         await vi.advanceTimersByTimeAsync(0);
         expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledTimes(1);
         expect(task.deliveryStatus).toBe("pending");
@@ -2438,7 +2438,7 @@ describe("CodexNativeSubagentMonitor", () => {
       ensureCodexAppServerClientRuntime(client as never, { agentDir: stateDir });
       const deliver = createRuntime().deliverAgentHarnessTaskCompletion;
       vi.useFakeTimers();
-      const parent = registerCodexNativeSubagentMonitor({
+      const parent = await registerCodexNativeSubagentMonitor({
         client: client as never,
         parentThreadId: "parent-thread",
         requesterSessionKey,
@@ -2562,7 +2562,7 @@ describe("CodexNativeSubagentMonitor", () => {
         threadRead({ status: "inProgress", previousResult: "original successful result" }),
       );
       ensureCodexAppServerClientRuntime(client as never, { agentDir: stateDir });
-      const parent = registerCodexNativeSubagentMonitor({
+      const parent = await registerCodexNativeSubagentMonitor({
         client: client as never,
         parentThreadId: "parent-thread",
         requesterSessionKey,
@@ -2651,7 +2651,7 @@ describe("CodexNativeSubagentMonitor", () => {
       }),
     ]);
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    const parent = registerParent(monitor, undefined, undefined, historyOwner);
+    const parent = await registerParent(monitor, undefined, undefined, historyOwner);
     await vi.waitFor(() => expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledTimes(1));
     await parent.unregister();
     await vi.waitFor(() =>
@@ -2694,7 +2694,7 @@ describe("CodexNativeSubagentMonitor", () => {
       }),
     ]);
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    monitor.registerParent({
+    await monitor.registerParent({
       parentThreadId: "parent-a",
       historyOwner: nativeHistoryOwner("parent-a"),
       requesterSessionKey: "requester-a",
@@ -2751,7 +2751,7 @@ describe("CodexNativeSubagentMonitor", () => {
       recoveryPollDelaysMs: [10],
     });
     onTestFinished(() => monitor.dispose());
-    const owner = monitor.registerParent({
+    const owner = await monitor.registerParent({
       parentThreadId: "parent-thread",
       historyOwner,
       requesterSessionKey: first.requesterSessionKey,
@@ -2846,8 +2846,8 @@ describe("CodexNativeSubagentMonitor", () => {
       taskRecord({ historyOwner, childThreadId: "child-thread" }),
     ]);
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    const first = registerParent(monitor, undefined, undefined, historyOwner);
-    const second = registerParent(monitor, undefined, undefined, historyOwner);
+    const first = await registerParent(monitor, undefined, undefined, historyOwner);
+    const second = await registerParent(monitor, undefined, undefined, historyOwner);
     expect(client.request).toHaveBeenCalledTimes(1);
     releaseRead();
     await vi.waitFor(() => expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledTimes(1));
@@ -2878,7 +2878,7 @@ describe("CodexNativeSubagentMonitor", () => {
       const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
         recoveryPollDelaysMs: [10],
       });
-      const parent = registerParent(monitor, undefined, undefined, historyOwner);
+      const parent = await registerParent(monitor, undefined, undefined, historyOwner);
       await Promise.resolve();
       expect(client.request).toHaveBeenCalledTimes(1);
 
@@ -2930,7 +2930,7 @@ describe("CodexNativeSubagentMonitor", () => {
       const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
         recoveryPollDelaysMs: [10],
       });
-      const parent = registerParent(monitor, undefined, undefined, historyOwner);
+      const parent = await registerParent(monitor, undefined, undefined, historyOwner);
       await vi.advanceTimersByTimeAsync(0);
       expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
       expect(client.request).toHaveBeenCalledWith(
@@ -2970,7 +2970,7 @@ describe("CodexNativeSubagentMonitor", () => {
     };
     runtime.listTaskRecords.mockReturnValue([task]);
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    monitor.registerParent({
+    await monitor.registerParent({
       parentThreadId: "current-parent",
       requesterSessionKey: task.requesterSessionKey,
       taskRuntimeScope: createTaskScope(task.requesterSessionKey),
@@ -3009,14 +3009,14 @@ describe("CodexNativeSubagentMonitor", () => {
     };
     runtime.listTaskRecords.mockReturnValue([task]);
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    monitor.registerParent({
+    await monitor.registerParent({
       parentThreadId: "current-parent",
       requesterSessionKey: task.requesterSessionKey,
       taskRuntimeScope: createTaskScope(task.requesterSessionKey),
       agentId: "main",
       historyOwner,
     });
-    registerParent(monitor, "foreign-parent", "agent:main:other");
+    await registerParent(monitor, "foreign-parent", "agent:main:other");
     await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(1));
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -3046,7 +3046,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
       now: () => 100_000,
     });
-    registerParent(monitor, undefined, undefined, historyOwner);
+    await registerParent(monitor, undefined, undefined, historyOwner);
     await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(1));
 
     expect(client.request).toHaveBeenCalledTimes(1);
@@ -3096,14 +3096,14 @@ describe("CodexNativeSubagentMonitor", () => {
     const childRelease = vi.fn(async () => undefined);
     ensureCodexAppServerClientRuntime(client as never, { agentDir: "/tmp/agent" });
     await retainCodexAppServerLiveThread(client as never, "child-thread", childRelease);
-    const first = registerCodexNativeSubagentMonitor({
+    const first = await registerCodexNativeSubagentMonitor({
       client: client as never,
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:main",
       taskRuntimeScope: createTaskScope("agent:main:main"),
       runtime,
     });
-    const second = registerCodexNativeSubagentMonitor({
+    const second = await registerCodexNativeSubagentMonitor({
       client: client as never,
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:main",
@@ -3143,7 +3143,7 @@ describe("CodexNativeSubagentMonitor", () => {
       throw new Error(`unexpected request: ${method}`);
     });
     ensureCodexAppServerClientRuntime(client as never, { agentDir: "/tmp/agent" });
-    const parent = registerCodexNativeSubagentMonitor({
+    const parent = await registerCodexNativeSubagentMonitor({
       client: client as never,
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:main",
@@ -3200,7 +3200,7 @@ describe("CodexNativeSubagentMonitor", () => {
       await retainCodexAppServerLiveThread(client as never, `thread-sibling-${index}`);
     }
     const releaseParentThread = vi.fn();
-    const parent = registerCodexNativeSubagentMonitor({
+    const parent = await registerCodexNativeSubagentMonitor({
       client: client as never,
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:main",
@@ -3247,7 +3247,7 @@ describe("CodexNativeSubagentMonitor", () => {
     client.setLoadedThreads([]);
     const runtime = createRuntime();
     ensureCodexAppServerClientRuntime(client as never, { agentDir: "/tmp/agent" });
-    const parent = registerCodexNativeSubagentMonitor({
+    const parent = await registerCodexNativeSubagentMonitor({
       client: client as never,
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:main",
@@ -3293,7 +3293,7 @@ describe("CodexNativeSubagentMonitor", () => {
       throw new Error(`unexpected request: ${method}`);
     });
     ensureCodexAppServerClientRuntime(client as never, { agentDir: "/tmp/agent" });
-    const parent = registerCodexNativeSubagentMonitor({
+    const parent = await registerCodexNativeSubagentMonitor({
       client: client as never,
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:main",

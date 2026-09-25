@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { registerNodesCli } from "../cli/nodes-cli/register.js";
+import { configureProgramHelp } from "../cli/program/help.js";
 import { readBestEffortConfigSnapshot } from "../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -39,6 +41,151 @@ afterEach(() => {
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("CLI prepared metadata lifetime", () => {
+  it.each([
+    { label: "complete metadata", complete: true, enabled: true },
+    { label: "disabled plugin", complete: true, enabled: false },
+    { label: "incomplete legacy descriptors", complete: false, enabled: true },
+  ])(
+    "keeps parent nodes help light with $label and preserves runtime expansion",
+    async ({ complete, enabled }) => {
+      const root = fs.realpathSync(makePluginLoaderTempDir());
+      const loaded = path.join(root, "runtime-loaded");
+      const unrelatedLoaded = path.join(root, "unrelated-runtime-loaded");
+      const action = path.join(root, "action-ran");
+      const descriptor = {
+        name: "widget",
+        description: "Fixture widget commands",
+        hasSubcommands: true,
+      };
+      const plugin = writePlugin({
+        id: "nodes-help",
+        dir: path.join(root, "plugin"),
+        filename: "index.cjs",
+        body: `const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(loaded)}, "full");
+module.exports = { id: "nodes-help", register(api) {
+  api.registerCli(({ program }) => {
+    const command = program.command("widget").description("Fixture widget commands").option("--fixture-option <value>", "Runtime option");
+    command.command("run").action(() => fs.writeFileSync(${JSON.stringify(action)}, "executed"));
+  }, { parentPath: ["nodes"], commands: ["widget"], descriptors: [${JSON.stringify(descriptor)}] });
+} };`,
+      });
+      fs.writeFileSync(
+        path.join(plugin.dir, "package.json"),
+        JSON.stringify({ name: "nodes-help", openclaw: { extensions: ["./index.cjs"] } }),
+      );
+      fs.writeFileSync(
+        path.join(plugin.dir, "cli-metadata.cjs"),
+        `module.exports = { id: "nodes-help", register(api) {
+      api.registerCli(() => {}, { parentPath: ["nodes"], commands: ["widget"], descriptors: ${JSON.stringify(complete ? [descriptor] : [])} });
+    } };`,
+      );
+      const unrelated = writePlugin({
+        id: "unrelated-help",
+        dir: path.join(root, "unrelated"),
+        filename: "index.cjs",
+        body: `require("node:fs").writeFileSync(${JSON.stringify(unrelatedLoaded)}, "full");
+module.exports = { id: "unrelated-help", register(api) {
+  api.registerCli(({ program }) => program.command("unrelated"), { commands: ["unrelated"] });
+} };`,
+      });
+      fs.writeFileSync(
+        path.join(unrelated.dir, "package.json"),
+        JSON.stringify({ name: "unrelated-help", openclaw: { extensions: ["./index.cjs"] } }),
+      );
+      fs.writeFileSync(
+        path.join(unrelated.dir, "cli-metadata.cjs"),
+        `module.exports = { id: "unrelated-help", register(api) {
+  api.registerCli(() => {}, { commands: ["unrelated"] });
+} };`,
+      );
+      const configPath = path.join(root, "openclaw.json");
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          plugins: {
+            load: { paths: [plugin.dir, unrelated.dir] },
+            allow: [plugin.id, unrelated.id],
+            entries: { [plugin.id]: { enabled }, [unrelated.id]: { enabled: true } },
+          },
+        }),
+      );
+      await withEnvAsync(
+        {
+          HOME: root,
+          OPENCLAW_HOME: root,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: path.join(root, "state"),
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        },
+        async () => {
+          const makeProgram = () => {
+            const program = new Command().exitOverride();
+            configureProgramHelp(program, { programVersion: "fixture" });
+            return program;
+          };
+          const helpProgram = makeProgram();
+          await registerNodesCli(helpProgram, ["node", "openclaw", "nodes", "--help"]);
+          const help = helpProgram.commands
+            .find((command) => command.name() === "nodes")!
+            .helpInformation();
+          expect(help.includes("Fixture widget commands")).toBe(enabled);
+          expect(fs.existsSync(unrelatedLoaded)).toBe(false);
+          expect(fs.existsSync(loaded)).toBe(enabled && !complete);
+          if (!enabled) {
+            return;
+          }
+          if (complete) {
+            const shortHelpProgram = makeProgram();
+            await registerNodesCli(shortHelpProgram, ["node", "openclaw", "nodes", "-h"]);
+            expect(
+              shortHelpProgram.commands
+                .find((command) => command.name() === "nodes")!
+                .helpInformation(),
+            ).toBe(help);
+            expect(fs.existsSync(loaded)).toBe(false);
+            expect(fs.existsSync(unrelatedLoaded)).toBe(false);
+          }
+
+          // Metadata registration closed its preparation; expansion must acquire full entries afresh.
+          await helpProgram.parseAsync(["nodes", "widget", "run"], { from: "user" });
+          expect(fs.readFileSync(action, "utf8")).toBe("executed");
+          expect(fs.readFileSync(loaded, "utf8")).toBe("full");
+          expect(fs.existsSync(unrelatedLoaded)).toBe(false);
+          const runtimeProgram = makeProgram();
+          await registerNodesCli(runtimeProgram, ["node", "openclaw", "nodes", "widget", "--help"]);
+          const nodes = runtimeProgram.commands.find((command) => command.name() === "nodes")!;
+          expect(nodes.helpInformation()).toBe(help);
+          expect(
+            nodes.commands.find((command) => command.name() === "widget")!.helpInformation(),
+          ).toContain("--fixture-option <value>");
+          expect(fs.existsSync(unrelatedLoaded)).toBe(false);
+          if (complete) {
+            const session = createPluginCliLoadSession();
+            const cfg: OpenClawConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+            try {
+              for (const mode of ["metadata", "lazy", "metadata"] as const) {
+                const reused = makeProgram();
+                const parent = reused.command("nodes");
+                await registerPluginCliCommands(reused, cfg, process.env, undefined, {
+                  mode,
+                  primary: "nodes",
+                  session,
+                });
+                const widget = parent.commands.find((command) => command.name() === "widget")!;
+                expect(widget.options.some((option) => option.long === "--fixture-option")).toBe(
+                  mode === "lazy",
+                );
+              }
+            } finally {
+              session.close();
+            }
+          }
+        },
+      );
+    },
+  );
+
   it("invalidates prepared facts and captured registrars at the metadata lifecycle boundary", async () => {
     const root = fs.realpathSync(makePluginLoaderTempDir());
     const plugin = writePlugin({

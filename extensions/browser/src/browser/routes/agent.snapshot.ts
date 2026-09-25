@@ -1,7 +1,10 @@
 // Browser snapshot, navigation, and screenshot routes.
 import path from "node:path";
-import { getImageMetadata } from "../../media/media-services.js";
-import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
+import {
+  ensureMediaDir,
+  getImageMetadata,
+  saveMediaBuffer,
+} from "openclaw/plugin-sdk/media-runtime";
 import { resolveBrowserNavigationTimeoutMs } from "../act-policy.js";
 import type { CdpDocumentIdentities } from "../cdp-page-session.js";
 import {
@@ -349,39 +352,29 @@ export function registerBrowserAgentSnapshotRoutes(
           if (!pw) {
             return;
           }
-          if (labels) {
-            const snap = ref
-              ? undefined
-              : await pw.snapshotRoleViaPlaywright({
+          const snap =
+            labels && !ref
+              ? await pw.snapshotRoleViaPlaywright({
                   cdpUrl,
                   targetId: tab.targetId,
                   ssrfPolicy: ctx.state().resolved.ssrfPolicy,
                   timeoutMs,
                   signal,
-                });
-            capture = await pw.screenshotWithLabelsViaPlaywright({
-              cdpUrl,
-              targetId: tab.targetId,
-              refs: snap?.refs,
-              type,
-              timeoutMs,
-              fullPage,
-              ref,
-              element,
-              signal,
-            });
-          } else {
-            capture = await pw.takeScreenshotViaPlaywright({
-              cdpUrl,
-              targetId: tab.targetId,
-              ref,
-              element,
-              fullPage,
-              type,
-              timeoutMs,
-              signal,
-            });
-          }
+                })
+              : undefined;
+          const screenshotOptions: Parameters<typeof pw.takeScreenshotViaPlaywright>[0] = {
+            cdpUrl,
+            targetId: tab.targetId,
+            ref,
+            element,
+            fullPage,
+            type,
+            timeoutMs,
+            signal,
+          };
+          capture = labels
+            ? await pw.screenshotWithLabelsViaPlaywright({ ...screenshotOptions, refs: snap?.refs })
+            : await pw.takeScreenshotViaPlaywright(screenshotOptions);
         } else {
           const profileRuntime = ctx.state().profiles.get(profileCtx.profile.name);
           capture = {

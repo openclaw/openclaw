@@ -13,13 +13,40 @@ export type ThreadReleaseTransition = {
   invalidated?: boolean;
 };
 
+/**
+ * Exact lifecycle inputs a live ephemeral thread was told. The generic policy is
+ * creation-owned and cannot be refreshed or cold-resumed; the skill catalog is the
+ * one refreshable section and records the catalog last delivered to the thread.
+ */
+export type CodexEphemeralThreadPolicy = {
+  developerInstructions?: string;
+  skillsInstructions?: string;
+  /**
+   * Catalog carried by the thread's creation-time native developer instructions.
+   * Compaction rebuilds initial context from those instructions and drops the
+   * client-authored refresh, so this is the catalog a compacted thread reverts to.
+   */
+  nativeSkillsInstructions?: string;
+};
+
 export type RetainedLiveThread = {
   ownerToken?: ThreadOwnerToken;
   configFingerprint?: string;
-  ephemeralPolicy?: string;
+  ephemeralPolicy?: CodexEphemeralThreadPolicy;
   serviceTier?: CodexServiceTier | null;
   expiresAt: number;
   release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
+};
+
+export type CodexAppServerLiveThreadOwnership = {
+  assertCurrent: () => void;
+  configFingerprint?: string;
+  ephemeralPolicy?: CodexEphemeralThreadPolicy;
+  serviceTier?: CodexServiceTier | null;
+  /** Releases this active claim or the exact idle record it published. */
+  release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
+  /** Forgets this local owner after native shutdown, without unsubscribing a successor. */
+  forget: () => void;
 };
 
 export type ThreadOwnershipState = {
@@ -129,4 +156,32 @@ export function forgetThreadOwnership(
     owner.invalidate();
   }
   return forgotten;
+}
+
+/** Compaction discards client-authored catalog refreshes, not creation policy. */
+export function revertRetainedThreadSkillsCatalog(
+  runtime: ThreadOwnershipState,
+  threadId: string,
+): void {
+  const retained = runtime.retainedThreads.get(threadId);
+  if (retained?.ephemeralPolicy) {
+    retained.ephemeralPolicy = {
+      ...retained.ephemeralPolicy,
+      skillsInstructions: retained.ephemeralPolicy.nativeSkillsInstructions,
+    };
+  }
+}
+
+export function createCodexEphemeralThreadPolicy({
+  developerInstructions,
+  skillsInstructions,
+}: Pick<
+  CodexEphemeralThreadPolicy,
+  "developerInstructions" | "skillsInstructions"
+>): CodexEphemeralThreadPolicy {
+  return {
+    developerInstructions,
+    skillsInstructions,
+    nativeSkillsInstructions: skillsInstructions,
+  };
 }

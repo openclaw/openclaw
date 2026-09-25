@@ -1,7 +1,12 @@
 import type {
+  CaptureQueryPreset as StoredCaptureQueryPreset,
+  CaptureSessionSummary,
+} from "openclaw/plugin-sdk/proxy-capture";
+import type {
   QaBusConversationKind,
   QaBusStateSnapshot,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
+import type { QaLabLatestReport, QaLabScenarioOutcome, QaLabScenarioRun } from "../../api.js";
 import type {
   QaLabExecutionKind,
   QaLabResolvedRunPlan,
@@ -18,11 +23,7 @@ import type {
 } from "../../shared/evidence-gallery-types.js";
 
 export type ReportEnvelope = {
-  report: null | {
-    outputPath: string;
-    markdown: string;
-    generatedAt: string;
-  };
+  report: QaLabLatestReport | null;
 };
 
 export type SeedScenario = {
@@ -67,37 +68,8 @@ export type Bootstrap = {
   };
 };
 
-type ScenarioStep = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-};
-
-export type ScenarioOutcome = {
-  id: string;
-  name: string;
-  status: "pending" | "running" | "pass" | "fail" | "skip";
-  details?: string;
-  steps?: ScenarioStep[];
-  startedAt?: string;
-  finishedAt?: string;
-};
-
-type ScenarioRun = {
-  kind: "suite" | "self-check";
-  status: "idle" | "running" | "completed";
-  startedAt?: string;
-  finishedAt?: string;
-  scenarios: ScenarioOutcome[];
-  counts: {
-    total: number;
-    pending: number;
-    running: number;
-    passed: number;
-    failed: number;
-    skipped: number;
-  };
-};
+export type ScenarioOutcome = QaLabScenarioOutcome;
+type ScenarioRun = QaLabScenarioRun;
 
 export type RunnerSelection = QaLabRunSelection;
 export type RunnerResolvedPlan = QaLabResolvedRunPlan;
@@ -113,16 +85,6 @@ export type RunnerModelOption = {
 
 export type OutcomesEnvelope = {
   run: ScenarioRun | null;
-};
-
-type CaptureSessionSummary = {
-  id: string;
-  startedAt: number;
-  endedAt?: number;
-  mode: string;
-  sourceProcess: string;
-  proxyUrl?: string;
-  eventCount: number;
 };
 
 export type CaptureEventView = {
@@ -149,14 +111,7 @@ export type CaptureEventView = {
   captureOrigin?: string;
 };
 
-export type CaptureQueryPreset =
-  | "none"
-  | "double-sends"
-  | "retry-storms"
-  | "cache-busting"
-  | "ws-duplicate-frames"
-  | "missing-ack"
-  | "error-bursts";
+export type CaptureQueryPreset = "none" | StoredCaptureQueryPreset;
 
 export type CaptureSessionsEnvelope = {
   sessions: CaptureSessionSummary[];

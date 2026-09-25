@@ -40,8 +40,8 @@ import {
 } from "./update-failure-facts.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
 import { UpdateSnapshotCapacityError } from "./update-snapshot-capacity.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 type CanaryPhase =
   | "snapshot"

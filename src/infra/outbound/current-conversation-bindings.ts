@@ -32,6 +32,8 @@ import {
   isBindingExpired,
   deleteCurrentConversationBindingRow,
   listCurrentConversationBindingRowsBySession,
+  readCurrentConversationBindingListInDatabase,
+  pruneCurrentConversationBindingListInTransaction,
   updateCurrentConversationBindingRecordInDatabase,
   inspectCurrentConversationBindingRecordInDatabase,
   readCurrentConversationBindingResolutionInDatabase,
@@ -93,28 +95,41 @@ export function listCurrentConversationBindingRecordsBySession(
   scope?: CurrentConversationBindingScope,
 ): SessionBindingRecord[] {
   const { db } = openOpenClawStateDatabase();
-  const rows = listCurrentConversationBindingRowsBySession(db, targetSessionKey, scope);
-  const records = bindingRowsToRecords(rows);
-  if (!records.some((record) => isBindingExpired(record))) {
-    return records;
-  }
-  return runOpenClawStateWriteTransaction(({ db: transactionDb }) => {
-    const latestRows = listCurrentConversationBindingRowsBySession(
-      transactionDb,
-      targetSessionKey,
-      scope,
-    );
-    const active: SessionBindingRecord[] = [];
-    for (const row of latestRows) {
-      const record = bindingRowsToRecords([row])[0];
-      if (!record || isBindingExpired(record)) {
-        deleteCurrentConversationBindingRow(transactionDb, row.binding_key);
-      } else {
-        active.push(record);
-      }
-    }
-    return active;
-  });
+  const prepared = readCurrentConversationBindingListInDatabase(db, targetSessionKey, scope);
+  return prepared.requiresPrune
+    ? runOpenClawStateWriteTransaction(({ db: transactionDb }) =>
+        pruneCurrentConversationBindingListInTransaction(transactionDb, targetSessionKey, scope),
+      )
+    : prepared.records;
+}
+
+/** Awaited listing retains the existing create-on-first-use and expiry-prune behavior. */
+export async function listCurrentConversationBindingRecordsBySessionAsync(
+  targetSessionKey: string,
+  scope?: CurrentConversationBindingScope,
+  assertCurrent?: () => void,
+): Promise<SessionBindingRecord[]> {
+  const capturedScope = scope ? { channel: scope.channel, accountId: scope.accountId } : undefined;
+  const context = captureOpenClawStateWorkerContext();
+  const records = await runOpenClawStateWorkerOperation(
+    context,
+    (worker) =>
+      worker.execute({
+        type: "conversationBindings.listBySession",
+        input: { targetSessionKey, ...(capturedScope ? { scope: capturedScope } : {}) },
+      }),
+    {
+      assertCurrent,
+      requireStateLifecycle: true,
+      createAdmission: createSqliteWorkerWriteAdmission(() => {
+        context.admission.assertCurrent();
+        assertCurrent?.();
+      }, [context.admission.databasePath]),
+    },
+  );
+  context.admission.assertCurrent();
+  assertCurrent?.();
+  return records;
 }
 
 /** Deletes exact account-owned or generic session rows without disturbing sibling owners. */
@@ -581,6 +596,45 @@ export async function readGenericCurrentConversationBindingSelectionAsync(
     const record = support.supported ? records[index++] : null;
     return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
   });
+}
+
+/** Plugin eligibility is evaluated only after native listing has settled. */
+export async function listGenericCurrentConversationBindingsBySessionAsync(
+  targetSessionKey: string,
+  options?: { assertCurrent?: () => void },
+): Promise<SessionBindingRecord[]> {
+  const registry = getActivePluginChannelRegistrySnapshotFromState();
+  const assertCurrent = () => {
+    options?.assertCurrent?.();
+    if (getActivePluginChannelRegistrySnapshotFromState() !== registry) {
+      throw new SessionBindingError(
+        "BINDING_ADAPTER_UNAVAILABLE",
+        "Generic conversation binding owners changed during destination listing",
+      );
+    }
+  };
+  assertCurrent();
+  const records = await listCurrentConversationBindingRecordsBySessionAsync(
+    targetSessionKey,
+    undefined,
+    assertCurrent,
+  );
+  assertCurrent();
+  const supports: ReturnType<typeof captureGenericBindingSupport>[] = [];
+  const selected = records.filter((record) => {
+    if (!record.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
+      return false;
+    }
+    const support = captureGenericBindingSupport(record.conversation);
+    supports.push(support);
+    assertCurrent();
+    return support.supported;
+  });
+  assertCurrent();
+  for (const support of supports) {
+    support.assertCurrent();
+  }
+  return selected;
 }
 
 export async function touchGenericCurrentConversationBindingAsync(

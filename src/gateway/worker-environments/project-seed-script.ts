@@ -147,7 +147,12 @@ const ownedDirectory = (parent, target) => {
     if (git(repository, ["status", "--porcelain=v1", "--untracked-files=all"])) throw new Error("Prepared project checkout is not pristine");
     fs.renameSync(repository, seed);
     prune();
-    process.stdout.write(JSON.stringify({ ready: true }));
+    // Repository code keeps its separate Gateway authority check. A checkout that
+    // cannot run setup can complete under this seed command's existing owner.
+    const preparedWorkspace = input.preparation && (!input.preparation.setupRecipe || input.preparation.runSetupScript === false)
+      ? await prepareWorkspace({ ...input, ...input.preparation, runSetupScript: false })
+      : undefined;
+    process.stdout.write(JSON.stringify({ ready: true, preparedWorkspace }));
   } finally { if (directory !== undefined) fs.rmSync(directory, { recursive: true, force: true }); }
 })().catch((error) => { console.error(error.message); process.exitCode = 1; });
 PROJECT_SEED_SCRIPT`;

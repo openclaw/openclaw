@@ -1,8 +1,6 @@
 import type { ProgressCard, ProgressCardStep } from "../../packages/gateway-protocol/src/index.js";
-import {
-  prepareSqliteTargetFromSessionStorePath,
-  resolveUnsuffixedSqliteTargetFromSessionStorePath,
-} from "../config/sessions/session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
+import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import { resolveStateDir } from "../config/state-dir.js";

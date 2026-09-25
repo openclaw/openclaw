@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -8,6 +9,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 
@@ -50,9 +52,7 @@ function activePlacement(database: OpenClawStateDatabase, sessionId: string) {
       ...step,
     });
   }
-  if (placement.state !== "active") {
-    throw new Error("Expected an active placement fixture");
-  }
+  assert(placement.state === "active", "Expected an active placement fixture");
   return { store, placement, identity };
 }
 
@@ -92,15 +92,8 @@ describe("worker placement read projection", () => {
     const other = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
     other.startDispatch(identity);
     await closeOpenClawStateDatabaseAsync();
-    const native = requireNodeSqlite();
-    const counters = [
-      ...(["prepare", "exec", "close"] as const).map((method) =>
-        vi.spyOn(native.DatabaseSync.prototype, method),
-      ),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(native.StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const counters = observeMainThreadSql({ includeClose: true });
     try {
       const snapshot = await store.readProjection([
         "pending",
@@ -141,9 +134,9 @@ describe("worker placement read projection", () => {
       expect((await store.readProjection(["pending"])).placements.get("pending")?.generation).toBe(
         draining.generation,
       );
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+      counters.expectIdle();
     } finally {
-      counters.forEach((counter) => counter.mockRestore());
+      counters.restore();
     }
   });
 });

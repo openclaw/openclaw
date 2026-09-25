@@ -458,20 +458,9 @@ export async function cancelPendingAgentQuestionForSession(params: {
   }
 }
 
-type RunAgentHarnessSecretInputParams = {
-  questions: readonly AgentHarnessUserInputQuestion[];
-  sessionKey: string;
-  timeoutMs: number;
-  delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply"> & {
-    hostCapabilities?: AgentHarnessHostCapabilities;
-  };
-  promptOptions?: AgentHarnessUserInputPromptOptions;
-  signal?: AbortSignal;
-};
-
 /** Presents one warned secret prompt and keeps its answer out of durable question records. */
 function runAgentHarnessSecretInput(
-  params: RunAgentHarnessSecretInputParams,
+  params: RunAgentHarnessGatewayQuestionParams,
 ): Promise<string | undefined> {
   params.signal?.throwIfAborted();
   const sessionKey = params.sessionKey.trim();
@@ -548,14 +537,7 @@ async function runScopedAgentHarnessQuestion(
   params: RunAgentHarnessGatewayQuestionParams,
 ): Promise<QuestionWaitAnswerResult> {
   if (params.questions.some((question) => question.isSecret)) {
-    const text = await runAgentHarnessSecretInput({
-      questions: params.questions,
-      sessionKey: params.sessionKey,
-      timeoutMs: params.timeoutMs,
-      delivery: params.delivery,
-      promptOptions: params.promptOptions,
-      signal: params.signal,
-    });
+    const text = await runAgentHarnessSecretInput(params);
     if (text === undefined) {
       return { status: "cancelled" };
     }

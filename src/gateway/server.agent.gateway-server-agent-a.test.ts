@@ -27,6 +27,7 @@ import {
   isGatewaySubordinateWorkAdmissionClosed,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
@@ -325,6 +326,16 @@ describe("gateway server agent", () => {
       method: "agent",
       runId: "idem-agent-detached-root",
     });
+    let participantRecorded = false;
+    const unsubscribeParticipant = onSessionLifecycleEvent((event) => {
+      if (
+        event.reason === "participants" &&
+        event.agentId === "main" &&
+        event.sessionKey === "agent:main:main"
+      ) {
+        participantRecorded = true;
+      }
+    });
     try {
       const res = await rpcReq(gatewaySuite.ws, "agent", {
         message: "prove detached root transfer",
@@ -335,10 +346,15 @@ describe("gateway server agent", () => {
       expect(res.ok).toBe(true);
       expect(res.payload?.status).toBe("accepted");
       await execution.waitForCompletion();
+      expect(participantRecorded).toBe(true);
       expect(subordinateAdmissionClosed).toBe(false);
       expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(0);
     } finally {
-      await execution.restore();
+      try {
+        await execution.restore();
+      } finally {
+        unsubscribeParticipant();
+      }
     }
   });
 

@@ -11,7 +11,7 @@ export {
   startBrowserControlServiceFromConfig,
 } from "./browser-runtime.js";
 export { persistBrowserProxyResultFiles } from "./browser/proxy-files.js";
-export { getRuntimeConfig } from "./sdk-config.js";
+export { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 export {
   ErrorCodes,
   errorShape,

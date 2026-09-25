@@ -2,7 +2,7 @@ import { execFileSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, it, type TestContext } from "vitest";
+import { expect, it, vi, type TestContext } from "vitest";
 import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
 import {
   isProcessAlive,
@@ -216,17 +216,46 @@ installVitestShutdownCancellation({root:${JSON.stringify(root)},preload:import.m
 `,
       );
       let child!: ChildProcess;
-      const invocation = runFixture(
-        root,
-        { scenario: "slow-exit", setup: "shared", fail: false },
-        fixturePreloadArgs(preload),
-        {
-          onReady(owned) {
-            child = owned;
+      let fireDeadline: (() => void) | undefined;
+      const schedule = globalThis.setTimeout;
+      // Capture only this command's deadline; readiness and native cleanup keep real timers.
+      const deadlineSpy =
+        mode === "timeout"
+          ? vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, ms, ...args) => {
+              if (ms !== 20_000 || fireDeadline) {
+                return schedule(callback, ms, ...args);
+              }
+              let pending = true;
+              const fire = () => {
+                if (!pending) {
+                  return;
+                }
+                pending = false;
+                clearTimeout(timer);
+                callback(...args);
+              };
+              // Keep the original deadline as a failsafe if readiness never arrives.
+              const timer = schedule(fire, ms);
+              fireDeadline = fire;
+              return timer;
+            })
+          : undefined;
+      let invocation: ReturnType<typeof runFixture>;
+      try {
+        invocation = runFixture(
+          root,
+          { scenario: "slow-exit", setup: "shared", fail: false },
+          fixturePreloadArgs(preload),
+          {
+            onReady(owned) {
+              child = owned;
+            },
+            signal: context.signal,
           },
-          signal: context.signal,
-        },
-      );
+        );
+      } finally {
+        deadlineSpy?.mockRestore();
+      }
       const outcome = invocation.then(
         (result) => ({ result, error: undefined }),
         (error: unknown) => ({ result: undefined, error }),
@@ -272,6 +301,12 @@ installVitestShutdownCancellation({root:${JSON.stringify(root)},preload:import.m
         pids.splice(0, pids.length, ...owned);
         if (mode === "signal") {
           child.kill("SIGTERM");
+        } else {
+          expect(
+            fireDeadline,
+            "managed command deadline must be armed before readiness",
+          ).toBeTypeOf("function");
+          fireDeadline!();
         }
         const result = await outcome;
         await waitForFile(path.join(root, "term-received"), 1_000);

@@ -423,7 +423,7 @@ export function createControlUiHandlers(
       }
       try {
         const reader = client
-          ? prepareControlUiSessionPrRead({
+          ? await prepareControlUiSessionPrRead({
               client,
               sessionKey: parsed.sessionKey,
               getRuntimeConfig: context.getRuntimeConfig,
@@ -435,19 +435,28 @@ export function createControlUiHandlers(
                   .has(client.connId) === true,
             })
           : undefined;
-        const currentBinding = () => {
+        const currentBinding = async () => {
           if (!client) {
             return resolveCheckDetailsSession(parsed.sessionKey, context, client);
           }
-          return reader?.() ?? null;
+          return (await reader?.()) ?? null;
         };
-        const binding = currentBinding();
+        const binding = await currentBinding();
         if (!binding) {
           throw new gitHubPublicApi.ControlUiGitHubError(404, "Session CI details unavailable");
         }
         const assertCurrent = () => {
-          const current = currentBinding();
-          if (signal?.aborted || current?.identity !== binding.identity) {
+          let identityCurrent = false;
+          try {
+            binding.assertCurrent?.();
+            identityCurrent = client
+              ? true
+              : resolveCheckDetailsSession(parsed.sessionKey, context, client)?.identity ===
+                binding.identity;
+          } catch {
+            // The read owner reports retired selections and grants as assertion failures.
+          }
+          if (signal?.aborted || !identityCurrent) {
             throw new gitHubPublicApi.ControlUiGitHubError(
               409,
               "Session changed; reopen CI details",
@@ -482,7 +491,7 @@ export function createControlUiHandlers(
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
       }
     },
-    "controlUi.sessionPullRequests.subscribe": ({ params, client, context, respond }) => {
+    "controlUi.sessionPullRequests.subscribe": async ({ params, client, context, respond }) => {
       const parsed = parseControlUiSessionPullRequestsSubscribeParams(params);
       if (!parsed) {
         respond(
@@ -505,11 +514,19 @@ export function createControlUiHandlers(
         );
         return;
       }
-      if (parsed.refreshSessionKeys.length > 0) {
-        void subscriptions.replace(connId, parsed.sessionKeys, new Set(parsed.refreshSessionKeys));
-      } else {
-        void subscriptions.replace(connId, parsed.sessionKeys);
-      }
+      const admitted = new Promise<void>((resolve) => {
+        const replacement =
+          parsed.refreshSessionKeys.length > 0
+            ? subscriptions.replace(
+                connId,
+                parsed.sessionKeys,
+                new Set(parsed.refreshSessionKeys),
+                resolve,
+              )
+            : subscriptions.replace(connId, parsed.sessionKeys, undefined, resolve);
+        void replacement.catch(() => {});
+      });
+      await admitted;
       respond(true, { subscribed: parsed.sessionKeys.length > 0 }, undefined);
     },
   };

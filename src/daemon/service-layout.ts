@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
 import {
@@ -98,17 +99,6 @@ export async function inspectGatewayServiceInstallationDrift(
   const serviceVersion =
     layout.packageVersion ?? (await readPackageVersion(serviceRoot)) ?? undefined;
   return { serviceRoot, activeRoot: activeRootReal, serviceVersion, activeVersion };
-}
-
-function shellQuoteArg(value: string): string {
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/u.test(value)) {
-    return value;
-  }
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-function formatExecStart(programArguments: readonly string[]): string {
-  return programArguments.map(shellQuoteArg).join(" ");
 }
 
 function resolveSystemdScopeFromServicePath(
@@ -244,7 +234,7 @@ export async function summarizeGatewayServiceLayout(
     : undefined;
 
   return {
-    execStart: formatExecStart(command.programArguments),
+    execStart: command.programArguments.map(quoteCliArg).join(" "),
     ...(sourcePath ? { sourcePath } : {}),
     ...(sourcePathReal ? { sourcePathReal } : {}),
     ...(sourcePath ? { sourceScope: resolveSystemdScopeFromServicePath(sourcePath) } : {}),

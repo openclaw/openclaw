@@ -845,12 +845,17 @@ describe("createTelegramBot typed command pipeline", () => {
       },
     });
     const cfg: OpenClawConfig = {
-      // Keep this controlled image-model fixture out of unrelated provider discovery.
-      plugins: { allow: ["telegram", "openai"] },
-      agents: { defaults: { model: "openai/text-model", imageModel: "openai/sticker-model" } },
+      // A synthetic provider keeps this controlled model out of runtime plugin activation.
+      plugins: { allow: ["telegram"] },
+      agents: {
+        defaults: {
+          model: "sticker-fixture/text-model",
+          imageModel: "sticker-fixture/sticker-model",
+        },
+      },
       models: {
         providers: {
-          openai: {
+          "sticker-fixture": {
             api: "openai-completions",
             baseUrl: "http://127.0.0.1:9/v1",
             apiKey: "synthetic-sticker-key",

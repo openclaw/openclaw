@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isLocalDirectRequest,
@@ -42,7 +43,7 @@ export function resolveBrowserOriginPolicy(params: {
     requestHost: headerValue(params.req.headers.host),
     origin: headerValue(params.req.headers.origin),
     fetchSite: headerValue(params.req.headers["sec-fetch-site"]),
-    allowedOrigins: params.cfg?.gateway?.controlUi?.allowedOrigins,
+    allowedOrigins: resolveControlUiAllowedOrigins(params.cfg),
     allowHostHeaderOriginFallback:
       params.cfg?.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
   };

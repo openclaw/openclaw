@@ -228,7 +228,8 @@ export function renderGroupedMessage(
   const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
 
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message) : [];
-  const hasToolCards = toolCards.length > 0;
+  // Nested cards moved under their parent must not leave empty message shells.
+  const hasToolCards = toolCards.some((card) => opts.toolCardOverrides?.get(card) !== nothing);
   const {
     images,
     attachments: visibleAttachments,
@@ -334,7 +335,7 @@ export function renderGroupedMessage(
     .filter(Boolean)
     .join(" ");
 
-  // Suppress empty bubbles when tool cards are the only content and toggle is off
+  // Suppress bubbles with no visible content, including relocated tool cards.
   if (
     !markdown &&
     !asyncQuestions &&
@@ -455,10 +456,6 @@ export function renderGroupedMessage(
     visibleAttachments.length === 0 &&
     assistantViewBlocks.length === 0 &&
     !reasoningMarkdown;
-
-  if (onlyToolCards && toolCards.every((card) => opts.toolCardOverrides?.get(card) === nothing)) {
-    return nothing;
-  }
 
   const toolRenderOptions = { ...opts, messageKey, onOpenSidebar };
   const renderText = () =>

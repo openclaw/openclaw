@@ -1,4 +1,6 @@
+import { channel } from "node:diagnostics_channel";
 import { afterEach, describe, expect, it } from "vitest";
+import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 import type {
   CodeModeExecutorContinuation,
   CodeModeExecutorStartInput,
@@ -16,6 +18,7 @@ const continuations = new Set<CodeModeExecutorContinuation>();
 afterEach(async () => {
   await Promise.all([...continuations].map((continuation) => continuation.dispose()));
   continuations.clear();
+  channel("openclaw.memory.critical").publish({});
 });
 
 function execute(source: string, overrides: Partial<CodeModeExecutorStartInput> = {}) {
@@ -26,6 +29,63 @@ function execute(source: string, overrides: Partial<CodeModeExecutorStartInput> 
 }
 
 describe("Node Code Mode executor", () => {
+  it.each(["alternating limits", "concurrent continuations"] as const)(
+    "keeps workers warm across %s",
+    async (scenario) => {
+      channel("openclaw.memory.critical").publish({});
+      const starts = () =>
+        sampleTrackedWorkerMemory().workerLifecycle.find(
+          ({ script }) => script === "code-mode-node.worker.js",
+        )?.started ?? 0;
+      const before = starts();
+      if (scenario === "alternating limits") {
+        for (let i = 0; i < 20; i++) {
+          expect(
+            await execute("return 1;", {
+              config: { ...config, memoryLimitBytes: (i % 2 ? 96 : 64) * 1024 * 1024 },
+            }),
+          ).toMatchObject({ status: "completed" });
+        }
+        expect(starts() - before).toBeLessThanOrEqual(2);
+      } else {
+        for (let round = 0; round < 2; round++) {
+          const results = await Promise.all(
+            Array.from({ length: 4 }, (_, i) =>
+              execute("await yield_control(); return 1;", {
+                config: { ...config, memoryLimitBytes: (i % 2 ? 160 : 128) * 1024 * 1024 },
+              }),
+            ),
+          );
+          await Promise.all(
+            results.map(async (result) => {
+              if (result.status !== "waiting") {
+                throw new Error(JSON.stringify(result));
+              }
+              continuations.add(result.continuation);
+              // Pressure must spare live continuations even while their task is idle.
+              channel("openclaw.memory.critical").publish({});
+              expect(
+                await result.continuation.resume(
+                  {
+                    kind: "resume",
+                    config,
+                    settledRequests: result.pendingRequests.map(({ id }) => ({
+                      id,
+                      ok: true,
+                      json: "null",
+                    })),
+                  },
+                  { timeoutMs: 7_000 },
+                ),
+              ).toMatchObject({ status: "completed", value: { json: "1" } });
+            }),
+          );
+        }
+        expect(starts() - before).toBeLessThanOrEqual(4);
+      }
+    },
+  );
+
   it("retains lexical state through one-shot waits and disposes only its owned continuation", async () => {
     let result = await execute(
       "const state = { value: 1 }; await yield_control(); state.value += 2; await yield_control(); return state;",

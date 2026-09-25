@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { formatErrorMessage } from "./errors.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export function formatUpdateCleanupCommand(directory: string): string {
   return process.platform === "win32"

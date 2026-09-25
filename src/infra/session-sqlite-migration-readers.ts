@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { TextDecoder } from "node:util";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   classifySessionFileEntry,
@@ -471,13 +472,6 @@ function resolveSessionIdentityProjection(database: DatabaseSync) {
 
 export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqliteDbStatsResult {
   const sqlitePath = resolveTargetSqlitePath(target);
-  const sizeFor = (filePath: string): number => {
-    try {
-      return fs.statSync(filePath).size;
-    } catch {
-      return 0;
-    }
-  };
   if (!fs.existsSync(sqlitePath)) {
     return {
       ok: true,
@@ -485,7 +479,7 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
         dbSizeBytes: 0,
         largestSessions: [],
         totalTranscriptRowBytes: 0,
-        walSizeBytes: sizeFor(`${sqlitePath}-wal`),
+        walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
       },
     };
   }
@@ -500,12 +494,12 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
       return {
         ok: true,
         stats: {
-          dbSizeBytes: sizeFor(sqlitePath),
+          dbSizeBytes: safeStatSync(sqlitePath)?.size ?? 0,
           integrityCheck:
             typeof integrityRow?.quick_check === "string" ? integrityRow.quick_check : undefined,
           largestSessions: [],
           totalTranscriptRowBytes: 0,
-          walSizeBytes: sizeFor(`${sqlitePath}-wal`),
+          walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
         },
       };
     }
@@ -530,7 +524,7 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
     return {
       ok: true,
       stats: {
-        dbSizeBytes: sizeFor(sqlitePath),
+        dbSizeBytes: safeStatSync(sqlitePath)?.size ?? 0,
         integrityCheck:
           typeof integrityRow?.quick_check === "string" ? integrityRow.quick_check : undefined,
         largestSessions: largestRows.flatMap((row) => {
@@ -546,7 +540,7 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
           ];
         }),
         totalTranscriptRowBytes: sqliteNumber(totalRow?.row_bytes),
-        walSizeBytes: sizeFor(`${sqlitePath}-wal`),
+        walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
       },
     };
   } catch (error) {

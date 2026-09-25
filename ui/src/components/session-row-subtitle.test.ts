@@ -318,7 +318,7 @@ describe("resolveSidebarSessionSubtitle", () => {
     ).toBe("Implementing the repair");
   });
 
-  it("keeps attention visible while hiding every preview candidate", () => {
+  it("hides error details and ambient text when previews are hidden", () => {
     const hidden = (session: SidebarRecentSession, narrationLine?: string) =>
       resolveSidebarSessionSubtitle({
         session,
@@ -337,7 +337,7 @@ describe("resolveSidebarSessionSubtitle", () => {
         agentStatusNote: "Waiting for deployment",
         lastMessagePreview: "The final reply is durable.",
       }),
-    ).toBe("Run failed:   Message failed: deployment unavailable");
+    ).toBeUndefined();
 
     expect([
       hidden({ ...workSession(), agentStatusNote: "Waiting for deployment" }),

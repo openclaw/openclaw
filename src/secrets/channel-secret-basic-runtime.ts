@@ -369,44 +369,13 @@ export function collectSimpleChannelFieldAssignments(params: {
   topInactiveReason: string;
   accountInactiveReason: string;
 }): void {
-  collectTopLevelChannelFieldAssignments({
-    channelKey: params.channelKey,
-    channel: params.channel,
-    value: params.channel[params.field],
-    fieldPath: `channels.${params.channelKey}.${params.field}`,
-    expected: "string",
-    surface: params.surface,
-    defaults: params.defaults,
-    context: params.context,
-    activeWithoutAccounts: params.surface.channelEnabled,
-    inheritedAccountActive: ({ account, enabled }) =>
+  collectConditionalChannelFieldAssignments({
+    ...params,
+    topLevelActiveWithoutAccounts: true,
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
       enabled && !hasOwnProperty(account, params.field),
-    inactiveReason: params.topInactiveReason,
-    apply: (value) => {
-      params.channel[params.field] = value;
-    },
+    accountActive: ({ enabled }) => enabled,
   });
-  if (!params.surface.hasExplicitAccounts) {
-    return;
-  }
-  for (const { accountId, account, enabled } of params.surface.accounts) {
-    if (!hasOwnProperty(account, params.field)) {
-      continue;
-    }
-    collectSecretInputAssignment({
-      value: account[params.field],
-      path: `${appendConfigPathSegment(`channels.${params.channelKey}.accounts`, accountId)}.${params.field}`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: enabled,
-      inactiveReason: params.accountInactiveReason,
-      owner: createChannelAccountSecretOwner(params.channelKey, accountId, params.channel, account),
-      apply: (value) => {
-        account[params.field] = value;
-      },
-    });
-  }
 }
 
 /** Collects a channel field whose active state depends on caller-provided account predicates. */

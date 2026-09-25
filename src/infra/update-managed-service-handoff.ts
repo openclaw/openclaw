@@ -1468,14 +1468,18 @@ async function spawnManagedServiceUpdateHandoff(
     `openclaw-update-failure-${randomUUID()}.json`,
   );
   const logPath = path.join(dir, "handoff.log");
+  const commandOptions = {
+    acceptCapabilities: params.acceptCapabilities,
+    admission: params.admission,
+    reapplyLocalOverrides: params.reapplyLocalOverrides,
+    timeoutMs: params.timeoutMs,
+    channel: params.channel,
+    tag: params.tag,
+  };
   const commandArgv = params.action
     ? [params.action.nodeRunner, params.action.entrypoint, "triage"]
     : resolveUpdateCliArgv({
-        acceptCapabilities: params.acceptCapabilities,
-        reapplyLocalOverrides: params.reapplyLocalOverrides,
-        timeoutMs: params.timeoutMs,
-        channel: params.channel,
-        tag: params.tag,
+        ...commandOptions,
         execPath: params.execPath ?? process.execPath,
         argv1: params.argv1 ?? process.argv[1],
       });
@@ -1484,16 +1488,8 @@ async function spawnManagedServiceUpdateHandoff(
   }
   const commandLabel = params.action
     ? "openclaw triage (automatic)"
-    : formatManagedServiceUpdateCommand(
-        {
-          timeoutMs: params.timeoutMs,
-          channel: params.channel,
-          tag: params.tag,
-          acceptCapabilities: params.acceptCapabilities,
-          reapplyLocalOverrides: params.reapplyLocalOverrides,
-        },
-        params.env,
-      ) + (owner.operatorRestartWarning ? " --no-restart" : "");
+    : formatManagedServiceUpdateCommand(commandOptions, params.env) +
+      (owner.operatorRestartWarning ? " --no-restart" : "");
   const metaFile: ControlPlaneUpdateSentinelMetaFile = {
     version: 1,
     meta: {

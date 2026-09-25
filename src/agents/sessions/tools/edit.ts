@@ -14,7 +14,6 @@ import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { repairJson } from "@openclaw/ai/internal/runtime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { Type } from "typebox";
 import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
 import { normalizeToLF } from "../../line-endings.js";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
@@ -44,50 +43,13 @@ import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import { invalidArgText, shortenPath, str } from "./render-utils.js";
 import type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { editSchema, EditToolOutputSchema } from "./tool-schemas.js";
 
 type EditPreview = EditDiffResult | EditDiffError;
 
 type EditRenderState = {
   callComponent?: EditCallRenderComponent;
 };
-
-const replaceEditSchema = Type.Object(
-  {
-    oldText: Type.String({
-      description: "Exact original text; unique and non-overlapping in this call.",
-    }),
-    newText: Type.String({
-      description: "Replacement text.",
-    }),
-  },
-  {},
-);
-
-const editSchema = Type.Object(
-  {
-    path: Type.String({
-      description: "File path; relative/absolute.",
-    }),
-    edits: Type.Array(replaceEditSchema, {
-      description:
-        "Targeted replacements against original file; no overlap/nesting. Merge nearby changes.",
-    }),
-  },
-  {},
-);
-
-const EditToolOutputSchema = Type.Union([
-  Type.Object({ changed: Type.Literal(false) }, { additionalProperties: false }),
-  Type.Object(
-    {
-      changed: Type.Literal(true),
-      diff: Type.String(),
-      patch: Type.String(),
-      firstChangedLine: Type.Optional(Type.Integer({ minimum: 1 })),
-    },
-    { additionalProperties: false },
-  ),
-]);
 
 const EDIT_MISMATCH_MESSAGE = "Could not find the exact text in";
 const EDIT_MISMATCH_HINT_LIMIT = 800;

@@ -324,7 +324,7 @@ export function upsertBoundDeliveryQueueEntryInDatabase(
 
 /** Recovery and media custody share the same inventory of unfinished work. */
 export function deliveryQueueEntriesQuery(
-  database: OpenClawStateDatabase,
+  database: Pick<OpenClawStateDatabase, "db">,
   queueNames: readonly (string | RawBuilder<string>)[],
   mode: DeliveryQueueReadMode,
 ) {

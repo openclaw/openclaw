@@ -199,10 +199,8 @@ describe("mock tool surface dispatch", () => {
         postResponses(server, {
           stream: false,
           model: "gpt-5.6-luna",
-          instructions: [
-            `Runtime: embedded | sessionId=${runtimeSessionId}`,
-            `- Your session: ${childSessionKey}.`,
-          ].join("\n"),
+          instructions: `Runtime: embedded\n- Your session: ${childSessionKey}.`,
+          client_metadata: { session_id: runtimeSessionId },
           input: [makeUserInput("Subagent terminal reply QA worker: visible.")],
         });
       const acknowledgeParent = async (
@@ -212,7 +210,8 @@ describe("mock tool surface dispatch", () => {
       ) => {
         const parent = await expectNonStreamingResponsesJson(server, {
           model: "gpt-5.6-luna",
-          instructions: `Runtime: embedded | agent=qa | session=agent:qa:${runtimeSessionId} | sessionId=${runtimeSessionId}`,
+          instructions: `Runtime: embedded | agent=qa | session=agent:qa:${runtimeSessionId}`,
+          client_metadata: { session_id: runtimeSessionId },
           tools: structured ? STRUCTURED_CATALOG_TOOLS : [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
           input: [
             makeUserInput("Subagent terminal reply QA check: visible."),

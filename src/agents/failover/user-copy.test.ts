@@ -175,7 +175,7 @@ describe("failover user copy", () => {
         "unexpected status 404 Not Found: The model `gpt-x` does not exist",
         { errorContext: true },
       ),
-    ).toMatch(/^⚠️ The configured model is unavailable from the provider/);
+    ).toMatch(/^⚠️ The selected model is unavailable from the provider/);
   });
 
   it("keeps non-401 auth text and non-error context out of the provider copy", () => {

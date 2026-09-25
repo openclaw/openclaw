@@ -24,6 +24,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import {
   MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
   MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
@@ -381,31 +382,41 @@ if (declarationBudget.shouldFail) {
     console.error("UNDECLARED BUNDLER HELPER DTS EXPORT: missing dist/ for helper export scan");
     missing += 1;
   } else {
-    const queue = [rootDist];
-    const visitedDirs = new Set<string>();
-    while (queue.length > 0) {
-      const dir = queue.pop()!;
-      if (visitedDirs.has(dir)) {
-        continue;
-      }
-      visitedDirs.add(dir);
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        const fullPath = join(dir, entry.name);
-        if (entry.isDirectory()) {
-          queue.push(fullPath);
+    // tsx's synchronous lexer misparses emitted `using` helpers with this shebang.
+    const parser = createNativeTypeScriptParser({ cwd: repoRoot });
+    try {
+      const queue = [rootDist];
+      const visitedDirs = new Set<string>();
+      while (queue.length > 0) {
+        const dir = queue.pop()!;
+        if (visitedDirs.has(dir)) {
           continue;
         }
-        if (!entry.isFile() || !/\.d\.(?:ts|mts|cts)$/u.test(entry.name)) {
-          continue;
-        }
-        const sourceText = readFileSync(fullPath, "utf8");
-        for (const finding of findUndeclaredBundlerHelperDtsExports(sourceText, fullPath)) {
-          console.error(
-            `UNDECLARED BUNDLER HELPER DTS EXPORT: ${relative(resolve(scriptDir, ".."), fullPath)}:${finding.line} exports ${finding.name} without a local declaration`,
-          );
-          missing += 1;
+        visitedDirs.add(dir);
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const fullPath = join(dir, entry.name);
+          if (entry.isDirectory()) {
+            queue.push(fullPath);
+            continue;
+          }
+          if (!entry.isFile() || !/\.d\.(?:ts|mts|cts)$/u.test(entry.name)) {
+            continue;
+          }
+          const sourceText = readFileSync(fullPath, "utf8");
+          for (const finding of findUndeclaredBundlerHelperDtsExports(
+            sourceText,
+            fullPath,
+            parser,
+          )) {
+            console.error(
+              `UNDECLARED BUNDLER HELPER DTS EXPORT: ${relative(resolve(scriptDir, ".."), fullPath)}:${finding.line} exports ${finding.name} without a local declaration`,
+            );
+            missing += 1;
+          }
         }
       }
+    } finally {
+      parser.close();
     }
   }
 }

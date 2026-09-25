@@ -144,6 +144,7 @@ describe("verified rollback failure actions", () => {
     expect(mocks.submit).toHaveBeenCalledExactlyOnceWith(f.prepared, f.prepared.previewDigest, {
       env: f.env,
       stateDir: f.env.OPENCLAW_STATE_DIR,
+      allowBrowserFallback: false,
     });
     expect(mocks.triage).not.toHaveBeenCalled();
     expect(f.result.status).toBe("error");

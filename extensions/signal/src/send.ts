@@ -144,35 +144,14 @@ type SignalTargetParams = {
   username?: string[];
 };
 
-type SignalTargetAllowlist = {
-  recipient?: boolean;
-  group?: boolean;
-  username?: boolean;
-};
-
-function buildTargetParams(
-  target: SignalTarget,
-  allow: SignalTargetAllowlist,
-): SignalTargetParams | null {
+function buildTargetParams(target: SignalTarget): SignalTargetParams {
   if (target.type === "recipient") {
-    if (!allow.recipient) {
-      return null;
-    }
     return { recipient: [target.recipient] };
   }
   if (target.type === "group") {
-    if (!allow.group) {
-      return null;
-    }
     return { groupId: target.groupId };
   }
-  if (target.type === "username") {
-    if (!allow.username) {
-      return null;
-    }
-    return { username: [target.username] };
-  }
-  return null;
+  return { username: [target.username] };
 }
 
 function createSignalSendReceipt(params: {
@@ -365,15 +344,7 @@ export async function sendMessageSignal(
     params.attachments = attachments;
   }
 
-  const targetParams = buildTargetParams(target, {
-    recipient: true,
-    group: true,
-    username: true,
-  });
-  if (!targetParams) {
-    throw new Error("Signal recipient is required");
-  }
-  Object.assign(params, targetParams);
+  Object.assign(params, buildTargetParams(target));
 
   const quote = resolveSignalQuoteParams(opts);
   const sendOpts = {
@@ -437,14 +408,11 @@ export async function sendTypingSignal(
 ): Promise<boolean> {
   const accountInfo = await resolveSignalRpcAccountInfo(opts);
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
-  const targetParams = buildTargetParams(parseTarget(to), {
-    recipient: true,
-    group: true,
-  });
-  if (!targetParams) {
+  const target = parseTarget(to);
+  if (target.type === "username") {
     return false;
   }
-  const params: Record<string, unknown> = { ...targetParams };
+  const params: Record<string, unknown> = buildTargetParams(target);
   if (account) {
     params.account = account;
   }
@@ -469,14 +437,12 @@ export async function sendReadReceiptSignal(
   }
   const accountInfo = await resolveSignalRpcAccountInfo(opts);
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
-  const targetParams = buildTargetParams(parseTarget(to), {
-    recipient: true,
-  });
-  if (!targetParams) {
+  const target = parseTarget(to);
+  if (target.type !== "recipient") {
     return false;
   }
   const params: Record<string, unknown> = {
-    ...targetParams,
+    ...buildTargetParams(target),
     targetTimestamp,
     type: opts.type ?? "read",
   };

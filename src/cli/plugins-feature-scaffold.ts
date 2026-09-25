@@ -30,7 +30,7 @@ export function writeFeaturePluginScaffold(params: {
         files: ["dist", "openclaw.plugin.json", "README.md"],
         peerDependencies: { openclaw: `>=${VERSION}` },
         dependencies: { typebox: "^1.3.17" },
-        devDependencies: { openclaw: "latest", esbuild: "0.28.2", typescript: "^5.9.0" },
+        devDependencies: { openclaw: "latest", esbuild: "0.28.2", typescript: "7.0.2" },
         openclaw: {
           extensions: ["./dist/index.js"],
           controlUi: "./src/control-ui.ts",

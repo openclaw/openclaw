@@ -255,6 +255,7 @@ export function renderTaskTranscript(params: {
     taskId: params.task.id,
   });
   const messages = load.status === "loaded" ? load.messages : [];
+  const capacityMessage = load.status === "loading" ? undefined : load.capacityMessage;
   const { loadFullAssistantMessage: loader, transcriptSessionKey: sessionKey } = params;
   const state = params.host.taskDetailState;
   const recovery =
@@ -282,19 +283,23 @@ export function renderTaskTranscript(params: {
     ${
       load.status === "error" || (load.status === "loaded" && load.error)
         ? html`<div class="chat-task-detail__state chat-task-detail__state--error" role="status">
-            ${t("chat.backgroundTasks.transcriptFailed")}
-            <button
-              class="btn btn--sm"
-              type="button"
-              ?disabled=${load.status === "loaded" && load.loading}
-              @click=${() => retryTaskTranscript(params.host)}
-            >
-              ${t("common.retry")}
-            </button>
+            ${capacityMessage ?? t("chat.backgroundTasks.transcriptFailed")}
+            ${
+              capacityMessage
+                ? nothing
+                : html`<button
+                    class="btn btn--sm"
+                    type="button"
+                    ?disabled=${load.status === "loaded" && load.loading}
+                    @click=${() => retryTaskTranscript(params.host)}
+                  >
+                    ${t("common.retry")}
+                  </button>`
+            }
           </div>`
         : nothing
     }
-    ${load.status === "loaded" && load.nextCursor ? renderChatHistoryBoundary({ hasMore: true, loading: load.loading, onShowEarlier: () => loadOlderTaskTranscript(params.host) }) : nothing}
+    ${load.status === "loaded" && load.nextCursor && !capacityMessage ? renderChatHistoryBoundary({ hasMore: true, loading: load.loading, onShowEarlier: () => loadOlderTaskTranscript(params.host) }) : nothing}
     ${load.status === "loaded" && !messages.length && !load.nextCursor && !load.error ? html`<div class="chat-task-detail__state">${t("chat.backgroundTasks.transcriptEmpty")}</div>` : nothing}
     ${renderTaskActivityFeed(messages, recovery)}
   </div>`;

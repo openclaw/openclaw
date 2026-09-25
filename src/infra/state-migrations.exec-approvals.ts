@@ -38,8 +38,8 @@ import {
 } from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
-const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
-const MAX_LEGACY_EXEC_APPROVALS_BYTES = 4 * 1024 * 1024;
+export const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
+export const MAX_LEGACY_EXEC_APPROVALS_BYTES = 4 * 1024 * 1024;
 const MIGRATION_KIND = "legacy-exec-approvals-json";
 const TARGET_TABLE = "exec_approvals_config";
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });

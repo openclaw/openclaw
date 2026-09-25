@@ -33,9 +33,12 @@ export async function readWorkspaceManifest(
 }
 
 /** Environment for node-owned workspace commands: pinned HOME, no credential prompts. */
-export function workspaceCommandEnv(homeDir: string): NodeJS.ProcessEnv {
+export function workspaceCommandEnv(
+  homeDir: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
   return {
-    ...process.env,
+    ...baseEnv,
     HOME: homeDir,
     ...(process.platform === "win32" ? { USERPROFILE: homeDir } : {}),
     GCM_INTERACTIVE: "Never",

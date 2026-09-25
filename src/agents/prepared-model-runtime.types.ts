@@ -102,10 +102,10 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
    * Full inventory discovery is deliberately outside the startup publication boundary.
    */
   modelCatalog: ModelCatalogSnapshot;
-  /** Returns saved inventory immediately while expired provider catalogs renew separately. */
-  readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
   /** Reads accepted inventory without scheduling discovery or expiry renewal. */
-  readPublishedModelCatalog?: () => ModelCatalogSnapshot | undefined;
+  readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
+  /** Inventory demand may renew expired providers without waiting or replacing saved rows. */
+  refreshExpiredModelCatalog?: () => void;
   /** Reads validated executable rows from this owner's accepted provider publication. */
   readPublishedModels?: () => ReadonlyMap<string, readonly Model[]> | undefined;
   /** Builds this generation's full control-plane catalog without replacing turn facts. */

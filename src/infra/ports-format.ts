@@ -2,6 +2,8 @@
 import net from "node:net";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
+import { splitArgsPreservingQuotes } from "../daemon/arg-split.js";
+import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { parseTcpListenerEndpoint } from "./ports-netstat.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
@@ -14,8 +16,10 @@ export function classifyPortListener(listener: PortListener, _port: number): Por
   if (command === "socat" || command === "socat1" || command === "socat.exe") {
     return "non_gateway";
   }
-  const raw = `${commandLine} ${command}`;
-  if (raw.includes("openclaw")) {
+  const argv = listener.commandLine
+    ? splitArgsPreservingQuotes(listener.commandLine, { escapeMode: "backslash-quote-only" })
+    : [listener.command ?? ""];
+  if (classifyOpenClawArgv(argv, { command: "gateway", pid: listener.pid }).kind === "openclaw") {
     return "gateway";
   }
   const hasSshCommand = /(?:^|[/\\])ssh(?:\.exe)?$/.test(command);

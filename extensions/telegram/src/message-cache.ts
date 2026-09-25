@@ -1,4 +1,5 @@
 import type { Message } from "grammy/types";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -111,16 +112,7 @@ const PERSISTENT_BUCKET_KEY = `plugin-state:${TELEGRAM_MESSAGE_CACHE_PERSISTENT_
 const TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY = Symbol.for("openclaw.telegram.messageCacheBuckets");
 
 function getPersistedMessageCacheBuckets(): Map<string, TelegramMessageCacheBucket> {
-  const globalRecord = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalRecord[TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY] as
-    | Map<string, TelegramMessageCacheBucket>
-    | undefined;
-  if (existing) {
-    return existing;
-  }
-  const created = new Map<string, TelegramMessageCacheBucket>();
-  globalRecord[TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY] = created;
-  return created;
+  return resolveGlobalMap(TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY);
 }
 
 type TelegramMessageCachePersistentStore = {

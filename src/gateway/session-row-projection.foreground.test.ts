@@ -22,6 +22,7 @@ import {
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import * as records from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
 import { listProjectedSessions } from "./session-utils-list.js";
@@ -31,14 +32,36 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 
-function holdBackfillPublication() {
+function holdBackfillPublication(signal?: AbortSignal) {
   const backfill = transcriptBackfill.backfillSessionRowTranscriptFields;
   const prepared = createDeferredCore<Awaited<ReturnType<typeof backfill>>>();
   const publish = createDeferredCore();
   const settled = createDeferredCore();
   const releaseLater = createDeferredCore();
+  const successorStarted = createDeferredCore();
+  const successorPublished = createDeferredCore();
   const pending: Promise<unknown>[] = [];
   let first = true;
+  let publishingSuccessor = false;
+  function wait<T>(work: Promise<T>): Promise<T> {
+    if (!signal) {
+      return work;
+    }
+    signal.throwIfAborted();
+    return new Promise<T>((resolve, reject) => {
+      const abort = () => reject(new Error("Backfill wait aborted", { cause: signal.reason }));
+      signal.addEventListener("abort", abort, { once: true });
+      void work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    });
+  }
+  const publishTranscriptFields = records.publishTranscriptFields;
+  vi.spyOn(records, "publishTranscriptFields").mockImplementation((...args) => {
+    const changed = publishTranscriptFields(...args);
+    if (publishingSuccessor) {
+      successorPublished.resolve();
+    }
+    return changed;
+  });
   vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields").mockImplementation(
     (params) => {
       const initial = first;
@@ -46,6 +69,7 @@ function holdBackfillPublication() {
       const work = (async () => {
         if (!initial) {
           // A queued successor must not conceal the held publication's observable result.
+          successorStarted.resolve();
           await releaseLater.promise;
           return backfill(params);
         }
@@ -66,10 +90,20 @@ function holdBackfillPublication() {
     },
   );
   return {
-    prepared: prepared.promise,
+    get prepared() {
+      return wait(prepared.promise);
+    },
     async publish() {
       publish.resolve();
-      await settled.promise.then(nextTurn);
+      await wait(settled.promise.then(nextTurn));
+    },
+    waitForSuccessor: () => wait(successorStarted.promise),
+    async publishSuccessor() {
+      await wait(successorStarted.promise);
+      publishingSuccessor = true;
+      releaseLater.resolve();
+      // A completed worker read is not proof that the host accepted its publication.
+      await wait(successorPublished.promise);
     },
     async close() {
       publish.resolve();
@@ -177,10 +211,10 @@ it("publishes read-only transcript previews without acquiring stored row facts a
   });
 });
 
-it.each(["notice cleared", "selection changed"] as const)(
+it.for(["notice cleared", "selection changed"] as const)(
   "rejects a held fallback after same-session metadata changes: %s",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  (change, { signal, onTestFinished }) => {
+    const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { list: [{ id: "main", default: true }] } };
       const scope = {
         agentId: "main",
@@ -218,7 +252,7 @@ it.each(["notice cleared", "selection changed"] as const)(
         touchSessionEntry: false,
         updateMode: "none",
       });
-      const backfill = holdBackfillPublication();
+      const backfill = holdBackfillPublication(signal);
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       try {
         expect(await backfill.prepared).toEqual({
@@ -237,6 +271,12 @@ it.each(["notice cleared", "selection changed"] as const)(
         expect(projection.describe(query)?.generation).toBe(before.generation);
         expect(projection.snapshot(query).row?.activeModel).toBeUndefined();
         await backfill.publish();
+        await backfill.waitForSuccessor();
+        expect(
+          projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
+        ).toBeUndefined();
+        expect(projection.describe(query)?.fallbackModel).toBeUndefined();
+        await backfill.publishSuccessor();
         await projection.ensureMaterialized();
         expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
           lastMessagePreview: "Finished",
@@ -250,11 +290,16 @@ it.each(["notice cleared", "selection changed"] as const)(
         await backfill.close();
       }
     });
+    onTestFinished(() => run);
+    return run;
   },
 );
 
-it("keeps pending Worker metadata, membership, and summary facts across optional publication", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("keeps pending Worker metadata, membership, and summary facts across optional publication", ({
+  signal,
+  onTestFinished,
+}) => {
+  const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {
       agents: {
         list: [{ id: "main", default: true }],
@@ -284,7 +329,7 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
       updateMode: "none",
     });
     const watermark = sessions.readSessionTranscriptWatermark(scope);
-    const backfill = holdBackfillPublication();
+    const backfill = holdBackfillPublication(signal);
     const captured = createDeferredCore();
     const release = createDeferredCore();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
@@ -365,7 +410,7 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
           key: scope.sessionKey,
           label: "Current label",
           sharingRole: "viewer",
-          lastMessagePreview: "Read-only preview",
+          lastMessagePreview: undefined,
           activitySummary: expect.objectContaining({
             text: "Current summary",
             updatedAt: 3,
@@ -375,6 +420,11 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
       ]);
       expect(projection.describe(query)?.membership.has(viewer.id)).toBe(false);
       expect(projection.dirtyRowCount).toBe(0);
+      await backfill.publishSuccessor();
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Read-only preview",
+      );
+      expect(reads).toBe(2);
     } finally {
       release.resolve();
       await Promise.allSettled(reading ? [reading] : []);
@@ -382,6 +432,8 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
       await backfill.close();
     }
   });
+  onTestFinished(() => run);
+  return run;
 });
 
 it.each(["before transcript work", "before preview publication"] as const)(

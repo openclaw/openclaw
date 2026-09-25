@@ -349,14 +349,7 @@ export function resolveSlackThreadTs(params: {
   hasReplied: boolean;
   isThreadReply?: boolean;
 }): string | undefined {
-  const planner = createSlackReplyReferencePlanner({
-    replyToMode: params.replyToMode,
-    incomingThreadTs: params.incomingThreadTs,
-    messageTs: params.messageTs,
-    hasReplied: params.hasReplied,
-    isThreadReply: params.isThreadReply,
-  });
-  return planner.use();
+  return createSlackReplyReferencePlanner(params).use();
 }
 
 type SlackReplyDeliveryPlan = {
@@ -395,11 +388,8 @@ export function createSlackReplyDeliveryPlan(params: {
   isThreadReply?: boolean;
 }): SlackReplyDeliveryPlan {
   const replyReference = createSlackReplyReferencePlanner({
-    replyToMode: params.replyToMode,
-    incomingThreadTs: params.incomingThreadTs,
-    messageTs: params.messageTs,
+    ...params,
     hasReplied: params.hasRepliedRef.value,
-    isThreadReply: params.isThreadReply,
   });
   return {
     peekThreadTs: () => replyReference.peek(),

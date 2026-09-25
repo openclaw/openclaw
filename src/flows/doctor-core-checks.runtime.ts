@@ -83,7 +83,9 @@ export async function collectGatewayDaemonFindings(
       message: `Gateway service status could not be determined: ${state.loadState.detail}`,
       path: state.command?.sourcePath,
       target: service.label,
-      fixHint: "Run `openclaw gateway status --deep`, restore service-manager access, and retry.",
+      fixHint:
+        service.unsupportedReason ??
+        "Run `openclaw gateway status --deep`, restore service-manager access, and retry.",
     });
     return findings;
   }

@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "dependencies": {
     "sandbox": "4.4.0",
-    "vercel": "59.19.0"
+    "vercel": "59.20.0"
   },
   "overrides": {
     "@tootallnate/once@2.0.0": "2.0.1",

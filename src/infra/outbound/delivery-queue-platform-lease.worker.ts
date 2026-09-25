@@ -6,6 +6,7 @@ import {
 } from "../delivery-queue-sqlite-claim.kernel.js";
 import type { DeliveryQueueWorkerOperations } from "../delivery-queue.worker-contract.js";
 import type { SqliteWorkerCommand } from "../sqlite-worker-contract.js";
+import { resolveOutboundDeliveryQueueNameInDatabase } from "./delivery-queue-ownership.kernel.js";
 
 type LeaseOperations = Pick<
   DeliveryQueueWorkerOperations,
@@ -21,13 +22,19 @@ export function executeDeliveryQueuePlatformLeaseCommand(
       command.type === "deliveryQueue.claimPlatformSend"
         ? claimDeliveryQueueEntryPlatformSendInDatabase(
             database,
-            command.input,
+            {
+              ...command.input,
+              queueName: resolveOutboundDeliveryQueueNameInDatabase(database, command.input.id),
+            },
             command.input.claimId,
           )
-        : renewDeliveryQueueEntryPlatformSendLeaseInDatabase(database, command.input),
+        : renewDeliveryQueueEntryPlatformSendLeaseInDatabase(database, {
+            ...command.input,
+            queueName: resolveOutboundDeliveryQueueNameInDatabase(database, command.input.id),
+          }),
     options,
     {
-      operationLabel: `${command.type === "deliveryQueue.claimPlatformSend" ? "claim" : "renew"} ${command.input.queueName} delivery platform send`,
+      operationLabel: command.type,
     },
   );
 }

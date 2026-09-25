@@ -13,120 +13,57 @@ import {
   matchesWhatsAppSutReactionToTrigger,
   waitForNoWhatsAppReply,
   waitForScenarioObservedMessage,
-  waitForWhatsAppScenarioSutMessage,
   waitForWhatsAppSutReactionToTrigger,
   writeWhatsAppQaWorkspaceFixture,
 } from "./whatsapp-live.operations.js";
 
-export const whatsappQaAgentMessageActionReactScenario: WhatsAppQaScenarioImplementation = {
-  posture: "user-path",
-  configOverrides: {
-    actions: true,
-  },
-  buildRun: () => {
-    const token = `WHATSAPP_QA_AGENT_REACT_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
-      afterSend: async (context) => {
-        const reaction = await waitForWhatsAppSutReactionToTrigger(context, {
-          expectation: { emoji: "👍" },
-          timeoutMs: 60_000,
-        });
-        return `agent message reaction ${reaction.reaction?.emoji ?? "<unknown>"} observed`;
-      },
-      allowQuietWindowMessage: (message, context) =>
-        matchesWhatsAppSutReactionToTrigger(message, context, { emoji: "👍" }),
-      configMode: "allowlist",
-      expectReply: false,
-      input:
-        `React to this WhatsApp message with thumbs up for QA action check ${token}. ` +
-        "Do not send any visible text reply after the reaction.",
-      matchText: token,
-      quietWindowMs: 8_000,
-      target: "dm",
-    };
-  },
-};
-
-export const whatsappQaAgentMessageActionUploadFileScenario: WhatsAppQaScenarioImplementation = {
-  posture: "user-path",
-  configOverrides: {
-    actions: true,
-  },
-  buildRun: () => {
-    const token = `WHATSAPP_QA_AGENT_UPLOAD_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
-      afterSend: async (context) => {
-        const media = await waitForScenarioObservedMessage(context, {
-          observedAfter: context.requestStartedAt,
-          timeoutMs: 60_000,
-          match: (message) =>
-            message.kind === "media" &&
-            message.hasMedia === true &&
-            message.mediaType?.startsWith("image/") === true &&
-            message.text.includes(token),
-        });
-        return `agent upload-file media ${media.mediaType ?? "<unknown>"} observed`;
-      },
-      allowQuietWindowMessage: (message) =>
-        message.kind === "media" &&
-        message.mediaType?.startsWith("image/") === true &&
-        message.text.includes(token),
-      configMode: "allowlist",
-      expectReply: false,
-      input:
-        `Use the WhatsApp message tool upload-file action to send a PNG with caption ${token}. ` +
-        "Do not send any visible text reply after the upload.",
-      matchText: token,
-      quietWindowMs: 8_000,
-      target: "dm",
-    };
-  },
-};
-
-export const whatsappQaGroupAgentMessageActionReactScenario: WhatsAppQaScenarioImplementation = {
-  posture: "user-path",
-  configOverrides: {
-    actions: true,
-  },
-  requiresGroupJid: true,
-  buildRun: () => {
-    const token = `WHATSAPP_QA_GROUP_AGENT_REACT_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
-      afterSend: async (context) => {
-        const reaction = await waitForWhatsAppSutReactionToTrigger(context, {
-          expectation: { emoji: "👍" },
-          timeoutMs: 60_000,
-        });
-        return `group agent message reaction ${reaction.reaction?.emoji ?? "<unknown>"} observed`;
-      },
-      allowQuietWindowMessage: (message, context) =>
-        matchesWhatsAppSutReactionToTrigger(message, context, { emoji: "👍" }),
-      configMode: "allowlist",
-      expectReply: false,
-      input:
-        `openclawqa react to this WhatsApp group message with thumbs up for QA action check ${token}. ` +
-        "Do not send any visible text reply after the reaction.",
-      matchText: token,
-      quietWindowMs: 8_000,
-      target: "group",
-    };
-  },
-};
-
-export const whatsappQaGroupAgentMessageActionUploadFileScenario: WhatsAppQaScenarioImplementation =
-  {
+function createWhatsAppAgentReactionScenario(
+  target: "dm" | "group",
+): WhatsAppQaScenarioImplementation {
+  const group = target === "group";
+  return {
     posture: "user-path",
-    configOverrides: {
-      actions: true,
-    },
-    requiresGroupJid: true,
+    configOverrides: { actions: true },
+    ...(group ? { requiresGroupJid: true } : {}),
     buildRun: () => {
-      const token = `WHATSAPP_QA_GROUP_AGENT_UPLOAD_${randomUUID().slice(0, 8).toUpperCase()}`;
+      const token = `WHATSAPP_QA_${group ? "GROUP_" : ""}AGENT_REACT_${randomUUID().slice(0, 8).toUpperCase()}`;
       return {
         afterSend: async (context) => {
-          const media = await waitForWhatsAppScenarioSutMessage(context, {
+          const reaction = await waitForWhatsAppSutReactionToTrigger(context, {
+            expectation: { emoji: "👍" },
+            timeoutMs: 60_000,
+          });
+          return `${group ? "group " : ""}agent message reaction ${reaction.reaction?.emoji ?? "<unknown>"} observed`;
+        },
+        allowQuietWindowMessage: (message, context) =>
+          matchesWhatsAppSutReactionToTrigger(message, context, { emoji: "👍" }),
+        configMode: "allowlist",
+        expectReply: false,
+        input:
+          `${group ? "openclawqa react" : "React"} to this WhatsApp ${group ? "group " : ""}message with thumbs up for QA action check ${token}. ` +
+          "Do not send any visible text reply after the reaction.",
+        matchText: token,
+        quietWindowMs: 8_000,
+        target,
+      };
+    },
+  };
+}
+
+function createWhatsAppAgentUploadScenario(
+  target: "dm" | "group",
+): WhatsAppQaScenarioImplementation {
+  const group = target === "group";
+  return {
+    posture: "user-path",
+    configOverrides: { actions: true },
+    ...(group ? { requiresGroupJid: true } : {}),
+    buildRun: () => {
+      const token = `WHATSAPP_QA_${group ? "GROUP_" : ""}AGENT_UPLOAD_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        afterSend: async (context) => {
+          const media = await waitForScenarioObservedMessage(context, {
             observedAfter: context.requestStartedAt,
-            targetKind: "group",
             timeoutMs: 60_000,
             match: (message) =>
               message.kind === "media" &&
@@ -134,7 +71,7 @@ export const whatsappQaGroupAgentMessageActionUploadFileScenario: WhatsAppQaScen
               message.mediaType?.startsWith("image/") === true &&
               message.text.includes(token),
           });
-          return `group agent upload-file media ${media.mediaType ?? "<unknown>"} observed`;
+          return `${group ? "group " : ""}agent upload-file media ${media.mediaType ?? "<unknown>"} observed`;
         },
         allowQuietWindowMessage: (message) =>
           message.kind === "media" &&
@@ -143,14 +80,23 @@ export const whatsappQaGroupAgentMessageActionUploadFileScenario: WhatsAppQaScen
         configMode: "allowlist",
         expectReply: false,
         input:
-          `openclawqa use the WhatsApp message tool upload-file action to send a PNG with caption ${token}. ` +
+          `${group ? "openclawqa use" : "Use"} the WhatsApp message tool upload-file action to send a PNG with caption ${token}. ` +
           "Do not send any visible text reply after the upload.",
         matchText: token,
         quietWindowMs: 8_000,
-        target: "group",
+        target,
       };
     },
   };
+}
+
+export const whatsappQaAgentMessageActionReactScenario = createWhatsAppAgentReactionScenario("dm");
+export const whatsappQaGroupAgentMessageActionReactScenario =
+  createWhatsAppAgentReactionScenario("group");
+export const whatsappQaAgentMessageActionUploadFileScenario =
+  createWhatsAppAgentUploadScenario("dm");
+export const whatsappQaGroupAgentMessageActionUploadFileScenario =
+  createWhatsAppAgentUploadScenario("group");
 
 export const whatsappQaInboundReactionNoTriggerScenario: WhatsAppQaScenarioImplementation = {
   posture: "user-path",

@@ -8,10 +8,10 @@ import { clearBundledDiscoveryModeMemo } from "../plugins/bundled-discovery-stat
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { prepareConfigRuntimeEnv } from "./config-env-vars.js";
 import { readConfigHealthStateFromStore } from "./io.health-state.js";
-import { createManagedRuntimeEnvBase } from "./io.read-helpers.js";
+import { createManagedRuntimeEnvBase } from "./io.runtime-env.js";
 import {
   captureRuntimeConfigAsyncReader,
   registerConfigWriteListener,

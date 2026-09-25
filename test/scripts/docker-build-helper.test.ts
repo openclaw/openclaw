@@ -29,6 +29,10 @@ import { buildSystemdUnit } from "../../src/daemon/systemd-unit.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
+  copySurvivorCaptureClosure,
+  UPGRADE_SURVIVOR_DIAGNOSTICS_PATH,
+} from "../helpers/upgrade-survivor-diagnostics.js";
+import {
   readUpgradeSurvivorPaths,
   UPGRADE_SURVIVOR_PATHS_HELPER,
 } from "./upgrade-survivor-paths.test-support.js";
@@ -185,7 +189,6 @@ const DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH =
 const DOCTOR_SWITCH_LOGINCTL_SHIM_PATH = "scripts/e2e/lib/doctor-install-switch/shims/loginctl";
 const DOCTOR_SWITCH_SYSTEMCTL_SHIM_PATH = "scripts/e2e/lib/doctor-install-switch/shims/systemctl";
 const UPGRADE_SURVIVOR_DOCKER_E2E_PATH = "scripts/e2e/upgrade-survivor-docker.sh";
-const UPGRADE_SURVIVOR_DIAGNOSTICS_PATH = "scripts/e2e/lib/upgrade-survivor/diagnostics.mjs";
 const UPGRADE_SURVIVOR_DIAGNOSTICS_PUBLISH_PATH = "scripts/upgrade-survivor-diagnostics.mjs";
 const PREPUBLISH_PLUGIN_REGISTRY_HELPER_PATH = "scripts/e2e/lib/prepublish-plugin-registry.sh";
 const UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/update-channel-switch-docker.sh";
@@ -463,22 +466,6 @@ function survivorPostCoreFixture() {
       NODE_OPTIONS: "--no-warnings",
     },
   };
-}
-
-function copySurvivorCaptureClosure(workDir: string) {
-  for (const source of [
-    "scripts/e2e/lib/openclaw-state-paths.mjs",
-    "scripts/e2e/lib/plugin-index-sqlite.mjs",
-    "scripts/e2e/lib/env-limits.mjs",
-    "scripts/e2e/lib/text-file-utils.mjs",
-    UPGRADE_SURVIVOR_DIAGNOSTICS_PATH,
-    "scripts/lib/release-version.mjs",
-  ]) {
-    const destination = join(workDir, source);
-    mkdirSync(dirname(destination), { recursive: true });
-    copyFileSync(source, destination);
-  }
-  return join(workDir, UPGRADE_SURVIVOR_DIAGNOSTICS_PATH);
 }
 
 function renderRepoShell(
@@ -3129,19 +3116,6 @@ docker_e2e_docker_run_cmd run demo
         'if [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-volume" ]; then',
         '  export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"',
         '  export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"',
-        "fi",
-      ].join("\n"),
-    );
-    expect(publishedRunner).toContain(
-      [
-        'if [ "$SCENARIO" = "watchos-direct-node" ] || [ "$SCENARIO" = "mobile-pairing-reconnect" ] || [ "$WORKER_CELL" = "1" ]; then',
-        "  unset OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY DISCORD_BOT_TOKEN TELEGRAM_BOT_TOKEN",
-        "else",
-        '  export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"',
-        '  export ANTHROPIC_API_KEY="sk-ant-openclaw-upgrade-survivor"',
-        '  export GEMINI_API_KEY="upgrade-survivor-gemini-key"',
-        '  export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"',
-        '  export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"',
         "fi",
       ].join("\n"),
     );
@@ -6188,6 +6162,7 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       'UPGRADE_RUNNER="$UPGRADE_SCENARIO_DIR/run.sh"',
       'cp -R "$UPGRADE_SCENARIO_DIR/." "$UPGRADE_SCENARIO_STAGE/"',
       'cp "$UPGRADE_DIAGNOSTICS" "$UPGRADE_SCENARIO_STAGE/diagnostics.mjs"',
+      'cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/backup-rollback-summary.mjs" "$UPGRADE_SCENARIO_STAGE/backup-rollback-summary.mjs"',
       '-v "$UPGRADE_SCENARIO_STAGE:/app/scripts/e2e/lib/upgrade-survivor:ro"',
       '-v "$UPGRADE_NPM_REGISTRY_SERVER:/app/scripts/e2e/lib/plugins/npm-registry-server.mjs:ro"',
       '-v "$UPGRADE_NPM_PUBLISH_PLAN:/app/scripts/lib/npm-publish-plan.mjs:ro"',
@@ -7806,7 +7781,7 @@ fs.appendFileSync(process.env.FIXTURE_DOCKER_CAPTURE, JSON.stringify({ args, sta
       'test -f "$package_root/package.json"',
       "pnpm add --global openclaw@file:/tmp/openclaw-current.tgz",
       'pnpm approve-builds --global "$artifact_build"',
-      "bun@1.4.0",
+      "bun@1.4.2",
       'test "$(command -v openclaw)" = "/usr/local/bin/openclaw"',
       'test "$(command -v openclaw)" = "$PNPM_HOME/bin/openclaw"',
       "OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH",
@@ -7826,7 +7801,7 @@ fs.appendFileSync(process.env.FIXTURE_DOCKER_CAPTURE, JSON.stringify({ args, sta
       "bash /tmp/openclaw-source/scripts/install-cli.sh",
       "--install-method git",
       "--prefix /tmp/openclaw-prefix",
-      "--node-version 24.19.0",
+      "--node-version 24.21.0",
       "apt-get install -y --no-install-recommends curl",
       "command -v curl >/dev/null",
       'chmod 0555 "$SOURCE_PROOF_SCRIPT"',

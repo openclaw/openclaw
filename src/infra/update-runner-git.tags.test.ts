@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -56,6 +56,7 @@ describe("Git updater release tag refresh", () => {
       path.join(seed, "package.json"),
       JSON.stringify({ name: "openclaw", version: "2026.9.1" }),
     );
+    writeFileSync(path.join(seed, ".gitignore"), "dist/\n");
     git(seed, "add", ".");
     git(seed, "commit", "-m", "original release");
     const oldTag = git(seed, "rev-parse", "HEAD");
@@ -65,6 +66,17 @@ describe("Git updater release tag refresh", () => {
     git(seed, "push", "origin", "main", "--tags");
     git(directory, "clone", "--origin", releaseRemote, upstream, root);
     git(root, "checkout", "--detach");
+    const dist = path.join(root, "dist");
+    mkdirSync(path.join(dist, "control-ui"), { recursive: true });
+    writeFileSync(path.join(dist, "entry.js"), "export {};\n");
+    writeFileSync(
+      path.join(dist, "build-info.json"),
+      JSON.stringify({ commit: release, buildId: release }),
+    );
+    for (const stamp of [".buildstamp", ".runtime-postbuildstamp"]) {
+      writeFileSync(path.join(dist, stamp), JSON.stringify({ head: release }));
+    }
+    writeFileSync(path.join(dist, "control-ui", "index.html"), "ready");
     git(root, "tag", "local-only", oldTag);
     if (forkRemote) {
       const fork = path.join(directory, "fork.git");

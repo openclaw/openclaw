@@ -14,7 +14,7 @@ import type { GithubIssueSubmitHooks, RunGithubCli } from "../../../infra/github
 import type { RestartSentinelPayload } from "../../../infra/restart-sentinel.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-approval-authority.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,

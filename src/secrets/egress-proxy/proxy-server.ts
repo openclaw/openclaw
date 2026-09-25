@@ -200,33 +200,25 @@ function swapRequestHeaders(params: {
 } {
   const output: IncomingHttpHeaders = {};
   let substituted = false;
+  const swap = (value: string) => {
+    const swapped = swapRequestText({
+      value,
+      urlMode: false,
+      host: params.host,
+      registered: params.registered,
+    });
+    substituted ||= swapped.substituted;
+    return swapped.value;
+  };
   for (const [name, rawValue] of Object.entries(params.headers)) {
     const lowerName = name.toLowerCase();
     if (lowerName === "proxy-authorization" || lowerName === "proxy-connection") {
       continue;
     }
     if (Array.isArray(rawValue)) {
-      output[name] = rawValue.map((value) => {
-        const swapped = swapRequestText({
-          value,
-          urlMode: false,
-          host: params.host,
-          registered: params.registered,
-        });
-        substituted ||= swapped.substituted;
-        return swapped.value;
-      });
-      continue;
-    }
-    if (rawValue !== undefined) {
-      const swapped = swapRequestText({
-        value: rawValue,
-        urlMode: false,
-        host: params.host,
-        registered: params.registered,
-      });
-      substituted ||= swapped.substituted;
-      output[name] = swapped.value;
+      output[name] = rawValue.map(swap);
+    } else if (rawValue !== undefined) {
+      output[name] = swap(rawValue);
     }
   }
   return { headers: output, substituted };

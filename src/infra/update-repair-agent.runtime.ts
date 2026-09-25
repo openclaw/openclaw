@@ -13,6 +13,7 @@ import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { buildExecRunConfig } from "../commands/agent-exec-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { SystemAgentConfiguredRoute } from "../system-agent/inference-route.js";
 import { sanitizeHostExecEnv, withHostExecInheritedEnvOmitted } from "./host-env-security.js";
 import {
@@ -20,6 +21,11 @@ import {
   withInstallationTarget,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "./installation-target-context.js";
+import {
+  readUpdateRepairMaintenanceRequest,
+  updateRepairMaintenanceTool,
+  type UpdateRepairMaintenanceRequest,
+} from "./update-repair-maintenance.js";
 import type { UpdateRepairTarget } from "./update-repair-protocol.js";
 import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 
@@ -105,7 +111,33 @@ export async function withUpdateRepairEnvironment<T>(
   }
 }
 
+async function withRepairResources<T>(run: () => Promise<T>): Promise<T> {
+  const resources = createOpenClawDatabaseMaintenanceScope();
+  const [outcome] = await Promise.allSettled([Promise.resolve().then(() => resources.run(run))]);
+  try {
+    await resources.close();
+  } catch (error) {
+    recordAgentCleanupFailure();
+    if (outcome.status === "rejected") {
+      throw new AggregateError(
+        [outcome.reason, error],
+        "Repair turn and database resource cleanup failed.",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  if (outcome.status === "rejected") {
+    throw outcome.reason;
+  }
+  return outcome.value;
+}
+
 export async function prepareUpdateRepairInference(signal: AbortSignal, timeoutMs: number) {
+  return withRepairResources(() => prepareRepairInference(signal, timeoutMs));
+}
+
+async function prepareRepairInference(signal: AbortSignal, timeoutMs: number) {
   signal.throwIfAborted();
   const { getRuntimeConfig } = await import("../config/io.js");
   signal.throwIfAborted();
@@ -219,7 +251,7 @@ function repairRunConfig(
   });
 }
 
-export async function runUpdateRepairTurn(params: {
+type UpdateRepairTurnParams = {
   target: UpdateRepairTarget;
   route: Extract<SystemAgentConfiguredRoute, { runner: "embedded" }>;
   modelFallbacks: string[];
@@ -228,7 +260,14 @@ export async function runUpdateRepairTurn(params: {
   maxToolCalls: number;
   signal: AbortSignal;
   isCurrent?: () => boolean;
-}) {
+  maintenanceHandoff?: true;
+};
+
+export async function runUpdateRepairTurn(params: UpdateRepairTurnParams) {
+  return withRepairResources(() => runScopedUpdateRepairTurn(params));
+}
+
+async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
   params.signal.throwIfAborted();
   const { route, target } = params;
   const config = repairRunConfig(route, params.modelFallbacks);
@@ -267,6 +306,7 @@ export async function runUpdateRepairTurn(params: {
     controller.abort(new Error("per-turn-budget"));
   }, params.timeoutMs);
   let cleanupProcessScope: (() => Promise<void>) | undefined;
+  let maintenance: UpdateRepairMaintenanceRequest | undefined;
   let envelope: {
     model: string;
     provider: string;
@@ -341,6 +381,9 @@ export async function runUpdateRepairTurn(params: {
                     cwd: target.installRoot,
                     config: runConfig,
                     prompt: params.prompt,
+                    clientTools: params.maintenanceHandoff
+                      ? [updateRepairMaintenanceTool]
+                      : undefined,
                     provider,
                     model,
                     ...(route.authProfileId && provider === route.provider
@@ -360,6 +403,10 @@ export async function runUpdateRepairTurn(params: {
         ),
     );
     const error = extractAgentRunTerminalError(result.result);
+    if (params.maintenanceHandoff && result.terminal.outcome.status === "ok" && !error) {
+      assertCurrent();
+      maintenance = readUpdateRepairMaintenanceRequest(result.result.meta);
+    }
     envelope = {
       model: result.model,
       provider: result.provider,
@@ -386,5 +433,10 @@ export async function runUpdateRepairTurn(params: {
     recordAgentCleanupFailure();
     throw error;
   }
-  return { status: "completed" as const, toolCalls: toolBudget.toolCalls, envelope };
+  return {
+    status: "completed" as const,
+    toolCalls: toolBudget.toolCalls,
+    envelope,
+    ...(maintenance ? { maintenance } : {}),
+  };
 }

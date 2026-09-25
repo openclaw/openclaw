@@ -20,8 +20,10 @@ import {
   markExited,
   type ProcessSession,
   resolveProcessCleanupMs,
+  waitForExecScope,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import * as supervisorExit from "./bash-tools.exec-runtime.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import { getBashShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
@@ -95,7 +97,8 @@ vi.mock("../infra/shell-env.js", async () => {
   };
 });
 
-vi.mock("../process/supervisor/index.js", () => {
+vi.mock("../process/supervisor/index.js", async () => {
+  const { takeHeldSupervisorExit } = await import("./bash-tools.exec-runtime.test-support.js");
   type SpawnInput = {
     argv?: string[];
     env?: NodeJS.ProcessEnv;
@@ -190,6 +193,7 @@ vi.mock("../process/supervisor/index.js", () => {
   return {
     getProcessSupervisor: () => ({
       spawn: async (input: SpawnInput) => {
+        const exitGate = takeHeldSupervisorExit();
         const command = extractCommand(input);
         const output = commandOutput(command, input.env);
         const exitCode = splitCommands(unwrapSnapshotEvalCommand(command)).includes("exit 1")
@@ -210,8 +214,13 @@ vi.mock("../process/supervisor/index.js", () => {
           pid: 123,
           stdin: undefined,
           wait: async () => {
-            await immediate();
-            await immediate();
+            if (exitGate) {
+              exitGate.markStarted();
+              await exitGate.wait;
+            } else {
+              await immediate();
+              await immediate();
+            }
             if (deferredOutput) {
               input.onStdout?.(deferredOutput);
               activity.lastOutputAtMs = Date.now();
@@ -274,6 +283,7 @@ const TEST_EXEC_DEFAULTS = {
   host: "gateway" as const,
   security: "full" as const,
   ask: "off" as const,
+  bypassHostApprovalFloors: true,
 };
 const DEFAULT_NOTIFY_SESSION_KEY = "agent:main:main";
 const ECHO_HI_COMMAND = shellEcho("hi");
@@ -704,26 +714,23 @@ describe("exec tool backgrounding", () => {
   it(
     "backgrounds after yield and can be polled",
     async () => {
-      const result = await executeExecCommand(execTool, shellEcho(OUTPUT_DONE), { yieldMs: 0 });
-
-      // Timing can race here: command may already be complete before the first response.
-      if (result.details.status === PROCESS_STATUS_COMPLETED) {
-        expect(readTextContent(result.content) ?? "").toContain(OUTPUT_DONE);
-        return;
-      }
-
-      const sessionId = requireRunningSessionId(result);
-
-      let output = "";
-      await expect
-        .poll(async () => {
-          const pollResult = await pollProcessSession({ tool: processTool, sessionId });
-          output += pollResult.output ?? "";
-          return pollResult.status;
-        }, BACKGROUND_POLL_OPTIONS)
-        .toBe(PROCESS_STATUS_COMPLETED);
-
-      expect(output).toContain(OUTPUT_DONE);
+      const scopeKey = "test:background-yield";
+      const tool = createTestExecTool({ scopeKey });
+      const sessionId = await supervisorExit.withHeldSupervisorExit(
+        async (heldExit) => {
+          const execution = executeExecCommand(tool, shellEcho(OUTPUT_DONE), { yieldMs: 10 });
+          await Promise.race([heldExit.waitStarted, execution]);
+          await vi.advanceTimersByTimeAsync(10);
+          return requireRunningSessionId(await execution);
+        },
+        () => waitForExecScope(scopeKey),
+      );
+      const pollResult = await pollProcessSession({
+        tool: processTool,
+        sessionId,
+      });
+      expect(pollResult.status).toBe(PROCESS_STATUS_COMPLETED);
+      expect(pollResult.output).toContain(OUTPUT_DONE);
     },
     isWin ? 15_000 : 5_000,
   );

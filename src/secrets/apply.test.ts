@@ -1,6 +1,5 @@
 /** Tests secrets apply dry-run/write behavior across config and auth stores. */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -130,10 +129,7 @@ function buildFixturePaths(rootDir: string) {
 }
 
 async function createApplyFixture(): Promise<ApplyFixture> {
-  const paths = buildFixturePaths(
-    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-apply-")),
-  );
-  await fs.mkdir(path.dirname(paths.configPath), { recursive: true });
+  const paths = buildFixturePaths(tempDirs.make("openclaw-secrets-apply-"));
   await fs.mkdir(paths.agentDir, { recursive: true });
   return {
     ...paths,
@@ -306,6 +302,8 @@ describe("secrets apply", () => {
     prepareSecretsRuntimeSnapshotMock.mockClear();
     clearSecretsRuntimeSnapshot();
     fixture = await createApplyFixture();
+    vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", fixture.configPath);
     await seedDefaultApplyFixture(fixture);
   });
 

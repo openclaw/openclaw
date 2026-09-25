@@ -404,23 +404,12 @@ async function promptNewAuthProfileCandidate(agentId: string): Promise<Configure
 
   const profileIdTrimmed = normalizeStringifiedOptionalString(profileId) ?? "";
   const providerTrimmed = normalizeStringifiedOptionalString(provider) ?? "";
-  if (credentialType === "token") {
-    return {
-      type: "auth-profiles.token.token",
-      path: `profiles.${profileIdTrimmed}.token`,
-      pathSegments: ["profiles", profileIdTrimmed, "token"],
-      label: `profiles.${profileIdTrimmed}.token (auth profile, agent ${agentId})`,
-      configFile: "auth-profile-store",
-      agentId,
-      authProfileProvider: providerTrimmed,
-      expectedResolvedValue: "string",
-    };
-  }
+  const field = credentialType === "token" ? "token" : "key";
   return {
-    type: "auth-profiles.api_key.key",
-    path: `profiles.${profileIdTrimmed}.key`,
-    pathSegments: ["profiles", profileIdTrimmed, "key"],
-    label: `profiles.${profileIdTrimmed}.key (auth profile, agent ${agentId})`,
+    type: credentialType === "token" ? "auth-profiles.token.token" : "auth-profiles.api_key.key",
+    path: `profiles.${profileIdTrimmed}.${field}`,
+    pathSegments: ["profiles", profileIdTrimmed, field],
+    label: `profiles.${profileIdTrimmed}.${field} (auth profile, agent ${agentId})`,
     configFile: "auth-profile-store",
     agentId,
     authProfileProvider: providerTrimmed,
@@ -781,10 +770,10 @@ async function configureProvidersInteractive(
       continue;
     }
 
-    if (action === "edit") {
+    if (action === "edit" || action === "remove") {
       const alias = assertNoCancel(
         await select({
-          message: "Select provider to edit",
+          message: action === "edit" ? "Select provider to edit" : "Select provider to remove",
           options: providerEntries.map(([providerAlias, providerConfig]) => ({
             value: providerAlias,
             label: providerAlias,
@@ -793,31 +782,18 @@ async function configureProvidersInteractive(
         }),
         "Secrets configure cancelled.",
       );
-      const current = providers[alias];
-      if (!current) {
+      if (action === "edit") {
+        const current = providers[alias];
+        if (!current) {
+          continue;
+        }
+        const source = await promptProviderSource(current.source);
+        const nextProviderConfig = await promptProviderConfig(source, current);
+        if (!isDeepStrictEqual(current, nextProviderConfig)) {
+          setSecretProvider(config, alias, nextProviderConfig);
+        }
         continue;
       }
-      const source = await promptProviderSource(current.source);
-      const nextProviderConfig = await promptProviderConfig(source, current);
-      if (!isDeepStrictEqual(current, nextProviderConfig)) {
-        setSecretProvider(config, alias, nextProviderConfig);
-      }
-      continue;
-    }
-
-    if (action === "remove") {
-      const alias = assertNoCancel(
-        await select({
-          message: "Select provider to remove",
-          options: providerEntries.map(([providerAlias, providerConfig]) => ({
-            value: providerAlias,
-            label: providerAlias,
-            hint: providerHint(providerConfig),
-          })),
-        }),
-        "Secrets configure cancelled.",
-      );
-
       const shouldRemove = assertNoCancel(
         await confirm({
           message: `Remove provider "${alias}"?`,

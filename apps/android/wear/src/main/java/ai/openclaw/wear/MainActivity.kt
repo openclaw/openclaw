@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -121,6 +122,7 @@ class MainActivity : ComponentActivity() {
     get() = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    installSplashScreen()
     super.onCreate(savedInstanceState)
     if (screenshotModeEnabled) {
       screenshotScene = parseWearScreenshotModeIntent(intent)

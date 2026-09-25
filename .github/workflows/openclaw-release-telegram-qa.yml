@@ -56,7 +56,7 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
 
@@ -2165,16 +2165,11 @@ jobs:
             exit 1
           fi
 
-          for attempt in 1 2; do
-            if run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"; then
-              exit 0
-            fi
-            terminate_sut_uid
-            if [[ "$attempt" == "2" ]]; then
-              exit 1
-            fi
-            echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2
-          done
+          if run_qa_attempt "attempt-1" "${remaining_scenarios[@]}"; then
+            exit 0
+          fi
+          terminate_sut_uid
+          exit 1
 
       - name: Terminate isolated Telegram SUT
         id: terminate_sut

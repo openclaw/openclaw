@@ -14,7 +14,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import {
@@ -700,6 +700,32 @@ export function prepareNpmPackageBundle({
   releaseTag: requestedReleaseTag = "",
   npmDistTag,
   producer,
+  sanitizeRootDeclarations = (distRoot) => {
+    const toolingScriptsDir = dirname(fileURLToPath(import.meta.url));
+    // Frozen candidates can own an older compiler API. The release tooling
+    // parses candidate text with its pinned parser, matching other frozen-target checks.
+    execFileSync(
+      process.execPath,
+      [
+        "--import",
+        join(toolingScriptsDir, "tsx.mjs"),
+        join(toolingScriptsDir, "lib/sanitize-bundler-helper-dts-exports.mts"),
+        distRoot,
+      ],
+      { cwd: sourceDir, stdio: "inherit" },
+    );
+  },
+  refreshRootDistInventory = (directory) => {
+    execFileSync(
+      process.execPath,
+      [
+        "--import",
+        join(sourceDir, "scripts/tsx.mjs"),
+        join(sourceDir, "scripts/write-package-dist-inventory.ts"),
+      ],
+      { cwd: directory, stdio: "inherit" },
+    );
+  },
   prepareRootShrinkwrap = ({ aiTarballPath }) => {
     execFileSync(
       process.execPath,
@@ -716,15 +742,9 @@ export function prepareNpmPackageBundle({
     // Bundled dependencies only pack under the hoisted linker; prepack scripts stay enabled.
     execFileSync(
       "pnpm",
-      [
-        "--dir",
-        directory,
-        "pack",
-        "--config.node-linker=hoisted",
-        "--pack-destination",
-        destination,
-      ],
+      ["pack", "--config.node-linker=hoisted", "--pack-destination", destination],
       {
+        cwd: directory,
         env: {
           ...process.env,
           OPENCLAW_PREPACK_PREPARED: "1",
@@ -736,6 +756,46 @@ export function prepareNpmPackageBundle({
         timeout: 30 * 60 * 1000,
       },
     ),
+  runRootPack = (directory, destination) => {
+    const env = {
+      ...process.env,
+      OPENCLAW_PREPACK_PREPARED: "1",
+      ...(/^[a-f0-9]{40}$/u.test(releaseRef)
+        ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
+        : {}),
+    };
+    execFileSync("pnpm", ["run", "prepack"], {
+      cwd: directory,
+      env,
+      stdio: "inherit",
+      timeout: 30 * 60 * 1000,
+    });
+    try {
+      // Frozen prepack hooks may rebuild dist even when preparation already ran.
+      // Sanitize the final declarations and refresh their hashes, then disable
+      // pack hooks so those exact bytes and inventory stay sealed.
+      sanitizeRootDeclarations(join(directory, "dist"));
+      refreshRootDistInventory(directory);
+      execFileSync(
+        "pnpm",
+        [
+          "pack",
+          "--config.ignore-scripts=true",
+          "--config.node-linker=hoisted",
+          "--pack-destination",
+          destination,
+        ],
+        { cwd: directory, env, stdio: "inherit", timeout: 30 * 60 * 1000 },
+      );
+    } finally {
+      execFileSync("pnpm", ["run", "--if-present", "postpack"], {
+        cwd: directory,
+        env,
+        stdio: "inherit",
+        timeout: 30 * 60 * 1000,
+      });
+    }
+  },
 }) {
   const { sourceSha, root, releaseTag, baseTag } = readReleaseSourceIdentity({
     sourceDir,
@@ -757,9 +817,9 @@ export function prepareNpmPackageBundle({
   }
   // Preserve non-root installs before hashing; qualified consumers never rewrite the archive.
   normalizePackModes(sourceDir);
-  const pack = (directory, packageName) => {
+  const pack = (directory, packageName, packer = runPack) => {
     const before = new Set(readdirSync(outputDir));
-    runPack(directory, outputDir);
+    packer(directory, outputDir);
     const added = readdirSync(outputDir).filter((name) => !before.has(name));
     if (added.length !== 1) {
       throw new Error(`Expected one new tarball for ${packageName}.`);
@@ -824,7 +884,7 @@ export function prepareNpmPackageBundle({
       aiTarballPath: join(outputDir, aiPackage.tarballName),
     });
   }
-  const packed = pack(sourceDir, "openclaw");
+  const packed = pack(sourceDir, "openclaw", runRootPack);
   const manifest = {
     schema: PACKAGE_MANIFEST_SCHEMA,
     producer,

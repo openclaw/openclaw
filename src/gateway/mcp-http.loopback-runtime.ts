@@ -22,8 +22,7 @@ type McpLoopbackToolCallResult = {
 
 export type McpLoopbackToolCallStart = Pick<McpLoopbackToolCallResult, "toolName" | "args">;
 
-type McpLoopbackToolCallCapture = {
-  generation: number;
+type McpLoopbackToolCallObservers = {
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   onRequestStart?: () => void;
   onRequestClassified?: () => void;
@@ -35,6 +34,10 @@ type McpLoopbackToolCallCapture = {
   }) => void;
   onToolCallFinish?: (call: McpLoopbackToolCallStart, state: { prepared: boolean }) => void;
   onToolCallResult: (call: McpLoopbackToolCallResult) => void;
+};
+
+type McpLoopbackToolCallCapture = McpLoopbackToolCallObservers & {
+  generation: number;
   inFlight: number;
   activityVersion: number;
   activityWaiters: Set<() => void>;
@@ -86,20 +89,9 @@ function notifyMcpLoopbackToolCallCaptureActivity(capture: McpLoopbackToolCallCa
 }
 
 /** Start loopback tool-call result capture for one serialized CLI invocation. */
-export function beginMcpLoopbackToolCallCapture(params: {
-  captureKey: string;
-  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
-  onRequestStart?: () => void;
-  onRequestClassified?: () => void;
-  onRequestFinish?: () => void;
-  onToolCallStart?: (call: McpLoopbackToolCallStart) => string | void;
-  onToolCallUpdate?: (calls: {
-    previous: McpLoopbackToolCallStart;
-    current: McpLoopbackToolCallStart;
-  }) => void;
-  onToolCallFinish?: (call: McpLoopbackToolCallStart, state: { prepared: boolean }) => void;
-  onToolCallResult: (call: McpLoopbackToolCallResult) => void;
-}): void {
+export function beginMcpLoopbackToolCallCapture(
+  params: McpLoopbackToolCallObservers & { captureKey: string },
+): void {
   const captureKey = params.captureKey.trim();
   if (!captureKey) {
     return;

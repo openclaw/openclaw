@@ -1,7 +1,7 @@
 // Outbound media helpers normalize plugin media attachments before channel delivery.
 import { randomBytes } from "node:crypto";
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
-import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "../media/load-options.js";
 import type { PluginStateKeyedStore } from "./plugin-state-runtime.js";
 import { loadWebMedia } from "./web-media.js";

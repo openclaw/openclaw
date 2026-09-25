@@ -12,6 +12,7 @@ import {
   finishCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
 import type { CronJob } from "../types.js";
 import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";
 import {
@@ -35,7 +36,6 @@ import { emitInterruptedCronRun } from "./run-recovery-events.js";
 import { recoverCronRunProposals } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
-import type { InterruptedStartupRun } from "./startup-run-repair.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";

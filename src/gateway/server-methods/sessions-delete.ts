@@ -30,6 +30,7 @@ import { handleSessionStateSessionDeleted } from "../../sessions/session-state-e
 import { removeSessionWorktree } from "../../sessions/session-worktree-lifecycle.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import { invalidSessionRequest } from "../session-request-error.js";
 import { loadGatewaySessionEntryReadOnly, loadSessionEntry } from "../session-utils.js";
 import { prepareSessionWorkerPlacementRetirement } from "../worker-environments/session-placement-lifecycle.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -93,13 +94,7 @@ export async function deleteGatewaySession({
   const isMainSession =
     target.canonicalKey !== "global" && isAgentMainSessionKey(cfg, target.canonicalKey);
   if ((target.canonicalKey === "global" || isMainSession) && !isSelectedNonDefaultGlobal) {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `Cannot delete the main session (${target.canonicalKey}).`,
-      ),
-    };
+    return invalidSessionRequest(`Cannot delete the main session (${target.canonicalKey}).`);
   }
 
   const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;

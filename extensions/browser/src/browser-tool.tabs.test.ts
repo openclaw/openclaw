@@ -23,9 +23,9 @@ vi.mock("./browser-tool.runtime.js", async () => {
   const { readStringValue } = await vi.importActual<
     typeof import("openclaw/plugin-sdk/string-coerce-runtime")
   >("openclaw/plugin-sdk/string-coerce-runtime");
-  const { wrapExternalContent } = await vi.importActual<typeof import("./sdk-security-runtime.js")>(
-    "./sdk-security-runtime.js",
-  );
+  const { wrapExternalContent } = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/security-runtime")
+  >("openclaw/plugin-sdk/security-runtime");
   return {
     ...schema,
     ...browserClientMocks,

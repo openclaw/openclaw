@@ -18,6 +18,7 @@ export { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 export { captureEnv, withEnv, withEnvAsync } from "../test-utils/env.js";
 export { withFetchPreconnect, type FetchMock } from "../test-utils/fetch-mock.js";
 export { createMockServerResponse } from "../test-utils/mock-http-response.js";
+export { acquireTestPortBlock } from "../test-utils/port-claims.js";
 export { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 export { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 export { withTempDir } from "../test-utils/temp-dir.js";

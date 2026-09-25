@@ -5,16 +5,21 @@ import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -24,6 +29,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import okio.Buffer
+import okio.ByteString
 import org.bouncycastle.asn1.ASN1Integer
 import org.bouncycastle.asn1.DERBitString
 import org.bouncycastle.asn1.DERNull
@@ -44,6 +50,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import java.io.IOException
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.MessageDigest
@@ -52,6 +59,8 @@ import java.security.cert.CertificateFactory
 import java.util.Date
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -608,6 +617,7 @@ class GatewaySessionCustomHeadersTest {
             providerRead.set(true)
             prefs.loadGatewayCustomHeaders(id)
           },
+          ingressAuthorizationProvider = { error("Cleartext must not read an ingress grant") },
         )
 
       try {
@@ -690,6 +700,620 @@ class GatewaySessionCustomHeadersTest {
     val factory = SSLContext.getInstance("TLS").apply { init(managers.keyManagers, null, null) }.socketFactory
     val fingerprint = MessageDigest.getInstance("SHA-256").digest(encoded).joinToString("") { "%02x".format(it) }
     return factory to fingerprint
+  }
+
+  @Test
+  fun suspendedIngressCannotCreateSocketAfterDisconnect() =
+    runBlocking {
+      val started = CompletableDeferred<Unit>()
+      val release = CompletableDeferred<Unit>()
+      val socketCount = AtomicInteger()
+      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val authorization =
+        object : GatewayIngressAuthorization {
+          override suspend fun authorizeUpgrade(request: Request): Request {
+            started.complete(Unit)
+            withContext(NonCancellable) { release.await() }
+            return request.newBuilder().header("CF-Access-Token", "test-grant").build()
+          }
+
+          override fun requireCurrent(request: Request) = Unit
+
+          override fun rejection(response: Response): GatewayExternalAuthorizationException? = null
+        }
+      val session =
+        ingressSession(scope, authorization, socketFactory = { _, _, _ ->
+          socketCount.incrementAndGet()
+          throw IOException("unexpected socket creation")
+        })
+      try {
+        connectIngressSession(session)
+        withTimeout(TEST_TIMEOUT_MS) { started.await() }
+        session.disconnect()
+        val drained = async { session.disconnectAndJoin() }
+        release.complete(Unit)
+        withTimeout(TEST_TIMEOUT_MS) { drained.await() }
+        assertEquals(0, socketCount.get())
+      } finally {
+        release.complete(Unit)
+        session.disconnectAndJoin()
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun replacingGatewayCancelsAndDrainsPendingIngressBeforeConnecting() = runBlocking { assertPendingIngressRetirement("replace") }
+
+  @Test
+  fun reconnectingGatewayCancelsAndDrainsPendingIngressBeforeConnecting() = runBlocking { assertPendingIngressRetirement("reconnect") }
+
+  @Test
+  fun disconnectingGatewayCancelsAndDrainsPendingIngress() = runBlocking { assertPendingIngressRetirement("disconnect") }
+
+  private suspend fun assertPendingIngressRetirement(mode: String) =
+    coroutineScope {
+      val started = CompletableDeferred<Unit>()
+      val canceled = CompletableDeferred<Unit>()
+      val releaseCleanup = CompletableDeferred<Unit>()
+      val cleanupFinished = CompletableDeferred<Unit>()
+      val socketAttempted = CompletableDeferred<Unit>()
+      val authorizations = AtomicInteger()
+      val sockets = AtomicInteger()
+      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val authorization =
+        object : GatewayIngressAuthorization {
+          override suspend fun authorizeUpgrade(request: Request): Request {
+            if (authorizations.incrementAndGet() == 1) {
+              started.complete(Unit)
+              try {
+                awaitCancellation()
+              } finally {
+                withContext(NonCancellable) {
+                  canceled.complete(Unit)
+                  releaseCleanup.await()
+                  cleanupFinished.complete(Unit)
+                }
+              }
+            }
+            check(cleanupFinished.isCompleted) { "Successor authorization started before old probe drained" }
+            return request.newBuilder().header("CF-Access-Token", "successor-grant").build()
+          }
+
+          override fun requireCurrent(request: Request) = Unit
+
+          override fun rejection(response: Response): GatewayExternalAuthorizationException? = null
+        }
+      val session =
+        ingressSession(scope, authorization, socketFactory = { _, request, _ ->
+          assertTrue(cleanupFinished.isCompleted)
+          assertEquals(if (mode == "replace") "replacement.example.test" else "gateway.example.test", request.url.host)
+          assertEquals("successor-grant", request.header("CF-Access-Token"))
+          sockets.incrementAndGet()
+          socketAttempted.complete(Unit)
+          throw GatewayExternalAuthorizationException("Test ends after successor socket admission")
+        })
+      try {
+        connectIngressSession(session)
+        withTimeout(TEST_TIMEOUT_MS) { started.await() }
+        when (mode) {
+          "replace" -> connectIngressSession(session, host = "replacement.example.test")
+          "reconnect" -> session.reconnect()
+          "disconnect" -> session.disconnect()
+          else -> error("Unexpected retirement mode")
+        }
+        val disconnected = if (mode == "disconnect") async { session.disconnectAndJoin() } else null
+        // Cancellation must arrive without releasing the probe or waiting for its connect timeout.
+        withTimeout(TEST_TIMEOUT_MS) { canceled.await() }
+        assertEquals(1, authorizations.get())
+        assertEquals(0, sockets.get())
+        assertTrue(disconnected?.isCompleted != true)
+        releaseCleanup.complete(Unit)
+        if (disconnected != null) {
+          withTimeout(TEST_TIMEOUT_MS) { disconnected.await() }
+          assertEquals(1, authorizations.get())
+          assertEquals(0, sockets.get())
+        } else {
+          withTimeout(TEST_TIMEOUT_MS) { socketAttempted.await() }
+          assertEquals(2, authorizations.get())
+          assertEquals(1, sockets.get())
+        }
+      } finally {
+        releaseCleanup.complete(Unit)
+        session.disconnectAndJoin()
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun ingressDenialPausesReconnectUntilExplicitRetry() =
+    runBlocking {
+      val failure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val secondAuthorization = CompletableDeferred<Unit>()
+      val socketCreated = CompletableDeferred<Unit>()
+      val attempts = AtomicInteger()
+      val allowed = AtomicBoolean(false)
+      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val authorization =
+        object : GatewayIngressAuthorization {
+          override suspend fun authorizeUpgrade(request: Request): Request {
+            if (attempts.incrementAndGet() > 1) secondAuthorization.complete(Unit)
+            if (!allowed.get()) throw GatewayExternalAuthorizationException("Sign in again")
+            return request.newBuilder().header("CF-Access-Token", "test-grant").build()
+          }
+
+          override fun requireCurrent(request: Request) = Unit
+
+          override fun rejection(response: Response): GatewayExternalAuthorizationException? = null
+        }
+      val session =
+        ingressSession(
+          scope,
+          authorization,
+          onFailure = { error, pause -> failure.complete(error to pause) },
+          socketFactory = { client, request, _ ->
+            assertEquals("test-grant", request.header("CF-Access-Token"))
+            assertTrue(!client.followRedirects && !client.followSslRedirects)
+            socketCreated.complete(Unit)
+            throw IOException("test ends before a real socket")
+          },
+        )
+      try {
+        connectIngressSession(session)
+        val observed = withTimeout(TEST_TIMEOUT_MS) { failure.await() }
+        assertEquals("EXTERNAL_AUTH_REQUIRED", observed.first.code)
+        assertTrue(observed.second)
+        assertNull(withTimeoutOrNull(1000) { secondAuthorization.await() })
+        allowed.set(true)
+        connectIngressSession(session)
+        withTimeout(TEST_TIMEOUT_MS) { socketCreated.await() }
+      } finally {
+        session.disconnectAndJoin()
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun upgradeFollowUpRetainsItsGrantAndCannotOutliveOwnerRetirement() =
+    runBlocking {
+      for (mode in listOf("valid", "retire", "expired")) {
+        val retire = mode == "retire"
+        val valid = AtomicBoolean(true)
+        val failure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+        val server = MockWebServer()
+        val firstRequest = CompletableDeferred<Unit>()
+        val releaseResponse = CountDownLatch(if (retire) 1 else 0)
+        val opened = CompletableDeferred<Unit>()
+        val admissions = AtomicInteger()
+        val requests = AtomicInteger()
+        server.dispatcher =
+          object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+              if (requests.incrementAndGet() == 1) {
+                firstRequest.complete(Unit)
+                check(releaseResponse.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+                return MockResponse().setResponseCode(503).setHeader("Retry-After", "0")
+              }
+              return MockResponse().withWebSocketUpgrade(object : WebSocketListener() {})
+            }
+          }
+        server.start()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val authorization =
+          object : GatewayIngressAuthorization {
+            override suspend fun authorizeUpgrade(request: Request): Request {
+              admissions.incrementAndGet()
+              return request.newBuilder().header("CF-Access-Token", "test-grant").build()
+            }
+
+            override fun requireCurrent(request: Request) {
+              if (!valid.get()) throw GatewayExternalAuthorizationException()
+            }
+
+            override fun rejection(response: Response): GatewayExternalAuthorizationException? = null
+          }
+        val session =
+          ingressSession(scope, authorization, onFailure = { error, pause -> failure.complete(error to pause) }, socketFactory = { client, request, listener ->
+            // Use a real loopback upgrade to exercise OkHttp's internal 503 follow-up;
+            // endpoint/TLS admission remains covered separately from this transaction test.
+            client.newWebSocket(
+              request.newBuilder().url(server.url("/upgrade")).build(),
+              object : WebSocketListener() {
+                override fun onOpen(
+                  webSocket: WebSocket,
+                  response: Response,
+                ) {
+                  opened.complete(Unit)
+                  if (mode == "expired") valid.set(false)
+                  listener.onOpen(webSocket, response)
+                }
+
+                override fun onFailure(
+                  webSocket: WebSocket,
+                  t: Throwable,
+                  response: Response?,
+                ) = listener.onFailure(webSocket, t, response)
+
+                override fun onClosing(
+                  webSocket: WebSocket,
+                  code: Int,
+                  reason: String,
+                ) = listener.onClosing(webSocket, code, reason)
+
+                override fun onClosed(
+                  webSocket: WebSocket,
+                  code: Int,
+                  reason: String,
+                ) = listener.onClosed(webSocket, code, reason)
+              },
+            )
+          })
+        try {
+          connectIngressSession(session)
+          withTimeout(TEST_TIMEOUT_MS) { firstRequest.await() }
+          val first = requireNotNull(server.takeRequest(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+          assertEquals("test-grant", first.getHeader("CF-Access-Token"))
+          if (retire) {
+            withTimeout(TEST_TIMEOUT_MS) { session.disconnectAndJoin() }
+            releaseResponse.countDown()
+            assertNull(server.takeRequest(250, TimeUnit.MILLISECONDS))
+            assertTrue(!opened.isCompleted)
+          } else {
+            withTimeout(TEST_TIMEOUT_MS) { opened.await() }
+            val repeated = requireNotNull(server.takeRequest(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+            assertEquals(first.path, repeated.path)
+            assertEquals(first.getHeader("Host"), repeated.getHeader("Host"))
+            assertEquals("test-grant", repeated.getHeader("CF-Access-Token"))
+            if (mode == "expired") {
+              val denied = withTimeout(TEST_TIMEOUT_MS) { failure.await() }
+              assertEquals("EXTERNAL_AUTH_REQUIRED", denied.first.code)
+              assertTrue(denied.second)
+            }
+          }
+          assertEquals(1, admissions.get())
+        } finally {
+          releaseResponse.countDown()
+          session.disconnectAndJoin()
+          scope.cancel()
+          server.shutdown()
+        }
+      }
+    }
+
+  @Test
+  fun rejectedUpgradeClosesPeerBeforeFailureTeardown() =
+    runBlocking {
+      val valid = AtomicBoolean(true)
+      val peerOpened = CompletableDeferred<Unit>()
+      val peerClosed = CompletableDeferred<Unit>()
+      val responseHeld = CompletableDeferred<Unit>()
+      val rawFailure = CompletableDeferred<Throwable>()
+      val failure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val releaseResponse = CountDownLatch(1)
+      val releaseFailure = CountDownLatch(1)
+      val opened = AtomicInteger()
+      val connected = AtomicInteger()
+      val server = MockWebServer()
+      server.enqueue(
+        MockResponse().withWebSocketUpgrade(
+          object : WebSocketListener() {
+            override fun onOpen(
+              webSocket: WebSocket,
+              response: Response,
+            ) {
+              peerOpened.complete(Unit)
+            }
+
+            override fun onFailure(
+              webSocket: WebSocket,
+              t: Throwable,
+              response: Response?,
+            ) {
+              peerClosed.complete(Unit)
+            }
+          },
+        ),
+      )
+      server.start()
+      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val authorization =
+        object : GatewayIngressAuthorization {
+          override suspend fun authorizeUpgrade(request: Request) = request.newBuilder().header("CF-Access-Token", "test-grant").build()
+
+          override fun requireCurrent(request: Request) {
+            if (!valid.get()) throw GatewayExternalAuthorizationException()
+          }
+
+          override fun rejection(response: Response): GatewayExternalAuthorizationException? = null
+        }
+      val session =
+        ingressSession(
+          scope,
+          authorization,
+          onFailure = { error, pause -> failure.complete(error to pause) },
+          onConnected = { connected.incrementAndGet() },
+          socketFactory = { client, request, listener ->
+            client
+              .newBuilder()
+              .addInterceptor { chain ->
+                val response = chain.proceed(chain.request())
+                check(response.code == 101 && response.socket != null)
+                responseHeld.complete(Unit)
+                check(releaseResponse.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+                response
+              }.build()
+              .newWebSocket(
+                request.newBuilder().url(server.url("/upgrade")).build(),
+                object : WebSocketListener() {
+                  override fun onOpen(
+                    webSocket: WebSocket,
+                    response: Response,
+                  ) {
+                    opened.incrementAndGet()
+                    listener.onOpen(webSocket, response)
+                  }
+
+                  override fun onFailure(
+                    webSocket: WebSocket,
+                    t: Throwable,
+                    response: Response?,
+                  ) {
+                    rawFailure.complete(t)
+                    // Hold application teardown so it cannot mask leaked upgrade streams.
+                    check(releaseFailure.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+                    listener.onFailure(webSocket, t, response)
+                  }
+                },
+              )
+          },
+        )
+      try {
+        connectIngressSession(session)
+        withTimeout(TEST_TIMEOUT_MS) {
+          peerOpened.await()
+          responseHeld.await()
+        }
+        valid.set(false)
+        releaseResponse.countDown()
+        assertTrue(withTimeout(TEST_TIMEOUT_MS) { rawFailure.await() } is GatewayExternalAuthorizationException)
+        withTimeout(TEST_TIMEOUT_MS) { peerClosed.await() }
+        assertEquals(0, opened.get())
+        assertEquals(0, connected.get())
+        releaseFailure.countDown()
+        val denied = withTimeout(TEST_TIMEOUT_MS) { failure.await() }
+        assertEquals("EXTERNAL_AUTH_REQUIRED", denied.first.code)
+        assertTrue(denied.second)
+        assertEquals(1, server.requestCount)
+        val request = requireNotNull(server.takeRequest(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+        assertEquals("test-grant", request.getHeader("CF-Access-Token"))
+        assertNull(server.takeRequest(250, TimeUnit.MILLISECONDS))
+      } finally {
+        releaseResponse.countDown()
+        releaseFailure.countDown()
+        session.disconnectAndJoin()
+        scope.cancel()
+        server.shutdown()
+      }
+    }
+
+  @Test
+  fun onlyAnExplicitUpgradeChallengePausesForExternalAuthorization() =
+    runBlocking {
+      for (protected in listOf(false, true)) {
+        val failure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+        val disconnected = CompletableDeferred<Unit>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val authorization =
+          object : GatewayIngressAuthorization {
+            override suspend fun authorizeUpgrade(request: Request) = request
+
+            override fun requireCurrent(request: Request) = Unit
+
+            override fun rejection(response: Response): GatewayExternalAuthorizationException? =
+              if (response.code == 302 && response.header("WWW-Authenticate") == "Cloudflare-Access") {
+                GatewayExternalAuthorizationException("Sign in again")
+              } else {
+                null
+              }
+          }
+        val session =
+          ingressSession(
+            scope,
+            authorization,
+            onFailure = { error, pause -> failure.complete(error to pause) },
+            socketFactory = { _, request, listener ->
+              val socket =
+                object : WebSocket {
+                  override fun request() = request
+
+                  override fun queueSize() = 0L
+
+                  override fun send(text: String) = false
+
+                  override fun send(bytes: ByteString) = false
+
+                  override fun close(
+                    code: Int,
+                    reason: String?,
+                  ) = true
+
+                  override fun cancel() = Unit
+                }
+              val response =
+                Response
+                  .Builder()
+                  .request(request)
+                  .protocol(Protocol.HTTP_1_1)
+                  .code(if (protected) 302 else 403)
+                  .message("Denied")
+                  .apply { if (protected) header("WWW-Authenticate", "Cloudflare-Access") }
+                  .build()
+              listener.onFailure(socket, IOException("Upgrade rejected"), response)
+              disconnected.complete(Unit)
+              socket
+            },
+          )
+        try {
+          connectIngressSession(session)
+          withTimeout(TEST_TIMEOUT_MS) { disconnected.await() }
+          if (protected) {
+            val observed = withTimeout(TEST_TIMEOUT_MS) { failure.await() }
+            assertEquals("EXTERNAL_AUTH_REQUIRED", observed.first.code)
+            assertTrue(observed.second)
+          } else {
+            // A normal HTTP denial follows the existing generic connection path.
+            assertNull(withTimeoutOrNull(200) { failure.await() })
+          }
+        } finally {
+          session.disconnectAndJoin()
+          scope.cancel()
+        }
+      }
+    }
+
+  @Test
+  fun admittedHttpTransportDoesNotRedirectOrReuseRetiredMediaCapability() =
+    runBlocking {
+      val source = MockWebServer()
+      val foreign = MockWebServer()
+      source.start()
+      foreign.start()
+      source.enqueue(MockResponse().setResponseCode(302).setHeader("Location", foreign.url("/leak")))
+      val captured = CompletableDeferred<OkHttpClient>()
+      val valid = AtomicBoolean(true)
+      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val authorization =
+        object : GatewayIngressAuthorization {
+          override suspend fun authorizeUpgrade(request: Request) = request.newBuilder().header("CF-Access-Token", "test-grant").build()
+
+          override fun requireCurrent(request: Request) {
+            if (!valid.get()) throw GatewayExternalAuthorizationException()
+            // The loopback HTTP endpoint isolates the shared client lifecycle; the
+            // app grant owner separately enforces its exact HTTPS authority.
+            check(request.url.host == "gateway.example.test" || request.url == source.url("/media"))
+          }
+
+          override fun rejection(response: Response): GatewayExternalAuthorizationException? = null
+        }
+      val session =
+        ingressSession(scope, authorization, socketFactory = { client, request, listener ->
+          captured.complete(client)
+          object : WebSocket {
+            override fun request() = request
+
+            override fun queueSize() = 0L
+
+            override fun send(text: String) = false
+
+            override fun send(bytes: ByteString) = false
+
+            override fun close(
+              code: Int,
+              reason: String?,
+            ) = true
+
+            override fun cancel() {
+              listener.onFailure(this, IOException("fixture closed"), null)
+            }
+          }
+        })
+      try {
+        connectIngressSession(session)
+        val client = withTimeout(TEST_TIMEOUT_MS) { captured.await() }
+        val request =
+          Request
+            .Builder()
+            .url(source.url("/media"))
+            .header("CF-Access-Token", "test-grant")
+            .build()
+        client.newCall(request).execute().use { assertEquals(302, it.code) }
+        assertEquals("test-grant", source.takeRequest().getHeader("CF-Access-Token"))
+        assertEquals(0, foreign.requestCount)
+
+        source.enqueue(MockResponse().setResponseCode(202).setBody("preparing"))
+        val retrying =
+          client
+            .newBuilder()
+            .addInterceptor(
+              GatewayPreparingPlaybackInterceptor(
+                policy = GatewayPlaybackRetryPolicy(initialDelayMs = 1),
+                sleepMs = { valid.set(false) },
+              ),
+            ).build()
+        val retryFailure = runCatching { retrying.newCall(request).execute().close() }
+        assertTrue(retryFailure.exceptionOrNull() is GatewayExternalAuthorizationException)
+        assertEquals(2, source.requestCount)
+        valid.set(true)
+
+        source.enqueue(MockResponse().setBody("ab").throttleBody(1, 1, TimeUnit.DAYS))
+        client.newCall(request).execute().use { response ->
+          assertEquals(
+            97,
+            response.body
+              .source()
+              .readByte()
+              .toInt(),
+          )
+          val reading = CompletableDeferred<Unit>()
+          val pending =
+            async(Dispatchers.IO) {
+              reading.complete(Unit)
+              runCatching { response.body.source().readByte() }
+            }
+          withTimeout(TEST_TIMEOUT_MS) { reading.await() }
+          session.disconnectAndJoin()
+          assertTrue(withTimeout(TEST_TIMEOUT_MS) { pending.await() }.exceptionOrNull() is IOException)
+        }
+        val late = runCatching { client.newCall(request.newBuilder().header("Range", "bytes=10-").build()).execute().close() }
+        assertTrue(late.exceptionOrNull() is GatewayExternalAuthorizationException)
+        assertEquals(3, source.requestCount)
+        assertEquals(0, foreign.requestCount)
+      } finally {
+        session.disconnectAndJoin()
+        scope.cancel()
+        source.shutdown()
+        foreign.shutdown()
+      }
+    }
+
+  private fun ingressSession(
+    scope: CoroutineScope,
+    authorization: GatewayIngressAuthorization,
+    onFailure: (GatewaySession.ErrorShape, Boolean) -> Unit = { _, _ -> },
+    onConnected: (GatewayHelloSummary) -> Unit = {},
+    socketFactory: (OkHttpClient, Request, WebSocketListener) -> WebSocket,
+  ) = GatewaySession(
+    scope = scope,
+    identityStore = testDeviceIdentityStore(RuntimeEnvironment.getApplication()),
+    deviceAuthStore = NoopDeviceAuthStore(),
+    onConnected = onConnected,
+    onDisconnected = {},
+    onEvent = { _, _ -> },
+    onConnectFailure = onFailure,
+    ingressAuthorizationProvider = { authorization },
+    webSocketFactory = socketFactory,
+  )
+
+  private fun connectIngressSession(
+    session: GatewaySession,
+    host: String = "gateway.example.test",
+  ) {
+    val endpoint = GatewayEndpoint.manual(host, 443)
+    session.connect(
+      endpoint = endpoint,
+      token = "gateway-token",
+      bootstrapToken = null,
+      password = null,
+      options =
+        GatewayConnectOptions(
+          role = "node",
+          scopes = emptyList(),
+          caps = emptyList(),
+          commands = emptyList(),
+          permissions = emptyMap(),
+          client = GatewayClientInfo("openclaw-android-test", "Android Test", "test", "android", "node", "test", "android", "test"),
+        ),
+      tls = GatewayTlsParams(required = true, expectedFingerprint = "aa".repeat(32), allowTOFU = false, stableId = endpoint.stableId),
+    )
   }
 
   private fun startCapturingGatewayServer(onHandshake: (RecordedRequest) -> Unit): MockWebServer {

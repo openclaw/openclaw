@@ -199,17 +199,11 @@ export function collectAllowlistProviderRestrictSendersWarnings(
   } & Omit<Parameters<typeof collectOpenGroupPolicyRestrictSendersWarnings>[0], "groupPolicy">,
 ): string[] {
   return collectAllowlistProviderGroupPolicyWarnings({
-    cfg: params.cfg,
-    providerConfigPresent: params.providerConfigPresent,
-    configuredGroupPolicy: params.configuredGroupPolicy,
+    ...params,
     collect: (groupPolicy) =>
       collectOpenGroupPolicyRestrictSendersWarnings({
+        ...params,
         groupPolicy,
-        surface: params.surface,
-        openScope: params.openScope,
-        groupPolicyPath: params.groupPolicyPath,
-        groupAllowFromPath: params.groupAllowFromPath,
-        mentionGated: params.mentionGated,
       }),
   });
 }
@@ -230,12 +224,8 @@ export function createAllowlistProviderRestrictSendersWarningCollector<ResolvedA
       params.resolveGroupPolicy(account),
     collect: ({ groupPolicy }) =>
       collectOpenGroupPolicyRestrictSendersWarnings({
+        ...params,
         groupPolicy,
-        surface: params.surface,
-        openScope: params.openScope,
-        groupPolicyPath: params.groupPolicyPath,
-        groupAllowFromPath: params.groupAllowFromPath,
-        mentionGated: params.mentionGated,
       }),
   });
 }
@@ -249,12 +239,8 @@ export function createOpenGroupPolicyRestrictSendersWarningCollector<ResolvedAcc
 ): (account: ResolvedAccount) => string[] {
   return (account) =>
     collectOpenGroupPolicyRestrictSendersWarnings({
+      ...params,
       groupPolicy: params.resolveGroupPolicy(account) ?? params.defaultGroupPolicy ?? "allowlist",
-      surface: params.surface,
-      openScope: params.openScope,
-      groupPolicyPath: params.groupPolicyPath,
-      groupAllowFromPath: params.groupAllowFromPath,
-      mentionGated: params.mentionGated,
     });
 }
 

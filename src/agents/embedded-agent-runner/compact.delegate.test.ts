@@ -88,6 +88,9 @@ beforeEach(async () => {
     await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js");
   const scope = await import("../agent-scope.js");
   vi.mocked(scope.listAgentEntries).mockImplementation(actualScope.listAgentEntries);
+  vi.mocked(scope.listAgentEntriesWithSource).mockImplementation(
+    actualScope.listAgentEntriesWithSource,
+  );
   vi.mocked(scope.resolveSessionAgentId).mockImplementation(actualScope.resolveSessionAgentId);
   vi.mocked(scope.resolveSessionAgentIds).mockImplementation(actualScope.resolveSessionAgentIds);
   requestPreparedCompaction.mockReset();

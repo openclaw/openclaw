@@ -28,12 +28,6 @@ export class NodeWorkspaceTransferLimitError extends Error {
   readonly code = "workspace-transfer-limit";
 }
 
-export function isNodeWorkspaceTransferLimitError(
-  error: unknown,
-): error is NodeWorkspaceTransferLimitError {
-  return error instanceof NodeWorkspaceTransferLimitError;
-}
-
 class NodeWorkspaceTransferInvalidError extends Error {
   readonly code = "workspace-transfer-invalid";
 

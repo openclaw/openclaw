@@ -3,7 +3,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { UpdateDoctorLintFinding } from "../../infra/update-doctor-lint-schema.js";
 import { parseUpdateDoctorLintReport } from "../../infra/update-doctor-lint.js";
-import type { UpdateStepResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
 import { isConfiguredPluginPathDiagnosticCode } from "../../plugins/discovery-availability.js";
 import { formatCommandOutput, formatCommandResult } from "../../process/command-error.js";

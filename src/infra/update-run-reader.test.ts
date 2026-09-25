@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
@@ -11,6 +11,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import {
   createUpdateRun,
@@ -159,15 +160,7 @@ describe("update run history reads", () => {
       expect(fs.existsSync(`${filename}-shm`)).toBe(false);
       expect(fs.existsSync(`${filename}-wal`)).toBe(retainedWal);
       const before = snapshotDatabaseFiles(filename);
-      const nativeCalls = reader.endsWith("-async")
-        ? [
-            vi.spyOn(DatabaseSync.prototype, "prepare"),
-            vi.spyOn(DatabaseSync.prototype, "exec"),
-            ...(["get", "all", "run", "iterate"] as const).map((method) =>
-              vi.spyOn(StatementSync.prototype, method),
-            ),
-          ]
-        : [];
+      const nativeCalls = reader.endsWith("-async") ? observeMainThreadSql() : undefined;
       const result =
         reader === "get"
           ? getUpdateRun(created.runId, options)
@@ -187,7 +180,7 @@ describe("update run history reads", () => {
             ? [expected]
             : expected,
       );
-      expect(nativeCalls.reduce((total, call) => total + call.mock.calls.length, 0)).toBe(0);
+      expect(nativeCalls?.count() ?? 0).toBe(0);
       vi.restoreAllMocks();
       expect(snapshotDatabaseFiles(filename)).toEqual(before);
     },

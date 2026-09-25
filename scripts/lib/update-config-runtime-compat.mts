@@ -1,12 +1,10 @@
-import { getTypeScript } from "./ts-guard-utils.mts";
+import * as ts from "typescript/unstable/ast";
 
 /** The stable config entrypoint is consumed by shipped updaters after replacing their own tree. */
 export function buildUpdateConfigRuntimeAlias(
   targetFileName: string,
-  targetSource: string,
+  source: ts.SourceFile,
 ): string {
-  const ts = getTypeScript();
-  const source = ts.createSourceFile(targetFileName, targetSource, ts.ScriptTarget.Latest, true);
   const names = new Set<string>();
   for (const statement of source.statements) {
     if (ts.isExportDeclaration(statement) && statement.exportClause) {
@@ -17,8 +15,10 @@ export function buildUpdateConfigRuntimeAlias(
         names.add(element.name.text);
       }
     } else if (
-      ts.canHaveModifiers(statement) &&
-      ts.getModifiers(statement)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
+      (ts.isFunctionDeclaration(statement) ||
+        ts.isClassDeclaration(statement) ||
+        ts.isVariableStatement(statement)) &&
+      statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
     ) {
       if (
         (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&

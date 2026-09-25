@@ -165,21 +165,9 @@ async function refreshCodexUsageLimitError(params: {
   signal?: AbortSignal;
 }): Promise<CodexUsageLimitErrorResult | undefined> {
   const initialMessage = formatCodexUsageLimitErrorMessage(params.source);
-  if (!shouldRefreshCodexRateLimitsForUsageLimitMessage(initialMessage)) {
-    return initialMessage
-      ? {
-          message: initialMessage,
-          ...(params.source.rateLimitsTrustedForProfile
-            ? { rateLimitsForProfile: params.source.rateLimits }
-            : {}),
-        }
-      : undefined;
-  }
-  const rateLimits = await readCodexRateLimitsFromAppServerForUsageLimitError({
-    client: params.client,
-    timeoutMs: params.timeoutMs,
-    signal: params.signal,
-  });
+  const rateLimits = shouldRefreshCodexRateLimitsForUsageLimitMessage(initialMessage)
+    ? await readCodexRateLimitsFromAppServerForUsageLimitError(params)
+    : undefined;
   if (!rateLimits) {
     return initialMessage
       ? {

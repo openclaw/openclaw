@@ -11,12 +11,19 @@ This directory owns docs authoring, published link rules, and docs i18n policy.
 - Approved release docs can own a marked `CHANGELOG/<version>.md` mirror. When changing those sources, regenerate that complete flat Markdown file in the same PR with `pnpm changelog:from-docs`, preserving the marker's ordered source list and the frozen `CHANGELOG/records/<version>.md`. `pnpm changelog:check` verifies marked mirrors; it does not convert untouched historical releases. The `openclaw-changelog-update` skill owns the commands and separate post-release publication sequence.
 - Generated `CHANGELOG/**` artifacts retain the exact migrated or mirrored bytes. Like the root changelog, they are excluded from generic formatting; use the owning generator and `pnpm changelog:check` instead.
 
+## Local Preview
+
+- Run `pnpm docs:dev -- --page <route>` to preview uncommitted English content using the current website UI. Repeat `--page` for more pages; the preview is bounded to 30 pages.
+- Clone `openclaw/docs` as `../openclaw-docs` beside the main checkout and run `npm ci` there first. For another checkout, pass `--site-repo <path>` or set `OPENCLAW_DOCS_SITE_REPO`.
+- The preview reads this checkout and writes only ignored `.cache/docs-preview/` output. It does not sync, translate, or publish. Re-run after edits. Use `--build-only` for artifacts without a server, or `--port <port>` to change the loopback server's default port 4173. Serving requires Python 3.
+- Website styling and renderer changes belong in `openclaw/docs`; content, navigation, redirects, and the shared publishing parser remain here.
+
 ## Published Link Rules
 
-- The publish pipeline pushes docs to `https://docs.openclaw.ai` from the `openclaw/docs` mirror.
+- The publish pipeline pushes docs to `https://docs.openclaw.ai` from the `openclaw/docs` publishing repo, which owns the website design and UI.
 - Internal doc links in `docs/**/*.md` must stay root-relative with no `.md` or `.mdx` suffix (example: `[Config](/gateway/configuration)`).
 - Section cross-references should use anchors on root-relative paths (example: `[Hooks](/gateway/config-hooks#hooks)`).
-- Anchor IDs come from the shared publishing parser in `scripts/lib/docs-markdown.mjs`. Verify them with `pnpm docs:check-links:anchors`, not Mintlify's independent checker. Published heading IDs stay stable. Compatibility aliases never replace an existing target.
+- Anchor IDs come from the shared publishing parser in `scripts/lib/docs-markdown.mjs`. Verify them with `pnpm docs:check-links:anchors`. Published heading IDs stay stable. Compatibility aliases never replace an existing target.
 - Use an explicit `<a id="stable-section-name" />` for a durable section link when heading wording may change. Keep existing named anchors when reorganizing content.
 - README and other GitHub-rendered docs should keep absolute docs URLs so links work outside the docs site.
 - Docs content must stay generic: no personal device names, hostnames, or local paths. Use placeholders like `user@gateway-host` and `~/path/to/skills`.

@@ -240,6 +240,10 @@ describe("startGatewayEventSubscriptions", () => {
     const projection = {
       capture: () => current,
       ensureMaterialized: () => prepared.promise,
+      withPreparedExactRows: async (_queries: unknown, consume: (read: unknown) => unknown) => {
+        await prepared.promise;
+        return { kind: "complete" as const, value: consume(undefined) };
+      },
       isCurrent: (record: typeof original) => record === current,
       snapshot: () => ({ row: current ? { key: "agent:main:queued", ...current } : null }),
     } as unknown as SessionRowProjection;

@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { JitiOptions, JitiResolveOptions } from "jiti";
 import { isPathInside } from "../infra/path-guards.js";
-import { toSafeImportPath } from "../shared/import-specifier.js";
 import { createJiti } from "./jiti-factory.js";
 import {
   isJavaScriptModulePath,
@@ -13,14 +12,8 @@ import {
   supportsBunRuntimeOnResolveTargets,
 } from "./native-module-require.js";
 import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
-import {
-  bindPluginCacheRoot,
-  getPluginCache,
-  withPluginCache,
-  type PluginCache,
-} from "./plugin-cache.js";
+import { bindPluginCacheRoot, getPluginCache, withPluginCache } from "./plugin-cache.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
-import type { PluginModuleLoaderRecovery } from "./plugin-instance.types.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import {
   preparePluginModuleLoaderRecovery,
@@ -28,6 +21,7 @@ import {
 } from "./plugin-module-loader-recovery.js";
 import { bindNativePluginInstanceModuleLoader } from "./plugin-native-module-loader.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
+import { bindSharedPluginModuleLoader } from "./plugin-shared-module-loader.js";
 import {
   buildPluginTypeScriptSource,
   PLUGIN_SOURCE_RESOLVE_PREFIX,
@@ -36,29 +30,6 @@ import {
 } from "./plugin-source-build.js";
 import { inspectPluginTypeScriptExecutionFacts } from "./plugin-source-references.js";
 import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
-
-// Compiled recovery shares process code identity without closing over the
-// binder's predecessor instance or source-graph state.
-function createSharedModuleLoader(cache: PluginCache, loader: PluginModuleLoader) {
-  const load = (source: string) => withPluginCache(cache, () => loader(toSafeImportPath(source)));
-  const captureRecovery = (): PluginModuleLoaderRecovery => {
-    let released = false;
-    return {
-      bind(target) {
-        if (released) {
-          throw new Error("Plugin module recovery has already been consumed or released");
-        }
-        released = true;
-        target.bindModuleLoader(load);
-        target.bindModuleLoaderRecovery(captureRecovery);
-      },
-      dispose() {
-        released = true;
-      },
-    };
-  };
-  return { load, captureRecovery };
-}
 
 /** Runtime and setup share code identity policy while keeping separate instance authority. */
 export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoaderParams): void {
@@ -86,9 +57,12 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
         pluginSdkResolution: params.pluginSdkResolution,
       });
     }
-    const shared = createSharedModuleLoader(cache, loader);
-    params.instance.bindModuleLoader(shared.load);
-    params.instance.bindModuleLoaderRecovery(shared.captureRecovery);
+    bindSharedPluginModuleLoader({
+      instance: params.instance,
+      rootDir: params.rootDir,
+      cache,
+      loader,
+    });
     return;
   }
   const nativeHooks = typeof Module.registerHooks === "function";

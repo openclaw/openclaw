@@ -23,6 +23,7 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-contract.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/session-rename.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
@@ -43,6 +44,14 @@ import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.ts";
 
 export abstract class ChatPaneSessionMenu extends ChatPaneContext {
+  protected resolveHeaderSessionTitle(row: GatewaySessionRow | undefined): string {
+    // The roster owns accepted titles; pane metadata fills absent cross-agent rows.
+    return (
+      this.presentationTitle ??
+      resolveSessionDisplayName(row?.key ?? this.state?.sessionKey ?? this.sessionKey, row)
+    );
+  }
+
   protected canArchiveHeaderSession(row: GatewaySessionRow): boolean {
     return (
       !row.archived &&
@@ -97,8 +106,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       parseAgentSessionKey(row.key)?.agentId ?? row.agentId,
     ).sessionKey;
     return {
-      label:
-        normalizeOptionalString(row.label) ?? normalizeOptionalString(this.paneTitle) ?? row.key,
+      label: this.resolveHeaderSessionTitle(row),
       sessionId: row.sessionId ?? null,
       isChild: Boolean(resolveSidebarSessionParentKey(row, new Set([mainSessionKey]))),
       pinned: row.pinned === true,
@@ -188,10 +196,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       key: candidate.key,
       sessionId: candidate.sessionId,
       sharingRole: candidate.sharingRole,
-      label:
-        normalizeOptionalString(candidate.label) ??
-        normalizeOptionalString(this.paneTitle) ??
-        candidate.key,
+      label: this.resolveHeaderSessionTitle(candidate),
       pinned: candidate.pinned === true,
       unread: candidate.unread === true,
       archived: candidate.archived === true,

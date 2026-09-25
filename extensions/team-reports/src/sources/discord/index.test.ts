@@ -248,6 +248,7 @@ describe("Discord report source", () => {
       const result = await createDiscordSource(context).collect(config, window, roster);
       expect(result.status.warnings).toEqual([expect.stringMatching(/20.*404/)]);
       expect(result.status.stale).toBe(true);
+      expect(result.status.ok).toBe(false);
       expect(result.status.stats.privateArchivesSkipped).toBe(0);
     },
   );
@@ -358,7 +359,7 @@ describe("Discord report source", () => {
       window,
       roster,
     );
-    expect(result.status.ok).toBe(true);
+    expect(result.status.ok).toBe(false);
     expect(result.status.stale).toBe(true);
     expect(result.status.warnings).toEqual([expect.stringMatching(/20.*403/)]);
     expect(result.messages.map((entry) => entry.channelId)).toEqual(["21"]);

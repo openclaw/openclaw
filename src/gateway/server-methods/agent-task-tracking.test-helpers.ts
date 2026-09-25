@@ -1,12 +1,16 @@
 import path from "node:path";
-import { vi } from "vitest";
+import { it, vi } from "vitest";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import {
+  getSubagentRunByChildSessionKey,
+  resetSubagentRegistryForTests,
+} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { getAgentTestMocks } from "./agent.test-harness.js";
+import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
+import { expectRecordFields, getAgentTestMocks, requireValue } from "./agent.test-harness.js";
 
 export function spyDetachedCreateRunningTaskRun() {
   const defaultRuntime = getDetachedTaskLifecycleRuntime();
@@ -56,4 +60,50 @@ export async function withPluginSubagentTestState(
     resetSubagentRegistryForTests({ persist: false });
     await state.cleanup();
   }
+}
+
+export function registerPluginSubagentRequesterLineageTest() {
+  it("registers host-owned requester lineage for plugin subagent completion", async () => {
+    await withPluginSubagentTestState("openclaw-gateway-plugin-subagent-requester-", async () => {
+      const childSessionKey = "agent:work:subagent:plugin-completion";
+      const requester = {
+        sessionKey: "agent:main:telegram:direct:123",
+        origin: {
+          channel: "telegram",
+          to: "telegram:123",
+          accountId: "work",
+          threadId: 42,
+        },
+      } as const;
+
+      await registerPluginSubagentRunFromGateway({
+        assertAdmissionCurrent: () => {},
+        cfg: {
+          session: { mainKey: "main", scope: "per-sender" },
+          agents: {
+            list: [{ id: "main", default: true }, { id: "work" }],
+          },
+        },
+        runId: "plugin-subagent-current-requester",
+        childSessionKey,
+        task: "background plugin subagent task",
+        requester,
+        pluginId: "memory-core",
+      });
+
+      const run = requireValue(
+        getSubagentRunByChildSessionKey(childSessionKey),
+        "expected requester-bound plugin subagent run",
+      );
+      expectRecordFields(run, {
+        controllerSessionKey: "agent:work:main",
+        requesterSessionKey: requester.sessionKey,
+        requesterAgentId: "main",
+        requesterDisplayKey: requester.sessionKey,
+        requesterOrigin: requester.origin,
+        label: "plugin:memory-core",
+      });
+      expectRecordFields(run.completion, { required: true });
+    });
+  });
 }

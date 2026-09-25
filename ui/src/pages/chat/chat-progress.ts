@@ -129,11 +129,6 @@ export function buildCompactionDividerItem(
             count: formatCompactTokenCount(tokensSaved),
           }),
         }),
-    ...(phase === "complete" && marker.kind === "compaction"
-      ? {
-          description: t("chat.compaction.description"),
-        }
-      : {}),
     timestamp,
   };
 }

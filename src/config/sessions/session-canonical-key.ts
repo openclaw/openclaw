@@ -6,6 +6,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
 import {
@@ -455,6 +456,23 @@ export function assertCanonicalSqliteSessionKeysCurrent(
   collectMetadata = false,
 ): ValidatedSessionMetadata | undefined {
   return validateCanonicalSqliteSessionKeys(database, collectMetadata).metadata;
+}
+
+/** Exact reads validate their snapshot without admitting unrelated persisted rows. */
+export function assertCanonicalSqliteSessionRowsCurrent(
+  database: { agentId: string; db: DatabaseSync },
+  sessionKeys: readonly string[],
+): void {
+  for (const row of iterateSqliteQuerySync(
+    database.db,
+    canonicalSessionValidationQuery(database).where(
+      "session_nodes.session_key",
+      "in",
+      sqliteStringSet(sessionKeys),
+    ),
+  )) {
+    validateCanonicalSessionRow(row, "read");
+  }
 }
 
 /** Validate the root's database and key together within its synchronous writer transaction. */

@@ -5,9 +5,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import type { MigrationPlan } from "../plugins/types.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
-import type { SetupMigrationPromotionContinuation } from "./setup.migration-promotion.js";
+import {
+  assertDisjointPromotionTargets,
+  type SetupMigrationPromotionContinuation,
+} from "./setup.migration-promotion.js";
 import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
 import {
   createSetupMigrationStage,
@@ -59,6 +63,67 @@ afterEach(async () => {
 });
 
 describe("setup migration stage", () => {
+  it.each([
+    {
+      rule: "case",
+      probe: "CaseProbe",
+      alias: "cASEpROBE",
+      left: "FutureWorkspace",
+      right: "futureworkspace",
+    },
+    {
+      rule: "normalization",
+      probe: "CaféProbe",
+      alias: "Cafe\u0301Probe",
+      left: "FuturéWorkspace",
+      right: "Future\u0301Workspace",
+    },
+  ])(
+    "compares missing promotion targets using the destination filesystem's $rule rules",
+    async ({ probe, alias, left, right }) => {
+      const root = tempRoots.make("openclaw-migration-case-");
+      await fs.mkdir(path.join(root, probe));
+      const originalEntries = await fs.readdir(root);
+      const aliases = await fs.stat(path.join(root, alias)).then(
+        () => true,
+        (error: unknown) => {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            throw error;
+          }
+          return false;
+        },
+      );
+      const validation = assertDisjointPromotionTargets([
+        { finalPath: path.join(root, left) },
+        { finalPath: path.join(root, right, "agent") },
+      ]);
+
+      if (aliases) {
+        await expect(validation).rejects.toThrow("Migration promotion targets overlap");
+      } else {
+        await expect(validation).resolves.toBeUndefined();
+      }
+      expect(await fs.readdir(root)).toEqual(originalEntries);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects overlap through a dangling parent symlink",
+    async () => {
+      const root = tempRoots.make("openclaw-migration-dangling-parent-");
+      const workspace = path.join(root, "future-workspace");
+      const alias = path.join(root, "workspace-alias");
+      await fs.symlink(workspace, alias);
+      await expect(
+        assertDisjointPromotionTargets([
+          { finalPath: workspace },
+          { finalPath: path.join(alias, "agent") },
+        ]),
+      ).rejects.toThrow("Migration promotion targets overlap");
+      expect(await fs.readdir(root)).toEqual(["workspace-alias"]);
+    },
+  );
+
   it("executes provider config mutations once and projects staged paths", async () => {
     const root = tempRoots.make("openclaw-migration-stage-");
     const stateDir = path.join(root, "state");

@@ -8,7 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
-import { isPathInside } from "./path-guards.js";
+import { isPathInside, safeStatSync } from "./path-guards.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 
 type EnsureOpenClawPathOpts = {
@@ -35,20 +35,12 @@ function isExecutable(filePath: string): boolean {
   }
 }
 
-function isDirectory(dirPath: string): boolean {
-  try {
-    return fs.statSync(dirPath).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
 function splitPathParts(pathEnv: string): Set<string> {
   return new Set(normalizeStringEntries(pathEnv.split(path.delimiter)));
 }
 
 function isKnownPathDir(existingPathParts: ReadonlySet<string>, dirPath: string): boolean {
-  return existingPathParts.has(dirPath) || isDirectory(dirPath);
+  return existingPathParts.has(dirPath) || safeStatSync(dirPath)?.isDirectory() === true;
 }
 
 function realpathExistingPath(candidate: string): string | undefined {

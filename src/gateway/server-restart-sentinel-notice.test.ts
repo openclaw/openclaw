@@ -600,13 +600,13 @@ describe("restart sentinel notice recovery", () => {
 
   it("serializes stable notice preparation before modifiers can run twice", async () => {
     mocks.hookRunner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
-    let releaseModifier: (() => void) | undefined;
-    mocks.hookRunner.runMessageSending.mockImplementationOnce(
-      async () =>
-        await new Promise<undefined>((resolve) => {
-          releaseModifier = () => resolve(undefined);
-        }),
-    );
+    const modifierEntered = createDeferredCore();
+    const releaseModifier = createDeferredCore();
+    mocks.hookRunner.runMessageSending.mockImplementationOnce(async () => {
+      modifierEntered.resolve();
+      await releaseModifier.promise;
+      return undefined;
+    });
     const request = {
       cfg: {},
       channel: "whatsapp",
@@ -617,25 +617,33 @@ describe("restart sentinel notice recovery", () => {
     };
 
     const first = enqueueRestartSentinelNotice(request);
-    await vi.waitFor(() => expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce());
-    let secondSettled = false;
-    const second = enqueueRestartSentinelNotice(request).finally(() => {
-      secondSettled = true;
-    });
-    await Promise.resolve();
-    expect(secondSettled).toBe(false);
-    expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
-    releaseModifier?.();
-    await expect(first).resolves.toEqual({
-      id: "restart-sentinel-notice:agent:main:main:123",
-      created: true,
-    });
-    await expect(second).resolves.toEqual({
-      id: "restart-sentinel-notice:agent:main:main:123",
-      created: false,
-    });
-    await expect(enqueueRestartSentinelNotice(request)).resolves.toEqual(await second);
-    expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
+    const pending = [first];
+    try {
+      await Promise.race([modifierEntered.promise, first]);
+      expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
+      let secondSettled = false;
+      const second = enqueueRestartSentinelNotice(request).finally(() => {
+        secondSettled = true;
+      });
+      pending.push(second);
+      await Promise.resolve();
+      expect(secondSettled).toBe(false);
+      expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
+      releaseModifier.resolve();
+      await expect(first).resolves.toEqual({
+        id: "restart-sentinel-notice:agent:main:main:123",
+        created: true,
+      });
+      await expect(second).resolves.toEqual({
+        id: "restart-sentinel-notice:agent:main:main:123",
+        created: false,
+      });
+      await expect(enqueueRestartSentinelNotice(request)).resolves.toEqual(await second);
+      expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
+    } finally {
+      releaseModifier.resolve();
+      await Promise.allSettled(pending);
+    }
   });
 
   it("emits message_sent only after the durable notice terminal is committed", async () => {

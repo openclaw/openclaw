@@ -126,24 +126,32 @@ export async function prepareWorkerAgentRuntimeIdentity(
     params.assertSourceCurrent();
     assertAdmittedActive();
   };
-  assertActive();
-  const runtimeIdentity = buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext });
+  assertAdmittedActive();
   // Stop closes the operational run before its placement claim finishes draining.
   // Worker tools must retain both owners even when audit collection is disabled.
-  const takeFinishingOutcome = bindWorkerTurnOwner(
+  const { capability, takeFinishingOutcome } = await bindWorkerTurnOwner(
     params.placements,
     params.turnClaim,
-    runtimeIdentity.executionIdentityToken,
+    admittedRunContext.executionIdentityToken,
     admittedRunContext.operationalRunInstance,
     params.sessionTarget,
     assertActive,
     params.turn.prepareAssistantTranscriptMessage,
     readAdmittedRunOperatorAuthority(admittedRunContext),
   );
+  capability.receiptAuthority();
+  const runtimeIdentity = await capability.run((owner) => ({
+    ...buildWorkerAgentRuntimeIdentity({
+      ...params,
+      admittedRunContext,
+      turnClaim: owner.turnClaim,
+    }),
+    approvalAuthority: owner.delegatedAuthority,
+  }));
   return {
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,
-    assertActive,
+    assertActive: capability.receiptAuthority,
     takeFinishingOutcome,
   };
 }

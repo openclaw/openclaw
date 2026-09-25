@@ -10,6 +10,7 @@ import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.j
 import {
   UserChannelIdentityConflictError,
   userChannelIdentitySubject,
+  resolveUserChannelAuthorizationPolicy,
 } from "./user-channel-identities.js";
 import {
   captureUserProfileAuthorityRead,
@@ -22,6 +23,8 @@ import type {
   UserChannelIdentity,
   UserChannelIdentityLink,
   UserChannelIdentityResult,
+  UserChannelIdentitySelector,
+  UserChannelIdentityWorkerOperations,
 } from "./user-profiles.types.js";
 
 type IdentityOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env">;
@@ -66,14 +69,16 @@ export async function listCanonicalUserChannelIdentities(
   return unwrapIdentityResult(reply.result, profileId);
 }
 
-export async function changeCanonicalUserChannelIdentity(
-  action: "link" | "unlink",
-  profileId: string,
-  identity: UserChannelIdentity,
+type IdentityChange =
+  UserChannelIdentityWorkerOperations["userProfiles.channelIdentity.change"]["input"];
+
+async function changeIdentity(
+  input: IdentityChange,
   options: IdentityOptions & { assertCurrent?: () => void } = {},
 ) {
-  const capturedIdentity = { ...identity };
-  const subject = userChannelIdentitySubject(capturedIdentity);
+  const captured = structuredClone(input);
+  const subject =
+    "identity" in captured ? userChannelIdentitySubject(captured.identity) : undefined;
   const assertCurrent = options.assertCurrent;
   const context = captureOpenClawStateWorkerContext(options);
   const result = await runOpenClawStateWorkerOperation(
@@ -81,7 +86,7 @@ export async function changeCanonicalUserChannelIdentity(
     (scope) =>
       scope.execute({
         type: "userProfiles.channelIdentity.change",
-        input: { action, profileId, identity: capturedIdentity },
+        input: captured,
       }),
     {
       assertCurrent,
@@ -92,17 +97,22 @@ export async function changeCanonicalUserChannelIdentity(
             (request.stage !== "transaction" && request.stage !== "commit") ||
             !isRecord(request.facts) ||
             request.facts.kind !== "channel-identity" ||
-            request.facts.subject !== subject
+            request.facts.action !== captured.action ||
+            request.facts.subject !== subject ||
+            !Array.isArray(request.facts.profiles) ||
+            !request.facts.profiles.every(
+              (profileId): profileId is string => typeof profileId === "string",
+            )
           ) {
             throw new Error("Channel identity mutation requires exact transaction admission");
           }
           context.admission.assertCurrent();
           assertCurrent?.();
-          if (request.stage === "commit") {
+          if (request.stage === "commit" && captured.action !== "authorize") {
             fence ??= fenceUserProfileMutationAuthority(context.admission, {
-              profiles: [],
+              profiles: request.facts.profiles,
               identities: [],
-              channels: [subject],
+              channels: subject === undefined ? [] : [subject],
             });
           }
           grant();
@@ -110,6 +120,7 @@ export async function changeCanonicalUserChannelIdentity(
         void operation.settled.then((settlement) => {
           const committed = admission.committed;
           if (
+            captured.action !== "authorize" &&
             committed &&
             isRecord(committed.facts) &&
             committed.facts.kind === "channel-identity" &&
@@ -124,16 +135,52 @@ export async function changeCanonicalUserChannelIdentity(
       },
     },
   );
-  return unwrapIdentityResult(result, profileId);
+  return unwrapIdentityResult(result, "profileId" in captured ? captured.profileId : "");
+}
+
+export async function changeCanonicalUserChannelIdentity(
+  action: "link" | "unlink",
+  profileId: string,
+  identity: UserChannelIdentity,
+  options: IdentityOptions & { assertCurrent?: () => void } = {},
+) {
+  const result = await changeIdentity({ action, profileId, identity }, options);
+  if (result.kind !== "linked" && result.kind !== "unlinked") {
+    throw new Error("Unexpected channel identity change");
+  }
+  return result;
+}
+
+export async function publishCanonicalUserChannelPolicy(
+  gateway: Parameters<typeof resolveUserChannelAuthorizationPolicy>[0],
+) {
+  await changeIdentity({
+    action: "policy",
+    policy: resolveUserChannelAuthorizationPolicy(gateway),
+  });
+}
+
+export async function authorizeCanonicalUserChannelIdentity(
+  input: Extract<IdentityChange, { action: "authorize" }>,
+  options: IdentityOptions & { assertCurrent: () => void },
+) {
+  const result = await changeIdentity(input, options);
+  if (result.kind !== "authorized") {
+    throw new Error("Unexpected channel authorization result");
+  }
+  return result.reference;
 }
 
 /** Qualify worker-read facts against the same physical profile owner's mutation lifetime. */
 export async function prepareUserChannelIdentityAuthority(
-  identity: UserChannelIdentity,
+  identity: UserChannelIdentitySelector,
   options: IdentityOptions = {},
 ) {
-  const capturedIdentity = { ...identity };
-  const subject = userChannelIdentitySubject(capturedIdentity);
+  const capturedIdentity = structuredClone(identity);
+  const subject =
+    "authorizationId" in capturedIdentity
+      ? undefined
+      : userChannelIdentitySubject(capturedIdentity);
   const context = captureAuthorityContext(options);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const read = await captureUserProfileAuthorityRead(context.admission, subject);
@@ -154,7 +201,10 @@ export async function prepareUserChannelIdentityAuthority(
     if (!reply.linked) {
       return undefined;
     }
-    const isCurrent = read.bind(reply.linked.profileId);
+    const isCurrent = read.bind(
+      reply.linked.profileId,
+      reply.linked.authorization?.subject ?? subject,
+    );
     if (isCurrent) {
       return { linked: reply.linked, isCurrent };
     }

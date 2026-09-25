@@ -36,6 +36,11 @@ building nested completion findings, preventing stale prior-run child
 outputs from leaking into the current announce. Announce replies preserve
 thread/topic routing when available on channel adapters.
 
+Completion inputs retain their own turn identity across compaction and runtime
+context messages. If transcript persistence rejects a completion because its
+keyed input belongs to a closed turn, delivery records a permanent failure with
+the error. It does not retry other models or keep scheduling the same completion.
+
 ### Private parent completion
 
 Set `completionTarget: "parent"` on `sessions_spawn` to return the result in a
@@ -89,8 +94,23 @@ final answer through the message tool and then returns `NO_REPLY`, that final
 answer remains authoritative.
 
 Completion delivery can read an existing registered archive when child cleanup
-finishes before the parent resumes. This does not add a post-cleanup retrieval
-feature.
+finishes before the parent resumes. The Control UI's **Tasks** inspector also
+reads the completed run's retained transcript after cleanup removes its live
+session. Paging stays bound to that run's archive, even if the session key is reused.
+After deletion, child-specific sharing metadata is no longer available. Archived
+previews therefore require existing session access that does not depend on that
+metadata, such as Gateway administrator access. Profile-scoped readers cannot
+recover a deleted child's entitlement from access to its parent task. Keeping the
+child session preserves its normal sharing checks.
+Oversized text records use the normal history size notice. A single archived
+record above 8 MiB makes Tasks history unavailable before the reader decodes it,
+to bound per-record decoding memory. This limit also applies to other retained
+generations with the same session key: run membership is stored inside transcript
+records, so an unreadable candidate prevents the reader from establishing a unique
+match, even when the requested run's own archive is small. The reader reports
+unavailable rather than skipping an unclassified generation. This read limit does
+not change retained archives or completion delivery's final-answer scanner.
+Tasks reports this as a non-retryable preview limit; refreshing cannot resolve it.
 
 Terminal failed runs report failure status without replaying captured
 reply text. Tool/toolResult output is not promoted into child result text.

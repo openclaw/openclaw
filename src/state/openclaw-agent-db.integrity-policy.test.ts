@@ -18,9 +18,9 @@ import * as verifier from "./openclaw-database-verify.js";
 import {
   clearOpenClawAgentIntegrityVerification,
   readOpenClawAgentIntegrityVerification,
-  resolveQuarantineStorePath,
 } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -89,9 +89,11 @@ it.each(
           .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='preserved'")
           .get(),
       ).toEqual({ state_json: '{"ok":true}' });
-      const reused = mode === "clean" || (runtimeProof === "shared" && mode === "version");
+      const reusedRuntime =
+        runtimeProof !== "reset" && mode !== "missing" && mode !== "replacement";
+      const reused = mode === "clean" || reusedRuntime;
       expect(diagnostics?.integrityGateOutcome).toBe(reused ? "cached" : "healthy");
-      expect(queued).toHaveBeenCalledTimes(reused ? 1 : 0);
+      expect(queued).toHaveBeenCalledTimes(reused && !reusedRuntime ? 1 : 0);
       expect(readOpenClawAgentIntegrityVerification(original.path, env)?.clean_close).toBe(0);
     } finally {
       if (lease) {

@@ -372,6 +372,8 @@ export interface UserMessage {
    * carriers are stable prompt-cache anchors.
    */
   runtimeContextCarrier?: boolean;
+  /** Explicit replay-policy retention decision; absent preserves model-derived behavior. */
+  runtimeContextCarrierRetained?: boolean;
 }
 
 /** Assistant turn, including provider identity and final stop state. */

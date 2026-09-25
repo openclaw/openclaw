@@ -1,14 +1,59 @@
 import path from "node:path";
 import { expect } from "vitest";
-import type { maybeCompactCodexAppServerSession } from "./compact.js";
+import { maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionImpl } from "./compact.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { sessionBindingIdentity } from "./session-binding.js";
 import {
   registerCodexTestSessionIdentity,
+  testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import type { CodexAppServerClientFactory } from "./shared-client.js";
+
+let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
+
+type MaybeCompactOptions = Omit<
+  NonNullable<Parameters<typeof maybeCompactCodexAppServerSessionImpl>[1]>,
+  "bindingStore"
+> & {
+  bindingStore?: NonNullable<
+    Parameters<typeof maybeCompactCodexAppServerSessionImpl>[1]
+  >["bindingStore"];
+};
+
+export function setCodexAppServerClientFactoryForTest(factory: CodexAppServerClientFactory): void {
+  codexAppServerClientFactoryForTest = factory;
+}
+
+export function resetCodexAppServerClientFactoryForTest(): void {
+  codexAppServerClientFactoryForTest = undefined;
+}
+
+export function maybeCompactCodexAppServerSession(
+  params: Parameters<typeof maybeCompactCodexAppServerSessionImpl>[0],
+  options: MaybeCompactOptions = {},
+) {
+  const identity = sessionBindingIdentity({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    config: params.config,
+  });
+  registerCodexTestSessionIdentity(
+    params.sessionFile,
+    params.sessionId,
+    params.sessionKey,
+    identity.agentId,
+  );
+  const clientFactory = options.clientFactory ?? codexAppServerClientFactoryForTest;
+  return maybeCompactCodexAppServerSessionImpl(params, {
+    ...options,
+    bindingStore: options.bindingStore ?? testCodexAppServerBindingStore,
+    ...(clientFactory ? { clientFactory } : {}),
+  });
+}
 
 export async function writeCompactionTestBinding(
   tempDir: string,

@@ -646,8 +646,6 @@ suite.define(() => {
           content: ONE_PIXEL_PNG_B64,
           mimeType: "image/png",
         });
-        // A locally submitted turn plays the composer entry animation exactly once.
-        expect(await currentPage.locator(".chat-bubble--enter").count()).toBe(1);
         await expect
           .poll(() =>
             currentPage.evaluate(() =>

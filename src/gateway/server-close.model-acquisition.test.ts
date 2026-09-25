@@ -10,6 +10,7 @@ import { registerPreparedModelRuntimePublicationListener } from "../agents/prepa
 import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
 import { getPreparedModelRuntimeStartupStatus } from "../agents/prepared-model-runtime.startup-status.js";
 import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
+import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
@@ -189,6 +190,10 @@ it.each(["static catalog", "synthetic auth"] as const)(
       if (cleanupFailure) {
         // Other shutdown work must not hide a discarded plugin cleanup outcome.
         expect(collectNestedErrorCandidates(closeError)).toContain(cleanupFailure);
+        // The process-cache reset retains the same outcome for its next observer.
+        expect((await waitForPluginCacheRetirement()).failures).toEqual([
+          { pluginId: fixture.pluginId, hookId: "instance", error: cleanupFailure },
+        ]);
       } else {
         expect(closeError).toBeUndefined();
       }

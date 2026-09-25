@@ -20,8 +20,7 @@ import { normalizeMSTeamsConversationId } from "./inbound.js";
 import {
   isCardActionInvokeAuthorized,
   isSigninInvokeAuthorized,
-  registerMSTeamsHandlers,
-  type MSTeamsActivityHandler,
+  createMSTeamsActivityHandler,
 } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import {
@@ -297,10 +296,6 @@ export async function monitorMSTeamsProvider(
     });
   }
 
-  // Build a simple ActivityHandler-compatible object and register our
-  // existing dispatch handlers on it. The SDK's App routes all inbound
-  // activities to our handler via app.on('activity', ...).
-  const handler = buildActivityHandler();
   const handlerDeps: MSTeamsMessageHandlerDeps = {
     cfg,
     runtime,
@@ -313,7 +308,7 @@ export async function monitorMSTeamsProvider(
     pollStore,
     log,
   };
-  registerMSTeamsHandlers(handler, handlerDeps);
+  const handleActivity = createMSTeamsActivityHandler(handlerDeps);
 
   const ingress = createMSTeamsIngress({
     accountId: appId,
@@ -328,7 +323,7 @@ export async function monitorMSTeamsProvider(
       const context =
         liveContext ??
         createMSTeamsReplayContext(activity, app, resolveMSTeamsSdkCloudOptions(msteamsCfg));
-      return await handler.run!(context, lifecycle);
+      return await handleActivity(context, lifecycle);
     },
   });
 
@@ -449,37 +444,31 @@ export async function monitorMSTeamsProvider(
     void runMSTeamsFileConsentInvokeHandler(adaptSdkContext(ctx, app), log);
   });
 
-  const handleSdkSigninInvoke = async (
-    ctx: unknown,
-    delegateName: "onTokenExchange" | "onVerifyState",
-  ) => {
-    const adaptedCtx = adaptSdkContext(ctx, app);
-    if (!(await isSigninInvokeAuthorized(adaptedCtx, handlerDeps))) {
+  // The SDK transport calls this public operation after validating the request token.
+  // Its system SSO routes precede user middleware, so authorization must run before process.
+  const processActivity = app.process.bind(app);
+  app.process = async (event) => {
+    const activity = event.body;
+    if (
+      activity.type !== "invoke" ||
+      !("name" in activity) ||
+      (activity.name !== "signin/tokenExchange" && activity.name !== "signin/verifyState")
+    ) {
+      return processActivity(event);
+    }
+    const context = { activity: { ...activity, type: activity.type, name: activity.name } };
+    if (!(await isSigninInvokeAuthorized(context, handlerDeps))) {
       return { status: 200, body: {} };
     }
     if (!ssoDeps) {
       log.debug?.("signin invoke received but msteams.sso is not configured", {
-        name: adaptedCtx.activity?.name,
+        name: activity.name,
       });
       return { status: 200, body: {} };
     }
 
-    const sdkSigninApp = app as MSTeamsApp & {
-      onTokenExchange?: (ctx: unknown) => Promise<unknown>;
-      onVerifyState?: (ctx: unknown) => Promise<unknown>;
-    };
-    const delegate = sdkSigninApp[delegateName];
-    if (typeof delegate !== "function") {
-      throw new Error(`Teams SDK ${delegateName} handler is unavailable`);
-    }
-    return delegate.call(sdkSigninApp, ctx);
+    return processActivity(event);
   };
-
-  // Replace the SDK's default sign-in invoke routes with an authz gate that
-  // delegates to the same SDK handlers only after sender policy passes. Registering
-  // a user route with the same name intentionally replaces the SDK system route.
-  app.on("signin.token-exchange", (ctx) => handleSdkSigninInvoke(ctx, "onTokenExchange"));
-  app.on("signin.verify-state", (ctx) => handleSdkSigninInvoke(ctx, "onVerifyState"));
 
   // The delegated SDK sign-in handlers emit `signin` only after a successful
   // token exchange/lookup. Persist that token for later OpenClaw use.
@@ -570,7 +559,7 @@ export async function monitorMSTeamsProvider(
       return;
     }
     try {
-      await handler.run!(adaptedCtx);
+      await handleActivity(adaptedCtx);
     } catch (err) {
       log.error("msteams non-turn activity failed", { error: formatUnknownError(err) });
     }
@@ -626,73 +615,6 @@ export async function monitorMSTeamsProvider(
   });
 
   return { app: expressApp, shutdown };
-}
-
-/**
- * Build a minimal ActivityHandler-compatible object that supports
- * onMessage / onMembersAdded registration and a run() method.
- */
-function buildActivityHandler(): MSTeamsActivityHandler {
-  type Handler = (context: unknown, next: () => Promise<void>) => Promise<void>;
-  type MessageHandler = Parameters<MSTeamsActivityHandler["onMessage"]>[0];
-  const messageHandlers: MessageHandler[] = [];
-  const membersAddedHandlers: Handler[] = [];
-  const reactionsAddedHandlers: Handler[] = [];
-  const reactionsRemovedHandlers: Handler[] = [];
-
-  const handler: MSTeamsActivityHandler = {
-    onMessage(cb) {
-      messageHandlers.push(cb);
-      return handler;
-    },
-    onMembersAdded(cb) {
-      membersAddedHandlers.push(cb);
-      return handler;
-    },
-    onReactionsAdded(cb) {
-      reactionsAddedHandlers.push(cb);
-      return handler;
-    },
-    onReactionsRemoved(cb) {
-      reactionsRemovedHandlers.push(cb);
-      return handler;
-    },
-    async run(context, turnAdoptionLifecycle) {
-      const ctx = context as { activity?: { type?: string } };
-      const activityType = ctx?.activity?.type;
-      const noop = async () => {};
-
-      if (activityType === "message") {
-        for (const h of messageHandlers) {
-          const result = await h(context, noop, turnAdoptionLifecycle);
-          if (result) {
-            return result;
-          }
-        }
-      } else if (activityType === "conversationUpdate") {
-        for (const h of membersAddedHandlers) {
-          await h(context, noop);
-        }
-      } else if (activityType === "messageReaction") {
-        const activity = (
-          ctx as { activity?: { reactionsAdded?: unknown[]; reactionsRemoved?: unknown[] } }
-        )?.activity;
-        if (activity?.reactionsAdded?.length) {
-          for (const h of reactionsAddedHandlers) {
-            await h(context, noop);
-          }
-        }
-        if (activity?.reactionsRemoved?.length) {
-          for (const h of reactionsRemovedHandlers) {
-            await h(context, noop);
-          }
-        }
-      }
-      return undefined;
-    },
-  };
-
-  return handler;
 }
 
 /**

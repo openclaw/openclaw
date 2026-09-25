@@ -1,9 +1,9 @@
 import type { lookup as dnsLookupCb } from "node:dns";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
-import { formatErrorMessage } from "../infra/errors.js";
 import { isWebSocketUrl, openCdpWebSocket } from "./cdp.helpers.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
 import type { BrowserEngineId } from "./engines/types.js";

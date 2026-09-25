@@ -1,0 +1,58 @@
+name: Full Release Validation Nightly
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-release-validation-nightly-${{ github.event_name }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  dispatch:
+    if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      # Both ref and expected_sha carry the scheduler's exact main SHA: a main push
+      # between this event and target resolution cannot move the target, and the
+      # Full Release Validation concurrency group is SHA-specific, so a still-active
+      # parent for the same SHA queues this dispatch instead of duplicating it.
+      - name: Dispatch Full Release Validation for main
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const sha = context.sha;
+            await github.rest.actions.createWorkflowDispatch({
+              ...context.repo,
+              workflow_id: "full-release-validation.yml",
+              ref: "main",
+              inputs: {
+                ref: sha,
+                expected_sha: sha,
+                trusted_workflow_json: '{"publicationSelection":null,"trustedWorkflow":null,"validationPurpose":"main-qualification"}',
+                release_profile: "stable",
+                run_release_soak: "true",
+                reuse_evidence: "true",
+                rerun_group: "all",
+                allow_unreleased_changelog: "true",
+                provider: "openai",
+                mode: "both",
+                fail_fast: "false",
+              },
+            });
+            await core.summary
+              .addHeading("Nightly Full Release Validation dispatched")
+              .addRaw(`SHA: ${sha}\n\n` +
+                "Follow the Full Release Validation run for this SHA (`gh run list --workflow full-release-validation.yml --branch main --event workflow_dispatch`). This dispatcher succeeding is not a passing validation result.")
+              .write();

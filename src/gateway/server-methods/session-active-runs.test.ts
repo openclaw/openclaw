@@ -245,7 +245,7 @@ it("matches session-id-only gateway runs during archive admission", () => {
   ).toBe(true);
 });
 
-it("excludes the replacement run from an internal active-session check", () => {
+it("finds a visible active run for a fully qualified session key", () => {
   const sessionKey = "agent:main:main";
   const context = {
     chatAbortControllers: new Map([
@@ -260,14 +260,6 @@ it("excludes the replacement run from an internal active-session check", () => {
     ]),
   } as never;
 
-  expect(
-    hasTrackedActiveSessionRun({
-      context,
-      requestedKey: sessionKey,
-      canonicalKey: sessionKey,
-      excludeRunIds: new Set(["replacement-run"]),
-    }),
-  ).toBe(false);
   expect(
     hasTrackedActiveSessionRun({
       context,

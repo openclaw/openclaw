@@ -238,6 +238,7 @@ suite.define(() => {
       await gateway.waitForRequest("session.suggestions.list");
       await expect(page.locator(".agent-chat__composer-combobox textarea")).toBeEnabled();
 
+      await page.clock.install();
       const ownerTyping = (preview?: string) =>
         gateway.emitGatewayEvent("session.typing", {
           sessionKey: "main",
@@ -273,6 +274,18 @@ suite.define(() => {
       await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("Typing · not sent");
       await expect(typingRow.locator(".agent-chat__typing-bubble")).toHaveCount(0);
       await screenshot(page, "typing-preview-live.png");
+      const activeBox = await previewBubble.boundingBox();
+      await page.clock.runFor(3_000);
+      await expect(previewBubble).toHaveText(draft);
+      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("Paused · not sent");
+      await expect(typingRow.locator(".sr-only")).toBeEmpty();
+      expect(await previewBubble.boundingBox()).toEqual(activeBox);
+      expect(
+        await previewBubble.evaluate(
+          (element) => getComputedStyle(element, "::after").animationName,
+        ),
+      ).toBe("none");
+      await screenshot(page, "typing-preview-paused.png");
 
       await gateway.emitGatewayEvent("session.typing", {
         sessionKey: "main",
@@ -411,6 +424,18 @@ suite.define(() => {
           animations: "disabled",
         });
       }
+      await ownerTyping("Another unsent draft");
+      await expect(previewBubble).toHaveText("Another unsent draft");
+      await page.clock.runFor(3_000);
+      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("Paused · not sent");
+      await gateway.emitGatewayEvent("presence", {
+        presence: ["alice", "owner", "zoe"].map((id) => ({
+          ts: Date.now(),
+          user: { id, identity: { type: "profile", id } },
+          watchedSessions: id === "owner" ? ["agent:main:other"] : [sessionKey],
+        })),
+      });
+      await expect(typingRow).toHaveCount(0);
       await context.close();
     },
   );

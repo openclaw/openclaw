@@ -15,6 +15,11 @@ import {
   type MockInstance,
 } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  emptySqliteCounts,
+  observeParentSqlite,
+  sqliteMethods,
+} from "../../../test/helpers/sqlite-parent-observer.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../../agents/agent-command-restart-recovery.js";
 import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
@@ -37,16 +42,27 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
+import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { TypingMode } from "../../config/types.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
 } from "../../plugins/before-agent-reply.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
 import { createReplyAgentRestartRecoveryController } from "./agent-runner-execute.js";
 import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallback.test-support.js";
+import { registerReplyAdmissionCases } from "./agent-runner.runreplyagent.admission.cases.js";
 import { registerImmediateFailurePolicyCases } from "./agent-runner.runreplyagent.failure-policy.cases.js";
 import { registerRequiredReplyCompletionCases } from "./agent-runner.runreplyagent.required-reply.cases.js";
 import { registerWaitingStatusCases } from "./agent-runner.runreplyagent.waiting-status.cases.js";
@@ -62,6 +78,7 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
+import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   resolveReplyOperationAgentTurn,
@@ -1966,52 +1983,10 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
   });
 
-  it("runs visible turns with the session id returned by admission", async () => {
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "pre-compact-session",
-      resetTriggered: false,
-    });
-    active.setPhase("preflight_compacting");
-    const sessionStore = {
-      main: {
-        sessionId: "pre-compact-session",
-        sessionFile: "main",
-        updatedAt: Date.now(),
-      },
-    };
-    const { run } = createMinimalRun({
-      runOverrides: { sessionId: "stale-session" },
-      sessionStore,
-    });
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "final" }],
-      meta: {
-        agentMeta: {
-          provider: "anthropic",
-          model: "claude",
-          usage: { input: 1, output: 1 },
-        },
-      },
-    });
-
-    const pending = run();
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    active.updateSessionId("post-compact-session");
-    sessionStore.main = {
-      sessionId: "post-compact-session",
-      sessionFile: "main",
-      updatedAt: Date.now(),
-    };
-    active.complete();
-    await pending;
-
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-    const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
-    expect((call as AgentRunParams).sessionId).toBe("post-compact-session");
-    expect((call as AgentRunParams).sessionFile).toBe("main");
+  registerReplyAdmissionCases({
+    createMinimalRun,
+    makeSessionFixture,
+    runEmbeddedAgentMock: state.runEmbeddedAgentMock,
   });
 
   it("drops runs when reply-lane admission sees an already-aborted caller", async () => {
@@ -2101,6 +2076,26 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("releases reply admission and typing when the recovery read fails", async () => {
+    const failure = new Error("synthetic recovery read failure");
+    vi.spyOn(entryReads, "readSessionEntryInWorker").mockRejectedValueOnce(failure);
+    const ticket = reserveReplyAdmissionTicket(["main"]);
+    if (!ticket) {
+      throw new Error("expected a reply admission ticket");
+    }
+    const release = vi.spyOn(ticket, "release");
+    const { run, typing } = createMinimalRun({
+      opts: { [REPLY_ADMISSION_TICKET]: ticket },
+      storePath: "/tmp/synthetic-recovery-read.sqlite",
+    });
+
+    await expect(run()).rejects.toBe(failure);
+
+    expect(release).toHaveBeenCalledOnce();
+    expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
@@ -3131,7 +3126,29 @@ describe("runReplyAgent pending final delivery capture", () => {
       text: "execute once",
     });
 
-    await expect(duplicate.run()).resolves.toBeUndefined();
+    // Retire the completed turn's automatic maintenance before observing cold redelivery.
+    const database = toDatabaseOptions(resolveSqliteScope({ storePath, sessionKey: "main" }));
+    await closeOpenClawAgentDatabaseByPathAsync(
+      resolveOpenClawAgentSqlitePath(database),
+      database.agentId,
+    );
+    const observer = observeParentSqlite();
+    try {
+      const calibration = openNodeSqliteDatabase(":memory:");
+      calibration.exec("CREATE TABLE calibration (value INTEGER)");
+      calibration.prepare("INSERT INTO calibration VALUES (?)").run(7);
+      const query = calibration.prepare("SELECT value FROM calibration");
+      expect(query.get()).toEqual({ value: 7 });
+      expect(query.all()).toEqual([{ value: 7 }]);
+      expect([...query.iterate()]).toEqual([{ value: 7 }]);
+      calibration.close();
+      sqliteMethods.forEach((method) => expect(observer.counts[method], method).toBeGreaterThan(0));
+      observer.reset();
+      await expect(duplicate.run()).resolves.toBeUndefined();
+      expect(observer.counts).toEqual(emptySqliteCounts());
+    } finally {
+      observer.restore();
+    }
 
     expect(onAdopted).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();

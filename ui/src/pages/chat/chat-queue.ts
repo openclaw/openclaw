@@ -69,9 +69,9 @@ export function keepVolatileQueuedMessage(
   item: ChatQueueItem,
   agentId?: string,
   options: { retryable?: boolean } = {},
-): void {
+): ChatQueueItem {
   const scope = resolveUiConversationIdentity(host, sessionKey, agentId ?? item.agentId);
-  chatOutboxOwner(host).keep(host, scope, item, options.retryable);
+  return chatOutboxOwner(host).keep(host, scope, item, options.retryable);
 }
 
 export function syncVisibleChatQueueProjection(
@@ -110,8 +110,7 @@ export function enqueueChatMessage(
     agentId: scopedAgentIdForSession(host, host.sessionKey),
     ...(sender ? { sender } : {}),
   };
-  keepVolatileQueuedMessage(host, host.sessionKey, item, item.agentId);
-  return item;
+  return keepVolatileQueuedMessage(host, host.sessionKey, item, item.agentId);
 }
 
 export function enqueuePendingRunMessage(

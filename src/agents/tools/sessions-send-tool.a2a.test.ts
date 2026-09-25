@@ -10,6 +10,13 @@ import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const agentWaitMock = vi.hoisted(() => vi.fn());
+const requesterDeliveryGeneration = {
+  agentId: "main",
+  storePath: "/test/agents/main/sessions/sessions.json",
+  sessionKey: "agent:main:discord:channel:target-room",
+  sessionId: "session-source",
+  lifecycleRevision: null,
+};
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
@@ -127,6 +134,8 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
 
   it("bypasses the announce decider for same-session channel replies", async () => {
     await runSessionsSendA2AFlow({
+      callGateway: callGatewayMock,
+      requesterDeliveryGeneration,
       targetAgentId: "main",
       targetSessionKey: "agent:main:discord:channel:target-room",
       displayKey: "agent:main:discord:channel:target-room",
@@ -214,6 +223,8 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     });
 
     await runSessionsSendA2AFlow({
+      callGateway: callGatewayMock,
+      requesterDeliveryGeneration,
       targetAgentId: "main",
       targetSessionKey: "agent:main:discord:channel:target-room",
       displayKey: "agent:main:discord:channel:target-room",
@@ -264,6 +275,8 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     const reply = 'The log says "Agent couldn\'t generate a response", but the retry succeeded.';
 
     await runSessionsSendA2AFlow({
+      callGateway: callGatewayMock,
+      requesterDeliveryGeneration,
       targetAgentId: "main",
       targetSessionKey: "agent:main:discord:channel:target-room",
       displayKey: "agent:main:discord:channel:target-room",
@@ -278,6 +291,22 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(runAgentStep).not.toHaveBeenCalled();
     const sendCall = requireGatewayCall("send");
     expect((sendCall.params as Record<string, unknown>).message).toBe(reply);
+  });
+
+  it("does not turn a missing original session generation into an unbound direct send", async () => {
+    await runSessionsSendA2AFlow({
+      targetAgentId: "main",
+      targetSessionKey: requesterDeliveryGeneration.sessionKey,
+      displayKey: requesterDeliveryGeneration.sessionKey,
+      requesterSessionKey: requesterDeliveryGeneration.sessionKey,
+      requesterChannel: "discord",
+      message: "Complete the task",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      roundOneReply: "Task complete",
+    });
+    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+    expect(runAgentStep).not.toHaveBeenCalled();
   });
 
   it("keeps the announce decider for same-session sends from a different channel", async () => {
@@ -420,22 +449,49 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     });
   });
 
-  it("does not run the announce decider for same-session sends without an announce target", async () => {
-    await runSessionsSendA2AFlow({
-      targetAgentId: "main",
-      targetSessionKey: "agent:main:main",
-      displayKey: "agent:main:main",
-      message: "Test message",
-      announceTimeoutMs: 10_000,
-      maxPingPongTurns: 2,
-      requesterSessionKey: "agent:main:main",
-      requesterChannel: "qa-channel",
-      roundOneReply: "Already delivered through the source message tool",
-    });
+  it.each([
+    { captured: false, generation: false },
+    { captured: true, generation: false },
+    { captured: true, generation: true },
+  ])(
+    "uses a captured route without current route metadata only with generation custody (%j)",
+    async ({ captured, generation }) => {
+      const sessionKey = "agent:main:direct:alice";
+      sessionListRows = [
+        { key: sessionKey, agentId: "main", kind: "direct", classification: "channel" },
+      ];
+      await runSessionsSendA2AFlow({
+        callGateway: callGatewayMock,
+        requesterDeliveryGeneration: generation
+          ? { ...requesterDeliveryGeneration, sessionKey }
+          : undefined,
+        targetAgentId: "main",
+        targetSessionKey: sessionKey,
+        displayKey: sessionKey,
+        message: "Test message",
+        announceTimeoutMs: 10_000,
+        maxPingPongTurns: 2,
+        requesterSessionKey: sessionKey,
+        requesterChannel: "qa-channel",
+        requesterOrigin: captured
+          ? { channel: "qa-channel", to: "dm:alice", accountId: "default" }
+          : undefined,
+        roundOneReply: "Delayed result for a session with no saved route",
+      });
 
-    expect(runAgentStep).not.toHaveBeenCalled();
-    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
-  });
+      expect(runAgentStep).not.toHaveBeenCalled();
+      if (generation) {
+        expect(requireGatewayCall("send").params).toMatchObject({
+          channel: "qa-channel",
+          to: "dm:alice",
+          accountId: "default",
+          message: "Delayed result for a session with no saved route",
+        });
+      } else {
+        expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+      }
+    },
+  );
 
   it("uses the projected delivery context for the Discord announce account", async () => {
     const accountId = "thinker";

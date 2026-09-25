@@ -21,7 +21,6 @@ export type CommandHandlerContext = {
   refreshAgents: (ownsRefresh?: () => boolean) => Promise<Result<void, string>>;
   abortActive: (params?: { preferActive?: boolean }) => Promise<void>;
   setActivityStatus: (text: string) => void;
-  formatSessionKey: (key: string) => string;
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
   applySessionMutationResult: (
     result?: TuiSessionMutationResult | null,

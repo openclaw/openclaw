@@ -358,6 +358,7 @@ describe("noteWorkspaceStatus", () => {
             source: "/tmp/plugin.json",
             code: "channel-setup-failure",
           },
+          { level: "info", pluginId: "selected", message: "explicit plugin source selected" },
         ],
       }),
     });
@@ -397,6 +398,11 @@ describe("noteWorkspaceStatus", () => {
         requirement: "channel-setup-failure",
         source: "/tmp/plugin.json",
         message: "channel setup failed",
+      }),
+      expect.objectContaining({
+        severity: "info",
+        target: "selected",
+        message: "explicit plugin source selected",
       }),
       expect.objectContaining({
         checkId: "core/doctor/workspace-status",

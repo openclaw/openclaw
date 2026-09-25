@@ -2,6 +2,7 @@
 import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { observeCronJobWrites } from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -43,36 +44,6 @@ import { onTimer } from "./timer.test-support.js";
 const opsRegressionFixtures = setupCronRegressionFixtures({
   prefix: "cron-service-run-admission-cleanup-",
 });
-let cronJobWriteObserverId = 0;
-
-function observeCronJobWrites(
-  jobId: string,
-  observer: (state: { queuedAtMs?: number; runningAtMs?: number }) => void,
-): () => void {
-  const database = openOpenClawStateDatabase().db;
-  const suffix = ++cronJobWriteObserverId;
-  const functionName = `observe_cron_job_write_${suffix}`;
-  const triggerName = `observe_cron_job_write_${suffix}`;
-  database.function(functionName, (writtenJobId, stateJson) => {
-    if (writtenJobId !== jobId || typeof stateJson !== "string") {
-      return 0;
-    }
-    const state = JSON.parse(stateJson) as { queuedAtMs?: number; runningAtMs?: number };
-    observer({
-      ...(typeof state.queuedAtMs === "number" ? { queuedAtMs: state.queuedAtMs } : {}),
-      ...(typeof state.runningAtMs === "number" ? { runningAtMs: state.runningAtMs } : {}),
-    });
-    return 0;
-  });
-  database.exec(`
-    CREATE TEMP TRIGGER ${triggerName}
-    AFTER UPDATE ON cron_jobs
-    BEGIN
-      SELECT ${functionName}(NEW.job_id, NEW.state_json);
-    END;
-  `);
-  return () => database.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
-}
 
 describe("cron service run admission cleanup", () => {
   it.each(["after preflight", "while awaiting root admission"] as const)(

@@ -1,5 +1,6 @@
 import * as module from "node:module";
 import path from "node:path";
+import { maintainOpenClawCompileCache } from "../../node-compile-cache.mjs";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 // The launcher publishes this same fact before importing built runtime chunks.
@@ -17,6 +18,7 @@ export function enableOwnedNodeCompileCache(directory: string): void {
   const enabled = module.constants?.compileCacheStatus?.ENABLED;
   if (enabled !== undefined && result?.status === enabled) {
     compileCacheOwner().baseDirectory ??= baseDirectory;
+    void maintainOpenClawCompileCache(baseDirectory);
   }
 }
 

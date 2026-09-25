@@ -60,6 +60,8 @@ export function makeContextParams(
       cancelRunBoundApprovals: undefined,
       forwardPluginApprovalRequest: undefined,
       forwardExecApprovalRequest: undefined,
+      forwardSystemAgentApprovalRequest: undefined,
+      forwardSystemAgentApprovalResolved: undefined,
       execApprovalIosPushDelivery: undefined,
       approvalWebPushDelivery: undefined,
       pluginApprovalIosPushDelivery: undefined,

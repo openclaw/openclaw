@@ -23,6 +23,7 @@ export type QaMockProviderDispatchRequest = {
   route: "responses" | "anthropic-messages";
   body: Record<string, unknown>;
   raw: string;
+  headers?: IncomingMessage["headers"];
 };
 
 export type QaMockProviderFailure = {
@@ -207,6 +208,7 @@ export type MockOpenAiCodeModeExecSurface = "native" | "guest";
 
 export type MockOpenAiRequestSnapshot = {
   cursor: number;
+  sessionId?: string;
   raw: string;
   body: Record<string, unknown>;
   prompt: string;

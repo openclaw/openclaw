@@ -258,7 +258,7 @@ describe("Doctor report process output", () => {
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     const original = Buffer.from('{"agent:main:legacy":');
     fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(configPath, `${JSON.stringify({ heartbeat: { every: "30m" } })}\n`);
+    fs.writeFileSync(configPath, `${JSON.stringify({ session: { typingMode: "thinking" } })}\n`);
     fs.writeFileSync(storePath, original);
 
     const result = await runDoctor({ root, configPath, repair: true });
@@ -271,9 +271,11 @@ describe("Doctor report process output", () => {
     expect(output).not.toContain("Doctor complete.");
     expect(fs.readFileSync(storePath)).toEqual(original);
     expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
-      agents: { defaults: { heartbeat: { every: "30m" } } },
+      agents: { defaults: { typingMode: "thinking" } },
     });
-    expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).not.toHaveProperty("heartbeat");
+    expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).not.toHaveProperty(
+      "session.typingMode",
+    );
   }, 120_000);
 
   it(

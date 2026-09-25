@@ -469,6 +469,7 @@ async function runProof(options: ProducerOptions) {
         usePackagedPlugins: true,
       },
       providerBaseUrl: `${authProxy.baseUrl}/v1`,
+      mockSessionObserverUrl: mock.sessionObserverUrl,
       providerMode: "mock-openai",
       primaryModel: MODEL_REF,
       alternateModel: DEFAULT_MOCK_MODEL_REF,

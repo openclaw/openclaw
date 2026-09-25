@@ -53,8 +53,8 @@ describe("Android Fastlane release upload gates", () => {
     expect(lockfile).toContain("aarch64-linux");
     expect(lockfile).toContain("x86_64-linux");
     expect(lockfile).toContain("CHECKSUMS");
-    expect(lockfile).toContain("RUBY VERSION\n   ruby 3.4.10");
-    expect(lockfile).toContain("BUNDLED WITH\n   2.6.9");
+    expect(lockfile).toContain("RUBY VERSION\n  ruby 3.4.10");
+    expect(lockfile).toContain("BUNDLED WITH\n  4.0.21");
   });
 
   it("publishes Wear releases to the matching form-factor track", () => {

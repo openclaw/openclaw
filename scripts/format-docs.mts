@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 
-// Formats docs Markdown/MDX and repairs Mintlify accordion indentation.
+// Formats docs Markdown/MDX using the repository formatter.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
-import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
 import { outputTail, spawnOutputText } from "./lib/output-tail.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
@@ -190,21 +189,6 @@ export function runOxfmt(files: string[], params: OxfmtParams = {}, deps: Format
   }
 }
 
-function repairFiles(root: string, files: string[]) {
-  const changed: string[] = [];
-  for (const relativePath of files) {
-    const absolutePath = path.join(root, relativePath);
-    const raw = fs.readFileSync(absolutePath, "utf8");
-    const formatted = repairMintlifyAccordionIndentation(raw);
-    if (formatted === raw) {
-      continue;
-    }
-    fs.writeFileSync(absolutePath, formatted);
-    changed.push(relativePath);
-  }
-  return changed;
-}
-
 function copyDocsToTemp(root: string, files: string[]) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-format-"));
   for (const relativePath of files) {
@@ -230,7 +214,6 @@ export function formatDocs(params: FormatDocsParams = {}, deps: FormatDeps = {})
         { ...params, repoRoot: root },
         deps,
       );
-      repairFiles(tempRoot, files);
       for (const relativePath of files) {
         const raw = fs.readFileSync(path.join(root, relativePath), "utf8");
         const formatted = fs.readFileSync(path.join(tempRoot, relativePath), "utf8");
@@ -243,7 +226,6 @@ export function formatDocs(params: FormatDocsParams = {}, deps: FormatDeps = {})
     }
   } else {
     runOxfmt(files, { ...params, repoRoot: root }, deps);
-    changed.push(...repairFiles(root, files));
   }
 
   return {

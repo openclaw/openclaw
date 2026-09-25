@@ -30,7 +30,7 @@ it("runs the installed compiler version through the real tsgo wrapper", () => {
 
   expect(result.error).toBeUndefined();
   expect(result.status).toBe(0);
-  const nativeManifest = createRequire(import.meta.url).resolve("typescript-native/package.json");
+  const nativeManifest = createRequire(import.meta.url).resolve("typescript/package.json");
   const nativePackage: { version: string } = JSON.parse(fs.readFileSync(nativeManifest, "utf8"));
   expect(result.stdout.trim()).toBe(`Version ${nativePackage.version}`);
 }, 30_000);
@@ -63,6 +63,7 @@ it("keeps compiler output unchanged with opt-in metrics and emits no metrics by 
         throw new Error("Missing compiler metrics artifact");
       }
       const evidence = JSON.parse(fs.readFileSync(path.join(cwd, artifact), "utf8"));
+      expect(`Version ${evidence.compilerVersion}`).toBe(result.stdout.trim());
       expect(evidence.outcome.exitCode).toBe(0);
       expect(evidence.command.args).toContain("--version");
       expect(evidence.cache.hit).toBe("unknown");
@@ -82,7 +83,7 @@ it.each([false, true])(
     fs.writeFileSync(path.join(root, "package.json"), '{"private":true}\n');
     fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
     const sharedInstall = fs.realpathSync.native(createTempDir("native-shared-install-"));
-    const nativeRoot = path.join(sharedInstall, "node_modules/typescript-native");
+    const nativeRoot = path.join(sharedInstall, "node_modules/typescript");
     const resolverExecuted = path.join(primary, "resolver-executed");
     fs.mkdirSync(path.join(nativeRoot, "lib"), { recursive: true });
     fs.writeFileSync(path.join(nativeRoot, "package.json"), '{"type":"module"}\n');
@@ -691,12 +692,12 @@ syncBuiltinESMExports();
   // regression that matters: without saturation Node collapses the delay to 1ms and
   // would kill this sleeping child immediately.
   it.each([
-    { bound: undefined, name: "the disabled watchdog", body: "#!/bin/sh\nsleep 2\nexit 0\n" },
+    { bound: undefined, name: "the disabled watchdog", body: "#!/bin/sh\nsleep 0.25\nexit 0\n" },
     { bound: "30000", name: "an explicit bound", body: "#!/bin/sh\nexit 0\n" },
     {
       bound: "2147483648",
       name: "an override past Node's timer ceiling",
-      body: "#!/bin/sh\nsleep 1\nexit 0\n",
+      body: "#!/bin/sh\nsleep 0.25\nexit 0\n",
     },
   ])(
     "leaves a completing tsgo alone under $name",

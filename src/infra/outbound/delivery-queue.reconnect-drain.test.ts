@@ -362,9 +362,11 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
       setQueuedEntryState(tmpDir, id, { retryCount: 0, enqueuedAt: index + 1 });
     }
     const pendingBefore = await loadPendingDeliveries(tmpDir);
+    const { promise: firstStarted, resolve: signalFirstStarted } = createDeferred();
     const { promise: firstBlocked, resolve: releaseFirst } = createDeferred();
     const deliver = vi.fn<DeliverFn>(async () => {
       if (deliver.mock.calls.length === 1) {
+        signalFirstStarted();
         await firstBlocked;
       }
     });
@@ -380,11 +382,14 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
       selectEntry: () => ({ match: true, bypassBackoff: false }),
       shouldContinue: () => shouldContinue,
     });
-    await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
-
-    shouldContinue = false;
-    releaseFirst();
-    await drain;
+    try {
+      await Promise.race([firstStarted, drain]);
+      expect(deliver).toHaveBeenCalledOnce();
+    } finally {
+      shouldContinue = false;
+      releaseFirst();
+      await drain;
+    }
 
     expect(deliver).toHaveBeenCalledOnce();
     expect(await loadPendingDeliveries(tmpDir)).toEqual(pendingBefore.slice(1));
@@ -566,8 +571,10 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
   it("does not re-deliver an entry already being recovered at startup", async () => {
     const log = createRecoveryLog();
     const startupLog = createRecoveryLog();
+    const { promise: deliveryStarted, resolve: signalDeliveryStarted } = createDeferred();
     const { promise: deliverPromise, resolve: resolveDeliver } = createDeferred();
     const deliver = vi.fn<DeliverFn>(async () => {
+      signalDeliveryStarted();
       await deliverPromise;
     });
 
@@ -584,18 +591,19 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
       stateDir: tmpDir,
     });
 
-    await vi.waitFor(() => {
+    try {
+      await Promise.race([deliveryStarted, startupRecovery]);
       expect(deliver).toHaveBeenCalledTimes(1);
-    });
 
-    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
-    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+      await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+      await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
 
-    expect(deliver).toHaveBeenCalledTimes(1);
-    expect(log.info).not.toHaveBeenCalled();
-
-    resolveDeliver!();
-    await startupRecovery;
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(log.info).not.toHaveBeenCalled();
+    } finally {
+      resolveDeliver();
+      await startupRecovery;
+    }
   });
 
   it("shares replay pacing between reconnect and startup drains", async () => {
@@ -652,11 +660,13 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
   it("does not re-deliver a stale startup snapshot after reconnect already acked it", async () => {
     const log = createRecoveryLog();
     const startupLog = createRecoveryLog();
+    const { promise: blockerStarted, resolve: signalBlockerStarted } = createDeferred();
     const { promise: blocker, resolve: releaseBlocker } = createDeferred();
     const deliveredTargets: string[] = [];
     const deliver = vi.fn<DeliverFn>(async ({ to }) => {
       deliveredTargets.push(to);
       if (to === "+1000") {
+        signalBlockerStarted();
         await blocker;
       }
     });
@@ -679,19 +689,17 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
       stateDir: tmpDir,
     });
 
-    await vi.waitFor(() => {
-      const deliveries = deliver.mock.calls.map(([delivery]) => requireRecord(delivery));
-      expect(
-        deliveries.some(
-          (delivery) => delivery.channel === "demo-channel-a" && delivery.to === "+1000",
-        ),
-      ).toBe(true);
-    });
+    try {
+      await Promise.race([blockerStarted, startupRecovery]);
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: "demo-channel-a", to: "+1000" }),
+      );
 
-    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
-
-    releaseBlocker!();
-    await startupRecovery;
+      await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+    } finally {
+      releaseBlocker();
+      await startupRecovery;
+    }
 
     expect(deliver).toHaveBeenCalledTimes(2);
     expect(countMatching(deliveredTargets, (target) => target === "+1555")).toBe(1);

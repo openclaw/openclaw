@@ -682,7 +682,10 @@ reclamation operations also include `sessionIdHash` (when targeting one session)
 `error` (the redacted message and causes), and `errorFrame` (the first stack frame).
 These failures emit one warning even below one second, named
 `SQLite reclamation Worker failed`; slower failures use the existing slow-operation
-warning. Session identifiers use the same hash as other session SQLite diagnostics;
+warning. Automatic maintenance that a newer session write supersedes before commit
+is not a Worker failure: maintenance retries after the write quiet window, and a
+fast superseded Worker logs `SQLite reclamation Worker superseded by newer inputs`
+at debug level. Session identifiers use the same hash as other session SQLite diagnostics;
 the failure fields are redacted and bounded to 2,048 characters each.
 Cold-storage operations use the same warning with `reclamationKind` set to
 `cold-batch` (archive or externalize), `cold-maintain` (reclaim free pages), or

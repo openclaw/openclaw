@@ -68,6 +68,7 @@ import {
   resolveCrabboxProvisionBaseTimeoutMs,
   resolveCrabboxProvisionCallTimeoutMs,
   resolveCrabboxWarmImageCaptureTimeoutMs,
+  WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
 } from "./crabbox-worker-timeouts.js";
 import { loadCrabboxWorkerWallpaperBase64 } from "./crabbox-worker-wallpaper.js";
 import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
@@ -389,7 +390,7 @@ export function createCrabboxWorkerProvider(
                 ? { forkedCheckpointId: allocationChoice.checkpointId }
                 : {}),
             },
-            async () => {
+            async (scrubScript) => {
               if (!options?.prepareNodeRuntime) {
                 throw new Error("Crabbox project snapshots require node runtime preparation");
               }
@@ -405,9 +406,11 @@ export function createCrabboxWorkerProvider(
                 await runProvisionSetup({
                   ...inspectedParams,
                   phase: "node runtime preparation",
-                  setup: setup.command,
+                  // Node clears its own environment; scrub must also inherit no shell credentials.
+                  setup: `${setup.command}\nunset ${Object.keys(setup.forwardedEnv).join(" ")}\n${scrubScript}`,
                   forwardedEnv: setup.forwardedEnv,
-                  timeoutMs: CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
+                  timeoutMs:
+                    CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS + WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
                   signal:
                     runtime.signal && preparationSignal
                       ? AbortSignal.any([preparationSignal, runtime.signal])

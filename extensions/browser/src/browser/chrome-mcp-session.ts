@@ -1,5 +1,5 @@
 // Owns Chrome MCP attachment, admission, and retained cleanup per profile configuration.
-import { toErrorObject } from "../infra/errors.js";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   createChromeMcpSession,
   setChromeMcpSessionFactoryForTest,

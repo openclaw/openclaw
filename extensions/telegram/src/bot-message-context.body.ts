@@ -207,7 +207,6 @@ export async function resolveTelegramInboundBody(params: {
     return null;
   }
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
-  const useAccessGroups = true;
   const hasControlCommandInMessage = hasControlCommand(messageTextParts.text, cfg, {
     botUsername,
   });
@@ -295,8 +294,7 @@ export async function resolveTelegramInboundBody(params: {
   const disableAudioPreflight =
     (topicConfig?.disableAudioPreflight ??
       (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
-  const senderAllowedForAudioPreflight =
-    !useAccessGroups || !allowForCommands.hasEntries || commandAuthorized;
+  const senderAllowedForAudioPreflight = !allowForCommands.hasEntries || commandAuthorized;
 
   let preflightTranscript: string | undefined;
   const needsPreflightTranscription =

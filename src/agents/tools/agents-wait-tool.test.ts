@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import ts from "typescript";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { typeCheckSources } from "../../../test/helpers/typescript.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
@@ -129,36 +129,23 @@ describe("agents_wait", () => {
     // Consume the intact guest declaration, with opaque collector-specific output.
     expect(file.content).not.toContain("truncated: true");
     const fileName = "/collector-consumer.ts";
-    const source = ts.createSourceFile(
-      fileName,
+    const source =
       file.content +
-        "\n" +
-        [
-          "async function consume() {",
-          'const result = await agents_wait({ids:["ready"]});',
-          "const ids: string[] = result.completed.map(item => item.runId);",
-          "// @ts-expect-error No invented builds field.",
-          "result.builds.map(item => item.id);",
-          "// @ts-expect-error Collector structured output is unknown without its own schema.",
-          "result.completed[0].structured.answer;",
-          "return ids;",
-          "}",
-          "// @ts-expect-error Required ids stay required.",
-          "agents_wait({});",
-        ].join("\n"),
-      ts.ScriptTarget.ESNext,
-      true,
-    );
-    const options = { noEmit: true, strict: true, types: [], target: ts.ScriptTarget.ESNext };
-    const host = ts.createCompilerHost(options);
-    const original = host.getSourceFile.bind(host);
-    host.getSourceFile = (name, ...args) => (name === fileName ? source : original(name, ...args));
-    const program = ts.createProgram([fileName], options, host);
-    expect(
-      ts
-        .getPreEmitDiagnostics(program)
-        .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
-    ).toEqual([]);
+      "\n" +
+      [
+        "async function consume() {",
+        'const result = await agents_wait({ids:["ready"]});',
+        "const ids: string[] = result.completed.map(item => item.runId);",
+        "// @ts-expect-error No invented builds field.",
+        "result.builds.map(item => item.id);",
+        "// @ts-expect-error Collector structured output is unknown without its own schema.",
+        "result.completed[0].structured.answer;",
+        "return ids;",
+        "}",
+        "// @ts-expect-error Required ids stay required.",
+        "agents_wait({});",
+      ].join("\n");
+    expect(typeCheckSources({ [fileName]: source })).toEqual([]);
   });
 
   it("settles a parked collector bridge from a registry write event", async () => {

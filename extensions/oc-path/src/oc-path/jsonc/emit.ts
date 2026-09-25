@@ -11,32 +11,18 @@
  * @module @openclaw/oc-path/jsonc/emit
  */
 
+import { emitWithMode, type EmitOptions } from "../emit-mode.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
 import type { JsoncAst, JsoncValue } from "./ast.js";
 
-interface JsoncEmitOptions {
-  readonly mode?: "roundtrip" | "render";
-  readonly fileNameForGuard?: string;
-  readonly acceptPreExistingSentinel?: boolean;
-}
-
-export function emitJsonc(ast: JsoncAst, opts: JsoncEmitOptions = {}): string {
-  const mode = opts.mode ?? "roundtrip";
-  const guardPath = opts.fileNameForGuard ? `oc://${opts.fileNameForGuard}` : "oc://";
-  const acceptPreExisting = opts.acceptPreExistingSentinel ?? true;
-
-  if (mode === "roundtrip") {
-    if (!acceptPreExisting && ast.raw.includes(REDACTED_SENTINEL)) {
-      throw new OcEmitSentinelError(`${guardPath}/[raw]`);
+export function emitJsonc(ast: JsoncAst, opts: EmitOptions = {}): string {
+  return emitWithMode(ast, opts, (guardPath) => {
+    // Render mode loses comments; walks leaves for caller-injected sentinel.
+    if (ast.root === null) {
+      return "";
     }
-    return ast.raw;
-  }
-
-  // Render mode loses comments; walks leaves for caller-injected sentinel.
-  if (ast.root === null) {
-    return "";
-  }
-  return renderJsoncValue(ast.root, guardPath, " ");
+    return renderJsoncValue(ast.root, guardPath, " ");
+  });
 }
 
 export function renderJsoncValue(

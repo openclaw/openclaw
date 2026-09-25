@@ -13,7 +13,7 @@ import {
   listOpenClawRegisteredAgentDatabases,
   readOpenClawAgentDatabaseRegistryToken,
 } from "../state/openclaw-agent-db-registry-listing.js";
-import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db-registry.js";
+import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
 import { resolveGatewaySessionStoreLookupCandidates } from "./session-utils-store-lookup.js";
 import type { GatewaySessionStoreReadSources } from "./session-utils-store.types.js";
 

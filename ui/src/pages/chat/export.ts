@@ -25,11 +25,12 @@ export function exportChatMarkdown(messages: unknown[], assistantName: string): 
 
 export function buildChatMarkdown(messages: unknown[], assistantName: string): string | null {
   const history = visibleChatHistoryMessages(messages);
-  if (history.length === 0) {
-    return null;
-  }
-  const lines: string[] = [`# Chat with ${assistantName}`, ""];
+  const lines: string[] = [];
   for (const msg of history) {
+    const content = extractTextCached(msg) ?? "";
+    if (!content.trim()) {
+      continue;
+    }
     const m = msg as Record<string, unknown>;
     const role = normalizeRoleForGrouping(resolveMessageRole(msg));
     const speaker =
@@ -38,9 +39,8 @@ export function buildChatMarkdown(messages: unknown[], assistantName: string): s
         : role === "assistant"
           ? (resolveMessageSenderLabel(msg) ?? assistantName)
           : "Tool";
-    const content = extractTextCached(msg) ?? "";
     const ts = timestampMsToIsoString(m.timestamp) ?? "";
     lines.push(`## ${speaker}${ts ? ` (${ts})` : ""}`, "", content, "");
   }
-  return lines.join("\n");
+  return lines.length > 0 ? [`# Chat with ${assistantName}`, "", ...lines].join("\n") : null;
 }

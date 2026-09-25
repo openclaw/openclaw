@@ -17,9 +17,12 @@ import {
   readGatewayDeviceSourceAuthority,
 } from "./device-revocation.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import * as operatorCapture from "./operator-run-authority.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
-import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
+import {
+  captureOperatorToolGatewayContinuationContext,
+  withOperatorToolGatewayAuthority,
+} from "./server-plugin-in-process-dispatch.js";
 import {
   createContext,
   createOperatorClient,
@@ -40,6 +43,84 @@ describe("typed in-process agent continuation authorization", () => {
     startTurn.mockReset();
     waitForTurn.mockReset();
   });
+
+  it.each(["invocation", "receipt"] as const)(
+    "rejects continuation transfer when its %s closes during preparation",
+    async (closed) => {
+      const client = createOperatorClient({
+        profileName: "preparing-continuation",
+        scopes: ["operator.write"],
+      });
+      const context = createContext();
+      context.resolveGatewayContext = () => context;
+      const source = await operatorCapture.captureGatewayOperatorRunAuthority({ client, context });
+      if (!source) {
+        throw new Error("Expected operator source");
+      }
+      client.internal = { operatorRunAuthority: source.authority };
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      let receiptCurrent = true;
+      let pending: ReturnType<typeof captureOperatorToolGatewayContinuationContext>;
+      let settled:
+        | Promise<Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>>
+        | undefined;
+      const capture = operatorCapture.captureGatewayOperatorRunAuthority;
+      let restoreCapture = () => {};
+      try {
+        await withPluginRuntimeGatewayRequestScope(
+          { client, context, isWebchatConnect: () => false },
+          () =>
+            withOperatorToolGatewayAuthority({ scopes: ["operator.write"] }, async () => {
+              const held = vi
+                .spyOn(operatorCapture, "captureGatewayOperatorRunAuthority")
+                .mockImplementationOnce(async (...args) => {
+                  const captured = await capture(...args);
+                  entered.resolve();
+                  await resume.promise;
+                  return captured;
+                });
+              restoreCapture = () => held.mockRestore();
+              await withGatewayToolCallerIdentity(
+                {
+                  agentId: "main",
+                  sessionKey: "agent:main:main",
+                  operationalRunInstance: createOperationalRunInstanceRef("preparing-continuation"),
+                  receiptAuthority: () => receiptCurrent,
+                },
+                async () => {
+                  pending = captureOperatorToolGatewayContinuationContext();
+                  if (!pending) {
+                    throw new Error("Expected continuation preparation");
+                  }
+                  settled = pending.catch(() => undefined);
+                  await entered.promise;
+                  if (closed === "receipt") {
+                    receiptCurrent = false;
+                    resume.resolve();
+                    await expect(pending).rejects.toThrow("agent tool caller authority");
+                  }
+                },
+              );
+            }),
+        );
+        if (closed === "invocation") {
+          resume.resolve();
+          if (!pending) {
+            throw new Error("Expected continuation preparation");
+          }
+          await expect(pending).rejects.toThrow("operator tool invocation authority expired");
+        }
+        source.release();
+        expect(source.authority.assertCurrent).toThrow();
+      } finally {
+        resume.resolve();
+        (await settled)?.release();
+        restoreCapture();
+        source.release();
+      }
+    },
+  );
 
   it.each([false, true])(
     "preserves roles-enabled dispatch without promoting scoped unknown callers (%s)",
@@ -120,7 +201,7 @@ describe("typed in-process agent continuation authorization", () => {
     "settles sessions_send after its requester ends (%s)",
     async (boundary) => {
       const owner = createOperatorClient({
-        profileId: "reply-owner",
+        profileName: "reply-owner",
         scopes: ["operator.read", "operator.write"],
       });
       const context = createContext();
@@ -152,7 +233,9 @@ describe("typed in-process agent continuation authorization", () => {
       });
       startTurn.mockImplementation(async ({ principal, io, preflight: { request } }) => {
         expect(principal.connect.scopes).toEqual(["operator.write"]);
-        expect(principal.authenticatedUserProfile?.profileId).toBe("reply-owner");
+        expect(principal.authenticatedUserProfile?.profileId).toBe(
+          owner.authenticatedUserProfile!.profileId,
+        );
         io.emitAcceptance([true, { runId: request.idempotencyKey, status: "accepted" }, undefined]);
         io.emitFinal([true, { runId: request.idempotencyKey, status: "ok" }, undefined]);
       });
@@ -236,13 +319,15 @@ describe("typed in-process agent continuation authorization", () => {
     "preserves GitHub identity access after %s admits a write-only continuation",
     async (sourceTool) => {
       const owner = createOperatorClient({
-        profileId: "continuation-owner",
+        profileName: "continuation-owner",
         scopes: ["operator.read", "operator.write"],
       });
       const readResult = { effective: { credentialState: "available", refreshState: "idle" } };
       const readHandler = vi.fn(({ client, respond }: GatewayRequestHandlerOptions) => {
         expect(client?.connect.scopes).toEqual(["operator.read"]);
-        expect(client?.authenticatedUserProfile?.profileId).toBe("continuation-owner");
+        expect(client?.authenticatedUserProfile?.profileId).toBe(
+          owner.authenticatedUserProfile!.profileId,
+        );
         respond(true, readResult);
       });
       const context = createContext();
@@ -312,12 +397,12 @@ describe("typed in-process agent continuation authorization", () => {
     const { runAnnounceAgentCall } =
       await import("../agents/subagents/announce/subagent-announce-completion-delivery.js");
     const owner = createOperatorClient({
-      profileId: "settle-owner",
+      profileName: "settle-owner",
       scopes: ["operator.write"],
     });
     const context = createContext();
     const sourceSignal = new AbortController();
-    const source = captureGatewayOperatorRunAuthority({
+    const source = await operatorCapture.captureGatewayOperatorRunAuthority({
       client: owner,
       context,
       sourceAuthority: {

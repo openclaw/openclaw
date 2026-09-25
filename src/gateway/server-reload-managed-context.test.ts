@@ -33,9 +33,22 @@ import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.j
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayPluginReloadResult } from "./server-reload-contracts.js";
+import {
+  createConfigWriteNotification,
+  createValidConfigSnapshot,
+} from "./server-reload-handlers.config.test-support.js";
 import type { startManagedGatewayConfigReloader as StartManagedGatewayConfigReloader } from "./server-reload-managed.js";
 import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
+
+// Model preparation has its own lifecycle coverage; this regression needs the
+// real reload transaction and async owners, not a cold model/plugin runtime.
+vi.mock("../agents/prepared-model-runtime.js", () => ({
+  advancePreparedModelRuntimeConfig: vi.fn(),
+  markPreparedModelRuntimeSnapshotsStale: vi.fn(),
+  rejectPendingPreparedModelRuntimeReplacement: vi.fn(),
+  refreshPreparedModelRuntimeSnapshots: vi.fn(async () => {}),
+}));
 
 type ManagedReloaderParams = Parameters<typeof StartManagedGatewayConfigReloader>[0];
 type ConfigWriteListener = (event: ConfigWriteNotification) => void;
@@ -173,43 +186,6 @@ function startManagedGatewayConfigReloader(
     requestRecoveryRestart:
       params.requestRecoveryRestart ?? requestGatewayRestartWithSignalAdmission,
   });
-}
-
-function createValidConfigSnapshot(config: OpenClawConfig, hash: string) {
-  return {
-    path: "/tmp/openclaw.json",
-    exists: true,
-    raw: "{}",
-    parsed: {},
-    sourceConfig: config,
-    resolved: config,
-    valid: true,
-    runtimeConfig: config,
-    config,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-    hash,
-  };
-}
-
-function createConfigWriteNotification(
-  config: OpenClawConfig,
-  persistedHash: string,
-  revision: number,
-  fingerprint: string,
-  sourceFingerprint: string,
-): ConfigWriteNotification {
-  return {
-    configPath: "/tmp/openclaw.json",
-    sourceConfig: config,
-    runtimeConfig: config,
-    persistedHash,
-    revision,
-    fingerprint,
-    sourceFingerprint,
-    writtenAtMs: Date.now(),
-  };
 }
 
 function captureConfigWriteListener(ref: ConfigWriteListenerRef) {

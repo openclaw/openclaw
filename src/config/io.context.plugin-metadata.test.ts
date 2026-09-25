@@ -167,7 +167,6 @@ describe("config IO plugin metadata snapshots", () => {
     for (let read = 0; read < 2; read++) {
       const context = createConfigIoContext({ env: {}, observe: false });
       const loader = context.createValidationPluginMetadataSnapshotLoader({
-        effectiveConfigRaw: config,
         env: {},
       });
       loader.load(config);
@@ -255,7 +254,7 @@ describe("config IO plugin metadata snapshots", () => {
       const loader = createConfigIoContext({
         env: {},
         observe: false,
-      }).createValidationPluginMetadataSnapshotLoader({ effectiveConfigRaw: nextConfig, env: {} });
+      }).createValidationPluginMetadataSnapshotLoader({ env: {} });
 
       const result = await withPluginCache(createPluginCache(), () =>
         mode === "sync"
@@ -301,7 +300,7 @@ describe("config IO plugin metadata snapshots", () => {
     const loader = createConfigIoContext({
       env: {},
       observe: false,
-    }).createValidationPluginMetadataSnapshotLoader({ effectiveConfigRaw: nextConfig, env: {} });
+    }).createValidationPluginMetadataSnapshotLoader({ env: {} });
 
     const result = await withPluginCache(createPluginCache(), () =>
       validateConfigObjectWithPluginsAsync(nextConfig, {
@@ -407,7 +406,6 @@ describe("config IO plugin metadata snapshots", () => {
     };
     const context = createConfigIoContext({ env: {}, observe: false });
     const loader = context.createValidationPluginMetadataSnapshotLoader({
-      effectiveConfigRaw: cfg,
       env: {},
     });
     loader.load(cfg);

@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
 import { waitForCommandSpawn } from "../../../process/exec-spawn.js";
 import { spawnCommand } from "../../../process/exec.js";
@@ -26,6 +25,7 @@ import {
 } from "./render-utils.js";
 import type { FindToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { findSchema } from "./tool-schemas.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
 function isInsideGitRepository(searchPath: string): boolean {
@@ -41,13 +41,6 @@ function isInsideGitRepository(searchPath: string): boolean {
   }
 }
 
-const findSchema = Type.Object({
-  pattern: Type.String({
-    description: "File glob, e.g. **/*.ts.",
-  }),
-  path: Type.Optional(Type.String({ description: "Search dir; default cwd." })),
-  limit: Type.Optional(Type.Integer({ description: "Max results; default 1000." })),
-});
 const DEFAULT_LIMIT = 1000;
 
 /**

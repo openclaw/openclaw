@@ -56,6 +56,7 @@ function createContext(
         password: "",
       },
       subscribe,
+      subscribeEvents: subscribe,
     },
     agents: { subscribe, ensureList: vi.fn(async () => null) },
     // The Profile editor follows the app-owned Settings sidebar selector.

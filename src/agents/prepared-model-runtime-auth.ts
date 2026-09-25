@@ -88,13 +88,13 @@ export function hasSamePreparedModelCatalogAuth(
 }
 
 /** Private auth facts owned by an immutable prepared model generation. */
-const authStoreBySnapshot = new WeakMap<object, AuthProfileStore>();
-const authLabelsBySnapshot = new WeakMap<object, ModelCatalogAuthLabels>();
-const materializationsBySnapshot = new WeakMap<object, readonly RuntimeAuthMaterialization[]>();
-const authLoaderBySnapshot = new WeakMap<
-  object,
-  (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>
->();
+type RuntimeAuthBinding = {
+  store?: AuthProfileStore;
+  labels?: ModelCatalogAuthLabels;
+  materializations?: readonly RuntimeAuthMaterialization[];
+  load?: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
+};
+const runtimeAuth = new WeakMap<object, RuntimeAuthBinding>();
 const authByFullCatalog = new WeakMap<
   object,
   {
@@ -104,26 +104,16 @@ const authByFullCatalog = new WeakMap<
 >();
 
 // Secret-bearing state stays lifecycle-owned without becoming part of the public snapshot shape.
-export function setPreparedModelRuntimeAuthStore(
-  snapshot: object,
-  authStore: AuthProfileStore,
-): void {
-  authStoreBySnapshot.set(snapshot, authStore);
+export function bindPreparedModelRuntimeAuth(snapshot: object, binding: RuntimeAuthBinding): void {
+  runtimeAuth.set(snapshot, { ...runtimeAuth.get(snapshot), ...binding });
 }
 
 export function getPreparedModelRuntimeAuthStore(snapshot: object): AuthProfileStore | undefined {
-  return authStoreBySnapshot.get(snapshot);
-}
-
-export function setPreparedModelRuntimeAuthLabels(
-  snapshot: object,
-  labels: ModelCatalogAuthLabels,
-): void {
-  authLabelsBySnapshot.set(snapshot, labels);
+  return runtimeAuth.get(snapshot)?.store;
 }
 
 export function getPreparedModelRuntimeAuthLabels(snapshot: object): ModelCatalogAuthLabels {
-  const labels = authLabelsBySnapshot.get(snapshot);
+  const labels = runtimeAuth.get(snapshot)?.labels;
   if (!labels) {
     throw new Error("Prepared model runtime omitted auth display labels");
   }
@@ -157,53 +147,28 @@ export function copyPreparedModelFullCatalogAuth(source: object, target: object)
   }
 }
 
-export function setPreparedModelRuntimeAuthLoader(
-  snapshot: object,
-  loader: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>,
-): void {
-  authLoaderBySnapshot.set(snapshot, loader);
-}
-
 export async function loadPreparedModelRuntimeAuth(
   snapshot: object & { authModes?: PreparedAgentCredentialModes },
   scope: PreparedModelRuntimeAuthScope,
 ): Promise<PreparedModelRuntimeAuth | undefined> {
-  const loader = authLoaderBySnapshot.get(snapshot);
-  if (loader) {
-    return await loader(scope);
+  const binding = runtimeAuth.get(snapshot);
+  const load = binding?.load;
+  if (load) {
+    return await load(scope);
   }
-  const authStore = authStoreBySnapshot.get(snapshot);
+  const authStore = binding?.store;
   return authStore ? { authStore, authModes: snapshot.authModes ?? {} } : undefined;
-}
-
-export function setPreparedModelRuntimeAuthMaterializations(
-  snapshot: object,
-  materializations: readonly RuntimeAuthMaterialization[],
-): void {
-  materializationsBySnapshot.set(snapshot, materializations);
 }
 
 export function getPreparedModelRuntimeAuthMaterializations(
   snapshot: object,
 ): readonly RuntimeAuthMaterialization[] {
-  return materializationsBySnapshot.get(snapshot) ?? [];
+  return runtimeAuth.get(snapshot)?.materializations ?? [];
 }
 
 export function copyPreparedModelRuntimeAuthBindings(source: object, target: object): void {
-  const authStore = authStoreBySnapshot.get(source);
-  const labels = authLabelsBySnapshot.get(source);
-  const authLoader = authLoaderBySnapshot.get(source);
-  const materializations = materializationsBySnapshot.get(source);
-  if (authStore) {
-    authStoreBySnapshot.set(target, authStore);
-  }
-  if (labels) {
-    authLabelsBySnapshot.set(target, labels);
-  }
-  if (authLoader) {
-    authLoaderBySnapshot.set(target, authLoader);
-  }
-  if (materializations) {
-    materializationsBySnapshot.set(target, materializations);
+  const binding = runtimeAuth.get(source);
+  if (binding) {
+    bindPreparedModelRuntimeAuth(target, binding);
   }
 }

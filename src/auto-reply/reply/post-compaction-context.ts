@@ -33,26 +33,9 @@ function matchesSectionSet(sectionNames: string[], expectedSections: string[]): 
     return false;
   }
 
-  const counts = new Map<string, number>();
-  for (const name of expectedSections) {
-    const normalized = normalizeLowercaseStringOrEmpty(name);
-    counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
-  }
-
-  for (const name of sectionNames) {
-    const normalized = normalizeLowercaseStringOrEmpty(name);
-    const count = counts.get(normalized);
-    if (!count) {
-      return false;
-    }
-    if (count === 1) {
-      counts.delete(normalized);
-    } else {
-      counts.set(normalized, count - 1);
-    }
-  }
-
-  return counts.size === 0;
+  const actual = sectionNames.map(normalizeLowercaseStringOrEmpty).toSorted();
+  const expected = expectedSections.map(normalizeLowercaseStringOrEmpty).toSorted();
+  return actual.every((name, index) => name === expected[index]);
 }
 
 /**
@@ -192,54 +175,29 @@ export function extractSections(
   const lines = content.split("\n");
 
   for (const name of sectionNames) {
-    let sectionLines: string[] = [];
+    const sectionLines: string[] = [];
     let inSection = false;
     let sectionLevel = 0;
     let inCodeBlock = false;
 
     for (const line of lines) {
-      // Track fenced code blocks
-      if (line.trimStart().startsWith("```")) {
+      const isFence = line.trimStart().startsWith("```");
+      if (isFence) {
         inCodeBlock = !inCodeBlock;
-        if (inSection) {
-          sectionLines.push(line);
-        }
-        continue;
       }
-
-      // Skip heading detection inside code blocks
-      if (inCodeBlock) {
-        if (inSection) {
-          sectionLines.push(line);
-        }
-        continue;
-      }
-
-      // Check if this line is a heading
-      const headingMatch = line.match(/^(#{2,3})\s+(.+?)\s*$/);
-
+      const headingMatch = !isFence && !inCodeBlock ? line.match(/^(#{2,3})\s+(.+?)\s*$/) : null;
       if (headingMatch) {
-        const level = expectDefined(headingMatch[1], "heading match capture group 1").length; // 2 or 3
+        const level = expectDefined(headingMatch[1], "heading match capture group 1").length;
         const headingText = headingMatch[2];
-
-        if (!inSection) {
-          // Check if this is our target section (case-insensitive)
-          if (
-            normalizeLowercaseStringOrEmpty(headingText) === normalizeLowercaseStringOrEmpty(name)
-          ) {
-            inSection = true;
-            sectionLevel = level;
-            sectionLines = [line];
-            continue;
-          }
-        } else {
-          // We're in section — stop if we hit a heading of same or higher level
-          if (level <= sectionLevel) {
-            break;
-          }
-          // Lower-level heading (e.g., ### inside ##) — include it
-          sectionLines.push(line);
-          continue;
+        if (inSection && level <= sectionLevel) {
+          break;
+        }
+        if (
+          !inSection &&
+          normalizeLowercaseStringOrEmpty(headingText) === normalizeLowercaseStringOrEmpty(name)
+        ) {
+          inSection = true;
+          sectionLevel = level;
         }
       }
 

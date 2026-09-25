@@ -124,7 +124,7 @@ class ChatMediaTranscriptLayoutTest {
             ChatMessage("garden-answer", "assistant", listOf(ChatMessageContent(text = "The sunny bed has room for herbs. Keep a clear path between the planters.")), null),
           )
       }
-      composeRule.waitUntil { composeRule.onAllNodesWithContentDescription("Open image preview").fetchSemanticsNodes().size == 2 }
+      composeRule.waitUntil { composeRule.onAllNodesWithContentDescription("image/png", useUnmergedTree = true).fetchSemanticsNodes().size == 2 }
       composeRule.onNodeWithText("Which garden layout works best?", useUnmergedTree = true).assertIsDisplayed()
       composeRule.onNodeWithText("The sunny bed has room for herbs. Keep a clear path between the planters.", useUnmergedTree = true).assertIsDisplayed()
       System.getenv("OPENCLAW_MEDIA_PROOF_DIR")?.let { directory ->

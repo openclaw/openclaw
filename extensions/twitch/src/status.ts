@@ -109,16 +109,6 @@ export function collectTwitchStatusIssues(
         });
       }
 
-      if (account.allowFrom && account.allowFrom.length === 0) {
-        issues.push({
-          channel: "twitch",
-          accountId,
-          kind: "config",
-          message: "allowFrom is configured but empty",
-          fix: "Either add user IDs to allowFrom, remove the allowFrom field, or use allowedRoles instead.",
-        });
-      }
-
       if (
         account.allowedRoles?.includes("all") &&
         account.allowFrom &&

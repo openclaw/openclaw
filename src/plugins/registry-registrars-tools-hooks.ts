@@ -29,11 +29,7 @@ import type {
   PluginAgentToolResultMiddlewareRegistration,
   PluginRecord,
 } from "./registry-types.js";
-import {
-  findUndeclaredPluginToolNames,
-  normalizePluginToolContractNames,
-  normalizePluginToolNames,
-} from "./tool-contracts.js";
+import { normalizePluginToolContractNames, normalizePluginToolNames } from "./tool-contracts.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import {
   isConversationHookName,
@@ -78,6 +74,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     reportRegistrationError,
     reportRegistrationWarning,
   } = state;
+  const declaredToolNames = new WeakMap<PluginRecord, ReadonlySet<string>>();
 
   const registerCodexAppServerExtensionFactory = (
     record: PluginRecord,
@@ -212,8 +209,12 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     if (pluginsWithChannelRegistrationConflict.has(record.id)) {
       return;
     }
-    const declaredNames = normalizePluginToolContractNames(record.contracts);
-    if (declaredNames.length === 0) {
+    let declaredNames = declaredToolNames.get(record);
+    if (!declaredNames) {
+      declaredNames = new Set(normalizePluginToolContractNames(record.contracts));
+      declaredToolNames.set(record, declaredNames);
+    }
+    if (declaredNames.size === 0) {
       reportRegistrationError(
         record,
         "plugin must declare contracts.tools before registering agent tools",
@@ -248,7 +249,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       names.push(tool.name);
     }
     const normalized = normalizePluginToolNames(names);
-    const undeclared = findUndeclaredPluginToolNames({ declaredNames, toolNames: normalized });
+    const undeclared = normalized.filter((name) => !declaredNames.has(name));
     if (undeclared.length > 0) {
       reportRegistrationError(
         record,
@@ -259,16 +260,17 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
-    registry.tools.push(
-      createRegistration(record, {
+    registry.tools.push({
+      ...createRegistration(record, {
         factory,
         ...(versioned ? { contextVersion: 2 as const } : {}),
         names: normalized,
-        declaredNames,
         optional,
         origin: record.origin,
       }),
-    );
+      // Host-owned membership must not re-enter the callable wrapper's graph walk.
+      declaredNames,
+    });
   };
 
   const registerHook = (

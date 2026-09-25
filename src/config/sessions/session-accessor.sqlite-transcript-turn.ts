@@ -351,10 +351,11 @@ export async function appendExpectedSessionTranscriptTurn(
           if (appended) {
             previousIdentity.set(resolved.sessionKey, appended.entry);
           }
-          writeSessionEntry(transactionDb, resolved.sessionKey, next, {
+          const persisted = writeSessionEntry(transactionDb, resolved.sessionKey, next, {
             canonicalPreviousEntry: previousIdentity.get(resolved.sessionKey) ?? null,
           });
-          const currentIdentity = readSessionIdentitySnapshot(transactionDb, identityKeys);
+          const currentIdentity = new Map(previousIdentity);
+          currentIdentity.set(resolved.sessionKey, persisted);
           publishIdentity = prepareSessionIdentityPublication(
             transactionDb,
             resolved.agentId,

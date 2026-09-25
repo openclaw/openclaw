@@ -1,6 +1,6 @@
 // Startup policy helpers for config guards, plugin loading, banners, and CLI path checks.
 import { isTruthyEnvValue } from "../infra/env.js";
-import type { CliCommandPluginLoadPolicy } from "./command-catalog.js";
+import type { CliCommandPluginLoadPolicy } from "./command-catalog-types.js";
 import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
 
 function shouldLoadPlugins(params: {
@@ -48,8 +48,10 @@ export function resolveCliStartupPolicy(params: {
     skipConfigGuard:
       nativeCheck ||
       configGuard === "skip" ||
+      configGuard === "defer" ||
       (configGuard === "when-suppressed" && suppressDoctorStdout),
-    ...(configGuard === "validate" ? { validateConfigOnly: true } : {}),
+    // Deferred actions own full preparation; early routing/proxy reads need only core config.
+    ...(configGuard === "validate" || configGuard === "defer" ? { validateConfigOnly: true } : {}),
     loadPlugins:
       !nativeCheck &&
       shouldLoadPlugins({

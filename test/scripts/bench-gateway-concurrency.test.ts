@@ -356,6 +356,7 @@ describe("gateway concurrency benchmark script", () => {
 
     it("omits private paths when diagnostic startup fails before a child exists", async () => {
       await withTempDir("gateway-recap-failure-", async (root) => {
+        const output = path.join(root, "report.json");
         const result = spawnSync(
           testNodeExecPath,
           [
@@ -363,13 +364,23 @@ describe("gateway concurrency benchmark script", () => {
             "--activity-summary-diagnostics",
             "--entry",
             "/private/fixture/diagnostic-secret/entry.js",
+            "--output",
+            output,
+            "--json",
           ],
           { encoding: "utf8", env: { ...process.env, TMPDIR: root, TEMP: root, TMP: root } },
         );
         expect(result.status).toBe(1);
         expect(result.stderr).toContain("Activity-summary diagnostic benchmark failed");
         expect(result.stderr).toContain("[bench-gateway-concurrency] FAILED (exit 1)");
-        expect(`${result.stdout}${result.stderr}`).not.toContain("diagnostic-secret");
+        const written = await readFile(output, "utf8");
+        expect(JSON.parse(result.stdout)).toEqual(JSON.parse(written));
+        expect(JSON.parse(written)).toMatchObject({
+          mode: "mock-activity-summary-diagnostics",
+          runs: [],
+          failedAttempt: { status: "failure", cleanup: { rootRemoved: true } },
+        });
+        expect(`${written}${result.stdout}${result.stderr}`).not.toContain("diagnostic-secret");
       });
     });
 
@@ -1910,13 +1921,42 @@ describe("gateway concurrency benchmark script", () => {
           turnsPerSession: 1,
         });
         deadlines.push(deadlineAt);
-        return sample;
+        return { status: "success", run: sample };
       },
     });
 
     expect(deadlines).toEqual([6_000, 14_000]);
-    expect(runs).toEqual([sample]);
+    expect(runs).toEqual({ runs: [sample], warmupRuns: [sample] });
   });
+
+  it.each(["warmup", "measured"] as const)(
+    "retains completed attempts and stops after a failed %s sample",
+    async (phase) => {
+      const warmup = createBenchmarkRun({ durationMs: 1 });
+      const measured = createBenchmarkRun({ durationMs: 2 });
+      const failed = {
+        status: "failure" as const,
+        errors: [{ phase: "diagnostics" as const, error: "timeline was incomplete" }],
+        partialRun: createBenchmarkRun({ durationMs: 3 }),
+        cleanup: { rootRemoved: true },
+      };
+      const completed = phase === "warmup" ? [warmup] : [warmup, measured];
+      let calls = 0;
+      const result = await testing.runBenchmarkSamples({
+        options: testing.parseOptions(["--runs", "3", "--warmup", phase === "warmup" ? "2" : "1"]),
+        runSample: async () => {
+          const run = completed[calls++];
+          return run ? { status: "success", run } : failed;
+        },
+      });
+      expect(result).toEqual({
+        warmupRuns: [warmup],
+        runs: phase === "warmup" ? [] : [measured],
+        failedAttempt: { ...failed, phase, index: 2 },
+      });
+      expect(calls).toBe(completed.length + 1);
+    },
+  );
 
   it("preserves HTTP and RPC failures in baseline probe diagnostics", async () => {
     const probeOrder: string[] = [];
@@ -2112,6 +2152,7 @@ describe("gateway concurrency benchmark script", () => {
   });
 
   it.skipIf(process.platform !== "linux").each([
+    ["protocol", "gateway/protocol/index.js"],
     ["mock", "ENOENT"],
     ["missing-taskset", "ENOENT"],
     ["non-executable-taskset", "EACCES"],
@@ -2130,7 +2171,9 @@ describe("gateway concurrency benchmark script", () => {
       await mkdir(`${dir}/gateway/protocol`, { recursive: true });
       await mkdir(runtime);
       await mkdir(bin);
-      await writeFile(`${dir}/gateway/protocol/index.js`, "exports.PROTOCOL_VERSION = 3;\n");
+      if (fault !== "protocol") {
+        await writeFile(`${dir}/gateway/protocol/index.js`, "exports.PROTOCOL_VERSION = 3;\n");
+      }
       await writeFile(
         entry,
         `import { readFileSync, writeFileSync } from "node:fs";
@@ -2186,7 +2229,10 @@ syncBuiltinESMExports();\n`,
             "1",
             "--warmup",
             "0",
-            ...(liveFailure ? ["--provider", "openai", "--output", output] : []),
+            "--output",
+            output,
+            "--json",
+            ...(liveFailure ? ["--provider", "openai"] : []),
             ...(fault.includes("taskset") ? ["--gateway-cpus", "0"] : []),
           ],
           {
@@ -2203,18 +2249,60 @@ syncBuiltinESMExports();\n`,
             timeout: 10_000,
           },
         );
-        if (liveFailure) {
+        if (liveFailure || fault === "protocol") {
           await expect(readFile(recordPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-          const failure = await readFile(`${output}.failure.json`, "utf8");
-          expect(JSON.parse(failure)).toMatchObject({
+        } else {
+          mockPid = (JSON.parse(await readFile(recordPath, "utf8")) as { pid: number | null }).pid;
+        }
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain(expectedError);
+        if (liveFailure) {
+          const sidecar = await readFile(`${output}.failure.json`, "utf8");
+          expect(JSON.parse(sidecar)).toMatchObject({
             mode: "live-openai-agent",
             status: "failed",
             liveProof: { requestedTurns: 1, turns: [] },
           });
-          expect(failure).not.toContain("synthetic-live-startup-secret");
-          expect(result.stderr).not.toContain("synthetic-live-startup-secret");
-        } else {
-          mockPid = (JSON.parse(await readFile(recordPath, "utf8")) as { pid: number | null }).pid;
+          expect(sidecar).not.toContain("synthetic-live-startup-secret");
+        }
+        const written = await readFile(output, "utf8");
+        const report = JSON.parse(written);
+        expect(JSON.parse(result.stdout)).toEqual(report);
+        expect(report).toMatchObject({
+          mode: liveFailure ? "live-openai-agent" : "mock-streaming-agent",
+          runs: [],
+          warmupRuns: [],
+          failedAttempt: {
+            status: "failure",
+            phase: "measured",
+            index: 1,
+            cleanup: { rootRemoved: true },
+            errors: expect.arrayContaining([
+              { phase: "workload", error: expect.stringContaining(expectedError) },
+            ]),
+          },
+        });
+        if (liveFailure) {
+          expect(report.failedAttempt.partialRun.liveProof).toMatchObject({
+            requestedTurns: 1,
+            turns: [],
+          });
+          expect(`${written}${result.stdout}${result.stderr}`).not.toContain(
+            "synthetic-live-startup-secret",
+          );
+        }
+        if (fault === "protocol") {
+          expect(report.failedAttempt.partialRun).toMatchObject({
+            readyz: [],
+            sessionsList: [],
+            freshConnection: null,
+            cpuUsage: null,
+            memory: { before: null, after: null, peakRssMb: null },
+            probeWarmup: { durationMs: null, samples: [] },
+          });
+          expect(report.failedAttempt.partialRun.gatewayProcess?.pid).toBeUndefined();
+          expect(report.failedAttempt.mockProviderProcess?.pid).toBeUndefined();
         }
         if (fault === "gateway-exit" || liveFailure) {
           const config = JSON.parse(await readFile(configProofPath, "utf8"));
@@ -2243,14 +2331,11 @@ syncBuiltinESMExports();\n`,
             expect(config.agents.defaults.model.primary).toBe("openai/gpt-5.6-luna");
           }
         }
-        expect(result.error).toBeUndefined();
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain(expectedError);
         expect(result.stderr).not.toContain("Unhandled 'error' event");
         expect(result.stderr.trim().split("\n").at(-1)).toBe(
           "[bench-gateway-concurrency] FAILED (exit 1)",
         );
-        await vi.waitFor(() => expect(mockAlive()).toBe(false));
+        expect(mockAlive()).toBe(false);
         expect(await readdir(runtime)).toEqual([]);
       } finally {
         // The failing baseline may leave its own detached mock behind.

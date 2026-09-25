@@ -25,6 +25,7 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createFailedDynamicToolResponse,
+  failedToolResult,
   type CodexDynamicToolRuntimeResponse,
 } from "./dynamic-tool-response-state.js";
 import type { CodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -252,10 +253,7 @@ async function executeDynamicToolCallWithTimeout(
   ) => {
     notifyAgentToolResult({
       toolName: params.call.tool,
-      result: {
-        content: [{ type: "text", text: message }],
-        details: { status: terminalReason, error: message },
-      },
+      result: failedToolResult(message, terminalReason),
       isError: true,
     });
   };
@@ -404,22 +402,15 @@ export function toCodexDynamicToolProgressResponse(
   const mcpAppPreview = isJsonObject(transcriptDetails?.mcpAppPreview)
     ? transcriptDetails.mcpAppPreview
     : undefined;
-  const progressDetails = mcpAppPreview ? { mcpAppPreview } : undefined;
-  if (response.asyncStarted !== true && progressDetails === undefined) {
+  if (response.asyncStarted !== true && !mcpAppPreview) {
     return protocolResponse;
   }
   return {
     ...protocolResponse,
-    ...(progressDetails ? { details: progressDetails } : {}),
-    ...(response.asyncStarted === true
-      ? {
-          details: {
-            ...progressDetails,
-            async: true as const,
-            status: "started" as const,
-          },
-        }
-      : {}),
+    details:
+      response.asyncStarted === true
+        ? { ...(mcpAppPreview ? { mcpAppPreview } : {}), async: true, status: "started" }
+        : { mcpAppPreview },
   };
 }
 

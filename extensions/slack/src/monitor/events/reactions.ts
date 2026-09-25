@@ -112,33 +112,19 @@ export function registerSlackReactionEvents(params: {
     }
   };
 
-  ctx.app.event(
-    "reaction_added",
-    async (args: SlackEventMiddlewareArgs<"reaction_added"> & AllMiddlewareArgs) => {
-      const { event, body, context, client } = args;
-      const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
-      if (eventScope === null) {
-        return;
-      }
-      if (ctx.shouldDropMismatchedSlackEvent(body)) {
-        return;
-      }
-      await handleReactionEvent(event as SlackReactionEvent, "added", eventScope, body.event_id);
-    },
-  );
-
-  ctx.app.event(
-    "reaction_removed",
-    async (args: SlackEventMiddlewareArgs<"reaction_removed"> & AllMiddlewareArgs) => {
-      const { event, body, context, client } = args;
-      const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
-      if (eventScope === null) {
-        return;
-      }
-      if (ctx.shouldDropMismatchedSlackEvent(body)) {
-        return;
-      }
-      await handleReactionEvent(event as SlackReactionEvent, "removed", eventScope, body.event_id);
-    },
-  );
+  for (const action of ["added", "removed"] as const) {
+    ctx.app.event(
+      `reaction_${action}`,
+      async (
+        args: SlackEventMiddlewareArgs<"reaction_added" | "reaction_removed"> & AllMiddlewareArgs,
+      ) => {
+        const { event, body, context, client } = args;
+        const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
+        if (eventScope === null || ctx.shouldDropMismatchedSlackEvent(body)) {
+          return;
+        }
+        await handleReactionEvent(event as SlackReactionEvent, action, eventScope, body.event_id);
+      },
+    );
+  }
 }

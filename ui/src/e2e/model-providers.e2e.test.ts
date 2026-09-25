@@ -726,6 +726,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
 
       await page.locator("[data-models-connect]").click();
       await page.locator('[data-models-login-provider="google"]').click();
+      await page.locator("[data-models-login-api-key]").click();
       const addSection = page.locator("[data-models-key-dialog]");
       await addSection.getByLabel("API key").fill(googleInputValue);
       const savedConfig = {

@@ -37,12 +37,19 @@ describe("terminal requester settlement", () => {
       released = true;
     });
     void child.catch(() => {});
-    const call = vi.fn(async () => ({ sessions: session ? [session] : [] }));
+    let listedSession = session;
+    const call = vi.fn(async (_method: string, params: unknown) => {
+      // Published 2026.9.4 rejects this newer sessions.list filter.
+      if (params && typeof params === "object" && "excludeSubagents" in params) {
+        throw new Error('invalid sessions.list params: unexpected property "excludeSubagents"');
+      }
+      return { sessions: listedSession ? [listedSession] : [] };
+    });
     try {
       gate.onResponseSent(requester);
       await gate.settle({ call });
       expect(released).toBe(false);
-      call.mockResolvedValue({ sessions: [settledSession] });
+      listedSession = settledSession;
       await gate.settle({ call });
       await child;
       expect(released).toBe(true);
@@ -51,7 +58,6 @@ describe("terminal requester settlement", () => {
         {
           agentId: requester.agentId,
           search: requester.sessionKey,
-          excludeSubagents: true,
           limit: 100,
         },
         { timeoutMs: 10_000 },

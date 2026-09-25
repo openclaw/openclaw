@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import * as tar from "tar";
 import { resolveStateDir } from "../../config/paths.js";
 import { sha256File } from "../../infra/directory-durability.js";
@@ -18,9 +19,10 @@ import {
   hashWorkerBundleManifest,
   WORKER_BUNDLE_ARTIFACT_MODE,
   WORKER_BUNDLE_MANIFEST_VERSION,
+  type WorkerBundleHashEntry,
 } from "../../shared/worker-bundle-hash.js";
 import { VERSION } from "../../version.js";
-import { collectWorkerBundleManifest, type WorkerBundleManifestEntry } from "./bundle-staging.js";
+import { collectWorkerBundleManifest } from "./bundle-staging.js";
 
 export { WORKER_BUNDLE_MANIFEST_VERSION };
 const OPENCLAW_NPM_REGISTRY = "https://registry.npmjs.org/";
@@ -117,28 +119,17 @@ type NpmPackageIdentity = {
   integrity: string;
 };
 
-function readNonEmptyString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function parseNpmPackageIdentity(value: unknown): NpmPackageIdentity | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
   const record = value as Record<string, unknown>;
-  const name = readNonEmptyString(record, "name");
-  const version = readNonEmptyString(record, "version");
+  const name = normalizeOptionalString(record.name);
+  const version = normalizeOptionalString(record.version);
   const integrity =
-    readNonEmptyString(record, "integrity") ?? readNonEmptyString(record, "dist.integrity");
-  const filename = readNonEmptyString(record, "filename");
+    normalizeOptionalString(record.integrity) ?? normalizeOptionalString(record["dist.integrity"]);
+  const filename = normalizeOptionalString(record.filename);
   return name && version && integrity ? { name, version, integrity, filename } : undefined;
-}
-
-// Single-spec view/pack proofs return exactly one entry; npm 12 shape drift is
-// normalized by the shared resolver so identity verification survives upgrades.
-function unwrapNpmJsonEntry(value: unknown): unknown {
-  return resolveNpmJsonEntries(value)[0];
 }
 
 async function runNpmProofCommand(params: {
@@ -147,9 +138,8 @@ async function runNpmProofCommand(params: {
   failureMessage: string;
   runCommand: WorkerNpmProofCommandRunner;
 }): Promise<unknown> {
-  let result;
   try {
-    result = await params.runCommand(params.argv, {
+    const result = await params.runCommand(params.argv, {
       cwd: params.cwd,
       timeoutMs: NPM_RELEASE_PROOF_TIMEOUT_MS,
       env: {
@@ -157,13 +147,9 @@ async function runNpmProofCommand(params: {
         NPM_CONFIG_IGNORE_SCRIPTS: "true",
       },
     });
-  } catch {
-    throw new Error(params.failureMessage);
-  }
-  if (result.code !== 0 || result.stdoutTruncatedBytes) {
-    throw new Error(params.failureMessage);
-  }
-  try {
+    if (result.code !== 0 || result.stdoutTruncatedBytes) {
+      throw new Error(params.failureMessage);
+    }
     return JSON.parse(result.stdout.trim()) as unknown;
   } catch {
     throw new Error(params.failureMessage);
@@ -189,7 +175,7 @@ async function verifyPublishedNpmRelease(params: {
   );
   try {
     const published = parseNpmPackageIdentity(
-      unwrapNpmJsonEntry(
+      resolveNpmJsonEntries(
         await runNpmProofCommand({
           argv: [
             "npm",
@@ -205,7 +191,7 @@ async function verifyPublishedNpmRelease(params: {
           failureMessage: `OpenClaw ${params.version} is not published; use the worker bundle install`,
           runCommand,
         }),
-      ),
+      )[0],
     );
     if (
       published?.name !== "openclaw" ||
@@ -232,7 +218,7 @@ async function verifyPublishedNpmRelease(params: {
         "Unable to verify the installed OpenClaw package; use the worker bundle install",
       runCommand,
     });
-    const packed = parseNpmPackageIdentity(unwrapNpmJsonEntry(packedValue));
+    const packed = parseNpmPackageIdentity(resolveNpmJsonEntries(packedValue)[0]);
     if (!packed?.filename || path.basename(packed.filename) !== packed.filename) {
       throw new Error("npm pack returned incomplete worker package metadata");
     }
@@ -281,8 +267,8 @@ async function verifyPublishedNpmRelease(params: {
 }
 
 function manifestsMatch(
-  left: readonly WorkerBundleManifestEntry[],
-  right: readonly WorkerBundleManifestEntry[],
+  left: readonly WorkerBundleHashEntry[],
+  right: readonly WorkerBundleHashEntry[],
 ): boolean {
   return (
     left.length === right.length &&
@@ -316,7 +302,7 @@ async function isCachedTarball(filePath: string): Promise<boolean> {
 
 async function cachedTarballMatches(
   tarballPath: string,
-  manifest: readonly WorkerBundleManifestEntry[],
+  manifest: readonly WorkerBundleHashEntry[],
 ): Promise<boolean> {
   if (!(await isCachedTarball(tarballPath))) {
     return false;
@@ -333,7 +319,7 @@ async function cachedTarballMatches(
 
 async function writeTarball(params: {
   stagingRoot: string;
-  entries: readonly WorkerBundleManifestEntry[];
+  entries: readonly WorkerBundleHashEntry[];
   tarballPath: string;
 }): Promise<void> {
   const temporaryPath = `${params.tarballPath}.${process.pid}.${randomUUID()}.tmp`;

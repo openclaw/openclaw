@@ -24,6 +24,11 @@ import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { configureSqlitePreSchemaPragmas } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { assertAgentDeletionRecoveryAllowsMutation } from "./agent-deletion-journal-recovery.js";
+import {
+  assertAgentDeletionPathFence,
+  prepareAgentDeletionPathFence,
+} from "./agent-deletion-journal.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
 import {
   canonicalSessionValidationSchemaSql,
@@ -71,7 +76,10 @@ import {
 } from "./openclaw-agent-db-session-migrations.js";
 import { migrateSessionNodesAndWindows } from "./openclaw-agent-db-session-nodes-migration.js";
 import { backfillSessionEntryProvenance } from "./openclaw-agent-db-session-provenance.js";
-import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import {
+  isPersistentOpenClawAgentDatabasePath,
+  resolveOpenClawAgentSqlitePath,
+} from "./openclaw-agent-db.paths.js";
 import {
   migrateSessionParticipantsSchema,
   withLegacySessionParticipantsSchema,
@@ -85,7 +93,10 @@ import {
   type OpenClawAgentIntegrityVerification,
 } from "./openclaw-quarantine-store.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
+import {
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  runOpenClawStateWriteTransaction,
+} from "./openclaw-state-db.js";
 
 const agentDbLog = createSubsystemLogger("state/agent-db");
 
@@ -253,11 +264,14 @@ function finishAgentSchemaMigration(
   assertMigration();
 }
 
+type AgentSchemaMutationGuard = <T>(run: () => T) => T;
+
 function ensureAgentSchema(
   db: DatabaseSync,
   agentId: string,
   pathname: string,
   targetVersion = OPENCLAW_AGENT_SCHEMA_VERSION,
+  withMutation: AgentSchemaMutationGuard = (run) => run(),
 ): void {
   const schemaSql = getOpenClawAgentMigrationSchema(targetVersion);
   const originalVersion = readSqliteUserVersion(db);
@@ -285,7 +299,7 @@ function ensureAgentSchema(
   // cascade-delete their children. Steady-state enforcement is restored below.
   db.exec("PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = OFF;");
   try {
-    runSqliteImmediateTransactionSync(db, () => {
+    const mutate = () => {
       // Repeat preflight ownership/version gates inside the write transaction;
       // concurrent openers must not overwrite another agent after the scan.
       // Role/ownership gates before version: user_version is only meaningful
@@ -452,7 +466,8 @@ function ensureAgentSchema(
         identityMigration,
         assertMigration,
       );
-    });
+    };
+    runSqliteImmediateTransactionSync(db, () => withMutation(mutate), { withCommit: withMutation });
   } finally {
     if (db.isOpen) {
       db.exec("PRAGMA foreign_keys = ON;");
@@ -476,6 +491,30 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
   const agentId = normalizeAgentId(options.agentId);
   const databaseOptions = { ...options, agentId };
   const pathname = resolveOpenClawAgentSqlitePath(databaseOptions);
+  const deletionFence =
+    databaseOptions.register === true &&
+    isPersistentOpenClawAgentDatabasePath(pathname, databaseOptions.env)
+      ? prepareAgentDeletionPathFence(
+          { agentId, path: pathname },
+          { env: databaseOptions.env },
+          "maintenance",
+        )
+      : undefined;
+  const withRegistrationFence = <T>(run: () => T): T => {
+    if (!deletionFence) {
+      return run();
+    }
+    return runOpenClawStateWriteTransaction(
+      (database) => {
+        assertAgentDeletionRecoveryAllowsMutation(database, pathname);
+        assertAgentDeletionPathFence(database, deletionFence);
+        return run();
+      },
+      { env: databaseOptions.env, initializationAgentPaths: [pathname] },
+    );
+  };
+  // Validate history before touching an independent store, without holding shared -> agent locks.
+  withRegistrationFence(() => undefined);
   if (db.location()) {
     maintenanceAuthority.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(
       pathname,
@@ -486,13 +525,34 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
   db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   assertSupportedAgentSchemaVersion(db, pathname);
   assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
+  const withIntegrityMutation: AgentSchemaMutationGuard = (run) =>
+    deletionFence
+      ? runSqliteImmediateTransactionSync(db, () => withRegistrationFence(run), {
+          withCommit: withRegistrationFence,
+        })
+      : run();
   if (readSqliteUserVersion(db) !== AGENT_MEDIA_SCHEMA_VERSION) {
-    yield* agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname);
+    const integrity = agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname);
+    try {
+      let step = withIntegrityMutation(() => integrity.next());
+      while (!step.done) {
+        let failure: { error: unknown } | undefined;
+        try {
+          yield step.value;
+        } catch (error) {
+          failure = { error };
+        }
+        // Resuming integrity can repair indexes before the outer schema phase runs.
+        step = withIntegrityMutation(() =>
+          failure ? integrity.throw(failure.error) : integrity.next(),
+        );
+      }
+    } finally {
+      integrity.return(false);
+    }
   }
-  configureSqlitePreSchemaPragmas(db, {
-    busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  });
-  ensureAgentSchema(db, agentId, pathname);
+  configureSqlitePreSchemaPragmas(db, { busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS });
+  ensureAgentSchema(db, agentId, pathname, OPENCLAW_AGENT_SCHEMA_VERSION, withRegistrationFence);
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   if (databaseOptions.register === true) {
     registerOpenClawAgentDatabase({ agentId, path: pathname, env: databaseOptions.env });

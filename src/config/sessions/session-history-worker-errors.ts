@@ -55,24 +55,31 @@ export function unwrapSessionTranscriptWorkerReply<
   if (reply.error.kind === "delta-visibility") {
     throw new SessionHistoryDeltaPreparationError(reply.error.partial);
   }
-  if (reply.error.kind === "read-error") {
-    const error = new Error(reply.error.message);
-    retainOpenClawStateWorkerErrorPayload(error, reply.error.payload);
-    throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
+  throw decodeSessionTranscriptWorkerReadError(reply.error);
+}
+
+/** Decode a positively identified domain failure without classifying transport rejections. */
+export function decodeSessionTranscriptWorkerReadError(
+  failure: SessionTranscriptWorkerReadError,
+): Error {
+  if (failure.kind === "read-error") {
+    const error = new Error(failure.message);
+    retainOpenClawStateWorkerErrorPayload(error, failure.payload);
+    return hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
   }
-  if (reply.error.kind === "storage") {
-    throw new SessionTranscriptStorageUnavailableError(reply.error.reason);
+  if (failure.kind === "storage") {
+    return new SessionTranscriptStorageUnavailableError(failure.reason);
   }
-  if (reply.error.kind === "cold") {
-    throw new SessionTranscriptColdError(reply.error.sessionId);
+  if (failure.kind === "cold") {
+    return new SessionTranscriptColdError(failure.sessionId);
   }
-  if (reply.error.kind === "projection") {
-    throw new SessionTranscriptProjectionUnavailableError(reply.error.sessionId);
+  if (failure.kind === "projection") {
+    return new SessionTranscriptProjectionUnavailableError(failure.sessionId);
   }
-  if (reply.error.kind === "syntax") {
-    throw new SyntaxError(reply.error.message);
+  if (failure.kind === "syntax") {
+    return new SyntaxError(failure.message);
   }
-  throw new SessionTranscriptReadFenceError(reply.error.message);
+  return new SessionTranscriptReadFenceError(failure.message);
 }
 
 /** Keep read and cleanup failures together through the worker error graph. */

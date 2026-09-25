@@ -9,6 +9,7 @@ import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
+import { markGatewaySuspendExiting } from "../infra/gateway-suspend-coordinator.js";
 import { upsertPresence } from "../infra/system-presence.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -334,10 +335,10 @@ export async function prepareGatewayLifecycle(params: {
   runtimeState.controlUiSessionPullRequests = createControlUiSessionPullRequestSubscriptions({
     broadcastToConnIds,
     isConnectionActive,
-    prepareRead: (connId, session) => {
+    prepareRead: async (connId, session) => {
       const client = clients.getByConnectionId(connId);
       return client
-        ? prepareControlUiSessionPrRead({
+        ? await prepareControlUiSessionPrRead({
             client,
             ...session,
             getRuntimeConfig,
@@ -397,6 +398,7 @@ export async function prepareGatewayLifecycle(params: {
     params.pluginMetadata.beginClose();
     const notice = resolveGatewayShutdownNotice(options);
     lifecycle.closePreludeStarted = true;
+    markGatewaySuspendExiting();
     void runtimeState.maintenance?.stopPeriodicTasks();
     // Publish the exact cancellation before withdrawing capabilities or running
     // disposal callbacks; startup can otherwise fail before restart marking.

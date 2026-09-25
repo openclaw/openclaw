@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
   getAgentRunLifecycleGeneration,
+  readAgentRunDelegatedAuthorityFailure,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
@@ -46,6 +47,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   source?: object;
   /** Retains the original source independently of a foreground run or request. */
   retain?: () => () => void;
+  /** Live assignment from the original prepared profile lease. */
+  readCurrentRoleAssignment?: (this: void) => string | null;
   modelPolicy?: PreparedOperatorModelPolicy;
   /** Committed policy changes invalidate only executions using a removed model. */
   onModelPolicyChanged?: (listener: () => void) => () => void;
@@ -60,6 +63,19 @@ export function createAdmittedRunOperatorAuthority(
   const check = source.assertCurrent;
   const signal = source.signal;
   let revoked = false;
+  const assertCurrent = () => {
+    if (revoked) {
+      throw new Error("operator execution authority is no longer active");
+    }
+    try {
+      signal?.throwIfAborted();
+      check();
+    } catch (error) {
+      revoked = true;
+      throw error;
+    }
+  };
+  const readCurrentRoleAssignment = source.readCurrentRoleAssignment;
   const authority = Object.freeze({
     profileId: source.profileId,
     scopes: Object.freeze([...source.scopes]),
@@ -73,18 +89,13 @@ export function createAdmittedRunOperatorAuthority(
     get modelPolicy() {
       return source.modelPolicy;
     },
-    assertCurrent: () => {
-      if (revoked) {
-        throw new Error("operator execution authority is no longer active");
-      }
-      try {
-        signal?.throwIfAborted();
-        check();
-      } catch (error) {
-        revoked = true;
-        throw error;
-      }
-    },
+    assertCurrent,
+    readCurrentRoleAssignment: readCurrentRoleAssignment
+      ? () => {
+          assertCurrent();
+          return readCurrentRoleAssignment();
+        }
+      : undefined,
   });
   operatorAuthorityIssuers.add(authority);
   return authority;
@@ -297,7 +308,10 @@ export function resolveAdmittedRunActiveAssertion(
       context.operationalRunInstance !== operationalRunInstance ||
       getAdmittedRunDelegatedAuthority(context) !== authority
     ) {
-      throw new Error("admitted run authority is no longer active");
+      throw new Error(
+        "admitted run authority is no longer active",
+        readAgentRunDelegatedAuthorityFailure(authority),
+      );
     }
   };
 }
@@ -449,18 +463,20 @@ export function prepareAgentRunAdmission(params: {
   }
   const assertOperatorCurrent = operatorAuthority?.assertCurrent;
   const releaseOperatorAuthority = operatorAuthority?.retain?.();
-  let sourceClosed = false;
+  let sourceFailure: Error | undefined;
   const assertSourceCurrent =
     (sourceAssertion || assertOperatorCurrent) &&
     (() => {
-      if (sourceClosed) {
-        throw new Error("source execution authority is no longer active");
+      if (sourceFailure) {
+        throw sourceFailure;
       }
       try {
         sourceAssertion?.();
         assertOperatorCurrent?.();
       } catch (error) {
-        sourceClosed = true;
+        sourceFailure = new Error("source execution authority is no longer active", {
+          cause: error,
+        });
         throw error;
       }
     });

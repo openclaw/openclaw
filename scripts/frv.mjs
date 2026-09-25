@@ -911,21 +911,6 @@ export function createClient(repository, dependencies = {}) {
         return apiText(path, undefined, [], options);
       }
     },
-    async getManualRetryAuthority(plan, childKey, operationDeadline) {
-      const { verifyReleaseFlakeManualRetryAuthority } =
-        await import("./full-release-flake-retry.mjs");
-      const options = { operationDeadline };
-      return verifyReleaseFlakeManualRetryAuthority({
-        plan,
-        childKey,
-        client: {
-          getRun: (id) => client.getRun(id, options),
-          getAttempt: (id, attempt) => client.getRunAttempt(id, attempt, options),
-          getJobs: (id, attempt) => client.getAttemptJobs(id, attempt, options),
-          getLog: (id) => client.getJobLog(id, options),
-        },
-      });
-    },
     rerunFailed: (runId) => rerun(runId, "rerun-failed-jobs"),
     cancelRun: (runId) => rerun(runId, "cancel"),
     rerunRun: (runId) => rerun(runId, "rerun"),
@@ -1170,57 +1155,6 @@ async function selectedRerunJob(child, target, client, operationDeadline) {
   return { id, name: target.name, acceptedRunAttempt: accepted.acceptedRunAttempt };
 }
 
-function hasAutomaticRetryOwner(plan, child) {
-  return plan.knownFlakyJobs?.some((selector) => selector.startsWith(`${child.key}:`));
-}
-
-async function inspectManualRetryOwner(plan, child, parentBinding, client, operationDeadline) {
-  if (!hasAutomaticRetryOwner(plan, child)) {
-    return { ready: true };
-  }
-  remainingOperationTime(operationDeadline);
-  const options = { operationDeadline };
-  const [original, current, jobs] = await Promise.all([
-    client.getRunAttempt(parentBinding.sourceRunId, 1, options),
-    client.getRun(parentBinding.sourceRunId, options),
-    client.getParentJobs(parentBinding.sourceRunId, options),
-  ]);
-  assertRootRunIdentity(original, { ...parentBinding, sourceRunAttempt: 1 });
-  assertRootRunIdentity(current, parentBinding, true);
-  const owners = jobs.filter((job) => job.name === `Automatic retry (${child.key})`);
-  const originalOwners = owners.filter((job) => Number(job.run_attempt) === 1);
-  const pending = { ready: false, pending: true };
-  const unresolved = {
-    ready: false,
-    error: new Error(`automatic retry original owner is missing or ambiguous: ${child.key}`),
-  };
-  if (originalOwners.length !== 1) {
-    return original.status === "completed" ? unresolved : pending;
-  }
-  if (originalOwners[0].status !== "completed") {
-    return pending;
-  }
-  const currentOwners = owners.filter(
-    (job) => Number(job.run_attempt) === Number(current.run_attempt),
-  );
-  if (currentOwners.some((job) => job.status !== "completed")) {
-    return pending;
-  }
-  if (currentOwners.length > 1) {
-    return current.status === "completed"
-      ? {
-          ready: false,
-          error: new Error(`automatic retry current owner is ambiguous: ${child.key}`),
-        }
-      : pending;
-  }
-  if (currentOwners.length === 0 && current.status !== "completed") {
-    return pending;
-  }
-  remainingOperationTime(operationDeadline);
-  return { ready: true, parentRunAttempt: Number(current.run_attempt) };
-}
-
 export async function prioritizeRelease(parentRunId, client, options = {}) {
   const parent = await client.getRun(parentRunId);
   if (
@@ -1369,32 +1303,6 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
         ready = [selected];
       }
     }
-    const admission = await Promise.all(
-      ready.map(async (child) => {
-        const owner = await inspectManualRetryOwner(
-          plan,
-          child,
-          parentBinding,
-          client,
-          operationDeadline,
-        );
-        if (!owner.ready || !hasAutomaticRetryOwner(plan, child) || child.effectiveRunAttempt > 1) {
-          return owner;
-        }
-        try {
-          await client.getManualRetryAuthority(plan, child.key, operationDeadline);
-          return owner;
-        } catch (error) {
-          if (error?.code === "FRV_PARENT_PROVENANCE") {
-            throw error;
-          }
-          return { ready: false, error };
-        }
-      }),
-    );
-    let pendingOwners = admission.some((owner) => owner.pending);
-    let heldOwner = admission.find((owner) => owner.error);
-    ready = ready.filter((_child, index) => admission[index].ready);
     if (ready.length > 0) {
       if (options.dryRun) {
         if (target) {
@@ -1402,7 +1310,7 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
         }
         return { action: "would-rerun", status };
       }
-      let requests = await Promise.all(
+      const requests = await Promise.all(
         ready.map(async (child) => {
           const job = target
             ? await selectedRerunJob(child, target, client, operationDeadline)
@@ -1445,14 +1353,6 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
         operationDeadline,
       });
       // Finish admission for the whole batch before any sibling can send a POST.
-      const finalOwners = await Promise.all(
-        requests.map(({ child }) =>
-          inspectManualRetryOwner(plan, child, parentBinding, client, operationDeadline),
-        ),
-      );
-      pendingOwners ||= finalOwners.some((owner) => owner.pending);
-      heldOwner ??= finalOwners.find((owner) => owner.error);
-      requests = requests.filter((_request, index) => finalOwners[index].ready);
       await Promise.all(
         requests.map(async ({ child }) => {
           const current = exactTerminalRunState(
@@ -1465,75 +1365,58 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
           }
         }),
       );
-      if (requests.length > 0 && plan.knownFlakyJobs?.length > 0) {
-        const parent = await client.getRun(rootRunId, { operationDeadline });
-        assertRootRunIdentity(parent, parentBinding, true);
-        for (const owner of finalOwners) {
-          if (owner.parentRunAttempt !== undefined) {
-            assertRootRunIdentity(
-              parent,
-              { ...parentBinding, sourceRunAttempt: owner.parentRunAttempt },
-              true,
-            );
-            if (Number(parent.run_attempt) !== owner.parentRunAttempt) {
-              pendingOwners = true;
-              requests = [];
-            }
-          }
-        }
+      assertRootRunIdentity(
+        await client.getRun(rootRunId, { operationDeadline }),
+        parentBinding,
+        true,
+      );
+      const minimumAttempts = new Map(
+        requests.map(({ child }) => [child.runId, child.effectiveRunAttempt + 1]),
+      );
+      remainingOperationTime(operationDeadline);
+      const sentRunIds = new Set();
+      const mutationResults = await Promise.allSettled(
+        requests.map(async ({ child, job }) => {
+          remainingOperationTime(operationDeadline);
+          sentRunIds.add(child.runId);
+          await (job ? client.rerunJob(job.id) : client.rerunFailed(child.runId));
+        }),
+      );
+      if (sentRunIds.size > 0) {
+        await reconcileAttemptStarts(
+          new Map([...minimumAttempts].filter(([runId]) => sentRunIds.has(runId))),
+          priorRuns,
+          client,
+          mutationResults.filter((_result, index) => sentRunIds.has(requests[index].child.runId)),
+          operationDeadline,
+        );
       }
-      if (requests.length > 0) {
-        const minimumAttempts = new Map(
-          requests.map(({ child }) => [child.runId, child.effectiveRunAttempt + 1]),
-        );
-        remainingOperationTime(operationDeadline);
-        const sentRunIds = new Set();
-        const mutationResults = await Promise.allSettled(
-          requests.map(async ({ child, job }) => {
-            remainingOperationTime(operationDeadline);
-            sentRunIds.add(child.runId);
-            await (job ? client.rerunJob(job.id) : client.rerunFailed(child.runId));
-          }),
-        );
-        if (sentRunIds.size > 0) {
-          await reconcileAttemptStarts(
-            new Map([...minimumAttempts].filter(([runId]) => sentRunIds.has(runId))),
-            priorRuns,
-            client,
-            mutationResults.filter((_result, index) => sentRunIds.has(requests[index].child.runId)),
-            operationDeadline,
-          );
-        }
-        const admissionFailure = mutationResults.find(
-          (result, index) =>
-            result.status === "rejected" && !sentRunIds.has(requests[index].child.runId),
-        );
-        if (admissionFailure) {
-          throw admissionFailure.reason;
-        }
-        for (const { child, job } of requests) {
-          if (!sentRunIds.has(child.runId)) {
-            continue;
-          }
-          const runAttempt = minimumAttempts.get(child.runId);
-          ownedAttempts.set(child.runId, runAttempt);
-          reruns.push({
-            child: child.key,
-            runId: child.runId,
-            sourceRunAttempt: child.effectiveRunAttempt,
-            runAttempt,
-            ...(job
-              ? { jobName: job.name, jobId: job.id, acceptedRunAttempt: job.acceptedRunAttempt }
-              : {}),
-          });
-        }
-        continue;
+      const admissionFailure = mutationResults.find(
+        (result, index) =>
+          result.status === "rejected" && !sentRunIds.has(requests[index].child.runId),
+      );
+      if (admissionFailure) {
+        throw admissionFailure.reason;
       }
+      for (const { child, job } of requests) {
+        if (!sentRunIds.has(child.runId)) {
+          continue;
+        }
+        const runAttempt = minimumAttempts.get(child.runId);
+        ownedAttempts.set(child.runId, runAttempt);
+        reruns.push({
+          child: child.key,
+          runId: child.runId,
+          sourceRunAttempt: child.effectiveRunAttempt,
+          runAttempt,
+          ...(job
+            ? { jobName: job.name, jobId: job.id, acceptedRunAttempt: job.acceptedRunAttempt }
+            : {}),
+        });
+      }
+      continue;
     }
-    if (status.active.length === 0 && !pendingArtifactProducers && !pendingOwners) {
-      if (heldOwner) {
-        throw heldOwner.error;
-      }
+    if (status.active.length === 0 && !pendingArtifactProducers) {
       break;
     }
     await sleep(

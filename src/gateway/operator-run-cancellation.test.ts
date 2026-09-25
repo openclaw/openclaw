@@ -9,6 +9,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
 import {
@@ -41,6 +42,7 @@ async function withCancellationFixture(
 }
 
 async function createCancellationFixture(cfg: OpenClawConfig) {
+  const profile = ensureProfileForEmail("guest-cancellation@example.test");
   const scope = {
     agentId: "main",
     sessionId: "guest-and-staff-session",
@@ -92,8 +94,8 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
     registrations.push(registration);
     return registration;
   };
-  const retain = (signal: AbortSignal, runId: string, entry: ChatAbortControllerEntry) => {
-    const retained = retainGatewayOperatorRun({
+  const retain = async (signal: AbortSignal, runId: string, entry: ChatAbortControllerEntry) => {
+    const retained = await retainGatewayOperatorRun({
       context,
       runId,
       entry,
@@ -105,7 +107,7 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
           role: "operator",
           scopes: ["operator.sessions.write"],
         },
-        internal: { operatorRoleActor: { kind: "operator", profileId: "guest-profile" } },
+        internal: { operatorRoleActor: { kind: "operator", profileId: profile.id } },
       },
       sourceAuthority: { signal, assertCurrent: () => signal.throwIfAborted() },
     });
@@ -159,7 +161,7 @@ describe("operator access cancellation", () => {
         const savedTranscript = loadTranscriptEventsSync(f.scope);
         f.context.chatRunState.getOrCreate("guest-run").buffer = "The guest's saved progress.";
         f.context.chatRunState.getOrCreate("staff-run").buffer = "Staff work continues.";
-        f.retain(source.signal, "guest-run", guest.entry).armCancellation();
+        (await f.retain(source.signal, "guest-run", guest.entry)).armCancellation();
         const terminalWrite = createDeferredCore();
         const cancellationObserved = createDeferredCore();
         let sourceClosedAtAbort = false;
@@ -252,7 +254,7 @@ describe("operator access cancellation", () => {
           guest.entry.projectSessionTerminalPersisted = true;
         });
         guest.entry.projectSessionTerminalPersistence = persistence;
-        f.retain(source.signal, "terminal-run", guest.entry).armCancellation();
+        (await f.retain(source.signal, "terminal-run", guest.entry)).armCancellation();
         try {
           if (phase === "persisted") {
             terminalWrite.resolve();
@@ -295,7 +297,7 @@ describe("operator access cancellation", () => {
         const source = new AbortController();
         const guest = f.register("queued-guest");
         const staff = f.register("queued-staff");
-        const retained = f.retain(source.signal, "queued-guest", guest.entry);
+        const retained = await f.retain(source.signal, "queued-guest", guest.entry);
         const work = createChatSendWorkAdmission({
           admission: { release: () => {} },
           releaseCallerAuthority: retained.release,
@@ -349,7 +351,7 @@ describe("operator access cancellation", () => {
     await withCancellationFixture(async (f) => {
       const source = new AbortController();
       const original = f.register("reused-run");
-      f.retain(source.signal, "reused-run", original.entry).armCancellation();
+      (await f.retain(source.signal, "reused-run", original.entry)).armCancellation();
       original.cleanup();
       const replacement = f.register("reused-run");
       source.abort();
@@ -368,11 +370,11 @@ describe("operator access cancellation", () => {
         const guest = f.register("bound-run");
         if (state === "already-aborted") {
           source.abort(new Error("operator source already ended"));
-          expect(() => f.retain(source.signal, "bound-run", guest.entry)).toThrow(
+          await expect(f.retain(source.signal, "bound-run", guest.entry)).rejects.toThrow(
             "operator source already ended",
           );
         } else {
-          const retained = f.retain(source.signal, "bound-run", guest.entry);
+          const retained = await f.retain(source.signal, "bound-run", guest.entry);
           retained.armCancellation();
           retained.release();
           source.abort();
@@ -390,7 +392,7 @@ describe("operator access cancellation", () => {
         const source = new AbortController();
         const guest = f.register("admitted-input");
         const staff = f.register("independent-backing-run");
-        const retained = f.retain(source.signal, "admitted-input", guest.entry);
+        const retained = await f.retain(source.signal, "admitted-input", guest.entry);
         const transcript = loadTranscriptEventsSync(f.scope);
         if (retired) {
           retained.armCancellation();
@@ -420,7 +422,7 @@ describe("operator access cancellation", () => {
       const guest = f.register("settled-run");
       f.context.chatRunState.getOrCreate("settled-run").buffer =
         "Keep the canceled run's progress.";
-      const retained = f.retain(source.signal, "settled-run", guest.entry);
+      const retained = await f.retain(source.signal, "settled-run", guest.entry);
       retained.armCancellation();
       source.abort();
       guest.cleanup();
@@ -446,7 +448,7 @@ describe("operator access cancellation", () => {
       guest.entry.sessionId = "retired-session";
       f.context.chatRunState.getOrCreate("failed-partial-capture").buffer =
         "Preserve this progress.";
-      f.retain(source.signal, "failed-partial-capture", guest.entry).armCancellation();
+      (await f.retain(source.signal, "failed-partial-capture", guest.entry)).armCancellation();
       source.abort();
       await f.settle();
       expect(guest.controller.signal.aborted).toBe(true);

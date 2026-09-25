@@ -217,11 +217,9 @@ export function createAgentTurnService(
       let supersededSessionId: string | undefined;
       let skipAgentInitialSessionTouch = false;
       let pendingChatRun: { sessionKey: string; agentId?: string } | undefined;
-      let resolvedStorePath: string | undefined;
       let admittedSessionId = resolvedSessionId ?? runId;
       const admissionController = createAgentAdmissionController({
         assertAdmissionCurrent,
-        cfg,
         runId,
         lifecycleGeneration,
         agentDedupeKeys,
@@ -238,7 +236,6 @@ export function createAgentTurnService(
         getResolvedSessionId: () => resolvedSessionId,
         getResolvedSessionAgentId: () => resolvedSessionAgentId,
         getAgentId: () => agentId,
-        getCfgForAgent: () => cfgForAgent,
         getSessionPersisted: () => sessionPersistedBeforeGatewayAdmission,
         getSupersededSessionId: () => supersededSessionId,
         setAdmittedSessionId: (sessionId) => {
@@ -312,7 +309,6 @@ export function createAgentTurnService(
           failedSessionTranscriptMissing: resolveFailedSessionTranscriptMissingForEntry,
         } = preparedSession;
         cfgForAgent = cfgLocal;
-        resolvedStorePath = storePath;
         // Authorize the canonical session the run will actually target — covering
         // keyless requests whose default/effective session is resolved only here —
         // before any run side effects (admission, dispatch).
@@ -577,7 +573,6 @@ export function createAgentTurnService(
             resolvedSessionKey,
             requestedSessionKey,
             resolvedSessionId,
-            storePath: resolvedStorePath,
             agentId,
             activeSessionAgentId,
             delivery,

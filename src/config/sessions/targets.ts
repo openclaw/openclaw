@@ -6,10 +6,8 @@ import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import {
-  createOpenClawAgentDatabasePathMatcher,
-  listOpenClawRegisteredAgentDatabases,
-} from "../../state/openclaw-agent-db-registry.js";
+import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
+import { createOpenClawAgentDatabasePathMatcher } from "../../state/openclaw-agent-db.paths.js";
 import {
   resolveSessionStoreCompatibilityAgentId,
   tryResolveLegacyCompatibilityAgentId,
@@ -18,9 +16,9 @@ import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
 import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-inventory.js";
+import { listSqliteTargetCandidatePathsForSessionStorePath } from "./session-sqlite-target-paths.js";
 import {
   listDurableSqliteTargetOwnersForSessionStorePath,
-  listSqliteTargetCandidatePathsForSessionStorePath,
   resolveSqliteTargetFromSessionStorePath,
   type SessionStoreRegistryRead,
 } from "./session-sqlite-target.js";

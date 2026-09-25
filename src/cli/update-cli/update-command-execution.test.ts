@@ -25,6 +25,76 @@ describe("mutable update execution", () => {
   registerExecutionTimeoutTests();
 
   registerNativeAdmissionTests({ executionParams, mocks, successfulUpdate });
+  it.each(["same", "alias", "disjoint"] as const)(
+    "preserves a serving Git runtime when activation did not stop it: %s",
+    async (destination) => {
+      await withTestDir({ prefix: "git-live-runtime-custody-" }, async (dir) => {
+        const servingRoot = path.join(dir, "serving");
+        const targetRoot = destination === "same" ? servingRoot : path.join(dir, "target");
+        await fs.mkdir(path.join(servingRoot, "dist"), { recursive: true });
+        if (destination === "alias") {
+          await fs.symlink(
+            servingRoot,
+            targetRoot,
+            process.platform === "win32" ? "junction" : "dir",
+          );
+        } else if (destination === "disjoint") {
+          await fs.mkdir(path.join(targetRoot, "dist"), { recursive: true });
+        }
+        const artifact = path.join(servingRoot, "dist", "prepare.runtime.js");
+        await fs.writeFile(artifact, "retained serving runtime");
+        const target = { schemaVersions: { state: 15, agent: 19 } };
+        mocks.maybeStopService.mockImplementation(async () => ({
+          ...inspectOrStopService("inspect"),
+          servicePid: 23456,
+          serviceUpdateVerdict: {
+            kind: "owned",
+            root: servingRoot,
+            fingerprint: "serving-generation",
+            refreshDefinition: false,
+          },
+        }));
+        vi.spyOn(readiness, "verifyPreviousGatewayForUpdate").mockResolvedValue(true);
+        mocks.runGitUpdate.mockImplementation(
+          async (
+            options: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
+          ) => {
+            await options.inspectGitTarget?.(target);
+            await options.beforeGitMutation?.(target);
+            await fs.writeFile(
+              path.join(targetRoot, "dist", "prepare.runtime.js"),
+              "candidate runtime",
+            );
+            return { ...successfulUpdate, mode: "git" };
+          },
+        );
+        const execution = await executeMutableUpdate({
+          ...executionParams("git"),
+          root: targetRoot,
+          shouldRestart: false,
+          opts: { json: true, restart: false },
+        });
+        expect(await fs.readFile(artifact, "utf8")).toBe("retained serving runtime");
+        expect(mocks.serviceStopped).toBe(false);
+        if (destination === "disjoint") {
+          expect(execution?.result.status).toBe("ok");
+          expect(
+            await fs.readFile(path.join(targetRoot, "dist", "prepare.runtime.js"), "utf8"),
+          ).toBe("candidate runtime");
+        } else {
+          expect(execution).toMatchObject({
+            mutationStarted: false,
+            result: { status: "error", reason: "runtime-artifact-publication" },
+          });
+          expect(execution?.result.steps).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ stderrTail: expect.stringContaining("23456") }),
+            ]),
+          );
+        }
+      });
+    },
+  );
   it("retains the live update run when stopped-service context capture fails", async () => {
     await withTestDir({ prefix: "partial-stop-recovery-owner-" }, async (dir) => {
       const control = path.join(dir, "leases");

@@ -1,6 +1,7 @@
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   type EnvironmentSummary,
+  type EnvironmentsListResult,
   ErrorCodes,
   errorShape,
   validateDesktopLaunchParams,
@@ -20,7 +21,11 @@ import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveDesktopObserveRequester } from "../desktop/observe-requester.js";
-import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
+import {
+  ADMIN_SCOPE,
+  WRITE_SCOPE,
+  authorizeOperatorScopesForRequiredScope,
+} from "../method-scopes.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import {
   isNodeCommandAllowed,
@@ -121,7 +126,7 @@ function summarizeNodeEnvironment(
 }
 export async function listGatewayEnvironments(
   context: GatewayRequestContext,
-  workers = listWorkerEnvironments(context),
+  workers = readWorkerInventory(context, false).workers,
   runtimeId?: string,
   includeDesktopSetup = false,
 ): Promise<EnvironmentSummary[]> {
@@ -177,9 +182,14 @@ export async function listGatewayEnvironments(
     ),
   ];
 }
-function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironmentServiceRecord[] {
+function readWorkerInventory(context: GatewayRequestContext, includePreparedDetails: boolean) {
   try {
-    return context.workerEnvironmentService?.list() ?? [];
+    return {
+      workers: context.workerEnvironmentService?.list() ?? [],
+      preparedPool: includePreparedDetails
+        ? context.workerEnvironmentService?.readPreparedPoolSummary()
+        : undefined,
+    };
   } catch {
     throw new Error("environment inventory unavailable");
   }
@@ -254,12 +264,17 @@ async function respondWorkerMutation(
 export const environmentsHandlers: GatewayRequestHandlers = {
   ...environmentsSessionHandlers,
   ...environmentsSessionExecHandlers,
-  "environments.list": async ({ params, respond, client, context }) => {
+  "environments.list": async (options) => {
+    const { params, respond, client, context } = options;
     if (!assertValidParams(params, validateEnvironmentsListParams, "environments.list", respond)) {
       return;
     }
+    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+    const includePreparedDetails =
+      params.includePreparedDetails === true &&
+      authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, scopes).allowed;
+    const authority = readGatewayRequestMutationAuthority(options);
     if (params.runtimeId) {
-      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
       const access = authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, scopes);
       if (!access.allowed) {
         respond(
@@ -272,33 +287,70 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     }
     await respondUnavailableOnThrow(respond, async () => {
       let environments: EnvironmentSummary[] = [];
+      let workers: WorkerEnvironmentServiceRecord[] = [];
+      let preparedPool: EnvironmentsListResult["preparedPool"];
       if (params.projection !== "profiles") {
-        const workers = listWorkerEnvironments(context);
+        const inventory = readWorkerInventory(context, includePreparedDetails);
+        workers = inventory.workers;
+        preparedPool = inventory.preparedPool;
         environments = await listGatewayEnvironments(
           context,
           workers,
           params.runtimeId,
           params.includeDesktopSetup,
         );
-        const summarizedAtMs = Date.now();
-        environments.push(
-          ...workers.map((record) => summarizeWorkerEnvironment(record, summarizedAtMs)),
-        );
       }
       const profiles = await listWorkerProfilesWithMachines(context);
-      respond(true, { environments, ...(profiles.length > 0 ? { profiles } : {}) }, undefined);
+      authority.assertCurrent();
+      const includeCurrentPreparedDetails =
+        includePreparedDetails &&
+        authorizeOperatorScopesForRequiredScope(
+          ADMIN_SCOPE,
+          Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
+        ).allowed;
+      const summarizedAtMs = Date.now();
+      environments.push(
+        ...workers.map((record) =>
+          summarizeWorkerEnvironment(record, summarizedAtMs, {
+            includePreparedDetails: includeCurrentPreparedDetails,
+          }),
+        ),
+      );
+      respond(
+        true,
+        {
+          environments,
+          ...(profiles.length > 0
+            ? {
+                profiles: includeCurrentPreparedDetails
+                  ? profiles.map((profile) => ({
+                      ...profile,
+                      readyWorkers: context.workerEnvironmentService?.readReadyWorkerTarget(
+                        profile.id,
+                      ),
+                    }))
+                  : profiles,
+              }
+            : {}),
+          ...(includeCurrentPreparedDetails && preparedPool ? { preparedPool } : {}),
+        },
+        undefined,
+      );
     });
   },
-  "environments.status": async ({ params, respond, context }) => {
+  "environments.status": async (options) => {
+    const { params, respond, client, context } = options;
     if (
       !assertValidParams(params, validateEnvironmentsStatusParams, "environments.status", respond)
     ) {
       return;
     }
+    const authority = readGatewayRequestMutationAuthority(options);
     await respondUnavailableOnThrow(respond, async () => {
       const environment = (await listGatewayEnvironments(context)).find(
         (entry) => entry.id === params.environmentId,
       );
+      authority.assertCurrent();
       if (environment) {
         respond(true, environment, undefined);
         return;
@@ -316,7 +368,16 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       }
       respond(
         Boolean(worker),
-        worker ? summarizeWorkerEnvironment(worker) : undefined,
+        worker
+          ? summarizeWorkerEnvironment(worker, Date.now(), {
+              includePreparedDetails:
+                params.includePreparedDetails === true &&
+                authorizeOperatorScopesForRequiredScope(
+                  ADMIN_SCOPE,
+                  Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
+                ).allowed,
+            })
+          : undefined,
         worker ? undefined : errorShape(ErrorCodes.INVALID_REQUEST, "unknown environmentId"),
       );
     });

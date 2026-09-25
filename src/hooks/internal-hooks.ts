@@ -82,30 +82,32 @@ export type MessageReceivedHookContext = {
   metadata?: Record<string, unknown>;
 };
 
-export type MessageSentHookContext = {
+export type MessageSentHookContext = Pick<
+  MessageReceivedHookContext,
+  "content" | "channelId" | "accountId" | "conversationId" | "messageId"
+> & {
   /** Recipient identifier */
   to: string;
-  /** Message content */
-  content: string;
   /** Whether the message was sent successfully */
   success: boolean;
   /** Error message if sending failed */
   error?: string;
-  /** Channel identifier (for example "chat" or "support-chat") */
-  channelId: string;
-  /** Provider account ID for multi-account setups */
-  accountId?: string;
-  /** Conversation/chat ID */
-  conversationId?: string;
-  /** Message ID returned by the provider */
-  messageId?: string;
   /** Whether this message was sent in a group/channel context */
   isGroup?: boolean;
   /** Group or channel identifier, if applicable */
   groupId?: string;
 };
 
-type MessageEnrichedBodyHookContext = {
+type MessageEnrichedBodyHookContext = Pick<
+  MessageReceivedHookContext,
+  | "timestamp"
+  | "channelId"
+  | "conversationId"
+  | "messageId"
+  | "media"
+  | "originalMedia"
+  | "mediaStagingPending"
+> & {
   /** Sender identifier (e.g., phone number, user ID) */
   from?: string;
   /** Recipient identifier */
@@ -114,14 +116,6 @@ type MessageEnrichedBodyHookContext = {
   body?: string;
   /** Enriched body shown to the agent, including transcript */
   bodyForAgent?: string;
-  /** Unix timestamp when the message was received */
-  timestamp?: number;
-  /** Channel identifier (for example "chat" or "support-chat") */
-  channelId: string;
-  /** Conversation/chat ID */
-  conversationId?: string;
-  /** Message ID from the provider */
-  messageId?: string;
   /** Sender user ID */
   senderId?: string;
   /** Sender display name */
@@ -132,12 +126,6 @@ type MessageEnrichedBodyHookContext = {
   provider?: string;
   /** Surface name */
   surface?: string;
-  /** Ordered media facts available to preprocessing/transcription hooks. */
-  media?: MessageHookMediaFact[];
-  /** Original facts when local staging has not completed yet. */
-  originalMedia?: MessageHookMediaFact[];
-  /** True when originalMedia is present but media is withheld pending staging. */
-  mediaStagingPending?: boolean;
   /** @deprecated Use `media?.[0]?.path`. */
   mediaPath?: string;
   /** @deprecated Use `media?.[0]?.contentType` or `.kind`. */
@@ -285,21 +273,14 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
   if (!internalHooksEnabledState.enabled) {
     return;
   }
-  if (!hasInternalHookListeners(event.type, event.action)) {
-    return;
-  }
-
   // An admitted event finishes its snapshot even if a handler awaits across a reload or disable.
-  const typeHandlers = [
+  const specificKey = `${event.type}:${event.action}`;
+  const allHandlers = [
     ...(handlers.get(event.type) ?? []),
     ...listLegacyPluginInternalHooks(event.type),
-  ];
-  const specificKey = `${event.type}:${event.action}`;
-  const specificHandlers = [
     ...(handlers.get(specificKey) ?? []),
     ...listLegacyPluginInternalHooks(specificKey),
   ];
-  const allHandlers = [...typeHandlers, ...specificHandlers];
 
   for (const handler of allHandlers) {
     try {
@@ -335,60 +316,36 @@ export function createInternalHookEvent(
   };
 }
 
-function isHookEventTypeAndAction(
+function hasHookEventContext(
   event: InternalHookEvent,
   type: InternalHookEventType,
   action: string,
 ): boolean {
-  return event.type === type && event.action === action;
-}
-
-function getHookContext<T extends Record<string, unknown>>(
-  event: InternalHookEvent,
-): Partial<T> | null {
-  const context = event.context as Partial<T> | null;
-  if (!context || typeof context !== "object") {
-    return null;
-  }
-  return context;
-}
-
-function hasStringContextField<T extends Record<string, unknown>>(
-  context: Partial<T>,
-  key: keyof T,
-): boolean {
-  return typeof context[key] === "string";
+  return (
+    event.type === type &&
+    event.action === action &&
+    event.context !== null &&
+    typeof event.context === "object"
+  );
 }
 
 export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {
-  if (!isHookEventTypeAndAction(event, "agent", "bootstrap")) {
-    return false;
-  }
-  const context = getHookContext<AgentBootstrapHookContext>(event);
-  if (!context) {
-    return false;
-  }
-  if (!hasStringContextField(context, "workspaceDir")) {
-    return false;
-  }
-  return Array.isArray(context.bootstrapFiles);
+  return (
+    hasHookEventContext(event, "agent", "bootstrap") &&
+    typeof event.context.workspaceDir === "string" &&
+    Array.isArray(event.context.bootstrapFiles)
+  );
 }
 
 export function isGatewayStartupEvent(event: InternalHookEvent): event is GatewayStartupHookEvent {
-  if (!isHookEventTypeAndAction(event, "gateway", "startup")) {
-    return false;
-  }
-  return Boolean(getHookContext<GatewayStartupHookContext>(event));
+  return hasHookEventContext(event, "gateway", "startup");
 }
 
 export function isSessionPatchEvent(event: InternalHookEvent): event is SessionPatchHookEvent {
-  if (!isHookEventTypeAndAction(event, "session", "patch")) {
+  if (!hasHookEventContext(event, "session", "patch")) {
     return false;
   }
-  const context = getHookContext<SessionPatchHookContext>(event);
-  if (!context) {
-    return false;
-  }
+  const context = event.context;
   return (
     typeof context.patch === "object" &&
     context.patch !== null &&

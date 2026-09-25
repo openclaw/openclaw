@@ -224,14 +224,24 @@ export async function prepareGitRuntimePromotion(
   const staged: Array<{ destination: string; temporary: string; previous: boolean }> = [];
   const promoted: typeof staged = [];
   let restoreStarted = false;
-  const cleanup = async () => {
+  const cleanup = async (assertCurrent = () => {}) => {
     // Failed restoration must retain pending originals; successfully restored
     // entries leave the promoted list before cleanup or another restore attempt.
-    await Promise.all(
+    const removed = await Promise.allSettled(
       staged
         .filter((entry) => !restoreStarted || !promoted.includes(entry))
-        .map((entry) => fs.rm(entry.temporary, { recursive: true, force: true })),
+        .map(async (entry) => {
+          assertCurrent();
+          await fs.rm(entry.temporary, { recursive: true, force: true });
+          assertCurrent();
+        }),
     );
+    const failures = removed.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length) {
+      throw new AggregateError(failures, "Git runtime backup cleanup did not finish.");
+    }
   };
   try {
     for (const { sourceRoot, destinationRoot: destination } of roots) {
@@ -255,6 +265,7 @@ export async function prepareGitRuntimePromotion(
     throw error;
   }
   return {
+    backupRoot: staged[0]?.temporary ?? root,
     // Source fences may hide only transaction-owned staging. The same exact
     // paths preserve pending originals while rollback cleans unrelated files.
     sourceTreeStagingPaths: staged.flatMap(({ temporary }) => {
@@ -280,12 +291,15 @@ export async function prepareGitRuntimePromotion(
         await fs.rename(path.join(entry.temporary, "candidate"), entry.destination);
       }
     },
-    async restore() {
+    async restore(assertCurrent = () => {}) {
       restoreStarted = true;
       for (const entry of promoted.toReversed()) {
+        assertCurrent();
         await fs.rm(entry.destination, { recursive: true, force: true });
+        assertCurrent();
         if (entry.previous) {
           await fs.rename(path.join(entry.temporary, "previous"), entry.destination);
+          assertCurrent();
         }
         promoted.pop();
       }

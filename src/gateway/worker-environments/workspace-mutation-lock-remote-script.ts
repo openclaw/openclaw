@@ -1,4 +1,23 @@
-export const REMOTE_WORKSPACE_MUTATION_LOCK_JS = String.raw`const lockRoot = path.join(
+export const REMOTE_WORKSPACE_MUTATION_LOCK_JS = String.raw`function removeTree(target) {
+  let stats;
+  try {
+    stats = fs.lstatSync(target);
+  } catch (error) {
+    if (error && error.code === "ENOENT") return;
+    throw error;
+  }
+  if (stats.isDirectory() && !stats.isSymbolicLink()) {
+    fs.chmodSync(target, 0o700);
+    for (const name of fs.readdirSync(target)) removeTree(path.join(target, name));
+    fs.rmdirSync(target);
+  } else {
+    fs.unlinkSync(target);
+  }
+}
+function sameInode(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+const lockRoot = path.join(
   transactionRoot,
   ".openclaw-accepted-lock-" + workspaceKey,
 );
@@ -61,22 +80,12 @@ function processIsAlive(pid) {
     throw error;
   }
 }
-function processGroupIsAlive(pid) {
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch (error) {
-    if (error && error.code === "EPERM") return true;
-    if (error && error.code === "ESRCH") return false;
-    throw error;
-  }
-}
 function lockIdentityIsAlive(identity) {
   if (identity.action === "receiver") {
     // Receiver descendants own mutation liveness; the wrapper owns acquire/release.
     // Reclaim is safe only after both the receiver group and wrapper are dead.
     return processIsAlive(identity.pid) ||
-      processGroupIsAlive(identity.pid) ||
+      processIsAlive(-identity.pid) ||
       processIsAlive(identity.controllerPid);
   }
   return processIsAlive(identity.pid);

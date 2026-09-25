@@ -4,7 +4,6 @@ import {
   resolveInboundSupplementalSenderAllowed,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
-import type { ContextVisibilityDecision } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   formatSignalSenderDisplay,
@@ -15,7 +14,6 @@ import type { SignalDataMessage } from "./event-handler.types.js";
 
 type SignalQuoteContext = {
   contextVisibilityMode: ReturnType<typeof resolveChannelContextVisibilityMode>;
-  decision: ContextVisibilityDecision;
   quoteSenderAllowed: boolean;
   visibleQuoteText: string;
   visibleQuoteSender?: string;
@@ -51,20 +49,9 @@ export function resolveSignalQuoteContext(params: {
     senderAllowed: quoteSenderAllowed,
     isQuote: true,
   });
-  const decision: ContextVisibilityDecision = {
-    include: Boolean(visibleQuote),
-    reason: visibleQuote
-      ? contextVisibilityMode === "all"
-        ? "mode_all"
-        : quoteSenderAllowed
-          ? "sender_allowed"
-          : "quote_override"
-      : "blocked",
-  };
 
   return {
     contextVisibilityMode,
-    decision,
     quoteSenderAllowed,
     visibleQuoteText: visibleQuote?.body ?? "",
     visibleQuoteSender: visibleQuote?.sender,

@@ -4,41 +4,21 @@ import {
   buildChannelKeyCandidates,
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
-import type {
-  ChannelBotLoopProtectionConfig,
-  ReplyToMode,
-  SlackChannelConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+import type { SlackChannelConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { buildSlackChannelIdCandidates, buildSlackChannelPolicyScope } from "../group-policy.js";
 import { normalizeSlackSlug, resolveSlackUserAllowListForTeam } from "./allow-list.js";
 
-export type SlackChannelConfigResolved = {
+type SlackChannelConfigEntry = Omit<SlackChannelConfig, "tools" | "toolsBySender">;
+
+export type SlackChannelConfigResolved = Omit<
+  SlackChannelConfigEntry,
+  "enabled" | "requireMention"
+> & {
   allowed: boolean;
   requireMention: boolean;
-  ignoreOtherMentions?: boolean;
-  replyToMode?: ReplyToMode;
-  allowBots?: boolean | "mentions";
-  botLoopProtection?: ChannelBotLoopProtectionConfig;
-  users?: Array<string | number>;
-  skills?: string[];
-  systemPrompt?: string;
-  presenceEvents?: SlackChannelConfig["presenceEvents"];
   matchKey?: string;
   matchSource?: ChannelMatchSource;
-};
-
-type SlackChannelConfigEntry = {
-  enabled?: boolean;
-  requireMention?: boolean;
-  ignoreOtherMentions?: boolean;
-  replyToMode?: ReplyToMode;
-  allowBots?: boolean | "mentions";
-  botLoopProtection?: ChannelBotLoopProtectionConfig;
-  users?: Array<string | number>;
-  skills?: string[];
-  systemPrompt?: string;
-  presenceEvents?: SlackChannelConfig["presenceEvents"];
 };
 
 export type SlackChannelConfigEntries = Record<string, SlackChannelConfigEntry>;

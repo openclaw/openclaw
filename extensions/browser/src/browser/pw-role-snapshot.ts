@@ -294,47 +294,6 @@ function compactTree(lines: readonly string[]) {
   return compacted || "(empty)";
 }
 
-type InteractiveSnapshotLine = NonNullable<ReturnType<typeof parseSnapshotLine>> & {
-  name?: string;
-};
-
-function buildInteractiveSnapshotLines(params: {
-  lines: string[];
-  options: RoleSnapshotOptions;
-  refs: RoleRefMap;
-  resolveRef: (parsed: InteractiveSnapshotLine) => { ref: string; data: RoleRef } | null;
-  formatSuffix: (suffix: string, ref: string) => string;
-}): string[] {
-  const out: string[] = [];
-  for (const line of params.lines) {
-    if (params.options.maxDepth !== undefined && getIndentLevel(line) > params.options.maxDepth) {
-      continue;
-    }
-    const entry = parseSnapshotLine(line);
-    if (!entry) {
-      continue;
-    }
-    const parsed = { ...entry, name: decodeSnapshotName(entry.nameToken) };
-    if (!INTERACTIVE_ROLES.has(parsed.role)) {
-      continue;
-    }
-    const resolved = params.resolveRef(parsed);
-    if (!resolved?.ref) {
-      continue;
-    }
-    params.refs[resolved.ref] = resolved.data;
-
-    let enhanced = `- ${parsed.roleRaw}`;
-    if (parsed.name) {
-      enhanced += ` ${JSON.stringify(parsed.name)}`;
-    }
-    enhanced += ` [ref=${resolved.ref}]`;
-    enhanced += params.formatSuffix(parsed.suffix, resolved.ref);
-    out.push(enhanced);
-  }
-  return out;
-}
-
 /** Normalize a role snapshot ref accepted by browser actions. */
 export function parseRoleRef(raw: string): string | null {
   const trimmed = raw.trim();
@@ -372,25 +331,6 @@ export function buildRoleSnapshotFromAiSnapshot(
   const lines = aiSnapshot.split("\n");
   const refs: RoleRefMap = {};
 
-  if (options.interactive) {
-    const out = buildInteractiveSnapshotLines({
-      lines,
-      options,
-      refs,
-      resolveRef: (parsed) => {
-        const ref = parseAiSnapshotRef(parsed.ref);
-        return ref
-          ? { ref, data: { role: parsed.role, ...(parsed.name ? { name: parsed.name } : {}) } }
-          : null;
-      },
-      formatSuffix: (suffix, ref) => suffix.replace(` [ref=${ref}]`, ""),
-    });
-    return {
-      snapshot: out.join("\n") || "(no interactive elements)",
-      refs,
-    };
-  }
-
   const out: string[] | undefined = suppliedOptions === undefined ? undefined : [];
   for (const line of lines) {
     const depth = getIndentLevel(line);
@@ -400,11 +340,27 @@ export function buildRoleSnapshotFromAiSnapshot(
 
     const parsed = parseSnapshotLine(line);
     if (!parsed) {
-      out?.push(line);
+      if (!options.interactive) {
+        out?.push(line);
+      }
       continue;
     }
     const { role } = parsed;
     const name = decodeSnapshotName(parsed.nameToken);
+    if (options.interactive) {
+      const ref = parseAiSnapshotRef(parsed.ref);
+      if (INTERACTIVE_ROLES.has(role) && ref) {
+        refs[ref] = { role, ...(name ? { name } : {}) };
+        let enhanced = `- ${parsed.roleRaw}`;
+        if (name) {
+          enhanced += ` ${JSON.stringify(name)}`;
+        }
+        enhanced += ` [ref=${ref}]`;
+        enhanced += parsed.suffix.replace(` [ref=${ref}]`, "");
+        out?.push(enhanced);
+      }
+      continue;
+    }
     const isStructural = STRUCTURAL_ROLES.has(role);
 
     if (options.compact && isStructural && !name) {
@@ -420,9 +376,11 @@ export function buildRoleSnapshotFromAiSnapshot(
   }
 
   return {
-    snapshot: options.compact
-      ? compactTree(out ?? lines)
-      : (out ? out.join("\n") : aiSnapshot) || "(empty)",
+    snapshot: options.interactive
+      ? out!.join("\n") || "(no interactive elements)"
+      : options.compact
+        ? compactTree(out ?? lines)
+        : (out ? out.join("\n") : aiSnapshot) || "(empty)",
     refs,
   };
 }

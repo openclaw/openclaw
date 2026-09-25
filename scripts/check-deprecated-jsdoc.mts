@@ -1,13 +1,10 @@
 #!/usr/bin/env node
 // Checks deprecated JSDoc blocks for required migration details.
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
-import type * as Ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-
-const require = createRequire(import.meta.url);
-const ts: typeof import("typescript") = require("typescript");
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const SCAN_ROOTS = ["src", "extensions", "packages"];
@@ -36,7 +33,7 @@ function walk(dir: string, files: string[] = []) {
   return files;
 }
 
-function leadingCommentText(sourceFile: Ts.SourceFile, node: Ts.Node) {
+function leadingCommentText(sourceFile: ts.SourceFile, node: ts.Node) {
   return (ts.getLeadingCommentRanges(sourceFile.text, node.pos) ?? [])
     .map((range) => sourceFile.text.slice(range.pos, range.end))
     .join("\n");
@@ -52,27 +49,36 @@ function normalizeCommentText(comment: string) {
     .join(" ");
 }
 
-function lineOf(sourceFile: Ts.SourceFile, node: Ts.Node) {
+function lineOf(sourceFile: ts.SourceFile, node: ts.Node) {
   return sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
 }
 
-function isExported(node: Ts.Node) {
-  const modifiers = ts.canHaveModifiers(node) ? ts.getModifiers(node) : undefined;
+function isExported(node: ts.ModifiersBase) {
   return (
-    modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) ||
+    node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) ||
     node.parent?.kind === ts.SyntaxKind.SourceFile
   );
 }
 
-type InspectedNode = Ts.Declaration | Ts.VariableStatement;
+type InspectedNode =
+  | ts.FunctionDeclaration
+  | ts.ClassDeclaration
+  | ts.InterfaceDeclaration
+  | ts.TypeAliasDeclaration
+  | ts.EnumDeclaration
+  | ts.VariableStatement
+  | ts.PropertySignatureDeclaration
+  | ts.MethodSignatureDeclaration
+  | ts.PropertyDeclaration
+  | ts.EnumMember;
 type Violation = { filePath: string; line: number; name: string };
 
 function symbolName(node: InspectedNode) {
   const declaration = ts.isVariableStatement(node) ? node.declarationList.declarations[0] : node;
-  return ts.getNameOfDeclaration(declaration)?.getText() ?? "<anonymous>";
+  return declaration?.name?.getText() ?? "<anonymous>";
 }
 
-function shouldInspectNode(node: Ts.Node): node is InspectedNode {
+function shouldInspectNode(node: ts.Node): node is InspectedNode {
   if (
     ts.isFunctionDeclaration(node) ||
     ts.isClassDeclaration(node) ||
@@ -84,19 +90,17 @@ function shouldInspectNode(node: Ts.Node): node is InspectedNode {
     return isExported(node);
   }
   return (
-    ts.isPropertySignature(node) ||
-    ts.isMethodSignature(node) ||
+    ts.isPropertySignatureDeclaration(node) ||
+    ts.isMethodSignatureDeclaration(node) ||
     ts.isPropertyDeclaration(node) ||
     ts.isEnumMember(node)
   );
 }
 
-function collectViolations(filePath: string) {
-  const sourceText = fs.readFileSync(filePath, "utf8");
-  const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
+function collectViolations(filePath: string, sourceFile: ts.SourceFile) {
   const violations: Violation[] = [];
 
-  function visit(node: Ts.Node) {
+  function visit(node: ts.Node) {
     if (shouldInspectNode(node)) {
       const comment = leadingCommentText(sourceFile, node);
       const normalizedComment = normalizeCommentText(comment);
@@ -112,16 +116,23 @@ function collectViolations(filePath: string) {
         });
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);
   return violations;
 }
 
-const violations = SCAN_ROOTS.flatMap((root) =>
-  walk(path.join(repoRoot, root)).flatMap(collectViolations),
-);
+function scanViolations() {
+  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
+  const files = SCAN_ROOTS.flatMap((root) => walk(path.join(repoRoot, root)));
+  const sourceFiles = parser.parseSourceFiles(
+    files.map((fileName) => ({ fileName, text: fs.readFileSync(fileName, "utf8") })),
+  );
+  return sourceFiles.flatMap((sourceFile) => collectViolations(sourceFile.fileName, sourceFile));
+}
+
+const violations = scanViolations();
 
 if (violations.length > 0) {
   console.error("Deprecated JSDoc guard failed:");

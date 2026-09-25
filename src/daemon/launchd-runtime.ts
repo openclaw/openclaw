@@ -349,12 +349,11 @@ export async function readLaunchAgentRuntime(
       },
     };
   }
+  const plistExists = await launchAgentPlistExists(env);
   if (probe.state === "not-loaded") {
-    const plistExists = await launchAgentPlistExists(env);
     return plistExists ? { status: "stopped" } : { status: "unknown", missingUnit: true };
   }
   if (probe.state === "unknown") {
-    const plistExists = await launchAgentPlistExists(env);
     const missingGuiSession = plistExists && isUnsupportedGuiDomain(probe.detail ?? "");
     return {
       status: "unknown",
@@ -364,7 +363,6 @@ export async function readLaunchAgentRuntime(
     };
   }
   const parsed = probe.runtime;
-  const plistExists = await launchAgentPlistExists(env);
   return {
     status: probe.state,
     state: parsed.state,

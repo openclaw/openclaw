@@ -122,8 +122,8 @@ describe("security audit workspace skill path escape findings", () => {
     // happens when a slow/hanging NFS or SMB mount causes the 2 s deadline in
     // realpathWithTimeout to fire. The .catch(() => null) inside the helper
     // converts any rejection to null, which is the same signal produced by a
-    // genuine timeout. All other paths resolve to their string value so the BFS
-    // and workspace-root detection work normally.
+    // genuine timeout. All other paths resolve to their string value so the
+    // workspace-root detection works normally.
     const realpathSpy = vi
       .spyOn(fs, "realpath")
       .mockImplementation(async (p: unknown): Promise<string> => {
@@ -147,47 +147,77 @@ describe("security audit workspace skill path escape findings", () => {
     }
   });
 
-  it("surfaces scan_truncated finding when BFS visit cap is hit", async () => {
-    const tmp = await tempCases.makeTmpDir("workspace-skill-bfs-truncated");
+  it.each([
+    {
+      name: "directory visit cap",
+      directories: ["a", "b", "c"],
+      files: [],
+      limits: { maxDirVisits: 2 },
+      truncated: true,
+    },
+    {
+      name: "file cap",
+      directories: ["a", "b"],
+      files: ["a/SKILL.md", "b/SKILL.md"],
+      limits: { maxFiles: 1 },
+      truncated: true,
+    },
+    {
+      name: "exact file cap with excluded directories",
+      directories: ["a", ".hidden", "node_modules"],
+      files: ["a/SKILL.md", ".hidden/SKILL.md", "node_modules/SKILL.md"],
+      limits: { maxFiles: 1 },
+      truncated: false,
+    },
+  ])("reports scan completeness for $name", async ({ directories, files, limits, truncated }) => {
+    const tmp = await tempCases.makeTmpDir("workspace-skill-capped");
     const workspaceDir = path.join(tmp, "workspace");
     const skillsRoot = path.join(workspaceDir, "skills");
-    await fs.mkdir(skillsRoot, { recursive: true });
+    await Promise.all(
+      directories.map((directory) =>
+        fs.mkdir(path.join(skillsRoot, directory), { recursive: true }),
+      ),
+    );
+    await Promise.all(files.map((file) => fs.writeFile(path.join(skillsRoot, file), "# skill\n")));
 
-    // Use a tiny injected visit cap to exercise the truncation branch without
-    // forcing the test to await tens of thousands of mocked readdir calls.
-    const FAKE_DIRS = 3;
-    const fakeDirEntries = Array.from({ length: FAKE_DIRS }, (_, i) => ({
-      name: `d${i}`,
-      isDirectory: () => true,
-      isFile: () => false,
-      isSymbolicLink: () => false,
-      isBlockDevice: () => false,
-      isCharacterDevice: () => false,
-      isFIFO: () => false,
-      isSocket: () => false,
-      parentPath: skillsRoot,
-      path: skillsRoot,
-    })) as unknown as Awaited<ReturnType<typeof fs.readdir>>;
-
-    let readdirCalls = 0;
-    const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation(async () => {
-      return readdirCalls++ === 0 ? fakeDirEntries : ([] as unknown as typeof fakeDirEntries);
+    const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
+      cfg: { agents: { defaults: { workspace: workspaceDir } } } satisfies OpenClawConfig,
+      skillScanLimits: limits,
     });
-    const realpathSpy = vi
-      .spyOn(fs, "realpath")
-      .mockImplementation(async (p: unknown) => String(p));
-
-    try {
-      const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
-        cfg: { agents: { defaults: { workspace: workspaceDir } } } satisfies OpenClawConfig,
-        skillScanLimits: { maxDirVisits: 2 },
-      });
-      const truncFinding = requireFinding(findings, "skills.workspace.scan_truncated");
-      expect(truncFinding.severity).toBe("warn");
-      expect(truncFinding.detail).toContain(workspaceDir);
-    } finally {
-      readdirSpy.mockRestore();
-      realpathSpy.mockRestore();
+    expect(findings.some((finding) => finding.checkId === "skills.workspace.scan_truncated")).toBe(
+      truncated,
+    );
+    if (truncated) {
+      const finding = requireFinding(findings, "skills.workspace.scan_truncated");
+      expect(finding.severity).toBe("warn");
+      expect(finding.detail).toContain(workspaceDir);
     }
   });
+
+  it.each(["", "blocked"])(
+    "reports an unreadable skills directory %j as incomplete",
+    async (relative) => {
+      const tmp = await tempCases.makeTmpDir("workspace-skill-unreadable");
+      const workspaceDir = path.join(tmp, "workspace");
+      const unreadableDir = path.join(workspaceDir, "skills", relative);
+      await fs.mkdir(unreadableDir, { recursive: true });
+      await fs.writeFile(path.join(unreadableDir, "SKILL.md"), "# skill\n");
+      const readDirectory = fs.readdir.bind(fs);
+      const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+        if (path.resolve(String(args[0])) === unreadableDir) {
+          throw Object.assign(new Error("directory unavailable"), { code: "EACCES" });
+        }
+        return readDirectory(...args);
+      });
+
+      try {
+        const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
+          cfg: { agents: { defaults: { workspace: workspaceDir } } } satisfies OpenClawConfig,
+        });
+        expect(requireFinding(findings, "skills.workspace.scan_truncated").severity).toBe("warn");
+      } finally {
+        readdirSpy.mockRestore();
+      }
+    },
+  );
 });

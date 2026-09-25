@@ -15,7 +15,7 @@ import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   readPackageManagerProbeValue,
 } from "./update-npm-prefix.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export async function resolveCanonicalPath(filePath: string): Promise<string> {
   return path.resolve(await fs.realpath(filePath).catch(() => filePath));

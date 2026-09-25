@@ -37,6 +37,7 @@ import {
 } from "./oc-path.js";
 import type { OcAst, OcMatch } from "./universal.js";
 import { resolveOcPath } from "./universal.js";
+import { resolveYamlPositionalSegment } from "./yaml/resolve.js";
 
 // ---------- Public types ---------------------------------------------------
 
@@ -48,10 +49,6 @@ interface OcPathMatch {
 
 type Slot = "section" | "item" | "field";
 interface SlotSub {
-  readonly slot: Slot;
-  readonly value: string;
-}
-interface PatternSub {
   readonly slot: Slot;
   readonly value: string;
 }
@@ -111,23 +108,16 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
 
 // ---------- Pattern unpacking ---------------------------------------------
 
-function patternSubs(pattern: OcPath): readonly PatternSub[] {
-  const out: PatternSub[] = [];
+function patternSubs(pattern: OcPath): readonly SlotSub[] {
+  const out: SlotSub[] = [];
   // Bracket-aware split so dots inside `[k=1.0]` or `{a.b,c}` aren't
   // treated as sub-segment delimiters.
-  if (pattern.section !== undefined) {
-    for (const v of splitRespectingBrackets(pattern.section, ".")) {
-      out.push({ slot: "section", value: v });
-    }
-  }
-  if (pattern.item !== undefined) {
-    for (const v of splitRespectingBrackets(pattern.item, ".")) {
-      out.push({ slot: "item", value: v });
-    }
-  }
-  if (pattern.field !== undefined) {
-    for (const v of splitRespectingBrackets(pattern.field, ".")) {
-      out.push({ slot: "field", value: v });
+  for (const slot of ["section", "item", "field"] as const) {
+    const value = pattern[slot];
+    if (value !== undefined) {
+      for (const sub of splitRespectingBrackets(value, ".")) {
+        out.push({ slot, value: sub });
+      }
     }
   }
   return out;
@@ -159,14 +149,14 @@ function repackSlotSubs(pattern: OcPath, slotSubs: readonly SlotSub[]): OcPath {
 
 // Per-kind ops the dispatcher uses to drive recursion. Each kind's
 // walker fills these in; the dispatcher handles every segment shape.
-interface WalkOps<T> {
-  enumerate(node: T): Iterable<{ keySub: string; child: T }>;
-  lookup(node: T, key: string): { keySub: string; child: T } | null;
-  positional(node: T, seg: string): { keySub: string; child: T } | null;
-  predicate(node: T, pred: PredicateSpec): Iterable<{ keySub: string; child: T }>;
+interface WalkOps<T, Child = T> {
+  enumerate(node: T): Iterable<{ keySub: string; child: Child }>;
+  lookup(node: T, key: string): { keySub: string; child: Child } | null;
+  positional(node: T, seg: string): { keySub: string; child: Child } | null;
+  predicate(node: T, pred: PredicateSpec): Iterable<{ keySub: string; child: Child }>;
   walk(
-    node: T,
-    subs: readonly PatternSub[],
+    node: T | Child,
+    subs: readonly SlotSub[],
     i: number,
     walked: readonly SlotSub[],
     onMatch: OnMatch,
@@ -183,10 +173,10 @@ function checkDepth(walked: readonly SlotSub[]): void {
   }
 }
 
-function dispatchSeg<T>(
+function dispatchSeg<T, Child>(
   node: T,
-  ops: WalkOps<T>,
-  subs: readonly PatternSub[],
+  ops: WalkOps<T, Child>,
+  subs: readonly SlotSub[],
   i: number,
   walked: readonly SlotSub[],
   onMatch: OnMatch,
@@ -238,16 +228,9 @@ function dispatchSeg<T>(
     return;
   }
 
-  if (isPositionalSeg(cur.value)) {
-    const m = ops.positional(node, cur.value);
-    if (m === null) {
-      return;
-    }
-    ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], onMatch);
-    return;
-  }
-
-  const m = ops.lookup(node, cur.value);
+  const m = isPositionalSeg(cur.value)
+    ? ops.positional(node, cur.value)
+    : ops.lookup(node, cur.value);
   if (m === null) {
     return;
   }
@@ -258,7 +241,7 @@ function dispatchSeg<T>(
 
 function walkJsonc(
   node: JsoncValue,
-  subs: readonly PatternSub[],
+  subs: readonly SlotSub[],
   i: number,
   walked: readonly SlotSub[],
   onMatch: OnMatch,
@@ -334,11 +317,10 @@ const jsoncOps: WalkOps<JsoncValue> = {
 
 // ---------- JSONL walker ---------------------------------------------------
 
-// First slot is a line address; subsequent slots descend into the
-// line's jsonc value via jsonlOps.walk's holder unwrap.
+// First slot is a line address; subsequent slots descend into its JSONC value.
 function walkJsonl(
   ast: JsonlAst,
-  subs: readonly PatternSub[],
+  subs: readonly SlotSub[],
   i: number,
   walked: readonly SlotSub[],
   onMatch: OnMatch,
@@ -353,11 +335,11 @@ function walkJsonl(
   }
 }
 
-const jsonlOps: WalkOps<JsonlAst> = {
+const jsonlOps: WalkOps<JsonlAst, JsonlLine> = {
   *enumerate(ast) {
     for (const l of ast.lines) {
       if (l.kind === "value") {
-        yield { keySub: `L${l.line}`, child: lineHolder(ast, l) };
+        yield { keySub: `L${l.line}`, child: l };
       }
     }
   },
@@ -367,7 +349,7 @@ const jsonlOps: WalkOps<JsonlAst> = {
       return null;
     }
     const concreteAddr = line.kind === "value" ? `L${line.line}` : key;
-    return { keySub: concreteAddr, child: lineHolder(ast, line) };
+    return { keySub: concreteAddr, child: line };
   },
   positional(ast, seg) {
     return jsonlOps.lookup(ast, seg);
@@ -379,16 +361,13 @@ const jsonlOps: WalkOps<JsonlAst> = {
       }
       const actual = topLevelLeafText(l.value, pred.key);
       if (evaluatePredicate(actual, pred)) {
-        yield { keySub: `L${l.line}`, child: lineHolder(ast, l) };
+        yield { keySub: `L${l.line}`, child: l };
       }
     }
   },
-  // After the line slot is consumed, descend into the line's jsonc
-  // value via the holder's WeakMap-tagged line. Otherwise this is a
-  // top-level walkJsonl entry — go through line-slot dispatch.
+  // Union alternatives revisit the file; consumed line slots descend into JSONC.
   walk(child, subs, i, walked, onMatch) {
-    const line = unwrapHolder(child);
-    if (line === null) {
+    if (child.kind === "jsonl") {
       walkJsonl(child, subs, i, walked, onMatch);
       return;
     }
@@ -396,29 +375,12 @@ const jsonlOps: WalkOps<JsonlAst> = {
       onMatch(walked);
       return;
     }
-    if (line.kind !== "value") {
+    if (child.kind !== "value") {
       return;
     }
-    walkJsonc(line.value, subs, i, walked, onMatch);
+    walkJsonc(child.value, subs, i, walked, onMatch);
   },
 };
-
-// JsonlAst-typed wrapper around a single line so jsonlOps.walk can
-// distinguish "top-level ast (descend the line slot)" from "we
-// already picked a line, walk inside it." A WeakMap keeps the wrapping
-// structural (no JsonlAst surface change).
-const lineByHolder = new WeakMap<object, JsonlLine>();
-function lineHolder(ast: JsonlAst, line: JsonlLine): JsonlAst {
-  // Synthesize a tagged JsonlAst that carries the chosen line. The
-  // outer structure is preserved (kind, raw, lines) so type checks
-  // remain happy; the WeakMap holds the per-line tag.
-  const holder: JsonlAst = { kind: "jsonl", raw: ast.raw, lines: ast.lines };
-  lineByHolder.set(holder, line);
-  return holder;
-}
-function unwrapHolder(holder: JsonlAst): JsonlLine | null {
-  return lineByHolder.get(holder) ?? null;
-}
 
 function topLevelLeafText(value: JsoncValue, key: string): string | null {
   if (value.kind !== "object") {
@@ -442,7 +404,7 @@ function topLevelLeafText(value: JsoncValue, key: string): string | null {
 
 function walkYaml(
   node: Node,
-  subs: readonly PatternSub[],
+  subs: readonly SlotSub[],
   i: number,
   walked: readonly SlotSub[],
   onMatch: OnMatch,
@@ -498,7 +460,7 @@ const yamlOps: WalkOps<Node> = {
     return null;
   },
   positional(node, seg) {
-    const concrete = positionalForYamlNode(node, seg);
+    const concrete = resolveYamlPositionalSegment(node, seg);
     return concrete === null ? null : yamlOps.lookup(node, concrete);
   },
   *predicate(node, pred) {
@@ -520,19 +482,6 @@ const yamlOps: WalkOps<Node> = {
   },
   walk: walkYaml,
 };
-
-function positionalForYamlNode(node: Node, seg: string): string | null {
-  if (isMap(node)) {
-    const keys = (node as { items: readonly Pair[] }).items.map((p) =>
-      String(isScalar(p.key) ? p.key.value : p.key),
-    );
-    return resolvePositionalSeg(seg, { indexable: false, size: keys.length, keys });
-  }
-  if (isSeq(node)) {
-    return resolvePositionalSeg(seg, { indexable: true, size: node.items.length });
-  }
-  return null;
-}
 
 function yamlChildMatchesPredicate(node: Node, pred: PredicateSpec): boolean {
   return evaluatePredicate(yamlChildFieldText(node, pred.key), pred);
@@ -587,7 +536,7 @@ type MdLevel =
 
 function walkMd(
   level: MdLevel,
-  subs: readonly PatternSub[],
+  subs: readonly SlotSub[],
   i: number,
   walked: readonly SlotSub[],
   onMatch: OnMatch,
@@ -637,7 +586,7 @@ function walkMd(
 
 function walkMdItemField(
   item: MdItem,
-  cur: PatternSub,
+  cur: SlotSub,
   walked: readonly SlotSub[],
   onMatch: OnMatch,
 ): void {
@@ -758,7 +707,7 @@ const mdOps: WalkOps<MdLevel> = {
   *predicate(level, pred) {
     if (level.kind === "root") {
       for (const block of level.ast.blocks) {
-        if (mdBlockHasMatchingItem(block, pred)) {
+        if (block.items.some((item) => mdItemMatchesPredicate(item, pred))) {
           yield { keySub: block.slug, child: { kind: "block", block, ast: level.ast } };
         }
       }
@@ -787,15 +736,6 @@ function mdItemMatchesPredicate(item: MdItem, pred: PredicateSpec): boolean {
   return evaluatePredicate(item.kv.value, pred);
 }
 
-function mdBlockHasMatchingItem(block: MdBlock, pred: PredicateSpec): boolean {
-  for (const item of block.items) {
-    if (mdItemMatchesPredicate(item, pred)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function jsoncChildMatchesPredicate(node: JsoncValue, pred: PredicateSpec): boolean {
   return evaluatePredicate(jsoncChildFieldText(node, pred.key), pred);
 }
@@ -820,4 +760,3 @@ function jsoncChildFieldText(node: JsoncValue, key: string): string | null {
   }
   return null;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

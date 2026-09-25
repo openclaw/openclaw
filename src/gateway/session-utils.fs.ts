@@ -1,6 +1,7 @@
 // Transcript artifact usage, previews, and response bounds.
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { findExistingTranscriptPath } from "./session-transcript-archive-reader.js";
@@ -56,19 +57,12 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
       }
       let normalizedMessage: Record<string, unknown>;
       try {
-        const record = JSON.parse(line) as Record<string, unknown>;
-        if (
-          !record.message ||
-          typeof record.message !== "object" ||
-          Array.isArray(record.message)
-        ) {
+        const record = asOptionalRecord(JSON.parse(line));
+        const message = asOptionalRecord(record?.message);
+        if (!record || !message) {
           continue;
         }
-        const message = record.message as Record<string, unknown>;
-        const usage =
-          message.usage && typeof message.usage === "object" && !Array.isArray(message.usage)
-            ? message.usage
-            : record.usage;
+        const usage = asOptionalRecord(message.usage) ?? asOptionalRecord(record.usage);
         normalizedMessage = {
           ...message,
           ...(typeof message.provider !== "string" && typeof record.provider === "string"
@@ -77,7 +71,7 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
           ...(typeof message.model !== "string" && typeof record.model === "string"
             ? { model: record.model }
             : {}),
-          ...(usage && typeof usage === "object" && !Array.isArray(usage) ? { usage } : {}),
+          ...(usage ? { usage } : {}),
         };
       } catch {
         continue;

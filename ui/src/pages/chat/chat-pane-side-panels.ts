@@ -1,3 +1,4 @@
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
@@ -168,8 +169,8 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
       this.sessionCompanionThreads.setDraft(sessionKey, text, agentId);
       return;
     }
-    const ask = (key: string, value: string) =>
-      requestSessionCompanionAnswer(client, key, value, agentId);
+    const ask = (key: string, value: string, attachments?: ChatAttachment[]) =>
+      requestSessionCompanionAnswer(client, key, value, agentId, attachments);
     await this.sessionCompanionThreads.submit(sessionKey, question, ask, agentId);
   };
 

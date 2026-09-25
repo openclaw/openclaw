@@ -15,10 +15,6 @@ import {
   resolveHeartbeatSummaryForAgent,
   type HeartbeatSummary,
 } from "../../../infra/heartbeat-summary.js";
-import {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../../../plugins/hook-agent-context.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { buildInterSessionPromptContext } from "../../../sessions/input-provenance.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
@@ -53,6 +49,7 @@ import {
   toolResultWarningDedupe,
   truncateOversizedToolResultsInMessages,
 } from "../tool-result-truncation.js";
+import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import {
   normalizeCurrentPromptTextForLlmBoundary,
   usesEscapedRuntimeContext,
@@ -145,24 +142,15 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     effectivePrompt = effectivePrompt.slice(originContext.text.length).replace(/^\n/, "");
   }
   const hookCtx = {
-    runId: attempt.runId,
-    trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
-    agentId: input.hookAgentId,
-    sessionKey: attempt.sessionKey,
-    sessionId: attempt.sessionId,
-    workspaceDir: attempt.workspaceDir,
+    ...buildEmbeddedAgentHookContext(
+      attempt,
+      input.hookAgentId,
+      freezeDiagnosticTraceContext(input.diagnosticTrace),
+    ),
     activeProjectKeys: [...(attempt.preparedModelRuntime?.activeProjectKeys ?? [])],
     modelProviderId: attempt.model.provider,
     modelId: attempt.model.id,
-    trigger: attempt.trigger,
     inputProvenance: attempt.inputProvenance,
-    ...buildAgentHookContextChannelFields(attempt),
-    ...buildAgentHookContextIdentityFields({
-      trigger: attempt.trigger,
-      senderId: attempt.senderId,
-      chatId: attempt.chatId,
-      channelContext: attempt.channelContext,
-    }),
   };
   const promptBuildMessages =
     pruneProcessedHistoryImages(input.activeSession.messages) ?? input.activeSession.messages;

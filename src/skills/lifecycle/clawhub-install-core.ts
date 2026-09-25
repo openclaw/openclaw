@@ -1,8 +1,4 @@
 import path from "node:path";
-import {
-  getAgentWorkspaceAccess,
-  WorkspaceAccessUnavailableError,
-} from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   downloadClawHubGitHubSkillArchive,
@@ -46,6 +42,7 @@ import {
   recordClawHubSkillInstall,
   type ClawHubSkillDownloadedArtifactLock,
   type ClawHubSkillVerificationLock,
+  resolveWorkspaceClawHubSkills,
 } from "./clawhub-store.js";
 import type { ClawHubSkillFileState } from "./skill-tree-digest.js";
 
@@ -289,34 +286,29 @@ async function fetchInstallVerificationLock(params: {
   }
 }
 
-function resolveGitHubSkillSourceDir(repoRoot: string, sourcePath: string): string {
-  return path.join(repoRoot, ...normalizeGitHubSourcePath(sourcePath).split("/"));
-}
-
-async function installArchiveResolution(params: {
-  workspaceDir: string;
-  slug: string;
-  ownerHandle?: string;
-  version: string;
-  archivePath: string;
-  registry: string;
-  authority: "official" | "openclaw" | "third-party";
-  force?: boolean;
-  logger?: Logger;
-  config?: OpenClawConfig;
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  expectedClawHubState?: ClawHubSkillFileState | null;
-}) {
+async function installDownloadedResolution(
+  params: ClawHubInstallParams & {
+    version: string;
+    archivePath: string;
+    registry: string;
+    authority: "official" | "openclaw" | "third-party";
+    github?: Extract<ClawHubSkillInstallResolutionResponse, { installKind: "github" }>["github"];
+  },
+) {
+  const { github } = params;
   return await withExtractedArchiveRoot({
     archivePath: params.archivePath,
-    tempDirPrefix: "openclaw-skill-clawhub-",
+    tempDirPrefix: github ? "openclaw-skill-clawhub-github-" : "openclaw-skill-clawhub-",
     timeoutMs: 120_000,
-    rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
+    // GitHub paths are relative to the repository root; select before checking skill markers.
+    ...(github ? {} : { rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS }),
     onExtracted: async (rootDir) =>
       await installExtractedSkillRoot({
         workspaceDir: params.workspaceDir,
         slug: params.slug,
-        extractedRoot: rootDir,
+        extractedRoot: github
+          ? path.join(rootDir, ...normalizeGitHubSourcePath(github.path).split("/"))
+          : rootDir,
         mode: params.force ? "update" : "install",
         logger: params.logger,
         expectedClawHubState: params.expectedClawHubState,
@@ -330,67 +322,25 @@ async function installArchiveResolution(params: {
             slug: params.slug,
             ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
             version: params.version,
+            ...(github
+              ? {
+                  repo: github.repo,
+                  path: github.path,
+                  commit: github.commit,
+                  ...(params.requestedReference ? { reference: params.requestedReference } : {}),
+                  ...(params.trustState ? { trustState: params.trustState } : {}),
+                }
+              : {}),
           },
-          source: { kind: "clawhub", authority: params.authority, mutable: false, network: true },
-          requestedSpecifier: `clawhub:${formatClawHubSkillRef(params)}@${params.version}`,
-        },
-        rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
-      }),
-  });
-}
-
-async function installGitHubResolution(params: {
-  workspaceDir: string;
-  slug: string;
-  ownerHandle?: string;
-  sourcePath: string;
-  archivePath: string;
-  registry: string;
-  authority: "official" | "third-party";
-  repo: string;
-  commit: string;
-  requestedReference?: string;
-  trustState?: ClawHubSkillsShTrustState;
-  force?: boolean;
-  logger?: Logger;
-  config?: OpenClawConfig;
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  expectedClawHubState?: ClawHubSkillFileState | null;
-}) {
-  // Preserve the repository root for sourcePath selection. Root markers validate
-  // the selected skill directory afterward, so nested paths are not applied twice.
-  return await withExtractedArchiveRoot({
-    archivePath: params.archivePath,
-    tempDirPrefix: "openclaw-skill-clawhub-github-",
-    timeoutMs: 120_000,
-    onExtracted: async (repoRoot) =>
-      await installExtractedSkillRoot({
-        workspaceDir: params.workspaceDir,
-        slug: params.slug,
-        extractedRoot: resolveGitHubSkillSourceDir(repoRoot, params.sourcePath),
-        mode: params.force ? "update" : "install",
-        logger: params.logger,
-        expectedClawHubState: params.expectedClawHubState,
-        policy: {
-          config: params.config,
-          onInstallPolicyWarning: params.onInstallPolicyWarning,
-          installId: "clawhub",
-          origin: {
-            type: "clawhub",
-            registry: params.registry,
-            slug: params.slug,
-            ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-            version: params.commit,
-            repo: params.repo,
-            path: params.sourcePath,
-            commit: params.commit,
-            ...(params.requestedReference ? { reference: params.requestedReference } : {}),
-            ...(params.trustState ? { trustState: params.trustState } : {}),
+          source: {
+            kind: github ? "git" : "clawhub",
+            authority: params.authority,
+            mutable: false,
+            network: true,
           },
-          source: { kind: "git", authority: params.authority, mutable: false, network: true },
           requestedSpecifier:
-            params.requestedReference ??
-            `clawhub:${formatClawHubSkillRef(params)}@${params.commit}`,
+            (github ? params.requestedReference : undefined) ??
+            `clawhub:${formatClawHubSkillRef(params)}@${params.version}`,
         },
         rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
       }),
@@ -458,12 +408,7 @@ export async function performClawHubSkillInstall(
 ): Promise<InstallClawHubSkillResult> {
   try {
     normalizeExpectedArtifactIntegrity(params.expectedIntegrity);
-    const workspaceAccess = getAgentWorkspaceAccess(params.workspaceDir, "loadSkills");
-    const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
-    if (access && !access.clawHubSkills) {
-      throw new WorkspaceAccessUnavailableError("Remote workspace ClawHub tracking is unavailable");
-    }
-    const files = access?.clawHubSkills;
+    const files = resolveWorkspaceClawHubSkills(params.workspaceDir);
     const registry = resolveClawHubBaseUrl(params.baseUrl);
     await (files?.assertClawHubSkillInstallState ?? assertClawHubSkillInstallState)({
       workspaceDir: params.workspaceDir,
@@ -569,44 +514,20 @@ export async function performClawHubSkillInstall(
       if (!params.version && !resolution) {
         throw new Error(`Skill "${params.slug}" has no install resolution.`);
       }
-      const install =
-        resolution?.installKind === "github" && !params.version
-          ? await installGitHubResolution({
-              workspaceDir: params.workspaceDir,
-              slug: params.slug,
-              ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-              sourcePath: resolution.github.path,
-              archivePath: archive.archivePath,
-              registry,
-              authority: official ? "official" : "third-party",
-              repo: resolution.github.repo,
-              commit: resolution.github.commit,
-              requestedReference: params.requestedReference,
-              trustState: params.trustState,
-              force: params.force,
-              logger: params.logger,
-              config: params.config,
-              onInstallPolicyWarning: params.onInstallPolicyWarning,
-              expectedClawHubState: params.expectedClawHubState,
-            })
-          : await installArchiveResolution({
-              workspaceDir: params.workspaceDir,
-              slug: params.slug,
-              ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-              version,
-              archivePath: archive.archivePath,
-              registry,
-              authority: official
-                ? "official"
-                : isDefaultClawHubBaseUrl(params.baseUrl)
-                  ? "openclaw"
-                  : "third-party",
-              force: params.force,
-              logger: params.logger,
-              config: params.config,
-              onInstallPolicyWarning: params.onInstallPolicyWarning,
-              expectedClawHubState: params.expectedClawHubState,
-            });
+      const github =
+        resolution?.installKind === "github" && !params.version ? resolution.github : undefined;
+      const install = await installDownloadedResolution({
+        ...params,
+        version,
+        archivePath: archive.archivePath,
+        registry,
+        authority: official
+          ? "official"
+          : !github && isDefaultClawHubBaseUrl(params.baseUrl)
+            ? "openclaw"
+            : "third-party",
+        github,
+      });
       if (!install.ok) {
         return {
           ok: false,
@@ -619,8 +540,7 @@ export async function performClawHubSkillInstall(
 
       const installedAt = Date.now();
       const artifact = buildDownloadedArtifactLock(archive);
-      const verificationVersion =
-        resolution?.installKind === "github" && !params.version ? undefined : version;
+      const verificationVersion = github ? undefined : version;
       const [{ skillFile, fileTreeSha256 }, verification] = await Promise.all([
         (files?.readInstalledClawHubSkillFiles ?? readInstalledClawHubSkillFiles)({
           skillDir: install.targetDir,

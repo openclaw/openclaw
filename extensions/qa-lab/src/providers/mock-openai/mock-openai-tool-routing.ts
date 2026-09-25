@@ -465,7 +465,11 @@ export function buildScenarioToolCallEvents(
     if (definition?.type === "custom" && typeof args.input === "string") {
       return buildCustomToolCallEventsWithInput(name, args.input, namespace);
     }
-    return buildRawToolCallEventsWithArgs(name, args, namespace);
+    const callArgs =
+      name === "exec" && typeof args.code === "string"
+        ? { title: "Run the QA fixture step", ...args }
+        : args;
+    return buildRawToolCallEventsWithArgs(name, callArgs, namespace);
   }
   const encodedTarget = encodeCodeModeTarget(name, args);
   if (resolveCodeModeExecSurface(body) === "native") {
@@ -486,6 +490,7 @@ export function buildScenarioToolCallEvents(
     );
   }
   return buildRawToolCallEventsWithArgs("exec", {
+    title: "Run the QA fixture step",
     code: [
       `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
       `const targetName = ${JSON.stringify(name)};`,

@@ -170,13 +170,10 @@ async function prepareLaunchAgentProgramArguments(params: {
   stdout?: NodeJS.WritableStream;
   warn?: (message: string) => void;
   definitionTransaction: GatewayServiceDefinitionTransactionHooks;
-}): Promise<{
-  programArguments: string[];
-  inlineEnvironment?: GatewayServiceEnv;
-}> {
+}): Promise<string[]> {
   const entries = collectLaunchAgentEnvironmentEntries(params.environment);
   if (entries.length === 0) {
-    return { programArguments: params.programArguments };
+    return params.programArguments;
   }
 
   // Environment values with secrets live in an owner-only env file instead of
@@ -210,17 +207,10 @@ async function prepareLaunchAgentProgramArguments(params: {
       wrapperPath,
     })
   ) {
-    return { programArguments: params.programArguments };
+    return params.programArguments;
   }
 
-  return {
-    programArguments: [
-      LAUNCH_AGENT_ENV_WRAPPER_SHELL,
-      wrapperPath,
-      envFilePath,
-      ...params.programArguments,
-    ],
-  };
+  return [LAUNCH_AGENT_ENV_WRAPPER_SHELL, wrapperPath, envFilePath, ...params.programArguments];
 }
 
 export function resolveLaunchAgentPlistPath(env: GatewayServiceEnv): string {
@@ -499,13 +489,12 @@ export async function writeLaunchAgentPlist(
   let plist = buildLaunchAgentPlist({
     label,
     comment: serviceDescription,
-    programArguments: prepared.programArguments,
+    programArguments: prepared,
     workingDirectory,
     stdoutPath,
     // Both handles target one file: launchd cannot merge streams, and darwin
     // diagnostics reads only stdout (readLastGatewayErrorLine).
     stderrPath: stdoutPath,
-    environment: prepared.inlineEnvironment,
   });
   if (definitionTransaction.preservePolicy?.length) {
     plist = preserveServicePolicyXml(
@@ -566,13 +555,12 @@ export async function rewriteLaunchAgentPlistForRestart({
     const plist = buildLaunchAgentPlist({
       label,
       comment: serviceDescription,
-      programArguments: prepared.programArguments,
+      programArguments: prepared,
       workingDirectory: existing.workingDirectory,
       stdoutPath,
       // Both handles target one file: launchd cannot merge streams, and darwin
       // diagnostics reads only stdout (readLastGatewayErrorLine).
       stderrPath: stdoutPath,
-      environment: prepared.inlineEnvironment,
     });
     const previousPlist = await fs.readFile(plistPath, "utf8").catch(() => "");
     if (previousPlist === plist) {

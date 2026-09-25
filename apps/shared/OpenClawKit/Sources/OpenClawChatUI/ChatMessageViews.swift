@@ -287,6 +287,7 @@ private struct ChatBubbleShape: InsettableShape {
 
 @MainActor
 struct ChatMessageBubble: View {
+    @Environment(\.openClawAssistantUsesReadingColumn) private var usesReadingColumn
     let message: OpenClawChatMessage
     var sourcePreviews: [ChatSourcePreview] = []
     var sourceContextRevision = UUID()
@@ -332,7 +333,12 @@ struct ChatMessageBubble: View {
                 }
 
                 self.messageBody
-                    .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+                    .frame(
+                        maxWidth: self.usesReadingColumn ? .infinity : ChatUIConstants.bubbleMaxWidth,
+                        alignment: .leading)
+                    .contentShape(.accessibility, Rectangle())
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("chat-assistant-message-body")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 2)
@@ -1047,11 +1053,21 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
 
 // Keep this explicit for SwiftPM toolchains where SwiftUI macro plugins are unavailable.
 // swiftformat:disable environmentEntry
+private struct OpenClawAssistantUsesReadingColumnKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 private struct OpenClawAssistantBubblesInCleanChromeKey: EnvironmentKey {
     static let defaultValue = false
 }
 
 extension EnvironmentValues {
+    /// The chat column owns tablet width for both streaming and completed answers.
+    var openClawAssistantUsesReadingColumn: Bool {
+        get { self[OpenClawAssistantUsesReadingColumnKey.self] }
+        set { self[OpenClawAssistantUsesReadingColumnKey.self] = newValue }
+    }
+
     /// Clients that want iMessage-style assistant bubbles in the clean chrome
     /// (the iOS app) opt in; the default keeps the plain clean look elsewhere.
     public var openClawAssistantBubblesInCleanChrome: Bool {
@@ -1067,28 +1083,31 @@ private struct AssistantBubbleContainerStyle: ViewModifier {
     let cornerRadius: CGFloat
 
     @Environment(\.openClawAssistantBubblesInCleanChrome) private var bubblesInClean
+    @Environment(\.openClawAssistantUsesReadingColumn) private var usesReadingColumn
 
     func body(content: Content) -> some View {
-        if self.isClean, !self.bubblesInClean {
-            content
-        } else {
-            content
-                // Clean call sites pre-pad only ~4pt; bubbles need room to breathe.
-                    .padding(self.isClean ? 8 : 0)
-                    .background(
-                        RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                            .fill(OpenClawChatTheme.assistantBubble))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+        Group {
+            if self.isClean, !self.bubblesInClean {
+                content
+            } else {
+                content
+                    // Clean call sites pre-pad only ~4pt; bubbles need room to breathe.
+                        .padding(self.isClean ? 8 : 0)
+                        .background(
+                            RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                                .fill(OpenClawChatTheme.assistantBubble))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+            }
         }
+        .frame(maxWidth: self.usesReadingColumn ? .infinity : ChatUIConstants.bubbleMaxWidth, alignment: .leading)
     }
 }
 
 extension View {
     fileprivate func assistantBubbleContainerStyle(isClean: Bool, cornerRadius: CGFloat = 16) -> some View {
-        self.modifier(AssistantBubbleContainerStyle(isClean: isClean, cornerRadius: cornerRadius))
-            .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+        modifier(AssistantBubbleContainerStyle(isClean: isClean, cornerRadius: cornerRadius))
             .focusable(false)
     }
 }
@@ -1129,6 +1148,9 @@ struct ChatStreamingAssistantBubble: View {
             }
             .padding(self.isClean ? 4 : 12)
             .assistantBubbleContainerStyle(isClean: self.isClean)
+            .contentShape(.accessibility, Rectangle())
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("chat-streaming-assistant-body")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

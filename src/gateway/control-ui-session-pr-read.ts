@@ -16,6 +16,7 @@ import { READ_SCOPE } from "./operator-scopes.js";
 import { isGatewayClientProfilePending } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { withReadySessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
 import type { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
@@ -31,6 +32,7 @@ export type ControlUiSessionPrTarget = {
   identity: string;
   readSource: { agentId: string; path: string };
   source: string | GitCheckoutContext | null;
+  assertCurrent?: () => void;
 };
 
 export type ControlUiSessionPrReadContext = {
@@ -84,17 +86,17 @@ export function resolveControlUiSessionPrTarget(
   };
 }
 
-export type ControlUiSessionPrRead = () => ControlUiSessionPrTarget | undefined;
+export type ControlUiSessionPrRead = () => Promise<ControlUiSessionPrTarget | undefined>;
 
 /** A watcher may follow a replaced target, but never a replacement person or access grant. */
-export function prepareControlUiSessionPrRead(params: {
+export async function prepareControlUiSessionPrRead(params: {
   client: GatewayClient;
   sessionKey: string;
   agentId?: string;
   getRuntimeConfig: () => OpenClawConfig;
   getSessionRowProjection: () => SessionRowProjection | undefined;
   isCurrentClient: () => boolean;
-}): ControlUiSessionPrRead | undefined {
+}): Promise<ControlUiSessionPrRead | undefined> {
   const {
     client,
     sessionKey,
@@ -112,7 +114,7 @@ export function prepareControlUiSessionPrRead(params: {
   const access = client.internal?.operatorAccessAuthority;
   const connectionSignal = client.connectionSignal;
   let aliasRevision = -1;
-  const readCurrent = () => {
+  const captureCurrent = (projection: SessionRowProjection) => {
     try {
       const currentActor = resolveGatewayOperatorRoleActor(client);
       if (
@@ -154,8 +156,7 @@ export function prepareControlUiSessionPrRead(params: {
       if (!requested.ok) {
         return undefined;
       }
-      const projection = getSessionRowProjection();
-      if (!projection) {
+      if (getSessionRowProjection() !== projection) {
         return undefined;
       }
       const query = { key: sessionKey, agentId: requested.agentId };
@@ -167,15 +168,25 @@ export function prepareControlUiSessionPrRead(params: {
       ) {
         return undefined;
       }
+      return { cfg, query, selected };
+    } catch {
+      return undefined;
+    }
+  };
+  const readPreparedCurrent = (
+    read: SessionRowReadView,
+    captured: NonNullable<ReturnType<typeof captureCurrent>>,
+  ) => {
+    try {
       // Authorize transient private rows before preparing presentation; resident rows reuse it.
-      const current = projection.describe(query, selected);
+      const current = read.describe(captured.query, captured.selected);
       const storePath = current?.storeTarget.storePath;
       if (!current || !storePath) {
         return undefined;
       }
       return resolveControlUiSessionPrTarget(
         {
-          cfg,
+          cfg: captured.cfg,
           agentId: current.agentId,
           canonicalKey: current.key,
           storePath,
@@ -188,5 +199,47 @@ export function prepareControlUiSessionPrRead(params: {
       return undefined;
     }
   };
-  return readCurrent() ? readCurrent : undefined;
+  const readCurrent: ControlUiSessionPrRead = async () => {
+    try {
+      const projection = getSessionRowProjection();
+      if (!projection) {
+        return undefined;
+      }
+      const target = await withReadySessionRows(
+        projection,
+        (cfg) => {
+          const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentId);
+          return requested.ok ? [{ key: sessionKey, agentId: requested.agentId }] : [];
+        },
+        (read) => {
+          const captured = captureCurrent(projection);
+          if (!captured) {
+            return undefined;
+          }
+          const preparedTarget = readPreparedCurrent(read, captured);
+          return preparedTarget
+            ? { target: preparedTarget, captured: captured.selected }
+            : undefined;
+        },
+      );
+      return target
+        ? {
+            ...target.target,
+            assertCurrent: () => {
+              const current = captureCurrent(projection);
+              if (
+                !current ||
+                current.selected !== target.captured ||
+                !projection.isCurrent(target.captured)
+              ) {
+                throw new Error("Session pull-request target changed");
+              }
+            },
+          }
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  return (await readCurrent()) ? readCurrent : undefined;
 }

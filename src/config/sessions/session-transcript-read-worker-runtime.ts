@@ -11,6 +11,7 @@ import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fen
 import type {
   SessionBranchSummaryWorkerInput,
   SessionEntryWorkerInput,
+  SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
   SessionSqliteTargetWorkerInput,
   SessionTranscriptWorkerReply,
@@ -36,8 +37,8 @@ const modelContextReads = new WorkerTaskPool<
 
 // Background transcript exports cannot occupy the foreground context worker.
 const sessionEntries = new WorkerTaskPool<
-  SessionEntryWorkerInput,
-  SessionTranscriptWorkerReply<"session-entry">
+  SessionEntryWorkerInput | SessionResetRecallWorkerInput,
+  SessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">
 >({
   workerUrl,
   prepareWorker: prepareSqliteReadWorker,
@@ -101,7 +102,7 @@ export async function prepareSessionEntryInWorker(
   redaction: SensitiveTextRedactionSnapshot,
 ) {
   const receipt = resolveSessionTranscriptReadFence(options);
-  return unwrapSessionTranscriptWorkerReply<"session-entry">(
+  const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
     await sessionEntries.run(
       {
         kind: "session-entry",
@@ -122,6 +123,30 @@ export async function prepareSessionEntryInWorker(
       },
     ),
   );
+  if (!("entry" in result)) {
+    throw new Error("Session transcript worker returned reset metadata instead of an export");
+  }
+  return result;
+}
+
+export async function readSessionResetRecallCutoffInWorker(
+  scope: SessionResetRecallWorkerInput["scope"],
+) {
+  const receipt = resolveSessionTranscriptReadFence(scope);
+  const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
+    await sessionEntries.run(
+      {
+        kind: "session-reset-recall",
+        scope,
+        ...(receipt ? { admission: { ...receipt } } : {}),
+      },
+      { inputBytes: JSON.stringify(scope).length * 2 },
+    ),
+  );
+  if (!("cutoff" in result)) {
+    throw new Error("Session transcript worker returned an export instead of reset metadata");
+  }
+  return result.cutoff;
 }
 
 export async function runSessionBranchSummaryWorkerRequest(

@@ -19,7 +19,7 @@ In practice:
 
 - Avatars and images served under relative paths (for example `/avatars/<id>`) still render, including authenticated avatar routes the UI fetches and converts into local `blob:` URLs.
 - Inline `data:image/...` URLs still render.
-- Local `blob:` URLs created by the Control UI still render.
+- Local `blob:` URLs created by the Control UI still render. Text attachment previews can read those local bytes before the attachment is sent.
 - HTTPS transcript images render in Chat image galleries and Activity previews. The browser contacts the image host directly, disclosing its network address; thumbnails, the expanded image viewer, and neighboring-image preloads send no page referrer.
 - Markdown attachment and Skill Workshop previews keep remote images as click-to-open links. Plugin README and agent-file previews automatically load HTTPS images and contact their hosts directly from the browser.
 - Verified GitHub account avatars render from `avatars.githubusercontent.com`; avatar helpers continue to reject arbitrary remote avatar URLs.

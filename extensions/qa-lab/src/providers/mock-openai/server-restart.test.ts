@@ -1,8 +1,10 @@
 import { runInNewContext } from "node:vm";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
   createMockServerTestHarness,
+  guestCodeModeExecTool,
   expectOpenAiNonStreamingResponsesJson,
   outputItems,
   outputToolArgsFromItem,
@@ -20,14 +22,7 @@ describe("mock provider restart checkpoints", () => {
     {
       type: "function",
       name: "exec",
-      parameters: {
-        type: "object",
-        properties: {
-          code: { type: "string" },
-          restartSafe: { type: "boolean" },
-        },
-        required: ["code"],
-      },
+      parameters: guestCodeModeExecTool.parameters,
     },
     {
       type: "function",
@@ -46,7 +41,17 @@ describe("mock provider restart checkpoints", () => {
     execArgs: Record<string, unknown>,
     checkpoint: number,
   ) {
-    expect(execArgs).toEqual({ code: expect.any(String), restartSafe: true });
+    validateToolArguments(guestCodeModeExecTool, {
+      type: "toolCall",
+      id: "restart-checkpoint",
+      name: "exec",
+      arguments: execArgs,
+    });
+    expect(execArgs).toEqual({
+      title: expect.any(String),
+      code: expect.any(String),
+      restartSafe: true,
+    });
 
     const started = createDeferred<void>();
     const released = createDeferred<void>();

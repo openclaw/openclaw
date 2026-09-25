@@ -62,7 +62,6 @@ import {
   normalizeRequestedRef,
   normalizeWindowsCommandShimPath,
   normalizeWindowsInstalledCliPath,
-  maybeBuildOptionalAgentTurnSkipResult,
   parsePackagedUpgradeUpdateTimings,
   parsePositiveIntegerEnv,
   parseCrossOsSuiteFilter,
@@ -75,7 +74,6 @@ import {
   readRunnerOverrideEnv,
   reserveGatewayPortForLane,
   resolveDashboardAssetUrls,
-  resolveCrossOsAgentTurnOptional,
   runCommand,
   resolveCommandSpawnInvocation,
   resolveExplicitBaselineVersion,
@@ -98,8 +96,6 @@ import {
   shouldRunPackagedUpgradeStatusProbe,
   shouldRunWindowsInstalledBrowserOverrideImportSmoke,
   shouldRunMainChannelDevUpdate,
-  shouldRetryCrossOsAgentTurnError,
-  shouldSkipOptionalCrossOsAgentTurnError,
   shouldUseManagedGatewayService,
   verifyDashboardAssetUrls,
   verifyDevUpdateStatus,
@@ -928,130 +924,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
-  it("retries transient agent-turn failures", () => {
-    const messages = [
-      "Agent output did not contain the expected OK marker.",
-      "The model did not produce a response before the model idle timeout. Please try again.",
-      "gateway request timeout for agent after 210000ms",
-      "Command timed out and could not be terminated cleanly",
-      "GatewayClientRequestError: FailoverError: Rate limit reached for gpt-5.5: code=rate_limit_exceeded",
-      "OpenAI image generation failed (HTTP 503): upstream connect error or disconnect/reset before headers. reset reason: connection timeout",
-    ];
-
-    expect(messages.map((message) => shouldRetryCrossOsAgentTurnError(new Error(message)))).toEqual(
-      messages.map(() => true),
-    );
-  });
-
-  it("requires explicit opt-in before cross-OS agent turns become optional", () => {
-    expect(resolveCrossOsAgentTurnOptional({})).toBe(false);
-    expect(resolveCrossOsAgentTurnOptional({ OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL: "1" })).toBe(
-      true,
-    );
-    expect(
-      resolveCrossOsAgentTurnOptional({ OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL: "false" }),
-    ).toBe(false);
-  });
-
-  it("skips optional live agent turns only for model availability failures", () => {
-    withTempDir("openclaw-cross-os-agent-skip-", (dir) => {
-      const logPath = join(dir, "agent.log");
-      writeFileSync(
-        logPath,
-        JSON.stringify({
-          status: "timeout",
-          result: {
-            payloads: [
-              {
-                text: "Request timed out before a response was generated.",
-              },
-            ],
-          },
-        }),
-      );
-
-      expect(
-        shouldSkipOptionalCrossOsAgentTurnError(
-          new Error("Agent output did not contain the expected OK marker."),
-          logPath,
-        ),
-      ).toBe(true);
-      expect(
-        shouldSkipOptionalCrossOsAgentTurnError(
-          new Error("document-extract: failed to install bundled runtime deps"),
-          logPath,
-        ),
-      ).toBe(false);
-      expect(
-        shouldSkipOptionalCrossOsAgentTurnError(
-          new Error("Agent output did not contain the expected OK marker."),
-          join(dir, "missing.log"),
-        ),
-      ).toBe(false);
-    });
-  });
-
-  it("does not classify stale timeout logs as current optional agent-turn failures", () => {
-    withTempDir("openclaw-cross-os-agent-skip-tail-", (dir) => {
-      const logPath = join(dir, "agent.log");
-      writeFileSync(
-        logPath,
-        [
-          JSON.stringify({
-            status: "timeout",
-            result: { payloads: [{ text: "Request timed out before a response was generated." }] },
-          }),
-          "x".repeat(2_200_000),
-          JSON.stringify({ status: "error", message: "document-extract failed" }),
-        ].join("\n"),
-      );
-
-      expect(
-        shouldSkipOptionalCrossOsAgentTurnError(
-          new Error("Agent output did not contain the expected OK marker."),
-          logPath,
-        ),
-      ).toBe(false);
-    });
-  });
-
-  it("only skips opted-in cross-OS live agent turns after retry exhaustion", () => {
-    withTempDir("openclaw-cross-os-agent-skip-retry-", (dir) => {
-      const logPath = join(dir, "agent.log");
-      const error = new Error("gateway request timeout for agent after 210000ms");
-
-      expect(
-        maybeBuildOptionalAgentTurnSkipResult(error, logPath, {
-          attempt: 1,
-          maxAttempts: 2,
-          optional: true,
-        }),
-      ).toBeNull();
-      expect(
-        maybeBuildOptionalAgentTurnSkipResult(error, logPath, {
-          attempt: 2,
-          maxAttempts: 2,
-          optional: false,
-        }),
-      ).toBeNull();
-
-      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, logPath, {
-        attempt: 2,
-        maxAttempts: 2,
-        optional: true,
-      });
-
-      expect(skipped?.status).toBe(0);
-      expect(JSON.parse(skipped?.stdout ?? "{}")).toEqual({
-        status: "skipped",
-        reason: "cross-os live agent turn unavailable after retry",
-      });
-      expect(readFileSync(logPath, "utf8")).toContain(
-        "skipping optional cross-OS live agent turn after retryable failure",
-      );
-    });
-  });
-
   it("allows cross-OS provider smoke models to use faster CI overrides", () => {
     expect(
       resolveProviderConfig("openai", {
@@ -1347,8 +1219,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("uses collision-resistant IDs for cross-OS live release probes", () => {
-    expect(buildCrossOsReleaseAgentSessionId("installer-fresh", 2)).toMatch(
-      /^cross-os-release-check-installer-fresh-[0-9a-f-]{36}-2$/u,
+    expect(buildCrossOsReleaseAgentSessionId("installer-fresh")).toMatch(
+      /^cross-os-release-check-installer-fresh-[0-9a-f-]{36}$/u,
     );
 
     const nonces = buildCrossOsDiscordRoundtripNonces();

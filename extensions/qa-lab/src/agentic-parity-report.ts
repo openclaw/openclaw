@@ -11,6 +11,7 @@ import {
   QA_AGENTIC_PARITY_SCENARIO_TITLES,
   QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
 } from "./agentic-parity.js";
+import type { QaReportScenario as QaParityReportScenario } from "./report.js";
 import {
   compareRuntimeWallClockMs,
   summarizeRuntimeParityTiming,
@@ -24,19 +25,6 @@ import {
 } from "./runtime-parity.js";
 
 export { renderQaRuntimeParityMarkdownReport } from "./agentic-parity-runtime-markdown.js";
-
-type QaParityReportStep = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-};
-
-type QaParityReportScenario = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-  steps?: QaParityReportStep[];
-};
 
 /**
  * Optional self-describing run metadata written by PR L (#64789). Before
@@ -175,17 +163,19 @@ function scenarioHasRuntimeToolCallEvidence(scenario: QaParityReportScenario): b
   );
 }
 
-function computeQaAgenticParityMetrics(summary: QaParitySuiteSummary): QaAgenticParityMetrics {
-  const scenarios = summary.scenarios.map((scenario) => ({
-    ...scenario,
-    status: normalizeScenarioStatus(scenario.status),
-  }));
+function computeQaAgenticParityMetrics(
+  summary: QaParitySuiteSummary,
+  parityTitleSet: ReadonlySet<string>,
+): QaAgenticParityMetrics {
+  const scenarios = summary.scenarios.filter((scenario) => parityTitleSet.has(scenario.name));
   const toolBackedTitleSet: ReadonlySet<string> = new Set(
     QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
   );
   const totalScenarios = scenarios.length;
   const passedScenarios = scenarios.filter((scenario) => scenario.status === "pass").length;
-  const failedScenarios = scenarios.filter((scenario) => scenario.status === "fail").length;
+  const failedScenarios = scenarios.filter(
+    (scenario) => normalizeScenarioStatus(scenario.status) === "fail",
+  ).length;
   const unintendedStopCount = scenarios.filter(
     (scenario) =>
       scenario.status !== "pass" && scenarioHasPattern(scenario, UNINTENDED_STOP_PATTERNS),
@@ -276,20 +266,6 @@ function requiredCoverageStatus(
   scenario: QaParityReportScenario | undefined,
 ): "pass" | "fail" | "skip" | "missing" {
   return scenario ? normalizeScenarioStatus(scenario.status) : "missing";
-}
-
-function scopeSummaryToParityPack(
-  summary: QaParitySuiteSummary,
-  parityTitleSet: ReadonlySet<string>,
-): QaParitySuiteSummary {
-  // The parity verdict must only consider the declared parity scenarios
-  // (the full first-wave + second-wave pack from QA_AGENTIC_PARITY_SCENARIOS).
-  // Drop `counts` so the metric helper recomputes totals from the filtered
-  // scenario list instead of inheriting the caller's full-suite counters.
-  return {
-    scenarios: summary.scenarios.filter((scenario) => parityTitleSet.has(scenario.name)),
-    ...(summary.run ? { run: summary.run } : {}),
-  };
 }
 
 type StructuredQaParityLabel = {
@@ -420,12 +396,8 @@ export function buildQaAgenticParityComparison(params: {
   // so extra non-parity scenarios in the input (for example when a caller feeds a full
   // qa-suite-summary.json rather than a --parity-pack agentic run) cannot influence
   // the gate verdict.
-  const candidateMetrics = computeQaAgenticParityMetrics(
-    scopeSummaryToParityPack(params.candidateSummary, parityTitleSet),
-  );
-  const baselineMetrics = computeQaAgenticParityMetrics(
-    scopeSummaryToParityPack(params.baselineSummary, parityTitleSet),
-  );
+  const candidateMetrics = computeQaAgenticParityMetrics(params.candidateSummary, parityTitleSet);
+  const baselineMetrics = computeQaAgenticParityMetrics(params.baselineSummary, parityTitleSet);
 
   const scenarioNames = new Set([
     ...QA_AGENTIC_PARITY_SCENARIO_TITLES,
@@ -444,8 +416,8 @@ export function buildQaAgenticParityComparison(params: {
     .map((name) => {
       const candidate = candidateByName.get(name);
       const baseline = baselineByName.get(name);
-      const candidateStatus = candidate ? normalizeScenarioStatus(candidate.status) : "missing";
-      const baselineStatus = baseline ? normalizeScenarioStatus(baseline.status) : "missing";
+      const candidateStatus = requiredCoverageStatus(candidate);
+      const baselineStatus = requiredCoverageStatus(baseline);
       const comparison: QaAgenticParityScenarioComparison = {
         name,
         candidateStatus,

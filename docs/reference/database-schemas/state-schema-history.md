@@ -30,6 +30,50 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 16      | Skill Workshop ownership moves from workspace/provenance columns to per-agent directory containment                                                                                                                                                                                                                             | Unreleased          |
 | 17      | Prepared worker lifecycle facts and one-use node workspace bindings                                                                                                                                                                                                                                                             | Unreleased          |
 | 18      | Original requesting authority retained with shared GitHub publication receipts                                                                                                                                                                                                                                                  | Unreleased          |
+| 19      | Durable original channel-owner authorization and revocation continuity                                                                                                                                                                                                                                                          | Unreleased          |
+
+### State schema 19
+
+Schema 19 adds nullable `authorization_id TEXT` and
+`authorization_basis_json TEXT` to the existing `user_profile_identities` rows.
+The profile owner reuses an uninterrupted channel link's opaque UUID and records
+only its original access-policy grant reference (or JSON `null`). It does not
+copy channel identities into another store. A reference is versioned JSON
+`{ "version": 1, "id": "<uuid>" }`, not a credential: recovery resolves it through
+the profile read worker and rechecks current roles or identity scopes and the original plugin grant.
+Unknown versions, malformed references, missing rows, or corrupt grant facts do
+not authorize work. This schema supplies the owner contract; consumers must
+retain and revalidate their own effect authority.
+
+Profile authority mutations clear these fields in the same transaction as their
+role, alias, or ownership change. Unlinking removes the row. Restoring a role or
+link cannot restore a retired reference. The existing config machine-state store
+records the activated `gateway.roles` and `gateway.auth.identityScopes` policy
+snapshot under `operator.channelPolicy`. Identity-scope-only owners use the same
+reference contract; removing and restoring their configured scopes cannot revive
+a retired reference. Under the secrets activation lock, changes to either policy
+retire existing references durably before
+publishing the exact successor snapshot. Rollback uses the same operation with
+the merged target; publication failure reconciles the surviving active policy.
+No agent schema changes are involved.
+
+Startup and Doctor add the nullable columns without assigning authority to legacy
+rows; unused profile tables remain absent until first use. The canonical schema
+and the profile owner's lazy ensure share the table and index definitions.
+Both published schema markers normally advance to 19. During the existing
+[older-updater publication deferral](/reference/database-schemas/versioning#schema-bumps-and-older-updaters),
+content can be upgraded while older published markers remain. References cannot
+be issued or recovered until version 19 is published.
+
+Version 18 writers cannot preserve revocation history, so this is a versioned
+permission contract even though the added columns are nullable. Their normal
+worker admission checks foreign version changes under the state coordinator and
+refuses further writes, including deferred content newer than their support. Older readers also refuse schema 19.
+Create a verified, WAL-aware backup before upgrading. Downgrade requires restoring
+the matching pre-upgrade backup in a separate state directory; never lower the
+markers or remove authority columns. Restoring a backup loses later revocations
+and receipts and does not undo external effects; reconcile those with a compatible
+build before rollback.
 
 ### State schema 18
 

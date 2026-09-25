@@ -43,6 +43,7 @@ export function createConnectedContext(
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
+      subscribeEvents: subscribe,
       updateSelfUser(patch: Partial<Omit<AuthenticatedUser, "id">>) {
         if (!snapshot.selfUser) {
           return;

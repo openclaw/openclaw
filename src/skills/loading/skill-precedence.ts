@@ -10,6 +10,7 @@ const reportedSkillCollisions = new Set<string>();
 
 // Content includes declared frontmatter. Paths identify copies, not new conflicts.
 export function warnSkillPrecedenceCollisions(collisions: SkillCollision[]): void {
+  const groups = new Map<string, SkillCollision & { roots: Set<string>; unreported: boolean }>();
   for (const { winner, loser } of collisions) {
     if (
       winner.contentHash &&
@@ -24,32 +25,44 @@ export function warnSkillPrecedenceCollisions(collisions: SkillCollision[]): voi
       JSON.stringify(
         [winner, loser].map((skill) => [
           skill.name,
+          skill.source,
           skill.contentHash ?? skill.filePath,
           skill.description,
           skill.disableModelInvocation,
         ]),
       ),
     );
-    if (reportedSkillCollisions.has(fingerprint)) {
-      continue;
-    }
+    const key = JSON.stringify([winner.name, winner.source, loser.source]);
+    const group = groups.get(key) ?? { winner, loser, roots: new Set<string>(), unreported: false };
+    group.winner = winner;
+    group.roots.add(winner.baseDir).add(loser.baseDir);
+    group.unreported ||= !reportedSkillCollisions.has(fingerprint);
+    groups.set(key, group);
     reportedSkillCollisions.add(fingerprint);
-    warnSkillPrecedenceCollision(winner, loser);
+  }
+  for (const group of groups.values()) {
+    if (group.unreported) {
+      reportSkillPrecedenceCollision(group.winner, group.loser, group.roots.size);
+    }
   }
 }
 
-function warnSkillPrecedenceCollision(winner: Skill, loser: Skill): void {
+function reportSkillPrecedenceCollision(winner: Skill, loser: Skill, affectedRoots: number): void {
   const collisionName = winner.name.slice(0, 128);
-  skillsLogger.warn("Skill precedence collision resolved.", {
+  const intentionalOverride =
+    winner.source !== loser.source &&
+    (winner.source === "openclaw-workspace" || winner.source === "agents-skills-project");
+  skillsLogger[intentionalOverride ? "info" : "warn"]("Skill precedence collision resolved.", {
     skill: collisionName,
     winnerSource: winner.source,
     loserSource: loser.source,
     winnerPath: winner.filePath,
     loserPath: loser.filePath,
+    affectedRoots,
     consoleMessage:
       `Skill precedence collision: skill="${collisionName}" ` +
       `winner=${winner.source}:${compactSkillPath(winner.filePath)} ` +
-      `loser=${loser.source}:${compactSkillPath(loser.filePath)}`,
+      `loser=${loser.source}:${compactSkillPath(loser.filePath)} affectedRoots=${affectedRoots}`,
   });
 }
 

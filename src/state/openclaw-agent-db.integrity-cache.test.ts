@@ -1,17 +1,21 @@
 import fs from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
+import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAdmission,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
+import * as verifier from "./openclaw-database-verify.js";
 import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 import { createUnsafeIndexDrift } from "./sqlite-index-drift.test-support.js";
@@ -22,6 +26,59 @@ afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+});
+
+it("retains admission after the last writer closes with a reader-pinned WAL", async () => {
+  const options = {
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-pinned-") },
+  };
+  const pathname = resolveOpenClawAgentSqlitePath(options);
+  let checks = 0;
+  const open = sqlite.openNodeSqliteDatabase;
+  vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+    const database = open(...args);
+    if (args[0] === pathname) {
+      const prepare = database.prepare.bind(database);
+      vi.spyOn(database, "prepare").mockImplementation((sql) => {
+        if (/^PRAGMA integrity_check;?$/.test(sql)) {
+          checks += 1;
+        }
+        return prepare(sql);
+      });
+    }
+    return database;
+  });
+  const worker = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
+  const quickCheck = vi.spyOn(verifier, "requestOpenClawAgentDatabaseQuickCheck");
+  const write = (updatedAt: number) =>
+    runOpenClawAgentWriteTransaction(
+      (database) =>
+        writeSessionEntry(database, "agent:main:integrity", { sessionId: "retained", updatedAt }),
+      options,
+    );
+  write(1);
+  const reader = open(pathname, { readOnly: true });
+  try {
+    reader.exec("BEGIN");
+    reader.prepare("SELECT updated_at FROM session_nodes").all();
+    for (let iteration = 2; iteration <= 9; iteration += 1) {
+      write(iteration);
+      const database = openOpenClawAgentDatabase(options);
+      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      expect(database.walMaintenance.health?.state).toBe("blocked");
+      expect(database.db.isOpen).toBe(false);
+      await withOpenClawAgentDatabaseAsync(options, (reopened) => {
+        expect(reopened.db.prepare("SELECT updated_at FROM session_nodes").get()).toEqual({
+          updated_at: iteration,
+        });
+      });
+    }
+    expect(checks + worker.mock.calls.length).toBe(1);
+    expect(quickCheck).not.toHaveBeenCalled();
+  } finally {
+    reader.close();
+  }
 });
 
 it.each(["sync", "async", "admitted"] as const)(
@@ -48,6 +105,7 @@ it.each(["sync", "async", "admitted"] as const)(
       return database;
     });
     const worker = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
+    const quickCheck = vi.spyOn(verifier, "requestOpenClawAgentDatabaseQuickCheck");
     const first = openOpenClawAgentDatabase(options);
     expect(checks).toEqual(["PRAGMA integrity_check;", "PRAGMA foreign_key_check;"]);
     first.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{\"value\":42}', 1)");
@@ -71,6 +129,7 @@ it.each(["sync", "async", "admitted"] as const)(
     }
     expect(checks).toEqual(["PRAGMA integrity_check;", "PRAGMA foreign_key_check;"]);
     expect(worker).not.toHaveBeenCalled();
+    expect(quickCheck).not.toHaveBeenCalled();
 
     closeOpenClawAgentDatabasesForTest();
     openOpenClawAgentDatabase(options);

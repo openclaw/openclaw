@@ -9,6 +9,7 @@ describe("plugins cli lazy runtime boundary", () => {
 
   afterEach(() => {
     vi.doUnmock("./plugins-cli.runtime.js");
+    vi.doUnmock("./plugins-reload-command.js");
     vi.doUnmock("./plugins-marketplace-list-command.js");
     vi.doUnmock("./plugins-authoring-command.js");
     vi.resetModules();
@@ -16,6 +17,10 @@ describe("plugins cli lazy runtime boundary", () => {
 
   it("renders parent help without importing the plugins runtime", async () => {
     const runtimeLoaded = vi.fn();
+    vi.doMock("./plugins-reload-command.js", () => {
+      runtimeLoaded();
+      return { runPluginsReloadCommand: vi.fn() };
+    });
     vi.doMock("./plugins-cli.runtime.js", () => {
       runtimeLoaded();
       return {
@@ -116,7 +121,7 @@ describe("plugins cli lazy runtime boundary", () => {
 
   it("dispatches plugin reload with consent and JSON options", async () => {
     const reload = vi.fn().mockResolvedValue(undefined);
-    vi.doMock("./plugins-cli.runtime.js", () => ({ runPluginsReloadCommand: reload }));
+    vi.doMock("./plugins-reload-command.js", () => ({ runPluginsReloadCommand: reload }));
     const { registerPluginsCli } = await import("./plugins-cli.js");
     const program = new Command();
     registerPluginsCli(program);
@@ -129,7 +134,6 @@ describe("plugins cli lazy runtime boundary", () => {
     expect(reload).toHaveBeenCalledWith(
       ["demo", "other"],
       expect.objectContaining({ acceptCapabilities: true, json: true }),
-      expect.any(Command),
     );
   });
 

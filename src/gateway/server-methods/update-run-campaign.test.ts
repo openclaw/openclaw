@@ -141,6 +141,7 @@ vi.mock("../../infra/update-campaign.js", () => ({
     adopt: adoptCampaignMock,
     clear: clearCampaignMock,
     getState: getCampaignStateMock,
+    bindRun: vi.fn(),
   },
 }));
 

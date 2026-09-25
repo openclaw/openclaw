@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import * as agentIdentity from "../agents/identity.js";
 import * as catalogLookup from "../agents/model-catalog-lookup.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   assignSessionOwner,
   deleteSessionEntryLifecycle,
@@ -33,7 +34,13 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail, linkEmail, setDisplayName } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  identifiedClient,
+  listSessions,
+  requestContext,
+} from "./server-methods/sessions-read-cache.test-support.js";
 import * as projectionWork from "./session-projection-work.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as materialization from "./session-row-projection-materialize.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
@@ -42,12 +49,14 @@ afterEach(() => vi.restoreAllMocks());
 
 it("reuses descendants after parent progress while keeping inherited models current", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    vi.spyOn(Date, "now").mockReturnValue(100);
     const cfg = {
       agents: {
         list: [{ id: "main", default: true }],
         defaults: { model: "unit-test/default" },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
     const parentKey = "agent:main:discord:channel:parent";
     const children = ["agent:main:child", `${parentKey}:thread:child`];
     const siblingKey = "agent:main:sibling";
@@ -55,6 +64,7 @@ it("reuses descendants after parent progress while keeping inherited models curr
     const parent: SessionEntry = {
       sessionId: "parent",
       updatedAt: 1,
+      visibility: "shared",
       providerOverride: "unit-test",
       modelOverride: "selected",
       modelOverrideSource: "user",
@@ -66,17 +76,46 @@ it("reuses descendants after parent progress while keeping inherited models curr
         {
           sessionId: `child-${index}`,
           updatedAt: index + 2,
+          visibility: "shared",
           ...(sessionKey === children[0] ? { parentSessionKey: parentKey } : {}),
         },
       );
     }
     const release = projectionWork.retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    const list = () => listProjectedSessions({ projection, opts: {} });
+    const context = bindSessionRowProjection(requestContext(cfg), () => projection);
+    const client = identifiedClient("viewer");
+    const list = () => listSessions({ context, client, request: {} });
     const sequence = (key: string) =>
       projection.capture({ agentId: "main", key })?.materializedSequence;
     try {
-      await list();
+      const initial = await list();
+      expect(initial.totalCount).toBe(4);
+      expect(initial.sessions.map((row) => row.key)).toEqual([
+        siblingKey,
+        children[1],
+        children[0],
+        parentKey,
+      ]);
+      expect(initial.sessions.find((row) => row.key === parentKey)?.childSessions).toEqual([
+        children[0],
+      ]);
+      const reads: string[] = [];
+      const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
+      vi.spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases").mockImplementation(
+        (targets, consume) =>
+          readDatabases(targets, (owners) =>
+            consume(
+              owners.map((owner) => ({
+                ...owner,
+                readRowFacts(input) {
+                  reads.push(...input.sessionKeys);
+                  return owner.readRowFacts(input);
+                },
+              })),
+            ),
+          ),
+      );
       const original = children.map(sequence);
       const siblingSequence = sequence(siblingKey);
       for (const change of [undefined, { label: "Updated parent", updatedAt: 10 }]) {
@@ -117,6 +156,7 @@ it("reuses descendants after parent progress while keeping inherited models curr
         },
       ];
       for (const { change, provider, model } of cases) {
+        reads.length = 0;
         Object.assign(parent, change);
         replaceSessionEntrySync(scope, { ...parent });
         const result = await list();
@@ -127,6 +167,7 @@ it("reuses descendants after parent progress while keeping inherited models curr
           });
         }
         expect(sequence(siblingKey)).toBe(siblingSequence);
+        expect.soft(reads, `Stored facts after ${JSON.stringify(change)}`).toEqual([parentKey]);
       }
       parent.modelOverrideSource = "user";
       replaceSessionEntrySync(scope, { ...parent });
@@ -134,6 +175,21 @@ it("reuses descendants after parent progress while keeping inherited models curr
       for (const key of children) {
         expect(pinned.sessions.find((row) => row.key === key)?.model).toBe("changed");
       }
+      const childScope = { agentId: "main", sessionKey: children[0]! };
+      reads.length = 0;
+      replaceSessionEntrySync(childScope, {
+        ...loadSessionEntry(childScope)!,
+        parentSessionKey: siblingKey,
+      });
+      const moved = await list();
+      expect(moved.totalCount).toBe(4);
+      expect(moved.sessions.find((row) => row.key === parentKey)?.childSessions).toBeUndefined();
+      expect(moved.sessions.find((row) => row.key === siblingKey)?.childSessions).toEqual([
+        children[0],
+      ]);
+      expect(moved.sessions.find((row) => row.key === children[0])?.model).toBe("default");
+      expect.soft(reads, "Unchanged parents after a child moves").toEqual([childScope.sessionKey]);
+      reads.length = 0;
       await deleteSessionEntryLifecycle({
         ...scope,
         storePath: projection.capture({ agentId: "main", key: parentKey })!.storeTarget.storePath,
@@ -147,6 +203,7 @@ it("reuses descendants after parent progress while keeping inherited models curr
           children.map((key) => expect.objectContaining({ key, model: "default" })),
         ),
       );
+      expect.soft(reads, "Unchanged descendants after parent deletion").toEqual([]);
     } finally {
       await projection.ensureMaterialized();
       projection.dispose();

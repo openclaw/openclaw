@@ -13,6 +13,7 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import * as support from "./service.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
 async function seedAttached(environmentId: string) {
   await support.seedBootstrapping(environmentId);
@@ -56,9 +57,9 @@ function createDispatch(
       runReclaimBarrier: async ({ begin, reclaim }) =>
         await reclaim({ kind: "local", path: support.testState.root }, begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-      resolveWorkspace: async () => ({ kind: "local", path: support.testState.root }),
-      reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
+      ...createWorkerWorkspaceRecoveryFixture({
+        resolveWorkspace: async () => ({ kind: "local", path: support.testState.root }),
+      }),
     }),
     (_request, run) => run(),
   );

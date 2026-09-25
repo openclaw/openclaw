@@ -1,6 +1,11 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
+import {
+  withSessionEntryCreationPublication,
+  runWithSessionEntryCreationPublication,
+} from "./session-accessor.sqlite-entry-cache.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import {
   commitSessionEntryReplacementsInWorker,
@@ -54,171 +59,206 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
       throw new Error("Session creation lost its initialized database");
     }
     const { normalizedKey, legacyKeys, labels, databaseIdentity, ...context } = snapshot;
-    const created = await createEntry({ ...context, isLabelInUse: (label) => labels.has(label) });
-    if (!created.ok) {
-      return { ok: false, error: created.error, phase: "entry" };
-    }
-    const owner = options.resolveOwnerAssignment?.();
-    const assertCurrent = () => {
+    const assertDatabaseCurrent = () => {
       reader.assertCurrent();
       assertExistingDatabaseIdentity(scope.path, `file:${databaseIdentity}`);
-      options.commitGuard?.();
     };
-    const initialize = async (assertSourceCurrent?: () => void) => {
-      const assertHeld = () => {
-        assertCurrent();
-        assertSourceCurrent?.();
-      };
-      try {
-        await initializeSessionTranscriptInWorker(
-          databaseOptions,
-          databaseIdentity,
-          {
-            sessionKey: normalizedKey,
-            sessionId: created.entry.sessionId,
-            cwd: options.cwd,
-          },
-          assertHeld,
-        );
-      } catch (error) {
-        assertHeld();
-        return formatErrorMessage(error);
-      }
-      return undefined;
-    };
-    const transcriptError = options.withCommit
-      ? await options.withCommit(initialize)
-      : await initialize();
-    if (transcriptError !== undefined) {
-      return { ok: false, error: transcriptError, phase: "transcript" };
-    }
-    const publishArchives = async () => {
-      // Match lifecycle adoption recovery, after registration and writer release.
-      // The archive owner retains batching, byte validation, events and failure semantics.
-      const run = <T>(
-        operation: (
-          worker: import("../../state/openclaw-agent-execution-native.js").AgentDatabaseExecutionScope,
-        ) => Promise<T>,
-      ) =>
-        withSessionEntryWorker(
-          databaseOptions,
-          databaseIdentity,
-          assertCurrent,
-          async (execution, source) => {
-            const result = await execution.runExisting(source, async (worker) => ({
-              value: await operation(worker),
-            }));
-            if (!result) {
-              throw new Error("Session database disappeared before archive publication");
-            }
-            return result.value;
-          },
-        );
-      await publishSessionStateArchives({ ...scope, agentId: databaseOptions.agentId }, [], {
-        prepare: (requested) =>
-          run((worker) =>
-            worker.execute({
-              type: "session.archives.preparePublication",
-              input: {
-                archiveDirectory: resolveSqliteTranscriptArchiveDirectory(scope),
-                requested,
-              },
-            }),
-          ),
-        record: (results) =>
-          run((worker) =>
-            worker.execute({
-              type: "session.archives.recordPublication",
-              input: { results, nowMs: Date.now() },
-            }),
-          ),
-      });
-    };
-    if (legacyKeys.length > 0) {
-      // Admitted folded aliases still belong to canonical replacement: it owns
-      // their row CAS, native deletion preparation, and atomic artifact rehoming.
-      await applySessionEntryCanonicalReplacements({
+    return await withSessionEntryCreationPublication<
+      SessionEntryCreateWithTranscriptResult<TError>
+    >(
+      {
         agentId: scope.agentId,
-        storePath: scope.path,
-        env: scope.env,
-        sessionKeys: [normalizedKey, ...legacyKeys],
-        assertCommitAllowed: assertCurrent,
-        withCommit: options.withCommit,
-        ownerAssignment: owner ? { sessionKey: normalizedKey, owner } : undefined,
-        onLifecycleCommitted: options.onLifecycleCommitted
-          ? () => options.onLifecycleCommitted!(created.entry)
-          : undefined,
-        afterCommitted: options.afterCommitted
-          ? (_result, source) => options.afterCommitted!(created.entry, source)
-          : undefined,
-        update: () => ({
-          result: undefined,
-          replacements: [
-            { sessionKey: normalizedKey, previousSessionKeys: legacyKeys, entry: created.entry },
-          ],
-        }),
-      });
-      await publishArchives();
-      return { ok: true, entry: created.entry, sessionFile: normalizedKey };
-    }
-    let adopted = false;
-    const commit = (assertSourceCurrent?: () => void) =>
-      runExclusiveSqliteSessionWrite(
-        scope,
-        async () => {
+        sessionKey: normalizedKey,
+        file: {
+          path: scope.path,
+          agentId: databaseOptions.agentId,
+          databaseIdentity,
+          assertCurrent: assertDatabaseCurrent,
+        },
+        bind: options.bindCreation,
+      },
+      async (operation) => {
+        const withSourceCommit = options.withCommit;
+        const withCommit: typeof options.withCommit = withSourceCommit
+          ? (run) =>
+              withSourceCommit((assertCurrent) =>
+                runWithSessionEntryCreationPublication(operation, () => run(assertCurrent)),
+              )
+          : undefined;
+        const created = await createEntry({
+          ...context,
+          isLabelInUse: (label) => labels.has(label),
+        });
+        if (!created.ok) {
+          return { ok: false, error: created.error, phase: "entry" };
+        }
+        const owner = options.resolveOwnerAssignment?.();
+        const assertCurrent = () => {
+          assertDatabaseCurrent();
+          options.commitGuard?.();
+        };
+        const initialize = async (assertSourceCurrent?: () => void) => {
           const assertHeld = () => {
             assertCurrent();
             assertSourceCurrent?.();
           };
-          assertHeld();
-          const replacement = (
-            await reader.readExactEntries({
-              projection: "replacement",
-              sessionKeys: [normalizedKey],
-              replacementSelection: { sessionKeys: [normalizedKey] },
-              env: { ...scope.env },
-            })
-          ).replacement;
-          assertHeld();
-          if (!replacement || replacement.databaseIdentity !== databaseIdentity) {
-            throw new Error("Session creation database changed before entry commit");
+          try {
+            await initializeSessionTranscriptInWorker(
+              databaseOptions,
+              databaseIdentity,
+              {
+                sessionKey: normalizedKey,
+                sessionId: created.entry.sessionId,
+                cwd: options.cwd,
+              },
+              assertHeld,
+            );
+          } catch (error) {
+            if (hasSqliteWorkerOutcomeUnknown(error)) {
+              throw error;
+            }
+            assertHeld();
+            return formatErrorMessage(error);
           }
-          adopted = replacement.expectedRows.has(normalizedKey);
-          // Creation owns its canonical target, including hidden run-owned nodes. The
-          // canonical-replacement projection deliberately does not admit those nodes.
-          await commitSessionEntryReplacementsInWorker(
-            databaseOptions,
-            databaseIdentity,
-            {
-              expectedRows: replacement.expectedRows,
-              labelOwnerKeys: replacement.labelOwnerKeys,
-              validationKeys: [normalizedKey],
-              replacements: [{ sessionKey: normalizedKey, entry: created.entry }],
-              ...(owner ? { ownerAssignment: { sessionKey: normalizedKey, owner } } : {}),
+          return undefined;
+        };
+        const transcriptError = withCommit ? await withCommit(initialize) : await initialize();
+        if (transcriptError !== undefined) {
+          return { ok: false, error: transcriptError, phase: "transcript" };
+        }
+        const publishArchives = async () => {
+          // Match lifecycle adoption recovery, after registration and writer release.
+          // The archive owner retains batching, byte validation, events and failure semantics.
+          const run = <T>(
+            execute: (
+              worker: import("../../state/openclaw-agent-execution-native.js").AgentDatabaseExecutionScope,
+            ) => Promise<T>,
+          ) =>
+            withSessionEntryWorker(
+              databaseOptions,
+              databaseIdentity,
+              assertCurrent,
+              async (execution, source) => {
+                const result = await execution.runExisting(source, async (worker) => ({
+                  value: await execute(worker),
+                }));
+                if (!result) {
+                  throw new Error("Session database disappeared before archive publication");
+                }
+                return result.value;
+              },
+            );
+          await publishSessionStateArchives({ ...scope, agentId: databaseOptions.agentId }, [], {
+            prepare: (requested) =>
+              run((worker) =>
+                worker.execute({
+                  type: "session.archives.preparePublication",
+                  input: {
+                    archiveDirectory: resolveSqliteTranscriptArchiveDirectory(scope),
+                    requested,
+                  },
+                }),
+              ),
+            record: (results) =>
+              run((worker) =>
+                worker.execute({
+                  type: "session.archives.recordPublication",
+                  input: { results, nowMs: Date.now() },
+                }),
+              ),
+          });
+        };
+        if (legacyKeys.length > 0) {
+          // Admitted folded aliases still belong to canonical replacement: it owns
+          // their row CAS, native deletion preparation, and atomic artifact rehoming.
+          await applySessionEntryCanonicalReplacements({
+            agentId: scope.agentId,
+            storePath: scope.path,
+            env: scope.env,
+            sessionKeys: [normalizedKey, ...legacyKeys],
+            assertCommitAllowed: assertCurrent,
+            withCommit,
+            ownerAssignment: owner ? { sessionKey: normalizedKey, owner } : undefined,
+            onLifecycleCommitted: options.onLifecycleCommitted
+              ? () => options.onLifecycleCommitted!(created.entry)
+              : undefined,
+            afterCommitted: options.afterCommitted
+              ? (_result, source) => options.afterCommitted!(created.entry, source)
+              : undefined,
+            update: () => ({
+              result: undefined,
+              replacements: [
+                {
+                  sessionKey: normalizedKey,
+                  previousSessionKeys: legacyKeys,
+                  entry: created.entry,
+                },
+              ],
+            }),
+          });
+          await publishArchives();
+          return { ok: true, entry: created.entry, sessionFile: normalizedKey };
+        }
+        let adopted = false;
+        const commit = (assertSourceCurrent?: () => void) =>
+          runExclusiveSqliteSessionWrite(
+            scope,
+            async () => {
+              const assertHeld = () => {
+                assertCurrent();
+                assertSourceCurrent?.();
+              };
+              assertHeld();
+              const replacement = (
+                await reader.readExactEntries({
+                  projection: "replacement",
+                  sessionKeys: [normalizedKey],
+                  replacementSelection: { sessionKeys: [normalizedKey] },
+                  env: { ...scope.env },
+                })
+              ).replacement;
+              assertHeld();
+              if (!replacement || replacement.databaseIdentity !== databaseIdentity) {
+                throw new Error("Session creation database changed before entry commit");
+              }
+              adopted = replacement.expectedRows.has(normalizedKey);
+              // Creation owns its canonical target, including hidden run-owned nodes. The
+              // canonical-replacement projection deliberately does not admit those nodes.
+              await commitSessionEntryReplacementsInWorker(
+                databaseOptions,
+                databaseIdentity,
+                {
+                  expectedRows: replacement.expectedRows,
+                  labelOwnerKeys: replacement.labelOwnerKeys,
+                  validationKeys: [normalizedKey],
+                  replacements: [{ sessionKey: normalizedKey, entry: created.entry }],
+                  ...(owner ? { ownerAssignment: { sessionKey: normalizedKey, owner } } : {}),
+                },
+                assertHeld,
+                {
+                  identityAgentId: scope.agentId,
+                  afterCommitted: options.afterCommitted
+                    ? (source) => options.afterCommitted!(created.entry, source)
+                    : undefined,
+                  onLifecycleCommitted: options.onLifecycleCommitted
+                    ? () => options.onLifecycleCommitted!(created.entry)
+                    : undefined,
+                },
+              );
             },
-            assertHeld,
-            {
-              identityAgentId: scope.agentId,
-              afterCommitted: options.afterCommitted
-                ? (source) => options.afterCommitted!(created.entry, source)
-                : undefined,
-              onLifecycleCommitted: options.onLifecycleCommitted
-                ? () => options.onLifecycleCommitted!(created.entry)
-                : undefined,
-            },
+            "session.entry.create-with-transcript",
           );
-        },
-        "session.entry.create-with-transcript",
-      );
-    if (options.withCommit) {
-      await options.withCommit(commit);
-    } else {
-      await commit();
-    }
-    if (adopted) {
-      await publishArchives();
-    }
-    return { ok: true, entry: created.entry, sessionFile: normalizedKey };
+        if (withCommit) {
+          await withCommit(commit);
+        } else {
+          await commit();
+        }
+        if (adopted) {
+          await publishArchives();
+        }
+        return { ok: true, entry: created.entry, sessionFile: normalizedKey };
+      },
+    );
   } finally {
     retained.release();
   }

@@ -19,7 +19,7 @@ import {
 import { projectSessionTranscriptReportFacts } from "./session-transcript-report-facts.js";
 
 export const MAX_COMPRESSED_EVENT_BYTES = 4 * 1024 * 1024;
-const MAX_NAVIGATION_BYTES = 16 * 1024;
+export const MAX_NAVIGATION_BYTES = 16 * 1024;
 const MIN_COMPRESS_BYTES = 1024;
 const DECODE_FUNCTION = "openclaw_transcript_payload_decode";
 const registeredDecoders = new WeakSet<DatabaseSync>();

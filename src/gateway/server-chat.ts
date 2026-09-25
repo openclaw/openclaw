@@ -78,6 +78,7 @@ import type {
 import { roundedChatSendTimingMs } from "./server-methods/chat-server-timing.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
 import {
   isRestartRecoveryLifecycleEvent,
   persistGatewaySessionLifecycleEvent,
@@ -822,23 +823,20 @@ export function createAgentEventHandler({
         void persistence
           .then(
             async () => {
-              if (projection) {
-                do {
-                  await projection.ensureMaterialized();
-                } while (projection.needsMaterialization);
-              }
-              broadcastSessionChange();
+              await withPreparedSessionEventRow(
+                projection,
+                sessionKey,
+                sessionAgentId,
+                broadcastSessionChange,
+              );
             },
             async (err: unknown) => {
               logError(
                 `gateway: terminal session persistence failed session=${formatForLog(sessionKey)} run=${formatForLog(evt.runId)} error=${formatForLog(err)}`,
               );
-              if (projection) {
-                do {
-                  await projection.ensureMaterialized();
-                } while (projection.needsMaterialization);
-              }
-              broadcastSessionChange(evt);
+              await withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, () =>
+                broadcastSessionChange(evt),
+              );
             },
           )
           .catch((error: unknown) => {
@@ -1884,18 +1882,10 @@ export function createAgentEventHandler({
             { dropIfSlow: true },
           );
         const projection = getSessionRowProjection?.();
-        if (projection) {
-          void (async () => {
-            do {
-              await projection.ensureMaterialized();
-            } while (projection.needsMaterialization);
-            publish();
-          })().catch((error: unknown) =>
+        void withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, publish).catch(
+          (error: unknown) =>
             logError(`gateway: session snapshot publication failed: ${formatErrorMessage(error)}`),
-          );
-        } else {
-          publish();
-        }
+        );
       }
     }
   };

@@ -118,18 +118,24 @@ merge with `gh pr merge --match-head-commit <verified-sha>` under the same autho
 
 ## Recovery and closeout
 
-Before replacing the remote head of an accepted auto-merge request, explicitly
-retire that request through its retained outcome:
+Before replacing the remote head after an accepted or uncertain auto-merge
+submission, explicitly retire that request through its retained outcome:
 
 ```bash
 git rev-parse refs/openclaw/pr-merge-outcomes/<PR>
 scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery --cancel-auto
 ```
 
-This supports an exact accepted non-queue auto request. It preserves the original
-intent and captures, checks the PR identity and head, and reconciles a concurrent
-merge. A lost cancellation response is observation-only on retry; never send a
-second cancellation blindly. Only a confirmed cancellation allows head repair.
+This supports an exact non-queue auto intent even when the submission response
+was lost. It preserves the original intent, acknowledgment state, and captures,
+checks the PR identity and head, and reconciles a concurrent merge. A matching
+active request is cancelled once; an already absent request is recorded as
+retired without sending a cancellation. This is an investigated operator
+recovery decision, not proof that the original submission never executed.
+A lost cancellation response is observation-only on retry; never send a second
+cancellation blindly. Only confirmed retirement allows head repair. Existing
+land authority covers this recovery; do not ask again or replace the PR merely
+because its submission response was lost.
 Then repair and push the branch, refresh review and preparation, and wait for
 completed CI. Use the current retained outcome OID and explicitly reviewed head:
 

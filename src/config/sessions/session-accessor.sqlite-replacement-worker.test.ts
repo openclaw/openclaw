@@ -3,7 +3,14 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  isSqliteWorkerError,
+  type SqliteWorkerOperations,
+  type SqliteWorkerStore,
+} from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import * as workerStore from "../../infra/sqlite-worker-store.js";
 import {
   onSessionIdentityMutation,
   type SessionIdentityMutation,
@@ -414,5 +421,194 @@ it("refuses a replaced pathname while retaining the committed native execution",
       sessionId: "successor",
     });
     expect(readExactSessionEntryRow(successor, key)?.entry.label).toBeUndefined();
+  });
+});
+
+it.each([
+  "lost delivery after native completion",
+  "lost result and commit receipt after final grant",
+  "unknown native settlement after commit",
+] as const)("settles canonical replacement with %s", async (fault) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const sessionKey = "agent:main:replacement-native-settlement";
+    const entry = {
+      sessionId: "native-settlement",
+      lifecycleRevision: "same-lifecycle",
+      updatedAt: 1,
+    };
+    writeSessionEntry(database, sessionKey, entry);
+    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+    if (typeof identity !== "string") {
+      throw new Error("Expected durable fixture");
+    }
+    const sharing = retainPreparedSessionSharingFacts({
+      databaseIdentity: `file:${identity}`,
+      sessionKey,
+      entry: projectSessionSharingEntry(entry),
+      membership: new Set(["member"]),
+    });
+    const observed: unknown[] = [];
+    const stop = sessionChanges.subscribe((change) => {
+      if ("sessionKey" in change && change.sessionKey === sessionKey) {
+        const current = sharing.readCurrent();
+        observed.push(
+          current && {
+            visibility: current.entry?.visibility,
+            membership: [...current.membership],
+          },
+        );
+      }
+    });
+    const deliveryFailure = new Error("Replacement committed but its reply was lost");
+    const missingReceipt = fault === "lost result and commit receipt after final grant";
+    const nativeUnknown = fault === "unknown native settlement after commit";
+    const committedLifecycle = vi.fn();
+    const followup = vi.fn();
+    let verifiedCommits = 0;
+    const restoreFaults: Array<() => void> = [];
+    const original = workerStore.runSqliteWorkerStoreOperation;
+    const observer = vi
+      .spyOn(workerStore, "runSqliteWorkerStoreOperation")
+      .mockImplementation(
+        <Operations extends SqliteWorkerOperations, T>(
+          target: SqliteWorkerStore<Operations>,
+          operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
+          stateContext?: Parameters<typeof original>[2],
+          assertCurrent?: Parameters<typeof original>[3],
+          createAdmission?: Parameters<typeof original>[4],
+          requireStateLifecycle?: Parameters<typeof original>[5],
+        ) => {
+          let replacing = false;
+          let injected = false;
+          let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
+          let nativeRetention: RetainedWorkerTransactionAdmission | undefined;
+          return original(
+            target,
+            (worker) =>
+              operation({
+                execute: async (command, options) => {
+                  replacing = command.type === "session.entries.replace";
+                  const result = await worker.execute(command, options);
+                  if (!replacing) {
+                    return result;
+                  }
+                  // Read committed first: its owner drains queued native port messages.
+                  expect(nativeAdmission?.committed).toMatchObject({
+                    facts: { kind: "session-entry-replacements", changedKeys: [sessionKey] },
+                  });
+                  const nativeSettlement = nativeAdmission?.settlement;
+                  expect(nativeSettlement).toMatchObject({
+                    kind: "completed",
+                    committed: { facts: { kind: "session-entry-replacements" } },
+                  });
+                  expect(await nativeRetention?.settled).toEqual({ kind: "completed" });
+                  expect(readExactSessionEntryRow(database, sessionKey)?.entry.visibility).toBe(
+                    "read-only",
+                  );
+                  if (!nativeAdmission || !nativeSettlement) {
+                    throw new Error("Real replacement did not provide native settlement");
+                  }
+                  if (missingReceipt) {
+                    const receipt = vi
+                      .spyOn(nativeAdmission, "committed", "get")
+                      .mockReturnValue(undefined);
+                    const settlement = vi
+                      .spyOn(nativeAdmission, "settlement", "get")
+                      .mockReturnValue({ kind: "completed" });
+                    restoreFaults.push(
+                      () => receipt.mockRestore(),
+                      () => settlement.mockRestore(),
+                    );
+                  } else if (nativeUnknown) {
+                    const settlement = vi
+                      .spyOn(nativeAdmission, "settlement", "get")
+                      .mockReturnValue({ ...nativeSettlement, kind: "unknown" });
+                    restoreFaults.push(() => settlement.mockRestore());
+                  }
+                  verifiedCommits++;
+                  injected = true;
+                  if (!nativeUnknown) {
+                    throw deliveryFailure;
+                  }
+                  return result;
+                },
+              }),
+            stateContext,
+            assertCurrent,
+            createAdmission &&
+              ((retained) => {
+                if (!replacing) {
+                  return createAdmission(retained);
+                }
+                nativeRetention = retained;
+                const owned = createAdmission({
+                  get settled() {
+                    return retained.settled.then((settlement) =>
+                      injected && fault === "lost delivery after native completion"
+                        ? { kind: "unknown" as const, error: deliveryFailure }
+                        : settlement,
+                    );
+                  },
+                });
+                nativeAdmission = owned.admission;
+                return owned;
+              }),
+            requireStateLifecycle,
+          );
+        },
+      );
+    try {
+      const replacement = applySessionEntryCanonicalReplacements({
+        agentId: "main",
+        storePath: database.path,
+        sessionKeys: [sessionKey],
+        onLifecycleCommitted: committedLifecycle,
+        afterCommitted: followup,
+        update: ([row]) => ({
+          result: "replacement-result",
+          replacements: [
+            {
+              sessionKey,
+              previousSessionKeys: [],
+              entry: { ...row!.entry, visibility: "read-only" },
+            },
+          ],
+        }),
+      });
+      const outcome = await replacement.then(
+        (value) => ({ kind: "returned" as const, value }),
+        (error: unknown) => ({ kind: "failed" as const, error }),
+      );
+      expect(verifiedCommits).toBe(1);
+      expect(outcome.kind).toBe("failed");
+      if (outcome.kind !== "failed") {
+        throw new Error("Uncertain replacement unexpectedly continued");
+      }
+      if (missingReceipt || nativeUnknown) {
+        expect(isSqliteWorkerError(outcome.error, "outcome-unknown")).toBe(true);
+      } else {
+        expect(outcome.error).toBe(deliveryFailure);
+      }
+      expect(followup).not.toHaveBeenCalled();
+      expect(committedLifecycle).toHaveBeenCalledTimes(missingReceipt ? 0 : 1);
+      expect(observed).toEqual([
+        missingReceipt ? undefined : { visibility: "read-only", membership: ["member"] },
+      ]);
+      expect(sharing.readCurrent()?.entry?.visibility).toBe(
+        missingReceipt ? undefined : "read-only",
+      );
+      expect(readExactSessionEntryRow(database, sessionKey)?.entry).toMatchObject({
+        ...entry,
+        visibility: "read-only",
+      });
+    } finally {
+      for (const restore of restoreFaults.toReversed()) {
+        restore();
+      }
+      observer.mockRestore();
+      stop();
+      sharing.release();
+    }
   });
 });

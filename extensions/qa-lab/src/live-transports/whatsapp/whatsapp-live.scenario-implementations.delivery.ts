@@ -1,6 +1,9 @@
 // QA Lab WhatsApp delivery-shape, status, and approval scenarios.
 import { randomUUID } from "node:crypto";
-import type { WhatsAppQaScenarioImplementation } from "./whatsapp-live.contracts.js";
+import type {
+  WhatsAppQaApprovalScenarioRun,
+  WhatsAppQaScenarioImplementation,
+} from "./whatsapp-live.contracts.js";
 import {
   callWhatsAppGatewaySend,
   waitForScenarioObservedMessage,
@@ -83,20 +86,31 @@ export const whatsappQaStreamFinalMessageAccountingScenario: WhatsAppQaScenarioI
   }),
 };
 
-export const whatsappQaApprovalExecDenyNativeScenario: WhatsAppQaScenarioImplementation = {
-  posture: "native-approval",
-  configOverrides: {
-    approvals: {
-      exec: true,
+function createWhatsAppApprovalScenario(
+  marker: string,
+  run: Omit<WhatsAppQaApprovalScenarioRun, "kind" | "token">,
+): WhatsAppQaScenarioImplementation {
+  return {
+    posture: "native-approval",
+    configOverrides: {
+      approvals: { exec: true, ...(run.approvalKind === "plugin" ? { plugin: true } : {}) },
     },
-  },
-  buildRun: () => ({
+    ...(run.target === "group" ? { requiresGroupJid: true } : {}),
+    buildRun: () => ({
+      ...run,
+      kind: "approval",
+      token: `WHATSAPP_QA_${marker}_${randomUUID().slice(0, 8).toUpperCase()}`,
+    }),
+  };
+}
+
+export const whatsappQaApprovalExecDenyNativeScenario = createWhatsAppApprovalScenario(
+  "EXEC_DENY",
+  {
     approvalKind: "exec",
     decision: "deny",
-    kind: "approval",
-    token: `WHATSAPP_QA_EXEC_DENY_${randomUUID().slice(0, 8).toUpperCase()}`,
-  }),
-};
+  },
+);
 
 export const whatsappQaStatusReactionsScenario: WhatsAppQaScenarioImplementation = {
   posture: "user-path",
@@ -171,67 +185,28 @@ export const whatsappQaGroupAllowlistBlockScenario: WhatsAppQaScenarioImplementa
   },
 };
 
-export const whatsappQaApprovalExecNativeScenario: WhatsAppQaScenarioImplementation = {
-  posture: "native-approval",
-  configOverrides: {
-    approvals: {
-      exec: true,
-    },
-  },
-  buildRun: () => ({
+export const whatsappQaApprovalExecNativeScenario = createWhatsAppApprovalScenario(
+  "EXEC_APPROVAL",
+  {
     approvalKind: "exec",
     decision: "allow-once",
-    kind: "approval",
-    token: `WHATSAPP_QA_EXEC_APPROVAL_${randomUUID().slice(0, 8).toUpperCase()}`,
-  }),
-};
-
-export const whatsappQaApprovalExecReactionNativeScenario: WhatsAppQaScenarioImplementation = {
-  posture: "native-approval",
-  configOverrides: {
-    approvals: {
-      exec: true,
-    },
   },
-  buildRun: () => ({
-    approvalKind: "exec",
-    decision: "allow-once",
-    decisionMode: "reaction",
-    kind: "approval",
-    token: `WHATSAPP_QA_EXEC_REACTION_APPROVAL_${randomUUID().slice(0, 8).toUpperCase()}`,
-  }),
-};
+);
 
-export const whatsappQaApprovalExecGroupReactionNativeScenario: WhatsAppQaScenarioImplementation = {
-  posture: "native-approval",
-  configOverrides: {
-    approvals: {
-      exec: true,
-    },
-  },
-  requiresGroupJid: true,
-  buildRun: () => ({
-    approvalKind: "exec",
-    decision: "allow-once",
-    decisionMode: "reaction",
-    kind: "approval",
-    target: "group",
-    token: `WHATSAPP_QA_GROUP_EXEC_REACTION_APPROVAL_${randomUUID().slice(0, 8).toUpperCase()}`,
-  }),
-};
+export const whatsappQaApprovalExecReactionNativeScenario = createWhatsAppApprovalScenario(
+  "EXEC_REACTION_APPROVAL",
+  { approvalKind: "exec", decision: "allow-once", decisionMode: "reaction" },
+);
 
-export const whatsappQaApprovalPluginNativeScenario: WhatsAppQaScenarioImplementation = {
-  posture: "native-approval",
-  configOverrides: {
-    approvals: {
-      exec: true,
-      plugin: true,
-    },
-  },
-  buildRun: () => ({
+export const whatsappQaApprovalExecGroupReactionNativeScenario = createWhatsAppApprovalScenario(
+  "GROUP_EXEC_REACTION_APPROVAL",
+  { approvalKind: "exec", decision: "allow-once", decisionMode: "reaction", target: "group" },
+);
+
+export const whatsappQaApprovalPluginNativeScenario = createWhatsAppApprovalScenario(
+  "PLUGIN_APPROVAL",
+  {
     approvalKind: "plugin",
     decision: "allow-once",
-    kind: "approval",
-    token: `WHATSAPP_QA_PLUGIN_APPROVAL_${randomUUID().slice(0, 8).toUpperCase()}`,
-  }),
-};
+  },
+);

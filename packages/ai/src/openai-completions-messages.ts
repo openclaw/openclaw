@@ -7,12 +7,12 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions.js";
+import { isImageWithMediaPayload } from "./media-payload.js";
 import { transformProviderMessages as transformMessages } from "./provider-transcript-transform.js";
 import type { ProviderMessage } from "./provider-types.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
-  isImageWithMediaPayload,
 } from "./providers/tool-result-text.js";
 import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
 import type { Context, Model, ThinkingContent, ToolCall } from "./types.js";

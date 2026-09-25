@@ -116,9 +116,9 @@ describe("createSynologyChatPlugin", () => {
   });
 
   describe("messaging", () => {
-    it("isolates stable Chat API recipients from inbound webhook identities", async () => {
+    it("isolates stable Chat API recipients from inbound webhook identities", () => {
       const plugin = synologyChatPlugin;
-      const route = await plugin.messaging?.resolveOutboundSessionRoute?.({
+      const route = plugin.messaging.resolveOutboundSessionRoute({
         cfg: {},
         agentId: "ops",
         accountId: "work",
@@ -136,9 +136,9 @@ describe("createSynologyChatPlugin", () => {
       });
     });
 
-    it("rejects non-numeric Chat API recipients for session routing", async () => {
+    it("rejects non-numeric Chat API recipients for session routing", () => {
       const plugin = synologyChatPlugin;
-      const route = await plugin.messaging?.resolveOutboundSessionRoute?.({
+      const route = plugin.messaging.resolveOutboundSessionRoute({
         cfg: {},
         agentId: "ops",
         target: "synology-chat:alice",
@@ -147,9 +147,9 @@ describe("createSynologyChatPlugin", () => {
       expect(route).toBeNull();
     });
 
-    it("canonicalizes safe Chat API recipient IDs", async () => {
+    it("canonicalizes safe Chat API recipient IDs", () => {
       const plugin = synologyChatPlugin;
-      const route = await plugin.messaging?.resolveOutboundSessionRoute?.({
+      const route = plugin.messaging.resolveOutboundSessionRoute({
         cfg: {},
         agentId: "ops",
         target: "synology_chat:+00042",
@@ -162,9 +162,9 @@ describe("createSynologyChatPlugin", () => {
       });
     });
 
-    it("rejects Chat API recipient IDs beyond the safe integer range", async () => {
+    it("rejects Chat API recipient IDs beyond the safe integer range", () => {
       const plugin = synologyChatPlugin;
-      const route = await plugin.messaging?.resolveOutboundSessionRoute?.({
+      const route = plugin.messaging.resolveOutboundSessionRoute({
         cfg: {},
         agentId: "ops",
         target: "9007199254740992",

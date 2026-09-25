@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { registerWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
+import * as abortRuntime from "./chat-abort-runtime.js";
 import * as persistence from "./chat-transcript-persistence.js";
 import {
   expectAbortPayload,
@@ -21,6 +24,139 @@ vi.mock("../session-utils.js", async () => {
 });
 
 describe("chat.abort original authority and registration", () => {
+  it("preserves exact-run descendant and partial persistence failures after parent Stop", async () => {
+    const descendantFailure = new Error("descendant cancellation failed");
+    const partialFailure = new Error("partial persistence failed");
+    const context = createChatAbortContext();
+    const run = createActiveRun("main", { sessionId: "main-session", agentId: "main" });
+    context.chatAbortControllers.set("parent-run", run);
+    context.chatRunState.getOrCreate("parent-run").buffer = "captured parent output";
+    const descendants = vi
+      .spyOn(abortRuntime, "abortControlledSubagents")
+      .mockImplementationOnce(async (params) => {
+        await params.beforeKill?.();
+        throw descendantFailure;
+      });
+    const persist = vi
+      .spyOn(persistence, "persistAbortedPartials")
+      .mockRejectedValueOnce(partialFailure);
+    const respond = vi.fn();
+    try {
+      await expect(
+        invokeChatAbortHandler({
+          handler: handleChatAbortRequestWithLifecycle,
+          context,
+          request: { sessionKey: "main", runId: "parent-run" },
+          client: { connect: { scopes: ["operator.admin"] } },
+          respond,
+        }),
+      ).rejects.toMatchObject({ errors: [descendantFailure, partialFailure] });
+      expect(run.controller.signal.aborted).toBe(true);
+      expect(persist).toHaveBeenCalledOnce();
+      expect(respond).not.toHaveBeenCalled();
+    } finally {
+      descendants.mockRestore();
+      persist.mockRestore();
+    }
+  });
+
+  it.each([undefined, "worker-run"])(
+    "waits for worker cancellation persistence before responding to Stop with runId=%s",
+    async (runId) => {
+      const cancelled = createDeferred();
+      const workerPersistence = createDeferred<string[]>();
+      const service = {};
+      registerWorkerInferenceSessionControl(service, {
+        reserveDrain: () => {
+          throw new Error("unexpected drain reservation");
+        },
+        resolveTarget: () => undefined,
+        captureCancel: () => ({
+          runIds: ["worker-run"],
+          cancel: (control) => {
+            control?.assertCurrent?.();
+            control?.onCancelled?.("worker-run");
+            cancelled.resolve();
+            return workerPersistence.promise;
+          },
+        }),
+      });
+      const respond = vi.fn();
+      const stopping = invokeChatAbortHandler({
+        handler: handleChatAbortRequestWithLifecycle,
+        context: createChatAbortContext({ workerEnvironmentService: service }),
+        request: { sessionKey: "main", ...(runId ? { runId } : {}) },
+        client: { connect: { scopes: ["operator.admin"] } },
+        respond,
+      });
+      try {
+        await cancelled.promise;
+        expect(respond).not.toHaveBeenCalled();
+      } finally {
+        workerPersistence.resolve(["worker-run"]);
+        await stopping;
+      }
+      expectAbortPayload(requireLastRespondCall(respond)[1], {
+        aborted: true,
+        runIds: ["worker-run"],
+      });
+    },
+  );
+
+  it("preserves worker cancellation and partial persistence failures after synchronous Stop", async () => {
+    const cancelled = createDeferred();
+    const workerPersistence = createDeferred<string[]>();
+    const workerFailure = new Error("worker cancellation write failed");
+    const partialFailure = new Error("partial output write failed");
+    const service = {};
+    registerWorkerInferenceSessionControl(service, {
+      reserveDrain: () => {
+        throw new Error("unexpected drain reservation");
+      },
+      resolveTarget: () => undefined,
+      captureCancel: () => ({
+        runIds: ["worker-run"],
+        cancel: (control) => {
+          control?.assertCurrent?.();
+          control?.onCancelled?.("worker-run");
+          cancelled.resolve();
+          return workerPersistence.promise;
+        },
+      }),
+    });
+    const context = createChatAbortContext({ workerEnvironmentService: service });
+    const run = createActiveRun("main", { sessionId: "main-session", agentId: "main" });
+    context.chatAbortControllers.set("worker-run", run);
+    context.chatRunState.getOrCreate("worker-run").buffer = "captured output";
+    const persist = vi
+      .spyOn(persistence, "persistAbortedPartials")
+      .mockRejectedValue(partialFailure);
+    const respond = vi.fn();
+    const stopping = invokeChatAbortHandler({
+      handler: handleChatAbortRequestWithLifecycle,
+      context,
+      request: { sessionKey: "main" },
+      client: { connect: { scopes: ["operator.admin"] } },
+      respond,
+    });
+    const rejected = expect(stopping).rejects.toMatchObject({
+      errors: [workerFailure, partialFailure],
+    });
+    try {
+      await cancelled.promise;
+      expect(run.controller.signal.aborted).toBe(true);
+      expect(respond).not.toHaveBeenCalled();
+      workerPersistence.reject(workerFailure);
+      await rejected;
+      expect(persist).toHaveBeenCalledOnce();
+      expect(respond).not.toHaveBeenCalled();
+    } finally {
+      workerPersistence.resolve([]);
+      await stopping.catch(() => undefined);
+      persist.mockRestore();
+    }
+  });
+
   it.each(["queued", "active", "lifecycle"] as const)(
     "stops subsequent effects after a synchronous %s cancellation revokes authority",
     async (firstEffect) => {

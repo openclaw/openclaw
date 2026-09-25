@@ -7,7 +7,10 @@ import {
   prepareChannelAccountConfiguration,
 } from "../../channels/plugins/account-config-mutation.js";
 import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
-import { resolveChannelSetupCliOptionMetadata } from "../../channels/plugins/cli-add-options.js";
+import {
+  channelOmitsEnvBackedSetupOption,
+  resolveChannelSetupCliOptionMetadata,
+} from "../../channels/plugins/cli-add-options.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
@@ -158,7 +161,9 @@ async function configureChannelAccount(
     const prompter = createClackPrompter();
     if (!isTerminalInteractive()) {
       runtime.error(
-        "Interactive channel setup requires a TTY. Use `openclaw channels add --channel <id> --use-env` or pass the channel's credential flags for non-interactive setup.",
+        channelOmitsEnvBackedSetupOption(opts.channel)
+          ? `Interactive channel setup requires a TTY. Run ${formatCliCommand(`openclaw channels add --channel ${opts.channel?.trim() || "<id>"} --help`)} to list the setup flags this channel accepts, then pass them for non-interactive setup.`
+          : "Interactive channel setup requires a TTY. Use `openclaw channels add --channel <id> --use-env` or pass the channel's credential flags for non-interactive setup.",
       );
       runtime.exit(1);
       return;

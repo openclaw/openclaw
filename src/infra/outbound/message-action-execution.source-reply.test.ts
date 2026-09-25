@@ -45,6 +45,7 @@ function registerSlackTextPlugin(accountIds: string[] = ["default"]) {
         plugin: {
           ...createOutboundTestPlugin({
             id: "slack",
+            messaging: { normalizeTarget: (target) => target.replace(/^channel:/, "") },
             outbound: {
               deliveryMode: "direct",
               sendText,

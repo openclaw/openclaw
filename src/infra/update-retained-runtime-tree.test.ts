@@ -71,6 +71,21 @@ it("retains files by hard link so the inodes outlive package replacement", async
   expect((await fs.stat(retainedWorker)).mode & 0o777).toBe(0o444);
 });
 
+it("copies overlay files without copy-up changing their admitted identity", async () => {
+  const f = await fixture();
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  const disk = await fs.statfs(f.source);
+  disk.type = 0x794c7630;
+  vi.spyOn(fs, "statfs").mockResolvedValue(disk);
+  const link = vi.spyOn(fs, "link");
+  expect(await f.link()).toEqual({ linked: 0, copied: 3 });
+  expect(link).not.toHaveBeenCalled();
+  const retainedWorker = path.join(f.destination, "dist", "state", "worker.js");
+  expect((await fs.stat(retainedWorker)).ino).not.toBe((await fs.stat(f.worker)).ino);
+  expect(await fs.readFile(retainedWorker, "utf8")).toBe("export const generation = 'retained';\n");
+  expect((await fs.stat(retainedWorker)).mode & 0o777).toBe(0o444);
+});
+
 it.each([0, 1])("copies shared inode occurrence %i when hard links are refused", async (index) => {
   const f = await fixture();
   const before = await fs.stat(f.worker, { bigint: true });

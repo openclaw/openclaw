@@ -74,6 +74,7 @@ export async function inspectGatewayRestart(params: {
   );
   let reachability: GatewayReachability | null = null;
   let probeError: string | undefined;
+  let staleConnection: GatewayReachability["staleConnection"];
   let gatewayBootId: string | undefined;
   let gatewayVersion: string | null | undefined;
   let gatewayBuildId: string | null | undefined;
@@ -93,6 +94,7 @@ export async function inspectGatewayRestart(params: {
         }),
       );
       probeError = reachability.probeError;
+      staleConnection = reachability.staleConnection;
       gatewayBootId = reachability.gatewayBootId;
       gatewayVersion = reachability.gatewayVersion;
       gatewayBuildId = reachability.gatewayBuildId;
@@ -255,6 +257,7 @@ export async function inspectGatewayRestart(params: {
       ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
       ...(startupPhase ? { startupPhase } : {}),
       ...(probeError ? { probeError } : {}),
+      ...(staleConnection ? { staleConnection } : {}),
       ...(activatedPluginErrors.length ? { activatedPluginErrors } : {}),
       ...(unavailablePlugins.length ? { unavailablePlugins } : {}),
       ...(channelProbeErrors.length ? { channelProbeErrors } : {}),

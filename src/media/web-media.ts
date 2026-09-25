@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
+import { assertNoWindowsNetworkPath, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
 import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import {
@@ -23,7 +24,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";

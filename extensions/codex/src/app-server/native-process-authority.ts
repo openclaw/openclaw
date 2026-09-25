@@ -47,6 +47,50 @@ export function hasCodexNativeBackgroundProcesses(
   return clients.get(client)?.hasProcesses(threadId) ?? false;
 }
 
+/** Read the native process owner's live inventory, never infer custody from a start event. */
+export async function readCodexRetainedBackgroundCommands(params: {
+  client: CodexAppServerClient;
+  threadId: string;
+  turnId: string;
+  commands: ReadonlyMap<string, string | null>;
+  authority?: CodexNativeProcessAuthority;
+  assertCurrent: () => void;
+  signal: AbortSignal;
+  timeoutMs: number;
+}): Promise<() => ReadonlyMap<string, string>> {
+  params.assertCurrent();
+  const { data } = await params.client.request(
+    "thread/backgroundTerminals/list",
+    { threadId: params.threadId },
+    { signal: params.signal, timeoutMs: params.timeoutMs },
+  );
+  params.signal.throwIfAborted();
+  params.assertCurrent();
+  // Consumption follows a second notification drain. Recheck source custody then,
+  // so revocation during that await cannot turn an orphan into retained work.
+  return () => {
+    params.signal.throwIfAborted();
+    params.assertCurrent();
+    const retained = new Map<string, string>();
+    for (const { itemId, processId } of data) {
+      if (
+        params.commands.has(itemId) &&
+        // Approval starts omit the process ID; the native inventory supplies it.
+        (params.commands.get(itemId) === null || params.commands.get(itemId) === processId) &&
+        (!params.authority ||
+          params.authority.ownsCurrentCommand(params.client, {
+            threadId: params.threadId,
+            turnId: params.turnId,
+            itemId,
+          }))
+      ) {
+        retained.set(itemId, processId);
+      }
+    }
+    return retained;
+  };
+}
+
 export class CodexNativeProcessClient {
   readonly id = randomUUID();
   readonly authPath = `/openclaw-${randomUUID()}`;
@@ -245,6 +289,18 @@ export class CodexNativeProcessAuthority {
       this.onAbort();
       throw error;
     }
+  }
+
+  ownsCurrentCommand(client: CodexAppServerClient, receipt: NativeCommand): boolean {
+    this.assertCurrent();
+    return [...this.commands].some(
+      (command) =>
+        command.client === clients.get(client) &&
+        command.threadId === receipt.threadId &&
+        command.turnId === receipt.turnId &&
+        command.itemId === receipt.itemId &&
+        command.processes.size > 0,
+    );
   }
 
   bindTurn(client: CodexAppServerClient, threadId: string, turnId: string): void {

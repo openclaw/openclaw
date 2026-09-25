@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import * as llmStream from "../../llm/stream.js";
 import type { Model } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
@@ -31,7 +32,6 @@ import * as modelAuth from "../model-auth.js";
 import * as preparedRuntime from "../prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
 import { closeEphemeralPreparedModelRuntimeResources } from "../prepared-model-runtime.resources.js";
-import * as providerStream from "../provider-stream.js";
 import { createPdfTool } from "./pdf-tool.js";
 import { FAKE_PDF_MEDIA } from "./pdf-tool.test-support.js";
 
@@ -309,20 +309,15 @@ it("does not dispatch a PDF completion retired during transport initialization",
     const dispatch = vi.fn(() => {
       throw new Error("Unexpected retired PDF provider dispatch");
     });
-    vi.spyOn(providerStream, "registerProviderStreamForModel").mockImplementationOnce(
-      ({ model, apiRegistry }) => {
-        apiRegistry?.registerApiProvider({
-          api: model.api,
-          stream: dispatch,
-          streamSimple: dispatch,
-        });
-        return undefined;
-      },
-    );
-    const complete = llmStream.complete;
+    const complete = llmStream.completeSimple;
     let retirement: Promise<void> | undefined;
-    vi.spyOn(llmStream, "complete").mockImplementationOnce((...args) => {
-      const completion = complete(...args);
+    vi.spyOn(llmStream, "completeSimple").mockImplementationOnce((model, ...args) => {
+      getModelLlmRuntime(model)?.registry.registerApiProvider({
+        api: model.api,
+        stream: dispatch,
+        streamSimple: dispatch,
+      });
+      const completion = complete(model, ...args);
       retirement = closeEphemeralPreparedModelRuntimeResources();
       return completion;
     });

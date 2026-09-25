@@ -22,12 +22,25 @@ type GatewayPluginBootstrapParams = Omit<
   "autoEnabledReasons"
 > & { logDiagnostics?: boolean };
 
+// Reload replaces the cache's metadata object and permits the next generation's notices.
+const loggedInfoByMetadata = new WeakMap<object, Set<string>>();
+
 // Keep plugin/source attribution without exposing internal diagnostic objects.
 function logGatewayPluginDiagnostics(params: {
   diagnostics: PluginRegistry["diagnostics"];
-  log: Pick<GatewayPluginBootstrapLog, "error" | "warn">;
+  log: Pick<GatewayPluginBootstrapLog, "error" | "warn" | "info">;
 }) {
+  const metadata = getPluginCache().metadata;
+  const loggedInfo = loggedInfoByMetadata.get(metadata) ?? new Set<string>();
+  loggedInfoByMetadata.set(metadata, loggedInfo);
   for (const diag of params.diagnostics) {
+    if (diag.level === "info") {
+      const key = JSON.stringify([diag.pluginId, diag.message]);
+      if (loggedInfo.has(key)) {
+        continue;
+      }
+      loggedInfo.add(key);
+    }
     const degradedPlugin = diag.pluginId ? findActiveDegradedPlugin(diag.pluginId) : undefined;
     // Startup preflight already emitted this typed owner diagnostic. Keep it
     // in the registry for health/status, but do not print it a second time.
@@ -47,12 +60,7 @@ function logGatewayPluginDiagnostics(params: {
     const message = details
       ? `[plugins] ${diag.message} (${details})`
       : `[plugins] ${diag.message}`;
-    if (diag.level === "error") {
-      params.log.error(message);
-    } else {
-      // `PluginDiagnostic.level` is only "warn" | "error": this branch is every warn diagnostic.
-      params.log.warn(message);
-    }
+    params.log[diag.level](message);
   }
 }
 

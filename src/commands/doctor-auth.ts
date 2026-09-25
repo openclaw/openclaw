@@ -8,7 +8,6 @@ import {
   type AuthHealthSummary,
 } from "../agents/auth-health.js";
 import {
-  type AuthCredentialReasonCode,
   ensureAuthProfileStore,
   findPersistedAuthProfileCredential,
   hasAnyAuthProfileStoreSource,
@@ -212,26 +211,12 @@ export function noteLegacyCodexProviderOverride(cfg: OpenClawConfig): void {
   note(buildCodexProviderOverrideWarning(providerOverride), CODEX_OAUTH_WARNING_TITLE);
 }
 
-type AuthIssue = {
-  profileId: string;
-  provider: string;
-  status: string;
-  reasonCode?: AuthCredentialReasonCode;
-  remainingMs?: number;
-};
+type AuthIssue = AuthHealthSummary["profiles"][number];
 
 type AuthProfileHealthTarget = {
   label: string;
   agentDir?: string;
 };
-
-function formatAuthNoteTitle(
-  title: string,
-  target: AuthProfileHealthTarget,
-  labelStores: boolean,
-): string {
-  return labelStores ? `${title} (${target.label})` : title;
-}
 
 function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTarget[] {
   const targets = new Map<string, AuthProfileHealthTarget>();
@@ -329,10 +314,6 @@ async function formatAuthIssueLine(
   return `- ${issue.profileId}: ${issue.status}${reason}${remaining}${hint ? ` — ${hint}` : ""}`;
 }
 
-function resolveAuthProfileStorePath(target: AuthProfileHealthTarget): string {
-  return resolveAuthStorePathForDisplay(target.agentDir);
-}
-
 function authProfileIssueToHealthFinding(params: {
   issue: AuthIssue;
   target: AuthProfileHealthTarget;
@@ -349,7 +330,7 @@ function authProfileIssueToHealthFinding(params: {
     checkId: AUTH_PROFILES_CHECK_ID,
     severity: "warning",
     message: `${owner} ${params.issue.profileId} is ${params.issue.status}${reason}${remaining}.`,
-    path: resolveAuthProfileStorePath(params.target),
+    path: resolveAuthStorePathForDisplay(params.target.agentDir),
     target: params.issue.profileId,
     ...(params.issue.reasonCode ? { requirement: params.issue.reasonCode } : {}),
     fixHint:
@@ -410,7 +391,7 @@ function authProfileCooldownToHealthFinding(
     message: params.labelStores
       ? `${params.target.label} auth profile ${params.profileId} is ${params.kind} (${params.remaining}).`
       : `Auth profile ${params.profileId} is ${params.kind} (${params.remaining}).`,
-    path: resolveAuthProfileStorePath(params.target),
+    path: resolveAuthStorePathForDisplay(params.target.agentDir),
     target: params.profileId,
     fixHint: params.hint,
   };
@@ -483,19 +464,12 @@ async function collectAuthProfileHealthFindingsForTarget(params: {
 
   const issues = summary.profiles.filter(isAuthProfileHealthIssue);
   for (const issue of issues) {
-    const authIssue: AuthIssue = {
-      profileId: issue.profileId,
-      provider: issue.provider,
-      status: issue.status,
-      reasonCode: issue.reasonCode,
-      remainingMs: issue.remainingMs,
-    };
     findings.push(
       authProfileIssueToHealthFinding({
-        issue: authIssue,
+        issue,
         target: params.target,
         labelStores: params.labelStores,
-        hint: await resolveAuthIssueHint(authIssue, params.cfg, store),
+        hint: await resolveAuthIssueHint(issue, params.cfg, store),
       }),
     );
   }
@@ -541,7 +515,7 @@ async function noteAuthProfileHealthForTarget(params: {
 }): Promise<string[]> {
   let { store, summary } = loadAuthProfileHealth(params);
   const noteTitle = (title: string) =>
-    formatAuthNoteTitle(title, params.target, params.labelStores);
+    params.labelStores ? `${title} (${params.target.label})` : title;
   const unusable = collectAuthProfileCooldowns(store).map(
     ({ profileId, kind, remaining, hint }) =>
       `- ${profileId}: ${kind} (${remaining})${hint ? ` — ${hint}` : ""}`,

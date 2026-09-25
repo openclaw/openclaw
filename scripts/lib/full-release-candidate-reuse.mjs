@@ -4,6 +4,7 @@ import {
   fullReleaseCandidateArtifactName,
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
+  validateRecordedFullReleaseCandidateRequest,
 } from "../full-release-candidate-contract.mjs";
 import {
   downloadExactActionsArtifactArchive,
@@ -53,8 +54,8 @@ function timestamp(value) {
 
 function exactRequest(left, right) {
   return (
-    JSON.stringify(validateFullReleaseCandidateRequest(left)) ===
-    JSON.stringify(validateFullReleaseCandidateRequest(right))
+    JSON.stringify(validateRecordedFullReleaseCandidateRequest(left)) ===
+    JSON.stringify(validateRecordedFullReleaseCandidateRequest(right))
   );
 }
 
@@ -558,7 +559,7 @@ export function resolveCandidateBinding({
   return validateCandidateBinding(hasReused ? reusedBinding : freshBinding, {
     minimumRemainingMs: MIN_CANDIDATE_REMAINING_MS,
     now,
-    request,
+    request: validateFullReleaseCandidateRequest(request),
   });
 }
 

@@ -50,7 +50,7 @@ type ExecutePreparedReplyAgentRunInput = Omit<
     >["checkpointBeforeAgentReply"];
     resolveVisibleReplyDelivery: () => Promise<boolean>;
     getActiveSessionEntry: () => SessionEntry | undefined;
-    isRestartRecoveryArmed: () => boolean;
+    isRestartRecoveryArmed: () => Promise<boolean>;
     sendDirectCompactionNotice: ((phase: CompactionNoticePhase) => Promise<void>) | undefined;
     setRunFollowupTurn: (runner: FinalizeReplyAgentRunInput["runFollowupTurn"]) => void;
     setActiveSessionEntry: (entry: SessionEntry | undefined) => void;

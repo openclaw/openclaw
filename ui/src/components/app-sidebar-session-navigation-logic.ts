@@ -378,33 +378,6 @@ export function extendSidebarSessionSelection(input: {
   };
 }
 
-function latestVisibleAgentSessionRow(input: {
-  agentId: string;
-  sessionsAgentId: string | null;
-  sessionsResult: SessionsListResult | null;
-  sessionResultsByAgent: Readonly<Record<string, SessionsListResult>>;
-  defaultAgentId: string;
-}): SessionRow | null {
-  const normalized = normalizeAgentId(input.agentId);
-  const rows =
-    normalized === normalizeAgentId(input.sessionsAgentId ?? "")
-      ? (input.sessionsResult?.sessions ?? [])
-      : (input.sessionResultsByAgent[normalized]?.sessions ?? []);
-  // Unprefixed keys belong to the system default agent. Keeping them for
-  // another agent would resume the wrong conversation with the raw key.
-  const visible = filterVisibleSessionRows(rows, {
-    agentId: normalized,
-    defaultAgentId: input.defaultAgentId,
-    filterByAgent: true,
-    archivedFilter: "active",
-  });
-  return visible.reduce<SessionRow | null>(
-    (latest, row) =>
-      latest !== null && compareSessionRowsByUpdatedAt(latest, row) <= 0 ? latest : row,
-    null,
-  );
-}
-
 export function resolveActiveSidebarAgent(input: {
   activeId: string;
   roster: NonNullable<ApplicationContext["agents"]["state"]["agentsList"]>["agents"];
@@ -431,16 +404,28 @@ export function resolveLatestSidebarAgentSession(input: {
   };
   context: ApplicationContext | undefined;
 }): SessionRow | null {
-  return latestVisibleAgentSessionRow({
-    agentId: input.agentId,
-    sessionsAgentId: input.sessionData.sessionsAgentId,
-    sessionsResult: input.sessionData.sessionsResult,
-    sessionResultsByAgent: input.sessionData.sessionResultsByAgent,
+  const { sessionData } = input;
+  const normalized = normalizeAgentId(input.agentId);
+  const rows =
+    normalized === normalizeAgentId(sessionData.sessionsAgentId ?? "")
+      ? (sessionData.sessionsResult?.sessions ?? [])
+      : (sessionData.sessionResultsByAgent[normalized]?.sessions ?? []);
+  // Unprefixed keys belong to the system default agent. Keeping them for
+  // another agent would resume the wrong conversation with the raw key.
+  const visible = filterVisibleSessionRows(rows, {
+    agentId: normalized,
     defaultAgentId: resolveUiDefaultAgentId({
       agentsList: input.context?.agents.state.agentsList,
       hello: input.context?.gateway.snapshot.hello,
     }),
+    filterByAgent: true,
+    archivedFilter: "active",
   });
+  return visible.reduce<SessionRow | null>(
+    (latest, row) =>
+      latest !== null && compareSessionRowsByUpdatedAt(latest, row) <= 0 ? latest : row,
+    null,
+  );
 }
 
 export function collectSidebarSessionRowsByKey(input: {

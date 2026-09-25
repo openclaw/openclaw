@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   attachGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
@@ -16,7 +17,7 @@ const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
 
 test("sessions.create stamps trusted operator provenance and records created", async () => {
   const { storePath } = await createSessionStoreDir();
-  const profileId = "profile-session-creator";
+  const profileId = ensureProfileForEmail("session-creator@example.test").id;
   const client = {
     connect: { scopes: ["operator.write"] },
     authenticatedUserProfile: {

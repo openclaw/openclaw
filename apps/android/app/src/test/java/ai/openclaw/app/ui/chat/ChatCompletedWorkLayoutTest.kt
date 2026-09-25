@@ -307,6 +307,45 @@ class ChatCompletedWorkLayoutTest {
   }
 
   @Test
+  fun completedWorkSummaryKeepsEarlierToolFailureVisible() {
+    val response = Json.parseToJsonElement(HISTORY).jsonObject
+    val failure = "The optional dashboard check was denied."
+    val revised =
+      response.getValue("messages").jsonArray.mapIndexed { index, message ->
+        if (index == 3) {
+          JsonObject(message.jsonObject + mapOf("content" to JsonPrimitive(failure), "isError" to JsonPrimitive(true)))
+        } else {
+          message
+        }
+      }
+    historyResponse = JsonObject(response + ("messages" to JsonArray(revised))).toString()
+    composeRule.runOnIdle { model.refreshChat() }
+    composeRule.waitUntil {
+      composeRule.runOnIdle {
+        !model.chatHistoryLoading.value && model.chatMessages.value
+          .getOrNull(3)
+          ?.content
+          ?.singleOrNull()
+          ?.toolActivity
+          ?.isError == true
+      }
+    }
+
+    val worked = composeRule.onNode(hasText(nativeString("Worked for \$duration", "4s")) and hasClickAction())
+    capture("completed-tool-failure-collapsed")
+    worked.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText(FINAL).assertIsDisplayed()
+    composeRule.onNodeWithText(failure, useUnmergedTree = true).assertDoesNotExist()
+    composeRule.onNodeWithText(nativeString("1 tool failed"), useUnmergedTree = true).assertIsDisplayed()
+
+    worked.performClick()
+    composeRule.onNode(hasText(nativeString("Tool activity")) and hasClickAction()).performClick()
+    composeRule.onNode(hasText(COMMAND) and hasClickAction()).performClick()
+    composeRule.onNodeWithText(failure).assertIsDisplayed()
+    composeRule.onNodeWithText(FINAL).assertIsDisplayed()
+  }
+
+  @Test
   fun hiddenInputTurnsKeepTheirOwnFinalReplies() {
     historyResponse = HIDDEN_TURNS_HISTORY
     composeRule.runOnIdle { model.refreshChat() }

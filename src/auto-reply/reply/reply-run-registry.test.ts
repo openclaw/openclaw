@@ -18,22 +18,20 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
+import { REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS } from "./reply-run-registry.contracts.js";
 import {
   abortActiveReplyRuns,
   beginReplyMessageInjectionTarget,
-  expireStaleReplyOperation,
   finalizeReplyMessageInjectionAttempt,
   forceClearReplyOperation,
   forceClearReplyRunBySessionId,
   hasCommittedReplyOperationOutcome,
-  isReplyRunEvidenceStale,
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
   isReplyRunAbortableForSignal,
   interruptReplyRunTarget,
   clearReplyRunForResetBySessionId,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   registerReplyOperationSuccessorBarrier,
   type ReplyBackendQueueMessageOptions,
   type ReplyOperation,
@@ -48,7 +46,11 @@ import {
   waitForReplyRunEndBySessionId,
   waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.js";
-import { lifecycleAdmissionByOperation } from "./reply-run-registry.state.js";
+import {
+  expireStaleReplyOperation,
+  isReplyRunEvidenceStale,
+  lifecycleAdmissionByOperation,
+} from "./reply-run-registry.state.js";
 import {
   createTestReplyOperation,
   queueCurrentReplyRunMessage,

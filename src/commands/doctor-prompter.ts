@@ -33,9 +33,13 @@ export type DoctorPrompter = {
 export function createDoctorPrompter(params: {
   runtime: RuntimeEnv;
   options: DoctorOptions;
+  signal?: AbortSignal;
 }): DoctorPrompter {
   const repairMode = resolveDoctorRepairMode(params.options);
   const confirmPrompt = async (p: DoctorConfirmParams) => {
+    if (params.signal?.aborted) {
+      return false;
+    }
     if (repairMode.nonInteractive) {
       return false;
     }
@@ -44,14 +48,17 @@ export function createDoctorPrompter(params: {
     }
     // Exit 130 (SIGINT convention) so the installer can distinguish
     // user cancellation from normal doctor failures.
-    return guardCancel(
-      await confirm({
-        ...p,
-        message: stylePromptMessage(p.message),
-      }),
-      params.runtime,
-      130,
-    );
+    const answer = await confirm({
+      ...p,
+      signal: params.signal
+        ? p.signal
+          ? AbortSignal.any([p.signal, params.signal])
+          : params.signal
+        : p.signal,
+      message: stylePromptMessage(p.message),
+    });
+    // Maintenance interruption declines new consent without abandoning restoration.
+    return params.signal?.aborted ? false : guardCancel(answer, params.runtime, 130);
   };
   const confirmDefault = async (p: DoctorConfirmParams) => {
     if (shouldAutoApproveDoctorFix(repairMode)) {

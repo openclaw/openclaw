@@ -6,18 +6,21 @@ import { renderChatAvatar } from "../chat-avatar.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 
 export function renderChatTypingIndicator(
-  actors: readonly { id: string; label: string; preview?: string }[] | undefined,
+  actors: readonly { id: string; label: string; preview?: string; paused?: boolean }[] | undefined,
   avatarPlacement: "gutter" | "footer" | "none" = "gutter",
 ) {
   if (!actors?.length) {
     return null;
   }
+  const active = actors.filter((actor) => !actor.paused);
   const status =
-    actors.length === 1
-      ? t("chat.sessionSuggestions.typing", { name: actors[0]?.label ?? "" })
-      : t("chat.sessionSuggestions.typingMany", {
-          names: actors.map((actor) => actor.label).join(", "),
-        });
+    active.length === 0
+      ? ""
+      : active.length === 1
+        ? t("chat.sessionSuggestions.typing", { name: active[0]?.label ?? "" })
+        : t("chat.sessionSuggestions.typingMany", {
+            names: active.map((actor) => actor.label).join(", "),
+          });
   return html`<div class="agent-chat__typing-indicator agent-chat__typing-indicator--outside">
     ${repeat(
       actors,
@@ -40,7 +43,10 @@ export function renderChatTypingIndicator(
               <div class="chat-message-avatar-anchor">
                 ${
                   preview
-                    ? html`<span class="chat-text agent-chat__typing-preview-text" dir="auto"
+                    ? html`<span
+                        class="chat-text agent-chat__typing-preview-text"
+                        dir="auto"
+                        ?data-paused=${actor.paused}
                         >${preview}</span
                       >`
                     : html`<span class="agent-chat__typing-bubble" aria-hidden="true"
@@ -56,7 +62,7 @@ export function renderChatTypingIndicator(
               ${avatarPlacement === "footer" ? renderChatAuthorAvatar(sender) : null}
               <span class="chat-sender-name agent-chat__typing-preview-label">${actor.label}</span>
               <span class="agent-chat__typing-state"
-                >${t("chat.sessionSuggestions.typingDraftState")}</span
+                >${t(actor.paused ? "chat.sessionSuggestions.pausedDraftState" : "chat.sessionSuggestions.typingDraftState")}</span
               >
             </div>
           </div>

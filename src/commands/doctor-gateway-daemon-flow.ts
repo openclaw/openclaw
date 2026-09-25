@@ -265,7 +265,11 @@ export async function maybeRepairGatewayDaemon(params: {
   const isLocalDarwinGateway = process.platform === "darwin";
   const serviceState = await readGatewayServiceState(service, { env: process.env });
   if (serviceState.loadState.status === "unknown") {
-    await noteGatewayServiceInspectionFailure(serviceState.loadState);
+    if (service.unsupportedReason) {
+      note(service.unsupportedReason, "Gateway");
+    } else {
+      await noteGatewayServiceInspectionFailure(serviceState.loadState);
+    }
     return;
   }
   let loaded = serviceState.loadState.status === "loaded";

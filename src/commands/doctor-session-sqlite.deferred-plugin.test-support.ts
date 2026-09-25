@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 export function seedDeferredPluginSessionSource(
@@ -10,6 +11,8 @@ export function seedDeferredPluginSessionSource(
   pluginId = "fixture-plugin",
   missingTranscript?: "declared" | "metadata-only",
 ) {
+  // This fixture models active legacy stores with known deletion history.
+  openOpenClawStateDatabase({ env: state.env });
   const sessionsDir =
     layout === "external"
       ? path.join(state.root, "external-sessions")

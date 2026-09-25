@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -6,6 +7,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as store from "./operator-approval-store.js";
 import * as native from "./operator-approval-store.kernel.js";
 import { getOperatorApprovalResolutionKey } from "./operator-approval-store.rows.js";
@@ -106,28 +108,10 @@ it("preserves serialized records, first-answer wins, consumption and history thr
 it("runs lookup, pending scans, expiry and history without host SQLite calls through close", async () => {
   const databaseOptions = options();
   await store.insertOperatorApproval({ approval: approval("off-thread"), databaseOptions });
-  const sqlite = requireNodeSqlite();
-  const counters = [
-    vi.spyOn(sqlite.DatabaseSync.prototype, "prepare"),
-    vi.spyOn(sqlite.DatabaseSync.prototype, "exec"),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(sqlite.StatementSync.prototype, method),
-    ),
-  ];
+  requireNodeSqlite();
+  const counters = observeMainThreadSql();
   try {
-    const calibration = new sqlite.DatabaseSync(":memory:");
-    try {
-      calibration.exec("CREATE TABLE calibration (value INTEGER)");
-      calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
-      const read = calibration.prepare("SELECT value FROM calibration");
-      read.get();
-      read.all();
-      expect([...read.iterate()]).toHaveLength(1);
-      expect(counters.every((counter) => counter.mock.calls.length > 0)).toBe(true);
-    } finally {
-      calibration.close();
-      counters.forEach((counter) => counter.mockClear());
-    }
+    counters.calibrate();
     const pending = await store.listPendingOperatorApprovals({ nowMs: 2000, databaseOptions });
     expect(pending.map((record) => record.id)).toEqual(["off-thread"]);
     expect(
@@ -140,9 +124,9 @@ it("runs lookup, pending scans, expiry and history without host SQLite calls thr
       await store.listTerminalOperatorApprovals({ nowMs: 10_002, databaseOptions }),
     ).toMatchObject({ records: [{ id: "off-thread", status: "expired" }] });
     await closeOpenClawStateDatabaseAsync();
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    counters.expectIdle();
   } finally {
-    counters.forEach((counter) => counter.mockRestore());
+    counters.restore();
   }
 });
 
@@ -268,9 +252,7 @@ it.each(["worker", "native-compatibility"] as const)(
     ).toMatchObject({ outcome: "found", record: { status: "pending" } });
     const winner = await store.resolveOperatorApproval(input);
     expect(winner.outcome).toBe("resolved");
-    if (winner.outcome !== "resolved") {
-      throw new Error("Expected committed resolution");
-    }
+    assert(winner.outcome === "resolved", "Expected committed resolution");
     expect(onCommitted).toHaveBeenCalledExactlyOnceWith(
       getOperatorApprovalResolutionKey(winner.record),
     );

@@ -239,39 +239,10 @@ export function formatList(response: JsonValue | undefined, label: string): stri
 
 /** Formats Codex skills grouped by scope, omitting disabled entries. */
 export function formatSkills(response: JsonValue | undefined): string {
-  const groups = isJsonObject(response) && Array.isArray(response.data) ? response.data : [];
-  if (groups.length === 0) {
-    return "Codex skills: none returned.";
-  }
-  const lines = ["Codex skills:"];
-  let renderedSkills = 0;
-  let loadErrors = 0;
-  for (const group of groups) {
-    const record = isJsonObject(group) ? group : {};
-    if (Array.isArray(record.errors)) {
-      loadErrors += record.errors.length;
-    }
-    const skills = Array.isArray(record.skills) ? record.skills : [];
-    if (skills.length === 0) {
-      continue;
-    }
-    for (const skill of skills) {
-      if (isJsonObject(skill) && skill.enabled === false) {
-        continue;
-      }
-      lines.push(`- ${formatCodexSkillEntry(skill)}`);
-      renderedSkills += 1;
-    }
-  }
-  if (renderedSkills === 0) {
-    if (loadErrors > 0) {
-      return `Codex skills: none returned (${loadErrors} load ${
-        loadErrors === 1 ? "error" : "errors"
-      }).`;
-    }
-    return "Codex skills: none returned.";
-  }
-  return lines.join("\n");
+  const { skills, emptySummary } = readEnabledCodexSkills(response);
+  return skills.length > 0
+    ? ["Codex skills:", ...skills.map((skill) => `- ${formatCodexSkillEntry(skill)}`)].join("\n")
+    : `Codex skills: ${emptySummary}.`;
 }
 
 function formatCodexSkillEntry(entry: JsonValue): string {
@@ -437,12 +408,12 @@ function summarizeArrayLike(value: JsonValue | undefined): string {
   return `${entries.length}`;
 }
 
-function summarizeCodexSkills(value: JsonValue | undefined): string {
+function readEnabledCodexSkills(value: JsonValue | undefined): {
+  skills: JsonValue[];
+  emptySummary: string;
+} {
   const groups = isJsonObject(value) && Array.isArray(value.data) ? value.data : [];
-  if (groups.length === 0) {
-    return "none returned";
-  }
-  let enabledSkills = 0;
+  const skills: JsonValue[] = [];
   let loadErrors = 0;
   for (const group of groups) {
     if (!isJsonObject(group)) {
@@ -451,20 +422,24 @@ function summarizeCodexSkills(value: JsonValue | undefined): string {
     if (Array.isArray(group.errors)) {
       loadErrors += group.errors.length;
     }
-    if (!Array.isArray(group.skills)) {
-      continue;
+    for (const skill of Array.isArray(group.skills) ? group.skills : []) {
+      if (!isJsonObject(skill) || skill.enabled !== false) {
+        skills.push(skill);
+      }
     }
-    enabledSkills += group.skills.filter(
-      (skill) => !isJsonObject(skill) || skill.enabled !== false,
-    ).length;
   }
-  if (enabledSkills > 0) {
-    return `${enabledSkills}`;
-  }
-  if (loadErrors > 0) {
-    return `none returned (${loadErrors} load ${loadErrors === 1 ? "error" : "errors"})`;
-  }
-  return "none returned";
+  return {
+    skills,
+    emptySummary:
+      loadErrors > 0
+        ? `none returned (${loadErrors} load ${loadErrors === 1 ? "error" : "errors"})`
+        : "none returned",
+  };
+}
+
+function summarizeCodexSkills(value: JsonValue | undefined): string {
+  const { skills, emptySummary } = readEnabledCodexSkills(value);
+  return skills.length > 0 ? `${skills.length}` : emptySummary;
 }
 
 function formatCodexRateLimitSummary(value: JsonValue | undefined): string {

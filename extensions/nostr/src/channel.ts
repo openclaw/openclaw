@@ -4,24 +4,26 @@ import {
   createScopedDmSecurityResolver,
   createTopLevelChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  buildChannelConfigSchema,
+  DEFAULT_ACCOUNT_ID,
+  formatPairingApproveHint,
+  type ChannelPlugin,
+} from "openclaw/plugin-sdk/channel-plugin-common";
+import {
   buildPassiveChannelStatusSummary,
   buildTrafficStatusSummary,
 } from "openclaw/plugin-sdk/extension-shared";
-import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
+  createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
-  DEFAULT_ACCOUNT_ID,
-  formatPairingApproveHint,
-  type ChannelOutboundAdapter,
-  type ChannelPlugin,
-} from "./channel-api.js";
+} from "openclaw/plugin-sdk/status-helpers";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { NostrProfile } from "./config-schema.js";
 import { NostrConfigSchema } from "./config-schema.js";
 import {
@@ -93,14 +95,7 @@ const nostrConfigAdapter = createTopLevelChannelConfigAdapter<ResolvedNostrAccou
   ],
   resolveAllowFrom: (account) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
-    normalizeStringEntries(allowFrom)
-      .map((entry) => {
-        if (entry === "*") {
-          return "*";
-        }
-        return normalizeNostrTarget(entry);
-      })
-      .filter(Boolean),
+    normalizeStringEntries(allowFrom).map(normalizeNostrTarget).filter(Boolean),
 });
 
 const nostrMessageAdapter = createChannelMessageAdapterFromOutbound({
@@ -177,7 +172,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
         },
         hint: NOSTR_TARGET_HINT,
       },
-      resolveOutboundSessionRoute: (params) => resolveNostrOutboundSessionRoute(params),
+      resolveOutboundSessionRoute: resolveNostrOutboundSessionRoute,
     },
     message: nostrMessageAdapter,
     status: {

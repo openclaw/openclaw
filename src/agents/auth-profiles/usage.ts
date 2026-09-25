@@ -1,7 +1,7 @@
 /**
  * Auth profile usage accounting and cooldown mutation.
- * Records failures under the store lock, applies WHAM usage probes for OpenAI
- * OAuth profiles, and exposes display helpers for unavailable profiles.
+ * Records failures under the store lock, applies WHAM usage probes for Codex
+ * subscription OAuth profiles, and exposes display helpers for unavailable profiles.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
@@ -16,6 +16,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { persistInlineAuthFailure } from "./inline-usage.js";
@@ -172,7 +173,12 @@ function isWhamOAuthProfile(
   return (
     profile?.type === "oauth" &&
     Boolean(profile.access) &&
-    normalizeProviderId(profile.provider) === "openai"
+    normalizeProviderId(profile.provider) === "openai" &&
+    resolveProviderModelAuthPolicy({
+      provider: profile.provider,
+      mode: profile.type,
+      authFlow: profile.authFlow,
+    }).authRequirement === "subscription"
   );
 }
 
@@ -718,7 +724,7 @@ export async function markAuthProfileFailure(params: {
 
   const shouldProbeWham = shouldProbeWhamForFailure(profile, reason);
   // A detail-less provider failure carries no credential-health evidence.
-  // Only OpenAI OAuth can disambiguate it with the canonical WHAM probe.
+  // Only Codex subscription OAuth can disambiguate it with the canonical WHAM probe.
   if (reason === "no_error_details" && !shouldProbeWham) {
     return;
   }

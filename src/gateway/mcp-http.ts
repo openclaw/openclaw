@@ -13,7 +13,6 @@ import {
 } from "../agents/tools/gateway-caller-context.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isRequestBodyLimitError, readRequestBodyWithLimit } from "../infra/http-body.js";
 import {
@@ -48,6 +47,7 @@ import {
 } from "./mcp-http.loopback-runtime.js";
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
 import {
+  logMcpLoopbackTraffic,
   resolveMcpCliCaptureKey,
   resolveMcpHttpBodyTimeoutMs,
   resolveMcpRequestContext,
@@ -137,20 +137,6 @@ function jsonRpcInternalError(parsed: unknown) {
     return null;
   }
   return isBatch ? responses : responses[0];
-}
-
-function shouldLogMcpLoopbackTraffic(): boolean {
-  return (
-    isTruthyEnvValue(process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT) ||
-    isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG)
-  );
-}
-
-function logMcpLoopbackTraffic(step: string, details: Record<string, unknown>): void {
-  if (!shouldLogMcpLoopbackTraffic()) {
-    return;
-  }
-  console.error(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
 }
 
 /** Starts a new MCP loopback HTTP server and registers its bearer tokens. */

@@ -48,7 +48,6 @@ import {
   addSession,
   appendOutput,
   isProcessSessionIdTaken,
-  markExited,
   recordNotifyOnExitRemoval,
   resolveProcessCleanupMs,
   tail,
@@ -61,6 +60,7 @@ import {
   renderExecOutputText,
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
+import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
 import type {
   ExecExitFailureKind,
   ExecProcessOutcome,
@@ -579,7 +579,7 @@ export async function runExecProcess({
   startupSignal?: AbortSignal;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
   /** Runs after process finalization and before the exit wake is queued. */
-  onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void;
+  onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void | Promise<void>;
   /** Process-owned invalidation survives foreground delivery and ends at settlement. */
   onActivity?: (at: number) => void;
   /** Revalidates authorization after async preparation, immediately before each spawn attempt. */
@@ -775,45 +775,18 @@ export async function runExecProcess({
       appendOutput(session, "stderr", `\n${detail}\n`);
       finalOutcome.aggregated = session.aggregated.trim();
     } finally {
-      // Finalization can release remote process/session resources. Keep the
-      // background-work blocker until that owner transition has settled.
-      session.finalizing = false;
-      try {
-        const shouldNotify = !session.exited;
-        if (shouldNotify) {
-          markExited(
-            session,
-            finalOutcome.exitCode,
-            finalOutcome.exitSignal,
-            finalOutcome.status,
-            finalOutcome.exitReason,
-            finalOutcome.noOutputTimedOut,
-          );
-        }
-        onSettledBeforeNotify?.(finalOutcome);
-        if (shouldNotify) {
-          maybeNotifyOnExit(session, finalOutcome.status);
-        }
-      } catch (error) {
-        session.finalizationFailed = true;
-        // Recover before yielding: scope joins queued by markExited must not
-        // outrun the task's failed outcome or restore its environment state.
-        finalOutcome = buildExecRuntimeErrorOutcome({
-          error,
-          aggregated: session.aggregated.trim(),
-          durationMs: Date.now() - startedAt,
-        });
-        onSettledBeforeNotify?.(finalOutcome);
-      } finally {
-        // Notifications need start-time routing, but completed logs must not
-        // retain it, including when a task callback or notification throws.
-        delete session.sessionKey;
-        delete session.agentId;
-        delete session.eventRouting;
-        delete session.notifyDeliveryContext;
-        delete session.notifyOnExit;
-        delete session.notifyOnExitEmptySuccess;
-      }
+      finalOutcome = await settleExecProcessExit({
+        session,
+        outcome: finalOutcome,
+        onSettledBeforeNotify,
+        notifyOnExit: maybeNotifyOnExit,
+        failureOutcome: (error) =>
+          buildExecRuntimeErrorOutcome({
+            error,
+            aggregated: session.aggregated.trim(),
+            durationMs: Date.now() - startedAt,
+          }),
+      });
     }
     return finalOutcome;
   };

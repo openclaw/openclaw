@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
-import {
-  createReplyOperation,
-  isReplyRunEvidenceStale,
-} from "../../../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
+import { isReplyRunEvidenceStale } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import * as diagnosticsTimeline from "../../../infra/diagnostics-timeline.js";
 import {
   closeDiagnosticEmbeddedRunOwner,

@@ -13,11 +13,11 @@ import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import {
   readTranscriptDisplayDelta,
   readRecentSessionTranscriptHistoryEvents,
-  readSessionTranscriptHistoryEventCount,
   readSessionTranscriptHistoryEventPage,
 } from "./session-accessor.sqlite-history-events.js";
 import {
   historyEventId,
+  readSessionTranscriptHistoryEventCount,
   insertSyntheticHistory,
   readSessionTranscriptHistoryEvents,
   readSessionTranscriptHistoryEventById,

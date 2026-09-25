@@ -18,10 +18,6 @@ import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snaps
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import type { FollowupRun } from "./queue.js";
 
-function sessionEntryMatchesSnapshot(entry: SessionEntry, snapshot: SessionEntry): boolean {
-  return isDeepStrictEqual(entry, snapshot);
-}
-
 function sessionEntryOnlyUpdatedAtChanged(entry: SessionEntry, snapshot: SessionEntry): boolean {
   if (entry.updatedAt === snapshot.updatedAt) {
     return false;
@@ -182,7 +178,7 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
     return;
   }
   if (authoritativeEntry) {
-    if (sessionEntryMatchesSnapshot(currentEntry, activeSessionEntryBeforeUpdate)) {
+    if (isDeepStrictEqual(currentEntry, activeSessionEntryBeforeUpdate)) {
       params.activeSessionStore[params.sessionKey] = authoritativeEntry;
       return;
     }
@@ -197,7 +193,7 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
       next: authoritativeEntry,
       current: currentEntry,
     });
-  } else if (sessionEntryMatchesSnapshot(currentEntry, activeSessionEntryBeforeUpdate)) {
+  } else if (isDeepStrictEqual(currentEntry, activeSessionEntryBeforeUpdate)) {
     delete params.activeSessionStore[params.sessionKey];
   }
 }

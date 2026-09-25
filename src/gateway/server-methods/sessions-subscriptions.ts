@@ -140,12 +140,10 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       let read: ReturnType<typeof retainSessionScopedRead>;
       try {
         sessionMutationAuthorization?.assertCurrent();
-        read = retainSessionScopedRead(
-          options,
-          canonicalKey,
-          requestedAgentId,
-          readGatewayRequestMutationAuthority(options).sessionScope === "operator.sessions.read",
-        );
+        read = retainSessionScopedRead(options, canonicalKey, requestedAgentId, {
+          requireMaterialized:
+            readGatewayRequestMutationAuthority(options).sessionScope === "operator.sessions.read",
+        });
         read?.assertCurrent();
         options.sessionMutationCommitGuard?.();
         if (connId) {

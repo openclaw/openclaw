@@ -47,6 +47,7 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createEmptyPluginRegistry } from "./registry.js";
+import { setActiveDegradedPlugins } from "./runtime-degraded-state.js";
 import {
   captureActivePluginRegistrySnapshot,
   clearActivePluginRegistry,
@@ -65,6 +66,7 @@ import * as sdkAlias from "./sdk-alias.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  setActiveDegradedPlugins([]);
   resetPluginStateStoreForTests();
   resetPluginLoaderTestStateForTest();
   clearRuntimeConfigSnapshot();
@@ -536,6 +538,72 @@ describe("cached plugin load failures", () => {
       error: expect.stringContaining("new replacement failure"),
     });
     expect(failure.registry.diagnostics).toEqual(expect.arrayContaining(previous.diagnostics));
+  });
+
+  it("does not reject an unrelated replacement for a re-evaluated startup quarantine", () => {
+    useNoBundledPlugins();
+    const broken = writePlugin({
+      id: "startup-quarantined",
+      body: 'throw new Error("quarantined plugin must not execute");',
+    });
+    const healthy = writePlugin({
+      id: "healthy-replacement",
+      body: "module.exports = { register() {} };",
+    });
+    const options = {
+      config: {
+        plugins: {
+          allow: [broken.id, healthy.id],
+          load: { paths: [broken.file, healthy.file] },
+          slots: { memory: "none" },
+        },
+      },
+      cache: false,
+    };
+    setActiveDegradedPlugins([
+      {
+        pluginId: broken.id,
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "missing-openclaw-peer-link",
+          detail:
+            'Plugin declares peerDependency "openclaw", but its host peer link is missing or invalid.',
+          installPath: broken.dir,
+        },
+      },
+    ]);
+    const previous = loadPluginRegistryHandle(options);
+    const previousError = previous.plugins.find((entry) => entry.id === broken.id)?.error;
+    expect(previousError).toContain("missing-openclaw-peer-link");
+
+    const replacement = loadPluginRegistryHandle({
+      ...options,
+      config: {
+        plugins: {
+          ...options.config.plugins,
+          entries: { [broken.id]: { enabled: true } },
+        },
+      },
+      previousRegistry: previous,
+      replacePluginIds: [healthy.id],
+      throwOnLoadError: true,
+    });
+    expect(replacement.plugins.find((entry) => entry.id === broken.id)).toMatchObject({
+      status: "error",
+      error: previousError,
+    });
+    expect(replacement.plugins.find((entry) => entry.id === healthy.id)).toMatchObject({
+      status: "loaded",
+    });
+    expect(() =>
+      loadPluginRegistryHandle({
+        ...options,
+        previousRegistry: previous,
+        replacePluginIds: [broken.id],
+        throwOnLoadError: true,
+      }),
+    ).toThrow(PluginLoadFailureError);
   });
 
   it("continues to reuse healthy cached registries for strict loads", () => {

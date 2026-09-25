@@ -43,6 +43,71 @@ const oauthMocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
 }));
 
+it("keeps subscription-sharing OAuth in the host and hands native Codex only an isolated placeholder", async () => {
+  const profileId = "openai:token-sharing:test";
+  const credential = {
+    type: "oauth" as const,
+    provider: "openai",
+    authFlow: "chatgpt-token-sharing",
+    access: "synthetic-scoped-access",
+    refresh: "synthetic-refresh",
+    expires: Date.now() + 60_000,
+    issuer: "https://auth.openai.com",
+    clientId: "synthetic-client",
+    idToken: `header.${Buffer.from(JSON.stringify({ sub: "synthetic-subject" })).toString("base64url")}.signature`,
+  };
+  const params = {
+    authRequirement: "api-key" as const,
+    authProfileId: profileId,
+    resolvedApiKey: credential.access,
+    authProfileStore: { version: 1, profiles: { [profileId]: credential } },
+    homeScope: "agent" as const,
+    subscriptionProfileRequiredError: "required",
+    subscriptionProfileUnusableError: "unusable",
+  };
+  const handoff = await resolveCodexAppServerPreparedAuthHandoff(params);
+  expect(handoff.authProfileId).toBe(profileId);
+  expect(handoff.preparedAuth?.kind).toBe("profile");
+  if (handoff.preparedAuth?.kind !== "profile") {
+    throw new Error("expected profile handoff");
+  }
+  expect(handoff.preparedAuth.snapshot).toMatchObject({
+    inferenceAuth: "host-oauth",
+    loginParams: { type: "apiKey" },
+  });
+  expect(JSON.stringify(handoff.preparedAuth.snapshot)).not.toContain(credential.access);
+  expect(handoff.preparedAuth.snapshot).not.toHaveProperty("chatgptAccountId");
+  const h = createClientHarness();
+  try {
+    const applying = applyCodexAppServerAuthProfile({
+      client: h.client,
+      preparedAuth: handoff.preparedAuth,
+      authRequirement: "api-key",
+      startOptions: {
+        transport: "stdio",
+        command: "codex",
+        args: [],
+        homeScope: "agent",
+        headers: {},
+      },
+    });
+    const login = JSON.parse(await h.waitForWrite(0));
+    expect(login.method).toBe("account/login/start");
+    expect(login.params).toEqual(handoff.preparedAuth.snapshot?.loginParams);
+    expect(JSON.stringify(login)).not.toContain(credential.access);
+    h.send({ id: login.id, result: { type: "apiKey" } });
+    await applying;
+  } finally {
+    h.client.close();
+  }
+  await expect(
+    resolveCodexAppServerPreparedAuthHandoff({ ...params, homeScope: "user" }),
+  ).rejects.toThrow("isolated home");
+  await expect(
+    resolveCodexAppServerPreparedAuthHandoff({ ...params, requirePreparedAuth: true }),
+  ).rejects.toThrow("managed local");
+});
+
 type MockDesktopCandidate = ReturnType<typeof resolveMacOSDesktopCodexAppPathCandidates>[number];
 type MockCacheResult = {
   status: "independent" | "shared";

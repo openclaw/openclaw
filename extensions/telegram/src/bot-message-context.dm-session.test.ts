@@ -1,5 +1,5 @@
 import path from "node:path";
-import { webhookCallback, type Bot } from "grammy";
+import type { Bot } from "grammy";
 import type { Update } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -96,19 +96,16 @@ function bind(
 }
 
 async function receive(bot: Bot, message: NonNullable<Update["message"]>) {
-  await webhookCallback(
-    bot,
-    "std/http",
-  )(
-    new Request("http://localhost/telegram", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        update_id: ++updateId,
-        message: { ...message, entities: message.text?.startsWith("@") ? message.entities : [] },
-      }),
-    }),
-  );
+  // Telegram JSON omits grammY's undefined-only reply fields.
+  const request = new Request("http://localhost/telegram", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      update_id: ++updateId,
+      message: { ...message, entities: message.text?.startsWith("@") ? message.entities : [] },
+    } satisfies Update),
+  });
+  await bot.handleUpdate(await request.json());
 }
 
 describe("Telegram recorded session destinations", () => {

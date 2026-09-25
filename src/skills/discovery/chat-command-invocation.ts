@@ -1,4 +1,3 @@
-// Chat command invocation helpers execute skill-provided chat command handlers.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -121,41 +120,23 @@ export function resolveSkillCommandInvocation(params: {
   commandBodyNormalized: string;
   skillCommands: SkillCommandSpec[];
 }): { command: SkillCommandSpec; args?: string; inline?: boolean } | null {
-  const trimmed = params.commandBodyNormalized.trim();
-  if (trimmed.startsWith("/")) {
-    const match = trimmed.match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
-    if (!match) {
-      return null;
-    }
-    const commandName = normalizeOptionalLowercaseString(match[1]);
-    if (!commandName) {
-      return null;
-    }
-    if (commandName === "skill") {
-      const remainder = match[2]?.trim();
-      if (!remainder) {
-        return null;
-      }
-      const skillMatch = remainder.match(/^([^\s]+)(?:\s+([\s\S]+))?$/);
-      if (!skillMatch) {
-        return null;
-      }
-      const skillCommand = findSkillCommand(params.skillCommands, skillMatch[1] ?? "");
-      if (!skillCommand) {
-        return null;
-      }
-      const args = skillMatch[2]?.trim();
-      return { command: skillCommand, args: args || undefined };
-    }
-    const command = params.skillCommands.find(
-      (entry) => normalizeOptionalLowercaseString(entry.name) === commandName,
-    );
-    if (command) {
-      const args = match[2]?.trim();
-      return { command, args: args || undefined };
-    }
+  const match = params.commandBodyNormalized.trim().match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
+  if (!match) {
+    return null;
   }
-  return null;
+  const commandName = normalizeOptionalLowercaseString(match[1]);
+  const invocation =
+    commandName === "skill" ? match[2]?.trim().match(/^([^\s]+)(?:\s+([\s\S]+))?$/) : match;
+  if (!commandName || !invocation) {
+    return null;
+  }
+  const command =
+    commandName === "skill"
+      ? findSkillCommand(params.skillCommands, invocation[1] ?? "")
+      : params.skillCommands.find(
+          (entry) => normalizeOptionalLowercaseString(entry.name) === commandName,
+        );
+  return command ? { command, args: invocation[2]?.trim() || undefined } : null;
 }
 
 export function expandBundleCommandPromptTemplate(template: string, args?: string): string {

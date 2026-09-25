@@ -193,11 +193,8 @@ export function resolveModelDirectiveSelection(params: {
   const allows = (ref: { provider: string; model: string }) =>
     policy.allows(ref) && (params.operatorModelPolicy?.allows(ref) ?? true);
 
-  const pickAliasForKey = (provider: string, model: string): string | undefined =>
-    aliasIndex.byKey.get(modelKey(provider, model))?.[0];
-
   const buildSelection = (provider: string, model: string): ModelDirectiveSelection => {
-    const alias = pickAliasForKey(provider, model);
+    const alias = aliasIndex.byKey.get(modelKey(provider, model))?.[0];
     return {
       provider,
       model,
@@ -238,28 +235,16 @@ export function resolveModelDirectiveSelection(params: {
 
     // Also allow partial alias matches when the user didn't specify a provider.
     if (!paramsLocal.provider) {
-      const aliasMatches: Array<{ provider: string; model: string }> = [];
       for (const [aliasKey, entry] of aliasIndex.byAlias.entries()) {
-        if (!aliasKey.includes(fragment)) {
+        if (!aliasKey.includes(fragment) || !allows(entry.ref)) {
           continue;
         }
-        aliasMatches.push({
-          provider: entry.ref.provider,
-          model: entry.ref.model,
-        });
-      }
-      for (const match of aliasMatches) {
-        if (!allows(match)) {
-          continue;
-        }
-        if (!candidates.some((c) => c.provider === match.provider && c.model === match.model)) {
-          candidates.push(match);
+        if (
+          !candidates.some((c) => c.provider === entry.ref.provider && c.model === entry.ref.model)
+        ) {
+          candidates.push({ provider: entry.ref.provider, model: entry.ref.model });
         }
       }
-    }
-
-    if (candidates.length === 0) {
-      return {};
     }
 
     const scored = candidates

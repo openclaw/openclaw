@@ -212,6 +212,11 @@ worker error; rebuild or reinstall the app. Changing CLI channels or updating
 a global CLI does not repair this private payload. Unbundled Swift development
 builds can use the checkout's freshness-aware source runner instead.
 
+If a Gateway update advances the shared state database schema beyond the private
+worker's supported version, update and relaunch OpenClaw.app too. Restarting the
+external Gateway does not replace the app-owned worker. A schema-version error
+from that older reader does not mean the upgraded Gateway's database is corrupt.
+
 For an app-owned local Gateway, the macOS app checks the external CLI against
 its install policy. Onboarding runs managed setup when that CLI is missing or
 incompatible. An attached Gateway uses connection and health checks instead of

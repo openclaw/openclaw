@@ -16,6 +16,8 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-bound
 import { resolveResponsesContextUsageBoundary } from "./openai-responses-context-usage.js";
 import {
   completedSdkResponse,
+  createModel,
+  createContext,
   createCompactionContext,
   createOrphanedToolOutputCompactionContext,
   SDK_FULL_HISTORY_PREFIX,
@@ -60,33 +62,6 @@ import {
 } from "./openai-responses-client.js";
 
 const initialHost = getAiTransportHost();
-
-function createModel<TApi extends Api = "openai-responses">(
-  overrides: Partial<Model<TApi>> = {},
-): Model<TApi> {
-  return {
-    id: "gpt-5.4",
-    name: "GPT-5.4",
-    api: "openai-responses",
-    provider: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 8192,
-    ...overrides,
-  } as Model<TApi>;
-}
-
-function createContext(systemPrompt: string, overrides: Partial<Context> = {}): Context {
-  return {
-    systemPrompt,
-    messages: [{ role: "user", content: "hello", timestamp: 1 }],
-    tools: [],
-    ...overrides,
-  } as Context;
-}
 
 function createJwt(): string {
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -661,12 +636,13 @@ describe("OpenAI Responses provider prompt observer", () => {
     const options = {
       openclawCodeModeToolSurface: true,
       openclawCodeModeAllowedHostedToolTypes: new Set(["web_search"]),
-      onPayload: async () => {
+      onPayload: async (payload: unknown) => {
         await Promise.resolve();
+        const request = payload as { metadata?: Record<string, string> };
         return {
           model: "gpt-5.4",
           stream: true,
-          metadata: { caller: "kept" },
+          metadata: { ...request.metadata, caller: "kept" },
           input: [
             { type: "message", role: "developer", content: prompt },
             {
@@ -708,6 +684,44 @@ describe("OpenAI Responses provider prompt observer", () => {
     });
     expect(JSON.stringify(run.requests[0]?.input)).toContain("omitted image payload");
   });
+
+  it.each([
+    { azure: false, remove: false },
+    { azure: true, remove: false },
+    { azure: false, remove: true },
+    { azure: true, remove: true },
+  ])(
+    "honors the payload hook's metadata choice (azure=$azure, remove=$remove)",
+    async ({ azure, remove }) => {
+      configureAiTransportHost({
+        ...initialHost,
+        plugin: {
+          ...initialHost.plugin,
+          resolveTransportTurnState: () => ({ metadata: { host: "added" } }),
+        },
+      });
+      const run = await runObservedRequest({
+        azure,
+        context: createContext("prompt"),
+        options: {
+          onPayload: (payload: unknown) => {
+            const request = payload as Record<string, unknown>;
+            expect(request.metadata).toEqual({ host: "added" });
+            if (remove) {
+              delete request.metadata;
+            }
+            return request;
+          },
+        },
+      });
+      expect(run.requests).toHaveLength(1);
+      if (remove) {
+        expect(run.requests[0]).not.toHaveProperty("metadata");
+      } else {
+        expect(run.requests[0]?.metadata).toEqual({ host: "added" });
+      }
+    },
+  );
 
   it("observes each staged encrypted-content recovery attempt", async () => {
     const prompt = "PRIVATE-REPLAY-PROMPT";

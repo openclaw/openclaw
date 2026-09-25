@@ -89,6 +89,7 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
         useStoredDeviceAuth: extra?.useStoredDeviceAuth,
         requiredStoredDeviceAuthScopes: extra?.requiredStoredDeviceAuthScopes,
         requireLocalBackendSharedAuth: extra?.requireLocalBackendSharedAuth,
+        allowLocalBackendAuthNone: extra?.clientName === undefined && extra?.mode === undefined,
         sharedStateMode: extra?.sharedStateMode,
         signal: extra?.signal,
         timeoutMs,

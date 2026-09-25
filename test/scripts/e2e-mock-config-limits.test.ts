@@ -12,6 +12,7 @@ import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/recor
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateToolArguments } from "../../packages/llm-core/src/validation.js";
 import { execSchema } from "../../src/agents/bash-tools.schemas.js";
+import { createCodeModeTools } from "../../src/agents/code-mode.js";
 import { writeJsonAtomic } from "../../src/infra/json-files.js";
 import { redactSensitiveText } from "../../src/logging/redact.js";
 import { captureFullEnv } from "../../src/test-utils/env.js";
@@ -397,7 +398,7 @@ describe("mock OpenAI response markers", () => {
               name: call.name,
               arguments: args,
             });
-            taskExpect(args.command).toBe("sleep 3 && echo openclaw-draft-proof");
+            taskExpect(args.command).toBe("sleep 2 && echo openclaw-draft-proof");
             let toolOutput = "openclaw-draft-proof\n";
             // The command is POSIX shell syntax; Windows still covers HTTP and native validation.
             if (process.platform !== "win32") {
@@ -411,7 +412,7 @@ describe("mock OpenAI response markers", () => {
               taskExpect(execution.child.exitCode, result.stderr).toBe(0);
               taskExpect(execution.child.signalCode).toBeNull();
               taskExpect(result.stdout).toBe(toolOutput);
-              taskExpect(performance.now() - startedAt).toBeGreaterThanOrEqual(2_900);
+              taskExpect(performance.now() - startedAt).toBeGreaterThanOrEqual(1_900);
               toolOutput = result.stdout;
             }
 
@@ -941,6 +942,7 @@ describe("mock OpenAI response markers", () => {
 
   it.each(["current", "legacy"])("resumes the MCP Code Mode fixture (%s catalog)", async (mode) => {
     const env = { OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE: mode };
+    const tools = createCodeModeTools({});
     await withMockServer(mockOpenAiPath, env, async (baseUrl) => {
       const input: Record<string, unknown>[] = [
         { content: "mcp code mode api file qa check", role: "user" },
@@ -952,20 +954,37 @@ describe("mock OpenAI response markers", () => {
           body: JSON.stringify({
             input,
             stream: false,
-            tools: ["exec", "wait"].map((name) => ({
+            tools: tools.map(({ name, parameters }) => ({
               name,
-              parameters: { type: "object" },
+              parameters,
               type: "function",
             })),
           }),
         });
         expect(response.status).toBe(200);
-        return await response.json();
+        const result = await response.json();
+        for (const call of result.output ?? []) {
+          if (call.type !== "function_call") {
+            continue;
+          }
+          const tool = tools.find((entry) => entry.name === call.name);
+          if (!tool) {
+            throw new Error(`Mock emitted undeclared tool: ${call.name}`);
+          }
+          validateToolArguments(tool, {
+            type: "toolCall",
+            id: call.call_id,
+            name: call.name,
+            arguments: JSON.parse(call.arguments),
+          });
+        }
+        return result;
       };
       const first = await request();
       expect(first.output?.[0]).toMatchObject({ name: "exec", type: "function_call" });
       const execArguments = JSON.parse(first.output[0].arguments);
       expect(execArguments).toEqual({
+        title: expect.any(String),
         code: expect.stringContaining('MCP.fixture.lookupNote({ id: "alpha" })'),
       });
       expect(execArguments.code).toContain(

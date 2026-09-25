@@ -3,6 +3,14 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { StateDatabaseCoordinatorContentionError } from "./state-database-coordinator-errors.js";
 
 const { acquire } = vi.hoisted(() => ({ acquire: vi.fn() }));
+// Unit deadlines and sleeps share virtual time; settlement tests exercise native clock isolation.
+vi.mock("node:timers/promises", async () => {
+  const { sleepWithAbort } = await import("./backoff.js");
+  return {
+    setTimeout: (ms: number, _value: unknown, timerOptions?: { signal?: AbortSignal }) =>
+      sleepWithAbort(ms, timerOptions?.signal),
+  };
+});
 vi.mock("./state-database-coordinator.js", async () => ({
   ...(await import("./state-database-coordinator-errors.js")),
   acquireStateDatabaseCoordinator: acquire,
@@ -47,15 +55,19 @@ it("retries native acquisition, retaining one deadline and the original physical
 });
 
 it("does not attempt native acquisition after sleeping to the deadline", async () => {
+  const contention = new StateDatabaseCoordinatorContentionError("state-lifecycle", {
+    pid: 321,
+    startTime: 123,
+    command: "coordinator-fixture",
+    family: "state-lifecycle",
+  });
   acquire.mockImplementation(() => {
-    throw busy();
+    throw contention;
   });
   const params = { ...options(), deadlineMs: performance.now() + 50 };
   const outcome = Promise.allSettled([acquireStateDatabaseCoordinatorWithWait(params)]);
   await vi.advanceTimersByTimeAsync(50);
-  expect(await outcome).toMatchObject([
-    { status: "rejected", reason: { family: "state-lifecycle" } },
-  ]);
+  expect(await outcome).toEqual([{ status: "rejected", reason: contention }]);
   expect(acquire).toHaveBeenCalledTimes(2);
 });
 

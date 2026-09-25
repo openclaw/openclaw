@@ -34,10 +34,8 @@ import {
 } from "../secrets/runtime-state.js";
 import type { PreparedSecretsRuntimeSnapshot, SecretResolverWarning } from "../secrets/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  createRuntimeSecretsActivator,
-  prepareGatewayStartupConfig,
-} from "./server-startup-config.js";
+import { prepareGatewayStartupConfig } from "./server-startup-config-helpers.js";
+import { createRuntimeSecretsActivator } from "./server-startup-config.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 
 const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
@@ -332,7 +330,15 @@ function createGatewayStartupSecretsRuntimeHarness(prefix: string) {
   vi.resetModules();
   const agentDir = mkdtempSync(path.join(tmpdir(), prefix));
   const runtimeImport = vi.fn();
-  const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
+  const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => {
+    // Import-order fixtures must capture revisions from the same module generation as activation.
+    const revisions = await import("../agents/auth-profiles/runtime-snapshots.js");
+    return {
+      ...preparedSnapshot(config),
+      authStoreCredentialsRevision: revisions.getRuntimeAuthProfileStoreCredentialsRevision(),
+      authStoreSnapshotsRevision: revisions.getRuntimeAuthProfileStoreSnapshotsRevision(),
+    };
+  });
   const activateRuntimeSecretsSnapshot = vi.fn();
   return {
     activateRuntimeSecretsSnapshot,
@@ -354,7 +360,7 @@ function createGatewayStartupSecretsRuntimeHarness(prefix: string) {
   };
 }
 
-async function activateImportedStartupConfig(config: OpenClawConfig) {
+async function activateImportedStartupConfig(config: OpenClawConfig, env?: NodeJS.ProcessEnv) {
   const { createRuntimeSecretsActivator: createActivator } =
     await import("./server-startup-config.js");
   return await createActivator(runtimeSecretsActivatorOptionsForTest())(
@@ -362,19 +368,9 @@ async function activateImportedStartupConfig(config: OpenClawConfig) {
     {
       reason: "startup",
       activate: true,
+      env,
     },
   );
-}
-
-async function activateStartupConfigWithEnv(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
-  const activateRuntimeSecrets = createRuntimeSecretsActivator(
-    runtimeSecretsActivatorOptionsForTest(),
-  );
-  return await activateRuntimeSecrets(gatewayTokenConfig(config), {
-    reason: "startup",
-    activate: true,
-    env,
-  });
 }
 
 function writePersistedOpenAiProfile(agentDir: string, key: string): void {
@@ -3087,7 +3083,7 @@ describe("gateway startup config secret preflight", () => {
         };
 
         try {
-          await activateStartupConfigWithEnv(
+          await activateImportedStartupConfig(
             { agents: { list: [{ id: "main", agentDir: relocatedMainAgentDir }] } },
             activationEnv,
           );
@@ -3128,7 +3124,7 @@ describe("gateway startup config secret preflight", () => {
         };
 
         try {
-          await activateStartupConfigWithEnv(
+          await activateImportedStartupConfig(
             {
               agents: {
                 list: [{ id: "main", agentDir: "~/configured-agent" }],

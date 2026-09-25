@@ -46,6 +46,7 @@ const INPUTS = new Set([
   "full_release_validation_run_id",
   "full_release_validation_run_attempt",
   "stable_soak_waiver",
+  "lane_waiver",
   "windows_node_tag",
   "windows_node_installer_digests",
   "npm_telegram_run_id",

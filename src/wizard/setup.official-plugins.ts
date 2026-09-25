@@ -1,5 +1,8 @@
 // Official plugin setup helpers install and configure bundled onboarding plugins.
-import { ensureOnboardingPluginInstalled } from "../commands/onboarding-plugin-install.js";
+import {
+  ensureOnboardingPluginInstalled,
+  type OnboardingPluginInstallEntry,
+} from "../commands/onboarding-plugin-install.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginPackageInstall } from "../plugins/manifest.js";
 import {
@@ -17,12 +20,8 @@ const SKIP_VALUE = "__skip__";
 
 // Official plugin onboarding lists generic official plugins not already
 // configured and installs the selected ones through the trusted install flow.
-type OfficialPluginOnboardingInstallEntry = {
-  pluginId: string;
-  label: string;
+type OfficialPluginOnboardingInstallEntry = OnboardingPluginInstallEntry & {
   description?: string;
-  install: PluginPackageInstall;
-  trustedSourceLinkedOfficialInstall?: boolean;
 };
 
 function isInstalledOrConfigured(config: OpenClawConfig, pluginId: string): boolean {

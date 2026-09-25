@@ -23,9 +23,12 @@ export async function finalizeActiveTaskRun(
     endedAt: terminal.endedAt,
     error: terminal.error,
     terminalSummary: terminal.terminalSummary,
+    detail: terminal.detail,
+    clearError: terminal.clearError,
+    lastEventAt: terminal.lastEventAt,
     runId,
     runtime: task.runtime,
-    sessionKey: task.childSessionKey,
+    sessionKey: task.childSessionKey ?? (task.scopeKind === "session" ? task.ownerKey : undefined),
   };
   await prepareTaskRegistryProjectionAsync(context, store);
   assertStores();

@@ -179,6 +179,8 @@ function loadSessionEntryWithMode(
     storePath,
     store,
     ...(target.readSource ? { readSource: target.readSource } : {}),
+    ...(target.capturedReadSource ? { capturedReadSource: target.capturedReadSource } : {}),
+    ...(target.capturedReadSources ? { capturedReadSources: target.capturedReadSources } : {}),
     entry,
     canonicalKey: target.canonicalKey,
     storeKeys: target.storeKeys,

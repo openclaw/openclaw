@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it } from "vitest";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
-import type { ChatItem } from "../../lib/chat/chat-types.ts";
+import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
@@ -33,6 +33,76 @@ function cachedGroups(messages: unknown[]) {
     showToolCalls: true,
   }).filter((item) => item.kind === "group");
 }
+
+describe("queued input group continuity", () => {
+  beforeEach(() => resetChatThreadState());
+
+  it("keeps each queued message in the same row through acceptance and persistence", () => {
+    const queue: ChatQueueItem[] = ["First queued input", "Second queued input"].map(
+      (text, index) => ({
+        id: `local-${index}`,
+        text,
+        createdAt: index + 1,
+        sendRunId: `send-${index}`,
+        sendState: "waiting-reconnect",
+        sendAttempts: 1,
+      }),
+    );
+    const pendingInputs = queue.map((item, index) => ({
+      id: `accepted-${index}`,
+      runId: item.sendRunId,
+      state: "queued" as const,
+      acceptedAt: index + 1,
+      message: {
+        role: "user",
+        content: item.text,
+        timestamp: index + 1,
+        __openclaw: { id: `pending:accepted-${index}` },
+      },
+    }));
+    const persisted = queue.map((item, index) => ({
+      role: "user",
+      content: item.text,
+      timestamp: index + 1,
+      __openclaw: {
+        id: `persisted-${index}`,
+        seq: index + 1,
+        idempotencyKey: `${item.sendRunId}:user`,
+        runId: `execution-${index}`,
+      },
+    }));
+    const render = (
+      input: Pick<Parameters<typeof buildCachedChatItems>[0], "messages" | "pendingInputs">,
+    ) =>
+      buildCachedChatItems({
+        paneId: "queued-input-continuity",
+        sessionKey: "agent:main:dashboard:queued-inputs",
+        toolMessages: [],
+        streamSegments: [],
+        stream: null,
+        streamStartedAt: null,
+        showToolCalls: true,
+        queue,
+        ...input,
+      }).filter((item) => item.kind === "group");
+    const initial = render({ messages: [] });
+    const rowKeys = initial.map((group) => group.key);
+    const messageKeys = initial.map((group) => group.messages[0]?.key);
+
+    expect(initial.map((group) => group.messages.length)).toEqual([1, 1]);
+    for (const input of [
+      { messages: [], pendingInputs: pendingInputs.slice(0, 1) },
+      { messages: [], pendingInputs },
+      { messages: persisted.slice(0, 1), pendingInputs: pendingInputs.slice(1) },
+      { messages: persisted, pendingInputs: [] },
+    ]) {
+      const groups = render(input);
+      expect(groups.map((group) => group.key)).toEqual(rowKeys);
+      expect(groups.map((group) => group.messages.length)).toEqual([1, 1]);
+      expect(groups.map((group) => group.messages[0]?.key)).toEqual(messageKeys);
+    }
+  });
+});
 
 describe("message client attribution", () => {
   beforeEach(() => resetChatThreadState());

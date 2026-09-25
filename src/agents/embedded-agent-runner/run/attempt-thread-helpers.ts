@@ -58,35 +58,6 @@ export function resolveAttemptSpawnWorkspaceDir(params: {
 }
 
 /**
- * Determines whether this attempt should append a cache-TTL marker. Compaction
- * and timeout attempts skip the marker because their transcript boundary is
- * already being rewritten.
- */
-function shouldAppendAttemptCacheTtl(params: {
-  timedOutDuringCompaction: boolean;
-  compactionOccurredThisAttempt: boolean;
-  config?: OpenClawConfig;
-  provider: string;
-  modelId: string;
-  modelApi?: string;
-  modelRoute?: Parameters<typeof isCacheTtlEligibleProvider>[3];
-  isCacheTtlEligibleProvider: typeof isCacheTtlEligibleProvider;
-}): boolean {
-  if (params.timedOutDuringCompaction || params.compactionOccurredThisAttempt) {
-    return false;
-  }
-  return (
-    params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
-    params.isCacheTtlEligibleProvider(
-      params.provider,
-      params.modelId,
-      params.modelApi,
-      params.modelRoute,
-    )
-  );
-}
-
-/**
  * Appends the cache-TTL transcript marker when context-pruning policy and model
  * eligibility both allow it. The boolean result tells callers whether the
  * session transcript changed.
@@ -106,7 +77,18 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   now?: number;
   toolResultPromptProjectionState: ToolResultPromptProjectionState;
 }): boolean {
-  if (!shouldAppendAttemptCacheTtl(params)) {
+  // Compaction and timeout attempts already rewrite the transcript boundary.
+  if (
+    params.timedOutDuringCompaction ||
+    params.compactionOccurredThisAttempt ||
+    params.config?.agents?.defaults?.contextPruning?.mode !== "cache-ttl" ||
+    !params.isCacheTtlEligibleProvider(
+      params.provider,
+      params.modelId,
+      params.modelApi,
+      params.modelRoute,
+    )
+  ) {
     return false;
   }
   if (params.sessionManager.appendCustomEntry) {

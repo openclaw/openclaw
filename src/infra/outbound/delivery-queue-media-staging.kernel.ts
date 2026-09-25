@@ -16,6 +16,7 @@ import {
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+  SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME,
 } from "./delivery-queue-namespaces.js";
 
 type MediaStageEntry = DeliveryQueueEntryState & { artifacts: string[] };
@@ -74,6 +75,7 @@ export function loadDeliveryQueueMediaRetentionSnapshotInDatabase(
   const snapshot = expireStagingAndLoadDeliveryQueueEntriesInDatabase(database, {
     queueNames: [
       OUTBOUND_DELIVERY_QUEUE_NAME,
+      SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME,
       LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
       OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,

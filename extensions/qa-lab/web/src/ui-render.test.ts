@@ -110,6 +110,38 @@ function rawRequestCaptureState(params: { payload: string; contentType: string }
   });
 }
 
+describe("QA Lab sidebar rendering", () => {
+  it.each([
+    ["chat", false, false],
+    ["chat", true, true],
+    ["results", false, false],
+    ["results", true, true],
+    ["evidence", false, true],
+    ["evidence", true, true],
+    ["report", false, false],
+    ["report", true, true],
+    ["events", false, false],
+    ["events", true, true],
+    ["capture", false, false],
+    ["capture", true, true],
+  ] as const)(
+    "renders %s with sidebarCollapsed=%s and inert=%s",
+    (activeTab, sidebarCollapsed, inert) => {
+      const state = evidenceState({ activeTab, sidebarCollapsed, sidebarPanel: "config" });
+      const html = renderQaLabUi(state);
+      const sidebar = html.match(/<aside class="sidebar(?:\s[^"]*)?"[^>]*>/gu);
+
+      expect(sidebar).toHaveLength(1);
+      expect(/\sinert(?:\s|=|>)/u.test(sidebar![0]!)).toBe(inert);
+      expect(html).toContain('<select id="provider-mode">');
+      expect(html).toContain('data-sidebar-panel="config"');
+      expect(html).toContain('data-action="toggle-sidebar"');
+      expect(state.sidebarCollapsed).toBe(sidebarCollapsed);
+      expect(state.sidebarPanel).toBe("config");
+    },
+  );
+});
+
 describe("QA Lab UI evidence render", () => {
   it("keeps same-id conversations isolated by account and kind", () => {
     const selectedConversationKey = JSON.stringify(["account-a", "channel", "shared"]);

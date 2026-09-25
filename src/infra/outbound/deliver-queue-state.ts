@@ -79,12 +79,12 @@ export function createQueuedDeliveryOwner(
       failure.queueCustody = custody;
       return failure;
     },
-    retireUnsent(terminalOutcome?: "failed"): ReturnType<typeof retireUnsentDelivery> {
+    async retireUnsent(terminalOutcome?: "failed"): ReturnType<typeof retireUnsentDelivery> {
       owner.signal?.throwIfAborted();
       if (!owner.claimId) {
         return undefined;
       }
-      const release = retireUnsentDelivery(
+      const release = await retireUnsentDelivery(
         {
           id: owner.queueId,
           producerClaimId: owner.claimId,
@@ -113,10 +113,10 @@ export function createQueuedDeliveryOwner(
       custody = "released";
     },
     // Staged failure has left send custody; exact row equality now fences compaction.
-    finalizeFailure(entry: QueuedDelivery): boolean {
+    async finalizeFailure(entry: QueuedDelivery): Promise<boolean> {
       if (
         entry.id !== owner.queueId ||
-        !finalizeDeliveryFailureSettlement(entry, owner.stateDir, context)
+        !(await finalizeDeliveryFailureSettlement(entry, owner.stateDir, context))
       ) {
         return false;
       }
@@ -219,7 +219,7 @@ export async function rejectQueuedDelivery(
     } catch (error) {
       // A staging failure may leave only the unsent claim. Its owner can retain
       // a failed receipt without bypassing send evidence or completion recovery.
-      const release = owner.retireUnsent("failed");
+      const release = await owner.retireUnsent("failed");
       if (!release) {
         throw error;
       }
@@ -244,7 +244,7 @@ export async function rejectQueuedDelivery(
       acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => prepared.payload),
       owner.stateDir,
     );
-    if (!owner.finalizeFailure(entry)) {
+    if (!(await owner.finalizeFailure(entry))) {
       return false;
     }
     await releaseSpoolArtifacts(spoolPaths, owner.stateDir);
@@ -269,23 +269,13 @@ export async function persistQueuedPreSendState(
   owner.signal?.throwIfAborted();
   try {
     const route = { replyToId: params.route.replyToId ?? null };
-    if (owner.claimId) {
-      await markDeliveryPlatformSendAttemptStarted(
-        owner.queueId,
-        owner.stateDir,
-        route,
-        owner.claimId,
-        context,
-      );
-    } else {
-      await markDeliveryPlatformSendAttemptStarted(
-        owner.queueId,
-        owner.stateDir,
-        route,
-        undefined,
-        context,
-      );
-    }
+    await markDeliveryPlatformSendAttemptStarted(
+      owner.queueId,
+      owner.stateDir,
+      route,
+      owner.claimId || undefined,
+      context,
+    );
     return "marked";
   } catch (markErr: unknown) {
     if (params.queuePolicy === "required") {

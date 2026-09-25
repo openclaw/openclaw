@@ -292,6 +292,37 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     ).toMatchObject({ layout: null, status: "fail" });
   });
 
+  it("matches the recorded 2026.8.33 source inventory and layout", () => {
+    const findings = [
+      "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/sandbox-child.ts",
+      "@openclaw/codex:dangerous-exec:src/app-server/transport-process-snapshot.ts",
+      "@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts",
+      "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs",
+      "@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts",
+      "@openclaw/codex:dangerous-exec:src/doctor.ts",
+      "@openclaw/discord:dangerous-exec:src/voice/audio.ts",
+      "@openclaw/imessage:dangerous-exec:src/client.ts",
+      "@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-install.ts",
+      "@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts",
+      "@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts",
+      "@openclaw/raft:dangerous-exec:src/gateway.ts",
+      "@openclaw/signal:dangerous-exec:src/daemon.ts",
+      "@openclaw/voice-call:dangerous-exec:src/tunnel.ts",
+    ];
+    const report = buildPluginNpmSecurityScanReport({
+      candidateSha: CANDIDATE_SHA,
+      packageResults: syntheticResultsForFindings(findings),
+      targetContextRef: "extended-stable/2026.8.33",
+      toolingSha: TOOLING_SHA,
+    });
+
+    expect(report).toMatchObject({
+      errors: [],
+      layout: "extended-stable-2026.8.33",
+      status: "pass",
+    });
+  });
+
   it("matches the recorded 2026.7.33 inert package scan inventory exactly", () => {
     // syntheticResultsForFindings returns freshly built results that nothing else
     // holds, so these are assigned in place rather than respread per element.

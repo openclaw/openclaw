@@ -1,8 +1,5 @@
 import "../../styles/chat/startup-layout.css";
-import {
-  normalizeStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -47,6 +44,7 @@ import { renderSegmented } from "./segmented-control.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import { renderJobsFilterPopover } from "./view-jobs-filter.ts";
 import { renderRunsSection, runStatusLabel } from "./view-runs.ts";
+import { renderCronSuggestionLists } from "./view-suggestions.ts";
 import type { CronDetailTab, CronProps } from "./view-types.ts";
 
 registerCronEnglish();
@@ -68,15 +66,6 @@ function buildChannelOptions(props: CronProps): ChannelPickerOption[] {
         value,
     })),
   ];
-}
-
-function renderSuggestionList(id: string, options: string[]) {
-  const clean = uniqueStrings(normalizeStringEntries(options));
-  return clean.length === 0
-    ? nothing
-    : html`<datalist id=${id}>
-        ${clean.map((value) => html`<option value=${value}></option> `)}
-      </datalist>`;
 }
 
 // ── Validation summary helpers ──
@@ -330,11 +319,7 @@ export function renderCron(props: CronProps) {
   const mode: CronPanelMode = props.editingJob ? "job" : props.createOpen ? "create" : "overview";
   return html`
     ${mode === "overview" ? renderListView(props) : renderDetailView(props, mode)}
-    ${renderSuggestionList("cron-agent-suggestions", props.agentSuggestions)}
-    ${renderSuggestionList("cron-thinking-suggestions", props.thinkingSuggestions)}
-    ${renderSuggestionList("cron-tz-suggestions", props.timezoneSuggestions)}
-    ${renderSuggestionList("cron-delivery-to-suggestions", props.deliveryToSuggestions)}
-    ${renderSuggestionList("cron-delivery-account-suggestions", props.accountSuggestions)}
+    ${renderCronSuggestionLists(props)}
   `;
 }
 
@@ -1823,7 +1808,7 @@ function renderFailureAlertRows(props: CronProps, channelOptions: readonly Chann
             ${renderCronInputField(props, "failureAlertTo", {
               label: t("cron.form.failureAlertTo"),
               help: t("cron.form.failureAlertToHelp"),
-              list: "cron-delivery-to-suggestions",
+              list: "cron-failure-alert-to-suggestions",
               placeholder: t("cron.form.failureAlertToPlaceholder"),
             })}
             ${renderCronSelectField(props, "failureAlertDeliveryMode", {

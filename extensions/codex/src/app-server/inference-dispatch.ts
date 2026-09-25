@@ -6,7 +6,7 @@ import type { RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import type { createCodexInferenceContext } from "./inference-context.js";
 import { readCodexInferenceMetadata, type CodexInferenceMetadata } from "./inference-metadata.js";
-import { createUploadBody, MAX_BODY_BYTES } from "./inference-upload.js";
+import { createUploadBody, createRetryableUploadBody, MAX_BODY_BYTES } from "./inference-upload.js";
 import type {
   NativeModelSourceCapture,
   NativeModelSourceRequest,
@@ -245,6 +245,7 @@ export function createCodexInferenceModelBinding(params: {
 
 /** One preparation path binds both HTTP requests and reusable WebSocket frames. */
 export function createCodexInferenceDispatch(params: {
+  requireAdmission?: boolean;
   context: ReturnType<typeof createCodexInferenceContext>;
   assertCurrent: () => void;
   bindModelExecution?: (
@@ -297,7 +298,9 @@ export function createCodexInferenceDispatch(params: {
       signal.throwIfAborted();
       // Instruction injection remains parent-only, independently of model authorization.
       const prepared =
-        sampling && isJsonObject(value) ? context.prepare(value, metadata) : undefined;
+        sampling && isJsonObject(value)
+          ? context.prepare(value, metadata, params.requireAdmission)
+          : undefined;
       const assertPrepared = () => {
         if (released) {
           throw new Error(FAILURE);
@@ -339,6 +342,7 @@ export function createCodexInferenceDispatch(params: {
     path: string,
     signal: AbortSignal,
     release: () => void,
+    retryable = false,
   ) => {
     const wire = await readProxyBody(req, MAX_BODY_BYTES);
     const encoding = req.headers["content-encoding"];
@@ -358,7 +362,13 @@ export function createCodexInferenceDispatch(params: {
             : prepared.bytes;
       prepared.assertCurrent();
       return {
-        ...createUploadBody(body, prepared.signal, release),
+        ...(retryable
+          ? createRetryableUploadBody(body, prepared.signal, release)
+          : {
+              ...createUploadBody(body, prepared.signal, release),
+              retry: undefined,
+              commit: undefined,
+            }),
         assertCurrent: prepared.assertCurrent,
         signal: prepared.signal,
         releaseModelExecution: prepared.release,

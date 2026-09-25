@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { getRuntimeConfig } from "../config/config.js";
 import {
   resolveTrajectoryPath,
   resolveTrajectoryPointerPath,
@@ -54,7 +53,6 @@ import {
   resolveTargetSqlitePath,
   type ReadOnlySqliteValidationSnapshot,
 } from "../infra/session-sqlite-migration-readers.js";
-import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { prepareActiveSqliteTranscriptSettlement } from "./doctor-session-sqlite-active.js";
 import {
   planImportedTranscriptArtifactsToArchive,
@@ -82,6 +80,7 @@ import { writeSessionSqliteMigrationFailureReports } from "./doctor-session-sqli
 import { importLegacySessionRecords } from "./doctor-session-sqlite-import.js";
 import { createMissingSessionIndexVerifier } from "./doctor-session-sqlite-missing-index.js";
 import { recoverDoctorSessionSqliteTargets } from "./doctor-session-sqlite-recover-report.js";
+import type { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-inventory.js";
 import { restoreDoctorSessionSqliteTargets } from "./doctor-session-sqlite-restore-report.js";
 import { reconcileSessionSqliteMigrationPublications } from "./doctor-session-sqlite-restore.js";
 import {
@@ -92,6 +91,7 @@ import {
 import { settleDuplicateSessionSqliteArchives } from "./doctor-session-sqlite-retirement.js";
 import {
   filterLegacySessionStoreTargets,
+  resolveDoctorSessionSqliteConfig,
   resolveDoctorSessionSqliteMaintenancePaths,
   resolveDoctorSessionSqliteMaintenanceRoots,
   resolveDoctorSessionSqliteTargets,
@@ -159,9 +159,10 @@ export async function runDoctorSessionSqlite(
           targets: candidates.map(createMigrationTargetInput),
         })
       : [];
-  const historicalArchives = ["import", "dry-run", "validate", "recover"].includes(options.mode)
-    ? collectHistoricalArchiveSources({ cfg, env }).sources
-    : new Map();
+  let historicalSources = ["import", "dry-run", "validate", "recover"].includes(options.mode)
+    ? collectHistoricalArchiveSources({ cfg, env })
+    : undefined;
+  let historicalArchives = historicalSources?.sources ?? new Map();
   const targets = filterLegacySessionStoreTargets(
     candidates,
     options.mode,
@@ -217,6 +218,9 @@ export async function runDoctorSessionSqlite(
       env,
       trustedTargets: targets.map(createMigrationTargetInput),
     });
+    // Reconciliation can consume a restored original and rewrite its receipt.
+    historicalSources = collectHistoricalArchiveSources({ cfg, env });
+    historicalArchives = historicalSources.sources;
   }
   const activeRun =
     options.mode === "import" && targets.length > 0
@@ -239,6 +243,7 @@ export async function runDoctorSessionSqlite(
         mode: options.mode,
         target,
         historicalArchives,
+        recoveryInventory: historicalSources?.inventory,
         referencedPaths: coverage?.referencedPaths,
         expectedIndexIdentity: coverage?.indexIdentities.get(
           canonicalMigrationFilePath(target.storePath),
@@ -632,20 +637,10 @@ export async function reconcileDoctorSessionSqlitePublication(
   });
 }
 
-// Direct store migrations are scoped by path; broader agent discovery needs runtime config.
-function resolveDoctorSessionSqliteConfig(options: DoctorSessionSqliteOptions): OpenClawConfig {
-  if (options.cfg) {
-    return options.cfg;
-  }
-  const requestedAgentId = normalizeAgentId(options.agent ?? LEGACY_IMPLICIT_AGENT_ID);
-  return options.store
-    ? { agents: { entries: { [requestedAgentId]: { default: true } } } }
-    : getRuntimeConfig();
-}
-
 async function inspectOrMigrateTarget(params: {
   verifyMissingIndex: ReturnType<typeof createMissingSessionIndexVerifier>;
   historicalArchives?: HistoricalArchiveSources;
+  recoveryInventory?: ReturnType<typeof collectRecoveryInventory>;
   referencedPaths?: ReadonlySet<string>;
   activeRun?: ActiveSessionSqliteMigrationRun;
   archiveTargets?: LegacyArchiveTarget[];
@@ -842,7 +837,7 @@ async function inspectOrMigrateTarget(params: {
   if (retainedImport) {
     countRetainedSessionSources(retained, records, report);
   } else if (params.mode === "import") {
-    await importLegacySessionRecords(params.target, records, report, params.activeRun);
+    await importLegacySessionRecords(params, records, report, params.activeRun);
   } else if (params.mode === "dry-run") {
     for (const record of records) {
       countLegacyTranscript(record, report);

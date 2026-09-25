@@ -131,9 +131,10 @@ For OpenAI ChatGPT/Codex OAuth troubleshooting, `openclaw models status`, `openc
 
 ### List
 
-`openclaw models list` reads published model inventory. It does not start model
-provider discovery or rewrite `models.json`. This also applies to `--all` and
-`--provider <id>`.
+`openclaw models list` returns published model inventory without waiting for
+provider discovery or rewriting `models.json`. This also applies to `--all` and
+`--provider <id>`. A Gateway-backed request can renew expired inventory in the
+background as described below.
 
 ```bash
 openclaw models list --agent <agentId>
@@ -147,8 +148,9 @@ agent on that Gateway. Provider filtering, model visibility and availability use
 the Gateway's captured config and auth facts. The command does not resolve local
 model-provider secrets for that request.
 
-When a provider's saved inventory expires, catalog reads return saved rows while
-the Gateway refreshes that provider in the background. A later read shows newly
+When a provider's saved inventory expires, inventory requests return saved rows while
+the Gateway refreshes that provider in the background. Internal chat and session
+metadata reads do not schedule discovery. A later inventory request shows newly
 published models. Failed refreshes preserve saved rows; use `--refresh` to retry.
 Chat model menus, the Control UI, and `models list` display the catalog's refresh
 warning. The CLI writes the warning to stderr, keeping JSON and plain stdout
@@ -363,6 +365,10 @@ For the shared-main agent, `--force` clears the provider's shared credentials an
 Use either `openclaw models auth --agent <id> <subcommand>` or `openclaw models auth <subcommand> --agent <id>` to target a specific configured agent store. Both forms are supported by `add`, `list`, `login`, `activate`, `logout`, `paste-api-key`, `setup-token`, `paste-token`, `login-github-copilot`, and `order get`/`set`/`clear`.
 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login. Use `--method api-key` only when you want to add an OpenAI API-key profile, usually as a backup for Codex subscription limits. Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix auth/profile state to `openai`.
+
+See [OpenAI authentication](/providers/openai/authentication) to compare Codex
+OAuth, device code, API keys, and Sign in with ChatGPT (`--method siwc`),
+including model access, hosted plugins, and shared versus personal setup.
 
 Examples:
 

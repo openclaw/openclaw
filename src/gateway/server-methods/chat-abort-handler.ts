@@ -51,7 +51,6 @@ import { assertValidParams } from "./validation.js";
 type ChatAbortLifecycle = {
   onAuthorizedAfterQueuedAbort?: () => boolean;
   onDescendantsCancelled?: () => void;
-  excludeRunIds?: ReadonlySet<string>;
   cascadeDescendants?: true;
 };
 
@@ -181,7 +180,6 @@ export async function handleChatAbortRequestWithLifecycle(
       requester,
       assertCurrent,
       preserveSideRuns,
-      excludeRunIds: lifecycle.excludeRunIds,
       onAuthorizedAfterQueuedAbort: lifecycle.onAuthorizedAfterQueuedAbort,
       cascadeDescendants: lifecycle.cascadeDescendants,
     });
@@ -260,11 +258,11 @@ export async function handleChatAbortRequestWithLifecycle(
     sessionId: active?.sessionId ?? workerTarget?.sessionId ?? abortSessionEntry?.sessionId,
     runId,
   });
-  const respondWithWorkerRuns = (localRunIds: string[], warning?: string): void => {
+  const respondWithWorkerRuns = async (localRunIds: string[], warning?: string): Promise<void> => {
     const runIds = new Set(localRunIds);
     if (requester.isAdmin) {
       assertCurrent();
-      workerCancellation?.cancel({ assertCurrent, onCancelled: (id) => runIds.add(id) });
+      await workerCancellation?.cancel({ assertCurrent, onCancelled: (id) => runIds.add(id) });
     }
     if (!abortSession.ok) {
       throw abortSession.error;
@@ -315,7 +313,7 @@ export async function handleChatAbortRequestWithLifecycle(
         attemptId: normalizeUnknownText(pendingChatMatch.payload.attemptId),
         expectedPayload: pendingChatMatch.payload,
       });
-      respondWithWorkerRuns(aborted ? [runId] : []);
+      await respondWithWorkerRuns(aborted ? [runId] : []);
       return;
     }
     const pendingAgentEntry = context.dedupe.get(`agent:${runId}`);
@@ -350,7 +348,7 @@ export async function handleChatAbortRequestWithLifecycle(
         respond(false, undefined, error);
         return;
       }
-      respondWithWorkerRuns(aborted ? [runId] : []);
+      await respondWithWorkerRuns(aborted ? [runId] : []);
       return;
     }
     // Queued followup/collect turns keep a cancel identity after chat.send
@@ -377,7 +375,7 @@ export async function handleChatAbortRequestWithLifecycle(
         stopReason: "rpc",
         allowSessionMismatch: true,
       });
-      respondWithWorkerRuns(queuedRes.aborted ? [runId] : []);
+      await respondWithWorkerRuns(queuedRes.aborted ? [runId] : []);
       return;
     }
     if (!workerCancellation?.runIds.length) {
@@ -391,7 +389,7 @@ export async function handleChatAbortRequestWithLifecycle(
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
       return;
     }
-    respondWithWorkerRuns([]);
+    await respondWithWorkerRuns([]);
     return;
   }
   if (!authorizeRunTarget(active)) {
@@ -449,11 +447,21 @@ export async function handleChatAbortRequestWithLifecycle(
     });
   } catch (error) {
     failure = { error };
-  } finally {
-    // A later child fence can reject after the parent consumed its buffer. The
-    // transcript owner must still settle that already-committed cancellation.
-    if (aborted && snapshot) {
+  }
+  // A later child fence can reject after the parent consumed its buffer. The
+  // transcript owner must still settle that already-committed cancellation.
+  if (aborted && snapshot) {
+    try {
       warning = await persistAbortedPartials({ context, snapshots: [snapshot] });
+    } catch (error) {
+      if (failure) {
+        throw new AggregateError(
+          [failure.error, error],
+          "Chat cancellation and persistence failed",
+          { cause: error },
+        );
+      }
+      throw error;
     }
   }
   if (failure) {
@@ -468,7 +476,7 @@ export async function handleChatAbortRequestWithLifecycle(
     return;
   }
   try {
-    respondWithWorkerRuns(aborted ? [runId] : [], warning);
+    await respondWithWorkerRuns(aborted ? [runId] : [], warning);
   } catch (error) {
     throw abortedPartialPersistenceError(error, warning);
   }

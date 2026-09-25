@@ -234,7 +234,12 @@ Manifest capability credentials use `configContracts.secretInputs` and authored
 SecretRefs. `getPreparedPluginSecretInput(pluginId, path)` from
 `openclaw/plugin-sdk/secret-input-runtime` reads only a prepared, available snapshot;
 it never resolves a cold reference or consults ambient environment credentials.
-Refresh with `secrets.reload`; capability failure does not retain an old key.
+Call it only from the plugin instance's active invocation. The helper is not a
+durable credential capability: quiescing or retiring that exact instance removes
+read authority immediately, even while already-admitted work is finishing. A
+provider must treat a missing value as unavailable and must not retain or reuse a
+previous value across reload. Refresh with `secrets.reload`; capability failure
+does not retain an old key.
 
 `plugins.inspect` reports configuration, credential readiness, current callability,
 last success, usage, latency, and bounded unavailable counts. Counts are

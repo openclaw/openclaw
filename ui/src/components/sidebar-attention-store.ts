@@ -8,6 +8,7 @@ import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
 import { createInitialCronState, loadCronStatus } from "../lib/cron/index.ts";
 import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
+import { modelAuthEventInvalidates } from "../lib/model-auth-request-state.ts";
 import { loadModelAuthStatus, nextModelAuthStatusRefreshAt } from "../lib/model-auth.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
@@ -56,13 +57,7 @@ export class SidebarAttentionStoreController implements StoreController {
   private cronRefreshNeeded = false;
   private cronRetryAt?: number;
   private modelAuthRefresh: { generation: number; requested: boolean } | null = null;
-  private readonly stopGateway: () => void;
-  private readonly stopEvents: () => void;
-  private readonly stopSelection: () => void;
-  private readonly stopAgents: () => void;
-  private readonly stopOverlays: () => void;
-  private readonly stopMentions: () => void;
-  private readonly stopOutbox: () => void;
+  private readonly stopSubscriptions: Array<() => void>;
   private outboxRuntime: typeof import("../pages/chat/chat-outbox-owner.ts") | null = null;
   private disposed = false;
 
@@ -75,21 +70,23 @@ export class SidebarAttentionStoreController implements StoreController {
       connectionBootstrap: sources.connectionBootstrap,
     });
     this.loadedClient = null;
-    this.stopGateway = sources.gateway.subscribe(() => this.synchronizeGateway());
-    this.stopEvents = sources.gateway.subscribeEvents((event) => {
-      if (event.event === "cron") {
-        this.load(false);
-      } else if (event.event === "config.changed") {
-        this.load();
-      } else if (event.event === "chat.metadata.changed") {
-        this.load(true, false);
-      }
-    });
-    this.stopSelection = sources.agentSelection.subscribe(() => this.synchronizeGateway());
-    this.stopAgents = sources.agents.subscribe(onChange);
-    this.stopOverlays = sources.overlays.subscribe(onChange);
-    this.stopMentions = this.mentions.subscribe(onChange);
-    this.stopOutbox = subscribeStoredChatOutboxChanges(onChange);
+    this.stopSubscriptions = [
+      sources.gateway.subscribe(() => this.synchronizeGateway()),
+      sources.gateway.subscribeEvents((event) => {
+        if (event.event === "cron") {
+          this.load(false);
+        } else if (event.event === "config.changed") {
+          this.load();
+        } else if (modelAuthEventInvalidates(event)) {
+          this.load(true, false);
+        }
+      }),
+      sources.agentSelection.subscribe(() => this.synchronizeGateway()),
+      sources.agents.subscribe(onChange),
+      sources.overlays.subscribe(onChange),
+      this.mentions.subscribe(onChange),
+      subscribeStoredChatOutboxChanges(onChange),
+    ];
     // Share the chat owner’s live overlays without putting its send graph in shell startup.
     void import("../pages/chat/chat-outbox-owner.ts")
       .then((runtime) => {
@@ -511,13 +508,9 @@ export class SidebarAttentionStoreController implements StoreController {
     this.loadGeneration += 1;
     this.modelAuthRefreshAt = undefined;
     this.scheduleHealthRefresh();
-    this.stopGateway();
-    this.stopEvents();
-    this.stopSelection();
-    this.stopAgents();
-    this.stopOverlays();
-    this.stopMentions();
-    this.stopOutbox();
+    for (const stop of this.stopSubscriptions) {
+      stop();
+    }
     this.mentions.dispose();
     document.removeEventListener("visibilitychange", this.refreshDeferred);
     globalThis.removeEventListener("storage", this.syncDismissalsFromStorage);

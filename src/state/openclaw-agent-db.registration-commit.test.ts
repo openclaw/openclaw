@@ -108,7 +108,10 @@ describe("agent registration commit publication", () => {
 
     registration.begin();
     expect(before.assertCurrent).toThrow("registry changed");
+    expect(prepared.assertCurrent).toThrow("registry changed");
     const during = await prepared.read();
+    prepared.assertCurrent();
+    expect(before.assertCurrent).toThrow("registry changed");
     expect(during.result).toEqual({ status: "available", entries: [] });
     registerOpenClawAgentDatabase(fixture.target, (receipt) =>
       registration.recordCommitted(receipt),

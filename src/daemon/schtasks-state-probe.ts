@@ -2,8 +2,9 @@
 import { spawnSync } from "node:child_process";
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { hasErrnoCode } from "../infra/errno.js";
+import { hasErrnoCode, isErrno } from "../infra/errno.js";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
+import type { ServiceInspectionDiagnostic } from "./service-inspection-error.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 
 type ScheduledTaskStateProbe =
@@ -15,7 +16,12 @@ type ScheduledTaskStateProbe =
       lastRunTime?: string;
     }
   | { status: "missing" }
-  | { status: "unknown"; detail: string; timeoutMs?: number };
+  | {
+      status: "unknown";
+      detail: string;
+      timeoutMs?: number;
+      diagnostic: ServiceInspectionDiagnostic;
+    };
 
 export function probeScheduledTaskState(
   taskName: string,
@@ -60,9 +66,21 @@ export function probeScheduledTaskState(
         status: "unknown",
         detail: `Scheduled Task probe timed out after ${probeTimeoutMs} ms (ETIMEDOUT).`,
         timeoutMs: probeTimeoutMs,
+        diagnostic: { kind: "timeout", timeoutMs: probeTimeoutMs },
       };
     }
-    return { status: "unknown", detail: probe.error.message };
+    return {
+      status: "unknown",
+      detail: probe.error.message,
+      diagnostic: {
+        kind: "spawn",
+        ...(isErrno(probe.error) &&
+        typeof probe.error.errno === "number" &&
+        Number.isSafeInteger(probe.error.errno)
+          ? { errno: probe.error.errno }
+          : {}),
+      },
+    };
   }
   if (probe.status === 0) {
     let snapshot: Record<string, unknown> | undefined;
@@ -70,7 +88,11 @@ export function probeScheduledTaskState(
       snapshot = asOptionalRecord(JSON.parse(probe.stdout));
     } catch {}
     if (!snapshot) {
-      return { status: "unknown", detail: "Scheduled Task probe returned invalid JSON." };
+      return {
+        status: "unknown",
+        detail: "Scheduled Task probe returned invalid JSON.",
+        diagnostic: { kind: "invalid-response" },
+      };
     }
     const { state, enabled, lastRunResult, lastRunTime } = snapshot;
     return {
@@ -93,6 +115,16 @@ export function probeScheduledTaskState(
     : {
         status: "unknown",
         detail: `Scheduled Task probe failed (exit ${probe.status}): ${probe.stdout.trim() || probe.stderr.trim() || "no output from PowerShell."}`,
+        diagnostic: {
+          kind: "native",
+          exitCode: probe.status,
+          ...(/^-?\d+$/.test(probe.stdout.trim()) &&
+          Number.isInteger(hresult) &&
+          hresult >= -0x80000000 &&
+          hresult <= 0x7fffffff
+            ? { hresult }
+            : {}),
+        },
       };
 }
 

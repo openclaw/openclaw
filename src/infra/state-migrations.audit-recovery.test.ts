@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { root } from "./fs-safe.js";
 import { openLegacyAuditRawCheckpointStore } from "./state-migrations.audit-checkpoints.js";
+import { readLegacyAuditSourceSnapshot } from "./state-migrations.audit-recovery.js";
 import {
   buildAuditScrubbedContent,
   configAuditRecord,
@@ -14,6 +16,22 @@ import {
 } from "./state-migrations.audit.test-support.js";
 
 describe("legacy audit recovery byte handling", () => {
+  it("reads legacy audit sources larger than the ordinary read limit", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const original = Buffer.alloc(16 * 1024 * 1024 + 1, " ");
+      original.write("legacy audit archive\n");
+      await audit.write(audit.system.raw, original);
+
+      const snapshot = await readLegacyAuditSourceSnapshot(
+        await root(audit.stateDir),
+        "audit/system-agent.jsonl.migrated.raw",
+      );
+
+      expect(snapshot.rawBytes.equals(original)).toBe(true);
+      expect(snapshot.size).toBe(original.length);
+    });
+  });
+
   it("blanks a zero-slack source within the fixed-size recovery inode", async () => {
     await withAuditMigrationFixture(async (audit) => {
       const { raw, restore, sanitized, source } = audit.config;

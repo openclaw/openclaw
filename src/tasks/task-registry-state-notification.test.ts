@@ -137,9 +137,13 @@ afterEach(async () => {
     notification.complete();
   }
   await Promise.allSettled(notifications.map(({ result }) => result));
-  await nativeDeliveries?.settle();
-  expect(getActiveGatewayRootWorkCount()).toBe(0);
-  vi.restoreAllMocks();
+  try {
+    await nativeDeliveries?.settle();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  } finally {
+    nativeDeliveries?.[Symbol.dispose]();
+    vi.restoreAllMocks();
+  }
   await closeOpenClawStateDatabaseAsync();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });

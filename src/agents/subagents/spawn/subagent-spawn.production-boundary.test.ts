@@ -218,7 +218,7 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
     { refreshPreparedModelRuntimeSnapshots },
   ] = await Promise.all([
     import("../../../gateway/agent-runtime-execution-lineage.js"),
-    import("../../../gateway/agent-runtime-identity-token.js"),
+    import("../../../gateway/agent-runtime-approval-authority.js"),
     import("../../../gateway/server-instance-runtime.js"),
     import("../../../gateway/server-methods.js"),
     import("../../prepared-model-runtime.js"),
@@ -800,7 +800,7 @@ describe("recursive spawn production boundary", () => {
       storePath: bound.storePath,
       sessionKey: childSessionKey,
     });
-    const worker = target.startsWith("worker-") ? createBoundWorker(bound) : undefined;
+    const worker = target.startsWith("worker-") ? await createBoundWorker(bound) : undefined;
     let replacementClaim: ReturnType<NonNullable<typeof worker>["store"]["claimTurn"]> | undefined;
     const results: boolean[] = [];
     const errors: unknown[] = [];

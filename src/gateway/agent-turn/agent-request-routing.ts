@@ -170,7 +170,10 @@ export async function prepareAgentRequestRouting(params: {
     explicitRecipientSession?.sessionKey ??
     // Ownership selection alone must not turn a sessionless run into a main-session write.
     (!requestedSessionId
-      ? resolveAgentExplicitRecipientSessionKey(params.cfg, agentIdRaw ? agentId : undefined)
+      ? resolveExplicitAgentSessionKey({
+          cfg: params.cfg,
+          agentId: agentIdRaw ? agentId : undefined,
+        })
       : undefined);
   const expectedSessionTargetError = validateExpectedExistingSessionTarget({
     constraint: params.expectedSession,
@@ -249,10 +252,6 @@ export async function prepareAgentRequestRouting(params: {
       ? { canonicalKey: loaded.canonicalKey, sessionId: loaded.entry.sessionId }
       : undefined,
   };
-}
-
-function resolveAgentExplicitRecipientSessionKey(cfg: OpenClawConfig, agentId?: string) {
-  return resolveExplicitAgentSessionKey({ cfg, agentId });
 }
 
 function dropReboundExecApprovalFollowup(params: {

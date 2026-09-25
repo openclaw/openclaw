@@ -10,9 +10,9 @@ import {
   type ReplyPayload,
 } from "../reply-payload.js";
 import { resolveRoutedPolicyConversationType } from "./dispatch-from-config.context.js";
+import type { PluginBindingTranscriptOwner } from "./dispatch-from-config.events.js";
 import type { GatherDispatchRequestReadyState } from "./dispatch-from-config.gather.js";
 import { hasAskUserPayload } from "./dispatch-from-config.payloads.js";
-import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import {
   loadReplyMediaPathsRuntime,
   loadRouteReplyRuntime,
@@ -264,12 +264,6 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   ) =>
     sendReplyOperationAsync({ kind: "raw", payload }, abortSignal, mirror, kind, deliveryIntentId);
 
-  type PluginBindingTranscriptOwner = {
-    agentId: string;
-    expectedSessionId?: string;
-    sessionKey: string;
-    transcriptWriteBlocked?: true;
-  };
   const deliverBindingPayload = async (
     payload: ReplyPayload,
     mode: "additive" | "terminal",
@@ -309,7 +303,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       ? turnLedger.sendQueued("tool", bindingPayload).queued
       : turnLedger.sendQueued("final", bindingPayload).queued;
   };
-  const nextState = extendPreparedDispatchState(state, {
+  const nextState = Object.assign(state, {
     suppressAcpChildUserDelivery,
     normalizedCurrentSurface,
     isInternalWebchatTurn,

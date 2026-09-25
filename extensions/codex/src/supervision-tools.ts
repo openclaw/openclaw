@@ -9,6 +9,7 @@ import type { AnyAgentTool } from "openclaw/plugin-sdk/core";
  * continuation belongs to the Codex harness, which installs approval and tool
  * handlers before it starts or resumes the harness-owned Codex thread.
  */
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { readStringParam } from "openclaw/plugin-sdk/param-readers";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -212,10 +213,6 @@ function readStoredThreads(data: unknown[], maxEntries: number): Record<string, 
     readCompatThreadId(entry.id, "thread/list", index);
     return entry;
   });
-}
-
-function readBooleanParam(params: Record<string, unknown>, key: string): boolean {
-  return params[key] === true;
 }
 
 function readIntegerParam(params: Record<string, unknown>, key: string): number | undefined {
@@ -555,7 +552,7 @@ function threadFromRead(value: unknown): Record<string, unknown> | undefined {
 }
 
 function isLoadedThreadReadMiss(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = coerceErrorMessage(error);
   return message.includes("thread not found") || message.includes("thread not loaded");
 }
 
@@ -734,7 +731,7 @@ async function listSessionSnapshot(params: {
       errors.push({
         endpointId: endpoint.id,
         ok: false,
-        detail: error instanceof Error ? error.message : String(error),
+        detail: coerceErrorMessage(error),
       });
     }
   }
@@ -769,9 +766,6 @@ async function resolveEndpointForThread(params: {
     } catch (error) {
       if (error instanceof CodexSupervisionPolicyError) {
         throw error;
-      }
-      if (!isLoadedThreadReadMiss(error)) {
-        continue;
       }
     }
   }
@@ -1047,7 +1041,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
         const result = await listSessionSnapshot({
           endpoints,
           request,
-          includeStored: readBooleanParam(params, "include_stored"),
+          includeStored: params.include_stored === true,
           maxStoredSessions: readIntegerParam(params, "max_stored_sessions"),
         });
         const { pluginConfig } = requireCurrentEndpointSet(options, endpoints);
@@ -1077,7 +1071,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
           request: rawTranscriptRequest,
           endpoint,
           threadId,
-          includeTurns: readBooleanParam(params, "include_turns"),
+          includeTurns: params.include_turns === true,
         });
         requireCurrentEndpoint(options, "raw-transcripts", endpoint);
         return jsonResult({

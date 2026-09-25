@@ -346,6 +346,9 @@ async function finalizeCronCompletionAnnouncement(params: {
           },
           payload: { text },
           abortSignal,
+          ...(params.runStartedAtMs === undefined
+            ? {}
+            : { completion: { job: params.job, runStartedAt: params.runStartedAtMs } }),
           onDeliveryAttempt: (reachedRecipient) => {
             deliveryMayHaveReachedRecipient ||= reachedRecipient;
           },
@@ -773,8 +776,8 @@ export function buildGatewayCronService(params: {
         return listConfiguredSessionStoreAgentIds(cfg);
       }
     },
-    isAgentAvailable: (agentId) =>
-      !isAgentDeletionBlocked(agentId) &&
+    isAgentAvailable: (agentId, database, facts) =>
+      !(facts?.deletionBlocked ?? isAgentDeletionBlocked(agentId, { env }, database)) &&
       !readAgentDatabaseAdmissionRefusal(agentId, { env }) &&
       listAgentIds(getRuntimeConfig()).some((id) => normalizeAgentId(id) === agentId),
     resolveSessionStorePath,

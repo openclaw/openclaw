@@ -347,17 +347,16 @@ extension OnboardingView {
             input: remoteGatewayProbeInput)
         return HStack(spacing: 20) {
             ZStack(alignment: .leading) {
-                Button(action: {}, label: {
-                    Label("Back", systemImage: "chevron.left").labelStyle(.iconOnly)
-                })
-                .buttonStyle(.plain)
-                .opacity(0)
-                .disabled(true)
+                Color.clear
+                    .frame(width: 32, height: 32)
+                    .accessibilityHidden(true)
 
                 if self.currentPage > 0 {
                     Button(action: self.handleBack, label: {
                         Label("Back", systemImage: "chevron.left")
                             .labelStyle(.iconOnly)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
                     })
                     .buttonStyle(.plain)
                     .foregroundColor(.secondary)
@@ -370,7 +369,7 @@ extension OnboardingView {
 
             Spacer()
 
-            HStack(spacing: 8) {
+            HStack(spacing: 0) {
                 ForEach(0..<self.pageCount, id: \.self) { index in
                     let isInstallLocked = (self.installingCLI || self.aiSetup.isBusy) &&
                         index != self.currentPage
@@ -393,8 +392,13 @@ extension OnboardingView {
                         Circle()
                             .fill(index == self.currentPage ? Color.accentColor : Color.gray.opacity(0.3))
                             .frame(width: 8, height: 8)
+                            .frame(width: 28, height: 28)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(self.navigationTitle(for: self.pageOrder[index]))
+                    .accessibilityAddTraits(index == self.currentPage ? .isSelected : [])
+                    .help(self.navigationTitle(for: self.pageOrder[index]))
                     .disabled(isLocked)
                     .opacity(isLocked ? 0.3 : 1)
                 }
@@ -414,6 +418,17 @@ extension OnboardingView {
         .padding(.horizontal, 28)
         .padding(.bottom, 13)
         .frame(minHeight: 60, alignment: .bottom)
+    }
+
+    private func navigationTitle(for pageIndex: Int) -> LocalizedStringKey {
+        switch pageIndex {
+        case self.connectionPageIndex: "Where should your assistant live?"
+        case self.cliPageIndex: "Getting things ready"
+        case self.aiPageIndex: self.aiSetup.configuredGatewayAuthIssue == nil
+            ? "Connect your AI" : "Authenticate with your Gateway"
+        case self.readyPageIndex: "You’re all set!"
+        default: "Welcome to OpenClaw"
+        }
     }
 
     func onboardingPage(@ViewBuilder _ content: @escaping () -> some View) -> some View {

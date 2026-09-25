@@ -56,7 +56,7 @@ afterEach(() => {
 });
 
 describe("built plugin control-plane module loads", () => {
-  it("keeps TypeScript unloaded for checker imports and runtime inventory checks", () => {
+  it("keeps the native compiler unstarted for checker imports and runtime inventory checks", () => {
     const rootDir = makeRoot();
     const checkerUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.controlPlane);
     const result = spawnSync(
@@ -66,20 +66,31 @@ describe("built plugin control-plane module loads", () => {
         "--input-type=module",
         "--eval",
         `import assert from "node:assert/strict";
-import { createRequire } from "node:module";
-const require = createRequire(import.meta.url);
-const compilerPath = require.resolve("typescript");
-const compilerLoaded = () => Boolean(require.cache[compilerPath]);
-assert.equal(compilerLoaded(), false, "TypeScript loaded before the checker");
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const spawn = childProcess.spawn;
+let compilerStarts = 0;
+childProcess.spawn = function(executable, args, ...rest) {
+  if (args?.includes("--api")) compilerStarts++;
+  return Reflect.apply(spawn, this, [executable, args, ...rest]);
+};
+syncBuiltinESMExports();
+assert.equal(compilerStarts, 0, "native compiler started before the checker");
 await import(${JSON.stringify(checkerUrl.href)});
-assert.equal(compilerLoaded(), false, "TypeScript loaded by the checker import");
+assert.equal(compilerStarts, 0, "native compiler started by the checker import");
 const { listCoreRuntimePostBuildOutputs } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.runtimePostbuild).href)});
 listCoreRuntimePostBuildOutputs({ rootDir: ${JSON.stringify(rootDir)} });
-assert.equal(compilerLoaded(), false, "TypeScript loaded by runtime postbuild inventory checks");
+assert.equal(compilerStarts, 0, "native compiler started by runtime postbuild inventory checks");
 await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.runNode).href)});
-assert.equal(compilerLoaded(), false, "TypeScript loaded by the development runner import");
-require("typescript");
-assert.equal(compilerLoaded(), true, "the compiler cache observation must detect an actual load");
+assert.equal(compilerStarts, 0, "native compiler started by the development runner import");
+const { API } = await import("typescript/unstable/sync");
+const api = new API();
+try {
+  api.parseConfigFile("tsconfig.json");
+  assert.equal(compilerStarts, 1, "the compiler process observation must detect an actual start");
+} finally {
+  api.close();
+}
 `,
       ],
       {

@@ -11,7 +11,6 @@ import type { EditorId } from "../../../lib/editor-links.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
-import { detectLineSeparator } from "./file-line-separator.ts";
 
 registerCodeBlocksEnglish();
 registerFilePreviewEnglish();
@@ -49,7 +48,7 @@ export function computeFileMatches(content: string, query: string): number[] {
     return [];
   }
   return content
-    .split(detectLineSeparator(content) ?? /\r\n?|\n/)
+    .split(/\r\n?|\n/)
     .flatMap((line, index) =>
       line.toLocaleLowerCase().includes(normalizedQuery) ? [index + 1] : [],
     );

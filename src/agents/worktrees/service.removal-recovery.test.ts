@@ -2,16 +2,16 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as commandExec from "../../process/exec.js";
 import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseByPathAsync,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { getRegistryWorktree, updateRegistryWorktree } from "./registry.js";
-import { acquireWorktreeRunLease } from "./run-lease.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { deleteRegistryWorktree, getRegistryWorktree, updateRegistryWorktree } from "./registry.js";
+import { acquireWorktreeRunLease, hasLiveWorktreeRunLease } from "./run-lease.js";
 import { resolveRepository } from "./service-preparation.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
@@ -25,36 +25,60 @@ const git = async (cwd: string, ...args: string[]) =>
   (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
 
 describe("interrupted ordinary worktree removal recovery", () => {
+  let env: NodeJS.ProcessEnv;
+  let cleanupId: string | undefined;
+  const stateDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterAll(async () => {
+      await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
+      cleanup();
+    }),
+  );
+  beforeAll(() => {
+    env = { ...process.env, OPENCLAW_STATE_DIR: stateDirs.make("openclaw-removal-state-") };
+  });
   const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(async () => {
+    afterEach(async ({ task }) => {
       vi.restoreAllMocks();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
+      if (task.result?.state !== "pass") {
+        await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
+      }
+      if (cleanupId) {
+        expect(hasLiveWorktreeRunLease(env, cleanupId)).toBe(false);
+        deleteRegistryWorktree(env, cleanupId);
+      }
       cleanup();
     }),
   );
   const initialize = useManagedWorktreeTestRepository();
   let root: string;
   let repo: string;
-  let env: NodeJS.ProcessEnv;
   let service: ManagedWorktreeService;
   let record: ManagedWorktreeRecord;
   let snapshot: string;
   let head: string;
   let admin: string;
 
+  const pinSnapshot = async () => {
+    const update = execFileAsync("git", ["-C", repo, "update-ref", "--stdin"]);
+    update.child.stdin?.end(
+      `update refs/openclaw/snapshots/${record.id} ${snapshot}\nupdate refs/openclaw/removals/${record.id} ${snapshot}\n`,
+    );
+    await update;
+  };
+
   beforeEach(async () => {
+    cleanupId = undefined;
     root = await fs.realpath(dirs.make("openclaw-removal-recovery-"));
     repo = await initialize(root);
-    env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
     service = new ManagedWorktreeService({ env });
     record = await materializeManagedWorktreeFixture({
       env,
       repoRoot: repo,
-      stateDir: env.OPENCLAW_STATE_DIR!,
+      stateDir: path.join(root, "state"),
       name: "recovery",
       now: Date.now(),
     });
+    cleanupId = record.id;
     const repository = await resolveRepository(repo);
     updateRegistryWorktree(env, record.id, {
       repositoryIdentity: { repoRoot: repo, repoFingerprint: repository.fingerprint },
@@ -74,8 +98,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
       "original completed capture",
     );
     const snapshotRef = `refs/openclaw/snapshots/${record.id}`;
-    await git(repo, "update-ref", snapshotRef, snapshot);
-    await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, snapshot);
+    await pinSnapshot();
     updateRegistryWorktree(env, record.id, { snapshotRef, provisionedState: [] });
     await fs.unlink(path.join(record.path, ".git"));
   });
@@ -427,8 +450,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
     await git(record.path, "commit", "-m", "captured CRLF checkout");
     head = await git(record.path, "rev-parse", "HEAD");
     snapshot = await git(repo, "commit-tree", `${head}^{tree}`, "-p", head, "-m", "clean capture");
-    await git(repo, "update-ref", `refs/openclaw/snapshots/${record.id}`, snapshot);
-    await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, snapshot);
+    await pinSnapshot();
     await fs.unlink(path.join(record.path, "converted.txt"));
     // Establish the original clean checkout's stat data before interrupting it.
     // Production recovery must never refresh or replace that retained index.
@@ -492,8 +514,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
     await git(record.path, "commit", "-m", "capture filter attribute");
     head = await git(record.path, "rev-parse", "HEAD");
     snapshot = await git(repo, "commit-tree", `${head}^{tree}`, "-p", head, "-m", "clean capture");
-    await git(repo, "update-ref", `refs/openclaw/snapshots/${record.id}`, snapshot);
-    await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, snapshot);
+    await pinSnapshot();
     const marker = path.join(root, "filter-executed");
     const script = path.join(root, "filter.cjs");
     await fs.writeFile(
@@ -663,8 +684,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
     await git(record.path, "commit", "-m", "capture checkout representation");
     head = await git(record.path, "rev-parse", "HEAD");
     snapshot = await git(repo, "commit-tree", `${head}^{tree}`, "-p", head, "-m", "clean capture");
-    await git(repo, "update-ref", `refs/openclaw/snapshots/${record.id}`, snapshot);
-    await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, snapshot);
+    await pinSnapshot();
     if (kind === "symlink-file") {
       await git(repo, "config", "core.symlinks", "false");
     }
@@ -723,8 +743,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
         "-m",
         "clean capture",
       );
-      await git(repo, "update-ref", `refs/openclaw/snapshots/${record.id}`, snapshot);
-      await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, snapshot);
+      await pinSnapshot();
       const physicalDirectory =
         process.platform === "darwin" ? directory.normalize("NFD") : directory;
       const physicalFilename = process.platform === "darwin" ? filename.normalize("NFD") : filename;

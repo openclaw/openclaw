@@ -1,11 +1,14 @@
-import type { ChildProcess } from "node:child_process";
+import { spawn as spawnChild, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { stopChild } from "../../scripts/lib/gateway-bench-child.ts";
 import {
+  inspectManagedProcessGroup,
   loadManagedChildSpawner,
   runManagedCommand,
+  terminateManagedChild,
 } from "../../scripts/lib/managed-child-process.mts";
 import type { ManagedWindowsJob } from "../../scripts/lib/managed-windows-job.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
@@ -35,6 +38,30 @@ vi.mock("../../scripts/lib/managed-windows-job.mts", async (original) => {
 });
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it.runIf(process.platform === "win32")(
+  "retains the benchmark termination receipt on the original Windows child",
+  async ({ signal }) => {
+    const child = spawnChild(
+      process.execPath,
+      ["-e", 'process.on("message", () => {}); process.send("ready");'],
+      { stdio: ["ignore", "ignore", "ignore", "ipc"] },
+    );
+    const closed = once(child, "close");
+    void closed.catch(() => {});
+    try {
+      expect((await once(child, "message", { signal }))[0]).toBe("ready");
+      expect(await stopChild(child)).toMatchObject({ exitedBeforeTeardown: false });
+      await closed;
+      expect(inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" })).toBe("dead");
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        terminateManagedChild(child, "SIGKILL");
+      }
+      await closed;
+    }
+  },
+);
 
 it.runIf(process.platform === "win32")(
   "releases an already-exited Gateway's native Job through the Gateway helper",

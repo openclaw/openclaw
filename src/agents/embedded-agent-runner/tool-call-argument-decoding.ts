@@ -5,7 +5,7 @@ import { decodeHtmlEntities } from "../../shared/html-entities.js";
 import { visitObjectContentBlocks } from "../../shared/message-content-blocks.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../stream-compat.js";
-import { mapAssistantMessageStream } from "./run/stream-wrapper.js";
+import { mapAssistantMessageStream, wrapStreamObjectEvents } from "./run/stream-wrapper.js";
 
 /**
  * Decodes HTML entities inside streamed tool-call arguments before downstream execution.
@@ -63,31 +63,12 @@ function wrapStreamMessageObjects(
     return message;
   };
 
-  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
   // Patch both final result and streamed partial/message events. Tool execution can consume either
   // path depending on provider wrapper shape, so one-sided decoding would leave escaped args live.
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as { partial?: unknown; message?: unknown };
-            transformMessage(event.partial);
-            transformMessage(event.message);
-          }
-          return result;
-        },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-      };
-    };
-  return stream;
+  return wrapStreamObjectEvents(stream, (event) => {
+    transformMessage(event.partial);
+    transformMessage(event.message);
+  });
 }
 
 /** Wraps a stream function so tool-call arguments are decoded before consumers inspect them. */

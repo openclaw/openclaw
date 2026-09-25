@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { AsyncResource } from "node:async_hooks";
 import { once } from "node:events";
 import path from "node:path";
@@ -31,17 +32,14 @@ async function withDelegate(
   await withStateDatabaseCoordinatorRuntimeDirectory(params.runtimeDirectory, async () => {
     const owner = acquireStateDatabaseCoordinator(params);
     const delegation = tryCreateStateLifecycleDelegate(params);
-    if (!delegation) {
-      owner.release();
-      throw new Error("Expected a retained lifecycle delegate");
-    }
     let attached: Awaited<ReturnType<typeof attachStateLifecycleDelegate>> | undefined;
     try {
+      assert(delegation, "Expected a retained lifecycle delegate");
       attached = await attachStateLifecycleDelegate(delegation.port, params);
       await run(attached, delegation, params, owner.path);
     } finally {
       attached?.close();
-      delegation.release();
+      delegation?.release();
       owner.release();
     }
   });
@@ -101,9 +99,7 @@ it("rechecks the retained owner's live authority after an await", async () => {
 it.each(["actor", "path"])("rejects a delegate whose %s does not match", async (mismatch) => {
   await withDelegate(async (_attached, _delegation, params) => {
     const other = tryCreateStateLifecycleDelegate(params);
-    if (!other) {
-      throw new Error("Expected a retained lifecycle delegate");
-    }
+    assert(other, "Expected a retained lifecycle delegate");
     try {
       await expect(
         attachStateLifecycleDelegate(other.port, {

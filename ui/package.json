@@ -9,7 +9,7 @@
     "test": "node ../scripts/run-node-package-bin.mts vitest run --config vitest.config.ts"
   },
   "dependencies": {
-    "@awesome.me/webawesome": "3.12.0",
+    "@awesome.me/webawesome": "3.13.0",
     "@codemirror/commands": "6.11.1",
     "@codemirror/language": "6.12.4",
     "@codemirror/language-data": "6.5.2",
@@ -58,7 +58,7 @@
     "@vitest/browser": "5.0.1",
     "@vitest/browser-playwright": "5.0.1",
     "fake-indexeddb": "6.2.5",
-    "jsdom": "30.0.1",
+    "jsdom": "30.1.0",
     "openclaw": "workspace:*",
     "pako": "3.0.2",
     "playwright": "1.63.0",

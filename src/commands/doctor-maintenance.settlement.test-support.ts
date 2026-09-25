@@ -114,6 +114,7 @@ vi.mock("../state/openclaw-agent-db-lease.js", async (importOriginal) => ({
 }));
 vi.mock("../state/openclaw-database-preflight.js", () => ({
   preflightOpenClawDatabaseSchemas: boundary.schemas,
+  assertOpenClawDatabasesReady: async () => {},
 }));
 vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({
   maybeStopManagedServiceBeforeMutableUpdate: boundary.stop,

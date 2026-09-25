@@ -118,12 +118,8 @@ export async function createMatrixDraftController(params: {
       suppressDefaultToolProgressMessages: true,
       progressPreambleEnabled: true,
       commentaryProgressEnabled: progressDraft.commentaryProgressEnabled,
-      onToolStart: async (payload) => {
-        return await progressDraft.pushToolEvent(payload);
-      },
-      onItemEvent: async (payload) => {
-        return await progressDraft.pushItemEvent(payload);
-      },
+      onToolStart: progressDraft.pushToolEvent,
+      onItemEvent: progressDraft.pushItemEvent,
       onPlanUpdate: async (payload) => {
         if (payload.phase !== "update") {
           return false;
@@ -143,9 +139,6 @@ export async function createMatrixDraftController(params: {
     const nextDraftBoundaryOffset = pendingDraftBoundaries.find(
       (boundary) => boundary.messageGeneration === currentDraftMessageGeneration,
     )?.endOffset;
-    if (nextDraftBoundaryOffset === undefined) {
-      return latestDraftFullText.slice(currentDraftBlockOffset);
-    }
     return latestDraftFullText.slice(currentDraftBlockOffset, nextDraftBoundaryOffset);
   };
 
@@ -227,9 +220,6 @@ export async function createMatrixDraftController(params: {
       progressDraft.beginNewTurn({ force: true });
     },
     currentReplyToId: () => currentDraftReplyToId,
-    setCurrentReplyToId: (replyToId: string | undefined) => {
-      currentDraftReplyToId = replyToId;
-    },
     resetReplyToIdForNextBlock: () => {
       currentDraftReplyToId = replyToMode === "all" ? draftReplyToId : undefined;
     },

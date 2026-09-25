@@ -197,7 +197,7 @@ it("commits model-only role changes without retiring permitted models or origina
       }),
       requestRecoveryRestart,
     });
-    let original: ReturnType<typeof captureGatewayOperatorRunAuthority>;
+    let original: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
     let modelA: ReturnType<typeof bindOperatorModelExecution>;
     let modelB: ReturnType<typeof bindOperatorModelExecution>;
     try {
@@ -210,8 +210,8 @@ it("commits model-only role changes without retiring permitted models or origina
         buildRequestContext: () => context,
         extraHandlers: {
           // A classified write route exercises ordinary operator admission before capture.
-          wake: (options) => {
-            original = captureGatewayOperatorRunAuthority({
+          wake: async (options) => {
+            original = await captureGatewayOperatorRunAuthority({
               client: options.client,
               context,
               hasCurrentClientAuthority: options.hasCurrentClientAuthority,

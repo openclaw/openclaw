@@ -208,11 +208,14 @@ export function parseOptionalPositiveInteger(raw: unknown, label: string): numbe
   return value;
 }
 
-export function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {
+export function parseOptionalTimeoutMs(
+  raw: string | number | undefined,
+  flagName = "--timeout-ms",
+): number | undefined {
   if (raw === undefined) {
     return undefined;
   }
-  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error" });
+  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error", flagName });
 }
 
 export async function resolveLocalCapabilityRuntimeConfig(params: {

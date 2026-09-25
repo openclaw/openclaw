@@ -1,8 +1,15 @@
 import { html, type TemplateResult } from "lit";
+import {
+  renderLearnMoreLink,
+  renderSettingsRow,
+  renderSettingsValue,
+} from "../../components/settings-ui.ts";
 import "../../components/mcp-servers-card.ts";
-import { renderSettingsRow, renderSettingsValue } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
+
+registerMcpEnglish();
 
 const MCP_DOCS_URL = "https://docs.openclaw.ai/tools/mcp";
 
@@ -12,6 +19,10 @@ type McpViewProps = {
   /** Embedded schema editor; it owns autosave status and the restart banner. */
   editor: TemplateResult;
 };
+
+export function renderMcpIntro() {
+  return html`${t("mcpPage.intro")} ${renderLearnMoreLink(MCP_DOCS_URL)}`;
+}
 
 export function renderMcp(props: McpViewProps) {
   const rows = summarizeMcpServers(props.configObject) ?? [];

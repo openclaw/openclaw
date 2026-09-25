@@ -1,7 +1,6 @@
 import * as crypto from "node:crypto";
 import {
   isJsonObject,
-  type CodexDynamicToolSpec,
   type CodexTurnEnvironmentParams,
   type JsonObject,
   type JsonValue,
@@ -10,11 +9,7 @@ import { hashCodexAppServerBindingFingerprint } from "./session-binding.js";
 import { resolveCodexGpt56MultiAgentVersion } from "./thread-binding-policy.js";
 
 export function codexDynamicToolsFingerprint(dynamicTools: readonly JsonValue[]): string {
-  return hashCodexAppServerBindingFingerprint(legacyFingerprintDynamicTools(dynamicTools));
-}
-
-export function codexLegacyDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[]): string {
-  return legacyFingerprintDynamicTools(dynamicTools);
+  return hashCodexAppServerBindingFingerprint(codexLegacyDynamicToolsFingerprint(dynamicTools));
 }
 
 export function areCodexDynamicToolFingerprintsCompatible(params: {
@@ -22,10 +17,12 @@ export function areCodexDynamicToolFingerprintsCompatible(params: {
   next: string;
   nextLegacy?: string;
 }): boolean {
-  return areDynamicToolFingerprintsCompatible(params.previous, params.next, params.nextLegacy);
+  return (
+    !params.previous || params.previous === params.next || params.previous === params.nextLegacy
+  );
 }
 
-function legacyFingerprintDynamicTools(dynamicTools: readonly JsonValue[]): string {
+export function codexLegacyDynamicToolsFingerprint(dynamicTools: readonly JsonValue[]): string {
   // Codex persists the complete model-visible schema at thread/start; resume
   // cannot refresh changed tool or nested input descriptions.
   return JSON.stringify(dynamicTools.map(stabilizeJsonValue).toSorted(compareJsonFingerprint));
@@ -126,7 +123,7 @@ export function fingerprintEnvironmentSelection(
   return environments ? JSON.stringify(environments.map(stabilizeJsonValue)) : undefined;
 }
 
-function stabilizeJsonValue(value: JsonValue): JsonValue {
+export function stabilizeJsonValue(value: JsonValue): JsonValue {
   if (Array.isArray(value)) {
     return value.map(stabilizeJsonValue);
   }
@@ -159,18 +156,10 @@ export function readActiveCodexTurnIdsFromResume(response: {
   );
 }
 
-const LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT = legacyFingerprintDynamicTools([]);
+const LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT = codexLegacyDynamicToolsFingerprint([]);
 const EMPTY_DYNAMIC_TOOLS_FINGERPRINT = hashCodexAppServerBindingFingerprint(
   LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT,
 );
-
-export function areDynamicToolFingerprintsCompatible(
-  previous: string | undefined,
-  next: string,
-  nextLegacy?: string,
-): boolean {
-  return !previous || previous === next || previous === nextLegacy;
-}
 
 export function areUserMcpServersFingerprintsCompatible(params: {
   previous?: string;

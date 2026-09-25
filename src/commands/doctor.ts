@@ -7,6 +7,8 @@ import type { DoctorOptions } from "./doctor-prompter.js";
 import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 
+export { runDoctorProcess } from "./doctor-process.js";
+
 async function resolveExplicitSessionSqliteMaintenancePaths(
   options: DoctorOptions,
 ): Promise<string[]> {

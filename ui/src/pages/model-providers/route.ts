@@ -17,13 +17,16 @@ export type ModelProvidersRouteData = {
   selectionIntentRevision: number;
   /** An explicit connection entry from a saved setup link. */
   connect?: boolean;
+  provider?: string;
 };
 
 async function loadModelProvidersRouteData(
   context: Pick<ApplicationContext, "gateway" | "agents" | "settingsAgentSelection">,
   options: RouteLoaderOptions,
 ): Promise<ModelProvidersRouteData> {
-  const connect = new URLSearchParams(options.location.search).get("connect") === "1";
+  const search = new URLSearchParams(options.location.search);
+  const connect = search.get("connect") === "1";
+  const provider = search.get("provider")?.trim() ?? "";
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
   const selection = context.settingsAgentSelection;
@@ -53,6 +56,7 @@ async function loadModelProvidersRouteData(
       agentId,
       selectionIntentRevision,
       connect,
+      provider,
     };
   }
   if (!agentId) {
@@ -69,12 +73,14 @@ async function loadModelProvidersRouteData(
       agentId,
       selectionIntentRevision,
       connect,
+      provider,
     };
   }
   return {
     gateway,
     gatewaySnapshot,
     connect,
+    provider,
     data: await loadModelProvidersData(client, { agentId, signal: options.signal }),
     client,
     agentId,

@@ -206,6 +206,19 @@ try {
   process.exit(1);
 }`;
 
+const ENSURE_PRIVATE_DIRECTORY_SH = String.raw`ensure_private_directory() {
+  directory=$1
+  if [ -e "$directory" ] || [ -L "$directory" ]; then
+    if [ ! -d "$directory" ] || [ -L "$directory" ]; then
+      printf '%s\n' 'unsafe worker bootstrap directory' >&2
+      exit 2
+    fi
+  else
+    mkdir "$directory"
+  fi
+  chmod 700 "$directory"
+}`;
+
 const PREFLIGHT_SCRIPT = String.raw`set -eu
 umask 077
 hash=$1
@@ -224,18 +237,7 @@ if [ "${"${"}#operation_token}" -ne 64 ]; then
   exit 2
 fi
 
-ensure_private_directory() {
-  directory=$1
-  if [ -e "$directory" ] || [ -L "$directory" ]; then
-    if [ ! -d "$directory" ] || [ -L "$directory" ]; then
-      printf '%s\n' 'unsafe worker bootstrap directory' >&2
-      exit 2
-    fi
-  else
-    mkdir "$directory"
-  fi
-  chmod 700 "$directory"
-}
+${ENSURE_PRIVATE_DIRECTORY_SH}
 
 ensure_private_directory "$root"
 
@@ -295,18 +297,7 @@ lock=$lock_root/$hash
 locked=0
 lock_identity="$$:$(date +%s)"
 
-ensure_private_directory() {
-  directory=$1
-  if [ -e "$directory" ] || [ -L "$directory" ]; then
-    if [ ! -d "$directory" ] || [ -L "$directory" ]; then
-      printf '%s\n' 'unsafe worker bootstrap directory' >&2
-      exit 2
-    fi
-  else
-    mkdir "$directory"
-  fi
-  chmod 700 "$directory"
-}
+${ENSURE_PRIVATE_DIRECTORY_SH}
 
 ensure_private_directory "$root"
 ensure_private_directory "$lock_root"
@@ -471,8 +462,6 @@ mv "$staging" "$install_dir"
 finish_with_receipt
 `;
 
-type ResolvedWorkerSshIdentity = WorkerSshIdentity;
-
 type WorkerBootstrapCommandRunner = (
   argv: string[],
   options: CommandOptions,
@@ -487,7 +476,7 @@ type WorkerBootstrapRequest = {
 };
 
 type WorkerBootstrapDependencies = {
-  resolveIdentity: (keyRef: WorkerSshEndpoint["keyRef"]) => Promise<ResolvedWorkerSshIdentity>;
+  resolveIdentity: (keyRef: WorkerSshEndpoint["keyRef"]) => Promise<WorkerSshIdentity>;
   runCommand?: WorkerBootstrapCommandRunner;
   timeoutMs?: number;
   signal?: AbortSignal;

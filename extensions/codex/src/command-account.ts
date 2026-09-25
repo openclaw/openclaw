@@ -13,24 +13,21 @@ import {
   resolveAuthProfileOrder,
 } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
+import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import type { JsonValue } from "./app-server/protocol.js";
+import { formatRelativeDuration } from "./app-server/rate-limit-time.js";
 import {
   summarizeCodexAccountUsage,
   type CodexAccountUsageSummary,
 } from "./app-server/rate-limits.js";
-import type { CodexControlRequestOptions, SafeValue } from "./command-rpc.js";
+import type {
+  SafeCodexControlRequestFn as SafeCodexControlRequest,
+  SafeValue,
+} from "./command-rpc.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 
 type AuthProfileOrderConfig = Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
-
-type SafeCodexControlRequest = (
-  pluginConfig: unknown,
-  method: CodexControlMethod,
-  requestParams: JsonValue | undefined,
-  options?: CodexControlRequestOptions,
-) => Promise<SafeValue<JsonValue | undefined>>;
 
 type CodexAccountAuthRow = {
   profileId: string;
@@ -215,7 +212,7 @@ function describeInactiveProfileStatus(params: {
   const stats = params.store.usageStats?.[params.profileId];
   const blockedUntil = stats?.blockedUntil;
   if (isActiveUntil(blockedUntil, params.now)) {
-    return `rate-limited - resets ${formatRelativeReset(blockedUntil, params.now)}`;
+    return `rate-limited - resets in ${formatRelativeDuration(Math.max(60_000, blockedUntil - params.now))}`;
   }
   const unusableUntil = resolveProfileUnusableUntilForDisplay(params.store, params.profileId);
   if (isActiveUntil(unusableUntil ?? undefined, params.now)) {
@@ -380,21 +377,4 @@ function describeEligibilityStatus(
 
 function isActiveUntil(value: number | undefined, now: number): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > now;
-}
-
-function formatRelativeReset(untilMs: number, nowMs: number): string {
-  const durationMs = Math.max(1_000, untilMs - nowMs);
-  const minuteMs = 60_000;
-  const hourMs = 60 * minuteMs;
-  const dayMs = 24 * hourMs;
-  if (durationMs < hourMs) {
-    const minutes = Math.ceil(durationMs / minuteMs);
-    return `in ${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
-  }
-  if (durationMs < dayMs) {
-    const hours = Math.ceil(durationMs / hourMs);
-    return `in ${hours} ${hours === 1 ? "hour" : "hours"}`;
-  }
-  const days = Math.ceil(durationMs / dayMs);
-  return `in ${days} ${days === 1 ? "day" : "days"}`;
 }

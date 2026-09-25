@@ -5,6 +5,7 @@ import {
   buildGatewayConnectAuth,
   selectGatewayConnectAuth,
 } from "../../packages/gateway-client/src/connect-auth.js";
+import type { EventLoopReadyResult } from "../../packages/gateway-client/src/event-loop-ready.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as oneShotExit from "../cli/one-shot-exit.js";
@@ -45,7 +46,7 @@ describe("runNodeHost", () => {
     });
     expect(mocks.runStartupMigrations).not.toHaveBeenCalled();
     expect(mocks.configureNodeHost).toHaveBeenCalledOnce();
-    expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
+    expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
   });
 
   it("retains managed state admission while an external signal closes the runtime", async () => {
@@ -54,6 +55,8 @@ describe("runNodeHost", () => {
       ready: true,
       aborted: false,
       elapsedMs: 0,
+      maxDriftMs: 0,
+      checks: 1,
     });
     const statePath = resolveOpenClawStateSqlitePath();
     let cleanupStatePath: string | undefined;
@@ -88,6 +91,8 @@ describe("runNodeHost", () => {
       ready: true,
       aborted: false,
       elapsedMs: 0,
+      maxDriftMs: 0,
+      checks: 1,
     });
     const input = new PassThrough();
     const previous = Object.getOwnPropertyDescriptor(process, "stdin");
@@ -103,7 +108,7 @@ describe("runNodeHost", () => {
       input.end();
       await running;
       expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
-      expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
+      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
       expect(input.listenerCount("end")).toBe(0);
     } finally {
       input.end();
@@ -174,6 +179,8 @@ describe("runNodeHost", () => {
       ready: true,
       aborted: false,
       elapsedMs: 0,
+      maxDriftMs: 0,
+      checks: 1,
     });
     const processOnSpy = vi.spyOn(process, "on");
     const previousExitCode = process.exitCode;
@@ -233,6 +240,8 @@ describe("runNodeHost", () => {
       ready: true,
       aborted: false,
       elapsedMs: 0,
+      maxDriftMs: 0,
+      checks: 1,
     });
     const previousExitCode = process.exitCode;
     try {
@@ -251,7 +260,7 @@ describe("runNodeHost", () => {
       } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
       await running;
 
-      expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
+      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
       expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
       expect(mocks.capturedGatewayClients[0]?.request).not.toHaveBeenCalled();
     } finally {
@@ -261,26 +270,46 @@ describe("runNodeHost", () => {
 
   it("routes invoke input, cancellation, and connection close to the runtime", async () => {
     mocks.useFakeRuntime = true;
-    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-      "event loop readiness timeout",
-    );
-    const options = lastCapturedOptions();
-
-    options?.onEvent?.({
-      type: "event",
-      event: "node.invoke.input",
-      payload: { id: "invoke-1", nodeId: "node-1", seq: 3, payloadJSON: '{"kind":"data"}' },
+    mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
+      ready: true,
+      aborted: false,
+      elapsedMs: 0,
+      maxDriftMs: 0,
+      checks: 1,
     });
-    options?.onEvent?.({
-      type: "event",
-      event: "node.invoke.cancel",
-      payload: { invokeId: "invoke-1", nodeId: "node-1" },
-    });
-    options?.onClose?.(1000, "connection closed");
+    const processOn = vi.spyOn(process, "on");
+    const previousExitCode = process.exitCode;
+    const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
+    try {
+      await vi.waitFor(() =>
+        expect(processOn).toHaveBeenCalledWith("SIGTERM", expect.any(Function)),
+      );
+      const options = lastCapturedOptions();
+      options?.onEvent?.({
+        type: "event",
+        event: "node.invoke.input",
+        payload: { id: "invoke-1", nodeId: "node-1", seq: 3, payloadJSON: '{"kind":"data"}' },
+      });
+      options?.onEvent?.({
+        type: "event",
+        event: "node.invoke.cancel",
+        payload: { invokeId: "invoke-1", nodeId: "node-1" },
+      });
+      options?.onClose?.(1000, "connection closed");
 
-    expect(mocks.activeRuntime.handleInput).toHaveBeenCalledWith("invoke-1", 3, '{"kind":"data"}');
-    expect(mocks.activeRuntime.cancel).toHaveBeenCalledWith("invoke-1");
-    expect(mocks.activeRuntime.cancelAll).toHaveBeenCalledOnce();
+      expect(mocks.activeRuntime.handleInput).toHaveBeenCalledWith(
+        "invoke-1",
+        3,
+        '{"kind":"data"}',
+      );
+      expect(mocks.activeRuntime.cancel).toHaveBeenCalledWith("invoke-1");
+      expect(mocks.activeRuntime.cancelAll).toHaveBeenCalledOnce();
+    } finally {
+      processOn.mock.calls.find(([event]) => event === "SIGTERM")?.[1]?.("SIGTERM");
+      await running;
+      process.exitCode = previousExitCode;
+      processOn.mockRestore();
+    }
   });
 
   it.each([
@@ -505,6 +534,8 @@ describe("runNodeHost", () => {
       ready: true,
       aborted: false,
       elapsedMs: 0,
+      maxDriftMs: 0,
+      checks: 1,
     });
     const unref = vi.fn();
     const interval = { unref } as unknown as ReturnType<typeof setInterval>;
@@ -533,7 +564,9 @@ describe("runNodeHost", () => {
       const onSigterm = processOnSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
       expect(onSigterm).toBeTypeOf("function");
       onSigterm?.("SIGTERM");
-      await vi.waitFor(() => expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce());
+      await vi.waitFor(() =>
+        expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce(),
+      );
 
       expect(clearIntervalSpy).not.toHaveBeenCalled();
       await vi.waitFor(() => expect(mocks.closeMcpManager).toHaveBeenCalledOnce());
@@ -567,7 +600,7 @@ describe("runNodeHost", () => {
       );
 
       expect(clearIntervalSpy).toHaveBeenCalledWith(interval);
-      expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
+      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
     } finally {
       setIntervalSpy.mockRestore();
       clearIntervalSpy.mockRestore();
@@ -580,7 +613,7 @@ describe("runNodeHost", () => {
     ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
     ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
   ])("closes MCP clients before exiting on terminal reconnect pause %s", async (detailCode) => {
-    const readiness = createDeferred<{ ready: false; aborted: false; elapsedMs: number }>();
+    const readiness = createDeferred<EventLoopReadyResult>();
     const mcpClose = createDeferred<undefined>();
     mocks.startGatewayClientWhenEventLoopReady.mockReturnValueOnce(readiness.promise);
     mocks.closeMcpManager.mockReturnValueOnce(mcpClose.promise);
@@ -598,20 +631,20 @@ describe("runNodeHost", () => {
       await vi.waitFor(() => {
         expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
       });
-      expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalled();
+      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalled();
       expect(exit).not.toHaveBeenCalled();
 
       mcpClose.resolve(undefined);
       await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(undefined, 1));
 
-      readiness.resolve({ ready: false, aborted: false, elapsedMs: 0 });
+      readiness.resolve({ ready: false, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 0 });
       await stopped;
       expect(process.exitCode).toBe(1);
       expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
-      expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
+      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
     } finally {
       mcpClose.resolve(undefined);
-      readiness.resolve({ ready: false, aborted: false, elapsedMs: 0 });
+      readiness.resolve({ ready: false, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 0 });
       try {
         // Shutdown owns the exit callback; keep it intercepted until the run settles.
         await stopped;
@@ -627,7 +660,7 @@ describe("runNodeHost", () => {
       "event loop readiness timeout",
     );
     mocks.closeMcpManager.mockClear();
-    mocks.capturedGatewayClients[0]?.stop.mockClear();
+    mocks.capturedGatewayClients[0]?.stopAndWait.mockClear();
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
     try {
@@ -641,7 +674,7 @@ describe("runNodeHost", () => {
         "node host gateway reconnect paused after close (1008): connect failed detail=PAIRING_REQUIRED; waiting for operator action\n",
       );
       expect(mocks.closeMcpManager).not.toHaveBeenCalled();
-      expect(mocks.capturedGatewayClients[0]?.stop).not.toHaveBeenCalled();
+      expect(mocks.capturedGatewayClients[0]?.stopAndWait).not.toHaveBeenCalled();
       expect(exit).not.toHaveBeenCalled();
     } finally {
       stderr.mockRestore();

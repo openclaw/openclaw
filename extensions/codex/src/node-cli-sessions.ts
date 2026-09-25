@@ -261,7 +261,7 @@ export function formatCodexCliSessions(params: {
 }
 
 async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<string> {
-  const params = readRecordParam(paramsJSON);
+  const params = parseJsonRecord(paramsJSON);
   const limit = normalizeLimit(params.limit);
   const filter = typeof params.filter === "string" ? params.filter.trim().toLowerCase() : "";
   const codexHome = resolveCodexAppServerUserHomeDir();
@@ -287,7 +287,7 @@ async function resumeLocalCodexCliSession(
   context?: Parameters<OpenClawPluginNodeHostCommand["handle"]>[2],
 ): Promise<string> {
   context?.signal?.throwIfAborted();
-  const params = readRecordParam(paramsJSON);
+  const params = parseJsonRecord(paramsJSON);
   const sessionId = typeof params.sessionId === "string" ? params.sessionId.trim() : "";
   const prompt = typeof params.prompt === "string" ? params.prompt.trim() : "";
   const expectedHomeId = readBoundedOptionalString(params, "sourceHomeId", MAX_SESSION_ID_LENGTH);
@@ -416,17 +416,8 @@ async function readHistorySessions(
   const summaries = new Map<string, CodexCliSessionSummary>();
   const historyPath = path.join(codexHome, "history.jsonl");
   const result = await visitJsonlLines(historyPath, (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      return;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed) as unknown;
-    } catch {
-      return;
-    }
-    if (!isRecord(parsed) || typeof parsed.session_id !== "string") {
+    const parsed = parseJsonRecord(line.trim());
+    if (typeof parsed.session_id !== "string") {
       return;
     }
     const sessionId = parsed.session_id.trim();
@@ -483,19 +474,7 @@ async function readSessionFileSummary(file: string): Promise<CodexCliSessionSumm
   let lastMessage: string | undefined;
   let messageCount = 0;
   const result = await visitJsonlLines(file, (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      return;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed) as unknown;
-    } catch {
-      return;
-    }
-    if (!isRecord(parsed)) {
-      return;
-    }
+    const parsed = parseJsonRecord(line.trim());
     if (typeof parsed.timestamp === "string" && parsed.timestamp.trim()) {
       updatedAt = parsed.timestamp.trim();
     }
@@ -667,7 +646,7 @@ function unwrapNodeInvokePayload(raw: unknown): unknown {
   return raw;
 }
 
-function readRecordParam(paramsJSON?: string | null): Record<string, unknown> {
+function parseJsonRecord(paramsJSON?: string | null): Record<string, unknown> {
   if (!paramsJSON?.trim()) {
     return {};
   }

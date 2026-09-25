@@ -1,5 +1,4 @@
 // Exposes archive extraction helpers after applying fs-safe defaults.
-import "./fs-safe-defaults.js";
 import {
   extractArchive as extractArchiveWithFsSafe,
   type ExtractArchiveOptions,

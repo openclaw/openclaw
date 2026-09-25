@@ -1,12 +1,21 @@
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
+import {
+  linkUserChannelIdentity,
+  authorizeUserChannelIdentityInDatabase,
+  publishUserChannelPolicyInDatabase,
+  resolveUserChannelAuthorizationPolicy,
+} from "./user-channel-identities.js";
 import {
   listUserProfilesSync,
   readUserProfileEmailBindings,
@@ -232,3 +241,71 @@ describe("user profile role schema", () => {
     },
   );
 });
+
+it.each([false, true])(
+  "upgrades channel links without granting legacy recovery custody (deferred: %s)",
+  (deferred) => {
+    const options = stateOptions();
+    const profile = ensureProfileForEmail("upgrade@example.test", options);
+    const identity = { channelId: "discord", accountId: "team", senderId: "100" };
+    linkUserChannelIdentity(profile.id, identity, options);
+    const runId = "ed099411-cfbd-4304-a6b7-d3e504a48505";
+    if (deferred) {
+      createUpdateRun({ runId, trigger: "cli", before: { version: "2026.9.2" } }, options);
+    }
+    closeOpenClawStateDatabaseForTest();
+    const legacy = new DatabaseSync(options.path);
+    legacy.exec(`
+    DROP INDEX idx_user_profile_identities_authorization;
+    ALTER TABLE user_profile_identities DROP COLUMN authorization_id;
+    ALTER TABLE user_profile_identities DROP COLUMN authorization_basis_json;
+    PRAGMA user_version = 18;
+    UPDATE schema_meta SET schema_version = 18;
+  `);
+    const before = legacy.prepare("SELECT * FROM user_profile_identities").all();
+    legacy.close();
+    let db = openOpenClawStateDatabase(options).db;
+    expect(db.prepare("SELECT * FROM user_profile_identities").all()).toEqual(
+      before.map((row) =>
+        Object.assign(row, {
+          authorization_id: null,
+          authorization_basis_json: null,
+        }),
+      ),
+    );
+    const policy = resolveUserChannelAuthorizationPolicy({
+      roles: {
+        default: "admin",
+        definitions: {
+          admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
+        },
+      },
+    });
+    const mint = () =>
+      runOpenClawStateWriteTransaction(({ db: writer }) => {
+        publishUserChannelPolicyInDatabase(writer, policy);
+        return authorizeUserChannelIdentityInDatabase(writer, {
+          identity,
+          profileId: profile.id,
+          policy,
+          grant: null,
+        });
+      }, options);
+    if (deferred) {
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
+      expect(mint()).toBeUndefined();
+      db.prepare(
+        "UPDATE update_runs SET status = 'succeeded', phase = 'finished', finished_at_ms = ? WHERE run_id = ?",
+      ).run(Date.now() - 300_001, runId);
+      closeOpenClawStateDatabaseForTest();
+      db = openOpenClawStateDatabase(options).db;
+    }
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
+    const reference = mint();
+    expect(reference).toEqual({ version: 1, id: expect.any(String) });
+    closeOpenClawStateDatabaseForTest();
+    expect(mint()).toEqual(reference);
+  },
+);

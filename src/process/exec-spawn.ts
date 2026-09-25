@@ -13,6 +13,7 @@ import {
   type SpawnResult,
 } from "./exec-result.js";
 import { killProcessTree } from "./kill-tree.js";
+import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
 import {
@@ -204,6 +205,7 @@ function retainCommandProcess(
       }
     }
     killProcessTree(pid, { detached: true, force: true });
+    scheduleAdoptedChildZombieReapAfterExit(nativeChild, true);
   };
   const initialize = () => {
     pid = child.pid;

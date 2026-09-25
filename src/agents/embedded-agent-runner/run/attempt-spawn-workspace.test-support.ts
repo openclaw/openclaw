@@ -669,16 +669,10 @@ vi.mock("../../provider-stream.js", () => ({
   registerProviderStreamForModel: vi.fn(),
 }));
 
-vi.mock("../../sandbox/runtime-status.js", () => ({
-  resolveSandboxRuntimeStatus: () => ({
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    mainSessionKey: "agent:main:main",
-    mode: "off",
-    sandboxed: false,
-    toolPolicy: { allow: [], deny: [], sources: { allow: { key: "" }, deny: { key: "" } } },
-  }),
-}));
+vi.mock(
+  "../../sandbox/runtime-status.js",
+  () => import("./attempt-spawn-workspace.sandbox-mock.test-support.js"),
+);
 
 vi.mock("../../tool-fs-policy.js", () => ({
   resolveSessionPermissionExecMode: (policy: { mode: string }) =>

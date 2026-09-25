@@ -192,23 +192,6 @@ export function mergeTransportHeaders(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-export function mergeTransportMetadata<T extends Record<string, unknown>>(
-  payload: T,
-  metadata?: Record<string, string>,
-): T {
-  if (!metadata || Object.keys(metadata).length === 0) {
-    return payload;
-  }
-  const existingMetadata = asOptionalRecord(payload.metadata) as Record<string, string> | undefined;
-  return {
-    ...payload,
-    metadata: {
-      ...existingMetadata,
-      ...metadata,
-    },
-  };
-}
-
 export function createEmptyTransportUsage(): TransportUsage {
   return {
     input: 0,

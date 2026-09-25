@@ -1,7 +1,6 @@
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
-import { createFeishuClient } from "./client.js";
+import { createConfiguredFeishuClient } from "./configured-client.js";
 
 type FeishuReaction = {
   reactionId: string;
@@ -9,14 +8,6 @@ type FeishuReaction = {
   operatorType: "app" | "user" | "unknown";
   operatorId: string;
 };
-
-function resolveConfiguredFeishuClient(params: { cfg: ClawdbotConfig; accountId?: string }) {
-  const account = resolveFeishuRuntimeAccount(params);
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-  return createFeishuClient(account);
-}
 
 /**
  * Add a reaction (emoji) to a message.
@@ -30,7 +21,7 @@ export async function addReactionFeishu(params: {
   accountId?: string;
 }): Promise<{ reactionId: string }> {
   const { cfg, messageId, emojiType, accountId } = params;
-  const client = resolveConfiguredFeishuClient({ cfg, accountId });
+  const client = createConfiguredFeishuClient({ cfg, accountId });
 
   const response = (await client.im.messageReaction.create({
     path: { message_id: messageId },
@@ -65,7 +56,7 @@ export async function removeReactionFeishu(params: {
   accountId?: string;
 }): Promise<void> {
   const { cfg, messageId, reactionId, accountId } = params;
-  const client = resolveConfiguredFeishuClient({ cfg, accountId });
+  const client = createConfiguredFeishuClient({ cfg, accountId });
 
   const response = (await client.im.messageReaction.delete({
     path: {
@@ -87,7 +78,7 @@ export async function listReactionsFeishu(params: {
   accountId?: string;
 }): Promise<FeishuReaction[]> {
   const { cfg, messageId, emojiType, accountId } = params;
-  const client = resolveConfiguredFeishuClient({ cfg, accountId });
+  const client = createConfiguredFeishuClient({ cfg, accountId });
   const reactions: FeishuReaction[] = [];
   const seenPageTokens = new Set<string>();
   let pageToken: string | undefined;

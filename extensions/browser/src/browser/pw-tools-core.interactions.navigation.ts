@@ -1,5 +1,5 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { Frame, Page } from "playwright-core";
-import { toErrorObject } from "../infra/errors.js";
 import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import {
   assertBrowserNavigationResultAllowed,
@@ -177,24 +177,7 @@ export async function runCancellablePageInteraction<T>(
 // fragment — do not cause a network request and must not trigger SSRF checks.
 function didCrossDocumentUrlChange(page: { url(): string }, previousUrl: string): boolean {
   const currentUrl = page.url();
-  if (currentUrl === previousUrl) {
-    return false;
-  }
-  try {
-    const prev = new URL(previousUrl);
-    const curr = new URL(currentUrl);
-    if (
-      prev.origin === curr.origin &&
-      prev.pathname === curr.pathname &&
-      prev.search === curr.search
-    ) {
-      // Only the fragment changed — same-document navigation, no fetch.
-      return false;
-    }
-  } catch {
-    // Non-parseable URL; fall through to string comparison.
-  }
-  return true;
+  return currentUrl !== previousUrl && !isHashOnlyNavigation(currentUrl, previousUrl);
 }
 
 // Returns true when a framenavigated event represents only a hash-only
@@ -352,7 +335,7 @@ function scheduleDelayedInteractionNavigationGuard(
   if (!hasInteractionNavigationPolicy(navigationPolicy)) {
     return Promise.resolve();
   }
-  const page = opts.page as unknown as NavigationObservablePage;
+  const page: NavigationObservablePage = opts.page;
   if (didCrossDocumentUrlChange(page, opts.previousUrl)) {
     return assertPageNavigationCompletedSafely({
       cdpUrl: opts.cdpUrl,
@@ -444,7 +427,7 @@ async function assertInteractionNavigationCompletedSafely<T>(
   // action so navigations triggered mid-click or mid-evaluate are not missed.
   // Using a fixed pre-action timer would expire before the action finishes for
   // slow interactions, silently bypassing the SSRF guard.
-  const navPage = opts.page as unknown as NavigationObservablePage;
+  const navPage: NavigationObservablePage = opts.page;
   let navigatedDuringAction = false;
   const subframeNavigationsDuringAction: string[] = [];
   const onFrameNavigated = (frame: Frame) => {

@@ -275,7 +275,7 @@ docker_build_with_retries() {
       return 1
     fi
 
-    echo "Docker build failed with a transient Docker/registry error; retrying ($attempt/$retries)..." >&2
+    echo "::warning::Docker build failed with a transient Docker/registry error; retrying ($attempt/$retries)..." >&2
     docker_e2e_print_log "$log_file"
     rm -f "$log_file"
     attempt=$((attempt + 1))

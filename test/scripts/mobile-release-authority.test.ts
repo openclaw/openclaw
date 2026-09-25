@@ -3658,11 +3658,11 @@ fi
           "bundler-cache": false,
           "ruby-version": "3.4.10",
           "working-directory": "apps/android",
-          bundler: "2.6.9",
+          bundler: "4.0.21",
         });
-        expect(bundleStep?.run).toContain("bundle _2.6.9_ install --jobs 4 --retry 3");
-        expect(bundleStep?.run).toContain("bundle _2.6.9_ check");
-        expect(bundleStep?.run).toContain("bundle _2.6.9_ exec ruby");
+        expect(bundleStep?.run).toContain("bundle _4.0.21_ install --jobs 4 --retry 3");
+        expect(bundleStep?.run).toContain("bundle _4.0.21_ check");
+        expect(bundleStep?.run).toContain("bundle _4.0.21_ exec ruby");
         expect(source).not.toContain("gem install fastlane");
       }
 
@@ -4066,8 +4066,8 @@ fi
     const prepared = runSigningProof();
     expect(prepared.result.status, prepared.result.stderr).toBe(0);
     expect(prepared.events).toEqual([
-      "bundle:_2.6.9_ check",
-      "bundle:_2.6.9_ exec fastlane ios signing_check",
+      "bundle:_4.0.21_ check",
+      "bundle:_4.0.21_ exec fastlane ios signing_check",
       "probe:root-cwd",
     ]);
     expect(signingProof).toContain("source ./scripts/lib/ios-fastlane.sh");
@@ -4075,7 +4075,7 @@ fi
 
     const failedCheck = runSigningProof({ FIXTURE_FAIL_CHECK: "1" });
     expect(failedCheck.result.status).not.toBe(0);
-    expect(failedCheck.events).toEqual(["bundle:_2.6.9_ check"]);
+    expect(failedCheck.events).toEqual(["bundle:_4.0.21_ check"]);
 
     const authorityCheckout = releaseSteps.find(
       (step) => step.name === "Checkout trusted mobile release authority",

@@ -29,7 +29,7 @@ import { hasConfiguredCommandOwners } from "../commands/doctor-command-owner.js"
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import { createConfigIO } from "../config/io.factory.js";
-import { createManagedRuntimeEnvBase } from "../config/io.read-helpers.js";
+import { createManagedRuntimeEnvBase } from "../config/io.runtime-env.js";
 import { formatConfigIssueSummary } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";

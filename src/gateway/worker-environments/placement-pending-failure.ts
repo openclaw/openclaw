@@ -13,7 +13,8 @@ import {
   assertNoRunningWorkerSessionToolOperations,
   clearWorkerTurnToolState,
 } from "./placement-session-tool-operations.js";
-import { signalWorkerTurnClaimClosed } from "./placement-turn-claims.js";
+import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
+import { deferWorkerTurnClaimClosed } from "./placement-turn-claim-events.js";
 import {
   isCurrentWorkerWorkspacePendingResultOwner,
   type WorkerWorkspacePendingResult,
@@ -29,7 +30,7 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
     ): WorkerSessionPlacementRecord {
       const sessionId = required(pending.sessionId, "session id");
       const recoveryError = boundedWorkerError(error);
-      const outcome = write((db) => {
+      return write((db) => {
         const current = getRequired(db, sessionId);
         if (!isCurrentWorkerWorkspacePendingResultOwner(current, pending)) {
           throw new Error(`Session ${sessionId} workspace result owner changed before failure`);
@@ -85,6 +86,7 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
             throw new Error(`Session ${sessionId} workspace result changed during drain`);
           }
           transitioning = getRequired(db, sessionId);
+          publishPlacementTurnClaimState(db, transitioning);
         }
         if (transitioning.state !== "draining") {
           throw new Error(`Session ${sessionId} workspace result did not reach draining`);
@@ -110,6 +112,7 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
           throw new Error(`Session ${sessionId} workspace result changed during reconcile`);
         }
         transitioning = getRequired(db, sessionId);
+        publishPlacementTurnClaimState(db, transitioning);
         const failedValues = transitionValues(
           transitioning,
           "failed",
@@ -144,15 +147,13 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
           throw new Error(`Session ${sessionId} workspace result changed during failure`);
         }
         sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
-        return {
-          record: getRequired(db, sessionId),
-          releasedClaim,
-        };
+        const record = getRequired(db, sessionId);
+        publishPlacementTurnClaimState(db, record);
+        if (releasedClaim) {
+          deferWorkerTurnClaimClosed(db, path, releasedClaim);
+        }
+        return record;
       });
-      if (outcome.releasedClaim) {
-        signalWorkerTurnClaimClosed(path, outcome.releasedClaim);
-      }
-      return outcome.record;
     },
   };
 }

@@ -52,7 +52,13 @@ export function isCodexAppServerNativeAuthProfile(
         },
       );
     const credential = store.profiles[authProfileId];
-    if (!credential || credential.type === "api_key") {
+    if (
+      !credential ||
+      credential.type === "api_key" ||
+      (credential.type === "oauth" &&
+        (credential.authFlow === "chatgpt-token-sharing" ||
+          credential.authFlow === "chatgpt-identity"))
+    ) {
       return false;
     }
     const provider = credential.provider?.trim();

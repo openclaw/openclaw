@@ -1,8 +1,8 @@
 // Browser tests cover cdp.helpers plugin behavior.
 import type { LookupAddress, LookupAllOptions, LookupOneOptions, LookupOptions } from "node:dns";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import type { LookupFn } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { LookupFn } from "../infra/net/ssrf.js";
 import {
   assertChromeMcpCdpTransportAllowed,
   resolveCdpReachabilityPolicy,
@@ -182,8 +182,9 @@ describe("cdp helpers", () => {
   it("does not turn a strict remote CDP hostname into a private-network grant", async () => {
     const policy = { dangerouslyAllowPrivateNetwork: false };
     const scoped = scopeCdpPolicyToConfiguredEndpoint("https://browser.example:9222", policy);
-    const { resolvePinnedHostnameWithPolicy } =
-      await vi.importActual<typeof import("../infra/net/ssrf.js")>("../infra/net/ssrf.js");
+    const { resolvePinnedHostnameWithPolicy } = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/security-runtime")
+    >("openclaw/plugin-sdk/security-runtime");
 
     expect(scoped).toBe(policy);
     await expect(
@@ -200,8 +201,9 @@ describe("cdp helpers", () => {
       allowedHostnames: ["browser.example"],
     };
     const scoped = scopeCdpPolicyToConfiguredEndpoint("https://browser.example:9222", policy);
-    const { resolvePinnedHostnameWithPolicy } =
-      await vi.importActual<typeof import("../infra/net/ssrf.js")>("../infra/net/ssrf.js");
+    const { resolvePinnedHostnameWithPolicy } = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/security-runtime")
+    >("openclaw/plugin-sdk/security-runtime");
 
     expect(scoped).toEqual({
       dangerouslyAllowPrivateNetwork: false,

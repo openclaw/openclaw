@@ -153,6 +153,38 @@ describe("fail-closed Windows ACL probe", () => {
   });
 
   it.each([
+    { role: "root", rightsMask: 0x100000, inheritOnly: false, allowed: true },
+    { role: "ancestor", rightsMask: 0x000001, inheritOnly: false, allowed: true },
+    { role: "ancestor", rightsMask: 0x040000, inheritOnly: false, allowed: false },
+    { role: "ancestor", rightsMask: 0x040000, inheritOnly: true, allowed: true },
+    { role: "root", rightsMask: 0x040000, inheritOnly: true, allowed: false },
+    { role: "root", rightsMask: 0x80000000, inheritOnly: false, allowed: false },
+    { role: "ancestor", rightsMask: 0x000200, inheritOnly: false, allowed: false },
+  ])("enforces $role access for mask $rightsMask with inheritOnly=$inheritOnly", async (row) => {
+    const tempDir = tempDirs.make("openclaw-snapshot-windows-acl-rights-");
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const entries: WindowsAclProbeEntry[] = [
+      CURRENT_USER_FULL_ACCESS,
+      {
+        principal: "S-1-1-0",
+        accessType: "Allow",
+        rightsMask: row.rightsMask,
+        inheritanceFlags: "ObjectInherit, ContainerInherit",
+        propagationFlags: row.inheritOnly ? "InheritOnly" : "None",
+      },
+    ];
+    mockWindowsPathSecurity(
+      row.role === "root" ? { rootEntries: entries } : { ancestorEntries: entries },
+    );
+    const result = ensurePrivateSnapshotRepositoryRoot(tempDir);
+    if (row.allowed) {
+      await expect(result).resolves.toBe(tempDir);
+    } else {
+      await expect(result).rejects.toThrow("Windows ACL permits untrusted SQLite staging access");
+    }
+  });
+
+  it.each([
     {
       label: "a OneDrive-style synced root",
       params: {

@@ -9,7 +9,6 @@ import type {
   CodexAppServerNetworkProxyConfig,
   CodexAppServerPolicyMode,
   CodexAppServerRuntimeOptions,
-  CodexAppServerSandboxMode,
   CodexAppServerTransportMode,
   OpenClawExecMode,
   ResolvedCodexAppServerNetworkProxyConfig,
@@ -27,7 +26,7 @@ import {
   selectUserApprovalsReviewer,
 } from "./config-requirements.js";
 import { readNonEmptyString } from "./config-utils.js";
-import type { JsonObject, JsonValue } from "./protocol.js";
+import type { CodexSandboxMode, JsonObject, JsonValue } from "./protocol.js";
 
 export function shouldAutoApproveCodexAppServerApprovals(
   appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy" | "networkProxy" | "sandbox">,
@@ -41,7 +40,7 @@ export function shouldAutoApproveCodexAppServerApprovals(
 
 export function resolveCodexAppServerNetworkProxy(
   config: CodexAppServerNetworkProxyConfig | undefined,
-  sandbox: CodexAppServerSandboxMode,
+  sandbox: CodexSandboxMode,
 ): { networkProxy?: ResolvedCodexAppServerNetworkProxyConfig } {
   if (config?.enabled !== true) {
     return {};

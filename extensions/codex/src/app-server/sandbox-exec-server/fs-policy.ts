@@ -89,14 +89,11 @@ function resolveFsSandboxEntry(entry: JsonObject, cwd: string): ResolvedFsSandbo
     };
   }
   if (pathType === "special") {
-    if (isNonGrantingFsSpecialPath(requireObject(pathSpec.value, "fs sandbox special path"))) {
-      return undefined;
-    }
-    return {
-      kind: "path",
-      path: resolveFsSpecialPath(requireObject(pathSpec.value, "fs sandbox special path"), cwd),
-      access,
-    };
+    const path = resolveFsSpecialPath(
+      requireObject(pathSpec.value, "fs sandbox special path"),
+      cwd,
+    );
+    return path === undefined ? undefined : { kind: "path", path, access };
   }
   if (pathType === "glob_pattern") {
     const pattern = requireString(pathSpec.pattern, "fs sandbox glob pattern");
@@ -114,11 +111,6 @@ function resolveFsSandboxEntry(entry: JsonObject, cwd: string): ResolvedFsSandbo
   throw new Error(`Unsupported Codex fs sandbox path type: ${pathType}`);
 }
 
-function isNonGrantingFsSpecialPath(value: JsonObject): boolean {
-  const kind = requireString(value.kind, "fs sandbox special path kind");
-  return kind === "minimal" || kind === "unknown";
-}
-
 function readFsAccessMode(value: unknown): FsAccessMode {
   if (value === "read" || value === "write" || value === "none") {
     return value;
@@ -129,8 +121,11 @@ function readFsAccessMode(value: unknown): FsAccessMode {
   throw new Error("fs sandbox entry access must be read, write, none, or deny.");
 }
 
-function resolveFsSpecialPath(value: JsonObject, cwd: string): string {
+function resolveFsSpecialPath(value: JsonObject, cwd: string): string | undefined {
   const kind = requireString(value.kind, "fs sandbox special path kind");
+  if (kind === "minimal" || kind === "unknown") {
+    return undefined;
+  }
   if (kind === "root") {
     return "/";
   }

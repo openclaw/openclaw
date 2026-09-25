@@ -39,15 +39,8 @@ type TerminalAttachResult = TerminalOpenResult & {
   seq?: number;
 };
 
-export type TerminalSessionInfo = {
-  sessionId: string;
-  agentId: string;
-  shell: string;
-  title?: string;
-  cwd: string;
-  confined: boolean;
+export type TerminalSessionInfo = TerminalOpenResult & {
   attached: boolean;
-  owner?: "conn" | `agent:${string}`;
   createdAtMs: number;
 };
 

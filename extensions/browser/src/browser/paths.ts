@@ -6,12 +6,12 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
   resolveExistingPathsWithinRoot,
   resolveStrictExistingPathsWithinRoot,
-} from "../sdk-security-runtime.js";
-import { CONFIG_DIR } from "../utils.js";
+} from "openclaw/plugin-sdk/security-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { CONFIG_DIR } from "openclaw/plugin-sdk/text-utility-runtime";
 export { resolveExistingPathsWithinRoot };
 
 const DEFAULT_FALLBACK_BROWSER_TMP_DIR = "/tmp/openclaw";
@@ -194,12 +194,12 @@ async function resolveDirectInboundMediaPath(params: {
   return inboundPathsResult;
 }
 
-/** Resolve upload paths and managed media references into existing file paths. */
-export async function resolveExistingUploadPaths({
+async function resolveUploadPaths({
   requestedPaths,
   uploadDir = DEFAULT_UPLOAD_DIR,
   inboundMediaDir = DEFAULT_INBOUND_MEDIA_DIR,
-}: UploadPathResolutionOptions): Promise<ExistingPathsResult> {
+  strict,
+}: UploadPathResolutionOptions & { strict: boolean }): Promise<ExistingPathsResult> {
   const paths: string[] = [];
   for (const requestedPath of requestedPaths) {
     const managedMediaPathResult = resolveManagedInboundMediaRef(requestedPath, inboundMediaDir);
@@ -209,7 +209,7 @@ export async function resolveExistingUploadPaths({
 
     if (managedMediaPathResult?.uploadRootPrecedence !== false) {
       const uploadPathsResult =
-        managedMediaPathResult?.uploadRootPrecedence === true
+        strict || managedMediaPathResult?.uploadRootPrecedence === true
           ? await resolveStrictExistingPathsWithinRoot({
               rootDir: uploadDir,
               requestedPaths: [requestedPath],
@@ -229,7 +229,7 @@ export async function resolveExistingUploadPaths({
     const inboundPathsResult = await resolveDirectInboundMediaPath({
       inboundMediaDir,
       requestedPath: managedMediaPathResult?.path ?? requestedPath,
-      strict: false,
+      strict,
     });
     if (!inboundPathsResult.ok) {
       return inboundPathsResult;
@@ -239,40 +239,16 @@ export async function resolveExistingUploadPaths({
   return { ok: true, paths };
 }
 
+/** Resolve upload paths and managed media references into existing file paths. */
+export async function resolveExistingUploadPaths(
+  options: UploadPathResolutionOptions,
+): Promise<ExistingPathsResult> {
+  return resolveUploadPaths({ ...options, strict: false });
+}
+
 /** Strictly resolve upload paths under the upload root only. */
-export async function resolveStrictExistingUploadPaths({
-  requestedPaths,
-  uploadDir = DEFAULT_UPLOAD_DIR,
-  inboundMediaDir = DEFAULT_INBOUND_MEDIA_DIR,
-}: UploadPathResolutionOptions): Promise<StrictExistingPathsResult> {
-  const paths: string[] = [];
-  for (const requestedPath of requestedPaths) {
-    const managedMediaPathResult = resolveManagedInboundMediaRef(requestedPath, inboundMediaDir);
-    if (managedMediaPathResult?.ok === false) {
-      return managedMediaPathResult;
-    }
-
-    if (managedMediaPathResult?.uploadRootPrecedence !== false) {
-      const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
-        rootDir: uploadDir,
-        requestedPaths: [requestedPath],
-        scopeLabel: `uploads directory (${uploadDir})`,
-      });
-      if (uploadPathsResult.ok) {
-        paths.push(uploadPathsResult.paths[0] ?? requestedPath);
-        continue;
-      }
-    }
-
-    const inboundPathsResult = await resolveDirectInboundMediaPath({
-      inboundMediaDir,
-      requestedPath: managedMediaPathResult?.path ?? requestedPath,
-      strict: true,
-    });
-    if (!inboundPathsResult.ok) {
-      return inboundPathsResult;
-    }
-    paths.push(inboundPathsResult.paths[0] ?? requestedPath);
-  }
-  return { ok: true, paths };
+export async function resolveStrictExistingUploadPaths(
+  options: UploadPathResolutionOptions,
+): Promise<StrictExistingPathsResult> {
+  return resolveUploadPaths({ ...options, strict: true });
 }

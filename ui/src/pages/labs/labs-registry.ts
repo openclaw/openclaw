@@ -1,5 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
+import { registerLabsEnglish } from "../../i18n/locales/en-labs.ts";
+
+registerLabsEnglish();
 
 /** What a lab row writes at its gate. Most gates are booleans; some are modes. */
 type LabFeatureValue = boolean | string;

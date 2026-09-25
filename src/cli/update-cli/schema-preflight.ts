@@ -5,6 +5,7 @@ import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config
 import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
 import { createConfigIO } from "../../config/io.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
+import { resolveConfigPath } from "../../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../../config/sessions/targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -16,12 +17,30 @@ import {
   type OpenClawDatabaseSchemaPreflight,
 } from "../../state/openclaw-database-preflight.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { UpdatePreMutationError } from "./shared.js";
 
 type TargetDatabaseSchemaContext = {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 };
+
+export type TargetDatabaseSchemaContextOptions = {
+  legacyConfigPlan?: LegacyConfigUpdatePlan;
+  /** Candidate admission owns schema validation; the installed process still pins source bytes. */
+  configValidation?: "candidate";
+};
+
+/** Candidate admission sees only the invoking process's config and shared-state selectors. */
+export function isCandidateAdmissionContextCovered(
+  env: NodeJS.ProcessEnv,
+  admissionEnv: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return (
+    resolveConfigPath(env) === resolveConfigPath(admissionEnv) &&
+    resolveOpenClawStateSqlitePath(env) === resolveOpenClawStateSqlitePath(admissionEnv)
+  );
+}
 
 export function formatSchemaRefusalLines(
   schemas: {
@@ -74,8 +93,12 @@ async function checkTargetDatabaseSchemas(
 
 export async function captureTargetDatabaseSchemaContext(
   env: NodeJS.ProcessEnv,
-  options?: { legacyConfigPlan?: LegacyConfigUpdatePlan },
+  options?: TargetDatabaseSchemaContextOptions,
 ) {
+  const configValidation =
+    options?.configValidation === "candidate" && isCandidateAdmissionContextCovered(env)
+      ? ("candidate" as const)
+      : undefined;
   // Discover stores without plugins, recovery, observations, or caller environment changes.
   const inspectionEnv = cloneEnvWithPlatformSemantics(env);
   const readEnv = cloneEnvWithPlatformSemantics(env);
@@ -114,7 +137,10 @@ export async function captureTargetDatabaseSchemaContext(
       `Update refused: planned configuration changed at ${snapshot.path}. Retry against the current source.`,
     );
   }
-  if ((!snapshot.valid && !legacyConfigPlan) || snapshot.readError) {
+  if (
+    (!snapshot.valid && !legacyConfigPlan && configValidation !== "candidate") ||
+    snapshot.readError
+  ) {
     throw new UpdatePreMutationError(
       "invalid-config",
       [
@@ -135,10 +161,14 @@ export async function captureTargetDatabaseSchemaContext(
   }
   return {
     env: inspectionEnv,
-    config: legacyConfigPlan?.config ?? snapshot.sourceConfig ?? snapshot.config,
+    config:
+      configValidation === "candidate"
+        ? snapshot.sourceConfig
+        : (legacyConfigPlan?.config ?? snapshot.sourceConfig ?? snapshot.config),
     configSnapshot: snapshot,
     readEnv,
     ...(legacyConfigPlan ? { legacyConfigPlan } : {}),
+    ...(configValidation ? { configValidation } : {}),
   };
 }
 

@@ -11,6 +11,7 @@ import type { CodexAppServerStartOptions } from "../app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import {
   isOpenAiCuratedMarketplace,
+  marketplaceRef,
   pluginReadParams,
   type CodexPluginMarketplaceRef,
 } from "../app-server/plugin-inventory.js";
@@ -219,7 +220,7 @@ function discoverInstalledCuratedPluginSources(
       }
       installedByName.set(plugin.pluginName, {
         plugin,
-        marketplace: marketplaceRef(marketplace),
+        marketplace: marketplaceRef(marketplace, CODEX_PLUGINS_MARKETPLACE_NAME),
         ...(remote
           ? { readPluginName: summary.remotePluginId?.trim() || undefined }
           : { readPluginName: plugin.pluginName }),
@@ -228,14 +229,6 @@ function discoverInstalledCuratedPluginSources(
     }
   }
   return Array.from(installedByName.values());
-}
-
-function marketplaceRef(marketplace: v2.PluginMarketplaceEntry): CodexPluginMarketplaceRef {
-  return {
-    name: CODEX_PLUGINS_MARKETPLACE_NAME,
-    ...(marketplace.path ? { path: marketplace.path } : {}),
-    ...(!marketplace.path ? { remoteMarketplaceName: marketplace.name } : {}),
-  };
 }
 
 async function withPluginMigrationEligibility(params: {

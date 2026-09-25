@@ -458,7 +458,31 @@ describe("toSanitizedMarkdownHtml links", () => {
       [
         "other path",
         "https://github.com/openclaw/openclaw/actions/runs/123",
-        "github.com/actions/runs/123",
+        "github.com/openclaw/openclaw/actions/runs/123",
+        undefined,
+      ],
+      [
+        "repository directory",
+        "https://github.com/openclaw/openclaw/tree/main/.agents/skills/test-audit",
+        "openclaw/openclaw/…/test-audit",
+        undefined,
+      ],
+      [
+        "branch root",
+        "https://github.com/openclaw/openclaw/tree/main",
+        "github.com/openclaw/openclaw/tree/main",
+        undefined,
+      ],
+      [
+        "slash-containing branch root",
+        "https://github.com/acme/project/tree/feature/link-labels",
+        "acme/project/…/link-labels",
+        undefined,
+      ],
+      [
+        "labeled directory",
+        "[Audit skill](https://github.com/openclaw/openclaw/tree/main/.agents/skills/test-audit)",
+        "Audit skill",
         undefined,
       ],
       [
@@ -559,14 +583,31 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(link?.classList.contains("markdown-github-item")).toBe(true);
     });
 
-    it("keeps the specific destination addressable after shortening its label", () => {
-      const input = "https://github.com/blader/humanizer/blob/main/SKILL.md";
-      const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
-      const link = fragment.querySelector<HTMLAnchorElement>("a");
-      expect(link?.classList.contains("markdown-github-link")).toBe(true);
-      expect(link?.textContent).toBe("SKILL.md");
-      expect(link?.getAttribute("href")).toBe(input);
-      expect(link?.getAttribute("title")).toBe(input);
+    it.each([
+      ["https://github.com/blader/humanizer/blob/main/SKILL.md", "SKILL.md"],
+      [
+        "https://github.com/openclaw/openclaw/tree/main/.agents/skills/test-audit",
+        "openclaw/openclaw/…/test-audit",
+      ],
+      [
+        "https://github.com/openclaw/openclaw/tree/main/skills/test%20audit/?tab=readme#examples",
+        "openclaw/openclaw/…/test audit",
+      ],
+    ])("preserves the destination when shortening %s", (href, label) => {
+      for (const source of [href, `<${href}>`, "`" + href + "`"]) {
+        for (const html of [
+          toSanitizedMarkdownHtml(source),
+          toStreamingMarkdownParts(source).join(""),
+        ]) {
+          const link = htmlFragment(html).querySelector<HTMLAnchorElement>("a");
+          expect(link?.classList.contains("markdown-github-link")).toBe(true);
+          expect(link?.textContent).toBe(label);
+          expect(link?.getAttribute("href")).toBe(href);
+          expect(link?.getAttribute("title")).toBe(href);
+          expect(link?.getAttribute("target")).toBe("_blank");
+          expect(link?.getAttribute("rel")).toBe("noreferrer noopener");
+        }
+      }
     });
 
     it.each([

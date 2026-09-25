@@ -240,7 +240,7 @@ class AgentDatabaseStartupAdmission {
             if (!activation.isCurrent() || this.pending.get(agentId) !== refusal) {
               throw new Error(`Gateway no longer owns preparation for agent ${agentId}`);
             }
-            if (readAgentDeletionJournal(agentId, { env })) {
+            if (readAgentDeletionJournal(agentId, { env }, "runtime")) {
               throw new Error(`Agent ${agentId} was deleted during startup inspection`);
             }
             for (const witness of witnesses) {

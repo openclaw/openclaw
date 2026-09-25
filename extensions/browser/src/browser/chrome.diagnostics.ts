@@ -1,3 +1,4 @@
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 /**
  * Chrome CDP diagnostics.
  *
@@ -5,9 +6,8 @@
  * and formats status output for browser doctor/status flows.
  */
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { redactSensitiveText } from "../logging/redact.js";
 import { CHROME_REACHABILITY_TIMEOUT_MS, CHROME_WS_READY_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { CdpSocketError } from "./cdp-websocket.js";
 import {

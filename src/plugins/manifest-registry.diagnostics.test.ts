@@ -78,6 +78,9 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
       });
 
       expect(registry.plugins.map((plugin) => plugin.rootDir)).toEqual([configDir]);
+      expect(registry.diagnostics).toContainEqual(
+        expect.objectContaining({ level: "info", code: "explicit-config-plugin-selection" }),
+      );
       expect(
         registry.diagnostics
           .filter((diagnostic) => diagnostic.message.includes("extension entry unreadable"))

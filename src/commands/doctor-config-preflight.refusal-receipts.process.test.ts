@@ -88,7 +88,6 @@ describe("Doctor preflight refusal receipts", () => {
       "workspace-state",
       "web-push",
       "node-host",
-      "subagent-registry",
       "rescue-pending",
       "skill-workshop",
       "channel-pairing",

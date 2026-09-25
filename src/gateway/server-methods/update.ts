@@ -340,12 +340,6 @@ export const updateHandlers: GatewayRequestHandlers = {
         adoptedCampaign?.target.kind === "package"
           ? adoptedCampaign.target.version.trim() || undefined
           : undefined;
-      if (adoptedCampaign) {
-        context?.logGateway?.info(
-          `update.run adopted campaign ${adoptedCampaign.campaignId} ${formatControlPlaneActor(actor)}`,
-          { target: adoptedCampaign.target },
-        );
-      }
       const devTarget = explicitDevTarget ?? adoptedDevTarget;
       recordUpdateRunPhase(runId, "requested", {
         ...(adoptedCampaign
@@ -358,6 +352,13 @@ export const updateHandlers: GatewayRequestHandlers = {
           ...(adoptedPackageTargetVersion ? { version: adoptedPackageTargetVersion } : {}),
         },
       });
+      if (adoptedCampaign) {
+        gatewayUpdateCampaign.bindRun(adoptedCampaign.campaignId, runId);
+        context?.logGateway?.info(
+          `update.run adopted campaign ${adoptedCampaign.campaignId} ${formatControlPlaneActor(actor)}`,
+          { target: adoptedCampaign.target },
+        );
+      }
       sentinelMeta.target = devTarget
         ? `${devTarget.upstreamRef}@${devTarget.upstreamSha}`
         : adoptedPackageTargetVersion

@@ -4,7 +4,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assertDirectoryIdentitySync, readDirectoryIdentity } from "@openclaw/fs-safe/advanced";
-import type { MovePathPublicationReceipt } from "@openclaw/fs-safe/atomic";
+import {
+  movePathWithCopyFallback,
+  type MovePathPublicationReceipt,
+} from "@openclaw/fs-safe/atomic";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
@@ -14,7 +17,6 @@ import { withInstallActivity, type InstallActivityObserver } from "./install-pro
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
 import { formatNpmCommandFailureOutput } from "./install-source-utils.js";
 import { tryReadJson, writeJson } from "./json-files.js";
-import { movePathWithCopyFallback } from "./replace-file.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
 type InstallSourceHardlinks = "package-manager" | "reject";

@@ -13,34 +13,8 @@ const abs = (p: string) => path.resolve(p);
 const setDir = (p: string) => state.dirs.add(abs(p));
 const setExe = (p: string) => state.executables.add(abs(p));
 
-vi.mock("node:fs", async () => {
-  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  const pathMod = await import("node:path");
-  const absInMock = (p: string) => pathMod.resolve(p);
-
-  const wrapped = {
-    ...actual,
-    constants: { ...actual.constants, X_OK: actual.constants.X_OK ?? 1 },
-    accessSync: (p: string, mode?: number) => {
-      const resolved = absInMock(p);
-      if (state.executables.has(resolved)) {
-        return;
-      }
-      actual.accessSync(p, mode);
-    },
-    statSync: (p: string) => {
-      const resolved = absInMock(p);
-      if (state.dirs.has(resolved)) {
-        return {
-          isDirectory: () => true,
-        };
-      }
-      return actual.statSync(p);
-    },
-  };
-
-  return { ...wrapped, default: wrapped };
-});
+const actualAccessSync = fs.accessSync;
+const actualStatSync = fs.statSync;
 
 vi.mock("./env.js", () => ({
   isTruthyEnvValue: (value?: string) => value === "1" || value === "true",
@@ -66,6 +40,17 @@ describe("ensureOpenClawCliOnPath", () => {
     envSnapshot = Object.fromEntries(envKeys.map((k) => [k, process.env[k]])) as typeof envSnapshot;
     state.dirs.clear();
     state.executables.clear();
+    vi.spyOn(fs, "accessSync").mockImplementation((pathname, mode) => {
+      if (!state.executables.has(abs(String(pathname)))) {
+        actualAccessSync(pathname, mode);
+      }
+    });
+    vi.spyOn(fs, "statSync").mockImplementation((pathname, options) =>
+      actualStatSync(
+        state.dirs.has(abs(String(pathname))) ? import.meta.dirname : pathname,
+        options,
+      ),
+    );
 
     setDir("/usr/bin");
     setDir("/bin");
@@ -73,6 +58,7 @@ describe("ensureOpenClawCliOnPath", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     for (const k of envKeys) {
       const value = envSnapshot[k];
       if (value === undefined) {

@@ -37,7 +37,7 @@ vi.mock("./nostr-key-utils.js", () => ({
 }));
 
 beforeAll(async () => {
-  await import("./inbound-direct-dm-runtime.js");
+  await import("openclaw/plugin-sdk/channel-inbound");
 });
 
 function createMockBus() {

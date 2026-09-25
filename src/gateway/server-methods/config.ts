@@ -155,11 +155,6 @@ function requireConfigBaseHash(
   return true;
 }
 
-function readConfigPatchReplacePaths(params: unknown): Set<string> {
-  const rawPaths = (params as { replacePaths?: unknown }).replacePaths;
-  return normalizeConfigPatchReplacePaths(Array.isArray(rawPaths) ? rawPaths : undefined);
-}
-
 function collectDestructiveArrayPatchPaths(params: {
   base: unknown;
   patch: unknown;
@@ -400,26 +395,6 @@ async function readConfigWriteSnapshotOrRespond(
   return result;
 }
 
-function parseRawConfigOrRespond(
-  params: unknown,
-  requestName: string,
-  respond: RespondFn,
-): string | null {
-  const rawValue = (params as { raw?: unknown }).raw;
-  if (typeof rawValue !== "string") {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid ${requestName} params: raw (string) required`,
-      ),
-    );
-    return null;
-  }
-  return rawValue;
-}
-
 function hasOwnRecordValue(value: unknown, key: string): boolean {
   return isRecord(value) && Object.hasOwn(value, key);
 }
@@ -476,16 +451,11 @@ function stripBundledProviderRuntimeDefaults(params: {
 }
 
 function parseValidateConfigFromRawOrRespond(
-  params: unknown,
-  requestName: string,
+  rawValue: string,
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   respond: RespondFn,
   modelIdNormalizationPolicies?: Parameters<typeof normalizeSubmittedConfigModelRefs>[1],
 ): { config: OpenClawConfig; writeConfig: OpenClawConfig; schema: ConfigSchemaResponse } | null {
-  const rawValue = parseRawConfigOrRespond(params, requestName, respond);
-  if (!rawValue) {
-    return null;
-  }
   const parsedRes = parseConfigJson5(rawValue);
   if (!parsedRes.ok) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
@@ -707,6 +677,12 @@ async function commitConfigRestartWrite(params: {
   if (!writeResult) {
     return;
   }
+  const persistedConfig = {
+    ...(writeResult.hash
+      ? { hash: params.context.configRevisionProjector.projectRawHash(writeResult.hash) }
+      : {}),
+    config: redactConfigObject(writeResult.config, params.uiHints),
+  };
   if (writeResult.application) {
     const outcome = await writeResult.application;
     if (outcome !== "applied") {
@@ -716,7 +692,13 @@ async function commitConfigRestartWrite(params: {
           : outcome === "restart-pending"
             ? `${params.mode} persisted and was accepted for restart; wait for the Gateway to restart, then run config.get to confirm the active revision`
             : `${params.mode} persisted but was not applied to the active Gateway (${outcome}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
-      params.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+      params.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, message, {
+          details: { persistedConfig },
+        }),
+      );
       writeResult.queueFollowUp();
       return;
     }
@@ -740,10 +722,7 @@ async function commitConfigRestartWrite(params: {
       path: writeResult.path,
       // Additive ack hash: matches the hash config.get would report for the
       // persisted bytes, so writers can adopt it without a reload.
-      ...(writeResult.hash
-        ? { hash: params.context.configRevisionProjector.projectRawHash(writeResult.hash) }
-        : {}),
-      config: redactConfigObject(writeResult.config, params.uiHints),
+      ...persistedConfig,
       ...(params.mode === "config.patch" ? { changedPaths } : {}),
       ...preparedSecretDegradationPayload(params.preparedSecretsSnapshot),
       restart,
@@ -989,8 +968,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const { snapshot, writeOptions } = writeSnapshot;
     const parsed = parseValidateConfigFromRawOrRespond(
-      params,
-      "config.set",
+      params.raw,
       snapshot,
       respond,
       writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,
@@ -1070,19 +1048,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const rawValue = (params as { raw?: unknown }).raw;
-    if (typeof rawValue !== "string") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "invalid config.patch params: raw (string) required",
-        ),
-      );
-      return;
-    }
-    const parsedRes = parseConfigJson5(rawValue);
+    const parsedRes = parseConfigJson5(params.raw);
     if (!parsedRes.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
       return;
@@ -1114,7 +1080,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const replacePaths = readConfigPatchReplacePaths(params);
+    const replacePaths = normalizeConfigPatchReplacePaths(params.replacePaths);
     try {
       assertNoDuplicateConfigPatchIds({
         patch: normalizedPatch,
@@ -1233,8 +1199,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const { snapshot, writeOptions } = writeSnapshot;
     const parsed = parseValidateConfigFromRawOrRespond(
-      params,
-      "config.apply",
+      params.raw,
       snapshot,
       respond,
       writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,

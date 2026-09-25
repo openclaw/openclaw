@@ -1,6 +1,9 @@
 import "./side-question.test-support.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createAdmittedHostCapabilityTestFixture,
+  useProviderToolSchemaRuntimeForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as clientCleanup from "./attempt-client-cleanup.js";
 import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
@@ -25,6 +28,8 @@ const {
   sideParams,
   useSideQuestionTestSetup,
 } = await import("./side-question.test-support.js");
+
+useProviderToolSchemaRuntimeForTest(["openai", "codex", "lmstudio"]);
 
 describe("runCodexAppServerSideQuestion", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -170,95 +175,102 @@ describe("runCodexAppServerSideQuestion", () => {
         () => undefined,
         (error: unknown) => error,
       );
-      const fork = await waitForRequest("thread/fork");
-      harness.send({ id: fork.id, result: threadResult("side-thread") });
-      const inject = await waitForRequest("thread/inject_items");
-      harness.send({ id: inject.id, result: {} });
+      try {
+        const fork = await waitForRequest("thread/fork");
+        harness.send({ id: fork.id, result: threadResult("side-thread") });
+        const inject = await waitForRequest("thread/inject_items");
+        harness.send({ id: inject.id, result: {} });
 
-      if (written) {
-        const turnStart = await waitForRequest("turn/start");
-        controller.abort("side-start-cancelled");
-        const interrupt = await waitForRequest("turn/interrupt");
-        expect(interrupt.params).toEqual({ threadId: "side-thread", turnId: "" });
-        harness.send({ id: turnStart.id, result: turnStartResult("turn-1") });
-        harness.send(
-          interruptFails
-            ? { id: interrupt.id, error: { code: -32_000, message: "side interrupt failed" } }
-            : { id: interrupt.id, result: {} },
-        );
-      } else {
-        controller.abort("side-start-cancelled");
-      }
-
-      if (!interruptFails) {
         if (written) {
-          const terminals = await waitForRequest("thread/backgroundTerminals/list");
-          expect(terminals.params).toEqual({ threadId: "side-thread" });
-          harness.send({ id: terminals.id, result: { data: [] } });
-        }
-        const unsubscribe = await waitForRequest("thread/unsubscribe");
-        harness.send(
-          unsubscribeFails
-            ? { id: unsubscribe.id, error: { code: -32_000, message: "side unsubscribe failed" } }
-            : { id: unsubscribe.id, result: {} },
-        );
-      }
-      const error = await failure;
-      if (written) {
-        const turnStart =
-          requests.mock.results[
-            requests.mock.calls.findIndex(([method]) => method === "turn/start")
-          ];
-        if (turnStart?.type !== "return") {
-          throw new Error("Expected the native turn/start request promise");
-        }
-        const primaryError = await turnStart.value.catch((reason: unknown) => reason);
-        expect(primaryError).toMatchObject({
-          message: "turn/start aborted: side-start-cancelled",
-          cause: "side-start-cancelled",
-          reason: "aborted",
-          mayHaveWritten: true,
-        });
-        if (interruptFails) {
-          expect(error).toBeInstanceOf(AggregateError);
-          if (!(error instanceof AggregateError)) {
-            throw new Error("Expected cancellation and native cleanup failures", { cause: error });
-          }
-          expect(error.cause).toBe(primaryError);
-          expect(error.errors).toHaveLength(2);
-          expect(error.errors[0]).toBe(primaryError);
-          expect(error.errors[1]).toMatchObject({
-            message:
-              "Codex /btw cleanup could not confirm the side turn stopped; background terminals may still be running.",
-          });
-          expect(error.message).toContain("turn/start aborted: side-start-cancelled");
-          expect(error.message).toContain("could not confirm the side turn stopped");
+          const turnStart = await waitForRequest("turn/start");
+          controller.abort("side-start-cancelled");
+          const interrupt = await waitForRequest("turn/interrupt");
+          expect(interrupt.params).toEqual({ threadId: "side-thread", turnId: "" });
+          harness.send({ id: turnStart.id, result: turnStartResult("turn-1") });
+          harness.send(
+            interruptFails
+              ? { id: interrupt.id, error: { code: -32_000, message: "side interrupt failed" } }
+              : { id: interrupt.id, result: {} },
+          );
         } else {
-          expect(error).toBe(primaryError);
+          controller.abort("side-start-cancelled");
         }
-      } else {
-        expect(error).toMatchObject({
-          name: "CodexThreadPolicyHandoffError",
-          outcome: "acknowledged",
-          cause: "side-start-cancelled",
-        });
-      }
-      expect(harness.writes.map((write) => JSON.parse(write).method)).toEqual([
-        "thread/fork",
-        "thread/inject_items",
-        ...(written ? ["turn/start", "turn/interrupt"] : []),
-        ...(written && !interruptFails ? ["thread/backgroundTerminals/list"] : []),
-        ...(!interruptFails ? ["thread/unsubscribe"] : []),
-      ]);
-      expect(harness.stdinDestroyed).toBe(
-        (interruptFails && !peerRetained) || unsubscribeFails === true,
-      );
-      if (peerRetained) {
-        expect(retireSharedCodexAppServerClientIfCurrentMock).toHaveBeenCalledExactlyOnceWith(
-          harness.client,
+
+        if (!interruptFails) {
+          if (written) {
+            const terminals = await waitForRequest("thread/backgroundTerminals/list");
+            expect(terminals.params).toEqual({ threadId: "side-thread" });
+            harness.send({ id: terminals.id, result: { data: [] } });
+          }
+          const unsubscribe = await waitForRequest("thread/unsubscribe");
+          harness.send(
+            unsubscribeFails
+              ? { id: unsubscribe.id, error: { code: -32_000, message: "side unsubscribe failed" } }
+              : { id: unsubscribe.id, result: {} },
+          );
+        }
+        const error = await failure;
+        if (written) {
+          const turnStart =
+            requests.mock.results[
+              requests.mock.calls.findIndex(([method]) => method === "turn/start")
+            ];
+          if (turnStart?.type !== "return") {
+            throw new Error("Expected the native turn/start request promise");
+          }
+          const primaryError = await turnStart.value.catch((reason: unknown) => reason);
+          expect(primaryError).toMatchObject({
+            message: "turn/start aborted: side-start-cancelled",
+            cause: "side-start-cancelled",
+            reason: "aborted",
+            mayHaveWritten: true,
+          });
+          if (interruptFails) {
+            expect(error).toBeInstanceOf(AggregateError);
+            if (!(error instanceof AggregateError)) {
+              throw new Error("Expected cancellation and native cleanup failures", {
+                cause: error,
+              });
+            }
+            expect(error.cause).toBe(primaryError);
+            expect(error.errors).toHaveLength(2);
+            expect(error.errors[0]).toBe(primaryError);
+            expect(error.errors[1]).toMatchObject({
+              message:
+                "Codex /btw cleanup could not confirm the side turn stopped; background terminals may still be running.",
+            });
+            expect(error.message).toContain("turn/start aborted: side-start-cancelled");
+            expect(error.message).toContain("could not confirm the side turn stopped");
+          } else {
+            expect(error).toBe(primaryError);
+          }
+        } else {
+          expect(error).toMatchObject({
+            name: "CodexThreadPolicyHandoffError",
+            outcome: "acknowledged",
+            cause: "side-start-cancelled",
+          });
+        }
+        expect(harness.writes.map((write) => JSON.parse(write).method)).toEqual([
+          "thread/fork",
+          "thread/inject_items",
+          ...(written ? ["turn/start", "turn/interrupt"] : []),
+          ...(written && !interruptFails ? ["thread/backgroundTerminals/list"] : []),
+          ...(!interruptFails ? ["thread/unsubscribe"] : []),
+        ]);
+        expect(harness.stdinDestroyed).toBe(
+          (interruptFails && !peerRetained) || unsubscribeFails === true,
         );
+        if (peerRetained) {
+          expect(retireSharedCodexAppServerClientIfCurrentMock).toHaveBeenCalledExactlyOnceWith(
+            harness.client,
+          );
+        }
+      } finally {
+        controller.abort();
+        harness.client.close();
+        await failure;
       }
-      harness.client.close();
     },
   );
 

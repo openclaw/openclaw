@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -12,6 +13,7 @@ import {
   installSignalToolResultTestHooks,
   setSignalToolResultTestConfig,
   toSignalToolResultTestError,
+  waitForSignalToolResultIngressDispatchIdle,
   waitForSignalToolResultIngressIdle,
 } from "./monitor.tool-result.test-harness.js";
 
@@ -506,7 +508,7 @@ describe("monitorSignalProvider tool results", () => {
     expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToBody");
   });
 
-  it("keeps durable conversation events separate in batched reply mode", async () => {
+  it("keeps durable conversation events separate in batched reply mode", async ({ signal }) => {
     setSignalToolResultTestConfig({
       ...createSignalToolResultConfig({
         autoStart: false,
@@ -516,12 +518,24 @@ describe("monitorSignalProvider tool results", () => {
     });
     replyMock.mockResolvedValue({ text: "reply" });
     const abortController = new AbortController();
-    let ingressIdleError: Error | undefined;
-    streamMock.mockImplementation(async ({ onEvent }) => {
-      for (const [timestamp, message] of [
-        [1700000000001, "first message"],
-        [1700000000002, "second message"],
-      ] as const) {
+    const eventsAccepted = Promise.withResolvers<void>();
+    const messages = [
+      {
+        timestamp: 1700000000001,
+        message: "first message",
+        delivered: Promise.withResolvers<void>(),
+      },
+      {
+        timestamp: 1700000000002,
+        message: "second message",
+        delivered: Promise.withResolvers<void>(),
+      },
+    ];
+    sendMock.mockImplementation(async () => {
+      messages[sendMock.mock.calls.length - 1]?.delivered.resolve();
+    });
+    streamMock.mockImplementation(async ({ onEvent, abortSignal }) => {
+      for (const { timestamp, message } of messages) {
         await onEvent({
           event: "receive",
           data: JSON.stringify({
@@ -534,30 +548,41 @@ describe("monitorSignalProvider tool results", () => {
           }),
         });
       }
-      try {
-        await waitForSignalDelivery(() => {
-          expect(replyMock).toHaveBeenCalledTimes(2);
-        });
-        await waitForSignalToolResultIngressIdle();
-      } catch (error) {
-        ingressIdleError = toSignalToolResultTestError(
-          error,
-          "Batched Signal ingress did not become idle",
-        );
-      } finally {
-        abortController.abort();
-      }
+      eventsAccepted.resolve();
+      await waitForAbortSignal(abortSignal);
     });
 
-    await runMonitorWithMocks({
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const monitorPromise = runMonitorWithMocks({
       autoStart: false,
       baseUrl: SIGNAL_BASE_URL,
-      abortSignal: abortController.signal,
+      abortSignal: AbortSignal.any([abortController.signal, signal]),
     });
-    if (ingressIdleError) {
-      throw ingressIdleError;
+    const monitorStopped = monitorPromise.then(() => {
+      throw new Error("Signal monitor stopped before delivering both replies");
+    });
+    try {
+      await Promise.race([eventsAccepted.promise, monitorStopped]);
+      for (const [index, { timestamp, message, delivered }] of messages.entries()) {
+        // Pump admission can finish before the handler schedules its debounce.
+        await Promise.race([waitForSignalToolResultIngressDispatchIdle(), monitorStopped]);
+        await vi.advanceTimersByTimeAsync(10);
+        await Promise.race([delivered.promise, monitorStopped]);
+        expect(replyMock.mock.calls[index]?.[0]).toMatchObject({
+          MessageSid: String(timestamp),
+          RawBody: message,
+        });
+      }
+    } finally {
+      abortController.abort();
+      try {
+        await monitorPromise;
+      } finally {
+        vi.useRealTimers();
+      }
     }
 
+    expect(replyMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenCalledTimes(2);
     for (const call of sendMock.mock.calls) {
       expect(call[2]).not.toHaveProperty("replyToId");

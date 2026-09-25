@@ -1,7 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { USER_PREFS_PROFILE_KEY_LIMIT } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import {
+  GIT_COAUTHOR_PREFERENCE_KEY,
+  USER_PREFS_PROFILE_KEY_LIMIT,
+} from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
@@ -10,6 +13,7 @@ import type {
   PreparedUserPreferenceUpdate,
   UserPreferenceError,
 } from "./user-preferences.types.js";
+import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
 
 type UserPreferencesDatabase = Pick<OpenClawStateKyselyDatabase, "user_preferences">;
 
@@ -17,6 +21,13 @@ export const ensureUserPreferencesSchema = createOpenClawStateSchemaEnsurer({
   table: "user_preferences",
   operationLabel: "users.preferences.schema.ensure",
 });
+
+export function updatesGitCoauthorPreference(update: PreparedUserPreferenceUpdate): boolean {
+  return (
+    update.serialized.some(({ prefKey }) => prefKey === GIT_COAUTHOR_PREFERENCE_KEY) ||
+    update.deletionKeys.includes(GIT_COAUTHOR_PREFERENCE_KEY)
+  );
+}
 
 export function deleteUserPreference(database: DatabaseSync, profileId: string, key: string): void {
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
@@ -132,8 +143,9 @@ export function readUserPreferences(
 export function writeUserPreferences(
   sqlite: DatabaseSync,
   profileId: string,
-  { serialized, deletionKeys, expected }: PreparedUserPreferenceUpdate,
+  update: PreparedUserPreferenceUpdate,
 ): Result<void, UserPreferenceError> {
+  const { serialized, deletionKeys, expected } = update;
   if (expected.length > 0) {
     const current = readUserPreferences(
       sqlite,
@@ -193,6 +205,9 @@ export function writeUserPreferences(
           }),
         ),
     );
+  }
+  if (updatesGitCoauthorPreference(update)) {
+    publishUserProfileAuthorityChange(sqlite, profileId);
   }
   return ok(undefined);
 }

@@ -65,6 +65,15 @@ async function setup() {
 }
 
 describe("update report shared transport boundary", () => {
+  it("does not publish when a status check cannot find its prior receipt", async () => {
+    const fixture = await setup();
+    const result = await fixture.submit({ publicationMode: "reconcile" });
+    expect(result).toMatchObject({ status: "pending" });
+    expect(result).not.toHaveProperty("fallbackUrl");
+    expect(fixture.runGh).not.toHaveBeenCalled();
+    expect(fixture.receipt()).toBeNull();
+  });
+
   it.each(["attempt", "authority"] as const)(
     "withholds browser handoff when %s retires during receipt persistence",
     async (change) => {

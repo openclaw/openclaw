@@ -439,7 +439,8 @@ Use `generate --intraday` for today's partial report. `/latest/` requires at
 least one closed daily report.
 
 **A source has warnings or reports look incomplete.** Read the warnings in
-status and the report. Check GitHub token access, organization/team names,
+status and the report. Failed-run errors name each affected period and source
+(for example, `day/2026-08-20/github`). Check GitHub token access, organization/team names,
 excluded repositories, and Discord bot access to each configured channel and
 its history. Rate limits can delay a run. Regenerate affected days once access
 or rate limits recover, then refresh aggregates. After rotating a file, exec, or

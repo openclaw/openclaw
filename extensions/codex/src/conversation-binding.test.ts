@@ -1655,7 +1655,7 @@ describe("codex conversation binding", () => {
       .spyOn(harness.client, "request")
       .mockResolvedValue(conversationThreadStartResult("thread-active-child") as never);
     ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
-    const parent = codexNativeSubagentMonitorRuntime.register({
+    const parent = await codexNativeSubagentMonitorRuntime.register({
       client: harness.client,
       parentThreadId: "thread-parent",
     });

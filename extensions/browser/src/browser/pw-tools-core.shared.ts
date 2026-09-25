@@ -4,9 +4,9 @@
  */
 import { stripVTControlCharacters } from "node:util";
 import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { formatErrorMessage } from "../infra/errors.js";
 import { BrowserActionError, BrowserError } from "./errors.js";
 import { parseRoleRef } from "./pw-role-snapshot.js";
 

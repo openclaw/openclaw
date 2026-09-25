@@ -23,7 +23,7 @@ import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { runStep } from "../../infra/update-runner-command.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
@@ -682,6 +682,7 @@ describe("Report action from the authoritative update ledger", () => {
     "reuses CLI $outcome across Gateway reconnect, changed preview: $changedPreview",
     async ({ outcome, changedPreview }) => {
       recordFailure();
+      mocks.select.mockResolvedValueOnce("report").mockResolvedValue("dismiss");
       mocks.runGh.mockImplementation(async (args) => {
         if (args[0] === "auth") {
           return { started: true, status: 0, stdout: Buffer.alloc(0) };
@@ -719,6 +720,15 @@ describe("Report action from the authoritative update ledger", () => {
         }),
       ).resolves.toBe("handled");
       expect(runtime.error).not.toHaveBeenCalled();
+      expect(mocks.select).toHaveBeenCalledTimes(outcome === "pending" ? 2 : 1);
+      if (outcome === "pending") {
+        expect(mocks.select).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({
+            options: expect.arrayContaining([{ value: "status", label: "Check report status" }]),
+          }),
+        );
+      }
       const createPhases = () =>
         mocks.runGh.mock.calls.map(([args]) => args[0]).filter((kind) => kind !== "issue");
       expect(createPhases()).toEqual(["auth", "api"]);

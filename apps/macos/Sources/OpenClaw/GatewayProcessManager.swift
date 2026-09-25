@@ -963,7 +963,7 @@ extension GatewayProcessManager {
                 }
                 let retryDelay = min(.milliseconds(300), max(.zero, clock.now.duration(to: deadline)))
                 if retryDelay > .zero {
-                    try? await clock.sleep(for: retryDelay)
+                    try? await clock.sleep(until: clock.now.advanced(by: retryDelay), tolerance: nil)
                 }
             }
         }
@@ -1230,9 +1230,12 @@ extension GatewayProcessManager {
             guard publishable else {
                 return false
             }
-            let retainedFailure: LaunchAgentReadinessFailure? = switch terminalFailure {
-            case let .timeoutWithRepairEvidence(failure): failure
-            case .attachProbe, .responsiveProbe, .serviceInspection, .deadlineWithoutRepairEvidence: nil
+            let retainedFailure: LaunchAgentReadinessFailure? = if case let .timeoutWithRepairEvidence(failure) =
+                terminalFailure
+            {
+                failure
+            } else {
+                nil
             }
             self.setLaunchAgentReadinessState(candidate: nil, failure: retainedFailure)
             self.status = .failed(terminalFailure.reason)

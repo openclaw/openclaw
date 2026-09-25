@@ -1,10 +1,21 @@
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  iterateSqliteQuerySync,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
+  type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import {
+  collectRecentSessionHistoryIds,
+  collectSessionStateIdsForEntry,
+} from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 import { isSessionEntryDiskBudgetEvictable } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
@@ -82,4 +93,106 @@ export function readDiskEvictableArchivedSessionBatch(params: {
     }
   }
   return { candidates, ...(cursor ? { cursor } : {}), exhausted: false };
+}
+
+/** Resolve a captured admission snapshot without consulting another thread's live owners. */
+export function collectSessionAdmissionReferences(params: {
+  database: Pick<OpenClawAgentDatabase, "db">;
+  admissionIdentities: readonly string[];
+}): Set<string> {
+  const protectedSessionIds = new Set<string>();
+  const admissionIdentities = params.admissionIdentities;
+  if (admissionIdentities.length === 0) {
+    return protectedSessionIds;
+  }
+
+  // Admissions may carry either the backing session id or its live session key. Protect both,
+  // then resolve admitted keys through their entries so cleanup cannot reclaim active work.
+  for (const identity of admissionIdentities) {
+    protectedSessionIds.add(identity);
+  }
+  const normalizedAdmissionKeys = new Set(
+    [...admissionIdentities].map((identity) => normalizeStoreSessionKey(identity)),
+  );
+  const db = getSessionKysely(params.database.db);
+  const admittedKeyBytes: string[] = [];
+  // Normalize lightweight keys before reading payloads; unrelated saved prompts can be large.
+  for (const row of iterateSqliteQuerySync(
+    params.database.db,
+    db
+      .selectFrom("session_nodes")
+      .select(["session_key", db.fn<string>("hex", ["session_key"]).as("key_bytes")]),
+  )) {
+    if (normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
+      admittedKeyBytes.push(row.key_bytes);
+    }
+  }
+  const rows = admittedKeyBytes.length
+    ? iterateSqliteQuerySync(
+        params.database.db,
+        db
+          .selectFrom("session_nodes")
+          .select(["entry_json", "current_session_id"])
+          // Keep stored keys inside SQLite: Node TEXT rebinding can change raw UTF-16 keys.
+          // The key-only subquery scans the existing index before fetching matched payloads.
+          .where(
+            "session_key",
+            "in",
+            db
+              .selectFrom("session_nodes")
+              .select("session_key")
+              .where(
+                db.fn<string>("hex", ["session_key"]),
+                "in",
+                sqliteStringSet(admittedKeyBytes),
+              ),
+          ),
+      )
+    : [];
+  for (const row of rows) {
+    protectedSessionIds.add(row.current_session_id);
+    const entry = parseSessionEntryJson(row);
+    if (entry) {
+      for (const sessionId of collectSessionStateIdsForEntry(entry)) {
+        protectedSessionIds.add(sessionId);
+      }
+    }
+  }
+  // Key-scoped admissions must survive rollover: an in-flight run admitted by
+  // key may still write to a generation the entry no longer references, so
+  // every generation of an admitted key stays off-limits.
+  const generationRows = iterateSqliteQuerySync(
+    params.database.db,
+    db.selectFrom("session_windows").select(["session_id", "session_key"]),
+  );
+  for (const row of generationRows) {
+    if (normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
+      protectedSessionIds.add(row.session_id);
+    }
+  }
+  return protectedSessionIds;
+}
+
+export function readHistoricalSessionIdsInDatabase(params: {
+  database: Pick<OpenClawAgentDatabase, "db">;
+  admissionIdentities: readonly string[];
+  preserveRecentMs?: number | null;
+}): string[] {
+  const { database } = params;
+  const protectedSessionIds = readReferencedSessionIds(database, undefined, undefined, params);
+  for (const sessionId of collectSessionAdmissionReferences(params)) {
+    protectedSessionIds.add(sessionId);
+  }
+  for (const sessionId of collectRecentSessionHistoryIds(params)) {
+    protectedSessionIds.add(sessionId);
+  }
+  const db = getSessionKysely(database.db);
+  return executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("session_windows")
+      .select("session_id")
+      .orderBy("updated_at", "asc")
+      .orderBy("session_id", "asc"),
+  ).rows.flatMap((row) => (protectedSessionIds.has(row.session_id) ? [] : [row.session_id]));
 }

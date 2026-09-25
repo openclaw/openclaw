@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { repairDoctorAgentDeletionJournal } from "../commands/doctor-agent-deletion-journal.js";
 import { maybeMigrateAuthProfileJsonStoresToSqlite } from "../commands/doctor-auth-flat-profiles.js";
 import { listAuthProfileRepairCandidates } from "../commands/doctor-auth-legacy-paths.js";
 import { maybeMigrateModelCatalogCredentials } from "../commands/doctor-model-catalog-credentials.js";
@@ -39,6 +40,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { projectExistingAgentDatabaseTargets } from "./session-sqlite-migration-readers.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "./state-migrations.media-persistence-targets.js";
@@ -51,6 +53,7 @@ import {
   detectSharedAuthStoreMigration,
   migrateSharedAuthStore,
 } from "./state-migrations.shared-auth-store.js";
+import type { LegacyStateMigrationStepReceipt } from "./state-migrations.types.js";
 
 const note = vi.hoisted(() => vi.fn());
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
@@ -64,6 +67,87 @@ afterEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("Doctor with a deleted agent database", () => {
+  it.each([false, true])(
+    "records held stores as advisories and completes independent repairs (unknown custom owner: %s)",
+    async (unknownOwner) => {
+      const stateDir = fs.realpathSync.native(tempDirs.make("doctor-missing-deletion-history-"));
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { main: {} } },
+        plugins: { enabled: false },
+      };
+      const stores = ["main", "retired"].map((agentId) =>
+        createLegacyDatabaseFixture({ agentId, env, eventsBySession: {}, schemaVersion: 19 }),
+      );
+      const custom = path.join(tempDirs.make("doctor-held-custom-"), "history.sqlite");
+      if (unknownOwner) {
+        const fixture = createLegacyDatabaseFixture({
+          agentId: "unknown",
+          env,
+          eventsBySession: {},
+          schemaVersion: 19,
+          path: custom,
+        });
+        const customDb = new DatabaseSync(fixture);
+        customDb.exec("DELETE FROM schema_meta");
+        customDb.close();
+        unregisterOpenClawAgentDatabase({ agentId: "unknown", path: custom, env });
+        stores.push(custom);
+        cfg.session = { store: custom };
+      }
+      closeOpenClawStateDatabaseForTest();
+      const database = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+      database.exec("DROP TABLE agent_deletion_journal");
+      database.close();
+      const bytes = stores.map((file) => fs.readFileSync(file));
+      let prepared: PreparedAgentDatabaseMigrationDiscovery | undefined;
+      const preflight = await preflightOpenClawDatabaseSchemas({
+        env,
+        configuredAgentDatabaseTargets: [{ agentId: "main", path: stores[0]! }],
+        configuredAgentDatabaseCandidatePaths: unknownOwner ? [custom] : [],
+        onAgentDatabaseDiscovery: (discovery) => {
+          prepared = discovery;
+        },
+      });
+      if (unknownOwner) {
+        const recovery = await repairDoctorAgentDeletionJournal({
+          preflight: { ...preflight, agentDatabaseMigrationDiscovery: prepared },
+          shouldRepair: true,
+          env,
+        });
+        expect(recovery.changes).toEqual([]);
+        expect(recovery.warnings.join("\n")).toContain("recovery inventory is incomplete");
+      }
+      const execPath = path.join(stateDir, "exec-approvals.json");
+      fs.writeFileSync(execPath, JSON.stringify({ version: 1, defaults: {}, agents: {} }));
+      const receipts: LegacyStateMigrationStepReceipt[] = [];
+      const result = await autoMigrateLegacyState({
+        cfg,
+        env,
+        agentDatabaseMigrationDiscovery: prepared,
+        doctorOnlyStateMigrations: true,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+        onStepReceipt: (receipt) => receipts.push(receipt),
+        log: { info() {}, warn() {} },
+      });
+      expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).not.toThrow();
+      const sharedAuth = receipts.find((receipt) => receipt.id === "shared-auth-store");
+      expect(sharedAuth).toMatchObject({
+        outcome: "skipped",
+        warnings: [expect.stringContaining("skipped: store held for agent main")],
+      });
+      expect(result.warnings).toContain(sharedAuth!.warnings[0]);
+      expect(sharedAuth!.warnings[0]).toContain(stores[0]);
+      expect(result.warnings.join("\n")).toContain("deletion journal missing");
+      expect(fs.existsSync(execPath)).toBe(false);
+      expect(receipts.find((receipt) => receipt.id === "exec-approvals")?.outcome).toBe(
+        "completed",
+      );
+      stores.forEach((file, index) => expect(fs.readFileSync(file)).toEqual(bytes[index]));
+    },
+  );
+
   it("repairs a configured survivor when only the deleted owner's registration remains", async () => {
     const stateDir = fs.realpathSync.native(tempDirs.make("doctor-configured-survivor-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };

@@ -1,7 +1,7 @@
 import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Frame, Page } from "playwright-core";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   getPageForTargetId,
   ensurePageState,

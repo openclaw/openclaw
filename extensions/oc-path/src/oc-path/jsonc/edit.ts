@@ -1,13 +1,7 @@
 // OC Path module implements edit behavior.
 import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";
 import type { OcPath } from "../oc-path.js";
-import {
-  isPositionalSeg,
-  isQuotedSeg,
-  parseArrayIndexSegment,
-  splitRespectingBrackets,
-  unquoteSeg,
-} from "../oc-path.js";
+import { isPositionalSeg, parseArrayIndexSegment, splitOcPathSlots } from "../oc-path.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
 import type { JsoncAst, JsoncValue } from "./ast.js";
 import { parseJsonc } from "./parse.js";
@@ -25,7 +19,7 @@ export function setJsoncOcPath(ast: JsoncAst, path: OcPath, newValue: JsoncValue
     return { ok: false, reason: "no-root" };
   }
 
-  const target = resolveEditTarget(ast.root, pathSegments(path));
+  const target = resolveEditTarget(ast.root, splitOcPathSlots(path.section, path.item, path.field));
   if (target === null) {
     return { ok: false, reason: "unresolved" };
   }
@@ -43,7 +37,10 @@ export function insertJsoncOcPath(
     return { ok: false, reason: "no-root" };
   }
 
-  const target = resolveEditTarget(ast.root, pathSegments(parentPath));
+  const target = resolveEditTarget(
+    ast.root,
+    splitOcPathSlots(parentPath.section, parentPath.item, parentPath.field),
+  );
   if (target === null) {
     return { ok: false, reason: "unresolved" };
   }
@@ -100,22 +97,6 @@ function guardSentinel(value: JsoncValue, guardPath: string): void {
   if (value.kind === "object") {
     value.entries.forEach((entry) => guardSentinel(entry.value, `${guardPath}/${entry.key}`));
   }
-}
-
-function pathSegments(path: OcPath): string[] {
-  const out: string[] = [];
-  const collect = (slot: string | undefined) => {
-    if (slot === undefined) {
-      return;
-    }
-    for (const segment of splitRespectingBrackets(slot, ".")) {
-      out.push(isQuotedSeg(segment) ? unquoteSeg(segment) : segment);
-    }
-  };
-  collect(path.section);
-  collect(path.item);
-  collect(path.field);
-  return out;
 }
 
 function resolveEditTarget(root: JsoncValue, segments: readonly string[]): JsoncEditTarget | null {

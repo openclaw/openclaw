@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import { userInfo } from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  createTempDirTracker,
+  useAutoCleanupTempDirTracker,
+} from "../../../test/helpers/temp-dir.js";
 import * as postCoreConvergence from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import * as config from "../../config/config.js";
 import { CONFIG_AUDIT_SCOPE } from "../../config/io.audit.js";
@@ -40,6 +43,7 @@ import {
   persistRequestedUpdateChannel,
   persistValidatedDowngradeConfig,
   preparePostCorePluginConfig,
+  readUpdateChannelConfig,
 } from "./update-command-config.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
@@ -51,12 +55,45 @@ import * as postCoreResume from "./update-command-resume.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 
 const dirs = createTempDirTracker();
+const channelDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   dirs.cleanup();
 });
+
+it.each(["beta", "stable"])(
+  "retains stored %s channel during tolerant invalid config reads without rewriting source",
+  async (channel) => {
+    const home = channelDirs.make("update-invalid-channel-read-");
+    const configPath = path.join(home, "openclaw.json");
+    const original = `{\n  // Keep the authored channel while another field needs repair.\n  update: { channel: '${channel}' },\n  gateway: { port: 'invalid' },\n}\n`;
+    await fs.writeFile(configPath, original);
+    await withEnvAsync(
+      {
+        HOME: home,
+        USERPROFILE: home,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_PROFILE: undefined,
+        OPENCLAW_STATE_DIR: home,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      },
+      async () => {
+        const ordinary = await readUpdateChannelConfig(false);
+        expect(ordinary.configSnapshot.valid).toBe(false);
+        expect(ordinary.storedChannel).toBeNull();
+
+        const tolerant = await readUpdateChannelConfig(false, { tolerateReadFailure: true });
+        expect(tolerant.configSnapshot.valid).toBe(false);
+        expect(tolerant.storedChannel).toBe(channel);
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        expect(await fs.readdir(home)).toEqual(["openclaw.json"]);
+      },
+    );
+  },
+);
 
 it.each(
   (

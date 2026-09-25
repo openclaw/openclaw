@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { SessionDataController } from "../components/session-data-controller.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -32,6 +33,7 @@ suite.define(() => {
       const artifactDir = createControlUiE2eArtifactDir("session-mutation-scope");
       const context = await suite.browser.newContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
+      await page.clock.install();
       await installMutationScopeDiagnostics(page, { operation, filter });
       const original = sessionRow("agent:main:rename-cross-agent", "Original name", 3);
       const batch = [original, sessionRow("agent:main:batch-sibling", "Batch sibling", 2)];
@@ -221,11 +223,14 @@ suite.define(() => {
           ...(filter === "All" ? { archived: "all" } : {}),
         };
         const readsBeforeEvent = (await gateway.getRequests("sessions.list", researchMatch)).length;
+        await pauseVirtualClock(page);
         await gateway.emitGatewayEvent("sessions.changed", {
           sessionKey: newRow.key,
           agentId: "research",
           reason: "create",
         });
+        await page.clock.fastForward(5_001);
+        await page.clock.resume();
         await gateway.waitForRequest("sessions.list", {
           match: researchMatch,
           after: readsBeforeEvent,
@@ -282,11 +287,14 @@ suite.define(() => {
           await capture("retained-before-invalidation");
           const readsBeforeInvalidation = (await gateway.getRequests("sessions.list", refreshMatch))
             .length;
+          await pauseVirtualClock(page);
           await gateway.emitGatewayEvent("sessions.changed", {
             sessionKey: newRow.key,
             agentId: "research",
             reason: "update",
           });
+          await page.clock.fastForward(5_001);
+          await page.clock.resume();
           const refresh = await gateway.waitForRequest("sessions.list", {
             match: refreshMatch,
             after: readsBeforeInvalidation,
@@ -314,11 +322,14 @@ suite.define(() => {
             "sessions.list",
             responseFor(returnedResearchRows.filter((row) => row.key !== researchRows[1]!.key)),
           );
+          await pauseVirtualClock(page);
           await gateway.emitGatewayEvent("sessions.changed", {
             sessionKey: newRow.key,
             agentId: "research",
             reason: "update",
           });
+          await page.clock.fastForward(5_001);
+          await page.clock.resume();
           const refresh = await gateway.waitForRequest("sessions.list", {
             match: refreshMatch,
             after: readsBeforeRemoval,

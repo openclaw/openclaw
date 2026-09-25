@@ -8,6 +8,7 @@ import { getChannelPlugin } from "../channels/plugins/index.js";
 import { isCommandFlagEnabled } from "../config/commands.flags.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginCommands } from "../plugins/commands.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import type { SkillCommandSpec } from "../skills/types.js";
 import {
   listChatCommands,
@@ -112,22 +113,16 @@ function formatCommandEntry(command: ChatCommandDefinition): string {
   const primary = command.nativeName
     ? `/${command.nativeName}`
     : normalizeOptionalString(command.textAliases[0]) || `/${command.key}`;
-  const seen = new Set<string>();
-  const aliases = command.textAliases
-    .map((alias) => alias.trim())
-    .filter(Boolean)
-    .filter(
-      (alias) =>
-        normalizeLowercaseStringOrEmpty(alias) !== normalizeLowercaseStringOrEmpty(primary),
-    )
-    .filter((alias) => {
-      const key = normalizeLowercaseStringOrEmpty(alias);
-      if (seen.has(key)) {
-        return false;
-      }
-      seen.add(key);
-      return true;
-    });
+  const aliases = dedupeByKey(
+    command.textAliases
+      .map((alias) => alias.trim())
+      .filter(Boolean)
+      .filter(
+        (alias) =>
+          normalizeLowercaseStringOrEmpty(alias) !== normalizeLowercaseStringOrEmpty(primary),
+      ),
+    normalizeLowercaseStringOrEmpty,
+  );
   const aliasLabel = aliases.length ? ` (${aliases.join(", ")})` : "";
   const scopeLabel = command.scope === "text" ? " [text]" : "";
   return `${primary}${aliasLabel}${scopeLabel} - ${command.description}`;

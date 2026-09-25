@@ -188,6 +188,9 @@ export function suspendPendingFinalDelivery(
     throw new Error(`subagent completion owner changed before suspension: ${args.runId}`);
   }
   params.resumedRuns.delete(args.runId);
+  if (args.entry.delivery?.discardReason === "task-missing") {
+    return;
+  }
   logAnnounceGiveUp(args.entry, args.reason);
   // Suspension settles this child for requester drain while cleanup stays incomplete.
   scheduleRequesterSettleWake(context, args.runId, args.entry);

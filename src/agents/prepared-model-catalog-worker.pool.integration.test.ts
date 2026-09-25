@@ -725,6 +725,7 @@ describe("Gateway catalog worker pool", () => {
     fs.writeFileSync(`${fixture.marker}.hold`, "");
     const first = loadCompletedFullCatalog(fixture.snapshots[0]!, { refresh: true });
     let expired: ReturnType<typeof loadPreparedModelRuntimeAuth> | undefined;
+    let duplicate: ReturnType<typeof loadPreparedModelRuntimeAuth> | undefined;
     try {
       await expect
         .poll(() => (fs.existsSync(fixture.marker) ? fs.readFileSync(fixture.marker, "utf8") : ""))
@@ -734,11 +735,17 @@ describe("Gateway catalog worker pool", () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       expired = loadPreparedModelRuntimeAuth(fixture.snapshots[1]!, { providerIds: [PROVIDER_ID] });
       void expired.catch(() => undefined);
+      duplicate = loadPreparedModelRuntimeAuth(fixture.snapshots[1]!, {
+        providerIds: [PROVIDER_ID, PROVIDER_ID],
+        profileIds: [],
+      });
+      void duplicate.catch(() => undefined);
       await vi.waitFor(() =>
         expect(getPreparedModelCatalogWorkerPoolSnapshot().pendingTasks).toBe(2),
       );
       await vi.advanceTimersByTimeAsync(PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS);
       await expect(expired).rejects.toMatchObject({ name: "WorkerTaskError", code: "timeout" });
+      await expect(duplicate).rejects.toBe(await expired.catch((error: unknown) => error));
       vi.useRealTimers();
       expect(fixture.snapshots.every((snapshot) => snapshot.isCurrent())).toBe(true);
       fs.rmSync(`${fixture.marker}.hold`);
@@ -759,7 +766,7 @@ describe("Gateway catalog worker pool", () => {
     } finally {
       vi.useRealTimers();
       fs.rmSync(`${fixture.marker}.hold`, { force: true });
-      await Promise.allSettled([first, expired]);
+      await Promise.allSettled([first, expired, duplicate]);
     }
   });
 });

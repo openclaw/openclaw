@@ -495,7 +495,11 @@ export function createGatewayHttpServer(opts: {
         (await getSessionKillHttpModule()).handleSessionKillHttpRequest(req, res, routeAuth),
       );
       addAdmittedStage(/^\/sessions\/[^/]+\/history$/.test(scopedRequestPath), async () =>
-        (await getSessionHistoryHttpModule()).handleSessionHistoryHttpRequest(req, res, routeAuth),
+        (await getSessionHistoryHttpModule()).handleSessionHistoryHttpRequest(req, res, {
+          ...routeAuth,
+          getCommittedRuntimeConfig: () =>
+            opts.getGatewayRequestContext?.()?.getCommittedRuntimeConfig?.() ?? loadGatewayConfig(),
+        }),
       );
       addAdmittedStage(scopedRequestPath.startsWith("/__openclaw__/board/"), async () =>
         (await getBoardHttpModule()).handleBoardHttpRequest(req, res, {

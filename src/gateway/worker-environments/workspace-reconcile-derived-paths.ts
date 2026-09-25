@@ -103,8 +103,9 @@ export async function prepareNonDirectoryTargets(
   root: string,
   entries: readonly WorkerWorkspaceManifestEntry[],
   retainedInput?: ReturnType<typeof createStagedInputPathMatcher>,
+  assertCurrent?: () => void,
 ): Promise<void> {
-  const workspaceRoot = await openFsSafeRoot(root);
+  const workspaceRoot = await openFsSafeRoot(root, { assertBeforeMutation: assertCurrent });
   const isRetainedInput = retainedInput ?? createStagedInputPathMatcher(workspaceRoot);
   // Entries are an already-selected delta; an unchanged ownership marker may be absent.
   for (const entry of entries) {

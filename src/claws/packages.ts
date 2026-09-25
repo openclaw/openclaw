@@ -1,6 +1,5 @@
-import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { resolveClawHubInstallConfirmation } from "../cli/clawhub-install-confirmation.js";
 import { resolvePluginCapabilityConsentCliOptions } from "../cli/plugin-capability-consent.js";
@@ -115,8 +114,6 @@ function packageFromAction(action: ClawAddPlanAction): PlannedClawPackage {
 
 type ClawPluginProbeDeps = {
   probePlugin?: typeof installPluginFromClawHub;
-  createProbeExtensionsDir?: () => Promise<string>;
-  removeProbeExtensionsDir?: (path: string) => Promise<void>;
 };
 
 async function probeClawPluginArtifact(
@@ -132,17 +129,15 @@ async function probeClawPluginArtifact(
   if (!isolateFromLiveExtensions) {
     return await probePlugin(request);
   }
-  const probeExtensionsDir = await (deps.createProbeExtensionsDir?.() ??
-    mkdtemp(join(tmpdir(), "openclaw-claw-plugin-probe-")));
+  const workspace = await tempWorkspace({
+    rootDir: tmpdir(),
+    prefix: "openclaw-claw-plugin-probe-",
+  });
   try {
-    return await probePlugin({ ...request, extensionsDir: probeExtensionsDir });
+    return await probePlugin({ ...request, extensionsDir: workspace.dir });
   } finally {
-    try {
-      await (deps.removeProbeExtensionsDir?.(probeExtensionsDir) ??
-        rm(probeExtensionsDir, { recursive: true, force: true }));
-    } catch {
-      // Temporary probe cleanup must not replace the canonical preflight result.
-    }
+    // Temporary probe cleanup must not replace the canonical preflight result.
+    await workspace.cleanup().catch(() => undefined);
   }
 }
 

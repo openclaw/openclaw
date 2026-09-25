@@ -8,7 +8,10 @@ import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { historicalV14AgentSchemaSql } from "./state-migrations.media-persistence.historical-schema.test-support.js";
@@ -26,6 +29,7 @@ function createHistoricalFixture() {
   const historicalSchema = historicalV14AgentSchemaSql();
   const stateDir = makeTempDir(tempDirs, "media-persistence-historical-v14-");
   const env = { OPENCLAW_STATE_DIR: stateDir };
+  openOpenClawStateDatabase({ env });
   const pristinePath = path.join(stateDir, "historical", "v14-pristine.sqlite");
   const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
   fs.mkdirSync(path.dirname(pristinePath), { recursive: true });

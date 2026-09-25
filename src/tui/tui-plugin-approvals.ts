@@ -1,4 +1,3 @@
-// Presents plugin approvals that belong to the active TUI session.
 import {
   SelectList,
   Text,
@@ -151,7 +150,6 @@ function parseSeverity(value: unknown): TuiPluginApproval["request"]["severity"]
   return value === "info" || value === "warning" || value === "critical" ? value : null;
 }
 
-/** Parses the gateway event/list shape used for pending plugin approvals. */
 function parseTuiPluginApproval(payload: unknown): TuiPluginApproval | null {
   const record = asOptionalObjectRecord(payload);
   const request = asOptionalObjectRecord(record?.request);
@@ -206,7 +204,6 @@ function approvalSurfaceLabel(approval: TuiPluginApproval): string {
     : "plugin approval";
 }
 
-/** Coordinates pending plugin approval events with the active TUI overlay. */
 export function createTuiPluginApprovalController(deps: TuiPluginApprovalControllerDeps) {
   const createSelector =
     deps.createSelector ??
@@ -220,7 +217,7 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
   let expiryTimer: ApprovalTimer | null = null;
   let disposed = false;
   let mutationVersion = 0;
-  const refreshRunner = createTuiRefreshCoalescer(async () => await refreshOnce());
+  const refreshRunner = createTuiRefreshCoalescer(refreshOnce);
   const mutations = new Map<string, ApprovalMutation>();
   const resolvingIds = new Set<string>();
   const dismissedIds = new Set<string>();

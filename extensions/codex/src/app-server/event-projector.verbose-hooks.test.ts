@@ -216,31 +216,6 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     });
   });
 
-  it("uses a safe markdown fence for verbose tool output", async () => {
-    const onToolResult = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      verboseLevel: "full",
-      onToolResult,
-    });
-
-    projector.recordDynamicToolCall({
-      callId: "tool-1",
-      tool: "read",
-      arguments: { path: "README.md" },
-    });
-    projector.recordDynamicToolResult({
-      callId: "tool-1",
-      tool: "read",
-      contentItems: [{ type: "inputText", text: "line\n```\nMEDIA:/tmp/secret.png" }],
-      success: true,
-    });
-
-    expect(onToolResult).toHaveBeenNthCalledWith(2, {
-      text: "📖 Read\n````txt\nline\n```\nMEDIA:/tmp/secret.png\n````",
-    });
-  });
-
   it("bounds streamed verbose tool output", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({

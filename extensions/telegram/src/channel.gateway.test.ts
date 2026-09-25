@@ -12,12 +12,7 @@ import {
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
-import {
-  readCachedTelegramBotInfo,
-  TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES,
-  TELEGRAM_BOT_INFO_CACHE_NAMESPACE,
-  writeCachedTelegramBotInfo,
-} from "./bot-info-cache.js";
+import { readCachedTelegramBotInfo, writeCachedTelegramBotInfo } from "./bot-info-cache.js";
 import type { TelegramBotInfo } from "./bot-info.js";
 import { telegramPlugin } from "./channel.js";
 import type { TelegramMonitorFn } from "./monitor.types.js";
@@ -368,8 +363,8 @@ describe("telegramPlugin gateway startup", () => {
           fetchedAt: string;
           botInfo: TelegramBotInfo;
         }>({
-          namespace: TELEGRAM_BOT_INFO_CACHE_NAMESPACE,
-          maxEntries: TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES,
+          namespace: "telegram.bot-info-cache",
+          maxEntries: 128,
           defaultTtlMs: 24 * 60 * 60 * 1000,
         });
         const cached = await store.lookup("ops");

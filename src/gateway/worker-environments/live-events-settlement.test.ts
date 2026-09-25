@@ -7,12 +7,16 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import { getAgentRunContext, getAgentRunContextOwnership } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import {
   runOpenClawAgentWorkerWrite,
   SQLITE_SESSION_WRITER_QUEUES,
 } from "../../state/openclaw-agent-write-admission.js";
 import * as trajectoryStore from "../../trajectory/runtime-store.sqlite.js";
+import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { dispatchWorkerRequest } from "../server/ws-connection/worker-connection-dispatch.js";
 import { createWorkerLiveEventReceiver } from "./live-events.js";
 import * as support from "./service.test-support.js";
@@ -33,10 +37,7 @@ describe("worker live event write settlement", () => {
       };
       await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
       support.testState.config.session = { store: storePath };
-      const receiver = createWorkerLiveEventReceiver({
-        startupBindings: [],
-        startupOwners: new Map(),
-      });
+      const receiver = createWorkerLiveEventReceiver();
       const { identity, placementStore, source, releaseSource, workerService } =
         await support.placementHarness(
           "worker-live-settlement",
@@ -44,22 +45,47 @@ describe("worker live event write settlement", () => {
           { liveEvents: receiver },
           target,
         );
+      await workerService.ready();
       const sourceOwnerClaims = new Set(
         expectDefined(getAgentRunContextOwnership(identity.runId!), "source run owner").claimIds,
       );
       identity.protocolFeatures = ["worker-live-event-v1"];
-      expect(
-        receiver.bindSession({
-          environmentId: identity.environmentId,
-          runEpoch: identity.ownerEpoch,
-          sessionId,
-        }),
-      ).toBe(true);
       const terminal = support.terminalEvent(identity, { seq: 2 });
       await expect(workerService.pushLiveEvent(identity, terminal)).resolves.toEqual({
         ok: true,
         result: { ackedSeq: 0 },
       });
+
+      const failureDatabase =
+        outcome === "failed"
+          ? openOpenClawAgentDatabase({ agentId: "main", path: storePath })
+          : undefined;
+      if (failureDatabase) {
+        const warmupTarget = {
+          ...target,
+          sessionId: "session-live-settlement-warmup",
+          sessionKey: "agent:main:live-settlement-warmup",
+        };
+        await upsertSessionEntryCore(warmupTarget, {
+          sessionId: warmupTarget.sessionId,
+          updatedAt: 1,
+        });
+        const warmup = expectDefined(
+          createTrajectoryRuntimeRecorder({
+            sessionId: warmupTarget.sessionId,
+            sessionTarget: warmupTarget,
+          }),
+          "worker warmup recorder",
+        );
+        warmup.recordEvent("worker.warmup");
+        await warmup.flush();
+        // Admit the real worker before adding a fault that must fail INSERT, not schema validation.
+        failureDatabase.db.exec(`CREATE TRIGGER reject_live_trajectory_append
+          BEFORE INSERT ON trajectory_runtime_events
+          BEGIN SELECT RAISE(ABORT, 'synthetic trajectory persistence failure'); END`);
+        warmup.recordEvent("worker.trigger-probe");
+        await expect(warmup.flush()).rejects.toThrow("synthetic trajectory persistence failure");
+      }
 
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -80,14 +106,6 @@ describe("worker live event write settlement", () => {
           }
         }
       });
-      const append =
-        outcome === "failed"
-          ? vi
-              .spyOn(trajectoryStore, "appendSqliteTrajectoryRuntimeEvents")
-              .mockImplementation(() => {
-                throw new Error("synthetic trajectory persistence failure");
-              })
-          : undefined;
       const respond = vi.fn();
       const close = vi.fn();
       let request: Promise<void> | undefined;
@@ -117,10 +135,12 @@ describe("worker live event write settlement", () => {
         expect(phases).toEqual(["start", "end"]);
         // A duplicate ACK must join the same accepted prefix without replaying it.
         let replaySettled = false;
-        replay = receiver.apply({ identity, request: terminal, source }).then((result) => {
-          replaySettled = true;
-          return result;
-        });
+        replay = receiver
+          .apply({ identity, request: terminal, source, readAckedSeq: () => 0 })
+          .then((result) => {
+            replaySettled = true;
+            return result;
+          });
         let shutdownSettled = false;
         if (outcome === "revoked") {
           placementStore.validateWorkerTurn.mockReturnValue(false);
@@ -150,10 +170,7 @@ describe("worker live event write settlement", () => {
         }
         expect(phases).toEqual(["start", "end"]);
         const rows = trajectoryStore.loadSqliteTrajectoryRuntimeEventRowsSync(target);
-        if (outcome === "failed") {
-          expect(append).toHaveBeenCalled();
-          expect(rows).toEqual([]);
-        } else if (outcome === "revoked") {
+        if (outcome === "failed" || outcome === "revoked") {
           expect(rows).toEqual([]);
         } else {
           expect(rows.map((row) => row.event.type)).toEqual([
@@ -190,7 +207,7 @@ describe("worker live event write settlement", () => {
         await workerService.stop();
         releaseSource();
         unsubscribe();
-        append?.mockRestore();
+        failureDatabase?.db.exec("DROP TRIGGER reject_live_trajectory_append");
         await drainStoreWriterQueuesForTest(
           SQLITE_SESSION_WRITER_QUEUES,
           "live event test cleanup",

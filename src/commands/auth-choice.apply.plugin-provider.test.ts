@@ -16,6 +16,18 @@ import { resolveProviderPluginChoiceCore } from "../plugins/provider-wizard.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import type { ProviderPlugin, ProviderAuthMethod } from "../plugins/types.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import {
+  LOCAL_PROVIDER_ID,
+  LOCAL_PROVIDER_LABEL,
+  LOCAL_AUTH_METHOD_ID,
+  LOCAL_PROFILE_ID,
+  LOCAL_API_KEY,
+  LOCAL_DEFAULT_MODEL,
+  buildProvider,
+  buildProviderWithDefaultModelPatch,
+  buildLocalProviderInstallCatalogEntry,
+  buildInstalledLocalProviderPluginResult,
+} from "./auth-choice.apply.plugin-provider.test-support.js";
 import type { ApplyAuthChoiceParams } from "./auth-choice.apply.types.js";
 
 type ResolveProviderInstallCatalogEntry =
@@ -61,6 +73,11 @@ const persistAuthProfileBatch = vi.hoisted(() =>
 );
 vi.mock("../agents/auth-profiles.js", () => ({
   persistAuthProfileBatch,
+}));
+
+const loadAuthProfileStoreWithoutExternalProfiles = vi.hoisted(() => vi.fn());
+vi.mock("../agents/auth-profiles/store-runtime.js", () => ({
+  loadAuthProfileStoreWithoutExternalProfiles,
 }));
 
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "default"));
@@ -141,12 +158,6 @@ vi.mock("../wizard/setup.post-install-migration.js", () => ({
   offerPostInstallMigrations,
 }));
 
-const LOCAL_PROVIDER_ID = "local-provider";
-const LOCAL_PROVIDER_LABEL = "Local Provider";
-const LOCAL_AUTH_METHOD_ID = "local";
-const LOCAL_PROFILE_ID = `${LOCAL_PROVIDER_ID}:default`;
-const LOCAL_API_KEY = "local-provider-key";
-const LOCAL_DEFAULT_MODEL = `${LOCAL_PROVIDER_ID}/demo-model`;
 const EXISTING_DEFAULT_MODEL = "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0";
 
 function expectPersistedProfile(profileId: string, credential: AuthProfileCredential): void {
@@ -156,53 +167,6 @@ function expectPersistedProfile(profileId: string, credential: AuthProfileCreden
       agentDir: "/tmp/agent",
     }),
   );
-}
-
-function buildProvider(): ProviderPlugin {
-  return {
-    id: LOCAL_PROVIDER_ID,
-    label: LOCAL_PROVIDER_LABEL,
-    auth: [
-      {
-        id: LOCAL_AUTH_METHOD_ID,
-        label: LOCAL_PROVIDER_LABEL,
-        kind: "custom",
-        run: async () => ({
-          profiles: [
-            {
-              profileId: LOCAL_PROFILE_ID,
-              credential: {
-                type: "api_key",
-                provider: LOCAL_PROVIDER_ID,
-                key: LOCAL_API_KEY,
-              },
-            },
-          ],
-          defaultModel: LOCAL_DEFAULT_MODEL,
-        }),
-      },
-    ],
-  };
-}
-
-function buildProviderWithDefaultModelPatch(): ProviderPlugin {
-  const provider = buildProvider();
-  const method = expectDefined(provider.auth[0], "auth method");
-  const run = method.run;
-  method.run = async (ctx) => ({
-    ...(await run(ctx)),
-    configPatch: {
-      agents: {
-        defaults: {
-          model: { primary: LOCAL_DEFAULT_MODEL },
-          models: {
-            [LOCAL_DEFAULT_MODEL]: { alias: "Local default" },
-          },
-        },
-      },
-    },
-  });
-  return provider;
 }
 
 function buildParams(overrides: Partial<ApplyAuthChoiceParams> = {}): ApplyAuthChoiceParams {
@@ -215,38 +179,6 @@ function buildParams(overrides: Partial<ApplyAuthChoiceParams> = {}): ApplyAuthC
     runtime: {} as ApplyAuthChoiceParams["runtime"],
     setDefaultModel: true,
     ...overrides,
-  };
-}
-
-function buildLocalProviderInstallCatalogEntry() {
-  return {
-    pluginId: "local-provider-plugin",
-    providerId: LOCAL_PROVIDER_ID,
-    methodId: LOCAL_AUTH_METHOD_ID,
-    choiceId: LOCAL_PROVIDER_ID,
-    choiceLabel: LOCAL_PROVIDER_LABEL,
-    label: LOCAL_PROVIDER_LABEL,
-    origin: "bundled" as const,
-    install: {
-      npmSpec: "@openclaw/local-provider",
-    },
-  };
-}
-
-function buildInstalledLocalProviderPluginResult() {
-  return {
-    cfg: {
-      plugins: {
-        entries: {
-          "local-provider-plugin": {
-            enabled: true,
-          },
-        },
-      },
-    },
-    installed: true,
-    pluginId: "local-provider-plugin",
-    status: "installed" as const,
   };
 }
 
@@ -317,6 +249,10 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    loadAuthProfileStoreWithoutExternalProfiles.mockReset().mockReturnValue({
+      version: 1,
+      profiles: {},
+    });
     applyAuthProfileConfig.mockImplementation((config) => config);
     resolveManifestProviderAuthChoice.mockReturnValue(undefined);
     resolvePluginSetupProvider.mockReturnValue(undefined);
@@ -333,6 +269,32 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       codexInstalled: false,
     }));
     offerPostInstallMigrations.mockImplementation(async ({ config }) => ({ config }));
+  });
+
+  it("offers only the selected provider's saved profiles during onboarding", async () => {
+    const provider = buildProvider();
+    const credential = {
+      type: "api_key",
+      provider: provider.id,
+      key: "synthetic-saved-key",
+    } as const;
+    loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      version: 1,
+      profiles: {
+        "saved:local": credential,
+        "saved:other": { ...credential, provider: "other" },
+      },
+    });
+    const run = vi.spyOn(provider.auth[0]!, "run");
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValue({ provider, method: provider.auth[0]! });
+
+    await prepareAuthChoiceLoadedPluginProvider(buildParams(), (result) => result);
+
+    expect(run.mock.calls[0]?.[0].existingProfiles).toEqual([
+      { profileId: "saved:local", credential },
+    ]);
+    expect(loadAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith("/tmp/agent");
   });
 
   it("stages provider profiles until the caller commits them", async () => {
@@ -944,6 +906,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     };
 
     const result = await runProviderPluginAuthMethod({
+      providerId: LOCAL_PROVIDER_ID,
       config: {
         agents: {
           defaults: {
@@ -994,6 +957,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     };
 
     const result = await runProviderPluginAuthMethod({
+      providerId: "google",
       config: {},
       runtime: {} as ApplyAuthChoiceParams["runtime"],
       prompter: {
@@ -1033,6 +997,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     };
 
     const result = await runProviderPluginAuthMethod({
+      providerId: LOCAL_PROVIDER_ID,
       config: {
         agents: {
           defaults: {

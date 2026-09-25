@@ -37,7 +37,7 @@ struct GatewaySettingsSmokeTests {
                         connectEnabled = elements.first {
                             $0.accessibilityRole?() == .button &&
                                 [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)]
-                                .contains("Connect")
+                                .contains(reconnecting ? "Reconnect" : "Connect")
                         }?.isAccessibilityEnabled?()
                         let populated = values.contains(profile.name) && values.contains(profile.url.absoluteString)
                         if values.count >= 2, connectEnabled == reconnecting,

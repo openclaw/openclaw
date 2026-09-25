@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { expect, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import { retainRuntimePluginWork } from "../agents/runtime-plugin-work.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "../plugins/plugin-instance.types.js";
@@ -244,7 +245,7 @@ export async function verifyFailedRecoveryCleanup(createFixture: RecoveryFixture
   expect(fixture.siblingStop).not.toHaveBeenCalled();
 }
 
-export async function verifySelfConsumerReload(
+async function verifySelfConsumerReload(
   createFixture: RecoveryFixtureFactory,
   caller:
     | "own invocation"
@@ -274,6 +275,13 @@ export async function verifySelfConsumerReload(
   assert(record);
   const instance = getPluginInstance(record);
   assert(instance);
+  const drainEntered = createDeferredCore();
+  const waitForWork = instance.waitForRetainedWork.bind(instance);
+  const observation = vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
+    const draining = waitForWork(...args);
+    drainEntered.resolve();
+    return draining;
+  });
   if (caller !== "final checkpoint") {
     consumer = instance.retainConsumer();
   }
@@ -287,11 +295,12 @@ export async function verifySelfConsumerReload(
         : fixture.reload(undefined, pluginIds)
     ).catch((error: unknown) => error);
     // Observe the original bounded failure without releasing the work reload depends on.
+    await Promise.race([drainEntered.promise, reloading]);
     await vi.advanceTimersByTimeAsync(70_000);
     expect(await reloading).toMatchObject({
-      details: { phase: "prepare", committed: false },
+      details: { phase: caller === "own invocation" ? "prepare" : "drain", committed: false },
     });
-    expect(prepareConfigEffects).not.toHaveBeenCalled();
+    expect(prepareConfigEffects).toHaveBeenCalledTimes(caller === "own invocation" ? 0 : 1);
     expect(fixture.firstStop).not.toHaveBeenCalled();
     expect(fixture.siblingStop).not.toHaveBeenCalled();
     expect(fixture.candidates).toHaveLength(0);
@@ -309,9 +318,99 @@ export async function verifySelfConsumerReload(
       runtime: { pluginIds },
     });
   } finally {
+    observation.mockRestore();
     cleanup.resolve();
     await closing;
     consumer?.release();
     vi.useRealTimers();
   }
+}
+
+async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixtureFactory) {
+  const reserved = createDeferredCore();
+  let registrations = 0;
+  const disposed: number[] = [];
+  const fixture = await createRecoveryFixture({
+    abortOnCandidateStart: false,
+    prepareConfigEffects: () => {
+      reserved.resolve();
+      return async () => {};
+    },
+    register(api, owner) {
+      if (owner !== "first") {
+        return;
+      }
+      const generation = ++registrations;
+      api.lifecycle.onDispose?.(() => void disposed.push(generation));
+      api.registerGatewayMethod("first.generation", ({ respond }) => {
+        respond(true, { generation });
+      });
+    },
+  });
+  const old = fixture.previousRegistry;
+  const record = old.plugins.find((entry) => entry.id === "first");
+  assert(record);
+  const instance = getPluginInstance(record);
+  assert(instance);
+  const consumer = instance.retainConsumer();
+  const consumerDrainEntered = createDeferredCore();
+  const waitForWork = instance.waitForRetainedWork.bind(instance);
+  const observation = vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
+    const draining = waitForWork(...args);
+    if (args[1]) {
+      consumerDrainEntered.resolve();
+    }
+    return draining;
+  });
+  const first = retainRuntimePluginWork([old]);
+  const second = retainRuntimePluginWork([old]);
+  const reloading = fixture.reload();
+  void reloading.catch(() => {});
+  try {
+    // A refusal is observed immediately instead of waiting for a fixture timeout.
+    await Promise.race([reserved.promise, reloading]);
+    expect(fixture.firstStop).not.toHaveBeenCalled();
+    expect(disposed).toEqual([]);
+    expect(() => retainRuntimePluginWork([old])).toThrow("replacement is in progress");
+    first();
+    expect(instance.run(() => "old run finishes")).toBe("old run finishes");
+    expect(fixture.candidates).toHaveLength(0);
+    second();
+    await Promise.race([consumerDrainEntered.promise, reloading]);
+    expect(disposed).toEqual([]);
+    consumer.release();
+    const receipt = await reloading;
+    expect(receipt.runtime.pluginIds).toEqual(["first"]);
+    expect(
+      receipt.runtime.warnings?.filter((warning) => warning.includes("retained work")),
+    ).toEqual([expect.stringMatching(/waited for.*retained work.*finish/)]);
+    expect(disposed).toEqual([1]);
+    const next = fixture.registryOwner.registry;
+    expect(next).not.toBe(old);
+    const release = retainRuntimePluginWork([next]);
+    release();
+    expect(registrations).toBe(2);
+  } finally {
+    first();
+    second();
+    consumer.release();
+    observation.mockRestore();
+    await reloading.catch(() => {});
+  }
+}
+
+export function registerPluginRetainedWorkReloadTests(
+  createRecoveryFixture: RecoveryFixtureFactory,
+) {
+  it("admits replacement while overlapping agent work drains on its original generation", () =>
+    verifyOverlappingRetainedWork(createRecoveryFixture));
+  it.each([
+    "own invocation",
+    "between invocations",
+    "pending cleanup",
+    "final checkpoint",
+    "later replacement target",
+  ] as const)("preserves serving resources when retained work cannot finish during %s", (caller) =>
+    verifySelfConsumerReload(createRecoveryFixture, caller),
+  );
 }

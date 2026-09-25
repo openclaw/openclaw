@@ -10,8 +10,8 @@ const { warn, inspectPathPermissions } = vi.hoisted(() => ({
   warn: vi.fn(),
   inspectPathPermissions: vi.fn(),
 }));
-vi.mock("../infra/permissions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/permissions.js")>();
+vi.mock("@openclaw/fs-safe/permissions", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/permissions")>();
   inspectPathPermissions.mockImplementation(actual.inspectPathPermissions);
   return { ...actual, inspectPathPermissions };
 });

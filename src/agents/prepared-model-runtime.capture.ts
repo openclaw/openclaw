@@ -21,7 +21,7 @@ export function capturePreparedModelRuntimeCatalog(
   source: PreparedModelRuntimeSnapshot | undefined,
 ): PreparedModelRuntimeSnapshot {
   const models = source?.readPublishedModels?.();
-  const catalog = source?.readPublishedModelCatalog?.();
+  const catalog = source?.readFullModelCatalog?.();
   let cached = catalogCaptures.get(snapshot);
   if (!cached || cached.models !== models || cached.catalog !== catalog) {
     const nativeCatalog =

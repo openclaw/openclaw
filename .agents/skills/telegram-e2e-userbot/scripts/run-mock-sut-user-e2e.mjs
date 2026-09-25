@@ -1437,6 +1437,8 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
                 method: action.method,
                 skip: action.skip,
                 bodyIncludes: action.bodyIncludes,
+                times: action.times,
+                retryAfter: action.retryAfter,
               });
               telegramApi = { method: action.method, skip: action.skip };
             } else if (action.type === "telegramApiWaitHeld") {
@@ -1511,6 +1513,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
           gatewayHealth: gatewayHealthSamples,
           telegramApiResponseHolds: creds.telegramProxy.getResponseHoldEvents(),
           telegramApiRequestRejections: creds.telegramProxy.getRequestRejectionEvents(),
+          telegramApiRequestLog: creds.telegramProxy.getRequestLog(),
         },
       });
     }

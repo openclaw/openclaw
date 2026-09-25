@@ -73,30 +73,17 @@ export function mapSandboxSkillEntriesForPrompt(params: {
   if (!params.entries || params.skillsWorkspaceDir === params.skillsPromptWorkspaceDir) {
     return params.entries;
   }
-  return params.entries.map((entry) => {
-    const filePath =
-      mapPathFromWorkspaceToContainer({
-        filePath: entry.skill.filePath,
-        sourceWorkspaceDir: params.skillsWorkspaceDir,
-        targetWorkspaceDir: params.skillsPromptWorkspaceDir,
-      }) ?? entry.skill.filePath;
-    const baseDir =
-      mapPathFromWorkspaceToContainer({
-        filePath: entry.skill.baseDir,
-        sourceWorkspaceDir: params.skillsWorkspaceDir,
-        targetWorkspaceDir: params.skillsPromptWorkspaceDir,
-      }) ?? entry.skill.baseDir;
-    const sourceInfoPath =
-      mapPathFromWorkspaceToContainer({
-        filePath: entry.skill.sourceInfo.path,
-        sourceWorkspaceDir: params.skillsWorkspaceDir,
-        targetWorkspaceDir: params.skillsPromptWorkspaceDir,
-      }) ?? entry.skill.sourceInfo.path;
-    const sourceInfoBaseDir = mapPathFromWorkspaceToContainer({
-      filePath: entry.skill.sourceInfo.baseDir,
+  const mapPath = (filePath: string | undefined) =>
+    mapPathFromWorkspaceToContainer({
+      filePath,
       sourceWorkspaceDir: params.skillsWorkspaceDir,
       targetWorkspaceDir: params.skillsPromptWorkspaceDir,
     });
+  return params.entries.map((entry) => {
+    const filePath = mapPath(entry.skill.filePath) ?? entry.skill.filePath;
+    const baseDir = mapPath(entry.skill.baseDir) ?? entry.skill.baseDir;
+    const sourceInfoPath = mapPath(entry.skill.sourceInfo.path) ?? entry.skill.sourceInfo.path;
+    const sourceInfoBaseDir = mapPath(entry.skill.sourceInfo.baseDir);
     return {
       ...entry,
       skill: {

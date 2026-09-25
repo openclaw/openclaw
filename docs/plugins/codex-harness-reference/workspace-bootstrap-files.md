@@ -84,8 +84,30 @@ same bounded instruction injection.
 Custom commands, Desktop attachments, external Unix/WebSocket connections,
 non-OpenAI native providers, custom upstream endpoints, unsupported native account
 modes, locked upstream configuration, and native `features.respect_system_proxy` profiles keep the legacy
-collaboration carrier, which model-owned catalog instructions
-can replace. A warning and unverified persona accounting identify that the
+collaboration carrier for persona and memory guidance, which model-owned catalog
+instructions can replace. A warning and unverified persona accounting identify that the
 workaround is not active. OpenClaw does not reroute or shut down those sessions.
 Previously embedded persona, conversation text, and explicit task handoffs are
 not removed from existing histories or full-history forks.
+
+### Skill catalogs without a managed relay
+
+On connections without a managed inference relay, the eligible OpenClaw skill
+catalog uses thread developer instructions instead of the replaceable
+collaboration carrier. Native children can inherit this fallback catalog.
+Managed connections keep their existing parent-only request-local catalog;
+skill changes do not resume their threads or write catalog history.
+
+For the fallback, a changed catalog cold-resumes the same persistent thread.
+A live incognito thread receives the complete current catalog through an
+injected developer message without changing its immutable generic policy.
+After automatic compaction, OpenClaw re-delivers edited or withdrawn catalogs.
+The immediate continuation can still use the creation-time catalog; restoration
+is guaranteed only for the following request. Standalone compaction invalidates
+the recorded delivery so the next turn refreshes it, including after a failed
+restore.
+
+Lightweight cron turns omit skills. On fallback connections sharing a thread
+with ordinary turns, that omission withdraws the thread-level catalog until the
+next ordinary turn. On managed connections it only omits the current request's
+catalog; it does not change native thread state.

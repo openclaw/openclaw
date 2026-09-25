@@ -633,10 +633,15 @@ suite.define(() => {
       try {
         await expect
           .poll(bubbleTexts)
-          .toEqual([initialText, "A", commentaryText, "B", steerText, afterText]);
-        expect(
-          await transcript.locator(".chat-working-indicator__preamble").allTextContents(),
-        ).toEqual([latestCommentaryText]);
+          .toEqual([
+            initialText,
+            "A",
+            commentaryText,
+            "B",
+            steerText,
+            latestCommentaryText,
+            afterText,
+          ]);
       } finally {
         await capture("recovered-continuation");
       }

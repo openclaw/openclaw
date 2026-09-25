@@ -34,7 +34,8 @@ import {
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
+import { bindInProcessSessionDeliveryGeneration } from "../in-process-session-delivery.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
@@ -44,13 +45,13 @@ import { startGatewayMaintenanceTimers } from "../server-maintenance.js";
 import { createGatewayMaintenanceStateForTest } from "../test-helpers.maintenance-state.js";
 import {
   agentRuntimeClientForTests as agentRuntimeClient,
-  createMessageActionClientForTests,
   createTelegramSourceSendRequest,
   directCliClientForTests as directCliClient,
   firstRespondCall,
   messageActionContextFromSessionKeyForTests,
   resolveAgentIdFromSessionKeyForTests,
 } from "./send.test-helpers.js";
+import { createMessageMethodTestDriver, makeContext } from "./send.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").resolveOutboundTarget;
@@ -209,119 +210,14 @@ async function loadSendHandlersForTest() {
   ({ sendHandlers } = await import("./send.js"));
 }
 
-const makeContext = (): GatewayRequestContext =>
-  ({
-    dedupe: new Map(),
-    getRuntimeConfig: () => ({}),
-  }) as unknown as GatewayRequestContext;
-
-async function invokeGatewayMessageMethod(params: {
-  method: "message.action" | "poll" | "send";
-  request: Record<string, unknown>;
-  respond: ReturnType<typeof vi.fn>;
-  context: GatewayRequestContext;
-}) {
-  await expectDefined(
-    sendHandlers[params.method],
-    `sendHandlers.${params.method} test invariant`,
-  )({
-    params: params.request as never,
-    respond: params.respond as never,
-    context: params.context,
-    req: { type: "req", id: "1", method: params.method },
-    client: null as never,
-    isWebchatConnect: () => false,
-  });
-}
-
-async function runSend(params: Record<string, unknown>) {
-  return await runSendWithClient(params);
-}
-
-async function runSendWithClient(
-  params: Record<string, unknown>,
-  client?: { connect?: { scopes?: string[] }; internal?: Record<string, unknown> } | null,
-  context: GatewayRequestContext = makeContext(),
-  sessionMutationCommitGuard?: () => void,
-) {
-  const respond = vi.fn();
-  await expectDefined(sendHandlers.send, "sendHandlers.send test invariant").call(sendHandlers, {
-    params: params as never,
-    respond,
-    context,
-    sessionMutationCommitGuard,
-    req: { type: "req", id: "1", method: "send" },
-    client: (client ?? null) as never,
-    isWebchatConnect: () => false,
-  });
-  return { respond };
-}
-
-async function runPoll(params: Record<string, unknown>) {
-  return await runPollWithClient(params);
-}
-
-async function runPollWithClient(
-  params: Record<string, unknown>,
-  client?: { connect?: { scopes?: string[] } } | null,
-) {
-  const respond = vi.fn();
-  await expectDefined(sendHandlers.poll, "sendHandlers.poll test invariant").call(sendHandlers, {
-    params: params as never,
-    respond,
-    context: makeContext(),
-    req: { type: "req", id: "1", method: "poll" },
-    client: (client ?? null) as never,
-    isWebchatConnect: () => false,
-  });
-  return { respond };
-}
-
-async function runMessageActionRequest(
-  params: Record<string, unknown>,
-  client?: {
-    connect?: {
-      scopes?: string[];
-      client?: { id: string; mode: string };
-    };
-    internal?: {
-      agentRuntimeIdentity?: {
-        kind: "agentRuntime";
-        agentId: string;
-        sessionKey: string;
-        messageActionContext?: {
-          expiresAtMs: number;
-          sessionId?: string;
-          sourceReplySessionKey?: string;
-          sourceReplyFinal?: boolean;
-          sourceReplyToolCallId?: string;
-          requesterAccountId?: string;
-          requesterSenderId?: string;
-          requesterSenderName?: string;
-          requesterSenderUsername?: string;
-          requesterSenderE164?: string;
-          toolContext?: Record<string, unknown>;
-        };
-      };
-    };
-  } | null,
-  context: GatewayRequestContext = makeContext(),
-) {
-  const respond = vi.fn();
-  const effectiveClient = createMessageActionClientForTests(params, client);
-  await expectDefined(
-    sendHandlers["message.action"],
-    'sendHandlers["message.action"] test invariant',
-  )({
-    params: params as never,
-    respond,
-    context,
-    req: { type: "req", id: "1", method: "message.action" },
-    client: (effectiveClient ?? null) as never,
-    isWebchatConnect: () => false,
-  });
-  return { respond };
-}
+const {
+  invokeGatewayMessageMethod,
+  runSend,
+  runSendWithClient,
+  runPoll,
+  runPollWithClient,
+  runMessageActionRequest,
+} = createMessageMethodTestDriver(() => sendHandlers);
 
 async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -2075,6 +1971,36 @@ describe("gateway send mirroring", () => {
     ]);
     expect(deliveryCall()?.session?.agentId).toBe("work");
     expect(deliveryCall()?.session?.key).toBe("agent:work:whatsapp:resolved");
+  });
+
+  it("hands each internally bound session result to the durable queue with its original generation", async () => {
+    mockDeliverySuccess("m-session-result");
+    const generation = {
+      agentId: "main",
+      storePath: "/test/agents/main/sessions/sessions.json",
+      sessionKey: "agent:main:main",
+      sessionId: "original-session",
+      lifecycleRevision: "original-revision",
+    };
+    const { respond } = await runSend(
+      bindInProcessSessionDeliveryGeneration(
+        {
+          channel: "telegram",
+          to: "original-recipient",
+          message: "Task complete",
+          idempotencyKey: "sessions-send:accepted-run",
+        },
+        generation,
+      ),
+    );
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(deliveryCall()).toMatchObject({
+      sessionGeneration: generation,
+      deliveryIntentId: "sessions-send:accepted-run",
+      reusePendingDeliveryIntent: true,
+      queuePolicy: "required",
+      skipQueue: false,
+    });
   });
 
   it("materializes buffer-only gateway sends before outbound delivery", async () => {

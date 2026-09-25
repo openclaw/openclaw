@@ -12,6 +12,7 @@ import * as agentDatabaseReadOnly from "../../state/openclaw-agent-db-readonly.j
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as activitySummary from "../session-activity-summary-state.js";
 import { beginSessionPermissionChange } from "../session-permission-change.js";
@@ -217,9 +218,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       context,
       placementFactsReader: preparedPlacements,
     });
-    const reads = (["all", "get", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    );
+    const reads = observeMainThreadReads();
     const finishPermissionChange = beginSessionPermissionChange(identity.sessionId);
     try {
       const first = facts.present();
@@ -241,9 +240,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       expect(first.placement).toMatchObject({ diskSpace: { availableBytes: 6_000 } });
       finishPermissionChange();
       expect(facts.present().permissionModePending).toBe(false);
-      for (const read of reads) {
-        expect(read).not.toHaveBeenCalled();
-      }
+      reads.expectIdle();
 
       const placementReads = vi.spyOn(placements, "readProjection");
       const rowReads = vi.spyOn(agentDatabaseReadOnly, "withOpenClawAgentDatabaseReadOnly");
@@ -358,20 +355,14 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       });
       expect(rowReads).not.toHaveBeenCalled();
       expect(summaryReads).not.toHaveBeenCalled();
-      for (const read of reads) {
-        read.mockClear();
-      }
+      reads.clear();
       facts.present();
       facts.present();
-      for (const read of reads) {
-        expect(read).not.toHaveBeenCalled();
-      }
+      reads.expectIdle();
     } finally {
       preparedPlacements.dispose();
       finishPermissionChange();
-      for (const read of reads) {
-        read.mockRestore();
-      }
+      reads.restore();
     }
   });
 });
@@ -425,9 +416,7 @@ it("prepares board membership and recap freshness from the physical target and r
         entry: { sessionId: "other-row", updatedAt: 1 },
       }).hasBoard,
     ).toBe(false);
-    const reads = (["all", "get", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    );
+    const reads = observeMainThreadReads();
     try {
       expect(facts.present().activitySummary).toEqual({
         text: "Prepared recap.",
@@ -439,13 +428,9 @@ it("prepares board membership and recap freshness from the physical target and r
         updatedAt: 1,
         state: "current",
       });
-      for (const read of reads) {
-        expect(read).not.toHaveBeenCalled();
-      }
+      reads.expectIdle();
     } finally {
-      for (const read of reads) {
-        read.mockRestore();
-      }
+      reads.restore();
     }
     await persistSessionTranscriptTurn(scope, {
       messages: [

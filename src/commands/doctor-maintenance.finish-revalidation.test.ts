@@ -42,7 +42,10 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
-import { stoppedSystemdBinding } from "./doctor-maintenance.test-support.js";
+import {
+  stoppedSystemdBinding,
+  useDoctorMaintenanceRuntimeDirectory,
+} from "./doctor-maintenance.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   resolveService: vi.fn<() => GatewayService>(),
@@ -73,27 +76,6 @@ vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
   waitForGatewayHealthyRestart: vi.fn(async () => ({ healthy: true })),
 }));
 
-// Keep coordinator files inside the isolated workspace on every host.
-vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/state-database-coordinator.js")>();
-  const withIsolatedRuntimeDir = <T extends { runtimeDirectory?: string }>(params: T): T => ({
-    ...params,
-    runtimeDirectory: mocks.coordinatorRuntimeDir || params.runtimeDirectory,
-  });
-  return {
-    ...actual,
-    acquireGatewayLifecycleCoordinator: (
-      params: Parameters<typeof actual.acquireGatewayLifecycleCoordinator>[0],
-    ) => actual.acquireGatewayLifecycleCoordinator(withIsolatedRuntimeDir(params)),
-    acquireGatewayMaintenanceCoordinator: (
-      params: Parameters<typeof actual.acquireGatewayMaintenanceCoordinator>[0],
-    ) => actual.acquireGatewayMaintenanceCoordinator(withIsolatedRuntimeDir(params)),
-    acquireStateDatabaseCoordinator: (
-      params: Parameters<typeof actual.acquireStateDatabaseCoordinator>[0],
-    ) => actual.acquireStateDatabaseCoordinator(withIsolatedRuntimeDir(params)),
-  };
-});
-
 // Windows hosts cannot enforce the mocked Linux mode bits; retain real SQLite locking.
 vi.mock("../infra/sqlite-coordinator.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/sqlite-coordinator.js")>();
@@ -107,6 +89,10 @@ vi.mock("../infra/sqlite-coordinator.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+useDoctorMaintenanceRuntimeDirectory(() => {
+  mocks.coordinatorRuntimeDir = tempDirs.make("openclaw-doctor-finish-runtime-");
+  return mocks.coordinatorRuntimeDir;
+});
 let gatewayPort: TestPortClaim;
 beforeAll(async () => {
   gatewayPort = await acquireTestPortBlock({ offsets: [0] });
@@ -210,7 +196,6 @@ async function runDoctorFinishForStoppedUnit(
   unauthorizedRestarts: number;
 }> {
   const home = tempDirs.make("openclaw-doctor-finish-");
-  mocks.coordinatorRuntimeDir = home;
   return await withEnvAsync(
     {
       HOME: home,
@@ -411,6 +396,9 @@ async function runDoctorFinishForStoppedUnit(
         },
       };
       const restart = vi.fn(async () => {
+        expect(fs.readdirSync(mocks.coordinatorRuntimeDir)).toEqual(
+          expect.arrayContaining([expect.stringMatching(/^service-lifecycle-.+\.lock$/)]),
+        );
         if (scenario === "restart-failed") {
           throw new Error("service manager rejected restart");
         }
@@ -761,14 +749,18 @@ it("preserves the existing malformed continuation writer refusal before stopping
 
 it("refuses a foreign lifecycle holder before stopping the service", async () => {
   await expect(runDoctorFinishForStoppedUnit("lifecycle-contended")).rejects.toThrow(
-    "another OpenClaw process owns gateway-lifecycle",
+    "OpenClaw state database is busy (gateway-lifecycle)",
   );
   expect(mocks.stops).toBe(0);
 });
 
 it.each([
-  { catalog: "exact", continuation: "manual", message: "is still in progress" },
-  { catalog: "conflict-on-recheck", continuation: undefined, message: "is still in progress" },
+  { catalog: "exact", continuation: "manual", message: "remains recorded as running" },
+  {
+    catalog: "conflict-on-recheck",
+    continuation: undefined,
+    message: "remains recorded as running",
+  },
   {
     catalog: "future-version",
     continuation: undefined,
@@ -817,7 +809,7 @@ it.each([
   { continuation: "competing", name: "an owning continuation alongside a different live driver" },
 ] as const)("refuses $name while another update owns the service", async ({ continuation }) => {
   await expect(runDoctorFinishForStoppedUnit("retained", continuation)).rejects.toThrow(
-    /is still in progress.*liveness: alive/,
+    /remains recorded as running.*liveness: alive/,
   );
   expect(mocks.stops).toBe(0);
 });
@@ -844,7 +836,7 @@ it("never lets the Doctor child stop or restart its parent's running service", a
 
 it("rechecks continuation before stopping the service", async () => {
   await expect(runDoctorFinishForStoppedUnit("retained", "lost-before-stop")).rejects.toThrow(
-    "is still in progress",
+    "remains recorded as running",
   );
 });
 
@@ -854,7 +846,7 @@ it("rechecks continuation before restoring the service", async () => {
     "lost-before-restart",
   );
   expect(finishError).toMatchObject({
-    message: expect.stringContaining("is still in progress"),
+    message: expect.stringContaining("remains recorded as running"),
   });
   expect(restartCalls).toBe(0);
 });
@@ -897,7 +889,7 @@ it.each([
 it("does not treat an inconclusive inspection as admission to a competing update", async () => {
   const result = await runDoctorFinishForStoppedUnit("inspection-competing");
   expect(result.finishError).toMatchObject({
-    message: expect.stringContaining("is still in progress"),
+    message: expect.stringContaining("remains recorded as running"),
   });
   expect(result.startCalls).toBe(0);
   expect(result.restartCalls).toBe(0);
@@ -942,7 +934,9 @@ it("rechecks update admission after passive native inspection before restoring t
   const { finishError, restartCalls } = await runDoctorFinishForStoppedUnit(
     "competing-during-inspection",
   );
-  expect(finishError).toMatchObject({ message: expect.stringContaining("is still in progress") });
+  expect(finishError).toMatchObject({
+    message: expect.stringContaining("remains recorded as running"),
+  });
   expect(restartCalls).toBe(0);
 });
 

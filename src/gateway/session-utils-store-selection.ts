@@ -1,6 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionEntryReadSource } from "../config/sessions/session-accessor.types.js";
+import type {
+  CapturedSessionEntryReadSource,
+  SessionEntryReadSource,
+} from "../config/sessions/session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 
@@ -8,6 +11,8 @@ export type GatewaySessionStoreLookup = {
   storePath: string;
   store: Record<string, SessionEntry>;
   readSource?: SessionEntryReadSource;
+  capturedReadSource?: CapturedSessionEntryReadSource;
+  capturedReadSources?: CapturedSessionEntryReadSource[];
   match: { entry: SessionEntry; key: string } | undefined;
   canonicalValidationError?: Error;
 };
@@ -56,7 +61,11 @@ export function findCanonicalStoreMatch<Entry extends SessionEntry>(
 
 /** Selects canonical rows in read order; callers own acquisition or admitted reads. */
 export function resolveGatewaySessionStoreReadResults<
-  Read extends { storePath: string; readSource?: SessionEntryReadSource },
+  Read extends {
+    storePath: string;
+    readSource?: SessionEntryReadSource;
+    capturedReadSource?: CapturedSessionEntryReadSource;
+  },
 >(params: {
   reads: readonly Read[];
   readStore: (read: Read) => Record<string, SessionEntry>;
@@ -68,6 +77,7 @@ export function resolveGatewaySessionStoreReadResults<
   let selectedStorePath = first.storePath;
   let selectedStore = params.readStore(first);
   let selectedReadSource = first.readSource;
+  let selectedCapturedReadSource = first.capturedReadSource;
   let canonicalValidationError: Error | undefined;
   const recordCanonicalError = params.deferCanonicalValidation
     ? (error: Error) => {
@@ -100,12 +110,17 @@ export function resolveGatewaySessionStoreReadResults<
     selectedStorePath = candidate.storePath;
     selectedStore = store;
     selectedReadSource = candidate.readSource;
+    selectedCapturedReadSource = candidate.capturedReadSource;
     selectedMatch = match;
   }
   return {
     storePath: selectedStorePath,
     store: selectedStore,
     ...(selectedReadSource ? { readSource: selectedReadSource } : {}),
+    ...(selectedCapturedReadSource ? { capturedReadSource: selectedCapturedReadSource } : {}),
+    capturedReadSources: params.reads.flatMap((read) =>
+      read.capturedReadSource ? [read.capturedReadSource] : [],
+    ),
     match: selectedMatch,
     ...(canonicalValidationError ? { canonicalValidationError } : {}),
   };

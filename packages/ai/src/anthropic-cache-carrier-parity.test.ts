@@ -41,13 +41,51 @@ describe("Anthropic runtime-context cache lifecycle", () => {
   registerParityHostLifecycle();
 
   it.each([
-    { id: "claude-sonnet-4-6", retained: false, blocks: false, cacheRetention: "short" },
-    { id: "claude-sonnet-4-6", retained: false, blocks: true, cacheRetention: "long" },
-    { id: "claude-fable-5-1", retained: true, blocks: false, cacheRetention: "short" },
-    { id: "claude-opus-5-5", retained: true, blocks: true, cacheRetention: "long" },
+    {
+      id: "claude-fable-5-1",
+      retained: false,
+      carrierRetained: false,
+      blocks: false,
+      cacheRetention: "short",
+    },
+    {
+      id: "claude-opus-5-5",
+      retained: false,
+      carrierRetained: false,
+      blocks: true,
+      cacheRetention: "long",
+    },
+    {
+      id: "claude-sonnet-4-6",
+      retained: true,
+      carrierRetained: true,
+      blocks: false,
+      cacheRetention: "short",
+    },
+    {
+      id: "claude-sonnet-4-6",
+      retained: true,
+      carrierRetained: true,
+      blocks: true,
+      cacheRetention: "long",
+    },
+    {
+      id: "claude-fable-5-1",
+      retained: true,
+      carrierRetained: undefined,
+      blocks: false,
+      cacheRetention: "short",
+    },
+    {
+      id: "claude-opus-5-5",
+      retained: true,
+      carrierRetained: undefined,
+      blocks: true,
+      cacheRetention: "long",
+    },
   ] as const)(
     "preserves reusable prefixes through tool loops and a new turn: %j",
-    async ({ id, retained, blocks, cacheRetention }) => {
+    async ({ id, retained, carrierRetained, blocks, cacheRetention }) => {
       const model = { ...anthropicModel, id };
       const cacheControl = {
         type: "ephemeral",
@@ -58,6 +96,9 @@ describe("Anthropic runtime-context cache lifecycle", () => {
         content: blocks ? [{ type: "text", text: "Runtime context" }] : "Runtime context",
         timestamp: 1,
         runtimeContextCarrier: true,
+        ...(carrierRetained === undefined
+          ? {}
+          : { runtimeContextCarrierRetained: carrierRetained }),
       };
       for (const implementation of ["provider", "transport"] as const) {
         const messages: Context["messages"] = [

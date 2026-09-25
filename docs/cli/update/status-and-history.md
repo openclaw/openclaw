@@ -17,6 +17,14 @@ While an update is active, the table shows its phase instead of advertising anot
 update, and the final line points to `openclaw update status`. JSON still includes
 registry/Git `availability` separately from `activeRun`.
 
+Git availability checks, including the Gateway's background check after startup,
+refresh only the selected upstream. They do not import other remote branches or
+tags, prune existing refs, or change shallow-history boundaries. A fresh detached
+Dev checkout can discover its configured `main` upstream without first fetching
+the remote's full ref inventory. Local upstreams need no fetch; an unknown upstream
+stays unknown. The selected upstream's own missing history may still be downloaded.
+Ahead/behind counts remain unavailable when shallow history has no merge base.
+
 If an update hands work to a background helper, the command has not finished the
 update. Follow its final `openclaw update status` command to check progress and the
 outcome. `openclaw gateway status --deep` checks Gateway health, not update progress.
@@ -98,6 +106,11 @@ the updated Gateway; older runs cannot recover a cause that was never recorded.
 
 An admitted `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
+An automatic-update campaign stops showing as applying when its own admitted run
+finishes, including when a managed handoff fails before restarting the Gateway.
+The Gateway reconciles the exact campaign run, so newer unrelated runs do not
+keep a finished campaign busy or clear a different active campaign.
+
 Retained dry-run previews remain available through history queries but do not
 replace `lastRun`, so a preview cannot hide the last real update failure.
 If history cannot be read or classified, status still shows update availability

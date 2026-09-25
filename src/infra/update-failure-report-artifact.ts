@@ -1,5 +1,5 @@
 /** Filesystem lifecycle for a non-authoritative, sanitized update report body. */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +11,7 @@ import {
 import { resolveStateDir } from "../config/paths.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { classifyUpdateOutcome } from "../shared/update-outcome.js";
+import { sha256Hex } from "./crypto-digest.js";
 import { formatErrorMessage } from "./errors.js";
 import { writeTextAtomic } from "./json-files.js";
 import { formatUpdateDoctorLintFinding } from "./update-doctor-lint.js";
@@ -118,9 +119,7 @@ export function bindSavedReportArtifact(
   previewDigest = prepared.previewDigest,
 ): PreparedUpdateFailureReport {
   const parsed = path.parse(prepared.savedReportPath);
-  const artifactKey = createHash("sha256")
-    .update(`${reservationId}\0${previewDigest}`)
-    .digest("hex");
+  const artifactKey = sha256Hex(`${reservationId}\0${previewDigest}`);
   return {
     ...prepared,
     savedReportPath: path.join(parsed.dir, `${parsed.name}.${artifactKey}${parsed.ext}`),
@@ -153,18 +152,6 @@ function isAttemptArtifactName(base: path.ParsedPath, entry: string): boolean {
     withoutStageSuffix.length - base.ext.length,
   );
   return /^[a-f0-9]{64}$/u.test(artifactKey);
-}
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.stat(filePath);
-    return true;
-  } catch (error) {
-    if (hasErrorCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
-  }
 }
 
 export async function discardSavedUpdateFailureReport(
@@ -239,10 +226,8 @@ export async function savePreparedUpdateFailureReport(
   };
   const reportDir = path.dirname(prepared.savedReportPath);
   ensureCurrentAuthority();
-  const reportDirExisted = await pathExists(reportDir);
-  ensureCurrentAuthority();
-  await fs.mkdir(reportDir, { mode: 0o700, recursive: true });
-  saved.reportDirCreated = !reportDirExisted;
+  const created = await fs.mkdir(reportDir, { mode: 0o700, recursive: true });
+  saved.reportDirCreated = created !== undefined;
   ensureCurrentAuthority();
   try {
     await fs.writeFile(stagedReportPath(prepared), prepared.body, {

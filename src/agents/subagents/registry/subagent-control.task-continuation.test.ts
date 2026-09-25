@@ -33,7 +33,7 @@ it.each(["canonical", "managed"] as const)(
       sessionKey: childSessionKey,
       defaultSessionId: "task-continuation-session",
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "original-task-run",
       childSessionKey,
       requesterSessionKey,

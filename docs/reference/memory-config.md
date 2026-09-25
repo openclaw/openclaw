@@ -344,7 +344,7 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     | ----------------- | -------- | --------------- | ----------------------- |
     | `local.modelPath` | `string` | auto-downloaded | Path to GGUF model file |
 
-    Install the official llama.cpp provider, then choose llama.cpp once in
+    Install the official [llama.cpp provider](/plugins/llama-cpp), then choose llama.cpp once in
     interactive setup. OpenClaw installs a pinned, verified `llama-server` and
     writes its loopback `localService` configuration. Default model:
     `embeddinggemma-300m-qat-Q8_0.gguf` (~0.3 GB, auto-downloaded).

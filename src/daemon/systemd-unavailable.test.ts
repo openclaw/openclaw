@@ -276,4 +276,78 @@ printf 's "252.39"\\n'
       },
     );
   });
+
+  it("refuses cleanup when the inspected user unit is replaced by a leftover legacy unit", async () => {
+    await withTempDir("openclaw-user-unit-drift-", async (dir) => {
+      const env = { ...systemctlEnv(dir), OPENCLAW_PROFILE: "lisa" };
+      const userDir = path.join(dir, ".config", "systemd", "user");
+      const leftoverPath = path.join(userDir, "openclaw-lisa.service");
+      const canonicalPath = path.join(userDir, "openclaw-gateway-lisa.service");
+      await fs.mkdir(userDir, { recursive: true });
+      await fs.writeFile(leftoverPath, "[Unit]\nDescription=OpenClaw Gateway (profile: lisa)\n");
+      const stdout = new Writable({
+        write(_chunk, _encoding, callback) {
+          callback();
+        },
+      });
+      await expect(
+        uninstallUserSystemdGatewayUnit({
+          env,
+          stdout,
+          target: {
+            scope: "user",
+            unitName: "openclaw-gateway-lisa.service",
+            unitPath: canonicalPath,
+          },
+        }),
+      ).rejects.toThrow(/openclaw-gateway-lisa\.service changed to openclaw-lisa\.service/);
+      await fs.access(leftoverPath);
+    });
+  });
+
+  it("still removes the inspected user unit when discovery still matches", async () => {
+    await withTempDir("openclaw-user-unit-match-", async (dir) => {
+      const env = { ...systemctlEnv(dir), OPENCLAW_PROFILE: "lisa" };
+      await managerProbe(dir);
+      const unitPath = path.join(dir, ".config", "systemd", "user", "openclaw-lisa.service");
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Gateway (profile: lisa)\n");
+      await fs.writeFile(
+        path.join(dir, "systemctl"),
+        [
+          "#!/bin/sh",
+          'printf "%s\\n" "$*" >> "$HOME/systemctl.calls"',
+          'case " $* " in',
+          '*" status "*|*" --version "*) kill -TERM $$ ;;',
+          '*" disable "*) exit 0 ;;',
+          "esac",
+        ].join("\n"),
+        { mode: 0o700 },
+      );
+      let output = "";
+      const stdout = new Writable({
+        write(chunk, _encoding, callback) {
+          output += chunk.toString();
+          callback();
+        },
+      });
+      const result = await uninstallUserSystemdGatewayUnit({
+        env,
+        stdout,
+        target: { scope: "user", unitName: "openclaw-lisa.service", unitPath },
+      });
+      expect(result).toMatchObject({
+        unitName: "openclaw-lisa.service",
+        unitPath,
+        removed: true,
+        disabled: true,
+      });
+      await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
+      const calls = (await fs.readFile(path.join(dir, "systemctl.calls"), "utf8"))
+        .trim()
+        .split("\n");
+      expect(calls).toContain("--user disable --now openclaw-lisa.service");
+      expect(output).toContain("Removed");
+    });
+  });
 });

@@ -12,7 +12,8 @@ import "../../styles/chat.ts";
 const paragraph =
   "The conversation keeps every participant's content inside the shared column. ".repeat(20);
 const code = `\`\`\`text\n${"long-unbroken-output-".repeat(80)}\n\`\`\``;
-const table = `| ${Array.from({ length: 12 }, (_, i) => `Column ${i}`).join(" | ")} |\n| ${"--- | ".repeat(12)}\n| ${"unbroken-table-value | ".repeat(12)}`;
+// Exercise the scroll fallback with values that cannot wrap at spaces or hyphens.
+const table = `| ${Array.from({ length: 12 }, (_, i) => `Column ${i}`).join(" | ")} |\n| ${"--- | ".repeat(12)}\n| ${"unbrokentablevalueunbrokentablevalue | ".repeat(12)}`;
 const image = {
   type: "image",
   data: "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAHElEQVR4nGP4z8DwnxLMMGrAsDCAQv2jBgwPAwAxtf4Q24P5oAAAAABJRU5ErkJggg==",

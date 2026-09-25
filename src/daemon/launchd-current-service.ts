@@ -7,20 +7,9 @@ function hasNativeLaunchdServiceLabel(
   label: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  const currentLabels = [env.LAUNCH_JOB_LABEL, env.LAUNCH_JOB_NAME, env.XPC_SERVICE_NAME].flatMap(
-    (value) => {
-      const normalized = normalizeOptionalString(value);
-      return normalized ? [normalized] : [];
-    },
+  return [env.LAUNCH_JOB_LABEL, env.LAUNCH_JOB_NAME, env.XPC_SERVICE_NAME].some(
+    (value) => normalizeOptionalString(value) === label,
   );
-
-  for (const currentLabel of currentLabels) {
-    if (currentLabel === label) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 /** Environment hints for launchd identity; inherited markers do not prove ancestry. */

@@ -3,7 +3,6 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 // Register shared mocks before imports bind their production exports.
 import "./agent-command.test-mocks.js";
@@ -53,6 +52,7 @@ import { getBootEchoContextForSession } from "../gateway/boot-echo-guard.js";
 import { runBootOnce } from "../gateway/boot.js";
 import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
+import { withTempHomeCore as withTempHomeBase } from "../plugin-sdk/test-helpers/temp-home.js";
 import { loadEnabledClaudeBundleCommands } from "../plugins/bundle-commands.js";
 import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import type { PluginProviderRegistration } from "../plugins/registry.test-fixtures.js";

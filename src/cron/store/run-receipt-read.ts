@@ -9,6 +9,7 @@ import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.
 import type {
   CronRunReceipt,
   CronRunReceiptHandle,
+  CronRunReceiptOwnerObservation,
   CronRunReceiptRecoveryCandidate,
   CronRunReceiptStatus,
 } from "./run-receipt.types.js";
@@ -79,4 +80,32 @@ export function readActiveCronRunReceiptsInDatabase(
   return rows
     .filter((row) => selected.has(row.job_id))
     .map((row) => receiptHandle(receiptFromRow(row)));
+}
+
+/** Drainage needs receipt ownership even after its scheduled job has been removed. */
+export function readActiveCronRunReceiptOwnersInDatabase(
+  database: DatabaseSync,
+  agentId: string,
+): CronRunReceiptOwnerObservation[] {
+  try {
+    return executeSqliteQuerySync(
+      database,
+      getNodeSqliteKysely<CronRunReceiptDatabase>(database)
+        .selectFrom("cron_run_receipts")
+        .select(["receipt_id", "owner_pid", "owner_start_time", "started_at_ms"])
+        .where("status", "=", "running")
+        .where("agent_id", "=", agentId),
+    ).rows.map((row) => ({
+      receiptId: row.receipt_id,
+      ownerPid: row.owner_pid,
+      ownerStartTime: row.owner_start_time,
+      startedAtMs: row.started_at_ms,
+    }));
+  } catch (error) {
+    // This additive table is initialized by the first receipt claim, never by a read.
+    if (error instanceof Error && error.message === "no such table: cron_run_receipts") {
+      return [];
+    }
+    throw error;
+  }
 }

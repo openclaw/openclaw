@@ -10,13 +10,11 @@ import type {
   SessionsBranchesSwitchResult,
   SessionsForkResult,
   SessionsRewindResult,
-  SessionWorkspaceGetResult,
-  SessionWorkspaceListResult,
-  SessionWorkspaceSetResult,
 } from "../../api/types.ts";
 import { requestSessionRecovery } from "./recover.ts";
 import type {
   SessionCompactResult,
+  SessionCapability,
   SessionConnectionOwner,
   SessionConnectionScope,
   SessionMessageSubscription,
@@ -82,44 +80,25 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     return result;
   };
 
-  const listFiles = async (
-    key: string,
-    options: { agentId?: string | null; path?: string; search?: string } = {},
-  ): Promise<SessionWorkspaceListResult | null> => {
+  const requestCurrent = async <T>(
+    request: (client: GatewayBrowserClient) => Promise<T>,
+  ): Promise<T | null> => {
     const scope = host.connection.capture();
     if (!scope) {
       return null;
     }
-    const result = await requestSessionFilesList(scope.client, key, options);
+    const result = await request(scope.client);
     return host.connection.isCurrent(scope) ? result : null;
   };
 
-  const getFile = async (
-    key: string,
-    path: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionWorkspaceGetResult | null> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return null;
-    }
-    const result = await requestSessionFile(scope.client, key, path, options);
-    return host.connection.isCurrent(scope) ? result : null;
-  };
+  const listFiles: SessionCapability["listFiles"] = (key, options = {}) =>
+    requestCurrent((client) => requestSessionFilesList(client, key, options));
 
-  const setFile = async (
-    key: string,
-    path: string,
-    content: string,
-    options: { agentId?: string | null; expectedHash: string },
-  ): Promise<SessionWorkspaceSetResult | null> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return null;
-    }
-    const result = await requestSessionFileSet(scope.client, key, path, content, options);
-    return host.connection.isCurrent(scope) ? result : null;
-  };
+  const getFile: SessionCapability["getFile"] = (key, path, options = {}) =>
+    requestCurrent((client) => requestSessionFile(client, key, path, options));
+
+  const setFile: SessionCapability["setFile"] = (key, path, content, options) =>
+    requestCurrent((client) => requestSessionFileSet(client, key, path, content, options));
 
   const unsubscribeMessages = async (subscription: SessionMessageSubscription): Promise<void> => {
     await releaseGatewaySessionMessageSubscription(subscription);

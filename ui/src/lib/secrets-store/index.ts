@@ -43,9 +43,17 @@ export function createInitialSecretsStoreState(
   };
 }
 
-async function requestSnapshot(client: GatewayBrowserClient): Promise<SecretStoreEntry[]> {
+async function refreshSnapshot(
+  state: SecretsStoreState,
+  client: GatewayBrowserClient,
+): Promise<boolean> {
   const result = await client.request<SecretsStoreListResult>("secrets.store.list", {});
-  return result.entries;
+  if (state.client !== client || !state.connected) {
+    return false;
+  }
+  state.entries = result.entries;
+  state.loaded = true;
+  return true;
 }
 
 export async function loadSecretsStore(state: SecretsStoreState): Promise<boolean> {
@@ -56,13 +64,7 @@ export async function loadSecretsStore(state: SecretsStoreState): Promise<boolea
   state.loading = true;
   state.error = null;
   try {
-    const entries = await requestSnapshot(client);
-    if (state.client === client && state.connected) {
-      state.entries = entries;
-      state.loaded = true;
-      return true;
-    }
-    return false;
+    return await refreshSnapshot(state, client);
   } catch (error) {
     if (state.client === client) {
       state.error = formatUiError(error);
@@ -93,11 +95,7 @@ async function mutateAndReload(
     mutationError = error;
   }
   try {
-    const entries = await requestSnapshot(client);
-    if (state.client === client && state.connected) {
-      state.entries = entries;
-      state.loaded = true;
-    }
+    await refreshSnapshot(state, client);
   } catch (error) {
     mutationError ??= error;
   } finally {
@@ -171,11 +169,7 @@ export async function bulkSetSecretsStoreEntries(
       const result = await client.request<SecretsStoreMutationResult>("secrets.store.set", entry);
       saved += 1;
       warningCount = Math.max(warningCount, result.warningCount ?? 0);
-      const snapshot = await requestSnapshot(client);
-      if (state.client === client && state.connected) {
-        state.entries = snapshot;
-        state.loaded = true;
-      }
+      await refreshSnapshot(state, client);
     }
   } catch (error) {
     mutationError = new Error(
@@ -188,11 +182,7 @@ export async function bulkSetSecretsStoreEntries(
   }
   try {
     if (mutationError) {
-      const snapshot = await requestSnapshot(client);
-      if (state.client === client && state.connected) {
-        state.entries = snapshot;
-        state.loaded = true;
-      }
+      await refreshSnapshot(state, client);
     }
   } catch (error) {
     mutationError ??= error;

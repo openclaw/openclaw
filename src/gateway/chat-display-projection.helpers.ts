@@ -227,24 +227,16 @@ export function isEmptyTextOnlyContent(content: unknown): boolean {
   if (!Array.isArray(content)) {
     return false;
   }
-  if (content.length === 0) {
-    return true;
-  }
-  let sawText = false;
   for (const block of content) {
     if (!block || typeof block !== "object") {
       return false;
     }
     const entry = block as { type?: unknown; text?: unknown };
-    if (entry.type !== "text") {
-      return false;
-    }
-    sawText = true;
-    if (typeof entry.text !== "string" || entry.text.trim().length > 0) {
+    if (entry.type !== "text" || typeof entry.text !== "string" || entry.text.trim().length > 0) {
       return false;
     }
   }
-  return sawText;
+  return true;
 }
 
 export function hasTranscriptMediaFacts(message: Record<string, unknown>): boolean {

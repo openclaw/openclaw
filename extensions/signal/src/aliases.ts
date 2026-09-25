@@ -111,18 +111,6 @@ function resolveSignalAliasTargetFromMap(params: {
   }
 }
 
-function resolveSignalAliasTarget(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  input: string;
-}): ResolvedSignalAliasTarget | null {
-  const aliases = resolveAliasMap(params);
-  return resolveSignalAliasTargetFromMap({
-    aliases,
-    input: params.input,
-  });
-}
-
 export function resolveSignalTarget(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -135,7 +123,10 @@ export function resolveSignalTarget(params: {
       source: "raw",
     };
   }
-  const aliasTarget = resolveSignalAliasTarget(params);
+  const aliasTarget = resolveSignalAliasTargetFromMap({
+    aliases: resolveAliasMap(params),
+    input: params.input,
+  });
   if (aliasTarget) {
     return { ...aliasTarget, source: "alias" };
   }

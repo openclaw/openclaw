@@ -341,19 +341,11 @@ export class SidebarSessionNarrationController {
     if (deltaText) {
       if (messageText) {
         const appends = consumed > 0 && messageText.length - deltaText.length === consumed;
-        if (appends) {
-          this.publishText(key, {
-            streamLength: messageText.length,
-            fragment: deltaText,
-            reset: false,
-          });
-        } else {
-          this.publishText(key, {
-            streamLength: messageText.length,
-            fragment: messageText,
-            reset: true,
-          });
-        }
+        this.publishText(key, {
+          streamLength: messageText.length,
+          fragment: appends ? deltaText : messageText,
+          reset: !appends,
+        });
       } else if (consumed > 0) {
         this.publishText(key, {
           streamLength: consumed + deltaText.length,

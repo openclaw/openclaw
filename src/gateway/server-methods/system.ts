@@ -4,7 +4,6 @@ import os from "node:os";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-  readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -249,49 +248,26 @@ export const systemHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const deviceId = readStringValue(params.deviceId);
-    const instanceId = readStringValue(params.instanceId);
-    const host = readStringValue(params.host);
-    const ip = readStringValue(params.ip);
-    const mode = readStringValue(params.mode);
-    const version = readStringValue(params.version);
-    const platform = readStringValue(params.platform);
-    const deviceFamily = readStringValue(params.deviceFamily);
-    const modelIdentifier = readStringValue(params.modelIdentifier);
-    const reason = readStringValue(params.reason);
-    const roles =
-      Array.isArray(params.roles) && params.roles.every((t) => typeof t === "string")
-        ? params.roles
-        : undefined;
-    const scopes =
-      Array.isArray(params.scopes) && params.scopes.every((t) => typeof t === "string")
-        ? params.scopes
-        : undefined;
-    const tags =
-      Array.isArray(params.tags) && params.tags.every((t) => typeof t === "string")
-        ? params.tags
-        : undefined;
-    const lastInputSeconds = tags?.includes(SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG)
+    const reason = params.reason;
+    const lastInputSeconds = params.tags?.includes(SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG)
       ? null
-      : typeof params.lastInputSeconds === "number" && Number.isFinite(params.lastInputSeconds)
-        ? params.lastInputSeconds
-        : undefined;
+      : params.lastInputSeconds;
     const presenceUpdate = updateSystemPresence({
       text,
-      deviceId,
-      instanceId,
-      host,
-      ip,
-      mode,
-      version,
-      platform,
-      deviceFamily,
-      modelIdentifier,
+      deviceId: params.deviceId,
+      instanceId: params.instanceId,
+      host: params.host,
+      ip: params.ip,
+      mode: params.mode,
+      version: params.version,
+      platform: params.platform,
+      deviceFamily: params.deviceFamily,
+      modelIdentifier: params.modelIdentifier,
       lastInputSeconds,
       reason,
-      roles,
-      scopes,
-      tags,
+      roles: params.roles,
+      scopes: params.scopes,
+      tags: params.tags,
     });
     if (isNodePresenceLine) {
       // Node presence heartbeats are noisy; only enqueue user-visible system

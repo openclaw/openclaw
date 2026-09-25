@@ -23,7 +23,7 @@ import { hasStoredUpdateRecovery, readUpdateRunRecord } from "./update-run-read.
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { persistRun, updateRunLedgerSchema, upsertStep } from "./update-run-write.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 export { readInstalledUpdateCandidate } from "./update-run-interruption-store.js";
 
 const CANDIDATE_STEP = "finalize:installed-candidate";

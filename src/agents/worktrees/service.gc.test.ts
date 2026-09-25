@@ -28,6 +28,7 @@ import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./ser
 import {
   useManagedWorktreeTestRepository,
   materializeManagedWorktreeFixture,
+  materializeManagedWorktreeFixtures,
 } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
@@ -858,9 +859,13 @@ describe("ManagedWorktreeService garbage collection", () => {
   });
 
   it("enforces one hundred live checkouts by default without evicting manual work", async () => {
-    for (let index = 0; index < 99; index += 1) {
-      await materializeDownstreamFixture(`manual-${index}`);
-    }
+    await materializeManagedWorktreeFixtures({
+      env,
+      names: Array.from({ length: 99 }, (_, index) => `manual-${index}`),
+      now,
+      repoRoot: repo,
+      stateDir,
+    });
     const oldest = await materializeRunOwnedFixture("default-oldest", "session");
     now += 1;
     const newest = await materializeRunOwnedFixture("default-newest", "session");
@@ -963,7 +968,12 @@ describe("ManagedWorktreeService garbage collection", () => {
       });
     const collection = service.gc();
     let restoration: ReturnType<typeof service.restore> | undefined;
-    const waits = vi.spyOn(backoff, "sleepWithAbort");
+    const waiting = createDeferred();
+    const sleep = backoff.sleepWithAbort;
+    const waits = vi.spyOn(backoff, "sleepWithAbort").mockImplementation((...args) => {
+      waiting.resolve();
+      return sleep(...args);
+    });
     try {
       await Promise.race([
         deleting.promise,
@@ -978,7 +988,8 @@ describe("ManagedWorktreeService garbage collection", () => {
         .finally(() => {
           settled = true;
         });
-      await vi.waitFor(() => expect(waits.mock.calls.length > 0 || settled).toBe(true));
+      await Promise.race([waiting.promise, outcome]);
+      expect(waits.mock.calls.length > 0 || settled).toBe(true);
       resume.resolve();
       expect((await collection).snapshotsPruned).toBe(1);
       await expect(outcome).resolves.toMatchObject({

@@ -29,7 +29,7 @@ const isLinkUnsupported = (error: unknown) =>
  *
  * Retention only needs the inventoried inodes to outlive the installer's rename or
  * unlink, so files share their inode with the source and bytes are copied only when
- * the filesystem refuses the link or the member must be rewritten for relocation.
+ * the filesystem cannot preserve identity or the member needs relocation.
  * One walk performs the inventory check, publication, relocation, and escape check
  * for every entry.
  */
@@ -84,6 +84,20 @@ export async function linkUpdateCandidatePluginTrees(
       await fs.chmod(destination, entry.mode);
     }
   };
+  // OverlayFS hard links can copy lower-layer files up, changing birthtime (or
+  // inode identity). Copy instead of relaxing the admitted file fingerprint.
+  const copyDevices = new Map<string, boolean>();
+  const requiresCopy = async (entry: UpdateCandidatePluginTreeEntry) => {
+    if (process.platform !== "linux") {
+      return false;
+    }
+    let copy = copyDevices.get(entry.dev);
+    if (copy === undefined) {
+      copy = (await fs.statfs(entry.path)).type === 0x794c7630;
+      copyDevices.set(entry.dev, copy);
+    }
+    return copy;
+  };
   const counts = { linked: 0, copied: 0 };
   const directories: Array<Extract<UpdateCandidatePluginTreeEntry, { kind: "directory" }>> = [];
   for (const entry of plan.entries) {
@@ -105,7 +119,7 @@ export async function linkUpdateCandidatePluginTrees(
       );
       continue;
     }
-    if (isRelocatedFile(destination)) {
+    if (isRelocatedFile(destination) || (await requiresCopy(entry))) {
       await copyEntry(entry, destination);
       counts.copied += 1;
       continue;

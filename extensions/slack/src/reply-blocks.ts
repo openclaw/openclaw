@@ -3,7 +3,6 @@ import {
   renderMessagePresentationFallbackText,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
-// Slack plugin module implements reply blocks behavior.
 import {
   resolveAskUserQuestionOptionIndices,
   resolveSendableOutboundReplyParts,
@@ -280,11 +279,7 @@ function projectSlackReplyRenderPlan(
 }
 
 function readSlackChannelBlocks(payload: ReplyPayload): SlackBlock[] {
-  const slackData = payload.channelData?.slack;
-  if (!slackData || typeof slackData !== "object" || Array.isArray(slackData)) {
-    return [];
-  }
-  return (parseSlackBlocksInput((slackData as { blocks?: unknown }).blocks) as SlackBlock[]) ?? [];
+  return parseSlackBlocksInput(asOptionalRecord(payload.channelData?.slack)?.blocks) ?? [];
 }
 
 export function hasSlackReplyStructuredContent(payload: ReplyPayload): boolean {

@@ -27,7 +27,11 @@ import {
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
-import { bindPluginRegistryResourceOwner } from "../plugins/registry-lifecycle.js";
+import {
+  bindPluginRegistryGatewayOwner,
+  bindPluginRegistryResourceOwner,
+  getPluginRegistryGatewayOwner,
+} from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   getActivePluginRegistry,
@@ -198,7 +202,20 @@ function adoptAgentRuntimeRegistrations(
     ),
     pluginRegistry,
   );
-  return { registry, ...(registry !== pluginRegistry ? { donor: activeRegistry } : {}) };
+  return {
+    registry: bindAdmittingGateway(registry),
+    ...(registry !== pluginRegistry ? { donor: activeRegistry } : {}),
+  };
+}
+
+/** The admitting Gateway owns reload recovery for work that runs in a turn registry. */
+function bindAdmittingGateway(registry: PluginRegistry): PluginRegistry {
+  const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const admittingGateway = requestRegistry && getPluginRegistryGatewayOwner(requestRegistry);
+  if (admittingGateway) {
+    bindPluginRegistryGatewayOwner(registry, admittingGateway);
+  }
+  return registry;
 }
 
 export type AcquiredAgentRuntimePluginRegistry =
@@ -218,7 +235,7 @@ export async function acquireAgentRuntimePluginRegistry(
   const loadOptions = resolveAgentRuntimePluginRegistryLoad(params);
   const reusable = reusableAgentRuntimeRegistry(params, loadOptions);
   if (reusable) {
-    return { registry: reusable, primaryRegistry: reusable };
+    return { registry: bindAdmittingGateway(reusable), primaryRegistry: reusable };
   }
   const acquire = () => acquirePluginRegistryForInspection(loadOptions);
   const channelSource = captureRuntimeChannelSource(getActivePluginRegistry());
@@ -275,7 +292,7 @@ export function loadAgentRuntimePluginRegistryHandle(
   const reusable = reusableAgentRuntimeRegistry(params, loadOptions);
   if (reusable) {
     onPrimaryRegistry?.(reusable);
-    return reusable;
+    return bindAdmittingGateway(reusable);
   }
   // Discovery-only load: full mode can replace process-global sandbox backends.
   // Adopt full-only runtime capabilities from the matching composition-root owners.

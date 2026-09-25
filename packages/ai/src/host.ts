@@ -34,6 +34,8 @@ export interface AiProviderStreamHookContext {
   config?: unknown;
   agentDir?: string;
   workspaceDir?: string;
+  /** Selected credential facts supplied by the host; never credential material. */
+  auth?: { mode: string; authFlow?: string };
   provider: string;
   modelId: string;
   model: Model;

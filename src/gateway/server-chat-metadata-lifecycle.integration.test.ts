@@ -332,7 +332,7 @@ describe("gateway chat metadata lifecycle composition", () => {
         ready = !initialReady;
         resume.resolve();
         const models = (await result).models;
-        expect(models.map(({ id }) => id)).toEqual(
+        expect(models.map(({ id }) => id).toSorted()).toEqual(
           ready ? ["codex-latest", "gpt-5.6-luna"] : ["gpt-5.6-luna"],
         );
         expect(models.every(({ available }) => available === ready)).toBe(true);
@@ -343,13 +343,17 @@ describe("gateway chat metadata lifecycle composition", () => {
         ready = initialReady;
         for (let read = 0; read < 3; read++) {
           expect(prepared.isCurrent()).toBe(true);
-          expect(prepared.read().models.map(({ id, available }) => [id, available])).toEqual(
-            ready
-              ? [
-                  ["codex-latest", true],
-                  ["gpt-5.6-luna", true],
-                ]
-              : [["gpt-5.6-luna", false]],
+          const membership = prepared.read().models.map(({ id, available }) => [id, available]);
+          expect(membership).toHaveLength(ready ? 2 : 1);
+          expect(membership).toEqual(
+            expect.arrayContaining(
+              ready
+                ? [
+                    ["codex-latest", true],
+                    ["gpt-5.6-luna", true],
+                  ]
+                : [["gpt-5.6-luna", false]],
+            ),
           );
         }
         expect(evaluations).toHaveBeenCalledTimes(hostCalls);

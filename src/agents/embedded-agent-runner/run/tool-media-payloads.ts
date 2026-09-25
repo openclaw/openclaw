@@ -1,6 +1,7 @@
 /**
  * Merges media payloads discovered from attempt tool results.
  */
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
   copyReplyPayloadMetadata,
@@ -32,9 +33,7 @@ type ToolMediaMergeParams = ToolMediaBatch & {
 };
 
 function selectToolMedia(params: ToolMediaMergeParams) {
-  let mediaUrls = Array.from(
-    new Set(params.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []),
-  );
+  let mediaUrls = normalizeUniqueTrimmedStringList(params.toolMediaUrls);
   const payloads = params.payloads?.length ? [...params.payloads] : [];
   const payloadIndex = payloads.findIndex((payload) => !payload.isReasoning && !payload.isError);
   const visiblePayload = payloads[payloadIndex];
@@ -81,15 +80,9 @@ function mergeSelectedToolMedia(
   }: ReturnType<typeof selectToolMedia>,
 ): EmbeddedRunPayload[] | undefined {
   const mediaUrlSet = new Set(mediaUrls);
-  const autoDeliveryMediaUrls = Array.from(
-    new Set(params.toolAutoDeliveryMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []),
-  );
-  const hostOwnedMediaUrls = Array.from(
-    new Set(
-      params.hostOwnedToolMediaUrls
-        ?.map((url) => url.trim())
-        .filter((url) => url.length > 0 && mediaUrlSet.has(url)) ?? [],
-    ),
+  const autoDeliveryMediaUrls = normalizeUniqueTrimmedStringList(params.toolAutoDeliveryMediaUrls);
+  const hostOwnedMediaUrls = normalizeUniqueTrimmedStringList(params.hostOwnedToolMediaUrls).filter(
+    (url) => mediaUrlSet.has(url),
   );
   if (
     mediaUrls.length === 0 &&
@@ -174,16 +167,12 @@ function mergeSelectedToolMedia(
     return appendOwnedMedia(payloads);
   }
 
-  if (shouldSplitHostOwnedMedia || shouldSplitAutoDeliveryMedia) {
-    const genericMediaPayload =
-      mergeableMediaUrls.length > 0 ? [buildMediaPayload(mergeableMediaUrls, true)] : [];
-    return appendOwnedMedia([...payloads, ...genericMediaPayload]);
-  }
-
-  const mediaPayload = buildMediaPayload(mergeableMediaUrls, true);
-
   // Reasoning-only turns still need a concrete media payload so channel delivery sees the attachment.
-  return appendOwnedMedia([...payloads, mediaPayload]);
+  const needsMediaPayload =
+    mergeableMediaUrls.length > 0 || (!shouldSplitHostOwnedMedia && !shouldSplitAutoDeliveryMedia);
+  return appendOwnedMedia(
+    needsMediaPayload ? [...payloads, buildMediaPayload(mergeableMediaUrls, true)] : payloads,
+  );
 }
 
 /** Keeps unsent artifacts with the logical run while their plugin generation retires. */

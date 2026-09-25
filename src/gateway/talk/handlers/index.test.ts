@@ -1,7 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-/**
- * Tests for talk gateway methods that coordinate speech and audio providers.
- */
+/** Tests for talk gateway methods that coordinate speech and audio providers. */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -40,6 +38,7 @@ import { buildTalkRealtimeConfig } from "../session-config.js";
 import { forgetLegacyVoiceBinding } from "./client-legacy-voice-bindings.js";
 import { talkConfigAccentCases } from "./config-accent.test-support.js";
 import {
+  createTalkConfig,
   defineRealtimeConfigProjectionTests,
   type TalkConfigProjectionResponse,
 } from "./config-realtime.test-support.js";
@@ -239,7 +238,10 @@ vi.mock("../../server-methods/chat-send-handler.js", () => ({
 }));
 
 vi.mock("../../sessions-resolve.js", () => ({
-  resolveSessionKeyFromResolveParams: mocks.resolveSessionKeyFromResolveParams,
+  withPreparedSessionResolve: async (
+    { isCurrent: _isCurrent, ...params }: Record<string, unknown>,
+    consume: (result: unknown) => unknown,
+  ) => consume(mocks.resolveSessionKeyFromResolveParams(params)),
 }));
 
 vi.mock("../relay/index.js", async (importOriginal) => {
@@ -277,20 +279,6 @@ vi.mock("../transcription-relay.js", async (importOriginal) => {
     stopTalkTranscriptionRelaySession: mocks.stopTalkTranscriptionRelaySession,
   };
 });
-
-function createTalkConfig(apiKey: unknown): OpenClawConfig {
-  return {
-    talk: {
-      provider: "acme",
-      providers: {
-        acme: {
-          apiKey,
-          voiceId: "stub-default-voice",
-        },
-      },
-    },
-  } as OpenClawConfig;
-}
 
 type TalkHandlerCallOptions = {
   params: Record<string, unknown>;

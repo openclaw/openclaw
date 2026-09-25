@@ -2197,33 +2197,53 @@ struct OnboardingAISetupTests {
         #expect(OnboardingProviderAuthLink.safeURL("Read https://docs.openclaw.ai/start/faq") == nil)
     }
 
-    @Test func `provider auth callback reacquires its route after a pre-dispatch disconnect`() async throws {
+    @Test(arguments: [
+        (choiceID: "test-provider-login", label: "Test provider", stepType: "text"),
+        (choiceID: "openai-token-sharing", label: "Sign in with ChatGPT", stepType: "note"),
+    ])
+    func `advertised browser auth preserves its choice and session after a pre-dispatch disconnect`(
+        choice: (choiceID: String, label: String, stepType: String)
+    ) async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingProviderAuthReconnectTests"))
         let detections = AISetupSocketGeneration()
         let answeredSessions = LockIsolated<[String]>([])
         let cancelledSessions = LockIsolated<[String]>([])
+        let signInURL = "https://auth.example.com/authorize?client_id=fixture"
         let url = try #require(URL(string: "ws://example.invalid"))
         let harness = AISetupHarness(url: url) { _, request, _ in
             switch request.method {
             case "openclaw.setup.detect":
-                return detections.claim() == 0
-                    ? detectedSetupResponse(id: request.id)
-                    : persistedDetectedSetupResponse(id: request.id)
+                guard detections.claim() == 0 else {
+                    return persistedDetectedSetupResponse(id: request.id)
+                }
+                return Data(
+                    """
+                    {"type":"res","id":"\(request.id)","ok":true,"payload":{
+                      "candidates":[],"manualProviders":[],"authOptions":[{
+                        "id":"\(choice.choiceID)","label":"\(choice.label)","kind":"oauth","featured":false}],
+                      "configuredModel":null,"setupComplete":false}}
+                    """.utf8
+                )
             case "openclaw.setup.auth.start":
+                #expect(request.params["authChoice"] as? String == choice.choiceID)
                 let sessionID = try #require(request.params["sessionId"] as? String)
                 return Data(
                     """
                     {"type":"res","id":"\(request.id)","ok":true,"payload":{
                       "sessionId":"\(sessionID)","done":false,"status":"running",
-                      "step":{"id":"login","type":"text","executor":"client",
-                        "message":"Enter the sign-in response"}}}
+                      "step":{"id":"login","type":"\(choice.stepType)","executor":"client",
+                        "externalUrl":"\(signInURL)","message":"Finish sign-in in your browser"}}}
                     """.utf8
                 )
             case "wizard.next":
                 let sessionID = try #require(request.params["sessionId"] as? String)
                 let answer = try #require(request.params["answer"] as? [String: Any])
                 #expect(answer["stepId"] as? String == "login")
-                #expect(answer["value"] as? String == "callback-value")
+                if choice.stepType == "text" {
+                    #expect(answer["value"] as? String == "callback-value")
+                } else {
+                    #expect(answer["value"] == nil)
+                }
                 answeredSessions.withValue { $0.append(sessionID) }
                 return wizardDoneResponse(id: request.id, sessionID: sessionID)
             case "wizard.cancel":
@@ -2238,17 +2258,18 @@ struct OnboardingAISetupTests {
             }
         }
         let model = harness.model(defaults: defaults)
-        let option = OnboardingAISetupModel.AuthOption(
-            id: "test-provider-login", brandId: nil, label: "Test provider", hint: nil,
-            groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false, modelTarget: nil
-        )
 
         await model.detectConnections()
+        let option = try #require(model.authOptions.first { $0.id == choice.choiceID })
+        #expect(option.label == choice.label)
+        #expect(!option.featured)
         model.startProviderAuth(option)
         for _ in 0 ..< 200 where model.authStep == nil {
             try await Task.sleep(for: .milliseconds(5))
         }
         let sessionID = try #require(model._test_authSessionID)
+        #expect(model.activeAuthOption == option)
+        #expect(model.authStep?.externalurl == signInURL)
         let staleLease = try #require(await harness.gateway.captureServerLease())
         let firstSocket = try #require(harness.session.latestTask())
 
@@ -2269,6 +2290,7 @@ struct OnboardingAISetupTests {
         #expect(harness.session.snapshotMakeCount() == 2)
         #expect(model.authError == nil)
         #expect(model.connected)
+        #expect(await harness.recorder.snapshot().authChoices == [choice.choiceID])
 
         let requestCount = await (harness.recorder.snapshot()).methods.count
         model.continueProviderAuth()

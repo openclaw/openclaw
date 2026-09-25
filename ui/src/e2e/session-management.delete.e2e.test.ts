@@ -397,12 +397,6 @@ suite.define(() => {
       );
 
       await gateway.setSessionsListResponse(sessionsListResponse([replacement]));
-      await gateway.emitGatewayEvent("sessions.changed", {
-        ...replacement,
-        reason: "update",
-        sessionKey: key,
-      });
-      await replacementLabel.waitFor();
       await gateway.deferNext("sessions.delete");
       await confirmModal.getByRole("button", { name: "Delete", exact: true }).click();
 
@@ -417,7 +411,16 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".sessions-error[role=alert]").textContent())
         .toContain("changed before deletion. Retry.");
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...replacement,
+        reason: "update",
+        sessionKey: key,
+      });
       await replacementLabel.waitFor();
+      expect(await page.getByRole("checkbox", { name: `Select session: ${key}` }).isChecked()).toBe(
+        false,
+      );
+      expect(await gateway.getRequests("sessions.delete")).toHaveLength(1);
       await captureUiProof(suite, page, "sessions-bulk-delete-replacement-protected.png");
     } finally {
       await context.close();

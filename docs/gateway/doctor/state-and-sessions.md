@@ -32,6 +32,8 @@ auth health, sandbox images, and plugin installs.
 
     When an unavailable plugin still needs legacy session files, Doctor retains those originals after verifying the core import. Startup accepts the retained files only when their session owners have matching verified imports. An unused configured agent does not need an empty database for another agent's history. Changed, unassigned, or unimported source rows still require repair before startup.
 
+    Doctor and Gateway startup use the same prepared plugin selection for planning and post-session repair. A deferred external plugin stays deferred while admitted plugins complete their repairs; changing maintenance scopes does not add unplanned actions or block an update with an action-order mismatch.
+
     Before archiving retained originals, Doctor rechecks pending plugin migrations against the current publication transaction. If those obligations changed during repair, the originals remain protected and Doctor reports the conflict for a later repair.
 
     A missing transcript remains a warning when the available history and session metadata were imported successfully, including while a plugin migration is pending. Later Doctor runs preserve current SQLite edits and deletions instead of replaying the retained index. The missing-history warning keeps that index protected after archival. If a previously missing transcript appears, Doctor preserves it and reports a source conflict for inspection before completing the deferred migration.

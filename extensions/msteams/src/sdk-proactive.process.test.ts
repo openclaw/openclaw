@@ -81,13 +81,6 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
       const quotedCreates = [];
       const posts = [];
       const app = {
-        client: {
-          request: async () => ({}),
-          post: async (url, activity) => {
-            posts.push({ url, activity });
-            return { data: { id: "normal-proactive" } };
-          },
-        },
         api: {
           serviceUrl: "https://smba.trafficmanager.net/amer",
           conversations: {
@@ -131,6 +124,24 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
         api.toActivityParams({ type: "message", text: "Direct conversion" }),
       );
 
+      const { Client } = await import("@microsoft/teams.common");
+      app.client = new Client({
+        interceptors: [{
+          request: ({ config }) => {
+            config.adapter = async (request) => {
+              posts.push({ url: request.url, activity: JSON.parse(request.data) });
+              return {
+                data: { id: "normal-proactive" },
+                status: 201,
+                statusText: "Created",
+                headers: {},
+                config: request,
+              };
+            };
+            return config;
+          },
+        }],
+      });
       await assert.doesNotReject(() =>
         sendMSTeamsActivityWithReference(
           app,

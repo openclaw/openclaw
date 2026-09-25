@@ -1,6 +1,5 @@
 import type { ChildProcess } from "node:child_process";
 import { basename, dirname, resolve, win32 as pathWin32 } from "node:path";
-import { parsePermissiveBooleanToken } from "../arg-utils.mts";
 import { trimForSummary } from "./shared.ts";
 import { type CrossOsSuite, parseCrossOsSuiteFilter } from "./suite-filter.mjs";
 
@@ -62,7 +61,6 @@ export type GatewayHandle = {
   waitForClose: () => Promise<void>;
 };
 export type CommandResult = { exitCode: number; stdout: string; stderr: string };
-export type AgentTurnResult = CommandResult | { status: number; stdout: string; stderr: string };
 export type CommandOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -138,7 +136,6 @@ export const CROSS_OS_PROCESS_TREE_KILL_AFTER_MS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_PROCESS_TREE_KILL_AFTER_MS",
   15_000,
 );
-export const CROSS_OS_AGENT_TURN_OPTIONAL = resolveCrossOsAgentTurnOptional();
 
 const providerConfig = {
   openai: {
@@ -347,22 +344,6 @@ export function parsePositiveIntegerEnv(name: string, fallback: number, env = pr
     throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
   }
   return value;
-}
-
-function parseBooleanEnv(name: string, fallback: boolean, env = process.env): boolean {
-  const raw = env[name]?.trim();
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = parsePermissiveBooleanToken(raw);
-  if (parsed !== undefined) {
-    return parsed;
-  }
-  throw new Error(`${name} must be a boolean. Got: ${JSON.stringify(raw)}`);
-}
-
-export function resolveCrossOsAgentTurnOptional(env = process.env) {
-  return parseBooleanEnv("OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL", false, env);
 }
 
 export function looksLikeReleaseVersionRef(ref: string) {

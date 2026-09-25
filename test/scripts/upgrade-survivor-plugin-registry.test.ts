@@ -529,50 +529,74 @@ run_live_models
   });
 
   it.each([
-    { OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI: "1" },
     {
-      OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS:
-        "openai/gpt-5.5 anthropic/claude-opus-5 google/gemini-3.1-pro-preview",
+      scenario: "watchos-direct-node",
+      liveEnv: { OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI: "1" },
+      expectedModels: ["openai/gpt-5.5"],
     },
-  ])("initializes watchOS live results before clearing fixture credentials: %j", (liveEnv) => {
-    const root = tempDirs.make("upgrade-survivor-watch-live-");
-    const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
-    const firstPhase = source.indexOf("\nphase storage-preflight");
-    expect(firstPhase).toBeGreaterThan(0);
-    const runner = join(root, "watch-live-init.sh");
-    writeFileSync(
-      runner,
-      `${source.slice(0, firstPhase)}
+    {
+      scenario: "watchos-direct-node",
+      liveEnv: {
+        OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS:
+          "openai/gpt-5.5 anthropic/claude-opus-5 google/gemini-3.1-pro-preview",
+      },
+      expectedModels: [
+        "openai/gpt-5.5",
+        "anthropic/claude-opus-5",
+        "google/gemini-3.1-pro-preview",
+      ],
+    },
+    ...[
+      "mobile-pairing-reconnect",
+      "projects-doctor",
+      "projects-startup-migration",
+      "taskflow-restoration",
+      "dreaming-cron-doctor",
+    ].map((scenario) => ({ scenario, liveEnv: {}, expectedModels: [] })),
+  ])(
+    "clears provider and channel credentials for $scenario while preserving live snapshots",
+    ({ scenario, liveEnv, expectedModels }) => {
+      const root = tempDirs.make("upgrade-survivor-isolated-env-");
+      const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+      const firstPhase = source.indexOf("\nphase storage-preflight");
+      expect(firstPhase).toBeGreaterThan(0);
+      const runner = join(root, "isolated-env-init.sh");
+      writeFileSync(
+        runner,
+        `${source.slice(0, firstPhase)}
 trap - ERR EXIT HUP INT TERM
 test -z "\${OPENAI_API_KEY+x}"
 test -z "\${ANTHROPIC_API_KEY+x}"
 test -z "\${GEMINI_API_KEY+x}"
+test -z "\${DISCORD_BOT_TOKEN+x}"
+test -z "\${TELEGRAM_BOT_TOKEN+x}"
 test "$LIVE_OPENAI_API_KEY" = fixture-openai
 test "$LIVE_ANTHROPIC_API_KEY" = fixture-anthropic
 test "$LIVE_GEMINI_API_KEY" = fixture-google
 `,
-    );
-    const result = spawnSync("bash", [runner], {
-      encoding: "utf8",
-      env: {
-        PATH: process.env.PATH,
-        HOME: root,
-        OPENAI_API_KEY: "fixture-openai",
-        ANTHROPIC_API_KEY: "fixture-anthropic",
-        GEMINI_API_KEY: "fixture-google",
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "watchos-direct-node",
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.9.5",
-        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(root, "runtime"),
-        OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: join(root, "summary.json"),
-        ...liveEnv,
-      },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    const receipt = JSON.parse(readFileSync(join(root, "live-models.json"), "utf8"));
-    expect(receipt.models.map((entry: { model: string }) => entry.model)).toEqual(
-      liveEnv.OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS?.split(" ") ?? ["openai/gpt-5.5"],
-    );
-  });
+      );
+      const result = spawnSync("bash", [runner], {
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          HOME: root,
+          OPENAI_API_KEY: "fixture-openai",
+          ANTHROPIC_API_KEY: "fixture-anthropic",
+          GEMINI_API_KEY: "fixture-google",
+          DISCORD_BOT_TOKEN: "fixture-discord",
+          TELEGRAM_BOT_TOKEN: "fixture-telegram",
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.9.5",
+          OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(root, "runtime"),
+          OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: join(root, "summary.json"),
+          ...liveEnv,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const receipt = JSON.parse(readFileSync(join(root, "live-models.json"), "utf8"));
+      expect(receipt.models.map((entry: { model: string }) => entry.model)).toEqual(expectedModels);
+    },
+  );
 
   it("fails closed before Docker when the opted-in key is missing", () => {
     const { captureDir, result } = runSurvivor({

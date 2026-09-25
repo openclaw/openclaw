@@ -10,6 +10,7 @@ import {
   resolveChannelApprovalAdapter,
 } from "../../channels/plugins/index.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -99,10 +100,14 @@ export async function resolvePrivateCommandRouteTargets(params: {
   return sortPrivateCommandRouteTargets({
     cfg: params.commandParams.cfg,
     originChannel,
-    targets: filterPrivateCommandRouteOwnerTargets({
-      cfg: params.commandParams.cfg,
-      targets: dedupePrivateCommandRouteTargets(targets),
-    }),
+    targets: dedupeByKey(targets, (target) =>
+      [
+        target.channel,
+        target.to,
+        target.accountId ?? "",
+        target.threadId == null ? "" : String(target.threadId),
+      ].join("\0"),
+    ),
   });
 }
 
@@ -256,6 +261,7 @@ function sortPrivateCommandRouteTargets(params: {
       ownerPreference: resolveOwnerPreferenceIndex({ cfg: params.cfg, target }),
       originPreference: target.channel === params.originChannel ? 0 : 1,
     }))
+    .filter((entry) => entry.ownerPreference !== Number.MAX_SAFE_INTEGER)
     .toSorted((a, b) => {
       if (a.originPreference !== b.originPreference) {
         return a.originPreference - b.originPreference;
@@ -266,38 +272,4 @@ function sortPrivateCommandRouteTargets(params: {
       return a.index - b.index;
     })
     .map((entry) => entry.target);
-}
-
-function filterPrivateCommandRouteOwnerTargets(params: {
-  cfg: HandleCommandsParams["cfg"];
-  targets: PrivateCommandRouteTarget[];
-}): PrivateCommandRouteTarget[] {
-  return params.targets.filter(
-    (target) =>
-      resolveOwnerPreferenceIndex({
-        cfg: params.cfg,
-        target,
-      }) !== Number.MAX_SAFE_INTEGER,
-  );
-}
-
-function dedupePrivateCommandRouteTargets(
-  targets: PrivateCommandRouteTarget[],
-): PrivateCommandRouteTarget[] {
-  const seen = new Set<string>();
-  const deduped: PrivateCommandRouteTarget[] = [];
-  for (const target of targets) {
-    const key = [
-      target.channel,
-      target.to,
-      target.accountId ?? "",
-      target.threadId == null ? "" : String(target.threadId),
-    ].join("\0");
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    deduped.push(target);
-  }
-  return deduped;
 }

@@ -253,7 +253,9 @@ describe("codex command", () => {
         }
       };
       let leasedClient: CodexAppServerClient | undefined;
-      let parent: ReturnType<typeof codexNativeSubagentMonitorRuntime.register> | undefined;
+      let parent:
+        | Awaited<ReturnType<typeof codexNativeSubagentMonitorRuntime.register>>
+        | undefined;
       let successor: Awaited<ReturnType<typeof consumeCodexAppServerLiveThread>>;
       try {
         leasedClient = await getLeasedSharedCodexAppServerClient({
@@ -262,7 +264,7 @@ describe("codex command", () => {
           agentDir: resolveDefaultAgentDir(context.config),
         });
         expect(leasedClient).toBe(harness.client);
-        parent = codexNativeSubagentMonitorRuntime.register({
+        parent = await codexNativeSubagentMonitorRuntime.register({
           client: leasedClient,
           parentThreadId,
         });

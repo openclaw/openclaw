@@ -101,16 +101,6 @@ export class TwilioProvider implements VoiceCallProvider {
   private readonly activeStreamCalls = new Set<string>();
 
   /**
-   * Delete stored TwiML for a given `callId`.
-   *
-   * We keep TwiML in-memory only long enough to satisfy the initial Twilio
-   * webhook request before streaming. Subsequent webhooks should not reuse it.
-   */
-  private deleteStoredTwiml(callId: string): void {
-    this.twimlStorage.delete(callId);
-  }
-
-  /**
    * Release all process-local metadata owned by one Twilio call.
    * Terminal webhooks can be replayed, so this must stay idempotent.
    */
@@ -126,7 +116,7 @@ export class TwilioProvider implements VoiceCallProvider {
       }
     }
     if (resolvedCallId) {
-      this.deleteStoredTwiml(resolvedCallId);
+      this.twimlStorage.delete(resolvedCallId);
     }
     this.callWebhookUrls.delete(providerCallId);
     this.callStreamMap.delete(providerCallId);
@@ -434,11 +424,11 @@ export class TwilioProvider implements VoiceCallProvider {
       canStream: Boolean(view.callSid && this.getStreamUrl()),
     });
 
-    if (decision.consumeStoredTwimlCallId) {
-      this.deleteStoredTwiml(decision.consumeStoredTwimlCallId);
-    }
-    switch (decision.kind) {
+    switch (decision) {
       case "stored":
+        if (view.callIdFromQuery) {
+          this.twimlStorage.delete(view.callIdFromQuery);
+        }
         return storedTwiml ?? TwilioProvider.EMPTY_TWIML;
       case "queue":
         return TwilioProvider.QUEUE_TWIML;
@@ -462,7 +452,7 @@ export class TwilioProvider implements VoiceCallProvider {
     if (!storedTwiml) {
       return null;
     }
-    this.deleteStoredTwiml(view.callIdFromQuery);
+    this.twimlStorage.delete(view.callIdFromQuery);
     console.log(
       `[voice-call] Twilio initial TwiML consumed for call ${view.callIdFromQuery} (kind=pre-connect, callSid=${view.callSid ?? "unknown"})`,
     );
@@ -742,8 +732,7 @@ export class TwilioProvider implements VoiceCallProvider {
           break;
         }
         chunkAttempts += 1;
-        const chunkResult = handler.sendAudio(streamSid, chunk);
-        if (!chunkResult.sent) {
+        if (!handler.sendAudio(streamSid, chunk)) {
           handler.clearAudio(streamSid);
           throw new Error(
             `Telephony stream playback failed: audio chunk ${chunkAttempts} not delivered`,

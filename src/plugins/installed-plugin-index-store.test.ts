@@ -301,7 +301,17 @@ describe("installed plugin index persistence", () => {
   it("writes and reads the installed plugin index atomically", async () => {
     const stateDir = makeTempDir();
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
-    const index = createIndex({ workspaceDir: "/agents/gadget/workspace" });
+    const index = createIndex({
+      workspaceDir: "/agents/gadget/workspace",
+      diagnostics: [
+        {
+          level: "info",
+          code: "explicit-config-plugin-selection",
+          pluginId: "demo",
+          message: "explicit override",
+        },
+      ],
+    });
 
     await expect(writePersistedInstalledPluginIndex(index, { stateDir })).resolves.toBe(filePath);
 
@@ -313,6 +323,7 @@ describe("installed plugin index persistence", () => {
     expect(persisted.warning).toContain("DO NOT EDIT.");
     expect(persisted.policyHash).toBe(index.policyHash);
     expect(persisted.workspaceDir).toBe("/agents/gadget/workspace");
+    expect(persisted.diagnostics).toEqual(index.diagnostics);
     expectPluginIds(persisted, ["demo"]);
     expectPluginFields(persisted, "demo", { packageBuild: { bundledDist: false } });
   });

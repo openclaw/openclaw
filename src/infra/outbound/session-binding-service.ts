@@ -1,12 +1,14 @@
 // Session binding service multiplexes channel adapters and the generic current
 // conversation store behind one bind/list/resolve/touch/unbind API.
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import { getActivePluginChannelRegistrySnapshotFromState } from "../../plugins/runtime-channel-state.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
   testing as genericCurrentConversationBindingTesting,
   bindGenericCurrentConversation,
   getGenericCurrentConversationBindingCapabilities,
   listGenericCurrentConversationBindingsBySession,
+  listGenericCurrentConversationBindingsBySessionAsync,
   requiresRegisteredSessionBindingAdapter,
   resolveGenericCurrentConversationBinding,
   inspectGenericCurrentConversationBinding,
@@ -20,6 +22,8 @@ import {
 import { SessionBindingError } from "./session-binding-errors.js";
 import {
   nativeSessionBindingSelection,
+  nativeSessionBindingListBySession,
+  type NativeSessionBindingListing,
   type NativeSessionBindingSelection,
 } from "./session-binding-native-selection.js";
 import {
@@ -132,7 +136,9 @@ function resolveAdapterCapabilities(
 
 const SESSION_BINDING_ADAPTERS_KEY = Symbol.for("openclaw.sessionBinding.adapters");
 
-type NativeCapableSessionBindingAdapter = SessionBindingAdapter & NativeSessionBindingSelection;
+type NativeCapableSessionBindingAdapter = SessionBindingAdapter &
+  NativeSessionBindingSelection &
+  NativeSessionBindingListing;
 
 type SessionBindingAdapterRegistration = {
   adapter: SessionBindingAdapter;
@@ -237,14 +243,16 @@ function captureConversationRef(ref: ConversationRef): ConversationRef {
   });
 }
 
-function getActiveRegisteredAdapters(scope?: SessionBindingScope): SessionBindingAdapter[] {
+function getActiveRegisteredAdapters(
+  scope?: SessionBindingScope,
+): NativeCapableSessionBindingAdapter[] {
   if (scope) {
     const adapter = resolveAdapterForChannelAccount(scope);
     return adapter ? [adapter] : [];
   }
   return [...ADAPTERS_BY_CHANNEL_ACCOUNT.values()]
     .map((registrations) => registrations.at(-1)?.normalizedAdapter ?? null)
-    .filter((adapter): adapter is SessionBindingAdapter => Boolean(adapter));
+    .filter((adapter): adapter is NativeCapableSessionBindingAdapter => Boolean(adapter));
 }
 
 function dedupeBindings(records: SessionBindingRecord[]): SessionBindingRecord[] {
@@ -260,6 +268,54 @@ function dedupeBindings(records: SessionBindingRecord[]): SessionBindingRecord[]
     );
   }
   return [...byId.values()];
+}
+
+/** Internal destination enumeration; the shipped synchronous SDK service remains unchanged. */
+export async function listSessionBindingsBySessionAsync(
+  targetSessionKey: string,
+): Promise<SessionBindingRecord[]> {
+  const key = targetSessionKey.trim();
+  if (!key) {
+    return [];
+  }
+  const adapters = getActiveRegisteredAdapters();
+  const registry = getActivePluginChannelRegistrySnapshotFromState();
+  const assertCurrent = () => {
+    const current = getActiveRegisteredAdapters();
+    if (
+      getActivePluginChannelRegistrySnapshotFromState() !== registry ||
+      current.length !== adapters.length ||
+      current.some((adapter, index) => adapter !== adapters[index])
+    ) {
+      throw new SessionBindingError(
+        "BINDING_ADAPTER_UNAVAILABLE",
+        "Session binding owners changed during destination listing",
+      );
+    }
+  };
+  const prepared = new Map<NativeCapableSessionBindingAdapter, SessionBindingRecord[]>();
+  for (const adapter of adapters) {
+    const nativeList = adapter[nativeSessionBindingListBySession];
+    if (!nativeList) {
+      continue;
+    }
+    assertCurrent();
+    prepared.set(adapter, await nativeList.call(adapter, key));
+    assertCurrent();
+  }
+  const generic = await listGenericCurrentConversationBindingsBySessionAsync(key, {
+    assertCurrent,
+  });
+  assertCurrent();
+  const results: SessionBindingRecord[] = [];
+  for (const adapter of adapters) {
+    // Hydrated channel projections and the shipped external adapter contract stay synchronous.
+    const entries = prepared.get(adapter) ?? adapter.listBySession(key);
+    assertCurrent();
+    results.push(...entries);
+  }
+  results.push(...generic);
+  return dedupeBindings(results);
 }
 
 export function inspectSessionBindingByConversation(

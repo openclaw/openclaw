@@ -1,6 +1,8 @@
 name: Plugin Init Scaffold Validation
 
 on:
+  schedule:
+    - cron: "23 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
@@ -34,13 +36,14 @@ concurrency:
   group: >-
     ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
       && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || ((github.event_name == 'push' || github.event_name == 'schedule') && format('{0}-{1}-{2}', github.workflow, github.event_name, github.ref))
       || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && github.event.pull_request.number || github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validate-provider-scaffold:
     name: Validate provider scaffold
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    if: (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 30
     steps:

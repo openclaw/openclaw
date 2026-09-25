@@ -122,7 +122,7 @@ export class CodexCatalogIndex {
         this.currency.requestNativeRefresh();
         this.remove(id);
       },
-      report: (error) => this.report(error),
+      report: (error, disposition) => this.report(error, disposition),
     });
     this.unsubscribe = subscribeCodexCatalogEvents(
       options.homeId,
@@ -163,9 +163,14 @@ export class CodexCatalogIndex {
     }
   }
 
-  private report(error: unknown): void {
+  private report(error: unknown, disposition?: "deferred"): void {
     if (!this.closed && !this.currency.stopForTerminalFailure(error)) {
-      embeddedAgentLog.warn("Codex resident catalog background update failed", { error });
+      embeddedAgentLog.warn(
+        disposition === "deferred"
+          ? "Codex resident catalog metadata refresh interrupted; deferred for automatic recovery"
+          : "Codex resident catalog background update failed",
+        { error },
+      );
     }
   }
 

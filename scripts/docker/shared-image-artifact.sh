@@ -117,7 +117,7 @@ gh_api_get_with_retry() {
       is_transient_gh_api_get_error "$(cat "$error_file")" "$not_found_policy"; then
       retry_delay=$((attempt * 2))
       printf \
-        'warning: %s GitHub API GET failed transiently on attempt %d/3; retrying in %ss.\n' \
+        '::warning::%s GitHub API GET failed transiently on attempt %d/3; retrying in %ss.\n' \
         "$label" "$attempt" "$retry_delay" >&2
       cat "$error_file" >&2
       sleep "$retry_delay"

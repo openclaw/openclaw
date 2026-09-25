@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { validateSessionsDescribeParams } from "../../../packages/gateway-protocol/src/index.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
@@ -193,7 +194,11 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
         respond(true, { messages: [] }, undefined);
         return;
       }
-      respond(true, { messages }, undefined);
+      respond(
+        true,
+        projectOperatorModelRead({ context, client, agentId: current.agentId }, { messages }),
+        undefined,
+      );
     });
   },
 };

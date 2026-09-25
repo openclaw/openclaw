@@ -9,6 +9,7 @@ import {
   withClawHubResponse,
   resolveClawHubBaseUrl,
   type ClawHubFetch,
+  type ClawHubFetchOptions,
   type ClawHubRequestParams,
 } from "./clawhub-client.js";
 import { normalizeClawHubSha256Hex } from "./clawhub-integrity.js";
@@ -106,16 +107,14 @@ async function fetchClawHubArchive(params: ClawHubRequestParams, resourceLabel: 
   });
 }
 
-export async function downloadClawHubPackageArchive(params: {
-  name: string;
-  version?: string;
-  tag?: string;
-  artifact?: "archive" | "clawpack";
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<ClawHubDownloadResult> {
+export async function downloadClawHubPackageArchive(
+  params: ClawHubFetchOptions & {
+    name: string;
+    version?: string;
+    tag?: string;
+    artifact?: "archive" | "clawpack";
+  },
+): Promise<ClawHubDownloadResult> {
   if (params.artifact === "clawpack") {
     if (!params.version) {
       throw new Error("ClawPack package downloads require an explicit version.");
@@ -205,16 +204,14 @@ export async function downloadClawHubPackageArchive(params: {
   });
 }
 
-export async function downloadClawHubSkillArchive(params: {
-  slug: string;
-  ownerHandle?: string;
-  version?: string;
-  tag?: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<ClawHubDownloadResult> {
+export async function downloadClawHubSkillArchive(
+  params: ClawHubFetchOptions & {
+    slug: string;
+    ownerHandle?: string;
+    version?: string;
+    tag?: string;
+  },
+): Promise<ClawHubDownloadResult> {
   const { bytes } = await fetchClawHubArchive(
     {
       baseUrl: params.baseUrl,
@@ -238,13 +235,11 @@ export async function downloadClawHubSkillArchive(params: {
   });
 }
 
-export async function downloadClawHubSkillArchiveUrl(params: {
-  url: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<ClawHubDownloadResult> {
+export async function downloadClawHubSkillArchiveUrl(
+  params: ClawHubFetchOptions & {
+    url: string;
+  },
+): Promise<ClawHubDownloadResult> {
   const providedToken = normalizeOptionalString(params.token);
   const requestUrl = new URL(params.url, `${resolveClawHubBaseUrl(params.baseUrl)}/`);
   const registryOrigin = new URL(`${resolveClawHubBaseUrl(params.baseUrl)}/`).origin;

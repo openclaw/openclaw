@@ -200,6 +200,48 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(refreshList).not.toHaveBeenCalled();
   });
 
+  it("refreshes effective tools after saving tool settings for the same session", async () => {
+    const saved = deferred<boolean>();
+    const roster = deferred<typeof agentsList>();
+    let effectiveReads = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "tools.effective") {
+        effectiveReads += 1;
+        return {
+          agentId: "main",
+          profile: effectiveReads === 1 ? "messaging" : "full",
+          groups: [],
+        };
+      }
+      return { agentId: "main", profiles: [], groups: [] };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const agents = agentsCapability(async () => files("main", "unused"));
+    agents.refreshList = vi.fn(() => roster.promise);
+    const context = pageContext(gateway(snapshot(client)), agents);
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    page.context = {
+      ...context,
+      runtimeConfig: { ...context.runtimeConfig, state: {}, save: () => saved.promise },
+    } as unknown as ApplicationContext;
+    page.routeData = { panel: "tools" } as AgentsRouteData;
+    setPageGateway(page, client);
+    page.agentsSelectedId = "main";
+    page.loadEffectiveToolsForAgent("main");
+    await Promise.resolve();
+    expect(page.toolsEffectiveResult?.profile).toBe("messaging");
+
+    page.saveAgentConfig();
+    saved.resolve(true);
+    await saved.promise;
+    roster.resolve(agentsList);
+    await roster.promise;
+    await Promise.resolve();
+
+    expect(effectiveReads).toBe(2);
+    expect(page.toolsEffectiveResult?.profile).toBe("full");
+  });
+
   it("loads the selected agent's configured model catalog once for the overview model picker", async () => {
     const models = [
       {

@@ -12,6 +12,7 @@ import {
 } from "./io.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import { replaceConfigFile, type ConfigMutationIO } from "./mutate.js";
+import { serializeConfigResolutionFacts } from "./resolution-facts.js";
 import {
   registerManagedRuntimeConfigWriteOwner,
   registerRuntimeConfigWriteListener,
@@ -122,12 +123,18 @@ describe("runtime config snapshot writes", () => {
     });
   });
 
-  it("preserves auth-store refresh scope through managed preflight and notification", async () => {
+  it("publishes canonical include snapshots with managed auth-store refresh scope", async () => {
     const initialConfig = {
+      env: { vars: { CONFIG_PUBLICATION_BIN: "jq" } },
       gateway: { mode: "local" as const },
       logging: { level: "info" as const },
+      tools: { exec: { safeBins: ["jq"] } },
     } satisfies OpenClawConfig;
-    await withTempHomeConfig(initialConfig, async ({ configPath }) => {
+    const authoredRoot = { ...initialConfig, tools: { $include: "./tools.json5" } };
+    await withTempHomeConfig(authoredRoot, async ({ configPath }) => {
+      const toolsPath = path.join(path.dirname(configPath), "tools.json5");
+      const authoredTools = { exec: { safeBins: ["${CONFIG_PUBLICATION_BIN}"] } };
+      await fs.writeFile(toolsPath, JSON.stringify(authoredTools), "utf-8");
       const overlayCalls: Array<{
         kind: string;
         receiver: RuntimeConfigWritePreparedCandidate;
@@ -176,6 +183,32 @@ describe("runtime config snapshot writes", () => {
       expect(notifications).toHaveLength(1);
       const [notification] = notifications;
       expect(notification?.runtimeRefresh).toEqual({ includeAuthStoreRefs: false });
+      expect(notification?.snapshot).toMatchObject({
+        path: configPath,
+        exists: true,
+        valid: true,
+        parsed: { tools: { $include: "./tools.json5" } },
+        authoredConfig: { tools: authoredTools },
+        sourceConfig: { logging: { level: "debug" }, tools: initialConfig.tools },
+        includedPaths: expect.arrayContaining([toolsPath]),
+        includeProvenance: expect.arrayContaining([
+          expect.objectContaining({ path: ["tools"], kind: "single", targetPath: toolsPath }),
+        ]),
+        hash: notification?.persistedHash,
+      });
+      expect(notification?.snapshot.raw).toBe(await fs.readFile(configPath, "utf-8"));
+      expect(serializeConfigResolutionFacts(notification?.snapshot.sourceConfig)).toEqual({
+        unresolvedPaths: [],
+        envSecretRefs: [
+          [
+            "tools.exec.safeBins[0]",
+            {
+              ref: { source: "env", provider: "default", id: "CONFIG_PUBLICATION_BIN" },
+              state: "resolved",
+            },
+          ],
+        ],
+      });
       expect(overlayCalls.map(({ kind }) => kind)).toEqual(["runtime", "compare"]);
       expect(overlayCalls.map(({ config }) => config)).toEqual([
         notification?.runtimeConfig,
@@ -336,6 +369,13 @@ describe("runtime config snapshot writes", () => {
       expect(notifications).toHaveLength(1);
       const [notification] = notifications;
       expect(notification?.runtimeRefresh).toEqual({ includeAuthStoreRefs: false });
+      expect(notification?.snapshot).toMatchObject({
+        path: configPath,
+        raw,
+        parsed: authoredRoot,
+        sourceConfig: nextConfig,
+        runtimeConfig: nextRuntimeConfig,
+      });
       const candidates = notification?.preparedCandidatesByOwner;
       expect([...(candidates?.keys() ?? [])]).toEqual([
         releaseOwner.ownerId,

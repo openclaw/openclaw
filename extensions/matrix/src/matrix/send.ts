@@ -1,4 +1,5 @@
 import type { MessageReceiptPartKind } from "openclaw/plugin-sdk/channel-outbound";
+import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { CoreConfig } from "../types.js";
@@ -28,7 +29,6 @@ import {
   extractMatrixMentions,
   resolveMatrixMentionsForBody,
   resolveMatrixMsgType,
-  resolveMatrixVoiceDecision,
 } from "./send/formatting.js";
 import {
   buildMediaContent,
@@ -74,12 +74,7 @@ function normalizeMatrixClientResolveOpts(
   if (isMatrixClient(opts)) {
     return { client: opts };
   }
-  return {
-    client: opts.client,
-    cfg: opts.cfg,
-    timeoutMs: opts.timeoutMs,
-    accountId: opts.accountId,
-  };
+  return opts;
 }
 
 function resolvePreviousThreadId(previousEvent: unknown): string | undefined {
@@ -181,6 +176,8 @@ export async function sendMessageMatrix(
         const { chunks, convertedText, preparedBody, fitsInSingleEvent, tableMode } = preparedText;
         const singleEventBody = fitsInSingleEvent ? preparedBody : undefined;
         const relation = buildMatrixMessageRelation({ ...opts, threadId });
+        let textChunks = chunks;
+        let textRelation = relation;
         let pendingExtraContent = opts.extraContent;
         const events: Omit<MatrixPreparedEvent, "transactionId">[] = [];
         const prepareContent = (
@@ -213,11 +210,7 @@ export async function sendMessageMatrix(
             kind: media.kind === "sticker" ? "unknown" : (media.kind ?? "unknown"),
           });
           const baseMsgType = resolveMatrixMsgType(media.contentType, media.fileName);
-          const { useVoice } = resolveMatrixVoiceDecision({
-            wantsVoice: opts.audioAsVoice === true,
-            contentType: media.contentType,
-            fileName: media.fileName,
-          });
+          const useVoice = opts.audioAsVoice === true && isVoiceMessageCompatibleAudio(media);
           const msgtype = useVoice ? MsgType.Audio : baseMsgType;
           const receiptKind: MessageReceiptPartKind = useVoice ? "voice" : "media";
           const imageInfo =
@@ -251,37 +244,22 @@ export async function sendMessageMatrix(
             tableMode,
           });
           prepareContent(content, receiptKind);
-          const textChunks = useVoice ? chunks : rest;
-          const followupRelation = useVoice || threadId ? relation : undefined;
-          for (const chunk of textChunks) {
-            if (!chunk.trim()) {
-              continue;
-            }
-            const followup = buildTextContent(chunk, followupRelation);
-            await enrichMatrixFormattedContent({
-              client,
-              content: followup,
-              markdown: chunk,
-              preparedBody: chunk === convertedText ? singleEventBody : undefined,
-              tableMode,
-            });
-            prepareContent(followup, "text");
+          textChunks = useVoice ? chunks : rest;
+          textRelation = useVoice || threadId ? relation : undefined;
+        }
+        for (const chunk of textChunks) {
+          if (!chunk.trim()) {
+            continue;
           }
-        } else {
-          for (const chunk of chunks.length ? chunks : [""]) {
-            if (!chunk.trim()) {
-              continue;
-            }
-            const content = buildTextContent(chunk, relation);
-            await enrichMatrixFormattedContent({
-              client,
-              content,
-              markdown: chunk,
-              preparedBody: chunk === convertedText ? singleEventBody : undefined,
-              tableMode,
-            });
-            prepareContent(content, "text");
-          }
+          const content = buildTextContent(chunk, textRelation);
+          await enrichMatrixFormattedContent({
+            client,
+            content,
+            markdown: chunk,
+            preparedBody: chunk === convertedText ? singleEventBody : undefined,
+            tableMode,
+          });
+          prepareContent(content, "text");
         }
         plannedEvents = durableIdentity
           ? createMatrixPlannedEvents({ identity: durableIdentity, events })

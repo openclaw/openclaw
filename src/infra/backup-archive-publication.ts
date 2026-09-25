@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { BigIntStats, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import {
   removePreparedBackupArchive,
   type BackupArchiveCleanupReceipt,
@@ -14,7 +15,6 @@ import {
   requireDirectorySync,
   syncDirectoryIfSupported,
 } from "./directory-durability.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 type BackupArchiveLogger = (message: string) => void;
 

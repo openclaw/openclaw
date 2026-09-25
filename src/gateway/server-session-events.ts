@@ -11,6 +11,7 @@ import {
 import { getRuntimeConfig } from "../config/io.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -289,7 +290,10 @@ async function handleTranscriptUpdateBroadcast(
         asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.transcriptPosition,
       );
     } catch (error) {
-      if (!isSessionTranscriptProjectionUnavailableError(error)) {
+      if (
+        !isSessionTranscriptProjectionUnavailableError(error) &&
+        !(error instanceof WorkerTaskError && error.code === "overloaded")
+      ) {
         throw error;
       }
       message = undefined;
@@ -309,17 +313,24 @@ async function handleTranscriptUpdateBroadcast(
       normalizeOptionalString(update.target?.sessionId) ??
       entry?.sessionId;
     const storePath = updateStorePath ?? fallbackTarget?.storeTarget.storePath;
-    messageSeq = messageSessionId
-      ? asPositiveSafeInteger(
-          await readSessionMessageCountAsync({
-            agentId: update.target?.agentId ?? routingAgentId,
-            sessionEntry: entry,
-            sessionId: messageSessionId,
-            sessionKey,
-            storePath,
-          }),
-        )
-      : undefined;
+    try {
+      messageSeq = messageSessionId
+        ? asPositiveSafeInteger(
+            await readSessionMessageCountAsync({
+              agentId: update.target?.agentId ?? routingAgentId,
+              sessionEntry: entry,
+              sessionId: messageSessionId,
+              sessionKey,
+              storePath,
+            }),
+          )
+        : undefined;
+    } catch (error) {
+      if (!(error instanceof WorkerTaskError && error.code === "overloaded")) {
+        throw error;
+      }
+      message = undefined;
+    }
   }
   await withPreparedEventRow(
     projection,

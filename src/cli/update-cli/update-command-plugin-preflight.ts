@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { collectConfiguredNpmPluginTargets } from "../../commands/doctor/shared/missing-configured-plugin-install.targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveNpmSpecMetadata } from "../../infra/install-source-utils.js";
 import { readInstalledPackageManifest } from "../../infra/package-update-utils.js";
@@ -45,6 +46,8 @@ export async function preflightConfiguredNpmPluginTargets(params: {
   targetVersion: string | null;
   channel: UpdateChannel;
   timeoutMs: number;
+  /** Read-only admission carries already-inspected records without opening a mutable actor. */
+  installRecords?: Record<string, PluginInstallRecord>;
 }): Promise<PluginUpdateWarning[]> {
   return await withCommandProcessScope(async () => {
     const targetVersion = params.targetVersion;
@@ -53,7 +56,9 @@ export async function preflightConfiguredNpmPluginTargets(params: {
     }
     return await withOwnedManagedUpdateEnv(params.env, async () => {
       const warnings: PluginUpdateWarning[] = [];
-      const installRecords = await loadInstalledPluginIndexInstallRecords({ env: params.env });
+      const installRecords =
+        params.installRecords ??
+        (await loadInstalledPluginIndexInstallRecords({ env: params.env }));
       const targets = await collectConfiguredNpmPluginTargets({
         ...params,
         targetVersion,

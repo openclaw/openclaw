@@ -15,6 +15,7 @@ import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { VERSION } from "../version.js";
 import {
   LAZY_ADDITIVE_STATE_TABLES,
+  DOCTOR_OWNED_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
@@ -256,7 +257,10 @@ function assertOpenClawStateDatabaseVersionForMigration(
     );
   }
   assertSqliteSchemaTablesPresent(database, options.pathname, OPENCLAW_STATE_SCHEMA_SQL, {
-    allowedMissingTables: STATE_MIGRATION_ALLOWED_MISSING_TABLES[options.version],
+    allowedMissingTables: [
+      ...STATE_MIGRATION_ALLOWED_MISSING_TABLES[options.version],
+      ...DOCTOR_OWNED_STATE_TABLES,
+    ],
   });
 }
 
@@ -663,7 +667,13 @@ export function writeCurrentStateSchemaMetadata(db: DatabaseSync, now: number): 
 
 export function executeCanonicalStateSchema(
   database: DatabaseSync,
-  options: { includeVersionLazyAdditiveTables: boolean },
+  options: { includeVersionLazyAdditiveTables: boolean; includeAgentDeletionJournal?: boolean },
 ): void {
-  database.exec(getOpenClawStateRuntimeSchema(options));
+  database.exec(
+    getOpenClawStateRuntimeSchema({
+      ...options,
+      includeAgentDeletionJournal:
+        options.includeAgentDeletionJournal ?? tableExists(database, "agent_deletion_journal"),
+    }),
+  );
 }

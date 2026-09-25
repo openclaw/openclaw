@@ -143,7 +143,9 @@ describePosix("native correction preparation", () => {
       writeFileSync(join(bin, "git"), "#!/bin/sh\necho 'unexpected PATH Git' >&2\nexit 97\n", {
         mode: 0o755,
       });
-      const selected = join(f.root, ".local", "selected git");
+      const selectedDir = join(f.root, ".local", "selected git");
+      mkdirSync(selectedDir);
+      const selected = join(selectedDir, "git");
       symlinkSync(resolved.stdout.trim(), selected);
       const env = {
         PATH: `${bin}:${process.env.PATH}`,

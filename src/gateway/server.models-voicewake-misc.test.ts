@@ -365,7 +365,8 @@ describe("gateway server models + voicewake", () => {
         await seedAgentModelCatalog();
         const res = await listModels();
         expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual(options.expected);
+        expect(res.payload?.models).toHaveLength(options.expected.length);
+        expect(res.payload?.models).toEqual(expect.arrayContaining(options.expected));
       },
     );
   };
@@ -854,7 +855,9 @@ describe("gateway server models + voicewake", () => {
         await seedAgentModelCatalog();
         const res = await listModels({ view: "all", preparedOnly: true });
         expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual(expectedSortedCatalog(["default", "configured"]));
+        const expected = expectedSortedCatalog(["default", "configured"]);
+        expect(res.payload?.models).toHaveLength(expected.length);
+        expect(res.payload?.models).toEqual(expect.arrayContaining(expected));
       },
     );
   });

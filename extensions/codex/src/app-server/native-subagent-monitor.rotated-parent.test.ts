@@ -174,7 +174,7 @@ it.each([
         ...defaultNativeSubagentMonitorRuntime,
         deliverAgentHarnessTaskCompletion: deliver,
       };
-      const initialParent = registerCodexNativeSubagentMonitor({
+      const initialParent = await registerCodexNativeSubagentMonitor({
         client: first.client,
         parentThreadId: initialBinding.threadId,
         requesterSessionKey: identity.sessionKey,
@@ -186,7 +186,7 @@ it.each([
         | Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>
         | undefined;
       let resumedHost: typeof secondHost;
-      let currentParent: ReturnType<typeof registerCodexNativeSubagentMonitor> | undefined;
+      let currentParent: Awaited<ReturnType<typeof registerCodexNativeSubagentMonitor>> | undefined;
       let current = first;
       let database: DatabaseSync | undefined;
       const initialRunId = "codex-thread:child-thread";
@@ -358,7 +358,7 @@ it.each([
           },
           runtime,
         };
-        currentParent = registerCodexNativeSubagentMonitor(rotatedRegistration);
+        currentParent = await registerCodexNativeSubagentMonitor(rotatedRegistration);
         currentParent.bindTurn("parent-b");
         if (scenario === "finishes-after-registration") {
           await finishInitialDelivery();
@@ -456,7 +456,7 @@ it.each([
             }
             return { delivered: true, path: "direct" };
           });
-          currentParent = registerCodexNativeSubagentMonitor({
+          currentParent = await registerCodexNativeSubagentMonitor({
             ...rotatedRegistration,
             client: current.client,
             taskRuntimeScope: resumedScope,
@@ -676,13 +676,13 @@ it.each([
     taskRuntimeScope: createTaskScope(),
     runtime,
   };
-  const initial = codexNativeSubagentMonitorRuntime.register({
+  const initial = await codexNativeSubagentMonitorRuntime.register({
     ...registration,
     parentThreadId: "parent-thread",
     historyOwner: initialHistory,
   });
-  let observer: ReturnType<typeof codexNativeSubagentMonitorRuntime.register> | undefined;
-  let foreign: ReturnType<typeof codexNativeSubagentMonitorRuntime.register> | undefined;
+  let observer: Awaited<ReturnType<typeof codexNativeSubagentMonitorRuntime.register>> | undefined;
+  let foreign: Awaited<ReturnType<typeof codexNativeSubagentMonitorRuntime.register>> | undefined;
   const firstRunId = "codex-thread:child-thread";
   const secondRunId = "codex-thread:child-thread:turn:turn-b";
   const collab = (parentThreadId: string, tool: string, result?: string) =>
@@ -731,7 +731,7 @@ it.each([
       deliveryStatus: "pending",
       terminalSummary: "A result",
     });
-    observer = codexNativeSubagentMonitorRuntime.register({
+    observer = await codexNativeSubagentMonitorRuntime.register({
       ...registration,
       parentThreadId: "rotated-parent",
       historyOwner: observerHistory,
@@ -805,7 +805,7 @@ it.each([
       );
       secondRecord = structuredClone(records.get(secondRunId)!);
       expect(secondRecord).toMatchObject({ status: "succeeded", deliveryStatus: "pending" });
-      foreign = codexNativeSubagentMonitorRuntime.register({
+      foreign = await codexNativeSubagentMonitorRuntime.register({
         ...registration,
         parentThreadId: "parent-thread",
         historyOwner: initialHistory,
@@ -833,7 +833,7 @@ it.each([
       });
     } else if (scenario === "foreign-observer") {
       receiptParent = "foreign-parent";
-      foreign = codexNativeSubagentMonitorRuntime.register({
+      foreign = await codexNativeSubagentMonitorRuntime.register({
         ...registration,
         parentThreadId: receiptParent,
         requesterSessionKey: "agent:other:main",

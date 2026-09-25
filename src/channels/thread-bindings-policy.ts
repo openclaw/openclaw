@@ -46,21 +46,13 @@ type ThreadBindingSpawnPolicy = {
 /** Starting transcript mode for a spawned thread-bound session. */
 type ThreadBindingSpawnContext = "isolated" | "fork";
 
-function normalizeChannelId(value: string | undefined | null): string {
-  return normalizeLowercaseStringOrEmpty(value);
-}
-
 /** Returns true when top-level commands should spawn in a child thread by default. */
 export function supportsAutomaticThreadBindingSpawn(channel: string): boolean {
   return resolveChannelDefaultBindingPlacement(channel) === "child";
 }
 
-function normalizeThreadBindingHours(raw: unknown): number | undefined {
-  return asNonNegativeFiniteNumber(raw);
-}
-
 function resolveThreadBindingHoursMs(raw: unknown, fallbackHours: number): number {
-  const hours = normalizeThreadBindingHours(raw) ?? fallbackHours;
+  const hours = asNonNegativeFiniteNumber(raw) ?? fallbackHours;
   const durationMs = Math.floor(hours * 60 * 60 * 1000);
   if (!Number.isFinite(durationMs) || durationMs < 0) {
     return 0;
@@ -75,7 +67,7 @@ export function resolveThreadBindingIdleTimeoutMs(params: {
 }): number {
   return resolveThreadBindingHoursMs(
     params.channelIdleHoursRaw,
-    normalizeThreadBindingHours(params.sessionIdleHoursRaw) ?? DEFAULT_THREAD_BINDING_IDLE_HOURS,
+    asNonNegativeFiniteNumber(params.sessionIdleHoursRaw) ?? DEFAULT_THREAD_BINDING_IDLE_HOURS,
   );
 }
 
@@ -86,8 +78,7 @@ export function resolveThreadBindingMaxAgeMs(params: {
 }): number {
   return resolveThreadBindingHoursMs(
     params.channelMaxAgeHoursRaw,
-    normalizeThreadBindingHours(params.sessionMaxAgeHoursRaw) ??
-      DEFAULT_THREAD_BINDING_MAX_AGE_HOURS,
+    asNonNegativeFiniteNumber(params.sessionMaxAgeHoursRaw) ?? DEFAULT_THREAD_BINDING_MAX_AGE_HOURS,
   );
 }
 
@@ -111,16 +102,16 @@ export function resolveThreadBindingsEnabled(params: {
 function resolveChannelThreadBindings(params: {
   cfg: OpenClawConfig;
   channel: string;
-  accountId: string;
+  accountId?: string;
 }): {
   root?: SessionThreadBindingsConfigShape;
   account?: SessionThreadBindingsConfigShape;
 } {
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
-  const channelConfig = channels?.[params.channel] as
+  const channelConfig = channels?.[normalizeLowercaseStringOrEmpty(params.channel)] as
     | ChannelThreadBindingsContainerShape
     | undefined;
-  const accountConfig = channelConfig?.accounts?.[params.accountId];
+  const accountConfig = channelConfig?.accounts?.[normalizeAccountId(params.accountId)];
   return {
     root: channelConfig?.threadBindings,
     account: accountConfig?.threadBindings,
@@ -138,7 +129,7 @@ export function resolveThreadBindingSpawnPolicy(params: {
   accountId?: string;
   kind: ThreadBindingSpawnKind;
 }): ThreadBindingSpawnPolicy {
-  const channel = normalizeChannelId(params.channel);
+  const channel = normalizeLowercaseStringOrEmpty(params.channel);
   const accountId = normalizeAccountId(params.accountId);
   const { root, account } = resolveChannelThreadBindings({ cfg: params.cfg, channel, accountId });
   const enabled =
@@ -171,7 +162,7 @@ export function resolveThreadBindingIdleTimeoutMsForChannel(params: {
   channel: string;
   accountId?: string;
 }): number {
-  const { root, account } = resolveThreadBindingChannelScope(params);
+  const { root, account } = resolveChannelThreadBindings(params);
   return resolveThreadBindingIdleTimeoutMs({
     channelIdleHoursRaw: account?.idleHours ?? root?.idleHours,
     sessionIdleHoursRaw: params.cfg.session?.threadBindings?.idleHours,
@@ -184,24 +175,10 @@ export function resolveThreadBindingMaxAgeMsForChannel(params: {
   channel: string;
   accountId?: string;
 }): number {
-  const { root, account } = resolveThreadBindingChannelScope(params);
+  const { root, account } = resolveChannelThreadBindings(params);
   return resolveThreadBindingMaxAgeMs({
     channelMaxAgeHoursRaw: account?.maxAgeHours ?? root?.maxAgeHours,
     sessionMaxAgeHoursRaw: params.cfg.session?.threadBindings?.maxAgeHours,
-  });
-}
-
-function resolveThreadBindingChannelScope(params: {
-  cfg: OpenClawConfig;
-  channel: string;
-  accountId?: string;
-}) {
-  const channel = normalizeChannelId(params.channel);
-  const accountId = normalizeAccountId(params.accountId);
-  return resolveChannelThreadBindings({
-    cfg: params.cfg,
-    channel,
-    accountId,
   });
 }
 

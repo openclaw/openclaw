@@ -226,6 +226,29 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedError: "non-loopback Control UI requires gateway.controlUi.allowedOrigins",
       },
       {
+        name: "allows non-loopback control UI with the advertised public origin",
+        cfg: {
+          gateway: {
+            bind: "lan" as const,
+            auth: TOKEN_AUTH,
+            publicOrigin: "https://control.example.com",
+          },
+        },
+        expectedBindHost: "0.0.0.0",
+      },
+      {
+        name: "does not replace an explicit empty origin list with the public origin",
+        cfg: {
+          gateway: {
+            bind: "lan" as const,
+            auth: TOKEN_AUTH,
+            publicOrigin: "https://control.example.com",
+            controlUi: { allowedOrigins: [] },
+          },
+        },
+        expectedError: "non-loopback Control UI requires gateway.controlUi.allowedOrigins",
+      },
+      {
         name: "allows non-loopback control UI without allowed origins when dangerous fallback is enabled",
         cfg: {
           gateway: {

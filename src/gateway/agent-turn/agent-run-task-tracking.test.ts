@@ -145,7 +145,8 @@ describe("prepareAgentRunTaskTracking", () => {
 
   it("registers plugin work only after its lookup settles", async () => {
     const lookup = delayLookup();
-    const preparation = prepareAgentRunTaskTracking(parameters({ client: pluginClient() }));
+    const params = parameters({ client: pluginClient() });
+    const preparation = prepareAgentRunTaskTracking(params);
     try {
       await Promise.resolve();
       expect(mocks.registerSubagentRun).not.toHaveBeenCalled();
@@ -154,6 +155,7 @@ describe("prepareAgentRunTaskTracking", () => {
       expect(mocks.registerSubagentRun).toHaveBeenCalledOnce();
       expect(mocks.registerSubagentRun).toHaveBeenCalledWith(
         expect.objectContaining({ runId, childSessionKey, task: "Continue the child task" }),
+        { assertCurrent: params.assertResumeAdmissionCurrent },
       );
     } finally {
       lookup.resolve(undefined);

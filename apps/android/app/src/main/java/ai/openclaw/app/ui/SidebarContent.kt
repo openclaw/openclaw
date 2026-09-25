@@ -130,7 +130,7 @@ internal enum class SidebarDestination(
 internal fun SidebarDestination.localizedLabel(): String =
   when (this) {
     SidebarDestination.Settings -> nativeString("Settings")
-    SidebarDestination.Work -> nativeString("Work")
+    SidebarDestination.Work -> nativeString("Overview")
     SidebarDestination.Home -> nativeString("Home")
     SidebarDestination.Skills -> nativeString("Skills")
     SidebarDestination.Threads -> nativeString("Threads")

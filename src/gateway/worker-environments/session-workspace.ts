@@ -32,7 +32,13 @@ export function createWorkerWorkspaceReconcileRequest(params: {
   const { workspace, remoteWorkspaceDir, baseManifestRef, journal, stagedResult } = params;
   if (workspace.kind === "local") {
     return {
-      source: { kind: "local", path: workspace.path, journal, stagedResult },
+      source: {
+        kind: "local",
+        path: workspace.path,
+        journal,
+        stagedResult,
+        assertCurrent: params.assertCurrent,
+      },
       remoteWorkspaceDir,
       baseManifestRef,
     };

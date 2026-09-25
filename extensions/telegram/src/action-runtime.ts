@@ -169,16 +169,10 @@ function readTelegramSendContent(params: {
     explicitContent == null && !params.presentation
       ? resolveTelegramInteractiveTextFallback({ interactive: params.interactive })
       : undefined;
-  let content =
+  const content =
     (presentationText?.trim() ? presentationText : undefined) ??
     explicitContent ??
     (interactiveText?.trim() ? interactiveText : undefined);
-  if ((content == null || content.trim().length === 0) && !params.mediaUrl && params.hasButtons) {
-    const fallback = presentationText?.trim() ? presentationText : interactiveText;
-    if (fallback?.trim()) {
-      content = fallback;
-    }
-  }
   if (content == null && !params.mediaUrl && !params.hasButtons && !params.hasLocation) {
     throw new Error("content required.");
   }
@@ -318,6 +312,15 @@ export async function handleTelegramAction(
     cfg,
     accountId,
   });
+  const requireToken = () => {
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    return token;
+  };
   const notifyVisibleOutboundSuccess = (to: string, messageThreadId?: number | null) => {
     telegramInboundEventDelivery.notify({
       sessionKey: options?.sessionKey ?? undefined,
@@ -344,12 +347,7 @@ export async function handleTelegramAction(
       accountId,
       context: options,
     });
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
+    const token = requireToken();
     const limit = Math.min(
       readPositiveIntegerParam(params, "limit", {
         message: "limit must be a positive integer.",
@@ -555,32 +553,16 @@ export async function handleTelegramAction(
     const replyToMessageId = readTelegramReplyToMessageId(params);
     const messageThreadId = readTelegramThreadId(params);
     const quoteText = readStringParam(params, "quoteText", { trim: false });
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
-    const sendOptions = {
-      cfg,
-      accountId: accountId ?? undefined,
-      gatewayClientScopes: options?.gatewayClientScopes,
-      replyToMessageId: replyToMessageId ?? undefined,
-      messageThreadId: messageThreadId ?? undefined,
-      quoteText: quoteText ?? undefined,
-      asVoice: readBooleanParam(params, "asVoice"),
-      asVideoNote,
-      silent: readBooleanParam(params, "silent"),
-      forceDocument:
-        readBooleanParam(params, "forceDocument") ??
-        readBooleanParam(params, "asDocument") ??
-        false,
-    };
+    requireToken();
+    const asVoice = readBooleanParam(params, "asVoice");
+    const silent = readBooleanParam(params, "silent");
+    const forceDocument =
+      readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false;
     const payload = buildTelegramActionSendPayload({
       content,
       mediaUrls,
-      asVoice: sendOptions.asVoice,
-      asVideoNote: sendOptions.asVideoNote,
+      asVoice,
+      asVideoNote,
       location,
       pin: normalizeTelegramDeliveryPin(params),
       buttons,
@@ -609,8 +591,8 @@ export async function handleTelegramAction(
         ? { reply: options.reply }
         : { replyToId: replyToMessageId == null ? undefined : String(replyToMessageId) }),
       threadId: messageThreadId,
-      forceDocument: sendOptions.forceDocument,
-      silent: sendOptions.silent,
+      forceDocument,
+      silent,
       durability: "required",
       gatewayClientScopes: options?.gatewayClientScopes,
       deliveryRetryOwner: options?.deliveryRetryOwner,
@@ -688,12 +670,7 @@ export async function handleTelegramAction(
         pollPublic: readBooleanParam(params, "pollPublic"),
       });
     const silent = readBooleanParam(params, "silent");
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
+    const token = requireToken();
     const result = await sendPollTelegram(
       to,
       {
@@ -824,12 +801,7 @@ export async function handleTelegramAction(
         );
       }
     }
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
+    const token = requireToken();
     if (content == null && caption == null && buttons !== undefined) {
       const result = await editMessageReplyMarkupTelegram(
         authorizedChatId,
@@ -896,12 +868,7 @@ export async function handleTelegramAction(
     }
     const replyToMessageId = readTelegramReplyToMessageId(params);
     const messageThreadId = readTelegramThreadId(params);
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
+    const token = requireToken();
     const result = await sendStickerTelegram(to, fileId, {
       cfg,
       token,
@@ -957,12 +924,7 @@ export async function handleTelegramAction(
       readStringParam(params, "threadName", { required: true, label: "name" });
     const iconColor = readTelegramForumTopicIconColor(params);
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
+    const token = requireToken();
     const result = await createForumTopicTelegram(chatId ?? "", name, {
       cfg,
       token,
@@ -1002,12 +964,7 @@ export async function handleTelegramAction(
     }
     const name = readStringParam(params, "name") ?? readStringParam(params, "threadName");
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
+    const token = requireToken();
     const result = await editForumTopicTelegram(chatId ?? "", messageThreadId, {
       cfg,
       token,

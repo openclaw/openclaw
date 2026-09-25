@@ -54,7 +54,13 @@ const runtime = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("./embedded-gateway-stub.runtime.js", () => runtime);
+vi.mock("./embedded-gateway-stub.runtime.js", () => ({
+  ...runtime,
+  withPreparedSessionResolve: async (
+    params: unknown,
+    consume: (result: import("../../gateway/sessions-resolve.js").SessionsResolveResult) => unknown,
+  ) => consume(runtime.resolveSessionKeyFromResolveParams(params)),
+}));
 
 describe("embedded gateway stub", () => {
   // The stub forwards this owner to the mocked shared operations without inspecting its rows.

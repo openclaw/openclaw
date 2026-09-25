@@ -65,7 +65,7 @@ describe("Codex native close delivery persistence", () => {
         });
         ensureCodexAppServerClientRuntime(client as never, { agentDir: stateDir });
         const deliver = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
-        const parent = registerCodexNativeSubagentMonitor({
+        const parent = await registerCodexNativeSubagentMonitor({
           client: client as never,
           parentThreadId: "parent-thread",
           requesterSessionKey,
@@ -188,7 +188,7 @@ describe("Codex native close admission", () => {
     const factory = createCodexNativeSubagentMonitorRuntime(ObservedMonitor);
     const a = { sourceIdentity: {}, assertCurrent: vi.fn(), release: vi.fn() };
     const b = { sourceIdentity: {}, assertCurrent: vi.fn(), release: vi.fn() };
-    const first = factory.register({
+    const first = await factory.register({
       client: client.client,
       parentThreadId: "parent-thread",
       runtime: createRuntime(),
@@ -214,7 +214,7 @@ describe("Codex native close admission", () => {
       }),
     );
     await settleOwnership("child-thread");
-    const second = factory.register({
+    const second = await factory.register({
       client: client.client,
       parentThreadId: "parent-thread",
       modelSource: b,
@@ -319,7 +319,7 @@ describe("Codex native close admission", () => {
         }
       }
       const factory = createCodexNativeSubagentMonitorRuntime(ObservedMonitor);
-      const parent = factory.register({
+      const parent = await factory.register({
         client: harness.client,
         parentThreadId: "parent-thread",
         requesterSessionKey: sessionKey,
@@ -362,7 +362,7 @@ describe("Codex native close admission", () => {
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
       captureChildThreadForget,
     });
-    const parent = registerParent(monitor);
+    const parent = await registerParent(monitor);
     onTestFinished(() => monitor.dispose());
     await notifyChildStarted(client);
 
@@ -393,7 +393,7 @@ describe("Codex native close admission", () => {
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
       captureChildThreadForget,
     });
-    registerParent(monitor).bindTurn("parent-turn");
+    (await registerParent(monitor)).bindTurn("parent-turn");
     onTestFinished(() => monitor.dispose());
     await notifyChildStarted(client);
 
@@ -610,7 +610,7 @@ describe("same-monitor close assignment proof", () => {
           },
         });
         ensureCodexAppServerClientRuntime(harness.client, { agentDir: stateDir });
-        const parent = codexNativeSubagentMonitorRuntime.register({
+        const parent = await codexNativeSubagentMonitorRuntime.register({
           client: harness.client,
           parentThreadId,
           requesterSessionKey,

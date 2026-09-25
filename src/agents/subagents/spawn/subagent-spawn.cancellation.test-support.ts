@@ -111,7 +111,7 @@ export function registerNativeCancellationCases<
           return response;
         },
       );
-    withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
+    await withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
       registerSubagentRun({
         runId: parentRunId,
         childSessionKey: parentSessionKey,
@@ -161,7 +161,7 @@ export function registerNativeCancellationCases<
           operatorRoleActor: { kind: "system" },
         },
       );
-      withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
+      await withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
         registerSubagentRun({
           runId: targetRunId,
           childSessionKey: targetKey,

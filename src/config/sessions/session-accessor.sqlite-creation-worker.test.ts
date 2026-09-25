@@ -49,7 +49,7 @@ it("creates with prepared label facts, header and atomic owner without host data
     const order: string[] = [];
     const stop = sessionChanges.subscribe((change) => {
       if ("sessionKey" in change && change.sessionKey === key) {
-        order.push("published");
+        order.push(order.includes("committed") ? "published" : "header");
       }
     });
     const sql = observeHostDataSql();
@@ -76,7 +76,7 @@ it("creates with prepared label facts, header and atomic owner without host data
             order.push("committed");
           },
           afterCommitted: async (entry, source) => {
-            expect(order).toEqual(["committed", "published"]);
+            expect(order).toEqual(["header", "committed", "published"]);
             expect(source.env.OPENCLAW_STATE_DIR).toBe(originalStateDir);
             source.assertCurrent();
             await ensureSessionGroupRegistered(entry.category!, source.env, source.assertCurrent);
@@ -100,7 +100,7 @@ it("creates with prepared label facts, header and atomic owner without host data
       sql.restore();
       stop();
     }
-    expect(order).toEqual(["committed", "published", "registered"]);
+    expect(order).toEqual(["header", "committed", "published", "registered"]);
     expect(readExactSessionEntryRow(database, key)?.entry).toMatchObject({
       sessionId: "created",
       owner,
@@ -513,3 +513,51 @@ it("checks both alias and canonical target after source custody is acquired", as
     expect(notified).not.toHaveBeenCalled();
   });
 });
+
+it.each([false, true])(
+  "preserves initialized header facts when cleanup fails (unknown=%s)",
+  async (unknown) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const replacements = await import("./session-accessor.sqlite-replacement-worker.js");
+      const { SqliteWorkerError } = await import("../../infra/sqlite-worker-contract.js");
+      const failure = new AggregateError([
+        new Error("Independent cleanup failure"),
+        unknown
+          ? new SqliteWorkerError("Header cleanup lost native settlement", "outcome-unknown")
+          : new Error("Ordinary initialized-header cleanup failure"),
+      ]);
+      const initialize = replacements.initializeSessionTranscriptInWorker;
+      const interception = vi
+        .spyOn(replacements, "initializeSessionTranscriptInWorker")
+        .mockImplementation(async (...args) => {
+          await initialize(...args);
+          throw failure;
+        });
+      const create = vi.fn(() => ({
+        ok: true as const,
+        entry: { sessionId: "cleanup-header", updatedAt: 1 },
+      }));
+      const committed = vi.fn();
+      try {
+        const work = createSessionEntryWithTranscript(
+          { agentId: "main", storePath: database.path, sessionKey: "agent:main:cleanup-header" },
+          create,
+          { onLifecycleCommitted: committed },
+        );
+        if (unknown) {
+          await expect(work).rejects.toBe(failure);
+        } else {
+          await expect(work).resolves.toMatchObject({ ok: false, phase: "transcript" });
+        }
+        expect(create).toHaveBeenCalledOnce();
+        expect(interception).toHaveBeenCalledOnce();
+        expect(committed).not.toHaveBeenCalled();
+        expect(readTranscriptStorageRows(database, "cleanup-header")).toHaveLength(1);
+        expect(readExactSessionEntryRow(database, "agent:main:cleanup-header")).toBeUndefined();
+      } finally {
+        interception.mockRestore();
+      }
+    });
+  },
+);

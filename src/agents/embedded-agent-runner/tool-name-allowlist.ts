@@ -24,10 +24,7 @@ export function collectAllowedToolNames(params: {
   tools: AgentTool[];
   clientTools?: ClientToolDefinition[];
 }): Set<string> {
-  const names = new Set<string>();
-  for (const tool of params.tools) {
-    addName(names, tool.name);
-  }
+  const names = collectRegisteredToolNames(params.tools);
   for (const tool of params.clientTools ?? []) {
     addName(names, tool.function?.name);
   }

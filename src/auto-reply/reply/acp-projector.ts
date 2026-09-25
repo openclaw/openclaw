@@ -48,15 +48,6 @@ type BufferedToolDelivery = {
   meta?: AcpProjectedDeliveryMeta;
 };
 
-function hashText(text: string): string {
-  return text.trim();
-}
-
-function normalizeToolStatus(status: string | undefined): string | undefined {
-  const normalized = normalizeOptionalLowercaseString(status);
-  return normalized || undefined;
-}
-
 function resolveHiddenBoundarySeparatorText(mode: AcpHiddenBoundarySeparator): string {
   if (mode === "space") {
     return " ";
@@ -312,7 +303,7 @@ export function createAcpReplyProjector(params: {
       return;
     }
     const formatted = prefixSystemMessage(bounded);
-    const hash = hashText(formatted);
+    const hash = formatted.trim();
     const shouldDedupe = settings.repeatSuppression && opts?.dedupe !== false;
     if (shouldDedupe && lastStatusHash === hash) {
       return;
@@ -333,7 +324,7 @@ export function createAcpReplyProjector(params: {
     if (!event.tag || !HIDDEN_BOUNDARY_TAGS.has(event.tag)) {
       return;
     }
-    const status = normalizeToolStatus(event.status);
+    const status = normalizeOptionalLowercaseString(event.status);
     const isTerminal = resolveAcpToolTerminalOutcome(status) !== undefined;
     pendingHiddenBoundary = pendingHiddenBoundary || event.tag === "tool_call" || isTerminal;
   };
@@ -343,15 +334,11 @@ export function createAcpReplyProjector(params: {
       markHiddenToolBoundary(event);
       return;
     }
-    if (!isAcpTagVisible(settings, event.tag)) {
-      return;
-    }
-
     const renderedToolSummary = renderToolSummaryText(event, params.shouldSendFullToolDetails);
     const toolSummary = truncateText(renderedToolSummary, settings.maxSessionUpdateChars);
-    const hash = hashText(renderedToolSummary);
+    const hash = renderedToolSummary.trim();
     const toolCallId = normalizeOptionalString(event.toolCallId);
-    const status = normalizeToolStatus(event.status);
+    const status = normalizeOptionalLowercaseString(event.status);
     const isTerminal = resolveAcpToolTerminalOutcome(status) !== undefined;
     const isStart = status === "in_progress" || event.tag === "tool_call";
 
@@ -482,7 +469,7 @@ export function createAcpReplyProjector(params: {
         const usageTuple =
           typeof event.used === "number" && typeof event.size === "number"
             ? `${event.used}/${event.size}`
-            : hashText(event.text);
+            : event.text.trim();
         if (usageTuple === lastUsageTuple) {
           return;
         }

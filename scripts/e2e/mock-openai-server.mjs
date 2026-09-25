@@ -551,7 +551,7 @@ function progressDraftEvents(body, bodyText) {
       return null;
     }
     return preambleThenToolCallEvents("Checking the workspace before answering.", "exec", {
-      command: "sleep 3 && echo openclaw-draft-proof",
+      command: "sleep 2 && echo openclaw-draft-proof",
     });
   }
   return responseEvents("OPENCLAW_E2E_DRAFTPROOF");
@@ -782,6 +782,7 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
         ? "ALL_TOOLS.some((tool) => tool.source === 'mcp')"
         : "catalog.all().some((tool) => tool.source === 'mcp')";
     return toolCallEvents("exec", {
+      title: "Read the MCP fixture note",
       code: [
         'const files = await API.list("mcp");',
         'const root = await API.read("mcp/index.d.ts");',
@@ -1008,7 +1009,7 @@ const server = http.createServer((req, res) => {
             body.stream !== false,
             "Checking the workspace before answering.",
             "exec",
-            { command: "sleep 3 && echo openclaw-draft-proof" },
+            { command: "sleep 2 && echo openclaw-draft-proof" },
           );
           return;
         }

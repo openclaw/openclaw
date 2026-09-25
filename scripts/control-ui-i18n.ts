@@ -11,27 +11,17 @@ import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion"
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { formatDurationCompact } from "../src/infra/format-time/format-duration.ts";
-import {
-  extractTranslationPlaceholders,
-  syncControlUiCatalogFallbackBaseline,
-  verifyControlUiGeneratedCatalogs,
-  verifyRuntimeLocaleConfig,
-} from "./control-ui-i18n-verify.ts";
 import { isStrictAffirmativeValue } from "./lib/arg-utils.mts";
 import {
   hashControlUiTranslationText,
   loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
 } from "./lib/control-ui-i18n-catalog-values.ts";
-import {
-  loadControlUiSourceCatalog,
-  readControlUiSourceCatalog,
-} from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
-import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
 import {
   compareStringArrays,
   createControlUiLocaleSyncPlan,
+  extractTranslationPlaceholders,
   flattenTranslations,
   type GlossaryEntry,
   type LocaleEntry,
@@ -1195,6 +1185,8 @@ async function syncLocale(
 ) {
   const localeLabel = formatLocaleLabel(entry.locale, context);
   const localeStartedAt = Date.now();
+  const { loadControlUiSourceCatalog, readControlUiSourceCatalog } =
+    await import("./lib/control-ui-i18n-catalog.ts");
   const sourceRaw = await readControlUiSourceCatalog();
   const sourceHash = sha256(sourceRaw);
   const sourceMap = loadControlUiSourceCatalog();
@@ -1359,6 +1351,11 @@ async function syncLocale(
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  const {
+    syncControlUiCatalogFallbackBaseline,
+    verifyControlUiGeneratedCatalogs,
+    verifyRuntimeLocaleConfig,
+  } = await import("./control-ui-i18n-verify.ts");
   if (args.command === "check") {
     await verifyControlUiGeneratedCatalogs({
       checkOnly: true,
@@ -1368,6 +1365,7 @@ async function main() {
     await verifyRuntimeLocaleConfig();
   }
   if (args.command === "sync" && args.write && !args.localeFilter) {
+    const { syncControlUiRawCopyBaseline } = await import("./lib/control-ui-i18n-raw-copy.ts");
     await syncControlUiRawCopyBaseline({
       checkOnly: false,
       write: args.write,

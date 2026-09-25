@@ -2,9 +2,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.js";
 import { configureSqliteConnectionPragmas } from "../../infra/sqlite-wal.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -502,7 +502,11 @@ describe("SQLite session entry cache", () => {
     });
     const primary = openOpenClawAgentDatabase(scope);
     const first = listSessionEntriesCore({ ...scope, clone: false });
-    const alternate = new DatabaseSync(primary.path, { readOnly: true });
+    const opened = openOpenClawAgentDatabaseReadOnly(scope);
+    if (!opened.found) {
+      throw new Error("Expected the existing agent database");
+    }
+    const alternate = opened.database.db;
     const parse = vi.spyOn(JSON, "parse");
 
     try {
@@ -536,8 +540,7 @@ describe("SQLite session entry cache", () => {
       ).toHaveLength(1);
     } finally {
       parse.mockRestore();
-      clearNodeSqliteKyselyCacheForDatabase(alternate);
-      alternate.close();
+      opened.database.close();
     }
   });
 
@@ -570,8 +573,7 @@ describe("SQLite session entry cache", () => {
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();
   });
 
-  it("fully reloads on the next turn after another connection commits", async () => {
-    vi.useFakeTimers({ toFake: ["setImmediate"] });
+  it("fully reloads on the next read after another connection commits", async () => {
     const scope = createSessionScope("external-write");
     const siblingScope = { ...scope, sessionKey: "agent:main:external-write-sibling" };
     await upsertSessionEntryCore(scope, {
@@ -607,7 +609,6 @@ describe("SQLite session entry cache", () => {
         .run(JSON.stringify(updated), updated.label, updated.updatedAt, scope.sessionKey);
 
       parseSessionEntryCalls.mockClear();
-      vi.runOnlyPendingTimers();
       expect(
         listSessionEntriesCore({ ...scope, clone: false, projection: "list" })[0]?.entry.label,
       ).toBe("projection-probe-after");
@@ -619,7 +620,6 @@ describe("SQLite session entry cache", () => {
   });
 
   it("fully reloads a cross-connection same-millisecond entry rewrite", async () => {
-    vi.useFakeTimers({ toFake: ["setImmediate"] });
     const scope = createSessionScope("external-same-ms");
     const siblingScope = { ...scope, sessionKey: "agent:main:external-same-ms-sibling" };
     await upsertSessionEntryCore(scope, {
@@ -653,7 +653,6 @@ describe("SQLite session entry cache", () => {
         .run(JSON.stringify(updated), updated.label, scope.sessionKey);
 
       parseSessionEntryCalls.mockClear();
-      vi.runOnlyPendingTimers();
       const after = listSessionEntriesCore({ ...scope, clone: false, projection: "list" });
 
       expect(after[0]?.entry.label).toBe("projection-probe-after");
@@ -664,8 +663,7 @@ describe("SQLite session entry cache", () => {
     }
   });
 
-  it("observes a commit during a listing on the next turn", async () => {
-    vi.useFakeTimers({ toFake: ["setImmediate"] });
+  it("observes a commit during a listing on the next read", async () => {
     const scope = createSessionScope("external-race");
     const siblingScope = { ...scope, sessionKey: "agent:main:external-race-sibling" };
     await upsertSessionEntryCore(scope, {
@@ -715,7 +713,6 @@ describe("SQLite session entry cache", () => {
 
       expect(byId.get("external-race-local")?.label).toBe("local-after");
       expect(byId.get("external-race-sibling")?.label).toBe("external-before");
-      vi.runOnlyPendingTimers();
       expect(
         listSessionEntriesCore(scope).find(
           ({ entry }) => entry.sessionId === "external-race-sibling",

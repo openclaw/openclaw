@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { toErrorObject } from "../infra/errors.js";
 import {
   takeChromeMcpScreenshotOnTarget,
   type ChromeMcpScreenshotOptions,

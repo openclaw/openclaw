@@ -273,6 +273,7 @@ export function createProviderAuthResolver(
           apiKey: options?.oauthMarker,
           discoveryApiKey: toDiscoveryApiKey(cred.access),
           mode: "oauth",
+          ...(cred.authFlow ? { authFlow: cred.authFlow } : {}),
           source: "profile",
           profileId: id,
         };

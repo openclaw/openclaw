@@ -20,6 +20,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { registerSandboxBackend } from "./backend.js";
 import {
   readBrowserRegistry,
@@ -69,17 +70,6 @@ async function seed() {
   await updateBrowserRegistry(browser);
 }
 
-function watchNativeSql() {
-  const { DatabaseSync, StatementSync } = requireNodeSqlite();
-  return [
-    vi.spyOn(DatabaseSync.prototype, "prepare"),
-    vi.spyOn(DatabaseSync.prototype, "exec"),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    ),
-  ];
-}
-
 it.each([
   { mode: "cached", otherRows: 0 },
   { mode: "fresh", otherRows: 0 },
@@ -120,7 +110,8 @@ it.each([
     if (mode === "fresh") {
       await closeOpenClawStateDatabaseAsync();
     }
-    const calls = watchNativeSql();
+    requireNodeSqlite();
+    const calls = observeMainThreadSql();
     const startedAt = performance.now();
     expect(await readRegistry()).toEqual({
       entries: [{ ...container, runtimeLabel: container.containerName, configLabelKind: "Image" }],
@@ -130,7 +121,7 @@ it.each([
       await readRegisteredSandboxRuntimeIds({ backendId: "fixture", scopeKey: "agent:main" }),
     ).toEqual([container.containerName]);
     expect(await readBrowserRegistry()).toEqual({ entries: [browser] });
-    const mainThreadSqlCalls = calls.reduce((total, call) => total + call.mock.calls.length, 0);
+    const mainThreadSqlCalls = calls.count();
     console.info("sandbox registry read", {
       mode,
       otherRows,
@@ -158,7 +149,8 @@ it("lists persisted sandbox runtime state through the actual CLI without parent 
     },
   });
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-  const calls = watchNativeSql();
+  requireNodeSqlite();
+  const calls = observeMainThreadSql();
   try {
     await sandboxListCommand({ browser: false, json: true }, runtime);
     expect(JSON.parse(runtime.log.mock.calls[0]?.[0])).toEqual({
@@ -173,7 +165,7 @@ it("lists persisted sandbox runtime state through the actual CLI without parent 
       ],
       browsers: [],
     });
-    const mainThreadSqlCalls = calls.reduce((total, call) => total + call.mock.calls.length, 0);
+    const mainThreadSqlCalls = calls.count();
     console.info("sandbox CLI listing", { mainThreadSqlCalls });
     expect(mainThreadSqlCalls).toBe(0);
   } finally {

@@ -126,7 +126,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     trajectoryEndRecorded: false,
     nativeHookRelay: undefined as CodexNativeHookRelay | undefined,
     nativeSubagentMonitor: undefined as
-      | ReturnType<typeof codexNativeSubagentMonitorRuntime.register>
+      | Awaited<ReturnType<typeof codexNativeSubagentMonitorRuntime.register>>
       | undefined,
     runtimeContinuationStarted: false,
     nativePreToolUseFailureFallbackActive: false,
@@ -252,7 +252,9 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       },
     });
   let nativeSubagentMonitorSettlement: Promise<void> | undefined;
+  let nativeSubagentMonitorGeneration = 0;
   const unregisterNativeSubagentMonitor = async () => {
+    nativeSubagentMonitorGeneration += 1;
     const registration = state.nativeSubagentMonitor;
     state.nativeSubagentMonitor = undefined;
     if (registration) {
@@ -261,8 +263,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     await nativeSubagentMonitorSettlement;
   };
   const registerNativeSubagentMonitor = async (parentThreadId: string) => {
+    const { client, thread, nativeHookRelay, turnRoute } = state;
     await unregisterNativeSubagentMonitor();
     connection.assertCurrent();
+    const generation = ++nativeSubagentMonitorGeneration;
     const sessionKey = params.sessionKey;
     const storePath = params.sessionTarget?.storePath;
     const parentSession =
@@ -281,53 +285,77 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       ...(parentSession?.sessionId === params.sessionId
         ? { lifecycleRevision: parentSession.lifecycleRevision }
         : {}),
-      binding: state.thread,
+      binding: thread,
     });
     const { bindingStore, bindingIdentity } = connection;
-    const submissionStore: CodexNativeSubagentSubmissionStore | undefined = historyOwner
-      ? {
-          assertCurrent: () => {
-            const current = bindingStore.read(bindingIdentity);
-            if (!current || !matchesCodexNativeSubagentSubmissionBinding(current, historyOwner)) {
-              throw new Error("Native submission binding is no longer current.");
-            }
-            if (historyOwner.lifecycleRevision && sessionKey && storePath) {
-              const currentSession = getSessionEntry({
-                agentId: sessionAgentId,
-                sessionKey,
-                storePath,
-                readConsistency: "latest",
-                hydrateSkillPromptRefs: false,
-              });
-              if (currentSession?.lifecycleRevision !== historyOwner.lifecycleRevision) {
-                throw new Error("Native submission session lifecycle is no longer current.");
-              }
-            }
-          },
-          read: () => bindingStore.readNativeSubagentSubmissions(bindingIdentity, historyOwner),
-          record: (receipt, assertCurrent) =>
-            bindingStore.mutate(
-              bindingIdentity,
-              { kind: "record-native-subagent-submission", owner: historyOwner, receipt },
-              assertCurrent,
-            ),
-          consume: (receipt, assertCurrent) =>
-            bindingStore.mutate(
-              bindingIdentity,
-              { kind: "consume-native-subagent-submission", owner: historyOwner, receipt },
-              assertCurrent,
-            ),
+    const assertParentSessionCurrent = () => {
+      if (historyOwner?.lifecycleRevision && sessionKey && storePath) {
+        const currentSession = getSessionEntry({
+          agentId: sessionAgentId,
+          sessionKey,
+          storePath,
+          readConsistency: "latest",
+          hydrateSkillPromptRefs: false,
+        });
+        if (currentSession?.lifecycleRevision !== historyOwner.lifecycleRevision) {
+          throw new Error("Native submission session lifecycle is no longer current.");
         }
-      : undefined;
+      }
+    };
+    const submissionStore: CodexNativeSubagentSubmissionStore | undefined =
+      historyOwner && thread.lifecycle.preserveExistingBinding !== true
+        ? {
+            assertCurrent: () => {
+              const current = bindingStore.read(bindingIdentity);
+              if (!current || !matchesCodexNativeSubagentSubmissionBinding(current, historyOwner)) {
+                throw new Error("Native submission binding is no longer current.");
+              }
+              assertParentSessionCurrent();
+            },
+            read: () => bindingStore.readNativeSubagentSubmissions(bindingIdentity, historyOwner),
+            record: (receipt, assertCurrent) =>
+              bindingStore.mutate(
+                bindingIdentity,
+                { kind: "record-native-subagent-submission", owner: historyOwner, receipt },
+                assertCurrent,
+              ),
+            consume: (receipt, assertCurrent) =>
+              bindingStore.mutate(
+                bindingIdentity,
+                { kind: "consume-native-subagent-submission", owner: historyOwner, receipt },
+                assertCurrent,
+              ),
+          }
+        : undefined;
+    const assertRegistrationCurrent = () => {
+      runAbortController.signal.throwIfAborted();
+      params.hostCapabilities.assertActive();
+      connection.assertCurrent();
+      if (submissionStore) {
+        submissionStore.assertCurrent();
+      } else {
+        assertParentSessionCurrent();
+      }
+      thread.liveThreadOwnership?.assertCurrent();
+      if (
+        generation !== nativeSubagentMonitorGeneration ||
+        state.client !== client ||
+        state.thread !== thread ||
+        state.nativeHookRelay !== nativeHookRelay ||
+        state.turnRoute !== turnRoute
+      ) {
+        throw new Error("Codex native subagent registration was superseded during setup");
+      }
+    };
     const retainModelSource = params.hostCapabilities.retainSourceAuthority;
     const modelSource = retainModelSource?.();
     try {
       const configurationQualification = getCodexInferenceThreadQualification(
-        state.client,
+        client,
         parentThreadId,
       );
-      state.nativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register({
-        client: state.client,
+      const registration = await codexNativeSubagentMonitorRuntime.register({
+        client,
         parentThreadId,
         ...(retainModelSource ? { modelSource } : {}),
         configurationQualification,
@@ -338,12 +366,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         historyOwner,
         submissionStore,
         agentId: sessionAgentId,
-        retainClient: () => retainSharedCodexAppServerClientIfCurrent(state.client),
+        assertCurrent: assertRegistrationCurrent,
+        retainClient: () => retainSharedCodexAppServerClientIfCurrent(client),
         retainParentThread: (protectedThreadId) =>
-          protectCodexAppServerLiveThread(state.client, protectedThreadId),
-        claimDirectChild: (childThreadId) => state.nativeHookRelay?.claimDirectChild(childThreadId),
+          protectCodexAppServerLiveThread(client, protectedThreadId),
+        claimDirectChild: (childThreadId) => nativeHookRelay?.claimDirectChild(childThreadId),
         rejectPendingDirectChild: (childThreadId, reason) =>
-          state.nativeHookRelay?.rejectPendingDirectChild(childThreadId, reason),
+          nativeHookRelay?.rejectPendingDirectChild(childThreadId, reason),
         ...(params.sessionKey && params.agentHarnessTaskRuntimeScope
           ? {
               onDirectChildAccepted: () => {
@@ -352,6 +381,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
             }
           : {}),
       });
+      try {
+        assertRegistrationCurrent();
+        state.nativeSubagentMonitor = registration;
+      } catch (error) {
+        await registration.unregister();
+        throw error;
+      }
     } catch (error) {
       modelSource?.release();
       throw error;

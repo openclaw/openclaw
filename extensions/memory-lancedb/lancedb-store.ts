@@ -221,16 +221,10 @@ export class MemoryDB {
     limit?: number,
     options: MemoryListOptions = {},
   ): Promise<MemoryListEntry[]> {
-    await this.ensureInitialized();
-
-    let query = this.table!.query()
-      .where(memoryAgentPredicate(agentId))
-      .select(["id", "text", "importance", "category", "createdAt"]);
-    if (!options.orderByCreatedAt && limit !== undefined) {
-      query = query.limit(limit);
-    }
-
-    const rows = await query.toArray();
+    const rows = await this.query(agentId, {
+      columns: [...MEMORY_QUERY_COLUMNS],
+      limit: options.orderByCreatedAt ? undefined : limit,
+    });
     const entries = rows.map((row) => ({
       id: row.id as string,
       text: row.text as string,

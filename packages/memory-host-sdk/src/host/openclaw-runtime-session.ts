@@ -150,3 +150,13 @@ export function isDreamingNarrativeSessionStoreKey(sessionKey: string): boolean 
   const sessionSegment = secondSeparator < 0 ? trimmed : trimmed.slice(secondSeparator + 1);
   return sessionSegment.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
 }
+
+export async function readSessionResetRecallCutoffInWorker(
+  ...args: Parameters<
+    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").readSessionResetRecallCutoffInWorker
+  >
+) {
+  const { readSessionResetRecallCutoffInWorker: read } =
+    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
+  return read(...args);
+}

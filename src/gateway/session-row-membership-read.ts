@@ -29,6 +29,7 @@ export function createSessionRowMembershipReadAccess(params: {
   topologyDirty: () => boolean;
   topology: () => void;
   lookup: (query: records.Lookup) => records.Row | undefined;
+  stores: () => ReadonlyMap<string, records.SessionRowStore>;
   owner: () => SessionRowReadView & { isCurrent(row: records.Row): boolean };
 }) {
   const { membership } = params;
@@ -61,6 +62,22 @@ export function createSessionRowMembershipReadAccess(params: {
       : null;
   };
   return {
+    readSource(row: records.MaterializedRow) {
+      const source = params.stores().get(row.storeTarget.storePath);
+      // Incognito rows retain their process-local locator and native lifetime guard.
+      if (!source && isIncognitoSessionKey(row.key)) {
+        return undefined;
+      }
+      if (!source || !params.owner().isCurrent(row)) {
+        throw new Error("Session store changed while preparing authorization");
+      }
+      return {
+        agentId: source.target.agentId,
+        path: source.filename,
+        databaseIdentity: source.identity,
+        databaseBirthtime: source.birthtime,
+      };
+    },
     prepareMembership,
     needsMembershipPreparation,
     sessionGroupTargets() {

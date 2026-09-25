@@ -139,4 +139,4 @@ Implications:
 
 - An auto-discovered workspace or untracked global copy will not shadow a bundled plugin, even when its id is enabled or allowlisted. `plugins.allow` and `plugins.entries.<id>.enabled` control load permission, not source selection.
 - To override a bundled plugin intentionally, select its path via `plugins.load.paths`. A tracked global install can also override an ordinary bundled copy, but not a development-source bundled copy.
-- Duplicate warnings identify the discarded copy and selected source, with config-selected winners labeled as explicit overrides. Intentional tracked-install overrides of ordinary bundled copies do not emit duplicate warnings.
+- Explicit config-selected overrides emit one informational diagnostic per plugin per discovery generation, without a config warning. Ambiguous selections and other unexpected duplicates still warn and identify the discarded copy and selected source. Intentional tracked-install overrides of ordinary bundled copies do not emit duplicate warnings.

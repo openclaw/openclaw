@@ -1,6 +1,5 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeIdentifier } from "./native-subagent-history-recovery.js";
 import type {
   ChildState,
   KnownChild,
@@ -10,7 +9,7 @@ import type {
   ParentState,
 } from "./native-subagent-monitor-types.js";
 import { logRecoveryFailure } from "./native-subagent-recovery-coordinator.js";
-import { readNativeSubagentThreadIds } from "./native-subagent-task-ids.js";
+import { normalizeIdentifier, readNativeSubagentThreadIds } from "./native-subagent-task-ids.js";
 import { isJsonObject, type CodexServerNotification } from "./protocol.js";
 
 type ChildCloseCall = {

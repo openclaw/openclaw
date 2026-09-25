@@ -344,9 +344,6 @@ function replacePartialAssistantPayload(input: {
       typeof payload.text === "string" &&
       assistantTextSignatures.has(payload.text.trim()),
   );
-  if (partialPayloadIndex < 0) {
-    return [...payloads, { text: input.recoveredText }];
-  }
   const partialPayload = payloads[partialPayloadIndex];
   if (!partialPayload) {
     return [...payloads, { text: input.recoveredText }];

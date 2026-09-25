@@ -22,6 +22,7 @@ type ReadinessResult = {
   eventLoop?: GatewayEventLoopHealth;
   pluginReload?: GatewayPluginReloadStatus;
   agentDatabases?: readonly AgentDatabaseAdmissionRefusal[];
+  stateDatabase?: { reason: string };
 };
 
 /** Function form used by HTTP readiness endpoints and tests. */
@@ -90,7 +91,10 @@ function shouldIgnoreReadinessFailure(
 /** Create a cached readiness checker over channel runtime health. */
 export function createReadinessChecker(
   deps: GatewayStartupStateDeps & {
-    channelManager: ChannelManager;
+    channelManager: Pick<
+      ChannelManager,
+      "getRuntimeSnapshot" | "getAutostartSuppression" | "isAmbientAutostartSuppressed"
+    >;
     getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
     getStateDatabaseFailure?: () => Error | undefined;
     getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
@@ -121,6 +125,19 @@ export function createReadinessChecker(
         deps.getEventLoopHealth,
       );
     }
+    const stateDatabaseFailure = deps.getStateDatabaseFailure?.();
+    if (stateDatabaseFailure) {
+      cachedState = null;
+      return withEventLoopHealth(
+        {
+          ready: false,
+          failing: ["state-database"],
+          stateDatabase: { reason: stateDatabaseFailure.message },
+          uptimeMs,
+        },
+        deps.getEventLoopHealth,
+      );
+    }
     const agentDatabases = deps.getAgentDatabaseAdmissionRefusals?.();
     if (agentDatabases?.length) {
       cachedState = null;
@@ -148,12 +165,6 @@ export function createReadinessChecker(
       now - cachedAt < cacheTtlMs
     ) {
       return withEventLoopHealth({ ...cachedState, uptimeMs }, deps.getEventLoopHealth);
-    }
-    if (deps.getStateDatabaseFailure?.()) {
-      return withEventLoopHealth(
-        { ready: false, failing: ["state-database"], uptimeMs },
-        deps.getEventLoopHealth,
-      );
     }
     if (deps.shouldSkipChannelReadiness?.()) {
       return withEventLoopHealth({ ready: true, failing: [], uptimeMs }, deps.getEventLoopHealth);

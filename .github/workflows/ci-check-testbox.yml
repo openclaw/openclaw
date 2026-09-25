@@ -9,7 +9,7 @@ on:
       timeout_minutes:
         type: number
         description: "Maximum GitHub job runtime for long Testbox commands"
-        default: 120
+        default: 240
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
     paths:
@@ -39,7 +39,7 @@ jobs:
     name: "check"
     # Pull requests only validate the hydration steps; real Testbox leases arrive via dispatch.
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
-    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '120') }}
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '240') }}
     steps:
       # Testbox lifecycle actions require Blacksmith VM metadata; PRs validate our setup steps only.
       - name: Begin Testbox

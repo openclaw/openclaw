@@ -10,7 +10,7 @@ import {
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
-import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
+import type { PrepareGatewaySessionLifecycle } from "./session-create-service.types.js";
 import { writeSessionStore } from "./test-helpers.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {

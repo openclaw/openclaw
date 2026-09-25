@@ -15,6 +15,7 @@ import type {
   ChatGoalDraftMode,
   ChatGoalRecovery,
   ChatQueueItem,
+  ChatQueueDisplayItem,
   HumanMention,
 } from "../../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
@@ -155,7 +156,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onOpenTalkSettings?: () => void;
   onOpenDictationSettings?: () => void;
   suggestionComposer?: boolean;
-  typingActors?: readonly { id: string; label: string; preview?: string }[];
+  typingActors?: readonly { id: string; label: string; preview?: string; paused?: boolean }[];
   onTypingChange?: (typing: boolean, preview?: string) => void;
   composerControls?: TemplateResult | typeof nothing;
   footerContent?: TemplateResult | typeof nothing;
@@ -181,7 +182,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
-  displayQueue?: ChatQueueItem[];
+  displayQueue?: ChatQueueDisplayItem[];
   queuedEdit?: ChatQueuedEditProps;
   onClearReply?: () => void;
   goalRecovery?: ChatGoalRecovery;

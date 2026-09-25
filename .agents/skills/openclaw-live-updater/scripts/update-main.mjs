@@ -1524,7 +1524,10 @@ function readManagedGatewayLaunchAgent(checkout) {
 
 function inspectManagedGatewayDeployment(checkout) {
   if (process.platform !== "darwin") {
-    return null;
+    throw new UpdateInvariantError(
+      "unsupported_gateway_control_platform",
+      "live updater managed Gateway control requires macOS LaunchAgent inspection; Linux systemd installs must use the standard update CLI instead of this helper",
+    );
   }
   const home = process.env.HOME;
   if (!home || !existsSync(path.join(home, "Library/LaunchAgents/ai.openclaw.gateway.plist"))) {

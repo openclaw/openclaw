@@ -11,7 +11,11 @@ import {
 } from "../lib/chat/chat-metadata-cache.ts";
 import { peekChatMetadata, beginChatMetadataPublication } from "../lib/chat/chat-metadata-store.ts";
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
-import { loadModelCatalog, peekModelCatalog } from "../lib/model-catalog-store.ts";
+import {
+  loadModelCatalog,
+  peekModelCatalog,
+  subscribeModelCatalogChanges,
+} from "../lib/model-catalog-store.ts";
 import { makeChatHost } from "../pages/chat/chat-host.test-support.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import {
@@ -31,11 +35,86 @@ import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 
 type ChatMetadataShell = HTMLElement & {
   runtime: { context: ApplicationContext };
-  handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
+  handleGatewayEvent: (event: { event: string; payload?: unknown }) => void;
 };
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+it("retains model and auth reads across 50 metadata-only publications", async () => {
+  vi.useFakeTimers();
+  const { gateway, current } = createGatewayStoreTestStore();
+  gateway.start();
+  current().opts.onHello?.(gatewayHelloForMethods([]));
+  const client = gateway.snapshot.client;
+  assert.ok(client);
+  const request = current().request.mockImplementation(async (method) =>
+    method === "models.authStatus" ? { ts: Date.now(), providers: [] } : { models: [] },
+  );
+  const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+  shell.runtime = {
+    context: {
+      gateway,
+      runtimeConfig: {
+        state: { configFormDirty: false },
+        refresh: vi.fn(async () => null),
+      },
+    } as unknown as ApplicationContext,
+  };
+  const stopShell = gateway.subscribeEvents((event) => shell.handleGatewayEvent(event));
+  const changed = vi.fn();
+  const stopCatalog = subscribeModelCatalogChanges(gateway, changed);
+  const read = () =>
+    Promise.all([
+      loadModelAuthStatus(client, { agentId: "main" }),
+      loadModelCatalog(client, { agentId: "main" }),
+    ]);
+  try {
+    await read();
+    request.mockClear();
+    for (let index = 0; index < 50; index++) {
+      beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [] });
+      current().opts.onEvent?.({
+        type: "event",
+        event: "chat.metadata.changed",
+        payload: { modelCatalogChanged: false, authChanged: false },
+      });
+      expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
+      await read();
+    }
+    expect
+      .soft(request.mock.calls.filter(([method]) => method === "models.authStatus"))
+      .toHaveLength(0);
+    expect.soft(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(0);
+    expect.soft(changed).not.toHaveBeenCalled();
+    current().opts.onEvent?.({
+      type: "event",
+      event: "chat.metadata.changed",
+      payload: { modelCatalogChanged: true, authChanged: false },
+    });
+    await read();
+    await read();
+    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(0);
+    expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
+    expect(changed).toHaveBeenCalledOnce();
+    for (const event of ["config.changed", "chat.metadata.changed"]) {
+      request.mockClear();
+      changed.mockClear();
+      current().opts.onEvent?.({ type: "event", event, payload: {} });
+      await read();
+      await read();
+      expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(
+        1,
+      );
+      expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
+      expect(changed).toHaveBeenCalledOnce();
+    }
+  } finally {
+    stopCatalog();
+    stopShell();
+    gateway.stop();
+  }
 });
 
 it.each([

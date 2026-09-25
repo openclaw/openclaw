@@ -60,7 +60,7 @@ vi.mock("./server.js", async (importOriginal) => ({
 const { afterAll, afterEach, beforeEach, expect, test } =
   await vi.importActual<typeof import("vitest")>("vitest");
 const runGatewayFixtureFork = createGatewayFixtureFork(afterAll);
-await import("./server.sessions.create.test.js");
+await import("./server.sessions.create.worktrees.test.js");
 const consumerHooks = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
 const sessions = await import("./test/server-sessions.test-helpers.js");
 const serverHarness = await import("./server.e2e-ws-harness.js");

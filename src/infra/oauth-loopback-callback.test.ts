@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import type { LookupAddress } from "node:dns";
 import * as dnsPromises from "node:dns/promises";
 import type { Server } from "node:http";
 import { createServer } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { oauthSuccessHtml } from "../plugin-sdk/provider-oauth-runtime.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { hasErrnoCode } from "./errno.js";
 import {
@@ -51,7 +53,10 @@ async function getClaimedIpv6Port(): Promise<number | undefined> {
   }
 }
 
-async function start(hostname = "127.0.0.1") {
+async function start(
+  hostname = "127.0.0.1",
+  renderSuccess?: Parameters<typeof startOAuthLoopbackCallbackServer>[0]["renderSuccess"],
+) {
   const port = hostname === "::1" ? await getClaimedIpv6Port() : await getClaimedPort();
   if (!port) {
     return undefined;
@@ -60,40 +65,73 @@ async function start(hostname = "127.0.0.1") {
     redirectUrl: callbackUrl(hostname, port),
     expectedState: "state-1234567890",
     timeoutMs: 5_000,
+    renderSuccess,
   });
   openCallbacks.push(callback);
   return { callback, port };
 }
 
 describe("OAuth loopback callback server", () => {
-  it("is listening before start resolves, returns the full response, then closes", async () => {
-    const started = await start();
-    if (!started) {
-      throw new Error("IPv4 loopback unavailable");
-    }
-    const responsePromise = fetch(
-      callbackUrl("127.0.0.1", started.port, "?code=authorization-code&state=state-1234567890"),
-    ).then(async (response) => ({
-      status: response.status,
-      body: await response.text(),
-      headers: response.headers,
-    }));
+  it.each(["default", "provider"] as const)(
+    "serves a styled %s response permitted by CSP before closing",
+    async (renderer) => {
+      const started = await start(
+        "127.0.0.1",
+        renderer === "provider"
+          ? () => ({
+              body: oauthSuccessHtml(
+                "Authorization received; return to the terminal while OpenClaw finishes.",
+              ),
+              contentType: "text/html; charset=utf-8",
+            })
+          : undefined,
+      );
+      if (!started) {
+        throw new Error("IPv4 loopback unavailable");
+      }
+      const responsePromise = fetch(
+        callbackUrl("127.0.0.1", started.port, "?code=authorization-code&state=state-1234567890"),
+      ).then(async (response) => ({
+        status: response.status,
+        body: await response.text(),
+        headers: response.headers,
+      }));
 
-    await expect(started.callback.waitForCallback()).resolves.toEqual({
-      type: "authorization_code",
-      code: "authorization-code",
-      state: "state-1234567890",
-    });
-    const response = await responsePromise;
-    expect(response.status).toBe(200);
-    expect(response.body).toContain("Authorization received");
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+      await expect(started.callback.waitForCallback()).resolves.toEqual({
+        type: "authorization_code",
+        code: "authorization-code",
+        state: "state-1234567890",
+      });
+      const response = await responsePromise;
+      expect(response.status).toBe(200);
+      expect(response.body).toContain("Authorization received");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+      const stylesheet = /<style>([\s\S]*?)<\/style>/.exec(response.body)?.[1];
+      expect(stylesheet).toBeTruthy();
+      const styleHash = createHash("sha256")
+        .update(stylesheet ?? "")
+        .digest("base64");
+      const policy = new Map(
+        response.headers
+          .get("content-security-policy")
+          ?.split(";")
+          .map((directive) => {
+            const [name, ...values] = directive.trim().split(/\s+/);
+            return [name, values] as const;
+          }),
+      );
+      expect(policy.get("default-src")).toEqual(["'none'"]);
+      expect(policy.get("style-src")).toEqual([`'sha256-${styleHash}'`]);
+      expect(policy.has("script-src")).toBe(false);
+      expect(policy.get("frame-ancestors")).toEqual(["'none'"]);
 
-    await vi.waitFor(async () => {
-      await expect(fetch(callbackUrl("127.0.0.1", started.port))).rejects.toThrow();
-    });
-  });
+      await vi.waitFor(async () => {
+        await expect(fetch(callbackUrl("127.0.0.1", started.port))).rejects.toThrow();
+      });
+    },
+  );
 
   it("keeps waiting after wrong path, method, missing state, and wrong state", async () => {
     const started = await start();
@@ -135,7 +173,7 @@ describe("OAuth loopback callback server", () => {
     });
     await expect(responsePromise).resolves.toEqual({
       status: 400,
-      body: "Authorization was not completed.",
+      body: expect.stringContaining("Authorization was not completed."),
     });
   });
 

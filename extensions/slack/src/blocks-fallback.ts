@@ -128,17 +128,8 @@ function readControlElementsText(
   values: readonly unknown[],
   options: RenderSlackBlockFallbackOptions = {},
 ): string | undefined {
-  const seen = new Set<string>();
-  const labels: string[] = [];
-  for (const value of values) {
-    const candidate = readControlElementText(value, options);
-    if (!candidate || seen.has(candidate)) {
-      continue;
-    }
-    seen.add(candidate);
-    labels.push(candidate);
-  }
-  return labels.length > 0 ? labels.join("\n") : undefined;
+  const labels = values.map((value) => readControlElementText(value, options)).filter(Boolean);
+  return [...new Set(labels)].join("\n") || undefined;
 }
 
 function readSectionText(

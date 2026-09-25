@@ -44,11 +44,6 @@ function hasPrivateTarget(value: unknown): boolean {
   return /^(?:direct|dm|im|private|user):/u.test(normalized);
 }
 
-function hasPublicTarget(value: unknown): boolean {
-  const normalized = normalizeSurface(value);
-  return /^(?:channel|forum|group|guild|public|room|topic):/u.test(normalized);
-}
-
 function isPrivateLoginContext(params: HandleCommandsParams): boolean {
   const surface = normalizeSurface(
     params.command.channel || params.command.surface || params.ctx.Surface,
@@ -73,13 +68,7 @@ function isPrivateLoginContext(params: HandleCommandsParams): boolean {
     params.command.from,
     params.ctx.From,
   ];
-  if (targets.some(hasPrivateTarget)) {
-    return true;
-  }
-  if (targets.some(hasPublicTarget)) {
-    return false;
-  }
-  return false;
+  return targets.some(hasPrivateTarget);
 }
 
 function keyPart(value: unknown, fallback: string): string {

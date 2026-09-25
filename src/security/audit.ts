@@ -112,7 +112,7 @@ type SecurityAuditOptions = {
   /** Optional preloaded config snapshot to skip audit-time config file reads. */
   configSnapshot?: ConfigFileSnapshot | null;
   /** Optional cache for code-safety summaries across repeated deep audits. */
-  codeSafetySummaryCache?: Map<string, Promise<unknown>>;
+  codeSafetySummaryCache?: import("./audit.deep.runtime.js").CodeSafetySummaryCache;
   /** Optional explicit auth for deep gateway probe. */
   deepProbeAuth?: SecurityAuditExplicitGatewayAuth;
   /** Optional explicit Gateway auth mode/secret for config-only audit checks. */
@@ -140,7 +140,7 @@ type AuditExecutionContext = {
   plugins?: ChannelPlugin[];
   loadPluginSecurityCollectors: boolean;
   configSnapshot: ConfigFileSnapshot | null;
-  codeSafetySummaryCache: Map<string, Promise<unknown>>;
+  codeSafetySummaryCache: import("./audit.deep.runtime.js").CodeSafetySummaryCache;
   deepProbeAuth?: SecurityAuditExplicitGatewayAuth;
   auditGatewayAuthOverride?: SecurityAuditGatewayAuthOverride;
   workspaceDir?: string;
@@ -1314,7 +1314,7 @@ async function createAuditExecutionContext(
     loadPluginSecurityCollectors: opts.loadPluginSecurityCollectors ?? deep,
     workspaceDir,
     configSnapshot,
-    codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map<string, Promise<unknown>>(),
+    codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map(),
     deepProbeAuth: opts.deepProbeAuth,
     auditGatewayAuthOverride: opts.auditGatewayAuthOverride,
   };

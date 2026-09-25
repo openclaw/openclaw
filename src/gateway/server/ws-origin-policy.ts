@@ -1,4 +1,5 @@
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import { resolveControlUiAllowedOrigins } from "../../config/gateway-control-ui-origins.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isBrowserCopilotClient,
@@ -38,7 +39,7 @@ export function resolveGatewayWsBrowserOrigin(
 export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg: OpenClawConfig) {
   return checkBrowserOrigin({
     ...origin,
-    allowedOrigins: cfg.gateway?.controlUi?.allowedOrigins,
+    allowedOrigins: resolveControlUiAllowedOrigins(cfg),
     allowHostHeaderOriginFallback:
       cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
   });

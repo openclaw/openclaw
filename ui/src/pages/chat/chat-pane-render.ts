@@ -25,6 +25,7 @@ import {
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
+import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
@@ -257,6 +258,8 @@ export class ChatPane extends ChatPaneLayoutRender {
           permissionAccess: mutationAccess.permission,
           canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
           onModelSetup: () => this.context.navigate("model-setup"),
+          onProviderSettings: (provider) =>
+            navigateToModelProvider(this.context, currentAgentId, provider),
           onModelAccounts: () => this.context.navigate("profile"),
         });
     const composerState = getChatComposerState(this.presentationId);

@@ -2,12 +2,20 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   collectDatabaseFirstNativeLegacyStoreViolations,
   collectDatabaseFirstLegacyStoreSourceFiles,
   collectDatabaseFirstLegacyStoreViolations,
 } from "../../scripts/check-database-first-legacy-stores.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
+
+function parseFixture(content: string, fileName: string) {
+  return [content, fileName, parser.parseSourceFile(fileName, content)] as const;
+}
 
 type LegacyStoreViolations = ReturnType<typeof collectDatabaseFirstLegacyStoreViolations>;
 type UnnamedViolationCase = {
@@ -197,11 +205,13 @@ describe("check-database-first-legacy-stores", () => {
       "string",
     );
     const violations = collectDatabaseFirstLegacyStoreViolations(
-      `
+      ...parseFixture(
+        `
         type DeepRuntimeSchema = ${nestedType};
         export const ok: DeepRuntimeSchema | null = null;
       `,
-      "src/runtime/deep-type-only-schema.ts",
+        "src/runtime/deep-type-only-schema.ts",
+      ),
     );
 
     expect(violations).toEqual([]);
@@ -226,27 +236,31 @@ describe("check-database-first-legacy-stores", () => {
       `("session-writer.ts", filesystemWriteViolations(5)),
     }),
   )("$name", ({ source, filename, expected }) => {
-    const violations = collectDatabaseFirstLegacyStoreViolations(source, filename);
+    const violations = collectDatabaseFirstLegacyStoreViolations(...parseFixture(source, filename));
 
     expect(violations).toEqual(expected);
   });
 
   it("keeps legacy restart sentinel filesystem access in its sole migration owner", () => {
     const runtimeViolations = collectDatabaseFirstLegacyStoreViolations(
-      `
+      ...parseFixture(
+        `
         import { readFile } from "node:fs/promises";
         import path from "node:path";
         const legacyFilename = "restart-sentinel.json";
       `,
-      "src/infra/restart-sentinel.ts",
+        "src/infra/restart-sentinel.ts",
+      ),
     );
     const migrationViolations = collectDatabaseFirstLegacyStoreViolations(
-      `
+      ...parseFixture(
+        `
         import { readFile } from "node:fs/promises";
         import path from "node:path";
         const legacyFilename = "restart-sentinel.json";
       `,
-      "src/infra/state-migrations.restart-sentinel.ts",
+        "src/infra/state-migrations.restart-sentinel.ts",
+      ),
     );
 
     expect(runtimeViolations).toEqual([
@@ -259,30 +273,40 @@ describe("check-database-first-legacy-stores", () => {
 
   it("keeps exec approvals legacy paths and stable URI identity in their exact owners", () => {
     const runtimeViolations = collectDatabaseFirstLegacyStoreViolations(
-      `
+      ...parseFixture(
+        `
         import fs from "node:fs";
         const legacyFilename = "exec-approvals.json";
       `,
-      "src/infra/exec-approvals-store.ts",
+        "src/infra/exec-approvals-store.ts",
+      ),
     );
     const migrationViolations = collectDatabaseFirstLegacyStoreViolations(
-      `
+      ...parseFixture(
+        `
         import fs from "node:fs";
         const legacyFilename = "exec-approvals.json";
       `,
-      "src/infra/state-migrations.exec-approvals.ts",
+        "src/infra/state-migrations.exec-approvals.ts",
+      ),
     );
     const configViolations = collectDatabaseFirstLegacyStoreViolations(
-      'const EXEC_APPROVALS_FILE = "exec-approvals.json";',
-      "src/infra/exec-approvals-config.ts",
+      ...parseFixture(
+        'const EXEC_APPROVALS_FILE = "exec-approvals.json";',
+        "src/infra/exec-approvals-config.ts",
+      ),
     );
     const stableUriViolations = collectDatabaseFirstLegacyStoreViolations(
-      'export const EXEC_APPROVALS_POLICY_URI = "oc://exec-approvals.json";',
-      "extensions/policy/src/exec-approvals-uri.ts",
+      ...parseFixture(
+        'export const EXEC_APPROVALS_POLICY_URI = "oc://exec-approvals.json";',
+        "extensions/policy/src/exec-approvals-uri.ts",
+      ),
     );
     const copiedUriViolations = collectDatabaseFirstLegacyStoreViolations(
-      'const copied = "oc://exec-approvals.json";',
-      "extensions/policy/src/doctor/copied-uri.ts",
+      ...parseFixture(
+        'const copied = "oc://exec-approvals.json";',
+        "extensions/policy/src/doctor/copied-uri.ts",
+      ),
     );
 
     expect(runtimeViolations).toEqual([
@@ -304,7 +328,9 @@ describe("check-database-first-legacy-stores", () => {
     `;
 
     expect(
-      collectDatabaseFirstLegacyStoreViolations(content, "src/commands/doctor/boundaries.ts"),
+      collectDatabaseFirstLegacyStoreViolations(
+        ...parseFixture(content, "src/commands/doctor/boundaries.ts"),
+      ),
     ).toEqual([
       { kind: "legacy restart sentinel reference", line: 3 },
       { kind: "legacy restart sentinel reference", line: 4 },
@@ -526,6 +552,15 @@ describe("check-database-first-legacy-stores", () => {
         import * as jsonFiles from "../infra/json-files.js";
         await jsonFiles.writeJson("sessions.json", {});
       `("helper-namespace-write.ts", filesystemWriteViolations(3)),
+      "flags direct fs-safe helper writes without flagging reads": sourceCase`
+        import { appendRegularFile as append } from "@openclaw/fs-safe/advanced";
+        import * as atomic from "@openclaw/fs-safe/atomic";
+        import { writeJsonSync as save, readJson } from "@openclaw/fs-safe/json";
+        await append({ filePath: "sessions.json", content: "{}\\n" });
+        atomic.replaceFileAtomicSync({ filePath: "plugin-state/state.sqlite", content: "" });
+        save("thread-bindings.json", {});
+        await readJson("sessions.json");
+      `("direct-fs-safe-helper-write.ts", filesystemWriteViolations(5, 6, 7)),
       "flags private file store writes to legacy paths": privateStoreCase`
         await privateFileStore(stateDir).writeJson("thread-bindings.json", {});
       `("private-file-store-write.ts", filesystemWriteViolations(3)),
@@ -1043,7 +1078,7 @@ describe("check-database-first-legacy-stores", () => {
       `("regular-file-helper.ts", filesystemWriteViolations(4)),
       "flags legacy paths written through JSON and atomic helpers": sourceCase`
         import { writeJson, writeTextAtomic } from "../infra/json-files.js";
-        import { replaceFileAtomicSync } from "../infra/replace-file.js";
+        import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
         import { saveJsonFile, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
         await writeJson("restart-sentinel.json", {});
         await writeTextAtomic("gateway-restart-intent.json", "{}\\n");
@@ -4678,7 +4713,7 @@ describe("check-database-first-legacy-stores", () => {
       `("extensions/memory-wiki/src/compile.ts", filesystemWriteViolations(3)),
     }),
   )("$name", ({ source, filename, expected }) => {
-    const violations = collectDatabaseFirstLegacyStoreViolations(source, filename);
+    const violations = collectDatabaseFirstLegacyStoreViolations(...parseFixture(source, filename));
 
     expect(violations).toEqual(expected);
   });
@@ -4686,8 +4721,7 @@ describe("check-database-first-legacy-stores", () => {
   it("flags changed writes on current legacy-debt lines", () => {
     const content = `import fs from "node:fs";${"\n".repeat(667)}fs.writeFileSync("sessions.json", "{}\\n");`;
     const violations = collectDatabaseFirstLegacyStoreViolations(
-      content,
-      "extensions/memory-wiki/src/compile.ts",
+      ...parseFixture(content, "extensions/memory-wiki/src/compile.ts"),
     );
 
     expect(violations).toEqual(filesystemWriteViolations(668));
@@ -4713,7 +4747,7 @@ describe("check-database-first-legacy-stores", () => {
       `("src/infra/state-migrations.device-identity.ts", []),
     }),
   )("$name", ({ source, filename, expected }) => {
-    const violations = collectDatabaseFirstLegacyStoreViolations(source, filename);
+    const violations = collectDatabaseFirstLegacyStoreViolations(...parseFixture(source, filename));
 
     expect(violations).toEqual(expected);
   });
@@ -4759,7 +4793,7 @@ describe("check-database-first-legacy-stores", () => {
       ]),
     }),
   )("$name", ({ source, filename, expected }) => {
-    const violations = collectDatabaseFirstLegacyStoreViolations(source, filename);
+    const violations = collectDatabaseFirstLegacyStoreViolations(...parseFixture(source, filename));
 
     expect(violations).toEqual(expected);
   });

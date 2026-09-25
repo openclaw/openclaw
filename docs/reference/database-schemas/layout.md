@@ -218,6 +218,15 @@ downtime. Each JSON column has a 16 KiB hard limit with deterministic truncation
 and redaction. The ledger stores bounded diagnostic summaries, not raw logs or
 credentials. There is no automatic history deletion.
 
+Candidate admission adds optional `origin.admission` metadata in the existing
+`origin_json` column: `owner` (`candidate` or `installed`), optional `protocol`,
+`candidateVersion`, `checks`, and `fallbackReason`. Reads expose the same metadata
+as `run.admission`. `origin.candidateAdmission` records the candidate's verdict,
+reasons, warnings, and facts within the existing redaction and byte limits.
+These observations do not grant execution authority. No column, table, or schema
+version changes; older records can omit them. See
+[candidate-owned admission](/cli/update#candidate-owned-admission).
+
 Asynchronous history lookup and listing run their queries and record decoding
 in the shared-state read worker. They preserve source artifacts and inherited
 snapshot or disposable-read scopes, and return empty history without creating

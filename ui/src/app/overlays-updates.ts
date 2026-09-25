@@ -71,6 +71,7 @@ export function createApplicationUpdateOverlays(
     updateStatusBanner: null,
     updateStatusCheckBanner: null,
     recordedUpdateAttempt: null,
+    diagnosableUpdateFailureId: null,
     reportableUpdateFailureId: null,
     updateFailureReportBusy: false,
     updateFailureReportNotice: null,
@@ -96,7 +97,7 @@ export function createApplicationUpdateOverlays(
   let updateHistory: UpdateHistory = { kind: "unknown" };
   let updateAttempt: UpdateAdmissionAttempt | null = null;
   let currentFailure: UpdateFailureTriage | null = null;
-  let presentedFailure: UpdateFailureTriage | null = null;
+  let diagnosticGeneration = 0;
 
   const updateFailureReporter = createUpdateFailureReportController({
     getClient: () => gateway.snapshot.client,
@@ -139,39 +140,45 @@ export function createApplicationUpdateOverlays(
     gateway.snapshot.phase === "connected" &&
     readGatewayOperatorAccess(gateway.snapshot).canAdmin;
 
-  function presentFailureTriage() {
+  function diagnoseUpdateFailure(attemptId: string) {
     const owned = currentFailure;
     const scope = updateGatewayScope;
     const profile = profileId;
+    const client = activeClient;
+    const epoch = connectedEpoch;
     if (
       !owned ||
-      owned === presentedFailure ||
+      owned.id !== attemptId ||
+      !client ||
+      !isCurrentClient(client) ||
       snapshot.updateRunning ||
       snapshot.updateFailureReportBusy ||
-      snapshot.updateFailureReportNotice !== null ||
       snapshot.updateReconciliationPending
     ) {
       return;
     }
+    const generation = ++diagnosticGeneration;
     const isCurrent = () =>
-      !disposed &&
+      generation === diagnosticGeneration &&
+      epoch === connectedEpoch &&
+      isCurrentClient(client) &&
       currentFailure === owned &&
       gatewayCredentialScope(gateway.connection.gatewayUrl) === scope &&
       (gateway.snapshot.selfUser?.id ?? null) === profile &&
-      readGatewayOperatorAccess(gateway.snapshot).canAdmin;
-    if (!isCurrent() || receipts.triaged(scope, profile, owned.id)) {
-      return;
-    }
-    presentedFailure = owned;
+      !snapshot.updateRunning &&
+      !snapshot.updateReconciliationPending;
+    // Consent belongs to this click. Loading, refreshing, or reconnecting never
+    // creates an admission, and a delayed panel cannot reuse an earlier click.
+    let admitted = false;
     hooks.onUpdateFailure?.(owned, {
       isCurrent,
-      admit: () =>
-        isCurrent() &&
-        gateway.snapshot.phase === "connected" &&
-        !snapshot.updateRunning &&
-        !snapshot.updateReconciliationPending &&
-        !receipts.triaged(scope, profile, owned.id) &&
-        receipts.recordTriage(scope, profile, owned.id),
+      admit: () => {
+        if (admitted || !isCurrent()) {
+          return false;
+        }
+        admitted = true;
+        return true;
+      },
     });
   }
 
@@ -190,6 +197,14 @@ export function createApplicationUpdateOverlays(
     }
     snapshot = {
       ...snapshot,
+      diagnosableUpdateFailureId:
+        currentFailure &&
+        activeClient &&
+        isCurrentClient(activeClient) &&
+        !snapshot.updateRunning &&
+        !snapshot.updateReconciliationPending
+          ? currentFailure.id
+          : null,
       reportableUpdateFailureId:
         snapshot.updateRunning || snapshot.updateReconciliationPending
           ? null
@@ -203,7 +218,6 @@ export function createApplicationUpdateOverlays(
               : null,
     };
     onChange();
-    presentFailureTriage();
   }
 
   const publishError = (error: unknown, source?: "read") => {
@@ -511,8 +525,10 @@ export function createApplicationUpdateOverlays(
       }
       // The event is an invalidation, not the run itself. Privileged facts are
       // fetched under the current authenticated connection and ordered by row revision.
+      setCurrentFailure(null);
       updateFailureReporter.invalidate();
       snapshot = { ...snapshot, updateFailureReportBusy: false };
+      publish();
       updateStatusRevision++;
       if (runId && runId !== payload.runId) {
         void refreshUpdateStatus("completion");
@@ -538,6 +554,7 @@ export function createApplicationUpdateOverlays(
       }
     },
     refreshUpdateStatus,
+    diagnoseUpdateFailure,
     acknowledgeUpdateRun(this: void) {
       const run = snapshot.updateRun;
       if (run && run.status !== "running") {

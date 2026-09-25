@@ -1,10 +1,11 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import { renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
 import {
   SIDEBAR_SESSION_SORT_OPTIONS,
   SIDEBAR_SESSION_STATUS_OPTIONS,
@@ -36,19 +37,6 @@ type SidebarSessionGroupMenuAction =
   | "new-group"
   | "delete-group";
 
-function renderSidebarMenuTrigger(position: { x: number; y: number }, label: string) {
-  return html`
-    <button
-      slot="trigger"
-      type="button"
-      tabindex="-1"
-      aria-hidden="true"
-      aria-label=${label}
-      style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-    ></button>
-  `;
-}
-
 function renderSidebarMenuRadioItem(params: {
   value: string;
   checked: boolean;
@@ -74,6 +62,20 @@ function renderSidebarMenuRadioItem(params: {
       </span>
     </wa-dropdown-item>
   `;
+}
+
+function renderSidebarMenuCheckbox(value: string, checked: boolean, label: string) {
+  return html`<wa-dropdown-item
+    class="sidebar-session-sort-menu__item"
+    type="checkbox"
+    value=${value}
+    .checked=${checked}
+  >
+    <span class="session-menu__text">${label}</span>
+    <span slot="details" class="session-menu__check" aria-hidden="true"
+      >${checked ? icons.check : nothing}</span
+    >
+  </wa-dropdown-item>`;
 }
 
 function renderSidebarOwnerOptions(params: {
@@ -230,6 +232,20 @@ export function renderSidebarSessionGroupMenu(params: {
   onClose: (restoreFocus: boolean) => void;
 }) {
   const menu = params.menu;
+  const renderAction = (
+    action: SidebarSessionGroupMenuAction,
+    label: string,
+    icon: TemplateResult,
+  ) => html`<wa-dropdown-item
+    class=${`session-menu__item${action === "delete-group" ? " session-menu__item--destructive" : ""}`}
+    value=${action}
+    variant=${action === "delete-group" ? "danger" : nothing}
+    ?disabled=${!params.connected || Boolean(params.actionDisabledReasons?.[action])}
+    title=${params.actionDisabledReasons?.[action] ?? nothing}
+  >
+    <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
+    <span class="session-menu__text">${label}</span>
+  </wa-dropdown-item>`;
   return keyed(
     menu,
     html`
@@ -257,52 +273,17 @@ export function renderSidebarSessionGroupMenu(params: {
         @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
       >
         ${renderSidebarMenuTrigger(menu, t("sessionsView.groupMenu", { group: menu.group }))}
-        <wa-dropdown-item
-          class="session-menu__item"
-          value="group-defaults"
-          ?disabled=${
-            !params.connected || Boolean(params.actionDisabledReasons?.["group-defaults"])
-          }
-          title=${params.actionDisabledReasons?.["group-defaults"] ?? nothing}
-        >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.settings}</span>
-          <span class="session-menu__text"
-            >${
-              params.groupDefaultsUnavailable
-                ? `${t("common.retry")}: ${t("sessionsView.groupDefaultsMenu")}`
-                : t("sessionsView.groupDefaultsMenu")
-            }</span
-          >
-        </wa-dropdown-item>
-        <wa-dropdown-item
-          class="session-menu__item"
-          value="rename-group"
-          ?disabled=${!params.connected || Boolean(params.actionDisabledReasons?.["rename-group"])}
-          title=${params.actionDisabledReasons?.["rename-group"] ?? nothing}
-        >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.edit}</span>
-          <span class="session-menu__text">${t("sessionsView.renameGroupMenu")}</span>
-        </wa-dropdown-item>
-        <wa-dropdown-item
-          class="session-menu__item"
-          value="new-group"
-          ?disabled=${!params.connected || Boolean(params.actionDisabledReasons?.["new-group"])}
-          title=${params.actionDisabledReasons?.["new-group"] ?? nothing}
-        >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
-          <span class="session-menu__text">${t("sessionsView.newGroup")}</span>
-        </wa-dropdown-item>
+        ${renderAction(
+          "group-defaults",
+          params.groupDefaultsUnavailable
+            ? `${t("common.retry")}: ${t("sessionsView.groupDefaultsMenu")}`
+            : t("sessionsView.groupDefaultsMenu"),
+          icons.settings,
+        )}
+        ${renderAction("rename-group", t("sessionsView.renameGroupMenu"), icons.edit)}
+        ${renderAction("new-group", t("sessionsView.newGroup"), icons.folder)}
         <div class="session-menu__separator" role="separator"></div>
-        <wa-dropdown-item
-          class="session-menu__item session-menu__item--destructive"
-          value="delete-group"
-          variant="danger"
-          ?disabled=${!params.connected || Boolean(params.actionDisabledReasons?.["delete-group"])}
-          title=${params.actionDisabledReasons?.["delete-group"] ?? nothing}
-        >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.trash}</span>
-          <span class="session-menu__text">${t("sessionsView.deleteGroupMenu")}</span>
-        </wa-dropdown-item>
+        ${renderAction("delete-group", t("sessionsView.deleteGroupMenu"), icons.trash)}
       </wa-dropdown>
     `,
   );
@@ -538,39 +519,13 @@ export function renderSidebarSessionSortMenu(params: {
                 )}
                 ${renderSidebarOwnerFilter(params)}
                 <div class="session-menu__separator" role="separator"></div>
-                <wa-dropdown-item
-                  class="sidebar-session-sort-menu__item"
-                  type="checkbox"
-                  value="show-preview"
-                  .checked=${params.showPreview}
-                >
-                  <span class="session-menu__text">${t("sessionsView.showSessionPreview")}</span>
-                  <span slot="details" class="session-menu__check" aria-hidden="true"
-                    >${params.showPreview ? icons.check : nothing}</span
-                  >
-                </wa-dropdown-item>
-                <wa-dropdown-item
-                  class="sidebar-session-sort-menu__item"
-                  type="checkbox"
-                  value="show-cron"
-                  .checked=${params.showCron}
-                >
-                  <span class="session-menu__text">${t("sessionsView.showCronSessions")}</span>
-                  <span slot="details" class="session-menu__check" aria-hidden="true"
-                    >${params.showCron ? icons.check : nothing}</span
-                  >
-                </wa-dropdown-item>
-                <wa-dropdown-item
-                  class="sidebar-session-sort-menu__item"
-                  type="checkbox"
-                  value="show-system"
-                  .checked=${params.showSystem}
-                >
-                  <span class="session-menu__text">${t("sessionsView.showSystemSessions")}</span>
-                  <span slot="details" class="session-menu__check" aria-hidden="true"
-                    >${params.showSystem ? icons.check : nothing}</span
-                  >
-                </wa-dropdown-item>
+                ${renderSidebarMenuCheckbox(
+                  "show-preview",
+                  params.showPreview,
+                  t("sessionsView.showSessionPreview"),
+                )}
+                ${renderSidebarMenuCheckbox("show-cron", params.showCron, t("sessionsView.showCronSessions"))}
+                ${renderSidebarMenuCheckbox("show-system", params.showSystem, t("sessionsView.showSystemSessions"))}
                 ${
                   params.rosterMode
                     ? nothing

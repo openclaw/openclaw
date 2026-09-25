@@ -1,10 +1,31 @@
-import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import type {
+  WorkerSessionPlacementIdentity,
+  WorkerSessionPlacementRecord,
+} from "./placement-record.js";
 import type {
   WorkerPlacementAuthorization,
   WorkerPlacementCancellationTarget,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
+import type {
+  WorkerWorkspaceConflictReport,
+  WorkspaceResultConflictLookup,
+} from "./workspace-conflicts.js";
+
+export type PreparedWorkerWorkspaceRecovery = {
+  readonly workspace: WorkerSessionWorkspace;
+  assertCurrent: () => void;
+  resolveConflict: () => Promise<WorkspaceResultConflictLookup>;
+  reportConflict: (report: WorkerWorkspaceConflictReport) => Promise<void>;
+  reportFailure: (error: string) => Promise<void>;
+};
+
+export type WithPreparedWorkerWorkspaceRecovery = <T>(
+  identity: WorkerSessionPlacementIdentity,
+  assertCurrent: () => void,
+  run: (recovery: PreparedWorkerWorkspaceRecovery) => Promise<T>,
+) => Promise<T>;
 
 type WorkerReclaimStartPlacement = Extract<
   WorkerSessionPlacementRecord,

@@ -12,7 +12,8 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";

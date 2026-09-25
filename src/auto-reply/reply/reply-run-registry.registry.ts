@@ -553,6 +553,7 @@ const replyRunRegistryTestApi = {
     replyRunState.activeKeysBySessionId.clear();
     replyRunState.waitKeysBySessionId.clear();
     replyRunState.sourceTurnByKey.clear();
+    replyRunState.completionObservationsByKey?.clear();
     replyRunSettle.resetReplyRunSettleTimersForTesting();
     for (const waiters of replyRunState.waitersByKey.values()) {
       for (const waiter of waiters) {

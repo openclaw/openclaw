@@ -14,13 +14,20 @@ it.each(
       { kind: "invalid core field", config: { gateway: { port: "invalid" } } },
     ].map(({ kind, config }) => ({ kind, config, dryRun })),
   ),
-)("identifies $kind as configuration failure (dryRun=$dryRun)", async ({ config, dryRun }) => {
+)("identifies $kind during installed admission (dryRun=$dryRun)", async ({ config, dryRun }) => {
   const configPath = process.env.OPENCLAW_CONFIG_PATH!;
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   const original = JSON.stringify(config);
   fs.writeFileSync(configPath, original);
 
-  const update = updateCommand({ tag: "2026.9.2", json: true, yes: true, restart: false, dryRun });
+  const update = updateCommand({
+    admission: "installed",
+    tag: "2026.9.2",
+    json: true,
+    yes: true,
+    restart: false,
+    dryRun,
+  });
   if (dryRun) {
     await update;
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(

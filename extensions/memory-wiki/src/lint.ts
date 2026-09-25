@@ -57,10 +57,6 @@ type LintMemoryWikiResult = {
   reportPath: string;
 };
 
-function toExpectedPageType(page: WikiPageSummary): string {
-  return page.kind;
-}
-
 function isUnmanagedRawSourcePage(
   page: WikiPageSummary,
   managedImportedSourcePagePaths: Set<string>,
@@ -250,13 +246,13 @@ function collectPageIssues(
           message: "Missing `pageType` frontmatter.",
         });
       }
-    } else if (page.pageType !== toExpectedPageType(page)) {
+    } else if (page.pageType !== page.kind) {
       issues.push({
         severity: "error",
         category: "structure",
         code: "page-type-mismatch",
         path: page.relativePath,
-        message: `Expected pageType \`${toExpectedPageType(page)}\`, found \`${page.pageType}\`.`,
+        message: `Expected pageType \`${page.kind}\`, found \`${page.pageType}\`.`,
       });
     }
 

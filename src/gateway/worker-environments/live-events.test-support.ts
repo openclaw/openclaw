@@ -50,12 +50,6 @@ export function live(seq: number, event: Params["event"], runId = RUN): Params {
   return { runEpoch: EPOCH, lastAckedSeq: seq - 1, seq, runId, event };
 }
 
-export const binding = ({ environmentId, ownerEpoch: runEpoch, sessionId }: Identity = ID) => ({
-  environmentId,
-  runEpoch,
-  sessionId: sessionId ?? SID,
-});
-
 export type WireEvent = Params["event"];
 type Payload<K extends WireEvent["kind"]> = Extract<WireEvent, { kind: K }>["payload"];
 export const tool = (payload: Payload<"tool">): WireEvent => ({ kind: "tool", payload });

@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import * as backupCreate from "../infra/backup-create.js";
 import * as packageRoot from "../infra/openclaw-root.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import * as integrity from "../infra/sqlite-integrity-worker.js";
 import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";

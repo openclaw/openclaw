@@ -1,6 +1,7 @@
 // Slack plugin module owns durable Agent View mode state.
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getOptionalSlackRuntime } from "../runtime.js";
+import { writeLruMapEntry } from "./lru-map-cache.js";
 
 const SLACK_AGENT_VIEW_STATE_NAMESPACE = "agent-view-workspaces";
 const SLACK_AGENT_VIEW_THREAD_STATE_NAMESPACE = "agent-view-threads";
@@ -140,15 +141,7 @@ export function createSlackAgentViewState(params: {
       : undefined;
   };
   const rememberManagedThread = (key: string) => {
-    managedThreads.delete(key);
-    managedThreads.set(key, true);
-    if (managedThreads.size <= SLACK_MANAGED_THREAD_CACHE_MAX_ENTRIES) {
-      return;
-    }
-    const oldestKey = managedThreads.keys().next().value;
-    if (oldestKey !== undefined) {
-      managedThreads.delete(oldestKey);
-    }
+    writeLruMapEntry(managedThreads, key, true, SLACK_MANAGED_THREAD_CACHE_MAX_ENTRIES);
   };
 
   const recordManagedThread = async (channelId: string, threadTs: string) => {

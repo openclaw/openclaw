@@ -25,6 +25,8 @@ import {
   stubRenderedWhenDefined,
 } from "./app-host.test-support.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
+import { createApplicationNavigationPreferences } from "./bootstrap-navigation-preferences.ts";
+import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
 import type {
   ApplicationContext,
@@ -41,6 +43,7 @@ import {
 import { shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
+import { loadSettings } from "./settings.ts";
 import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 
 vi.mock("./stale-chunk-reload.ts", async () => {
@@ -590,8 +593,20 @@ describe("OpenClaw shell server preferences", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     resetServerUiPrefsSync();
     const sidebarEntries = ["route:usage", "session:agent:main:test"];
-    const updateNavigation = vi.fn();
-    const refreshTheme = vi.fn();
+    const gateway = {
+      connection: { gatewayUrl: "ws://sidebar.test" },
+      snapshot: { phase: "connected" },
+      subscribe: () => () => undefined,
+    } as unknown as ApplicationGateway;
+    const theme = createApplicationTheme(loadSettings(gateway.connection.gatewayUrl), gateway);
+    const navigation = createApplicationNavigationPreferences(theme);
+    const navigationChanged = vi.fn();
+    const stopNavigation = navigation.subscribe(navigationChanged);
+    onTestFinished(() => {
+      stopNavigation();
+      theme.dispose();
+      resetServerUiPrefsSync();
+    });
     const runtimeConfig = {
       state: {
         configSnapshot: {
@@ -601,12 +616,9 @@ describe("OpenClaw shell server preferences", () => {
       },
     } as unknown as ApplicationContext["runtimeConfig"];
     const context = {
-      gateway: {
-        connection: { gatewayUrl: "ws://sidebar.test" },
-        snapshot: { phase: "connected" },
-      },
-      navigation: { update: updateNavigation },
-      theme: { refresh: refreshTheme },
+      gateway,
+      navigation,
+      theme,
       // reconcileServerUiPrefs only accepts the current context's capability.
       runtimeConfig,
     } as unknown as ApplicationContext;
@@ -617,9 +629,9 @@ describe("OpenClaw shell server preferences", () => {
 
     shell.reconcileServerUiPrefs(runtimeConfig);
 
-    expect(updateNavigation).toHaveBeenCalledWith({ sidebarEntries });
-    expect(refreshTheme).toHaveBeenCalledOnce();
-    resetServerUiPrefsSync();
+    expect(navigation.snapshot.sidebarEntries).toEqual(sidebarEntries);
+    expect(navigationChanged).toHaveBeenCalledWith(expect.objectContaining({ sidebarEntries }));
+    expect(loadSettings(gateway.connection.gatewayUrl).sidebarEntries).toEqual(sidebarEntries);
   });
 });
 

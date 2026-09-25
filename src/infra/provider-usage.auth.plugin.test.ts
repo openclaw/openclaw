@@ -492,7 +492,7 @@ describe("resolveProviderAuths plugin boundary", () => {
     expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
   });
 
-  it("uses a caller-provided auth store for credential gating", async () => {
+  it("carries the selected OAuth flow from the caller-provided auth store to usage policy", async () => {
     const store = {
       profiles: {
         "anthropic:external": {
@@ -500,6 +500,7 @@ describe("resolveProviderAuths plugin boundary", () => {
           provider: "anthropic",
           access: "external-access",
           refresh: "external-refresh",
+          authFlow: "external-flow",
           expires: Date.now() + 60_000,
         },
       },
@@ -521,7 +522,9 @@ describe("resolveProviderAuths plugin boundary", () => {
         providers: ["anthropic"],
         store: store as never,
       }),
-    ).resolves.toEqual([{ provider: "anthropic", token: "external-access" }]);
+    ).resolves.toEqual([
+      { provider: "anthropic", token: "external-access", authFlow: "external-flow" },
+    ]);
 
     expect(ensureAuthProfileStoreWithoutExternalProfilesMock).not.toHaveBeenCalled();
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();

@@ -1,9 +1,24 @@
 // Llm Task plugin entrypoint registers its OpenClaw integration.
 import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 import { Type } from "typebox";
-import type { AnyAgentTool } from "./api.js";
-import { createLlmTaskTool, llmTaskToolDefinition } from "./src/llm-task-tool.js";
+import type { AnyAgentTool, OpenClawPluginApi } from "./api.js";
+import { llmTaskToolDefinition } from "./src/llm-task-tool-definition.js";
+
+function createLazyLlmTaskTool(api: OpenClawPluginApi): AnyAgentTool {
+  // Tool catalog and registration need only metadata; model/schema runtimes load on first use.
+  const loadTool = createLazyRuntimeModule(() =>
+    import("./src/llm-task-tool.js").then(
+      ({ createLlmTaskTool }) => createLlmTaskTool(api) as unknown as AnyAgentTool,
+    ),
+  );
+  return {
+    ...llmTaskToolDefinition,
+    execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
+      await (await loadTool()).execute(...args),
+  };
+}
 
 export default defineToolPlugin({
   id: "llm-task",
@@ -23,7 +38,7 @@ export default defineToolPlugin({
     tool({
       ...llmTaskToolDefinition,
       optional: true,
-      factory: ({ api }) => createLlmTaskTool(api) as unknown as AnyAgentTool,
+      factory: ({ api }) => createLazyLlmTaskTool(api),
     }),
   ],
 });

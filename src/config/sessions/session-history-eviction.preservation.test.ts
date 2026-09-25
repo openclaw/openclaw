@@ -76,14 +76,16 @@ describe("SQLite historical session preservation", () => {
           sql.startsWith("select") &&
           sql.includes('"session_windows"') &&
           sql.includes('"session_nodes"') &&
-          sql.includes('"entry_json"')
+          sql.includes('"entry_json"') &&
+          !sql.includes('where "session_windows"."session_id" =')
             ? "history"
             : null,
         );
         try {
           const result = await operation();
-          expect.soft(reads.rowCounts.history).toBeGreaterThan(0);
-          expect.soft(reads.textBytes.history).toBeLessThan(16 * 1024);
+          // Whole-store recent-history discovery belongs to the worker; keyed live checks remain.
+          expect.soft(reads.rowCounts.history).toBe(0);
+          expect.soft(reads.textBytes.history).toBe(0);
           return result;
         } finally {
           reads.restore();

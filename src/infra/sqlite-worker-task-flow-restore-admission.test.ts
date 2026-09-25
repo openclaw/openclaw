@@ -41,9 +41,8 @@ import {
   createInMemoryTaskRegistryStore,
 } from "../test-utils/task-registry-store.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
-import type { SqliteWorkerOperations, SqliteWorkerStore } from "./sqlite-worker-contract.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
-import * as workerStore from "./sqlite-worker-store.js";
+import { interceptTaskWorkerCommands } from "./sqlite-worker-task.test-support.js";
 
 let executionOwner: TaskExecutionOwner;
 
@@ -80,38 +79,17 @@ function holdRestoreReply(target: "tasks.restore" | "flows.syncMirroredTask") {
   const held = createDeferred();
   const release = createDeferred();
   let failure: Error | undefined;
-  const original = workerStore.runSqliteWorkerStoreOperation;
-  vi.spyOn(workerStore, "runSqliteWorkerStoreOperation").mockImplementation(
-    <Operations extends SqliteWorkerOperations, T>(
-      store: SqliteWorkerStore<Operations>,
-      operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-      stateContext?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[2],
-      assertCurrent?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[3],
-      createAdmission?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[4],
-      requireStateLifecycle?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[5],
-    ) =>
-      original(
-        store,
-        (scope) =>
-          operation({
-            execute: async (command, options) => {
-              const result = await scope.execute(command, options);
-              if (command.type === target) {
-                held.resolve();
-                await release.promise;
-                if (failure) {
-                  throw failure;
-                }
-              }
-              return result;
-            },
-          }),
-        stateContext,
-        assertCurrent,
-        createAdmission,
-        requireStateLifecycle,
-      ),
-  );
+  interceptTaskWorkerCommands(async (type, execute) => {
+    const result = await execute();
+    if (type === target) {
+      held.resolve();
+      await release.promise;
+      if (failure) {
+        throw failure;
+      }
+    }
+    return result;
+  });
   return {
     held,
     release,

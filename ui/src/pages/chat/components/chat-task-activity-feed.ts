@@ -58,7 +58,7 @@ type Entry = { key: string; timestamp: number | null } & (
 function toolLine(call: ToolCard): string {
   const view = resolveToolCallView(call);
   const text = view.command ?? view.code ?? call.inputText ?? call.name;
-  return redactToolPayloadText(text.trim(), { preservePaths: true });
+  return redactToolPayloadText(text.trim());
 }
 
 function entries(messages: unknown[]): Entry[] {
@@ -194,7 +194,6 @@ function renderToolLine(call: ToolCard) {
   const label = truncateUtf16Safe(
     redactToolPayloadText(
       view.title ?? view.target ?? (command || view.command)?.split("\n")[0] ?? call.name,
-      { preservePaths: true },
     ),
     160,
   );

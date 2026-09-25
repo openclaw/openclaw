@@ -130,8 +130,9 @@ export type TestChatPane = HTMLElement & {
   handleSessionSuggestionEvent: (event: SessionSuggestionEvent) => void;
   handleSessionTypingEvent: (event: SessionTypingEvent) => void;
   clearTypingActorForSessionMessage: (payload: unknown) => void;
+  pruneTypingActors: () => void;
   typingActors: Map<string, { label: string; expiresAt: number; preview?: string }>;
-  typingActorViews: () => { id: string; label: string; preview?: string }[];
+  typingActorViews: () => { id: string; label: string; preview?: string; paused?: boolean }[];
   sendTypingState: (typing: boolean, preview?: string) => void;
   refreshSessionSuggestions: () => Promise<void>;
   resolveCurrentSessionSuggestion: (
@@ -148,7 +149,7 @@ export type TestChatPane = HTMLElement & {
     sessionKey: string,
     transcriptLoad: Promise<boolean>,
   ) => void;
-  paneTitle: string;
+  presentationTitle: string | undefined;
   catalogSession: SessionCatalogSession | null;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;
@@ -473,6 +474,7 @@ export function createTestChatPane(params: {
     chatHistoryPagination: { hasMore: false },
     chatLoading: false,
     chatMessages: [],
+    chatToolMessages: [],
     chatModelCatalog: [],
     chatModelCatalogError: null,
     chatModelsLoading: false,

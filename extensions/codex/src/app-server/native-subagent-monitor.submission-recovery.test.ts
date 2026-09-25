@@ -163,7 +163,7 @@ describe("CodexNativeSubagentMonitor", () => {
       if (scenario === "delivered-with-receipt") {
         firstSubmissionStore.consume = heldConsume;
       }
-      const firstParent = registerCodexNativeSubagentMonitor({
+      const firstParent = await registerCodexNativeSubagentMonitor({
         client: first as never,
         parentThreadId: binding.threadId,
         requesterSessionKey: identity.sessionKey,
@@ -386,7 +386,7 @@ describe("CodexNativeSubagentMonitor", () => {
         claimCodexAppServerLiveThread(second as never, resumedBinding.threadId),
       ).resolves.toBeDefined();
       const delivery = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
-      const resumedParent = registerCodexNativeSubagentMonitor({
+      const resumedParent = await registerCodexNativeSubagentMonitor({
         client: second as never,
         parentThreadId: resumedBinding.threadId,
         requesterSessionKey: identity.sessionKey,

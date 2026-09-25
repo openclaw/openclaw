@@ -89,6 +89,9 @@ The selected effort applies to new sessions and later turns in existing
 sessions. `adaptive` and omitted native efforts use the model default; updating
 an existing session resets its effort to that default. The single-agent MVP
 does not support `ultra` delegation. Automatic runtime selection is unchanged.
+When reasoning display is enabled, new sessions request native summaries.
+Summary generation is fixed at creation; enabling it for an existing session
+requires a reset. Native delegation remains disabled.
 
 ```json5
 {
@@ -115,7 +118,8 @@ A restricted API key needs Agents and Responses read/write plus Models read
 permission so the service can retrieve the selected model when creating a session.
 
 Agents API owns the persistent agent session and workspace. OpenClaw stores
-the session binding in plugin SQLite state and mirrors text replies into its
+the session binding in plugin SQLite state and mirrors assistant commentary,
+reasoning summaries, native tool calls and results, and final text into its
 normal transcript. Follow-up messages reuse the agent session; input during
 a running turn steers it, and interruption cancels its remote turn. `/new`
 and `/reset` start a fresh session on the next message. Reset and local session
@@ -123,9 +127,44 @@ deletion retire the binding; the Agents API retains the remote history and
 workspace, which can be managed through its API.
 
 If the event stream closes, the harness subscribes again and reconciles saved
-turns and input receipts before accepting completion. It does not resubmit the
-user's message. Native token usage is best effort; unavailable usage currently
-appears as zero in OpenClaw's usage totals.
+turns, saved items, and input receipts before accepting completion. It does not
+resubmit the user's message. Completion requires a terminal root turn and an
+idle native session. Recovered items use stable identities to avoid duplicate
+history. If a recovered item is still running, its saved snapshot is displayed
+and ambiguous overlapping deltas are suppressed until authoritative completion;
+new items continue streaming normally.
+
+When a retry retains the native conversation, later canonical facts can also
+repair missing tool records from earlier terminal turns. These records append
+to the existing history without replaying progress or counting earlier work
+in the current attempt. Retrieved command invocation facts can be saved while
+execution is still running; a durable result requires the item's own terminal
+status. MCP arguments and web-search actions are saved after their items finish.
+
+Commentary remains live while durable commentary and reasoning records wait for
+retrieved native history. Missing or unfinished items can prevent exact ordering;
+terminal reconciliation retains available completed records instead of dropping
+them behind an unresolved item. Host input keeps its existing transcript
+placement, and historical repairs append without rewriting earlier messages.
+
+Native token usage is best effort and is accumulated across all admitted turns,
+including work superseded by a steering follow-up. Cached input and reasoning
+tokens remain separate usage facts. Billed tokens do not establish active
+context occupancy; that value remains unavailable.
+Completed, failed, and cancelled turn events can supply usage even when the
+saved turn has none; the harness retains that contribution and reports it once.
+
+Native commands, MCP calls, and web searches use the same activity and output
+callbacks as the Codex harness. Assistant commentary preserves its text, so a
+progress marker can reach the channel while a command is still running.
+Existing channel settings govern output and reasoning visibility.
+
+Saved native tool items supply canonical history and available command output,
+exit codes, duration, arguments, MCP details, and web-search actions. Missing
+command exit facts remain unknown even when the assistant claims success.
+The native API exposes web-search activity without result bodies or snippets.
+Structured plans, diffs, compaction events, native child agents, and pre-execution
+approval or hook events are not provided by this harness.
 
 New Agents API sessions enable built-in web search in live mode. Sessions
 created before web search was enabled need `/new` or `/reset` to pick it up.

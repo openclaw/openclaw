@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   isPreviewCompletion,
+  parseJsonObjectBody,
   type QaMockProviderDispatchResult,
   type ResponsesInputItem,
 } from "./mock-openai-contracts.js";
@@ -29,17 +30,6 @@ function readWebSocketText(data: RawData): string {
     return Buffer.from(data).toString("utf8");
   }
   return data.toString("utf8");
-}
-
-function readWebSocketRequest(raw: string): Record<string, unknown> | undefined {
-  try {
-    const value: unknown = JSON.parse(raw);
-    return value !== null && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function sendWebSocketEvent(socket: WebSocket, event: unknown): void {
@@ -95,7 +85,7 @@ export function attachQaMockResponsesWebSocketServer(params: {
           // all responses that happen to reuse the same WebSocket.
           sequenceNumber = 0;
           const raw = readWebSocketText(data);
-          const request = isBinary ? undefined : readWebSocketRequest(raw);
+          const request = isBinary ? undefined : parseJsonObjectBody(raw);
           if (!request || request.type !== "response.create") {
             sendEvent({
               type: "error",

@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  createReplyOperation,
-  isReplyRunEvidenceStale,
-} from "../../../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
+import { isReplyRunEvidenceStale } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,

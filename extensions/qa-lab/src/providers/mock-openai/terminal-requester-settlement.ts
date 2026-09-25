@@ -41,7 +41,6 @@ export function createTerminalRequesterSettleGate() {
             {
               agentId: requester.agentId,
               search: requester.sessionKey,
-              excludeSubagents: true,
               limit: 100,
             },
             { timeoutMs: 10_000 },

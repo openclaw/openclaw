@@ -447,7 +447,7 @@ describe("subagent registry persistence", () => {
       status: "pending",
     });
 
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: " run-live ",
       childSessionKey: " agent:main:subagent:live-child ",
       controllerSessionKey: " agent:main:subagent:live-controller ",

@@ -29,6 +29,7 @@ import { seedStartingPlacement } from "./worker-environments/placement-dispatch-
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import * as workerEnvironmentSupport from "./worker-environments/service.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./worker-environments/workspace-recovery.test-support.js";
 
 describe("worker placement startup cleanup ownership", () => {
   workerEnvironmentSupport.setupWorkerEnvironmentServiceSuite();
@@ -77,9 +78,7 @@ describe("worker placement startup cleanup ownership", () => {
       environments,
       failure: createPlacementFailureActions({ placements, environments }),
       workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-      resolveWorkspace,
-      reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
+      ...createWorkerWorkspaceRecoveryFixture({ resolveWorkspace }),
     });
     const starting = recovery.reconcile("startup");
     let sweeping: Promise<void> | undefined;

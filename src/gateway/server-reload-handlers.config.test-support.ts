@@ -4,7 +4,7 @@ import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contracts.js";
@@ -55,12 +55,15 @@ export function createPluginReloadPlan(): GatewayReloadPlan {
   });
 }
 
-export function createValidConfigSnapshot(config: OpenClawConfig, hash: string) {
+export function createValidConfigSnapshot(
+  config: OpenClawConfig,
+  hash: string,
+): ConfigFileSnapshot {
   return {
     path: "/tmp/openclaw.json",
     exists: true,
-    raw: "{}",
-    parsed: {},
+    raw: JSON.stringify(config),
+    parsed: config,
     sourceConfig: config,
     resolved: config,
     valid: true,
@@ -81,6 +84,8 @@ export function createConfigWriteNotification(
   sourceFingerprint: string,
   overrides: Partial<ConfigWriteNotification> = {},
 ): ConfigWriteNotification {
+  const sourceConfig = overrides.sourceConfig ?? config;
+  const runtimeConfig = overrides.runtimeConfig ?? config;
   return {
     configPath: "/tmp/openclaw.json",
     sourceConfig: config,
@@ -91,6 +96,12 @@ export function createConfigWriteNotification(
     sourceFingerprint,
     writtenAtMs: Date.now(),
     ...overrides,
+    snapshot: overrides.snapshot ?? {
+      ...createValidConfigSnapshot(sourceConfig, overrides.persistedHash ?? persistedHash),
+      path: overrides.configPath ?? "/tmp/openclaw.json",
+      runtimeConfig,
+      config: runtimeConfig,
+    },
   };
 }
 
@@ -124,14 +135,7 @@ export function createDirectConfigWriteFixture(initialConfig: OpenClawConfig) {
   const subscribeToWrites: ManagedGatewayConfigReloaderParams["subscribeToWrites"] = (listener) =>
     captureConfigWriteListener(ref)((event) => {
       // Persist this write before notifying consumers; later writes replace the snapshot.
-      snapshot = {
-        ...createValidConfigSnapshot(event.sourceConfig, event.persistedHash),
-        raw: JSON.stringify(event.sourceConfig),
-        parsed: event.sourceConfig,
-        resolved: event.sourceConfig,
-        runtimeConfig: event.runtimeConfig,
-        config: event.runtimeConfig,
-      };
+      snapshot = event.snapshot;
       listener(event);
     });
   return { ref, subscribeToWrites, readSnapshot: vi.fn(async () => snapshot) };

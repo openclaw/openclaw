@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
-// Profiles peak RSS for built bundled plugin entrypoints and emits a JSON
-// report suitable for extension memory budget review.
+// Profiles cold-import process CPU and peak RSS, not plugin activation or workload cost.
 import {
   spawn,
   type ChildProcessByStdio,
@@ -21,6 +20,14 @@ import {
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { appendBoundedTail } from "./lib/bounded-output-tail.mjs";
 import { formatErrorMessage } from "./lib/error-format.mts";
+import {
+  captureImportIdentity,
+  importCpuDelta,
+  importIdentityGaps,
+  parseImportResources,
+  RESOURCE_MARKER,
+  type ImportResources,
+} from "./lib/extension-import-profile.mts";
 import { hasUnjoinedWork, inspectManagedProcessGroup } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
@@ -31,13 +38,15 @@ const DEFAULT_CHILD_SHUTDOWN_GRACE_MS = 1_000;
 const DEFAULT_TOP = 10;
 const OUTPUT_CAPTURE_MAX_CHARS = 128 * 1024;
 const STDERR_PREVIEW_MAX_CHARS = 8 * 1024;
-const RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
 type ParentSignal = "SIGHUP" | "SIGINT" | "SIGTERM";
 type OutputCapture = { text: string; truncatedChars: number };
 type RunCaseResult = {
   code: number | null;
   error: string | null;
   maxRssMb: number | null;
+  resources: ImportResources | null;
+  completion: "baseline" | "imports" | null;
+  cleanup: { childClosed: boolean; processGroup: "verified" | "unavailable" };
   name: string;
   signal: NodeJS.Signals | null;
   stderr: string;
@@ -170,12 +179,6 @@ export function parseArgs(argv: string[]): {
   return options;
 }
 
-function parseMaxRssMb(stderr: string): number | null {
-  const matches = [...stderr.matchAll(new RegExp(`^${RSS_MARKER}(\\d+)\\s*$`, "gm"))];
-  const last = matches.at(-1);
-  return last ? Number(last[1]) / 1024 : null;
-}
-
 function createOutputCapture(): OutputCapture {
   return { text: "", truncatedChars: 0 };
 }
@@ -185,17 +188,6 @@ function formatCapturedOutput(capture: OutputCapture): string {
     return capture.text;
   }
   return `[output truncated ${capture.truncatedChars} chars; showing tail]\n${capture.text}`;
-}
-
-function scanMaxRssMb(tail: string, chunk: unknown, current: number | null) {
-  const text = `${tail}${String(chunk)}`;
-  const parsed = parseMaxRssMb(text);
-  const lineBreakIndex = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r"));
-  const openLine = lineBreakIndex === -1 ? text : text.slice(lineBreakIndex + 1);
-  return {
-    maxRssMb: parsed ?? current,
-    tail: openLine.slice(-(RSS_MARKER.length + 32)),
-  };
 }
 
 function summarizeStderr(stderr: string, lines = 8, maxChars = STDERR_PREVIEW_MAX_CHARS): string {
@@ -230,6 +222,9 @@ function summarizeCase(result: RunCaseResult) {
     signal: result.signal,
     error: result.error ?? (status === "ok" ? null : describeCaseFailure(result)),
     maxRssMb: result.maxRssMb,
+    resources: result.resources,
+    completion: result.completion,
+    cleanup: result.cleanup,
     stderrPreview: summarizeStderr(result.stderr),
   };
 }
@@ -243,6 +238,7 @@ export function runCase({
   hookPath,
   name,
   body,
+  completionKind,
   timeoutMs,
   shutdownGraceMs = DEFAULT_CHILD_SHUTDOWN_GRACE_MS,
   spawnImpl = spawn,
@@ -252,6 +248,7 @@ export function runCase({
   hookPath: string;
   name: string;
   body: string;
+  completionKind: "baseline" | "imports";
   timeoutMs: number;
   shutdownGraceMs?: number | undefined;
   spawnImpl?: (
@@ -266,8 +263,10 @@ export function runCase({
   let child: CaseChild | undefined;
   let stdout = createOutputCapture();
   let stderr = createOutputCapture();
-  let stderrRssTail = "";
-  let maxRssMb: number | null = null;
+  let resourceTail = "";
+  const observation: { resources: ImportResources | null } = { resources: null };
+  const completionMarker = `__OPENCLAW_IMPORT_COMPLETE__=${randomUUID()}`;
+  let completed = false;
   let timedOut = false;
   let closed = false;
   let code: number | null = null;
@@ -342,7 +341,15 @@ export function runCase({
       }
       child = spawnImpl(
         process.execPath,
-        ["--import", pathToFileURL(hookPath).href, "--input-type=module", "--eval", body],
+        [
+          "--import",
+          pathToFileURL(hookPath).href,
+          "--input-type=module",
+          "--eval",
+          // Only reaching the end of the awaited body grants completion. A plugin can
+          // exit with code zero during import, still emitting the exit-hook counters.
+          `${body}\nconst { writeSync: completeImport } = await import("node:fs");\ncompleteImport(2, ${JSON.stringify(`\n${completionMarker}\n`)});\nprocess.exit(0);`,
+        ],
         {
           cwd: repoRoot,
           detached: process.platform !== "win32",
@@ -373,9 +380,19 @@ export function runCase({
             stdout = appendBoundedTail(stdout, chunk, OUTPUT_CAPTURE_MAX_CHARS);
           });
           child.stderr.setEncoding("utf8").on("data", (chunk) => {
-            const rssScan = scanMaxRssMb(stderrRssTail, chunk, maxRssMb);
-            stderrRssTail = rssScan.tail;
-            maxRssMb = rssScan.maxRssMb;
+            const resourceLines = `${resourceTail}${String(chunk)}`.split("\n");
+            resourceTail = (resourceLines.pop() ?? "").slice(-4096);
+            for (const line of resourceLines) {
+              if (line === completionMarker) {
+                completed = true;
+              }
+              const sample = parseImportResources(line);
+              // Node descendants can inherit the preload and stderr. Only the
+              // importing leader owns this case's CPU and peak RSS observation.
+              if (sample && sample.pid === child?.pid) {
+                observation.resources = sample;
+              }
+            }
             stderr = appendBoundedTail(stderr, chunk, OUTPUT_CAPTURE_MAX_CHARS);
           });
           timer = setTimeout(() => {
@@ -432,7 +449,15 @@ export function runCase({
         error: null,
         stdout: formatCapturedOutput(stdout),
         stderr: stderrText,
-        maxRssMb: maxRssMb ?? parseMaxRssMb(stderrText),
+        maxRssMb: observation.resources ? observation.resources.maxRssKb / 1024 : null,
+        resources: observation.resources,
+        completion: completed ? completionKind : null,
+        // Windows currently observes only the leader; do not claim descendant proof.
+        cleanup: {
+          childClosed: closed,
+          processGroup:
+            child.pid && !cleanupError && process.platform !== "win32" ? "verified" : "unavailable",
+        },
       };
       if (cleanupError) {
         const message = describeCaseFailure(result, [...errors, cleanupError]);
@@ -447,7 +472,11 @@ export function runCase({
         });
         throw failure ? new AggregateError([failure, cleanupError], message) : cleanupError;
       }
-      result.error = failure ? describeCaseFailure(result, errors) : null;
+      result.error = failure
+        ? describeCaseFailure(result, errors)
+        : completed
+          ? null
+          : `${name}: ${completionKind} sequence did not complete`;
       return result;
     })
     .finally(() => untrackActiveCase(owner));
@@ -565,7 +594,7 @@ function buildImportBody(entryFiles: string[], label: string): string {
   const imports = entryFiles
     .map((filePath) => `await import(${JSON.stringify(pathToFileURL(filePath).href)});`)
     .join("\n");
-  return `${imports}\nconsole.log(${JSON.stringify(label)});\nprocess.exit(0);\n`;
+  return `${imports}\nconsole.log(${JSON.stringify(label)});\n`;
 }
 
 async function main(): Promise<void> {
@@ -594,6 +623,8 @@ async function main(): Promise<void> {
     throw new Error("No extensions selected for profiling");
   }
 
+  const entryFiles = selectedEntries.map((entry) => entry.file);
+  const identityBefore = captureImportIdentity(repoRoot, entryFiles);
   const tmpHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-extension-memory-"));
   const hookPath = path.join(tmpHome, "measure-rss.mjs");
   const jsonPath = options.jsonPath ?? defaultJsonReportPath();
@@ -604,7 +635,11 @@ async function main(): Promise<void> {
       "import { writeSync } from 'node:fs';",
       "process.on('exit', () => {",
       "  const usage = typeof process.resourceUsage === 'function' ? process.resourceUsage() : null;",
-      `  if (usage && typeof usage.maxRSS === 'number') writeSync(2, '${RSS_MARKER}' + String(usage.maxRSS) + '\\n');`,
+      "  if (usage) {",
+      "    const runtime = { node: process.version, v8: process.versions.v8, abi: process.versions.modules, platform: process.platform, arch: process.arch };",
+      "    const sample = { pid: process.pid, maxRssKb: usage.maxRSS, userCpuUs: usage.userCPUTime, systemCpuUs: usage.systemCPUTime, runtime };",
+      `    writeSync(2, ${JSON.stringify(RESOURCE_MARKER)} + JSON.stringify(sample) + '\\n');`,
+      "  }",
       "});",
       "",
     ].join("\n"),
@@ -625,13 +660,15 @@ async function main(): Promise<void> {
   };
 
   const runErrors: unknown[] = [];
+  let publishReport: ((temporaryHomeRemoved: boolean) => void) | undefined;
   try {
     const baseline = await runCase({
       repoRoot,
       env,
       hookPath,
       name: "baseline",
-      body: "process.exit(0)",
+      body: "",
+      completionKind: "baseline",
       timeoutMs: options.timeoutMs,
     });
 
@@ -642,6 +679,7 @@ async function main(): Promise<void> {
           env,
           hookPath,
           name: "combined",
+          completionKind: "imports",
           body: buildImportBody(
             selectedEntries.map((entry) => entry.file),
             "IMPORTED_ALL",
@@ -662,12 +700,15 @@ async function main(): Promise<void> {
             env,
             hookPath,
             name: next.dir,
+            completionKind: "imports",
             body: buildImportBody([next.file], "IMPORTED"),
             timeoutMs: options.timeoutMs,
           });
           const entry = {
             dir: next.dir,
             file: next.file,
+            relativeFile: path.relative(repoRoot, next.file).split(path.sep).join("/"),
+            cpuDeltaFromBaseline: importCpuDelta(result.resources, baseline.resources),
             ...summarizeCase(result),
             deltaFromBaselineMb:
               result.maxRssMb !== null && baseline.maxRssMb !== null
@@ -701,8 +742,20 @@ async function main(): Promise<void> {
       .slice(0, options.top);
 
     const report = {
+      schemaVersion: 2,
+      scope: "cold-import",
+      measurement: {
+        cpu: "child-process-through-exit-hook-microseconds",
+        rss: "process-peak-MiB",
+        termination: "explicit-process-exit",
+      },
       generatedAt: new Date().toISOString(),
       repoRoot,
+      provenance: {
+        before: identityBefore,
+        after: captureImportIdentity(repoRoot, entryFiles),
+        dependencyClosure: "not-attested",
+      },
       selectedExtensions: selectedEntries.map((entry) => entry.dir),
       baseline: summarizeCase(baseline),
       combined:
@@ -710,6 +763,7 @@ async function main(): Promise<void> {
           ? null
           : {
               ...summarizeCase(combined),
+              cpuDeltaFromBaseline: importCpuDelta(combined.resources, baseline.resources),
               stderrPreview: summarizeStderr(combined.stderr, 12),
             },
       counts: {
@@ -728,22 +782,63 @@ async function main(): Promise<void> {
       results,
     };
 
-    mkdirSync(path.dirname(jsonPath), { recursive: true });
-    writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-
-    console.log(`[extension-memory] report: ${jsonPath}`);
-    console.log(
-      JSON.stringify(
-        {
-          baselineMb: report.baseline.maxRssMb,
-          combinedMb: report.combined?.maxRssMb ?? null,
-          counts: report.counts,
-          topByDeltaMb: report.topByDeltaMb,
-        },
-        null,
-        2,
-      ),
-    );
+    // Publish only after the owner has completed its final temporary-home cleanup.
+    publishReport = (temporaryHomeRemoved) => {
+      const gaps = importIdentityGaps(report.provenance.before, report.provenance.after);
+      for (const row of [
+        report.baseline,
+        ...(report.combined ? [report.combined] : []),
+        ...results,
+      ]) {
+        if (row.completion === null) {
+          gaps.push("awaited sequence completion unavailable");
+        }
+        if (row.status !== "ok") {
+          gaps.push("import did not complete successfully");
+        }
+        if (row.maxRssMb === null || !row.resources) {
+          gaps.push("resource counters unavailable");
+        }
+        if (
+          row.resources &&
+          baseline.resources &&
+          !importCpuDelta(row.resources, baseline.resources)
+        ) {
+          gaps.push("child runtime identity differs from baseline");
+        }
+        if (!row.cleanup.childClosed || row.cleanup.processGroup !== "verified") {
+          gaps.push("child/process-group closure unavailable");
+        }
+      }
+      if (!temporaryHomeRemoved) {
+        gaps.push("temporary-home cleanup incomplete");
+      }
+      const qualification = {
+        qualified: gaps.length === 0,
+        gaps: [...new Set(gaps)],
+        scope: "cold-import-snapshot",
+        temporaryHomeRemoved,
+      };
+      mkdirSync(path.dirname(jsonPath), { recursive: true });
+      writeFileSync(jsonPath, `${JSON.stringify({ ...report, qualification }, null, 2)}\n`, "utf8");
+      console.log(`[extension-memory] report: ${jsonPath}`);
+      console.log(
+        JSON.stringify(
+          {
+            baselineMb: report.baseline.maxRssMb,
+            combinedMb: report.combined?.maxRssMb ?? null,
+            counts: report.counts,
+            topByDeltaMb: report.topByDeltaMb,
+            qualification,
+          },
+          null,
+          2,
+        ),
+      );
+      if (!qualification.qualified) {
+        console.error(`[extension-memory] unqualified screening: ${qualification.gaps.join("; ")}`);
+      }
+    };
 
     const failures = [];
     if (report.baseline.status !== "ok") {
@@ -782,6 +877,7 @@ async function main(): Promise<void> {
     await parentSignalShutdown;
     return;
   }
+  let temporaryHomeRemoved = false;
   if (runErrors.some(hasUnjoinedWork)) {
     console.error(
       `[extension-memory] retained temporary home after unverified cleanup: ${tmpHome}`,
@@ -789,10 +885,12 @@ async function main(): Promise<void> {
   } else {
     try {
       rmSync(tmpHome, { recursive: true, force: true });
+      temporaryHomeRemoved = true;
     } catch (error) {
       runErrors.push(error);
     }
   }
+  publishReport?.(temporaryHomeRemoved);
   if (runErrors.length > 0) {
     throw new AggregateError(runErrors, runErrors.map(formatErrorMessage).join("; "));
   }

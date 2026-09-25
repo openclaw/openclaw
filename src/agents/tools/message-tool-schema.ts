@@ -16,7 +16,6 @@ import {
   type MessageToolSchemaBuilders,
 } from "./message-tool-schema-scoping.js";
 
-const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 function buildRoutingSchema(options: { includeTeamId?: boolean }) {
   const props: Record<string, TSchema> = {
     channel: Type.Optional(Type.String()),
@@ -420,10 +419,6 @@ function buildModerationSchema() {
   };
 }
 
-function buildGatewaySchema() {
-  return gatewayCallOptionSchemaProperties();
-}
-
 function buildPresenceSchema() {
   return {
     activityType: Type.Optional(
@@ -494,7 +489,7 @@ function buildMessageToolSchemaProps(options: {
     ...buildThreadSchema(),
     ...buildEventSchema(),
     ...buildModerationSchema(),
-    ...buildGatewaySchema(),
+    ...gatewayCallOptionSchemaProperties(),
     ...buildChannelManagementSchema(),
     ...buildPresenceSchema(),
     ...options.extraProperties,
@@ -506,7 +501,7 @@ export const MESSAGE_TOOL_SCHEMA_BUILDERS = {
   base: (options) => ({
     ...buildRoutingSchema(options),
     ...buildSendSchema(options),
-    ...buildGatewaySchema(),
+    ...gatewayCallOptionSchemaProperties(),
   }),
   groups: {
     reaction: buildReactionSchema,
@@ -524,7 +519,7 @@ export const MESSAGE_TOOL_SCHEMA_BUILDERS = {
 } satisfies MessageToolSchemaBuilders;
 
 export const MessageToolSchema = buildMessageToolSchemaFromActions(
-  AllMessageActions,
+  CHANNEL_MESSAGE_ACTION_NAMES,
   {
     includePresentation: true,
     includeDeliveryPin: true,

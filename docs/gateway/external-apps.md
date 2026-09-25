@@ -108,7 +108,7 @@ The RPC contract is:
 - `gateway.suspend.prepare` — `operator.admin`; params
   `{ "requestId": "stable-host-operation-id", "terminalPolicy": "preserve", "drain": true }`
 - `gateway.suspend.status` — `operator.read`; params
-  `{ "suspensionId": "id-from-prepare" }`
+  `{ "suspensionId": "id-from-prepare", "includeLifecycle": true }`
 - `gateway.suspend.resume` — `operator.admin`; params
   `{ "suspensionId": "id-from-prepare" }`
 - `gateway.suspend.handoff` — `operator.admin`; params
@@ -173,6 +173,10 @@ Poll `gateway.suspend.status` with the returned `suspensionId`, honoring
 together with `expiresAtMs`, `retryAfterMs`, `activeCount`, and `blockers`.
 Each status call refreshes the active-work snapshot. Once every blocker has
 finished, the same lease transitions to `{"status":"ready","expiresAtMs":...}`.
+Status preserves the original response shape by default for published validators.
+Opt into lifecycle metadata with `includeLifecycle: true` to receive `ownerId`,
+the original `requestId`; draining status also includes `phase: "draining"`.
+Use an updated response validator when requesting this metadata.
 Status returns `{"status":"running"}` when no suspension is held; querying a
 different active lease returns a conflict without exposing its identifiers.
 Resume returns `{"ok":true,"status":"running","resumed":true}`; repeating it
@@ -223,6 +227,22 @@ An accepted handoff uses the existing restart recovery and abort cleanup,
 then exits for the external controller. An ordinary stop without an arm keeps
 waiting for active work. Controllers must defer on unsupported methods or
 refused handoffs; a draining lease alone never authorizes interruption.
+
+Once shutdown commits, including an installation-replaced restart during a
+held suspension, the same owner can still poll `status: "draining"`. With
+`includeLifecycle: true`, it also receives `phase: "interrupting"`. Ownership and
+foreign-token conflicts remain stable across authenticated operator reconnects;
+node and worker connections remain fenced. The shutdown record remains available
+past the old lease expiry; this is shutdown progress, not a renewable lease or
+permission to freeze the process. Resume is refused after shutdown commits.
+The owner records `phase: "exiting"` before server teardown; RPC access ends
+when that teardown closes request admission and transports. These facts remain
+in memory until process exit or the next in-process lifecycle resets them.
+
+The running Gateway serves this contract; staging a newer installation does not
+change an older resident's responses. Request lifecycle metadata only once a
+Gateway version supporting it is running. Drivers must still verify their exact
+predecessor and handle transport closure through their lifecycle owner.
 
 A competing request ID or transient scheduler-resume failure returns retryable
 `UNAVAILABLE` with `retryAfterMs`. During scheduler recovery, prepare, status,

@@ -17,6 +17,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -47,7 +48,7 @@ import {
   readSessionPendingInputByKey,
   readSessionPendingInputOwnerIds,
   registerSessionPendingInputOwner,
-  releaseSessionPendingInputOwner,
+  finishSessionPendingInputOwner,
   runWithSessionPendingInput,
   runWithSessionPendingInputPersistence,
   withSessionPendingInputRelocation,
@@ -348,12 +349,12 @@ export async function stageSessionPendingInput(
       }
       const inputId = existing?.input_id ?? randomUUID();
       ensureSessionPendingInputsSchema(database.db);
-      const inserted = runOpenClawAgentWriteTransaction((current) => {
+      const source = runOpenClawAgentWriteTransaction((current) => {
         options.assertCurrent();
         if (
           readSessionEntryRow(current, resolved.sessionKey)?.entry.sessionId !== scope.sessionId
         ) {
-          return false;
+          return undefined;
         }
         if (existing) {
           // A reconnect supplies fresh admission, never the previous run's closure.
@@ -373,26 +374,35 @@ export async function stageSessionPendingInput(
               .where("state", "=", existing.state)
               .where("consumed_event_id", "is", null),
           );
-          return result.numAffectedRows === 1n;
+          if (result.numAffectedRows !== 1n) {
+            return undefined;
+          }
+        } else {
+          executeSqliteQuerySync(
+            current.db,
+            getSessionKysely(current.db).insertInto("session_pending_inputs").values({
+              input_id: inputId,
+              session_key: resolved.sessionKey,
+              session_id: scope.sessionId,
+              idempotency_key: idempotencyKey,
+              run_id: options.runId,
+              request_hash: requestHash,
+              message_json: messageJson,
+              lifecycle_generation: lifecycleGeneration,
+              state: "queued",
+              accepted_at: Date.now(),
+            }),
+          );
         }
-        executeSqliteQuerySync(
-          current.db,
-          getSessionKysely(current.db).insertInto("session_pending_inputs").values({
-            input_id: inputId,
-            session_key: resolved.sessionKey,
-            session_id: scope.sessionId,
-            idempotency_key: idempotencyKey,
-            run_id: options.runId,
-            request_hash: requestHash,
-            message_json: messageJson,
-            lifecycle_generation: lifecycleGeneration,
-            state: "queued",
-            accepted_at: Date.now(),
-          }),
-        );
-        return true;
+        const physical = readOpenClawAgentDatabaseIdentity(current);
+        return {
+          agentId: current.agentId,
+          path: current.path,
+          databaseIdentity: physical.identity,
+          databaseBirthtime: physical.birthtime,
+        };
       }, databaseOptions);
-      if (!inserted) {
+      if (!source) {
         return undefined;
       }
       const owner: SessionPendingInputOwner = {
@@ -400,7 +410,7 @@ export async function stageSessionPendingInput(
         transcriptInputId: inputId,
         sessionId: scope.sessionId,
         sessionKey: resolved.sessionKey,
-        databasePath: database.path,
+        databasePath: source.path,
         idempotencyKey,
         lifecycleGeneration,
         messageJson,
@@ -412,23 +422,7 @@ export async function stageSessionPendingInput(
             return;
           }
           finished = true;
-          // Release authority even if recording the terminal disposition fails.
-          releaseSessionPendingInputOwner(owner);
-          if (owner.consumed) {
-            return;
-          }
-          runOpenClawAgentWriteTransaction((current) => {
-            executeSqliteQuerySync(
-              current.db,
-              getSessionKysely(current.db)
-                .updateTable("session_pending_inputs")
-                .set({ state: disposition })
-                .where("input_id", "=", inputId)
-                .where("lifecycle_generation", "=", lifecycleGeneration)
-                .where("state", "=", "queued")
-                .where("consumed_event_id", "is", null),
-            );
-          }, databaseOptions);
+          finishSessionPendingInputOwner(owner, disposition, source, databaseOptions);
         },
       };
       registerSessionPendingInputOwner(owner);

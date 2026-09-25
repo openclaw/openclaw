@@ -59,6 +59,8 @@ import {
 import { getSubCliEntriesCore } from "./program/subcli-descriptors.js";
 import { withCliPluginInvocation } from "./run-main-plugin-cache.js";
 import {
+  isAgentExecInvocation,
+  isRemoteAgentDispatchInvocation,
   resolveMissingPluginCommandMessage,
   rewriteUpdateFlagArgv,
   shouldHandleBareRoot,
@@ -67,10 +69,12 @@ import {
   shouldUseRootHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
+import { tryRunUpdateAdmissionBeforeStartup } from "./run-main-update-admission.js";
 import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 import { closeCliResources, runCliDisposer } from "./runtime-cleanup.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 import {
+  configureCliStartupDiagnostics,
   configureGatewayStartupTraceConsoleFormatting,
   createGatewayDispatchStartupTrace,
 } from "./startup-trace.js";
@@ -85,10 +89,6 @@ const CLI_PROXY_ENV_KEYS = [
   "all_proxy",
 ] as const;
 const UNKNOWN_COMMAND_DISPLAY_LIMIT = 128;
-
-function isRemoteAgentDispatchInvocation(argv: string[], primary: string | null): boolean {
-  return primary === "agent" && !argv.includes("--local");
-}
 
 export function isGatewayRunFastPathArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
@@ -618,10 +618,6 @@ function shouldLoadCliDotEnv(
   return loadGlobalEnv && existsSync(path.join(resolveStateDir(env), ".env"));
 }
 
-function isAgentExecInvocation(commandPath: string[]): boolean {
-  return commandPath[0] === "agent" && commandPath[1] === "exec";
-}
-
 function isCommanderParseExit(error: unknown): error is { exitCode: number } {
   if (!error || typeof error !== "object") {
     return false;
@@ -953,6 +949,9 @@ export async function runCli(
 ) {
   const runtimeRecoveryEnv = options.runtimeRecoveryEnv ?? { ...process.env };
   const originalArgv = normalizeWindowsArgv(argv);
+  if (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(originalArgv))) {
+    return;
+  }
   const builtInMachineOutput = resolveBuiltInMachineOutput(originalArgv);
   return await withConsoleLogsRoutedToStderrForJson(
     originalArgv,
@@ -1283,17 +1282,11 @@ async function runCliWithPreparedOutputMode(
   let unhandledRejectionHandlerInstalled = false;
 
   try {
-    const startupTraces = [startupTrace, options.additionalStartupTrace].filter(
-      (trace): trace is ReturnType<typeof createGatewayDispatchStartupTrace> => Boolean(trace),
-    );
-    if (
-      !isDatabaseInvocation &&
-      (await Promise.all(startupTraces.map((trace) => trace.requiresDiagnosticsConfig()))).some(
-        Boolean,
-      )
-    ) {
-      const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
-      await Promise.all(startupTraces.map((trace) => trace.configureDiagnosticsTimeline(config)));
+    if (!isDatabaseInvocation) {
+      await configureCliStartupDiagnostics(
+        [startupTrace, options.additionalStartupTrace],
+        isGatewayRunInvocation ? readBestEffortCliConfig : undefined,
+      );
     }
     if (
       !isHelpOrVersionInvocation &&

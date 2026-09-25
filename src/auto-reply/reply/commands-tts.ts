@@ -133,14 +133,7 @@ async function buildTtsAudioReply(params: {
   agentId?: string;
 }): Promise<{ reply: ReplyPayload } | { error: string }> {
   const start = Date.now();
-  const result = await textToSpeech({
-    text: params.text,
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    prefsPath: params.prefsPath,
-    agentId: params.agentId,
-  });
+  const result = await textToSpeech(params);
 
   if (result.success && result.audioPath) {
     setLastTtsAttempt({

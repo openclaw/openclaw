@@ -11,6 +11,7 @@ import { loadSettings } from "../../app/settings.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
@@ -22,6 +23,7 @@ import {
   resolveUiConfiguredMainKey,
   uiConversationMatches,
 } from "../../lib/sessions/session-key.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import {
   getChatHistoryLoadState,
@@ -79,6 +81,24 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     revision: number;
     outboxState?: string;
   };
+
+  constructor() {
+    super();
+    void new SubscriptionsController(this).effect(
+      () => this.context?.gateway,
+      (gateway) =>
+        gateway.subscribeEvents((event) => {
+          const state = this.state;
+          if (!state || !modelAuthEventInvalidates(event)) {
+            return;
+          }
+          state.modelAuthStatusResult = null;
+          state.modelAuthStatusError = null;
+          this.requestUpdate();
+          void refreshChatModelAuthStatus(state).finally(() => this.requestUpdate());
+        }),
+    );
+  }
 
   protected placementComposerPresentation(
     row: GatewaySessionRow | undefined,

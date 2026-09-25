@@ -72,14 +72,15 @@ const uploadMocks = vi.hoisted(() => ({
   ensureBrowserProxyUploadCleanup: vi.fn(async () => {}),
 }));
 
-vi.mock("../sdk-config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../sdk-config.js")>()),
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
   getRuntimeConfig: configMocks.loadConfig,
   getRuntimeConfigSourceSnapshot: () => configMocks.sourceConfig,
   loadConfig: configMocks.loadConfig,
 }));
 
-vi.mock("../sdk-setup-tools.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-mime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-mime")>()),
   detectMime: vi.fn(async () => "image/png"),
 }));
 

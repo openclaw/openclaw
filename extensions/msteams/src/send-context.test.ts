@@ -427,3 +427,33 @@ describe("resolveMSTeamsProactiveReplyTarget", () => {
     ).resolves.toEqual({ replyStyle: "top-level", threadActivityId: undefined });
   });
 });
+
+describe("stored serviceUrl cloud admission", () => {
+  it("rejects a missing URL after SDK setup without creating a token provider or deleting the reference", async () => {
+    sendContextMockState.store.get.mockResolvedValue(channelRef());
+    await expect(
+      resolveMSTeamsSendContext({
+        cfg: {
+          channels: {
+            msteams: {
+              enabled: true,
+              appId: "app-id",
+              appPassword: "placeholder",
+              tenantId: "tenant-id",
+              serviceUrl: "https://smba.trafficmanager.net/teams",
+            },
+          },
+        } as OpenClawConfig,
+        to: "conversation:19:channel@thread.tacv2",
+      }),
+    ).rejects.toThrow(
+      new Error(
+        "msteams proactive send blocked for 19:channel@thread.tacv2: stored conversation reference is missing a valid serviceUrl. " +
+          "Ask the bot to receive a new Teams message in this conversation, then retry.",
+      ),
+    );
+    expect(sendContextMockState.loadMSTeamsSdkWithAuth).toHaveBeenCalledTimes(1);
+    expect(sendContextMockState.createMSTeamsTokenProvider).not.toHaveBeenCalled();
+    expect(sendContextMockState.store.remove).not.toHaveBeenCalled();
+  });
+});

@@ -358,11 +358,12 @@ function writePatchedRuntimeFixture(bundling = "default") {
     ),
     snapshots: {
       [`local-runtime-dep@${patchedVersion}`]: {},
+      ...(bundling === "nested-other" ? { "local-runtime-dep@2.0.0": {} } : {}),
       ...(bundling.startsWith("nested-")
         ? {
             "unpatched-sibling@1.0.0": {
               optionalDependencies: {
-                "local-runtime-dep": bundling === "nested-other" ? "2.0.0" : "1.0.0",
+                "local-runtime-dep": bundling === "nested-other" ? "2.0.0" : patchedVersion,
               },
             },
           }

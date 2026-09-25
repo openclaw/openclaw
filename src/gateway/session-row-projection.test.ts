@@ -718,6 +718,44 @@ it("keeps cross-agent inheritance bound to a stored qualified parent", async () 
         model: "updated-work-model",
         modelOverrideSource: "inherited",
       });
+      await deleteSessionEntryLifecycle({
+        agentId: "work",
+        storePath: projection.capture({ agentId: "work", key: "agent:work:main" })!.storeTarget
+          .storePath,
+        archiveTranscript: false,
+        target: { canonicalKey: "agent:work:main", storeKeys: ["agent:work:main"] },
+      });
+      await projection.ensureMaterialized();
+      // Check the parent index before a keyed read can repair stale lineage.
+      expect(
+        projection.selectEntries({ parentSessionKey: "global" }).map((row) => row.key),
+      ).toEqual([key]);
+      expect(projection.snapshot({ agentId: "main", key }).row).toMatchObject({
+        parentSessionKey: "global",
+        model: "work-global-model",
+        modelOverrideSource: "inherited",
+      });
+      replaceSessionEntrySync(
+        { agentId: "work", sessionKey: "agent:work:main" },
+        {
+          sessionId: "restored-work-parent",
+          updatedAt: 4,
+          providerOverride: "unit-test",
+          modelOverride: "restored-work-model",
+        },
+      );
+      await projection.ensureMaterialized();
+      expect(
+        projection
+          .selectEntries({ agentId: "main", parentSessionKey: "agent:work:main" })
+          .map((row) => row.key),
+      ).toEqual([key]);
+      expect(projection.selectEntries({ parentSessionKey: "global" })).toEqual([]);
+      expect(projection.snapshot({ agentId: "main", key }).row).toMatchObject({
+        parentSessionKey: "agent:work:main",
+        model: "restored-work-model",
+        modelOverrideSource: "inherited",
+      });
     } finally {
       projection.dispose();
     }

@@ -7,16 +7,18 @@ import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import type { inspectOtherOpenClawProcesses } from "../infra/openclaw-process-census.js";
 import { acquireGatewayMaintenanceCoordinator } from "../infra/state-database-coordinator.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   createDoctorHealthFlowContext,
   resolveDoctorHealthContributions,
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
 
-const { note, readCommand, census } = vi.hoisted(() => ({
+const { note, readCommand, census, processMembers } = vi.hoisted(() => ({
   note: vi.fn(),
   readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(),
   census: vi.fn<typeof inspectOtherOpenClawProcesses>(),
+  processMembers: vi.fn(),
 }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 vi.mock("../daemon/service.js", () => ({
@@ -24,6 +26,12 @@ vi.mock("../daemon/service.js", () => ({
 }));
 vi.mock("../infra/openclaw-process-census.js", () => ({
   inspectOtherOpenClawProcesses: census,
+}));
+vi.mock("../process/supervisor/service-child-group-ownership.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../process/supervisor/service-child-group-ownership.js")
+  >()),
+  readProcessGroupMembers: processMembers,
 }));
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
@@ -59,6 +67,7 @@ afterEach(() => {
   note.mockClear();
   readCommand.mockReset();
   census.mockReset();
+  processMembers.mockReset();
 });
 
 async function runCaptureReport(repair = false, update = false) {
@@ -109,6 +118,47 @@ function inspectAsLaterProcess() {
   // The fixtures model captures left by an earlier process, without sleeps or backdated files.
   vi.spyOn(performance, "timeOrigin", "get").mockReturnValue(Date.now() + 1_000);
 }
+
+it.each([
+  { identity: "unrelated", removed: true },
+  { identity: "openclaw", removed: false },
+  { identity: "unclassified", removed: false },
+])(
+  "uses the real census before reclamation with an $identity entrypoint",
+  async ({ identity, removed }) => {
+    mockProcessPlatform("darwin");
+    const app = path.join(parent, "application");
+    const script = write(app, "dist/index.js", "");
+    write(
+      app,
+      "package.json",
+      identity === "unclassified" ? "{" : JSON.stringify({ name: identity }),
+    );
+    const file = write(systemTmp, "openclaw-plugin-build-legacy/source.cjs", "capture");
+    inspectAsLaterProcess();
+    const peer = process.pid + 100;
+    processMembers.mockReturnValue([
+      { pid: process.pid, state: "S", command: { ppid: 0, argv: ["openclaw-doctor"] } },
+      { pid: peer, state: "S", command: { ppid: 0, argv: ["node", script] } },
+    ]);
+    const actual = await vi.importActual<typeof import("../infra/openclaw-process-census.js")>(
+      "../infra/openclaw-process-census.js",
+    );
+    census.mockImplementation(actual.inspectOtherOpenClawProcesses);
+    const output = await duringMaintenance(() => runCaptureReport(true));
+    expect(fs.existsSync(file)).toBe(!removed);
+    expect(output).toContain(
+      removed
+        ? "Removed 1 legacy plugin capture root(s)"
+        : identity === "openclaw"
+          ? `PIDs: ${peer}`
+          : `Could not classify PID ${peer}:`,
+    );
+    if (identity === "unclassified") {
+      expect(output).not.toContain("Other OpenClaw processes are still running");
+    }
+  },
+);
 
 it.each([false, true])(
   "reports environment, system, and recorded service temporary directories (update=%s)",

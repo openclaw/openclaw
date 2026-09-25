@@ -249,7 +249,7 @@ it.each(["rpc", "http"] as const)(
   },
 );
 
-it.each(["delta", "message-lookup", "recent"] as const)(
+it.each(["delta", "message-lookup", "recent", "message-by-id", "message-count"] as const)(
   "captures %s selectors and target before asynchronous dispatch",
   async (kind) => {
     const target = {
@@ -271,12 +271,31 @@ it.each(["delta", "message-lookup", "recent"] as const)(
               kind,
               params: { target, maxMessages: 10, maxLines: 220, allowResetArchiveFallback: true },
             }
-          : { kind, params: { target, messageId: "original" } };
+          : kind === "message-count"
+            ? { kind, params: { target } }
+            : kind === "message-by-id"
+              ? {
+                  kind,
+                  params: {
+                    target,
+                    messageId: "original",
+                    options: {
+                      currentOnly: true as const,
+                      maxBytes: 8000,
+                      allowResetArchiveFallback: true,
+                    },
+                  },
+                }
+              : { kind, params: { target, messageId: "original" } };
     const expected = structuredClone(supplied);
     const pending =
-      supplied.kind === "delta"
+      supplied.kind === "message-by-id"
         ? readSessionHistoryPageInWorker(supplied)
-        : readSessionHistoryPageInWorker(supplied);
+        : supplied.kind === "message-count"
+          ? readSessionHistoryPageInWorker(supplied)
+          : supplied.kind === "delta"
+            ? readSessionHistoryPageInWorker(supplied)
+            : readSessionHistoryPageInWorker(supplied);
     target.sessionId = "successor";
     target.sessionEntry.sessionId = "successor";
     target.env.OPENCLAW_STATE_DIR = "/tmp/successor-history-state";
@@ -287,7 +306,11 @@ it.each(["delta", "message-lookup", "recent"] as const)(
       supplied.params.maxMessages = 1;
       supplied.params.maxLines = 2;
       supplied.params.allowResetArchiveFallback = false;
-    } else {
+    } else if (supplied.kind === "message-by-id") {
+      supplied.params.messageId = "successor";
+      supplied.params.options.maxBytes = 1;
+      supplied.params.options.allowResetArchiveFallback = false;
+    } else if (supplied.kind === "message-lookup") {
       supplied.params.messageId = "successor";
     }
     await waitForReaderAdmission(1);
@@ -299,7 +322,11 @@ it.each(["delta", "message-lookup", "recent"] as const)(
             delta: { kind: "reset", cursor: "next", reason: "invalid_cursor" },
             subagentCoordination: { sessions: [], runMessages: [] },
           }
-        : { kind, messages: [] },
+        : kind === "message-by-id"
+          ? { kind, result: { found: false, oversized: false } }
+          : kind === "message-count"
+            ? { kind, count: 0 }
+            : { kind, messages: [] },
     );
     await pending;
     expect(input.request).toMatchObject({

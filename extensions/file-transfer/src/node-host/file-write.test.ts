@@ -1,5 +1,6 @@
 // File Transfer tests cover file write plugin behavior.
 import crypto from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -106,6 +107,37 @@ describe("handleFileWrite — happy path", () => {
     const entries = await fs.readdir(tmpRoot);
     const tmpFiles = entries.filter((n) => n.includes(".tmp"));
     expect(tmpFiles).toStrictEqual([]);
+  });
+
+  it("closes the published file when its final identity stat fails", async () => {
+    const target = path.join(tmpRoot, "stat-failure.txt");
+    const realOpen = fs.open.bind(fs);
+    let observed: Awaited<ReturnType<typeof fs.open>> | undefined;
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+      const handle = await realOpen(file, flags, mode);
+      const readOnly =
+        flags === "r" ||
+        (typeof flags === "number" && (flags & (fsConstants.O_WRONLY | fsConstants.O_RDWR)) === 0);
+      if (String(file) === target && readOnly) {
+        observed = handle;
+        vi.spyOn(handle, "stat").mockRejectedValueOnce(
+          Object.assign(new Error("identity observation failed"), { code: "EIO" }),
+        );
+      }
+      return handle;
+    });
+    try {
+      const result = await handleFileWrite({ path: target, contentBase64: b64("published") });
+      expectSuccessFields(result, { path: target, size: 9 });
+      if (!observed) {
+        throw new Error("expected a real handle for the published file");
+      }
+      await expect(observed.stat()).rejects.toMatchObject({ code: "EBADF" });
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("published");
+    } finally {
+      openSpy.mockRestore();
+      await observed?.close();
+    }
   });
 });
 

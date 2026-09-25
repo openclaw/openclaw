@@ -24,7 +24,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../../state/openclaw-agent-db.js";
-import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";

@@ -1,5 +1,6 @@
 // Discord helper module supports message handler.preflight helpers behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { registerSessionBindingAdapter } from "openclaw/plugin-sdk/conversation-runtime";
 import { onTestFinished } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import type { preflightDiscordMessage } from "./message-handler.preflight.js";
@@ -173,4 +174,48 @@ export function createThreadBinding(
     },
     ...overrides,
   } satisfies import("openclaw/plugin-sdk/conversation-runtime").SessionBindingRecord;
+}
+
+export async function runThreadBoundPreflight(params: {
+  threadId: string;
+  parentId: string;
+  message: import("../internal/discord.js").Message;
+  threadBinding: import("openclaw/plugin-sdk/conversation-runtime").SessionBindingRecord;
+  discordConfig: DiscordConfig;
+  threadBindings: ReturnType<typeof createNoopThreadBindingManager>;
+  registerBindingAdapter?: boolean;
+}) {
+  if (params.registerBindingAdapter) {
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === params.threadId ? params.threadBinding : null,
+    });
+  }
+
+  const client = createThreadClient({
+    threadId: params.threadId,
+    parentId: params.parentId,
+  });
+
+  const { preflightDiscordMessage } = await import("./message-handler.preflight.js");
+  return preflightDiscordMessage({
+    ...createDiscordPreflightArgs({
+      cfg: DEFAULT_PREFLIGHT_CFG,
+      discordConfig: params.discordConfig,
+      threadBindings: params.threadBindings,
+      data: createGuildEvent({
+        channelId: params.threadId,
+        guildId: "guild-1",
+        author: params.message.author,
+        message: params.message,
+      }),
+      client,
+    }),
+    threadBindings: {
+      getByThreadId: (id: string) => (id === params.threadId ? params.threadBinding : undefined),
+    } as import("./thread-bindings.js").ThreadBindingManager,
+  });
 }

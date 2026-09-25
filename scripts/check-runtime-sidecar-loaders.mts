@@ -3,7 +3,8 @@
 // Finds hidden local runtime sidecar loaders missing tsdown entries.
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFilesFromRoots,
@@ -108,11 +109,11 @@ export function collectTsdownEntrySources(config: unknown): Set<string> {
  * Finds local runtime require loaders not represented as explicit tsdown entries.
  */
 export function findRuntimeSidecarLoaderViolations(
-  content: string,
+  _content: string,
   importerPath: string,
   explicitEntrySources: Set<string>,
+  sourceFile: ts.SourceFile,
 ): RuntimeSidecarLoaderViolation[] {
-  const sourceFile = ts.createSourceFile(importerPath, content, ts.ScriptTarget.Latest, true);
   const createRequireNames = new Set<string>();
   const requireNames = new Set<string>();
   const stringConstants = new Map<string, string>();
@@ -222,7 +223,7 @@ export function findRuntimeSidecarLoaderViolations(
         const values = stringArrays.get(expression.text);
         if (values) {
           forOfRuntimeValues.push(new Map([[initializer.declarations[0].name.text, values]]));
-          ts.forEachChild(node.statement, visit);
+          node.statement.forEachChild(visit);
           forOfRuntimeValues.pop();
           return;
         }
@@ -239,7 +240,7 @@ export function findRuntimeSidecarLoaderViolations(
       }
     }
 
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
 
   visit(sourceFile);
@@ -254,6 +255,7 @@ async function collectRuntimeSidecarLoaderViolations(params: {
   sourceRoots: string[];
   explicitEntrySources: Set<string>;
 }): Promise<LocatedRuntimeSidecarLoaderViolation[]> {
+  using parser = createNativeTypeScriptParser({ cwd: params.repoRoot });
   const files = await collectTypeScriptFilesFromRoots(params.sourceRoots, {
     extraTestSuffixes: [".test-support.ts", ".test-helpers.ts"],
   });
@@ -268,6 +270,7 @@ async function collectRuntimeSidecarLoaderViolations(params: {
       content,
       relativePath,
       params.explicitEntrySources,
+      parser.parseSourceFile(filePath, content),
     )) {
       violations.push({ path: relativePath, ...violation });
     }

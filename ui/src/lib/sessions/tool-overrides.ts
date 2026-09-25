@@ -6,16 +6,9 @@ function copyDynamicKeyRecord<T>(
   values: Record<string, T> | undefined,
   copyValue: (value: T) => T = (value) => value,
 ): Record<string, T> {
-  const copy: Record<string, T> = {};
-  for (const [name, value] of Object.entries(values ?? {})) {
-    Object.defineProperty(copy, name, {
-      configurable: true,
-      enumerable: true,
-      value: copyValue(value),
-      writable: true,
-    });
-  }
-  return copy;
+  return Object.fromEntries(
+    Object.entries(values ?? {}).map(([name, value]) => [name, copyValue(value)]),
+  );
 }
 
 export function readOwnEntry<T>(
@@ -74,7 +67,7 @@ export function nextBooleanToolOverrides(
   baseEnabled: boolean,
 ): SessionToolOverrides {
   const next = copyOverrides(current);
-  const values = copyDynamicKeyRecord(Object.hasOwn(next, group) ? next[group] : undefined);
+  const values = (Object.hasOwn(next, group) ? next[group] : undefined) ?? {};
   if (nextEnabled === baseEnabled) {
     delete values[name];
   } else {
@@ -123,7 +116,7 @@ export function nextMcpToolsDenyOverrides(
   } else {
     deniedTools.delete(rawToolName);
   }
-  const mcpToolsDeny = copyDynamicKeyRecord(currentDeny, (tools) => [...tools]);
+  const mcpToolsDeny = currentDeny ?? {};
   if (deniedTools.size > 0) {
     setOwnValue(mcpToolsDeny, server, [...deniedTools].toSorted());
   } else {

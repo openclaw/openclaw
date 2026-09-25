@@ -413,10 +413,7 @@ async function resolveSlackConversationContext(params: {
       })
     : null;
   const allowBotsSetting =
-    channelConfig?.allowBots ??
-    account.config?.allowBots ??
-    cfg.channels?.slack?.allowBots ??
-    false;
+    channelConfig?.allowBots ?? account.config?.allowBots ?? cfg.channels?.slack?.allowBots ?? true;
   const allowBotsMode: "off" | "all" | "mentions" =
     allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting ? "all" : "off";
 
@@ -449,7 +446,10 @@ async function authorizeSlackInboundMessage(params: {
     conversation;
 
   if (isBotMessage) {
-    if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
+    if (
+      (ctx.botUserId && message.user === ctx.botUserId) ||
+      (ctx.botId && message.bot_id === ctx.botId)
+    ) {
       return null;
     }
     if (allowBotsMode === "off") {

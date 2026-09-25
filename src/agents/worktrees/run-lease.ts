@@ -77,7 +77,7 @@ async function withGitLockTransition<T>(id: string, operation: () => Promise<T>)
   }
 }
 
-async function retainGitLock(env: NodeJS.ProcessEnv, id: string): Promise<void> {
+async function retainGitLock(context: OpenClawStateWorkerContext, id: string): Promise<void> {
   await withGitLockTransition(id, async () => {
     const held = heldGitLocks.get(id) ?? { refcount: 0, gitLocked: false };
     const needsLock = held.refcount === 0 && !held.gitLocked;
@@ -88,7 +88,7 @@ async function retainGitLock(env: NodeJS.ProcessEnv, id: string): Promise<void> 
     }
     let record: ManagedWorktreeRecord | undefined;
     try {
-      record = getRegistryWorktree(env, id);
+      record = await readRegistryWorktree(context, id);
       if (!record) {
         return;
       }
@@ -281,7 +281,7 @@ export async function acquireWorktreeRunLease(
   // Serialize refcount and Git transitions so a cleanup retry cannot unlock a
   // newer same-process holder after a prior generation's unlock failed.
   try {
-    await retainGitLock(env, id);
+    await retainGitLock(context, id);
   } catch (error) {
     // The failed retain already discarded its in-memory holder; cleanup owns only
     // the durable row and keeps it fenced if deletion cannot complete yet.

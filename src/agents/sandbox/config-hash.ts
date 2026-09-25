@@ -25,9 +25,7 @@ type SandboxHashInput = {
   managedMounts?: readonly string[];
 };
 
-type SandboxBrowserHashInput = {
-  docker: SandboxDockerConfig;
-  dockerEnvPolicyEpoch?: string;
+type SandboxBrowserHashInput = SandboxHashInput & {
   browser: Pick<
     SandboxBrowserConfig,
     | "cdpPort"
@@ -39,18 +37,9 @@ type SandboxBrowserHashInput = {
     | "autoStartTimeoutMs"
   >;
   securityEpoch: string;
-  workspaceAccess: SandboxWorkspaceAccess;
-  workspaceDir: string;
-  agentWorkspaceDir: string;
-  mountFormatVersion: number;
-  createArgsEpoch: string;
-  managedMounts?: readonly string[];
 };
 
 function normalizeForHash(value: unknown): unknown {
-  if (value === undefined) {
-    return undefined;
-  }
   if (Array.isArray(value)) {
     return value.map(normalizeForHash).filter((item): item is unknown => item !== undefined);
   }

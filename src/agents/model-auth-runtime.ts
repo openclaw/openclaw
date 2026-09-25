@@ -15,7 +15,7 @@ import type { AuthProfileStore } from "./auth-profiles.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey, type EnvApiKeyLookupOptions } from "./model-auth-env.js";
 import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "./model-auth-markers.js";
-import { isAuthModeAllowedForModel } from "./model-auth-openai.js";
+import { isAuthModeAllowedForModel } from "./model-auth-policy.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";

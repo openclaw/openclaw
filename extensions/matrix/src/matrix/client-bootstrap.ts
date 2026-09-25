@@ -14,12 +14,7 @@ type ResolvedRuntimeMatrixClient = {
 type MatrixRuntimeClientReadiness = "none" | "prepared" | "started";
 type ResolvedRuntimeMatrixClientStopMode = "stop" | "persist" | "discard";
 
-const loadMatrixSharedClientRuntimeDeps = createLazyRuntimeModule(() =>
-  import("./client.js").then((clientModule) => ({
-    acquireSharedMatrixClient: clientModule.acquireSharedMatrixClient,
-    resolveMatrixAuthContext: clientModule.resolveMatrixAuthContext,
-  })),
-);
+const loadMatrixSharedClientRuntimeDeps = createLazyRuntimeModule(() => import("./client.js"));
 
 async function ensureResolvedClientReadiness(params: {
   client: MatrixClient;

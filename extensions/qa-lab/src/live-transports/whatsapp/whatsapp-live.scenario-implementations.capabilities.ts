@@ -15,7 +15,6 @@ import {
   requireWhatsAppTriggerMessageId,
   runWhatsAppStructuredInboundChecks,
   waitForScenarioObservedMessage,
-  waitForWhatsAppScenarioSutMessage,
   waitForWhatsAppSutReactionToTrigger,
   writeWhatsAppQaWorkspaceFixture,
 } from "./whatsapp-live.operations.js";
@@ -146,9 +145,8 @@ export const whatsappQaGroupOutboundMediaScenario: WhatsAppQaScenarioImplementat
           mediaUrl: imagePath,
           message: `${token}_IMAGE`,
         });
-        await waitForWhatsAppScenarioSutMessage(context, {
+        await waitForScenarioObservedMessage(context, {
           observedAfter: imageStartedAt,
-          targetKind: "group",
           match: (message) =>
             message.kind === "media" &&
             message.hasMedia === true &&
@@ -163,9 +161,8 @@ export const whatsappQaGroupOutboundMediaScenario: WhatsAppQaScenarioImplementat
           mediaUrl: documentPath,
           message: `${token}_DOCUMENT`,
         });
-        await waitForWhatsAppScenarioSutMessage(context, {
+        await waitForScenarioObservedMessage(context, {
           observedAfter: documentStartedAt,
-          targetKind: "group",
           match: (message) =>
             message.kind === "media" &&
             message.hasMedia === true &&
@@ -202,17 +199,15 @@ export const whatsappQaGroupOutboundAudioScenario: WhatsAppQaScenarioImplementat
           mediaUrl: audioPath,
           message: `${token}_AUDIO`,
         });
-        await waitForWhatsAppScenarioSutMessage(context, {
+        await waitForScenarioObservedMessage(context, {
           observedAfter: audioStartedAt,
-          targetKind: "group",
           match: (message) =>
             message.kind === "media" &&
             message.hasMedia === true &&
             message.mediaType?.startsWith("audio/") === true,
         });
-        await waitForWhatsAppScenarioSutMessage(context, {
+        await waitForScenarioObservedMessage(context, {
           observedAfter: audioStartedAt,
-          targetKind: "group",
           match: (message) => message.text.includes(`${token}_AUDIO`),
         });
         return "gateway send delivered audio media to the group";
@@ -240,9 +235,8 @@ export const whatsappQaGroupOutboundPollScenario: WhatsAppQaScenarioImplementati
           options: ["alpha", "beta"],
           question,
         });
-        const poll = await waitForWhatsAppScenarioSutMessage(context, {
+        const poll = await waitForScenarioObservedMessage(context, {
           observedAfter: pollStartedAt,
-          targetKind: "group",
           match: (message) =>
             message.kind === "poll" &&
             message.poll?.question === question &&

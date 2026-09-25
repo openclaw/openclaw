@@ -24,8 +24,10 @@ import {
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db-registry.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  isSameOpenClawAgentDatabasePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { getOwedHarnessCompletionTask } from "../../tasks/agent-harness-completion-recovery.js";

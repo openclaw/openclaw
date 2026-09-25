@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
@@ -90,19 +91,11 @@ type DoctorPrompterLike = {
 };
 
 function existsDir(dir: string): boolean {
-  try {
-    return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
-  } catch {
-    return false;
-  }
+  return safeStatSync(dir)?.isDirectory() ?? false;
 }
 
 function existsFile(filePath: string): boolean {
-  try {
-    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
+  return safeStatSync(filePath)?.isFile() ?? false;
 }
 
 type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
@@ -279,6 +272,15 @@ function dirPermissionHint(dir: string): string | null {
     return null;
   }
   return null;
+}
+
+function readGroupOrWorldAccessibleMode(targetPath: string): number | null {
+  const linkStat = fs.lstatSync(targetPath);
+  const isSymlink = linkStat.isSymbolicLink();
+  // Symlink permissions describe the link, not the target. Immutable stores cannot be repaired.
+  const stat = isSymlink ? fs.statSync(targetPath) : linkStat;
+  const resolvedPath = isSymlink ? fs.realpathSync(targetPath) : targetPath;
+  return !resolvedPath.startsWith("/nix/store/") && (stat.mode & 0o077) !== 0 ? stat.mode : null;
 }
 
 function addUserRwx(mode: number): number {
@@ -856,12 +858,9 @@ export function detectStateIntegrityHealthIssues(
 
   if (stateDirExists && process.platform !== "win32") {
     try {
-      const dirLstat = fs.lstatSync(stateDir);
-      const isDirSymlink = dirLstat.isSymbolicLink();
-      const stat = isDirSymlink ? fs.statSync(stateDir) : dirLstat;
-      const resolvedDir = isDirSymlink ? fs.realpathSync(stateDir) : stateDir;
-      if (!resolvedDir.startsWith("/nix/store/") && (stat.mode & 0o077) !== 0) {
-        issues.push({ kind: "state-dir-too-open", path: stateDir, mode: stat.mode });
+      const mode = readGroupOrWorldAccessibleMode(stateDir);
+      if (mode !== null) {
+        issues.push({ kind: "state-dir-too-open", path: stateDir, mode });
       }
     } catch {
       // Legacy noteStateIntegrity reports stat failures. Structured findings
@@ -871,12 +870,9 @@ export function detectStateIntegrityHealthIssues(
 
   if (params?.configPath && existsFile(params.configPath) && process.platform !== "win32") {
     try {
-      const configLstat = fs.lstatSync(params.configPath);
-      const isSymlink = configLstat.isSymbolicLink();
-      const stat = isSymlink ? fs.statSync(params.configPath) : configLstat;
-      const resolvedConfig = isSymlink ? fs.realpathSync(params.configPath) : params.configPath;
-      if (!resolvedConfig.startsWith("/nix/store/") && (stat.mode & 0o077) !== 0) {
-        issues.push({ kind: "config-file-too-open", path: params.configPath, mode: stat.mode });
+      const mode = readGroupOrWorldAccessibleMode(params.configPath);
+      if (mode !== null) {
+        issues.push({ kind: "config-file-too-open", path: params.configPath, mode });
       }
     } catch {
       // See state-dir stat handling above.
@@ -1182,15 +1178,7 @@ export async function noteStateIntegrity(
   }
   if (stateDirExists && process.platform !== "win32") {
     try {
-      const dirLstat = fs.lstatSync(stateDir);
-      const isDirSymlink = dirLstat.isSymbolicLink();
-      // For symlinks, check the resolved target permissions instead of the
-      // symlink itself (which always reports 777). Skip the warning only when
-      // the target lives in a known immutable store (e.g. /nix/store/).
-      const stat = isDirSymlink ? fs.statSync(stateDir) : dirLstat;
-      const resolvedDir = isDirSymlink ? fs.realpathSync(stateDir) : stateDir;
-      const isImmutableStore = resolvedDir.startsWith("/nix/store/");
-      if (!isImmutableStore && (stat.mode & 0o077) !== 0) {
+      if (readGroupOrWorldAccessibleMode(stateDir) !== null) {
         warnings.push(
           `- State directory permissions are too open (${displayStateDir}). Recommend chmod 700.`,
         );
@@ -1210,14 +1198,7 @@ export async function noteStateIntegrity(
 
   if (configPath && existsFile(configPath) && process.platform !== "win32") {
     try {
-      const configLstat = fs.lstatSync(configPath);
-      const isSymlink = configLstat.isSymbolicLink();
-      // For symlinks, check the resolved target permissions. Skip the warning
-      // only when the target lives in an immutable store (e.g. /nix/store/).
-      const stat = isSymlink ? fs.statSync(configPath) : configLstat;
-      const resolvedConfig = isSymlink ? fs.realpathSync(configPath) : configPath;
-      const isImmutableConfig = resolvedConfig.startsWith("/nix/store/");
-      if (!isImmutableConfig && (stat.mode & 0o077) !== 0) {
+      if (readGroupOrWorldAccessibleMode(configPath) !== null) {
         warnings.push(
           `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
         );

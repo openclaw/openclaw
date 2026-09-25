@@ -5,7 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
-import { readNativeTurnEnd, readThreadParentThreadId } from "./native-subagent-history-recovery.js";
+import { readNativeTurnEnd } from "./native-subagent-history-recovery.js";
 import type {
   NativeModelInputRequest,
   NativeModelSourceRequest,
@@ -41,6 +41,7 @@ import type { CodexNativeSubagentSubmission } from "./native-subagent-submission
 import {
   codexNativeSubagentRunId,
   readNativeTaskAssignment,
+  readThreadParentThreadId,
   type NativeSubagentAssignment,
 } from "./native-subagent-task-ids.js";
 import { isJsonObject, type JsonObject, type CodexServerNotification } from "./protocol.js";

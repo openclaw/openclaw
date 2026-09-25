@@ -136,10 +136,6 @@ function compileStringField(
     isOther: true,
     defaultValue: defaultText,
     decode: (values) => {
-      const missing = decodeMissing(context, values, defaultText);
-      if (missing) {
-        return missing;
-      }
       const value = values[0] ?? "";
       const error = validate(value);
       return error ? invalid(context, error) : { kind: "present", value };
@@ -194,10 +190,6 @@ function compileNumberField(
     isOther: true,
     defaultValue,
     decode: (values) => {
-      const missing = decodeMissing(context, values, defaultValue);
-      if (missing) {
-        return missing;
-      }
       const raw = values[0]?.trim() ?? "";
       if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/u.test(raw)) {
         return invalid(context, type === "integer" ? "must be an integer." : "must be a number.");
@@ -230,10 +222,6 @@ function compileBooleanField(
     isOther: false,
     defaultValue,
     decode: (values) => {
-      const missing = decodeMissing(context, values, defaultValue);
-      if (missing) {
-        return missing;
-      }
       const selected = findChoice(choices, values[0]);
       return selected
         ? { kind: "present", value: selected.value === "true" }
@@ -262,10 +250,6 @@ function compileChoiceField(
     isOther: context.otherFieldId !== undefined,
     defaultValue,
     decode: (values) => {
-      const missing = decodeMissing(context, values, defaultValue);
-      if (missing) {
-        return missing;
-      }
       const selected = findChoice(choices, values[0]);
       if (selected) {
         return { kind: "present", value: selected.value };
@@ -327,10 +311,6 @@ function compileMultiSelectField(
     multiSelect: true,
     defaultValue,
     decode: (values) => {
-      const missing = decodeMissing(context, values, defaultValue);
-      if (missing) {
-        return missing;
-      }
       const decoded = values.flatMap((value) => {
         const choice = findChoice(choices, value);
         return choice ? [choice.value] : [];
@@ -421,7 +401,7 @@ function buildField(
         })) ?? null,
     },
     decode: (values) => {
-      const decoded = params.decode(values);
+      const decoded = decodeMissing(context, values, params.defaultValue) ?? params.decode(values);
       if (decoded.kind !== "present") {
         return decoded;
       }

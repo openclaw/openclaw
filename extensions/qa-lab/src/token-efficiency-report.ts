@@ -295,24 +295,6 @@ export function buildTokenEfficiencyReport(params: {
     .map((scenario) => scenario.runtimeParity)
     .filter((result): result is RuntimeParityResult => Boolean(result));
 
-  if (parityResults.length === 0) {
-    const noCapturesReason = "No runtime parity captures were present in the suite summary.";
-    return {
-      status: liveUsage ? "evaluated" : "skipped",
-      runtimePair,
-      generatedAt: params.generatedAt ?? new Date().toISOString(),
-      ...(providerMode ? { providerMode } : {}),
-      thresholdPercent,
-      rows: [],
-      notApplicableScenarios: [],
-      aggregate: ZERO_AGGREGATE,
-      pass: !liveUsage,
-      failures: liveUsage ? [noCapturesReason] : [],
-      ...(liveUsage ? {} : { skipReason: noCapturesReason }),
-      notes: ["Token efficiency requires runtime-pair summaries with RuntimeParityResult cells."],
-    } as const;
-  }
-
   const notApplicableScenarios = parityResults.flatMap((result) => {
     const usage = resolveRuntimeParityUsagePolicy(result.runtimeParityUsage);
     return usage.expectation === "not-applicable"
@@ -326,7 +308,9 @@ export function buildTokenEfficiencyReport(params: {
   );
   if (usageApplicableResults.length === 0) {
     const noApplicableReason =
-      "No usage-applicable runtime parity captures were present in the suite summary.";
+      parityResults.length === 0
+        ? "No runtime parity captures were present in the suite summary."
+        : "No usage-applicable runtime parity captures were present in the suite summary.";
     return {
       status: liveUsage ? "evaluated" : "skipped",
       runtimePair,
@@ -339,7 +323,11 @@ export function buildTokenEfficiencyReport(params: {
       pass: !liveUsage,
       failures: liveUsage ? [noApplicableReason] : [],
       ...(liveUsage ? {} : { skipReason: noApplicableReason }),
-      notes: ["Token efficiency requires at least one assistant-message usage capture."],
+      notes: [
+        parityResults.length === 0
+          ? "Token efficiency requires runtime-pair summaries with RuntimeParityResult cells."
+          : "Token efficiency requires at least one assistant-message usage capture.",
+      ],
     } as const;
   }
 

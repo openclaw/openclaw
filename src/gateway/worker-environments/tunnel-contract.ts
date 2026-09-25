@@ -162,6 +162,7 @@ export type WorkerLocalWorkspaceReconcileRequest = {
   remoteWorkspaceDir: string;
   baseManifestRef: string;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
+  assertCurrent?: () => void;
   stagedResult?: {
     ref: string;
     record(ref: string): void;
@@ -176,6 +177,7 @@ export type WorkerWorkspaceReconcileRequest = {
         kind: "local";
         path: string;
         journal: WorkerWorkspaceReconciliationJournalAdapter;
+        assertCurrent?: () => void;
         stagedResult?: WorkerLocalWorkspaceReconcileRequest["stagedResult"];
       }
     | {

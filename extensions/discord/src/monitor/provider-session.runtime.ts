@@ -10,4 +10,4 @@ export {
   createNoopThreadBindingManager,
   reconcileAcpThreadBindingsOnStartup,
 } from "./thread-bindings.js";
-export { createThreadBindingManagerAsync as createThreadBindingManager } from "./thread-bindings.manager.js";
+export { createThreadBindingManager } from "./thread-bindings.manager.js";

@@ -57,15 +57,11 @@ type MemoryWikiImportRunMetaStateRecord = Omit<
   vaultRootKey: string;
 };
 
-type MemoryWikiImportRunPathStateRecord = {
+type MemoryWikiImportRunPathStateRecord = ChatGptImportRunEntry & {
   kind: "created-path" | "updated-path";
   vaultRootKey: string;
   runId: string;
   index: number;
-  path: string;
-  snapshotPath?: string;
-  contentHash?: string;
-  recoveryPaths?: string[];
 };
 
 type MemoryWikiImportRunStateRecord =
@@ -307,26 +303,23 @@ function toPathRecords(
   vaultRootKey: string,
   record: ChatGptImportRunRecord,
 ): MemoryWikiImportRunPathStateRecord[] {
+  const toPathRecord = (
+    entry: ChatGptImportRunEntry,
+    index: number,
+    kind: MemoryWikiImportRunPathStateRecord["kind"],
+  ): MemoryWikiImportRunPathStateRecord => ({
+    kind,
+    vaultRootKey,
+    runId: record.runId,
+    index,
+    path: entry.path,
+    ...(kind === "updated-path" && entry.snapshotPath ? { snapshotPath: entry.snapshotPath } : {}),
+    ...(entry.contentHash ? { contentHash: entry.contentHash } : {}),
+    ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
+  });
   return [
-    ...record.createdPaths.map((entry, index): MemoryWikiImportRunPathStateRecord => ({
-      kind: "created-path",
-      vaultRootKey,
-      runId: record.runId,
-      index,
-      path: entry.path,
-      ...(entry.contentHash ? { contentHash: entry.contentHash } : {}),
-      ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
-    })),
-    ...record.updatedPaths.map((entry, index): MemoryWikiImportRunPathStateRecord => ({
-      kind: "updated-path",
-      vaultRootKey,
-      runId: record.runId,
-      index,
-      path: entry.path,
-      ...(entry.snapshotPath ? { snapshotPath: entry.snapshotPath } : {}),
-      ...(entry.contentHash ? { contentHash: entry.contentHash } : {}),
-      ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
-    })),
+    ...record.createdPaths.map((entry, index) => toPathRecord(entry, index, "created-path")),
+    ...record.updatedPaths.map((entry, index) => toPathRecord(entry, index, "updated-path")),
   ];
 }
 
@@ -391,13 +384,7 @@ export function createMemoryWikiImportRunStateStore(
       const store = openStore();
       const nextPathKeys = new Set<string>();
       for (const pathRecord of toPathRecords(vaultRootKey, record)) {
-        const key = resolvePathStateEntryKey({
-          vaultRootKey,
-          runId: record.runId,
-          kind: pathRecord.kind,
-          index: pathRecord.index,
-          path: pathRecord.path,
-        });
+        const key = resolvePathStateEntryKey(pathRecord);
         nextPathKeys.add(key);
         await store.register(key, pathRecord);
       }

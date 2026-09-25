@@ -50,6 +50,8 @@ export type Row = {
   storedEntry?: SessionEntry;
   /** Accepted under retained database custody; presentation consumes the whole snapshot. */
   pendingDatabaseFacts?: PreparedSessionRowDatabaseFacts;
+  /** Catalog changes reuse the accepted snapshot until a data publication or demotion. */
+  retainedDatabaseFacts?: PreparedSessionRowDatabaseFacts;
   /** Durable search metadata survives archive demotion, until its owner invalidates it. */
   preparedAcpMeta?: SessionAcpMeta | null;
   databaseFactsRevision: number;
@@ -162,6 +164,7 @@ export function markAutomation(
 export function invalidateDatabaseFacts(row: Row) {
   row.databaseFactsRevision++;
   row.pendingDatabaseFacts = undefined;
+  row.retainedDatabaseFacts = undefined;
   row.preparedAcpMeta = undefined;
 }
 
@@ -227,6 +230,7 @@ export function renewGeneration(row: Row): Row {
     entry: undefined,
     storedEntry: undefined,
     pendingDatabaseFacts: undefined,
+    retainedDatabaseFacts: undefined,
     preparedAcpMeta: undefined,
     sharingEntry: undefined,
     materialized: undefined,
@@ -465,6 +469,7 @@ export function dematerialize(row: Row): Row {
     materializedSequence: undefined,
     facts: undefined,
     pendingDatabaseFacts: undefined,
+    retainedDatabaseFacts: undefined,
     databaseFactsRevision: row.databaseFactsRevision + 1,
     membership: new Set<string>(),
     lastMessagePreview: undefined,
@@ -566,6 +571,7 @@ export function acquireSessionRowEntry(params: {
     ...row,
     storedEntry,
     pendingDatabaseFacts: undefined,
+    retainedDatabaseFacts: undefined,
     databaseFactsRevision: row.databaseFactsRevision + 1,
     ...lineage,
     sharingEntry: entry,

@@ -278,6 +278,14 @@ describe("late exact requester recovery", () => {
       disposition: "permanent_failure",
     },
     {
+      name: "flattened transcript turn assertion",
+      error: new Error(
+        "Error: Session transcript keyed user is outside the current turn: old-input",
+      ),
+      delivered: false,
+      disposition: "permanent_failure",
+    },
+    {
       name: "send ambiguity",
       error: Object.assign(new Error("send outcome unknown"), { sentBeforeError: true }),
       delivered: false,
@@ -288,6 +296,7 @@ describe("late exact requester recovery", () => {
     const delivery = fixture.startDelivery();
     await fixture.dispatchEntered.promise;
     fixture.state.entry = { ...fixture.state.entry, ...finalReceipt };
+    fixture.readDone.resolve();
     if ("error" in outcome) {
       fixture.dispatchDone.reject(outcome.error);
     } else {

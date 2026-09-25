@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import {
   readRecoveryStepInputs,
   requireRecoveryJob,
@@ -611,6 +612,302 @@ describe("verify-stable-main-closeout", () => {
     const replay = runCli(...args, "--existing-manifest", originalPath, ...publishedArgs);
     expect(replay.status, replay.stderr).toBe(0);
     expect(readFileSync(outputPath, "utf8")).toBe(readFileSync(originalPath, "utf8"));
+  });
+
+  it("records operator waivers at closeout and preserves a waiver-less recorded manifest on replay", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-waiver-closeout-"));
+    tempDirs.push(dir);
+    const version = "2026.9.6";
+    const tag = `v${version}`;
+    for (const name of ["main", "tag"]) {
+      const root = path.join(dir, name);
+      mkdirSync(root);
+      execFileSync("git", ["init", "--quiet", root]);
+      writeFileSync(path.join(root, ".git/HEAD"), `${"a".repeat(40)}\n`);
+      writeFileSync(path.join(root, "package.json"), JSON.stringify({ version }));
+      writeFileSync(
+        path.join(root, "CHANGELOG.md"),
+        `# Changelog\n\n## ${version}\n\n- Released.\n`,
+      );
+      writeFileSync(path.join(root, "appcast.xml"), "<rss>older app release</rss>");
+    }
+    const releasePath = path.join(dir, "release.json");
+    const outputPath = path.join(dir, "closeout.json");
+    const originalPath = path.join(dir, "original.json");
+    writeFileSync(
+      releasePath,
+      JSON.stringify({ tagName: tag, isDraft: false, isPrerelease: false, assets: [] }),
+    );
+    const args = [
+      "--tag",
+      tag,
+      "--main-dir",
+      path.join(dir, "main"),
+      "--tag-dir",
+      path.join(dir, "tag"),
+      "--release-json",
+      releasePath,
+      "--full-release-validation-run-id",
+      "11",
+      "--full-release-validation-run-attempt",
+      "2",
+      "--release-publish-run-id",
+      "12",
+      "--rollback-drill-id",
+      "synthetic-drill",
+      "--rollback-drill-date",
+      new Date().toISOString().slice(0, 10),
+      "--output",
+      outputPath,
+      "--allow-failed-publish-recovery",
+      "true",
+    ];
+    const waiverArgs = [
+      "--stable-soak-waiver",
+      "2026.9.6 operator approved",
+      "--lane-waiver",
+      "2026.9.6 known flake",
+    ];
+
+    // A closeout recorded before waiver fields existed carries none of them.
+    const initial = runCli(...args);
+    expect(initial.status, initial.stderr).toBe(0);
+    const recorded = JSON.parse(readFileSync(outputPath, "utf8"));
+    expect(recorded).not.toHaveProperty("stableSoakWaiver");
+    expect(recorded).not.toHaveProperty("laneWaiver");
+    writeFileSync(originalPath, readFileSync(outputPath));
+
+    // Replay with waivers resolved from publish evidence keeps the recorded bytes.
+    const replay = runCli(...args, ...waiverArgs, "--existing-manifest", originalPath);
+    expect(replay.status, replay.stderr).toBe(0);
+    expect(readFileSync(outputPath, "utf8")).toBe(readFileSync(originalPath, "utf8"));
+
+    // A fresh closeout records the waivers that authorized the stable.
+    const waived = runCli(...args, ...waiverArgs);
+    expect(waived.status, waived.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
+      stableSoakWaiver: "2026.9.6 operator approved",
+      laneWaiver: "2026.9.6 known flake",
+    });
+  });
+
+  it("records a withdrawn 2026.9.6 macOS appcast from the main commit lookup", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-withdrawn-closeout-"));
+    tempDirs.push(dir);
+    const version = "2026.9.6";
+    const tag = `v${version}`;
+    const mainSha = "a".repeat(40);
+    for (const name of ["main", "tag"]) {
+      const root = path.join(dir, name);
+      mkdirSync(root);
+      execFileSync("git", ["init", "--quiet", root]);
+      writeFileSync(path.join(root, ".git/HEAD"), `${mainSha}\n`);
+      writeFileSync(path.join(root, "package.json"), JSON.stringify({ version }));
+      writeFileSync(
+        path.join(root, "CHANGELOG.md"),
+        `# Changelog\n\n## ${version}\n\n- Released.\n`,
+      );
+      writeFileSync(
+        path.join(root, "appcast.xml"),
+        "<rss><sparkle:shortVersionString>2026.9.5</sparkle:shortVersionString></rss>",
+      );
+    }
+    const bin = path.join(dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env node
+const expected = 'repos/openclaw/openclaw/commits?sha=${mainSha}&path=appcast.xml&per_page=100';
+if (process.argv[2] !== 'api' || process.argv[3] !== expected || process.env.WITHDRAWAL_LOOKUPS !== 'allowed') {
+  throw new Error('Unexpected GitHub operation: ' + process.argv.slice(2).join(' '));
+}
+process.stdout.write(JSON.stringify([
+  { sha: 'b'.repeat(40), commit: { message: 'chore(release): update appcast for ${version}' } },
+  { sha: 'c'.repeat(40), commit: { message: 'chore(release): withdraw the ${version} macOS build from the Sparkle feed\\n\\nRefs #156861\\n' } },
+]));
+`,
+      { mode: 0o755 },
+    );
+    const releasePath = path.join(dir, "release.json");
+    const outputPath = path.join(dir, "closeout.json");
+    const originalPath = path.join(dir, "original.json");
+    writeFileSync(
+      releasePath,
+      JSON.stringify({
+        tagName: tag,
+        isDraft: false,
+        isPrerelease: false,
+        assets: ["", "-arm64", "-x86_64"]
+          .flatMap((suffix) =>
+            ["zip", "dmg", "dSYM.zip"].map(
+              (extension) => `OpenClaw-${version}${suffix}.${extension}`,
+            ),
+          )
+          .map((name) => ({ name, digest: `sha256:${"c".repeat(64)}` })),
+      }),
+    );
+    const args = [
+      "--tag",
+      tag,
+      "--main-dir",
+      path.join(dir, "main"),
+      "--tag-dir",
+      path.join(dir, "tag"),
+      "--release-json",
+      releasePath,
+      "--full-release-validation-run-id",
+      "11",
+      "--full-release-validation-run-attempt",
+      "2",
+      "--release-publish-run-id",
+      "12",
+      "--rollback-drill-id",
+      "synthetic-drill",
+      "--rollback-drill-date",
+      new Date().toISOString().slice(0, 10),
+      "--output",
+      outputPath,
+    ];
+    const run = (lookups: "allowed" | "forbidden", ...extra: string[]) =>
+      spawnSync(process.execPath, ["scripts/verify-stable-main-closeout.mjs", ...args, ...extra], {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, WITHDRAWAL_LOOKUPS: lookups },
+      });
+
+    const initial = run("allowed");
+    expect(initial.status, initial.stderr).toBe(0);
+    const initialBytes = readFileSync(outputPath, "utf8");
+    expect(JSON.parse(initialBytes)).toMatchObject({
+      apps: "pending",
+      appPlatforms: { macos: "withdrawn" },
+      appcast: "withdrawn",
+      appcastWithdrawal: { commit: "c".repeat(40), reason: "Refs #156861" },
+    });
+    writeFileSync(originalPath, initialBytes);
+    const replay = run("forbidden", "--existing-manifest", originalPath);
+    expect(replay.status, replay.stderr).toBe(0);
+    expect(readFileSync(outputPath, "utf8")).toBe(initialBytes);
+  });
+});
+
+describe("stable closeout workflow keyed runs and tag-only replay", () => {
+  const tempRoots = useAutoCleanupTempDirTracker(afterEach);
+  const workflow = parse(
+    readFileSync(path.resolve(".github/workflows/openclaw-stable-main-closeout.yml"), "utf8"),
+  ) as {
+    concurrency: { group: string; "cancel-in-progress": boolean | string };
+    on: {
+      workflow_dispatch: {
+        inputs: Record<string, { required: boolean; type: string; default?: string | boolean }>;
+      };
+    };
+    jobs: Record<
+      "resolve" | "verify",
+      {
+        concurrency?: { group: string; "cancel-in-progress": boolean };
+        steps: Array<{ name: string; run?: string; env?: Record<string, string> }>;
+      }
+    >;
+  };
+  const resolveStep = expectDefined(
+    workflow.jobs.resolve.steps.find(
+      (step) => step.name === "Resolve published stable release evidence",
+    ),
+    "resolve step",
+  );
+
+  it("keeps push runs alive and serializes verification by resolved stable tag", () => {
+    expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
+    expect(workflow.concurrency.group).toContain("inputs.tag");
+    expect(workflow.jobs.verify.concurrency).toEqual({
+      group: "openclaw-stable-main-closeout-verify-${{ needs.resolve.outputs.tag }}",
+      "cancel-in-progress": false,
+    });
+  });
+
+  it("needs only a tag and forwards sealed waivers to the closeout gate", () => {
+    for (const [name, input] of Object.entries(workflow.on.workflow_dispatch.inputs)) {
+      if (name === "tag") {
+        continue;
+      }
+      expect(input.required, name).toBe(false);
+      // Optional string inputs have an implicit empty default in GitHub Actions.
+      expect(input.default ?? (input.type === "string" ? "" : undefined), name).toBeOneOf([
+        "",
+        false,
+      ]);
+    }
+    const gateStep = expectDefined(
+      workflow.jobs.verify.steps.find((step) => step.name === "Verify release workflow evidence"),
+      "gate step",
+    );
+    expect(gateStep.env).toMatchObject({
+      PUBLISHED_STABLE_SOAK_WAIVER:
+        "${{ fromJSON(needs.resolve.outputs.published_stable_soak_waiver) }}",
+      PUBLISHED_LANE_WAIVER: "${{ fromJSON(needs.resolve.outputs.published_lane_waiver) }}",
+    });
+    expect(resolveStep.run).toContain(".laneWaiverAcknowledgement // .laneWaiver //");
+  });
+
+  const evidence = {
+    stableSoakWaiver: "Operator-approved for 2026.9.6",
+    laneWaiver: "2026.9.6 sealed lane",
+    laneWaiverAcknowledgement: "2026.9.6 acknowledged lane",
+  };
+  function resolveWaivers(sealed: unknown, soak = "", lane = "") {
+    const root = tempRoots.make("stable-closeout-waivers-");
+    const evidencePath = path.join(root, "evidence.json");
+    writeFileSync(evidencePath, JSON.stringify(sealed));
+    const run = expectDefined(resolveStep.run, "resolve script");
+    const block = expectDefined(
+      run.match(/# Operator inputs win[^]*?(?=^\{\s*$)/mu)?.[0],
+      "waiver block",
+    );
+    return spawnSync("bash", ["-euo", "pipefail"], {
+      cwd: root,
+      encoding: "utf8",
+      input: `${block}\nprintf '%s\\n' "$stable_soak_waiver" "$lane_waiver" "$published_stable_soak_waiver" "$published_lane_waiver"\n`,
+      env: {
+        PATH: process.env.PATH,
+        evidence_path: evidencePath,
+        INPUT_STABLE_SOAK_WAIVER: soak,
+        INPUT_LANE_WAIVER: lane,
+      },
+    });
+  }
+
+  it.each([
+    { name: "sealed acknowledgements", soak: "", lane: "", acknowledged: true },
+    {
+      name: "operator overrides",
+      soak: '2026.9.6 operator "approved"\nsoak',
+      lane: "2026.9.6 operator lane",
+      acknowledged: true,
+    },
+    { name: "legacy sealed lane", soak: "", lane: "", acknowledged: false },
+  ])("resolves $name while preserving published text", ({ soak, lane, acknowledged }) => {
+    const publishedLane = acknowledged ? evidence.laneWaiverAcknowledgement : evidence.laneWaiver;
+    const result = resolveWaivers(
+      { ...evidence, laneWaiverAcknowledgement: acknowledged ? publishedLane : undefined },
+      soak,
+      lane,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trimEnd().split("\n")).toEqual(
+      [
+        soak || evidence.stableSoakWaiver,
+        lane || publishedLane,
+        evidence.stableSoakWaiver,
+        publishedLane,
+      ].map((value) => JSON.stringify(value)),
+    );
+  });
+
+  it("rejects a non-string sealed soak waiver", () => {
+    const result = resolveWaivers({ ...evidence, stableSoakWaiver: 123 });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Invalid stable soak waiver");
   });
 });
 

@@ -8,7 +8,8 @@ import {
   captureUpdateCandidatePluginCodeLink,
   type UpdateCandidatePluginCodeLink,
 } from "./update-candidate-plugin-code-links.js";
-import { relocateRuntimePath } from "./update-runtime-relocation.js";
+import { createRuntimePathLookup } from "./update-runtime-path-index.js";
+import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime-relocation.js";
 
 export type UpdateCandidatePluginTreeEntry = {
   path: string;
@@ -77,8 +78,10 @@ export function resolveUpdateCandidatePluginTreeTargets(
   if (candidateRoot !== plan.candidateRoot) {
     throw new Error("Plugin files changed during update preparation; rerun the update");
   }
-  const rebase = (file: string) =>
-    relocateRuntimePath(file, [{ sourceRoot: plan.privateRoot, destinationRoot: privateRoot }]);
+  const rebasing = prepareRuntimeRelocations([
+    { sourceRoot: plan.privateRoot, destinationRoot: privateRoot },
+  ]);
+  const rebase = (file: string) => relocateRuntimePath(file, rebasing);
   const copies = plan.copies.map<[string, string]>(([source, target]) => [source, rebase(target)]);
   for (const [, target] of copies) {
     const destination = resolvePathViaExistingAncestorSync(target);
@@ -91,8 +94,9 @@ export function resolveUpdateCandidatePluginTreeTargets(
       }
     }
   }
+  const copyOwner = createRuntimePathLookup(copies.map((copy) => [copy[0], copy] as const));
   const destinationFor = (source: string) => {
-    const owner = copies.find(([root]) => isPathInside(root, source));
+    const owner = copyOwner(source);
     if (!owner) {
       throw new Error("Inventoried plugin entry has no copy owner");
     }
@@ -122,10 +126,12 @@ export function resolveUpdateCandidatePluginTreeTargets(
     candidateRoot,
     copies,
     hostLinks: new Set(plan.hostLinks.map(rebase)),
-    relocations: plan.relocations.map(({ sourceRoot, destinationRoot }) => ({
-      sourceRoot,
-      destinationRoot: rebase(destinationRoot),
-    })),
+    relocations: prepareRuntimeRelocations(
+      plan.relocations.map(({ sourceRoot, destinationRoot }) => ({
+        sourceRoot,
+        destinationRoot: rebase(destinationRoot),
+      })),
+    ),
     aliases: plan.aliases.map<[string, string]>(([alias, target]) => [
       rebase(alias),
       rebase(target),

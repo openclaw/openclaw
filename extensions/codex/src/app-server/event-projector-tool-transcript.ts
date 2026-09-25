@@ -1,13 +1,15 @@
 import path from "node:path";
 import {
+  createAgentHarnessToolCallMessage,
+  createAgentHarnessToolResultMessage,
+} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
+import {
   embeddedAgentLog,
   runAgentHarnessAfterToolCallHook,
   type AgentMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { Usage } from "openclaw/plugin-sdk/llm";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isMutatingNativeToolItem,
   isNonSuccessItemStatus,
@@ -48,15 +50,6 @@ import { sanitizeCodexToolArguments } from "./tool-progress-normalization.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
-
-const ZERO_USAGE: Usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
 const MISSING_TOOL_RESULT_ERROR =
   "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
@@ -511,6 +504,7 @@ export class CodexToolTranscriptProjection {
   synthesizeMissingToolResults(params: {
     synthesize: boolean;
     terminalDisposition: "prompt_error" | "tool_error" | "diagnostic_only";
+    retainedCommands?: ReadonlyMap<string, string>;
   }): string | undefined {
     if (!params.synthesize) {
       return undefined;
@@ -525,12 +519,16 @@ export class CodexToolTranscriptProjection {
     for (const id of missingTranscriptIds) {
       const name = this.namesById.get(id) ?? this.trajectoryNamesById.get(id);
       if (name) {
+        const processId = params.retainedCommands?.get(id);
         this.recordToolResult({
           id,
           name,
-          text: formatMissingToolResultError({ id, name }),
-          isError: true,
-          details: { reason: "missing_tool_result" },
+          text: processId
+            ? formatRetainedCommandResult(processId)
+            : formatMissingToolResultError({ id, name }),
+          isError: !processId,
+          ...(processId ? { outcomeUnknown: true as const } : {}),
+          details: processId ? { status: "running", processId } : { reason: "missing_tool_result" },
         });
       }
     }
@@ -540,16 +538,21 @@ export class CodexToolTranscriptProjection {
         continue;
       }
       this.trajectoryResultIds.add(id);
-      const text = formatMissingToolResultError({ id, name });
+      const processId = params.retainedCommands?.get(id);
+      const text = processId
+        ? formatRetainedCommandResult(processId)
+        : formatMissingToolResultError({ id, name });
       this.options.trajectoryRecorder?.recordEvent("tool.result", {
         threadId: this.threadId,
         turnId: this.turnId,
         itemId: id,
         toolCallId: id,
         name,
-        status: "failed",
-        isError: true,
-        result: { status: "failed", reason: "missing_tool_result" },
+        status: processId ? "running" : "failed",
+        isError: !processId,
+        result: processId
+          ? { status: "running", processId }
+          : { status: "failed", reason: "missing_tool_result" },
         output: text,
       });
     }
@@ -653,32 +656,25 @@ export class CodexToolTranscriptProjection {
   }
 
   private createToolCallMessage(params: ToolTranscriptCallInput): AgentMessage {
-    const args = asNonArrayRecord(params.arguments);
     const attribution = resolveCodexLocalRuntimeAttribution(this.params);
-    return {
-      role: "assistant",
-      content: [{ type: "toolCall", id: params.id, name: params.name, arguments: args }],
-      api: attribution.api ?? "openai-chatgpt-responses",
-      provider: attribution.provider,
-      model: this.params.modelId,
-      usage: ZERO_USAGE,
-      stopReason: "toolUse",
-      timestamp: this.nextTranscriptTimestamp(),
-    };
+    return createAgentHarnessToolCallMessage(
+      {
+        ...attribution,
+        api: attribution.api ?? "openai-chatgpt-responses",
+        modelId: this.params.modelId,
+      },
+      params,
+      this.nextTranscriptTimestamp(),
+    );
   }
 
   private createToolResultMessage(params: ToolTranscriptResultInput) {
     const response = this.rawNativeToolOutputByCallId.get(params.id);
     const text = response ?? params.text ?? toolResultStatusText(params);
-    const message = {
-      role: "toolResult",
-      toolCallId: params.id,
-      toolName: params.name,
-      isError: params.isError,
-      content: [{ type: "text", text }],
-      ...(params.details !== undefined ? { details: params.details } : {}),
-      timestamp: this.nextTranscriptTimestamp(),
-    } satisfies Extract<AgentMessage, { role: "toolResult" }>;
+    const message = createAgentHarnessToolResultMessage(
+      { ...params, text },
+      this.nextTranscriptTimestamp(),
+    );
     return {
       ...message,
       __openclaw: {
@@ -694,6 +690,10 @@ export class CodexToolTranscriptProjection {
       },
     };
   }
+}
+
+function formatRetainedCommandResult(processId: string): string {
+  return `Native command is still running with session handle ${processId}. Its final outcome is not yet available; use the native process-wait tool to collect it.`;
 }
 
 function formatMissingToolResultError(params: { id: string; name: string }): string {

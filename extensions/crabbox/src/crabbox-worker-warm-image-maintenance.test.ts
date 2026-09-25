@@ -156,6 +156,62 @@ describe("Crabbox idle image maintenance", () => {
     expect(store.lookup("expired")).toBeUndefined();
   });
 
+  it("reports paused captures once per ownership snapshot without attempting capture", async () => {
+    const { provider, calls, warn } = createWarmProvider();
+    const store = openWarmImageStore();
+    const records = Array.from({ length: 4 }, (_, index): WarmProfileRecord => ({
+      version: 3,
+      allocations: {},
+      operation: {
+        type: "capture",
+        id: `capture-${index}`,
+        phase: "uncertain",
+        startedAtMs: Date.now() - 1_200_000,
+      },
+    }));
+    records.forEach((record, index) => store.register(`profile-${index}`, record));
+
+    await provider.maintain!(context());
+    await provider.maintain!(context());
+
+    expect(warn).toHaveBeenCalledOnce();
+    const warning = warn.mock.calls[0]?.[0];
+    expect(warning).toContain("4");
+    expect(warning).toContain("paused");
+    expect(warning).not.toContain("failed");
+    expect(warning).toContain("Stop the owning Gateway");
+    expect(warning).toContain("--acknowledge-provider-cleanup");
+    for (const [index, record] of records.entries()) {
+      expect(warning).toContain(`capture-${index}`);
+      expect(store.lookup(`profile-${index}`)).toEqual(record);
+    }
+    expect(calls).toEqual([]);
+
+    store.register("profile-0", {
+      version: 3,
+      allocations: {},
+      operation: {
+        type: "capture",
+        id: "replacement-capture",
+        phase: "uncertain",
+        startedAtMs: Date.now(),
+      },
+    });
+    await provider.maintain!(context());
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[1]?.[0]).toContain("replacement-capture");
+    records.forEach((_, index) =>
+      store.register(`profile-${index}`, { version: 3, allocations: {} }),
+    );
+    await provider.maintain!(context());
+    expect(warn).toHaveBeenCalledTimes(2);
+    records.forEach((record, index) => store.register(`profile-${index}`, record));
+    await provider.maintain!(context());
+    expect(warn).toHaveBeenCalledTimes(3);
+    expect(warn.mock.calls[2]?.[0]).toBe(warning);
+    expect(calls).toEqual([]);
+  });
+
   it.each(["dispose", "authority", "operator delete"] as const)(
     "fences %s during deletion and retains its obligation until an active retry",
     async (boundary) => {

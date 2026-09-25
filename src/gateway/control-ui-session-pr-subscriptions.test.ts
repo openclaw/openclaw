@@ -772,8 +772,10 @@ describe("control UI session PR subscriptions", () => {
       isConnectionActive: () => false,
     });
 
-    await active.replace("conn-closed", ["orphan"]);
+    const onAdmitted = vi.fn();
+    await active.replace("conn-closed", ["orphan"], undefined, onAdmitted);
 
+    expect(onAdmitted).toHaveBeenCalledTimes(1);
     expect(load).not.toHaveBeenCalled();
     expect(broadcastToConnIds).not.toHaveBeenCalled();
   });

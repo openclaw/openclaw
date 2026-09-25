@@ -7,9 +7,9 @@
  */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { Model } from "../llm/types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";

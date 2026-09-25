@@ -33,7 +33,11 @@ import {
   onSessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
+import {
+  createLazyPromise,
+  createLazyPromiseLoader,
+  createLazyRuntimeSurface,
+} from "../shared/lazy-runtime.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import {
   bindChatAbortTerminalDispatch,
@@ -381,38 +385,14 @@ export function startGatewayEventSubscriptions(params: {
     cacheRejections: true,
   });
 
-  let transcriptUpdateHandlerPromise: Promise<
-    ReturnType<typeof import("./server-session-events.js").createTranscriptUpdateBroadcastHandler>
-  > | null = null;
-  const getTranscriptUpdateHandler = () => {
-    transcriptUpdateHandlerPromise ??= getSessionEventsModule().then(
-      ({ createTranscriptUpdateBroadcastHandler }) =>
-        createTranscriptUpdateBroadcastHandler({
-          broadcastToConnIds: params.broadcastToConnIds,
-          sessionEventSubscribers: params.sessionEventSubscribers,
-          sessionMessageSubscribers: params.sessionMessageSubscribers,
-          chatAbortControllers: params.chatAbortControllers,
-          getSessionRowProjection: params.getSessionRowProjection,
-        }),
-    );
-    return transcriptUpdateHandlerPromise;
-  };
-
-  let lifecycleEventHandlerPromise: Promise<
-    ReturnType<typeof import("./server-session-events.js").createLifecycleEventBroadcastHandler>
-  > | null = null;
-  const getLifecycleEventHandler = () => {
-    lifecycleEventHandlerPromise ??= getSessionEventsModule().then(
-      ({ createLifecycleEventBroadcastHandler }) =>
-        createLifecycleEventBroadcastHandler({
-          broadcastToConnIds: params.broadcastToConnIds,
-          sessionEventSubscribers: params.sessionEventSubscribers,
-          chatAbortControllers: params.chatAbortControllers,
-          getSessionRowProjection: params.getSessionRowProjection,
-        }),
-    );
-    return lifecycleEventHandlerPromise;
-  };
+  const getTranscriptUpdateHandler = createLazyRuntimeSurface(
+    getSessionEventsModule,
+    ({ createTranscriptUpdateBroadcastHandler }) => createTranscriptUpdateBroadcastHandler(params),
+  );
+  const getLifecycleEventHandler = createLazyRuntimeSurface(
+    getSessionEventsModule,
+    ({ createLifecycleEventBroadcastHandler }) => createLifecycleEventBroadcastHandler(params),
+  );
 
   const unsubscribeAgentEvents = onAgentRuntimeEvent((evt) => {
     if (evt.stream === "lifecycle") {
