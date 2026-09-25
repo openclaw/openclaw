@@ -7,6 +7,7 @@ export type TelegramTarget = {
   chatId: string;
   messageThreadId?: number;
   directMessagesTopicId?: number;
+  dmTopicId?: number;
   chatType: "direct" | "group" | "unknown";
 };
 
@@ -52,7 +53,9 @@ export function isNumericTelegramChatId(raw: string): boolean {
 
 export function normalizeTelegramOutboundTarget(raw: string): string {
   const trimmed = raw.trim();
-  const legacyGroupMatch = /^group:(-?\d+(?::(?:direct-topic|topic):\d+|:\d+)?)$/i.exec(trimmed);
+  const legacyGroupMatch = /^group:(-?\d+(?::(?:dm-topic|direct-topic|topic):\d+|:\d+)?)$/i.exec(
+    trimmed,
+  );
   if (legacyGroupMatch?.[1]) {
     return legacyGroupMatch[1];
   }
@@ -91,6 +94,7 @@ export function normalizeTelegramLookupTarget(raw: string): string | undefined {
  * - `chatId` (plain chat ID, t.me link, @username, or internal prefixes like `telegram:...`)
  * - `chatId:topicId` (numeric topic/thread ID)
  * - `chatId:topic:topicId` (explicit topic marker; preferred)
+ * - `chatId:dm-topic:topicId` (bot-private DM topic)
  * - `chatId:direct-topic:topicId` (channel Direct Messages topic)
  */
 function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown" {
@@ -106,18 +110,27 @@ function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown"
 
 export function parseTelegramTarget(to: string): TelegramTarget {
   const normalized = stripTelegramInternalPrefixes(to);
-  const match = /^(.+?):(?:(direct-topic|topic):)?(\d+)$/.exec(normalized);
+  const match = /^(.+?):(?:(dm-topic|direct-topic|topic):)?(\d+)$/.exec(normalized);
   const chatId = match?.[1];
   const topicIdText = match?.[3];
   if (chatId && topicIdText) {
+    const dmTopic = match[2] === "dm-topic";
     const directTopic = match[2] === "direct-topic";
     const topicId = directTopic
       ? parseStrictPositiveInteger(topicIdText)
       : parseStrictNonNegativeInteger(topicIdText);
     if (topicId !== undefined) {
-      return directTopic
-        ? { chatId, directMessagesTopicId: topicId, chatType: resolveTelegramChatType(chatId) }
-        : { chatId, messageThreadId: topicId, chatType: resolveTelegramChatType(chatId) };
+      if (directTopic) {
+        return {
+          chatId,
+          directMessagesTopicId: topicId,
+          chatType: resolveTelegramChatType(chatId),
+        };
+      }
+      if (dmTopic) {
+        return { chatId, dmTopicId: topicId, chatType: resolveTelegramChatType(chatId) };
+      }
+      return { chatId, messageThreadId: topicId, chatType: resolveTelegramChatType(chatId) };
     }
   }
   return {
