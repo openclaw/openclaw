@@ -137,7 +137,7 @@ export function isTaskRegistryTaskSettled(taskId: string): boolean {
 }
 
 /** Pin known identity before yielding; cold or uncertain projections use normal preparation. */
-export function captureResidentTaskRegistryRunCandidates(runId: string): TaskRecord[] | undefined {
+function captureResidentTaskRegistryRunCandidates(runId: string): TaskRecord[] | undefined {
   const normalized = runId.trim();
   if (
     !isTaskRegistryResidentReady() ||
@@ -150,6 +150,33 @@ export function captureResidentTaskRegistryRunCandidates(runId: string): TaskRec
   return candidates.every((task) => isTaskRegistryReadCurrent(task.taskId, "identity"))
     ? candidates.map(cloneTaskRecord)
     : undefined;
+}
+
+/**
+ * Retain the first usable run selection before joining the external read fence.
+ * Cold state linearizes at its first SQL snapshot. A receipt-free call cannot
+ * identify an assignment replaced before that read; producer receipts can.
+ */
+export async function captureTaskRegistryRunSelection(
+  runId: string,
+  matches: (task: Readonly<TaskRecord>) => boolean,
+): Promise<TaskRecord[]> {
+  const normalized = runId.trim();
+  const resident = captureResidentTaskRegistryRunCandidates(normalized);
+  if (resident) {
+    return resident.filter(matches);
+  }
+  const context = captureOpenClawStateWorkerContext();
+  const store = getTaskRegistryStore();
+  const snapshot = await store.loadMutationSnapshotAsync(
+    context,
+    { taskId: "", runId: normalized },
+    { missingDatabase: "empty" },
+  );
+  assertTaskRegistryOwnerCurrent(context, store);
+  return [...snapshot.tasks.values()]
+    .filter((task) => task.runId?.trim() === normalized && matches(task))
+    .map(cloneTaskRecord);
 }
 
 type TaskRegistryReadOwner = {

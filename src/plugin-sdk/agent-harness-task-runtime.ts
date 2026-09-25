@@ -56,7 +56,7 @@ import {
 import { listTaskRecords, type TaskRecord } from "../tasks/runtime-internal.js";
 import { captureTaskExecutionOwner } from "../tasks/task-execution-owner.js";
 import {
-  captureResidentTaskRegistryRunCandidates,
+  captureTaskRegistryRunSelection,
   prepareTaskRegistryRead,
 } from "../tasks/task-registry-read.js";
 import {
@@ -437,9 +437,9 @@ export async function deliverAgentHarnessTaskCompletion(params: {
     task.runtime === "subagent" &&
     Boolean(task.taskKind) &&
     task.requesterSessionKey === requesterSessionKey;
-  const residentTasks = params.expectedTask
+  const selectedTasks = params.expectedTask
     ? undefined
-    : captureResidentTaskRegistryRunCandidates(childSessionKey)?.filter(matchesCompletionScope);
+    : await captureTaskRegistryRunSelection(childSessionKey, matchesCompletionScope);
   const taskRead = await prepareTaskRegistryRead();
   runtimeOwner.assertCurrent();
   assertAgentHarnessTaskRuntimeScope(scope);
@@ -451,7 +451,7 @@ export async function deliverAgentHarnessTaskCompletion(params: {
     assertAgentHarnessTaskRuntimeScope(scope);
     return taskRead.getTasksByRunId(childSessionKey).filter(matchesCompletionScope);
   };
-  const ownedTasks = residentTasks ?? readOwnedTasks();
+  const ownedTasks = selectedTasks ?? readOwnedTasks();
   const sourceTask = ownedTasks.length === 1 ? ownedTasks[0] : undefined;
   const taskReceipt =
     params.expectedTask ?? (sourceTask && captureTaskPersistenceReceipt(sourceTask));

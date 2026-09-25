@@ -127,7 +127,10 @@ const edge = vi.hoisted(() => ({
 }));
 
 vi.mock("node:sqlite", () => ({ DatabaseSync: edge.forbidden }));
-vi.mock("node:worker_threads", () => ({ isMainThread: true, Worker: edge.forbidden }));
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...await importOriginal<typeof import("node:worker_threads")>(),
+  Worker: edge.forbidden,
+}));
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
 }));

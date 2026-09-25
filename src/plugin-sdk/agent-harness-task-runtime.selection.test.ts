@@ -100,9 +100,15 @@ describe("harness task selection with the real registry", () => {
     "empty",
     "cold-empty",
     "explicit-replacement",
+    "cold-replacement",
+    "cold-removed",
+    "cold-inserted",
+    "cold-metadata",
+    "cold-unrelated",
   ] as const)("retains implicit assignment across read preparation: %s", async (change) => {
+    const mutation = change.replace(/^cold-/, "");
     const original = record("original", { runId: "example:completion" });
-    const startsEmpty = change === "inserted" || change === "empty" || change === "cold-empty";
+    const startsEmpty = mutation === "inserted" || mutation === "empty";
     const { store } = configure(startsEmpty ? [] : [original], !change.startsWith("cold"));
     const context = captureOpenClawStateWorkerContext();
     const entered = createDeferredCore();
@@ -115,7 +121,7 @@ describe("harness task selection with the real registry", () => {
     });
     const pending = deliverAgentHarnessTaskCompletion({
       scope: createAgentHarnessTaskRuntimeScope({ requesterSessionKey: ownerKey }),
-      ...(change === "explicit-replacement"
+      ...(mutation === "explicit-replacement"
         ? { expectedTask: captureAgentHarnessTaskAssignment(original) }
         : {}),
       childSessionKey: expectDefined(original.runId, "completion run"),
@@ -132,25 +138,25 @@ describe("harness task selection with the real registry", () => {
           throw new Error("Delivery settled before read preparation");
         }),
       ]);
-      const replaces = change === "replacement" || change === "explicit-replacement";
-      if (replaces || change === "removed") {
+      const replaces = mutation === "replacement" || mutation === "explicit-replacement";
+      if (replaces || mutation === "removed") {
         store.deleteTaskWithDeliveryState(original.taskId);
       }
-      if (replaces || change === "inserted") {
+      if (replaces || mutation === "inserted") {
         store.upsertTaskWithDeliveryState({
           task: record("replacement", { runId: original.runId }),
         });
-      } else if (change === "metadata") {
+      } else if (mutation === "metadata") {
         store.upsertTaskWithDeliveryState({ task: { ...original, progressSummary: "updated" } });
-      } else if (change === "unrelated") {
+      } else if (mutation === "unrelated") {
         store.upsertTaskWithDeliveryState({ task: record("unrelated") });
       }
-      if (replaces || ["removed", "inserted", "metadata", "unrelated"].includes(change)) {
+      if (replaces || ["removed", "inserted", "metadata", "unrelated"].includes(mutation)) {
         await reloadTaskRegistryFromStoreAsync(context);
       }
       release.resolve();
       const result = await pending;
-      const allowed = !replaces && change !== "removed" && change !== "inserted";
+      const allowed = !replaces && mutation !== "removed" && mutation !== "inserted";
       expect(result.delivered).toBe(allowed);
       expect(sendSubagentAnnounceDirectly).toHaveBeenCalledTimes(allowed ? 1 : 0);
       if (allowed) {
@@ -163,7 +169,7 @@ describe("harness task selection with the real registry", () => {
       } else {
         expect(result).toMatchObject({ recoveryBlocked: true });
       }
-      if (replaces || change === "inserted") {
+      if (replaces || mutation === "inserted") {
         expect(getTaskById("replacement")).toEqual(
           record("replacement", { runId: original.runId }),
         );

@@ -33,6 +33,7 @@ import {
 } from "../tasks/detached-task-runtime.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
 import { captureTaskExecutionOwner } from "../tasks/task-execution-owner.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
@@ -84,8 +85,8 @@ vi.mock("../tasks/runtime-internal.js", () => ({
 }));
 
 vi.mock("../tasks/task-registry-read.js", () => ({
-  captureResidentTaskRegistryRunCandidates: (runId: string) =>
-    structuredClone(listTaskRecords().filter((task) => task.runId === runId)),
+  captureTaskRegistryRunSelection: async (runId: string, matches: (task: TaskRecord) => boolean) =>
+    structuredClone(listTaskRecords().filter((task) => task.runId === runId && matches(task))),
   prepareTaskRegistryRead: async () => ({
     getTasksByRunId: (runId: string) => listTaskRecords().filter((task) => task.runId === runId),
   }),
