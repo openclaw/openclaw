@@ -111,15 +111,15 @@ class ControlUiPluginManager extends OpenClawLightDomContentsElement {
             title: entry.pluginId,
             carapace: true,
             stacked: true,
-            control: disabled
-              ? html`<div role="status">${disabled}</div>`
-              : html`<span role="alert">${entry.message}</span>`,
+            role: disabled ? "status" : "alert",
+            control: disabled ?? html`<span>${entry.message}</span>`,
           });
         })}
         ${
           this.reloadError
             ? renderSettingsRow({
-                title: html`<span role="alert">${this.reloadError}</span>`,
+                title: this.reloadError,
+                role: "alert",
                 carapace: true,
               })
             : nothing
