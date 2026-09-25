@@ -43,6 +43,14 @@ describe("interrupted ordinary worktree removal recovery", () => {
   let head: string;
   let admin: string;
 
+  const pinSnapshot = async () => {
+    const update = execFileAsync("git", ["-C", repo, "update-ref", "--stdin"]);
+    update.child.stdin?.end(
+      `update refs/openclaw/snapshots/${record.id} ${snapshot}\nupdate refs/openclaw/removals/${record.id} ${snapshot}\n`,
+    );
+    await update;
+  };
+
   beforeEach(async () => {
     root = await fs.realpath(dirs.make("openclaw-removal-recovery-"));
     repo = await initialize(root);
@@ -74,8 +82,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
       "original completed capture",
     );
     const snapshotRef = `refs/openclaw/snapshots/${record.id}`;
-    await git(repo, "update-ref", snapshotRef, snapshot);
-    await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, snapshot);
+    await pinSnapshot();
     updateRegistryWorktree(env, record.id, { snapshotRef, provisionedState: [] });
     await fs.unlink(path.join(record.path, ".git"));
   });
@@ -427,8 +434,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
     await git(record.path, "commit", "-m", "captured CRLF checkout");
     head = await git(record.path, "rev-parse", "HEAD");
     snapshot = await git(repo, "commit-tree", `${head}^{tree}`, "-p", head, "-m", "clean capture");
-    await git(repo, "update-ref", `refs/openclaw/snapshots/${record.id}`, snapshot);
-    await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, snapshot);
+    await pinSnapshot();
     await fs.unlink(path.join(record.path, "converted.txt"));
     // Establish the original clean checkout's stat data before interrupting it.
     // Production recovery must never refresh or replace that retained index.
@@ -492,8 +498,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
     await git(record.path, "commit", "-m", "capture filter attribute");
     head = await git(record.path, "rev-parse", "HEAD");
     snapshot = await git(repo, "commit-tree", `${head}^{tree}`, "-p", head, "-m", "clean capture");
-    await git(repo, "update-ref", `refs/openclaw/snapshots/${record.id}`, snapshot);
-    await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, snapshot);
+    await pinSnapshot();
     const marker = path.join(root, "filter-executed");
     const script = path.join(root, "filter.cjs");
     await fs.writeFile(
@@ -663,8 +668,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
     await git(record.path, "commit", "-m", "capture checkout representation");
     head = await git(record.path, "rev-parse", "HEAD");
     snapshot = await git(repo, "commit-tree", `${head}^{tree}`, "-p", head, "-m", "clean capture");
-    await git(repo, "update-ref", `refs/openclaw/snapshots/${record.id}`, snapshot);
-    await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, snapshot);
+    await pinSnapshot();
     if (kind === "symlink-file") {
       await git(repo, "config", "core.symlinks", "false");
     }
@@ -723,8 +727,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
         "-m",
         "clean capture",
       );
-      await git(repo, "update-ref", `refs/openclaw/snapshots/${record.id}`, snapshot);
-      await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, snapshot);
+      await pinSnapshot();
       const physicalDirectory =
         process.platform === "darwin" ? directory.normalize("NFD") : directory;
       const physicalFilename = process.platform === "darwin" ? filename.normalize("NFD") : filename;
