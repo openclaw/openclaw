@@ -11,6 +11,7 @@ import {
   attributeWorkerToPool,
   createCpuTrackedWorker,
   markWorkerRetirement,
+  receiveWorkerMemoryPort,
 } from "./worker-cpu.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
@@ -403,6 +404,10 @@ class WorkerTaskPoolCore<Input, Output> {
     attributeWorkerToPool(worker, this);
     slot.worker = worker;
     worker.on("message", (message: unknown) => {
+      // Native message events inherit the Worker's detached creation context.
+      if (receiveWorkerMemoryPort(worker, message)) {
+        return;
+      }
       const task = slot.task;
       if (task) {
         task.runInContext(() => this.receive(slot, message));
@@ -461,6 +466,7 @@ class WorkerTaskPoolCore<Input, Output> {
             taskId: task.id,
             interactive: Boolean(task.options.onRequest),
             nativeSections: slot.nativeSections.buffer,
+            sampleMemory: true,
           },
           transferList,
         );
