@@ -102,6 +102,62 @@ describe("plugin async iterable protocol", () => {
     },
   );
 
+  it("fences retained and pending plain results when their consumer releases its token", async () => {
+    const instance = owner();
+    const consumer = instance.retainConsumer();
+    const later = createDeferredCore<IteratorResult<string>>();
+    let calls = 0;
+    const stream = consumer.wrap({
+      [Symbol.asyncIterator]() {
+        return {
+          next: () => (++calls === 1 ? { done: false, value: "first" } : later.promise),
+        };
+      },
+    });
+    const iterator = stream[Symbol.asyncIterator]();
+    const retained = await iterator.next();
+    const pending = Promise.resolve(iterator.next());
+    const rejected = expect(pending).rejects.toThrow("stream is closed");
+    try {
+      consumer.release();
+      expect(instance.run(() => "still live")).toBe("still live");
+      expect(() => retained.value).toThrow("stream is closed");
+      later.resolve({ done: false, value: "late" });
+      await rejected;
+    } finally {
+      consumer.release();
+      later.resolve({ done: true, value: "cleanup" });
+      await pending.catch(() => {});
+    }
+  });
+
+  it("settles native thenable values inside their stream admission", async () => {
+    const instance = owner();
+    const then = vi.fn((resolve: (value: string) => void) => {
+      expect(instance.hasActiveCall).toBe(true);
+      resolve("settled value");
+    });
+    const value = Object.assign(new Date(0), { then });
+    const iterator = instance
+      .wrap({
+        [Symbol.asyncIterator]() {
+          return {
+            next: () => ({ done: false, value }),
+            return: () => ({ done: true, value: undefined }),
+          };
+        },
+      })
+      [Symbol.asyncIterator]();
+    try {
+      const result = await iterator.next();
+      expect(then).not.toHaveBeenCalled();
+      await expect(result.value).resolves.toBe("settled value");
+      expect(then).toHaveBeenCalledOnce();
+    } finally {
+      await iterator.return();
+    }
+  });
+
   it.each(["missing", "done-false"] as const)(
     "releases an early-break admission when return is %s",
     async (kind) => {
