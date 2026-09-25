@@ -1068,8 +1068,13 @@ describe("OpenCode session catalog", () => {
     );
 
     const listing = provider!.list({ hostIds: ["node:node-a", "node:node-b"] });
-    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
-    releaseSlow?.(page("session-a"));
+    const settledListing = Promise.allSettled([listing]);
+    try {
+      await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+    } finally {
+      releaseSlow?.(page("session-a"));
+      await settledListing;
+    }
     await expect(listing).resolves.toEqual([
       expect.objectContaining({ nodeId: "node-a", sessions: [expect.any(Object)] }),
       expect.objectContaining({ nodeId: "node-b", sessions: [expect.any(Object)] }),

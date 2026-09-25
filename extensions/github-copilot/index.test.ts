@@ -1281,29 +1281,7 @@ describe("github-copilot plugin", () => {
     const method = requireAuthMethod(provider.auth, 0);
     const agentDir = await createAgentDir();
     writeExistingCopilotTokenProfile(agentDir);
-    const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {
-      const target =
-        typeof input === "string"
-          ? input
-          : input instanceof URL
-            ? input.toString()
-            : input instanceof Request
-              ? input.url
-              : String(input);
-      if (target === "https://github.com/login/device/code") {
-        return Response.json({
-          device_code: "device-code-stub",
-          user_code: "ABCD-1234",
-          verification_uri: "https://github.com/login/device",
-          expires_in: 900,
-          interval: 0,
-        });
-      }
-      if (target === "https://github.com/login/oauth/access_token") {
-        return Response.json({ access_token: "refreshed-token", token_type: "bearer" });
-      }
-      throw new Error(`unexpected fetch in github-copilot refresh test: ${target}`);
-    });
+    const fetchMock = buildDeviceFlowFetchMock("github.com", "refreshed-token");
     vi.stubGlobal("fetch", fetchMock);
     mocks.fetchWithSsrFGuard.mockImplementation(async (params) => ({
       response: await fetchMock(params.url, params.init),
@@ -1314,54 +1292,40 @@ describe("github-copilot plugin", () => {
       confirm: vi.fn(async () => true),
       note: vi.fn(),
     };
-    const isTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-    Object.defineProperty(process.stdin, "isTTY", {
-      configurable: true,
-      value: true,
+
+    const result = await runDeviceAuthWithTty((openUrl) =>
+      method.run({
+        config: {},
+        env: {},
+        agentDir,
+        workspaceDir: "/tmp/workspace",
+        prompter,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        opts: {},
+        secretInputMode: "plaintext",
+        allowSecretRefPrompt: false,
+        isRemote: false,
+        openUrl,
+        oauth: { createVpsAwareHandlers: vi.fn() },
+      } as never),
+    );
+
+    expect(prompter.confirm).toHaveBeenCalledWith({
+      message: "GitHub Copilot auth already exists. Re-run login?",
+      initialValue: false,
     });
-
-    try {
-      const result = await runDeviceAuthWithFakeTimers((openUrl) =>
-        method.run({
-          config: {},
-          env: {},
-          agentDir,
-          workspaceDir: "/tmp/workspace",
-          prompter,
-          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-          opts: {},
-          secretInputMode: "plaintext",
-          allowSecretRefPrompt: false,
-          isRemote: false,
-          openUrl,
-          oauth: { createVpsAwareHandlers: vi.fn() },
-        } as never),
-      );
-
-      expect(prompter.confirm).toHaveBeenCalledWith({
-        message: "GitHub Copilot auth already exists. Re-run login?",
-        initialValue: false,
-      });
-      if (!result) {
-        throw new Error("Expected GitHub Copilot auth result");
-      }
-      expect(result.profiles[0]?.credential).toEqual({
-        type: "token",
-        provider: "github-copilot",
-        token: "refreshed-token",
-      });
-      expect(result.profiles[0]?.secretStorage).toBeUndefined();
-      expect(result.notes).toContain(
-        "Plaintext secret input mode was selected, so the GitHub Copilot token will remain inline in the auth profile and openclaw secrets audit --check will report it.",
-      );
-    } finally {
-      vi.unstubAllGlobals();
-      if (isTtyDescriptor) {
-        Object.defineProperty(process.stdin, "isTTY", isTtyDescriptor);
-      } else {
-        delete (process.stdin as { isTTY?: boolean }).isTTY;
-      }
+    if (!result) {
+      throw new Error("Expected GitHub Copilot auth result");
     }
+    expect(result.profiles[0]?.credential).toEqual({
+      type: "token",
+      provider: "github-copilot",
+      token: "refreshed-token",
+    });
+    expect(result.profiles[0]?.secretStorage).toBeUndefined();
+    expect(result.notes).toContain(
+      "Plaintext secret input mode was selected, so the GitHub Copilot token will remain inline in the auth profile and openclaw secrets audit --check will report it.",
+    );
   });
 
   function buildDeviceFlowFetchMock(domain: string, accessToken: string) {

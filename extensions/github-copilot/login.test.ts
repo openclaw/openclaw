@@ -1,4 +1,5 @@
 // Github Copilot tests cover device-flow login behavior.
+import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -319,29 +320,10 @@ describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
 
 describe("postGitHubDeviceFlowForm — response size bound", () => {
   it("bounds oversized device code body and cancels the stream", async () => {
-    const chunk = new Uint8Array(1024 * 1024); // 1 MiB
-    let readCount = 0;
-    let canceled = false;
-    // 64 chunks × 1 MiB = 64 MiB — far exceeds the 16 MiB cap
-    const oversizedBody = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (readCount >= 64) {
-          controller.close();
-          return;
-        }
-        readCount += 1;
-        controller.enqueue(chunk);
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
+    const oversized = oversizedJsonResponse({ chunkCount: 64, chunkSize: 1024 * 1024 });
 
     mocks.fetchWithSsrFGuard.mockImplementation(async () => ({
-      response: new Response(oversizedBody, {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+      response: oversized.response,
       finalUrl: DEVICE_CODE_URL,
       release: async () => {},
     }));
@@ -351,14 +333,12 @@ describe("postGitHubDeviceFlowForm — response size bound", () => {
     );
 
     // Stream must be cancelled before all 64 MiB are consumed
-    expect(readCount).toBeLessThan(64);
-    expect(canceled).toBe(true);
+    expect(oversized.getReadCount()).toBeLessThan(64);
+    expect(oversized.wasCanceled()).toBe(true);
   });
 
   it("bounds oversized access token body and cancels the stream", async () => {
-    const chunk = new Uint8Array(1024 * 1024); // 1 MiB
-    let readCount = 0;
-    let canceled = false;
+    const oversized = oversizedJsonResponse({ chunkCount: 64, chunkSize: 1024 * 1024 });
     let callIdx = 0;
 
     mocks.fetchWithSsrFGuard.mockImplementation(async () => {
@@ -367,25 +347,8 @@ describe("postGitHubDeviceFlowForm — response size bound", () => {
         return guardResponse(VALID_DEVICE_CODE_BODY);
       }
 
-      const oversizedBody = new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (readCount >= 64) {
-            controller.close();
-            return;
-          }
-          readCount += 1;
-          controller.enqueue(chunk);
-        },
-        cancel() {
-          canceled = true;
-        },
-      });
-
       return {
-        response: new Response(oversizedBody, {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
+        response: oversized.response,
         finalUrl: ACCESS_TOKEN_URL,
         release: async () => {},
       };
@@ -396,8 +359,8 @@ describe("postGitHubDeviceFlowForm — response size bound", () => {
     );
 
     // Stream must be cancelled before all 64 MiB are consumed
-    expect(readCount).toBeLessThan(64);
-    expect(canceled).toBe(true);
+    expect(oversized.getReadCount()).toBeLessThan(64);
+    expect(oversized.wasCanceled()).toBe(true);
   });
 });
 

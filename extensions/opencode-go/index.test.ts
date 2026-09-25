@@ -9,7 +9,7 @@ import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runt
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -58,6 +58,21 @@ function upstreamModel(id: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
+function createCompletedGoStream(model: Parameters<StreamFn>[0]) {
+  const stream = createAssistantMessageEventStream();
+  stream.push({
+    type: "done",
+    reason: "stop",
+    message: makeAgentAssistantMessage({
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+    }),
+  });
+  return stream;
+}
+
 async function captureGoWirePayload({
   thinkingLevel,
   payload,
@@ -88,7 +103,7 @@ async function captureGoWirePayload({
   };
   const baseStreamFn = vi.fn<StreamFn>((runtimeModel, _context, options) => {
     void options?.onPayload?.(payload, runtimeModel);
-    return createAssistantMessageEventStream();
+    return createCompletedGoStream(runtimeModel);
   });
   const wrap = standalone ? provider.wrapSimpleCompletionStreamFn : provider.wrapStreamFn;
   const streamFn = wrap?.({
@@ -100,7 +115,8 @@ async function captureGoWirePayload({
     thinkingLevel,
   });
   expect(streamFn).toBeTypeOf("function");
-  await streamFn?.(model, { messages: [] }, {});
+  const stream = await streamFn?.(model, { messages: [] }, {});
+  await expect(stream?.result()).resolves.toMatchObject({ stopReason: "stop" });
   expect(baseStreamFn).toHaveBeenCalledOnce();
   return payload;
 }
@@ -164,7 +180,7 @@ describe("opencode-go provider plugin", () => {
         );
         await options?.onPayload?.(request, runtimeModel);
         payload = request;
-        return createAssistantMessageEventStream();
+        return createCompletedGoStream(runtimeModel);
       };
       const wrapped = provider.wrapSimpleCompletionStreamFn?.({
         provider: "opencode-go",
@@ -177,13 +193,14 @@ describe("opencode-go provider plugin", () => {
         throw new Error("Missing standalone completion wrapper");
       }
       for (const reasoning of ["off", "max", undefined] as const) {
-        await wrapped(
+        const stream = await wrapped(
           model,
           {
             messages: [{ role: "user", content: "Synthetic request", timestamp: 1 }],
           },
           { reasoning },
         );
+        await expect(stream.result()).resolves.toMatchObject({ stopReason: "stop" });
 
         if (modelId === "kimi-k3") {
           expect(payload).not.toHaveProperty("thinking");
@@ -790,9 +807,9 @@ describe("opencode-go provider plugin", () => {
       },
     ] as const) {
       const capturedHeaders: Array<Record<string, string> | undefined> = [];
-      const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-        capturedHeaders.push((options as { headers?: Record<string, string> })?.headers);
-        return {} as never;
+      const baseStreamFn: StreamFn = (runtimeModel, _context, options) => {
+        capturedHeaders.push(options?.headers);
+        return createCompletedGoStream(runtimeModel);
       };
       const streamFn = testCase.wrap?.({
         streamFn: baseStreamFn as never,
@@ -803,7 +820,7 @@ describe("opencode-go provider plugin", () => {
       } as never);
 
       expect(streamFn).toBeTypeOf("function");
-      await streamFn?.(
+      const nativeStream = await streamFn?.(
         {
           provider: "opencode-go",
           id: "qwen3.8-max",
@@ -813,7 +830,8 @@ describe("opencode-go provider plugin", () => {
         {} as never,
         { headers: { "User-Agent": "configured-client/1.0", "X-Custom": "1" } },
       );
-      await streamFn?.(
+      await expect(nativeStream?.result()).resolves.toMatchObject({ stopReason: "stop" });
+      const proxyStream = await streamFn?.(
         {
           provider: "opencode-go",
           id: "qwen3.8-max",
@@ -823,6 +841,7 @@ describe("opencode-go provider plugin", () => {
         {} as never,
         { headers: { "User-Agent": "configured-client/2.0", "X-Custom": "2" } },
       );
+      await expect(proxyStream?.result()).resolves.toMatchObject({ stopReason: "stop" });
 
       expect(capturedHeaders).toEqual([
         {
