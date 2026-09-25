@@ -84,7 +84,7 @@ describe("resolveGatewayProgramArguments", () => {
   );
 
   it.skipIf(Boolean(process.versions.bun))(
-    "sizes only the Gateway in an ordinary Node spawn tree",
+    "omits a process-wide heap flag and keeps the worker old-space budget effective",
     async () => {
       const entryPath = path.resolve("/opt/openclaw/dist/index.js");
       process.argv = [originalExecPath, entryPath];
@@ -95,29 +95,33 @@ describe("resolveGatewayProgramArguments", () => {
         runtime: "node",
         runtimePath: originalExecPath,
       });
+      const nativeFlags = programArguments.slice(1, programArguments.indexOf(entryPath));
+      expect(nativeFlags).toEqual([]);
+
       const measurement = "console.log(require('node:v8').getHeapStatistics().heap_size_limit)";
       const environment = { NODE_OPTIONS: resolveGatewayHeapNodeOptions(undefined) };
       const nativeDefault = spawnSync(originalExecPath, ["-e", measurement], {
         env: environment,
         encoding: "utf8",
       });
-      const parent = spawnSync(
-        originalExecPath,
-        [
-          ...programArguments.slice(1, programArguments.indexOf(entryPath)),
-          "-e",
-          `const child = require('node:child_process').spawnSync(process.execPath, ['-e', ${JSON.stringify(measurement)}], { encoding: 'utf8' });
-       if (child.status !== 0) throw new Error(child.stderr);
-       console.log(JSON.stringify({ heap: require('node:v8').getHeapStatistics().heap_size_limit, used: process.memoryUsage().heapUsed, child: Number(child.stdout), options: process.env.NODE_OPTIONS }));`,
-        ],
-        { env: environment, encoding: "utf8" },
-      );
+      // The real worker entrypoint declares a 512 MiB old-generation budget. A
+      // process-wide flag would override it, so the managed command must omit it.
+      const workerProbe = `const { Worker } = require('node:worker_threads');
+       const v8 = require('node:v8');
+       const worker = new Worker("const { parentPort } = require('node:worker_threads'); parentPort.postMessage(require('node:v8').getHeapStatistics().heap_size_limit);", { eval: true, resourceLimits: { maxOldGenerationSizeMb: 512 } });
+       worker.once('message', (workerHeap) => {
+         console.log(JSON.stringify({ heap: v8.getHeapStatistics().heap_size_limit, workerHeap, options: process.env.NODE_OPTIONS }));
+         worker.terminate();
+       });`;
+      const parent = spawnSync(originalExecPath, [...nativeFlags, "-e", workerProbe], {
+        env: environment,
+        encoding: "utf8",
+      });
       expect(nativeDefault.status, nativeDefault.stderr).toBe(0);
       expect(parent.status, parent.stderr).toBe(0);
       const result = JSON.parse(parent.stdout);
-      expect(result.heap).toBeGreaterThanOrEqual(16384 * 1024 ** 2);
-      expect(result.used).toBeLessThan(64 * 1024 ** 2);
-      expect(result.child).toBe(Number(nativeDefault.stdout));
+      expect(result.heap).toBe(Number(nativeDefault.stdout));
+      expect(result.workerHeap).toBeLessThanOrEqual(512 * 1.5 * 1024 ** 2);
       expect(result.options).toBe("");
     },
   );
@@ -210,7 +214,6 @@ describe("resolveGatewayProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       validatedNodePath,
-      "--max-old-space-size=16384",
       indexPath,
       "gateway",
       "--port",
@@ -238,7 +241,6 @@ describe("resolveGatewayProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       validatedNodePath,
-      "--max-old-space-size=16384",
       entryPath,
       "gateway",
       "--port",
@@ -266,7 +268,6 @@ describe("resolveGatewayProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       validatedNodePath,
-      "--max-old-space-size=16384",
       entryPath,
       "gateway",
       "--port",
@@ -295,10 +296,10 @@ describe("resolveGatewayProgramArguments", () => {
 
     // Should use the symlinked canonical index.js path, not the realpath-resolved versioned path
     expect(result.programArguments[0]).toBe(validatedNodePath);
-    expect(result.programArguments[2]).toBe(
+    expect(result.programArguments[1]).toBe(
       path.resolve("/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/index.js"),
     );
-    expect(result.programArguments[2]).not.toContain("@2026.1.21-2");
+    expect(result.programArguments[1]).not.toContain("@2026.1.21-2");
   });
 
   it("falls back to node_modules package dist when .bin path is not resolved", async () => {
@@ -321,7 +322,6 @@ describe("resolveGatewayProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       validatedNodePath,
-      "--max-old-space-size=16384",
       indexPath,
       "gateway",
       "--port",
@@ -345,7 +345,6 @@ describe("resolveGatewayProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       validatedNodePath,
-      "--max-old-space-size=16384",
       "--import",
       "tsx",
       repoEntryPath,
@@ -645,7 +644,7 @@ it.each([
         runtime,
         runtimePath,
       });
-      expect(gateway.programArguments[runtime === "node" ? 2 : 1]).toBe(expected);
+      expect(gateway.programArguments[1]).toBe(expected);
       expect(node.programArguments[1]).toBe(expected);
     }
   },

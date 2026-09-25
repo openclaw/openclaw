@@ -341,7 +341,9 @@ file-system scan or writing a pre-OOM snapshot.
 On Node, persistent database workers collect garbage after a completed operation
 when their used heap has grown by 32 MiB since the last idle collection. SQLite,
 history, transcript, and reclamation workers request a 512 MiB V8 old-generation
-limit; an explicit process-wide `--max-old-space-size` overrides Node's worker
+limit. A managed Node Gateway install does not set a process-wide
+`--max-old-space-size`, so these worker budgets stay effective; an explicit
+operator-owned process-wide `--max-old-space-size` overrides Node's worker
 resource limit. These limits do not cover native allocations or transferred buffers.
 Critical memory pressure retires idle workers through their existing cleanup owners,
 including when diagnostic event collection is disabled. Active operations keep
