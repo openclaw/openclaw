@@ -40,6 +40,7 @@ import {
   parseTimeoutMsOrExit,
   parseUpdateTimeoutMs,
   readPackageVersion,
+  resolveNodeRunner,
   resolveUpdateRoot,
   tryWriteCompletionCache,
   type UpdateFinalizeOptions,
@@ -140,8 +141,11 @@ export async function updateFinalizeCommand(
         recoveryRunIds === undefined ? "finalize" : "unknown",
       );
       lifecycle.root = root;
+      // A custom Bun executable may not be named "bun".
+      const nodeRunner = process.versions.bun ? process.execPath : resolveNodeRunner();
       const target: UpdateTriageTarget = {
         root,
+        nodeRunner,
         env: {
           ...resolveServiceRefreshEnv(process.env, invocationCwd),
           [UPDATE_RUN_ID_ENV]: runId,
@@ -159,7 +163,7 @@ export async function updateFinalizeCommand(
                 );
                 return await updateFinalizeCommandInternal(
                   opts,
-                  prepared,
+                  { ...prepared, nodeRunner },
                   lifecycle,
                   recoveryRunIds ?? [],
                   runId,
@@ -297,14 +301,21 @@ async function prepareUpdateFinalization(
 
 async function updateFinalizeCommandInternal(
   opts: UpdateFinalizeOptions,
-  prepared: Awaited<ReturnType<typeof prepareUpdateFinalization>>,
+  prepared: Awaited<ReturnType<typeof prepareUpdateFinalization>> & { nodeRunner: string },
   lifecycle: UpdateFinalizationLifecycle,
   recoveryRunIds: readonly string[],
   invokingRunId: string,
   ownsMaintenance: boolean,
 ): Promise<() => Promise<void>> {
-  const { root, preFinalizeConfig, requestedChannel, storedChannel, effectiveChannel, channel } =
-    prepared;
+  const {
+    root,
+    nodeRunner,
+    preFinalizeConfig,
+    requestedChannel,
+    storedChannel,
+    effectiveChannel,
+    channel,
+  } = prepared;
   let { configSnapshot } = prepared;
   let doctorWarnings: string[] = [];
   const onDoctorWarnings = (warnings: string[]) => {
@@ -342,6 +353,7 @@ async function updateFinalizeCommandInternal(
           runUpdateFinalizationDoctorInFreshProcess({
             phase: "pre-plugin",
             root,
+            nodeRunner,
             runId: invokingRunId,
             yes: opts.yes === true,
             json: opts.json === true,
@@ -411,6 +423,7 @@ async function updateFinalizeCommandInternal(
       async (phase) => {
         const result = await completePostCorePluginUpdate({
           root,
+          nodeRunner,
           runId: invokingRunId,
           pluginUpdate: initialPluginUpdate,
           freshDoctorRequired: initialPluginUpdate.changed,
@@ -436,7 +449,7 @@ async function updateFinalizeCommandInternal(
       async () =>
         opts.deferCompletionCache
           ? ("deferred" as const)
-          : await tryWriteCompletionCache(root, Boolean(opts.json), completionTimeout),
+          : await tryWriteCompletionCache(root, Boolean(opts.json), completionTimeout, nodeRunner),
       (result) => result,
     );
 
