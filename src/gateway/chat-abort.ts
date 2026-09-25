@@ -22,7 +22,10 @@ import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import { notifyChatAbortControllerRemoved } from "./chat-abort-lifecycle-internal.js";
+import {
+  notifyChatAbortControllerRemoved,
+  publishChatAbortControllerEntry,
+} from "./chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import { appendChatCanvasBlocksToMessage } from "./chat-display-projection.canvas.js";
 import { resolveChatRunOwnerAgentId } from "./chat-run-owner.js";
@@ -608,6 +611,7 @@ export function abortChatRunById(
   active.projectSessionTerminalPending = true;
   active.projectSessionTerminalObservedAt = undefined;
   active.registrationCleanupRequested = true;
+  publishChatAbortControllerEntry(ops.chatAbortControllers, runId, active);
   // Approval cancellation and run abort share this owner so authorization
   // cannot outlive the active run whose controller is about to terminate.
   if (active.agentRunDelegatedAuthority) {

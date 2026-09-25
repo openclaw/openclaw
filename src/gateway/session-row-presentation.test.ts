@@ -7,6 +7,7 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import {
   claimAgentRunContext,
@@ -16,12 +17,14 @@ import {
 import { readUserProfileIdentity, retainUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { publishChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.js";
 import {
   createExpectedProfileBinding,
   ExpectedProfileMismatchError,
   prepareGatewayRecipientProfile,
 } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { bindChatSendPreparedSession } from "./server-methods/chat-send-session-binding.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
@@ -340,6 +343,22 @@ it("presents current recipient roles without SQLite while rejecting source overr
         expiresAtMs: Date.now() + 60_000,
       };
       connection.chatAbortControllers.set("old-run", activeRun);
+      for (let index = 0; index < 49; index++) {
+        connection.chatAbortControllers.set(`unrelated-${index}`, {
+          ...activeRun,
+          sessionKey: `agent:main:unrelated-${index}`,
+          sessionId: `unrelated-session-${index}`,
+        });
+      }
+      const controllerScans = vi.spyOn(connection.chatAbortControllers, Symbol.iterator);
+      connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
+      expect(controllerScans).toHaveBeenCalledTimes(1);
+      controllerScans.mockRestore();
+      for (const client of clients.slice(0, 2)) {
+        expect(
+          JSON.parse(String(vi.mocked(client.socket).send.mock.lastCall?.[0])).payload.session,
+        ).toMatchObject({ hasActiveRun: true, activeRunIds: ["old-run"] });
+      }
       for (const client of clients) {
         vi.mocked(client.socket).send.mockClear();
       }
@@ -368,6 +387,50 @@ it("presents current recipient roles without SQLite while rejecting source overr
         });
       }
       expect(vi.mocked(clients[2]!.socket).send.mock.calls).toHaveLength(0);
+      const replacement = connection.chatAbortControllers.get("replacement-run")!;
+      const bindSession = bindChatSendPreparedSession({
+        chatAbortControllers: connection.chatAbortControllers,
+        clientRunId: "replacement-run",
+        sessionKey: replacement.sessionKey,
+        sessionBinding: replacement,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        admission: { isActive: () => true },
+        progressRefresh: false,
+      });
+      for (const change of ["session-id", "terminal"] as const) {
+        replacement.sessionId = entry.sessionId;
+        replacement.projectSessionActive = true;
+        publishChatAbortControllerEntry(
+          connection.chatAbortControllers,
+          "replacement-run",
+          replacement,
+        );
+        for (const client of clients) {
+          vi.mocked(client.socket).send.mockClear();
+        }
+        vi.mocked(clients[0]!.socket).send.mockImplementationOnce(() => {
+          if (change === "session-id") {
+            bindSession({ sessionKey: replacement.sessionKey, sessionId: "adopted-session" });
+          } else {
+            replacement.projectSessionActive = false;
+            publishChatAbortControllerEntry(
+              connection.chatAbortControllers,
+              "replacement-run",
+              replacement,
+            );
+          }
+        });
+        connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
+        for (const [index, hasActiveRun] of [true, false].entries()) {
+          const sends = vi.mocked(clients[index]!.socket).send.mock.calls;
+          expect(sends).toHaveLength(1);
+          expect(JSON.parse(String(sends[0]?.[0])).payload.session).toMatchObject({
+            hasActiveRun,
+            activeRunIds: hasActiveRun ? ["replacement-run"] : [],
+          });
+        }
+        expect(vi.mocked(clients[2]!.socket).send.mock.calls).toHaveLength(0);
+      }
       connection.chatAbortControllers.clear();
       expect(prepares).not.toHaveBeenCalled();
       expect(exec).not.toHaveBeenCalled();

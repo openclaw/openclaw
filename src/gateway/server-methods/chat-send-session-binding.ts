@@ -2,6 +2,7 @@ import type { ReplySessionBinding } from "../../auto-reply/reply/get-reply.types
 import { createAbortError } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import { publishChatAbortControllerEntry } from "../chat-abort-lifecycle-internal.js";
 import { isChatAbortControllerEntryAbortable } from "../chat-abort.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 
@@ -35,5 +36,10 @@ export function bindChatSendPreparedSession(params: {
       throw createAbortError("chat session preparation no longer owns its admission");
     }
     sessionBinding.sessionId = binding.sessionId;
+    publishChatAbortControllerEntry(
+      params.chatAbortControllers,
+      params.clientRunId,
+      sessionBinding,
+    );
   };
 }

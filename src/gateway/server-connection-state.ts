@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 // Gateway connection and run registries.
 // This state is transport-fed but can be constructed without HTTP or WebSocket servers.
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { ChatAbortControllerRegistry } from "./chat-abort-lifecycle-internal.js";
 import { createEventWebPushDelivery } from "./event-web-push.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
@@ -14,7 +14,7 @@ import {
 } from "./server-chat-state.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
-import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
@@ -128,21 +128,30 @@ export function createGatewayConnectionState(params: {
       }
       const now = Date.now();
       const ancestors = projection.ancestorRows(record);
+      let projectedAgentRuns = projection.state.rowContext.projectedAgentRuns;
+      let runRevision = chatAbortControllers.revision;
+      let projectRun: ReturnType<typeof createVisibleActiveSessionRunProjector> | undefined;
       return (client) => {
         if (!projection.isCurrent(record)) {
           return undefined;
         }
-        const { projectedAgentRuns } = projection.state.rowContext;
+        if (
+          !projectRun ||
+          runRevision !== chatAbortControllers.revision ||
+          projectedAgentRuns !== projection.state.rowContext.projectedAgentRuns
+        ) {
+          runRevision = chatAbortControllers.revision;
+          projectedAgentRuns = projection.state.rowContext.projectedAgentRuns;
+          projectRun = createVisibleActiveSessionRunProjector(
+            { chatAbortControllers },
+            projectedAgentRuns,
+          );
+        }
         const presentation = prepareProjectedSessionPresentation(
           projection,
           client,
           now,
-          (selection) =>
-            resolveVisibleActiveSessionRunState({
-              ...selection,
-              context: { chatAbortControllers },
-              projectedAgentRunIndex: projectedAgentRuns,
-            }),
+          projectRun,
         );
         const enrichment = { includeDerivedTitles: true, includeLastMessage: true };
         const { row } = presentation.snapshot(query, enrichment);
@@ -205,7 +214,7 @@ export function createGatewayConnectionState(params: {
   const chatRunRegistry = chatRunState.registry;
   const addChatRun = chatRunRegistry.add;
   const removeChatRun = chatRunRegistry.remove;
-  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+  const chatAbortControllers = new ChatAbortControllerRegistry();
   const chatQueuedTurns = new Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>();
   const toolEventRecipients = chatRunState.toolEventRecipients;
 

@@ -1,3 +1,48 @@
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
+
+/** Registration publications invalidate indexes retained within a synchronous fan-out. */
+export class ChatAbortControllerRegistry extends Map<string, ChatAbortControllerEntry> {
+  #revision = 0;
+
+  constructor() {
+    super();
+  }
+
+  get revision(): number {
+    return this.#revision;
+  }
+
+  override set(runId: string, entry: ChatAbortControllerEntry): this {
+    super.set(runId, entry);
+    this.#revision += 1;
+    return this;
+  }
+
+  override delete(runId: string): boolean {
+    const removed = super.delete(runId);
+    if (removed) {
+      this.#revision += 1;
+    }
+    return removed;
+  }
+
+  override clear(): void {
+    super.clear();
+    this.#revision += 1;
+  }
+}
+
+/** Retained callbacks must not restore a registration that has been replaced or removed. */
+export function publishChatAbortControllerEntry(
+  entries: Map<string, ChatAbortControllerEntry>,
+  runId: string,
+  entry: ChatAbortControllerEntry,
+): void {
+  if (entries.get(runId) === entry) {
+    entries.set(runId, entry);
+  }
+}
+
 const terminalPersistenceErrorByEntry = new WeakMap<object, unknown>();
 export type ChatAbortTerminalDispatch = {
   settled: Promise<void>;
