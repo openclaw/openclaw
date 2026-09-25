@@ -16,6 +16,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
+import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { sessionsTailCommand } from "./sessions-tail.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -115,6 +116,46 @@ describe("sessionsTailCommand", () => {
     await writeSessionEntry();
     await appendEvents([
       makeEvent({
+        type: "trace.metadata",
+        ts: "2026-05-18T12:04:15.000Z",
+        data: {
+          skills: { entries: [{ name: "SECRET" }, { name: "also-secret" }] },
+          prompting: {
+            skillsPrompt: "SECRET skill prompt",
+            systemPromptReport: {
+              currentTurn: { promptChars: 1_200 },
+              systemPrompt: { chars: 24_500 },
+              skills: {
+                promptChars: 3_400,
+                entries: [{ name: "SECRET" }, { name: "also-secret" }],
+              },
+              tools: {
+                schemaChars: 6_789,
+                entries: [{ name: "bash" }, { name: "read" }],
+              },
+            },
+          },
+        },
+      }),
+      makeEvent({
+        type: "context.compiled",
+        ts: "2026-05-18T12:04:16.000Z",
+        data: {
+          prompt: "ask SECRET",
+          systemPrompt: {
+            truncated: true,
+            reason: "trajectory-field-size-limit",
+            originalChars: 39_406,
+          },
+          tools: [{ name: "bash" }, { name: "read" }],
+        },
+      }),
+      makeEvent({
+        type: "prompt.submitted",
+        ts: "2026-05-18T12:04:17.000Z",
+        data: { prompt: "SECRET", systemPrompt: "top SECRET", imagesCount: 2 },
+      }),
+      makeEvent({
         type: "tool.call",
         ts: "2026-05-18T12:04:18.000Z",
         data: { name: "bash", arguments: { command: "echo SECRET" } },
@@ -122,13 +163,31 @@ describe("sessionsTailCommand", () => {
       makeEvent({
         type: "tool.result",
         ts: "2026-05-18T12:04:21.000Z",
-        data: { name: "bash", success: true, output: "SECRET" },
+        data: {
+          name: "bash",
+          success: true,
+          output: "SECRET🙂",
+          result: { durationMs: 1_250 },
+        },
       }),
       makeEvent({
         type: "model.completed",
         ts: "2026-05-18T12:04:29.000Z",
         provider: "openai",
         modelId: "gpt-5.2",
+        data: {
+          usage: {
+            input: 1_200,
+            output: 30,
+            cacheRead: 1_000,
+            cacheWrite: 0,
+            reasoningTokens: 4,
+            total: 1_234,
+          },
+          promptCache: { retention: "short", observation: { broke: true } },
+          startedAt: 1_000,
+          endedAt: 3_500,
+        },
       }),
     ]);
 
@@ -139,13 +198,122 @@ describe("sessionsTailCommand", () => {
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
     expect(output).toContain("12:04:18");
+    expect(output).toContain(
+      "trace metadata prompt=1.2Kch system=24.5Kch skills=2 skillChars=3.4Kch tools=2 schema=6.8Kch",
+    );
+    expect(output).toContain("context compiled (2 tools) prompt=10ch system=39.4Kch");
+    expect(output).toContain("prompt submitted prompt=6ch system=10ch images=2");
     expect(output).toContain("tool.call");
     expect(output).toContain("bash {...redacted...}");
     expect(output).toContain("tool.result");
-    expect(output).toContain("bash ok");
+    expect(output).toContain("bash ok result=10B duration=1.25s");
     expect(output).toContain("model.completed");
-    expect(output).toContain("openai/gpt-5.2 done");
+    expect(output).toContain(
+      "openai/gpt-5.2 done tokens(in=1.2K out=30 cacheR=1K cacheW=0 reason=4 total=1.2K) retention=short cacheBroke elapsed=2.5s",
+    );
     expect(output).not.toContain("SECRET");
+  });
+
+  it("keeps model token metrics within one usage scope", async () => {
+    const runtime = createTestRuntime();
+    await writeSessionEntry();
+    await appendEvents([
+      makeEvent({
+        type: "model.completed",
+        ts: "2026-05-18T12:04:29.000Z",
+        data: {
+          usage: { input: 1_200, output: 300, total: 1_500 },
+          promptCache: {
+            lastCallUsage: { input: 100, output: 30, cacheRead: 80, total: 130 },
+            observation: { cacheRead: 90 },
+          },
+        },
+      }),
+      makeEvent({
+        type: "model.completed",
+        ts: "2026-05-18T12:04:30.000Z",
+        data: { promptCache: { lastCallUsage: { input: 100, cacheRead: 80 } } },
+      }),
+    ]);
+
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
+
+    const lines = runtimeOutput(runtime).split("\n");
+    expect(lines[0]).toContain("tokens(in=1.2K out=300 total=1.5K)");
+    expect(lines[0]).not.toContain("cacheR=");
+    expect(lines[1]).toContain("tokens(in=100 cacheR=80)");
+  });
+
+  it("marks inventory counts incomplete when recorder metadata is bounded", async () => {
+    const runtime = createTestRuntime();
+    await writeSessionEntry();
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-one",
+      sessionKey,
+      sessionTarget: { agentId: "main", sessionId: "session-one", sessionKey, storePath },
+    });
+    if (!recorder) {
+      throw new Error("expected trajectory recorder");
+    }
+    recorder.recordEvent("trace.metadata", {
+      prompting: {
+        systemPromptReport: {
+          skills: {
+            entries: Array.from({ length: 100 }, (_, index) => ({ name: `skill-${index}` })),
+          },
+        },
+      },
+    });
+    recorder.recordEvent("trace.metadata", {
+      prompting: {
+        systemPromptReport: {
+          tools: { entries: Array.from({ length: 75 }, (_, index) => ({ name: `tool-${index}` })) },
+        },
+      },
+    });
+    recorder.recordEvent("context.compiled", {
+      tools: Array.from({ length: 100 }, (_, index) => ({ name: `tool-${index}` })),
+    });
+    recorder.recordEvent("tool.result", {
+      name: "large-output",
+      success: true,
+      output: "x".repeat(40_000),
+    });
+    await recorder.flush();
+    await appendEvents([
+      makeEvent({
+        type: "trace.metadata",
+        ts: "2026-05-18T12:04:15.000Z",
+        data: {
+          prompting: {
+            systemPromptReport: {
+              skills: {
+                entries: [
+                  ...Array.from({ length: 64 }, (_, index) => ({ name: `skill-${index}` })),
+                  {
+                    truncated: true,
+                    reason: "trajectory-array-size-limit",
+                    originalLength: 100,
+                    limitItems: 64,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    ]);
+
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
+
+    expect(runtimeOutput(runtime)).toContain("trace metadata skills>=64");
+    expect(runtimeOutput(runtime)).toContain("trace metadata tools>=64");
+    expect(runtimeOutput(runtime)).toContain("trace metadata skills=100");
+    expect(runtimeOutput(runtime)).toContain("context compiled (>=64 tools)");
+    expect(runtimeOutput(runtime)).toContain("large-output ok");
+    expect(runtimeOutput(runtime)).not.toContain("large-output ok result=");
+    expect(runtimeOutput(runtime)).not.toContain("skill-64");
+    expect(runtimeOutput(runtime)).not.toContain("tool-64");
   });
 
   it.each<[string, TrajectoryEvent["data"], string]>([

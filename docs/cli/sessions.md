@@ -236,6 +236,16 @@ and turns without delivery show `error`; cancellation shows `aborted`, timeouts
 show `timeout`, and successful completions (including delivered partial replies)
 show `done`.
 
+Progress lines also carry compact size and timing metrics derived from the same
+events, never their content: prompt and system-prompt character counts, skill and
+tool counts, tool result size and duration, and recorded token usage, cache
+retention, and elapsed time on model completion. Token usage may cover the whole
+attempt rather than one model call. Bounded skill and tool inventories display a
+lower bound such as `skills>=64` when the exact original count was not retained.
+Result size is omitted when only a truncated payload was retained and no
+original byte count was recorded. Metrics are omitted when the event does not
+record them, so lines stay short for sparse events.
+
 ## Export a trajectory bundle
 
 ```bash
