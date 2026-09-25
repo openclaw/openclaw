@@ -64,6 +64,7 @@ import {
   bindRetainedReadScope,
   createRetainedReadScope,
   runRetainedReadScope,
+  runSynchronousReadScope,
 } from "./openclaw-state-read-scope.js";
 import { createOpenClawStateReadTransport } from "./openclaw-state-read-worker.js";
 import type {
@@ -214,47 +215,39 @@ const synchronousReadSnapshots = resolveGlobalSingleton(
 );
 
 /** One synchronous metadata operation shares private bytes, never later admission reads. */
-export function withSynchronousArtifactPreservingStateSnapshot<T>(operation: () => T): T {
+export function withSynchronousArtifactPreservingStateSnapshot<T>(
+  operation: () => T,
+  options?: { current?: OpenClawStateDatabaseOptions },
+): T {
+  if (options?.current) {
+    // Check inherited admission before selecting fresh bytes for this assertion.
+    resolveReadOnlyPath(options.current);
+    const inherited = synchronousReadSnapshots.current;
+    return stateSnapshotReads.exit(() => {
+      synchronousReadSnapshots.current = undefined;
+      try {
+        return withArtifactPreservingStateReads(() =>
+          withSynchronousArtifactPreservingStateSnapshot(operation),
+        );
+      } finally {
+        synchronousReadSnapshots.current = inherited;
+      }
+    });
+  }
   if (!isArtifactPreservingStateRead() || synchronousReadSnapshots.current) {
     return operation();
   }
   const readers = new Map<string, ScopedRead>();
   synchronousReadSnapshots.current = readers;
-  let result!: T;
-  let failed = false;
-  let failure: unknown;
-  const cleanupErrors: unknown[] = [];
-  try {
-    result = operation();
-    if (isPromiseLike(result)) {
-      throw new SqliteCoordinatorError("SQLite metadata snapshot scope must remain synchronous");
-    }
-  } catch (error) {
-    failed = true;
-    failure = error;
-  } finally {
-    synchronousReadSnapshots.current = undefined;
-    for (const reader of readers.values()) {
-      try {
-        if (!reader.close()) {
-          cleanupErrors.push(new Error("Shared-state metadata snapshot cleanup is incomplete."));
-        }
-      } catch (error) {
-        cleanupErrors.push(error);
-      }
-    }
-    readers.clear();
-  }
-  if (cleanupErrors.length) {
-    throw new AggregateError(
-      failed ? [failure, ...cleanupErrors] : cleanupErrors,
-      "Shared-state metadata snapshot cleanup failed.",
-    );
-  }
-  if (failed) {
-    throw failure;
-  }
-  return result;
+  return runSynchronousReadScope(
+    {
+      readers,
+      leave: () => {
+        synchronousReadSnapshots.current = undefined;
+      },
+    },
+    operation,
+  );
 }
 
 function resolveReadOnlyPath(options: OpenClawStateDatabaseOptions): string {

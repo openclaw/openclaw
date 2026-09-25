@@ -3,6 +3,7 @@ import {
   withDelegatedUpdateCommandExecutor,
   type UpdateCommandChildGrant,
 } from "../cli/update-cli/update-command-executor.js";
+import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import type { UpdateRepairTurnMessage, UpdateRepairTurnResult } from "./update-repair-protocol.js";
 import { repairSummary, runLocalUpdateRepairTurn } from "./update-repair-turn.js";
 import {
@@ -42,14 +43,19 @@ export async function runDelegatedUpdateRepairTurn(
           : undefined;
         const assertAuthority = () => {
           fence.assertCurrent();
-          if (requester?.isCurrent() === false) {
-            throw new UpdateRequesterRevokedError();
-          }
-          const run = getUpdateRun(message.runId, { env: admissionEnv });
-          if (!process.connected || run?.status !== "running" || run.phase !== "repairing") {
-            throw new Error("Repair no longer owns the update attempt.");
-          }
-          return true;
+          return withSynchronousArtifactPreservingStateSnapshot(
+            () => {
+              if (requester?.isCurrent() === false) {
+                throw new UpdateRequesterRevokedError();
+              }
+              const run = getUpdateRun(message.runId, { env: admissionEnv });
+              if (!process.connected || run?.status !== "running" || run.phase !== "repairing") {
+                throw new Error("Repair no longer owns the update attempt.");
+              }
+              return true;
+            },
+            { current: { env: admissionEnv } },
+          );
         };
         const assertCurrent = () => {
           signal.throwIfAborted();
