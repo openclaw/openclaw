@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
 import { normalizeRoute } from "../../scripts/lib/docs-published-routes.mts";
@@ -562,14 +562,28 @@ describe("docs-link-audit", () => {
     it("exits clean from the CLI in plain mode for a fragment into a mirrored route", () => {
       const tempDirs: string[] = [];
       try {
-        // Nest the fixture so `<root>/../clawhub` cannot accidentally resolve and
-        // turn the allowance off: this run must be the source-absent shape.
+        // Resolve source discovery from an owned module root, not the caller's checkout.
         const fixtureRoot = path.join(makeTempDir(tempDirs, "docs-clawhub-mirror-cli-"), "repo");
         const home = path.join(fixtureRoot, "home");
+        const auditSource = new URL("../../scripts/docs-link-audit.mts", import.meta.url);
+        const auditRuntime = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.docsLinkAudit);
+        const syncSource = new URL("../../scripts/docs-sync-publish.mjs", import.meta.url);
+        const syncRuntime =
+          auditRuntime.href === auditSource.href
+            ? syncSource
+            : new URL("./docs-sync-publish.js", auditRuntime);
+        const fixtureSync = path.join(fixtureRoot, "scripts", "docs-sync-publish.mjs");
         buildDocsTree(tempDirs, "/clawhub/publishing#package-publish-source", {
           root: fixtureRoot,
         });
         fs.mkdirSync(home, { recursive: true });
+        fs.mkdirSync(path.dirname(fixtureSync), { recursive: true });
+        fs.copyFileSync(syncSource, fixtureSync);
+        fs.writeFileSync(
+          path.join(fixtureRoot, "package.json"),
+          '{"private":true,"type":"module"}\n',
+        );
+        fs.writeFileSync(path.join(fixtureRoot, "pnpm-workspace.yaml"), "packages: []\n");
         const result = spawnSync(
           process.execPath,
           [fileURLToPath(new URL("../../scripts/docs-link-audit.mjs", import.meta.url))],
@@ -578,10 +592,8 @@ describe("docs-link-audit", () => {
             encoding: "utf8",
             env: preparedScriptWrapperEnv(
               [
-                [
-                  new URL("../../scripts/docs-link-audit.mts", import.meta.url),
-                  resolveRuntimeWorkerUrl(scriptModuleEntrypoints.docsLinkAudit),
-                ],
+                [auditSource, auditRuntime],
+                [syncSource, syncRuntime],
               ],
               {
                 PATH: process.env.PATH,
@@ -589,12 +601,14 @@ describe("docs-link-audit", () => {
                 USERPROFILE: home,
                 TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
               },
+              [[pathToFileURL(fixtureSync), syncRuntime]],
             ),
             timeout: 30_000,
           },
         );
         expect(result.error).toBeUndefined();
         expect(result.stdout).toContain("broken_links=0\n");
+        expect(result.stdout).not.toContain("Synced ");
         expect(result.stdout).not.toContain("fragment unverified");
         expect(result.status).toBe(0);
       } finally {
