@@ -237,7 +237,7 @@ function createStateDirEnv(
   return env;
 }
 
-export function openChannelIngressDatabase(stateDir?: string) {
+function openChannelIngressDatabase(stateDir?: string) {
   return openOpenClawStateDatabase({
     env: stateDir ? createStateDirEnv(stateDir) : process.env,
   });
