@@ -17,6 +17,12 @@ declarations when Gateway tools are added. Fresh sessions receive the current
 Gateway tool declarations. Reset an existing session to adopt the new tool
 surface; changing its model or API key still requires a reset.
 
+Child sessions use the same Gateway tool-policy filtering as other OpenClaw
+runtimes, including inherited restrictions and the child's role. Denied session
+and control tools stay unavailable. Policies that restrict hosted shell, file,
+or native web-search access are rejected before the hosted session starts or
+resumes; the MVP cannot narrow those native capabilities.
+
 Token accounting reads canonical native turn records after settlement, since
 completion stream events can omit usage. Each OpenClaw attempt counts its new
 coordinator turns once, including work superseded by steering. Earlier turns in
@@ -24,10 +30,12 @@ the same native session are excluded. Cached input is counted separately from
 uncached input; reasoning tokens remain included in output tokens.
 
 Successful assistant messages retain those totals in the OpenClaw transcript.
+When a Gateway tool ends the native turn, a transcript entry with no assistant
+content retains usage without publishing another reply.
 Run results and completion hooks also retain usage reported for interrupted or
 failed work after native cleanup settles. Historical session usage is derived
-from transcript messages, so interrupted work without an assistant message is
-not included in that historical report. A bounded five-second settlement window
+from transcript messages, so other interrupted work without an assistant message
+is not included in that historical report. A bounded five-second settlement window
 waits for late turn records and usage. Counts are not refreshed after that
 snapshot. Accounting read failures retain the last available snapshot and log a
 warning; they do not discard a completed reply or replace cancellation. Missing

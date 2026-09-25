@@ -345,19 +345,22 @@ export function createAgentsApiSession(options: {
             items?.findIndex(
               (item) => item.type === "function_call" && item.call_id === call.call_id,
             ) ?? -1;
-          if (items && callIndex >= 0) {
+          if (items) {
+            // A pending function can precede its saved item. Preserve the available
+            // prefix; its existing readiness barrier still fences unresolved slots.
+            const prefix = callIndex >= 0 ? items.slice(0, callIndex) : items;
             const transcriptReady = await projectSavedState(
               turns.map((turn) => ({
                 turn,
                 items:
                   turn.id === call.turn_id
-                    ? items.slice(0, callIndex)
+                    ? prefix
                     : (itemsByTurn!.get(turn.id) ?? []),
               })),
               signal,
             );
             assertCurrent();
-            if (!transcriptReady) {
+            if (!transcriptReady || callIndex < 0) {
               options.onTranscriptOrderingGap?.();
               assertCurrent();
             }

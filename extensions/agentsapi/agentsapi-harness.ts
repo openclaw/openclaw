@@ -1,6 +1,8 @@
 import {
   abortAndDrainAgentHarnessRun,
+  AgentHarnessPreflightError,
   AgentHarnessSessionSupersededError,
+  toolPolicy,
   type AgentHarnessAttemptParamsV2,
   type AgentHarnessV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -8,6 +10,16 @@ import { captureNativeSessionGenerationAuthority } from "openclaw/plugin-sdk/age
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
 import { createAgentsApiBindings } from "./agentsapi-bindings.js";
+
+const AGENTS_API_NATIVE_TOOL_REQUIREMENTS = [
+  "exec",
+  "process",
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "web_search",
+] as const;
 
 /** Agents API owns native protocol; the host harness runtime owns coordination. */
 export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
@@ -26,6 +38,28 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
     label: "OpenAI Agents API (MVP)",
     autoSelection: { providerIds: [] },
     deliveryDefaults: { visibleReplies: "automatic" },
+    conversationToolPolicySupport: "exact",
+    conversationToolPolicyNativeTools: AGENTS_API_NATIVE_TOOL_REQUIREMENTS,
+    // These capabilities exist only in the policy-filtered Gateway tool surface.
+    // Native multi-agent tools are disabled when the hosted session is created.
+    conversationToolPolicySafeDenyTools: [
+      "gateway",
+      "agents_list",
+      "openclaw",
+      "session_status",
+      "progress_card",
+      "automations",
+      "message",
+      "sessions_send",
+      "conversations_list",
+      "conversations_send",
+      "conversations_turn",
+      "subagents",
+      "sessions_list",
+      "sessions_history",
+      "sessions_search",
+      "sessions_spawn",
+    ],
     supports: (ctx) => {
       if (ctx.provider !== "openai") {
         return { supported: false, reason: "Agents API requires the OpenAI provider" };
@@ -130,6 +164,19 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
 }
 
 function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {
+  const runtimeToolAllowed = toolPolicy.createToolPolicyMatcher({ allow: params.toolsAllow });
+  if (
+    params.disableTools ||
+    params.pluginHarnessToolPolicyRestricted ||
+    params.toolExecutionAllow !== undefined ||
+    params.toolsAllow?.length === 0 ||
+    AGENTS_API_NATIVE_TOOL_REQUIREMENTS.some((name) => !runtimeToolAllowed(name))
+  ) {
+    throw new AgentHarnessPreflightError(
+      "Agents API cannot enforce this run's restrictions on hosted shell, file, or web-search tools.",
+      { scope: "harness" },
+    );
+  }
   const target = params.sessionTarget;
   if (
     !target?.agentId ||

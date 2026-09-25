@@ -352,7 +352,10 @@ export async function runAgentsApiAttempt(
     params.hostCapabilities.reportOutputTokens?.(reply.usage?.output ?? 0);
     if (result.cancelled) {
       terminal = { kind: "aborted", source: "runtime" };
-    } else if (!result.terminatedByTool) {
+    } else if (result.terminatedByTool) {
+      await projection.commitUsage(result.turn);
+      assertCurrent();
+    } else {
       const items = await client.items(remoteSessionId, result.turn.id, controller.signal);
       assertCurrent();
       await projection.commit(result.turn, items);

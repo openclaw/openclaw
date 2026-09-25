@@ -406,6 +406,23 @@ class AgentsApiMessageProjection {
     this.finalTurnId = turn.id;
   }
 
+  async commitUsage(turn: NativeTurn): Promise<void> {
+    this.assertCurrent();
+    if (this.reply.usage?.total === undefined) {
+      return;
+    }
+    // Tool termination suppresses another reply, but must retain its billing.
+    await this.append({
+      ...createAgentHarnessAssistantMessage(this.attribution(), "", {
+        aborted: false,
+        content: [],
+        timestamp: this.nextTimestamp(),
+      }),
+      usage: this.reply.assistantUsage,
+      idempotencyKey: `agentsapi:${this.remoteSessionId}:${turn.id}`,
+    });
+  }
+
   private async recordItem(
     turnId: string,
     item: AgentsApiItem,
