@@ -10,5 +10,6 @@ pub mod router;
 pub mod sessions_rpc;
 
 pub mod cli;
+pub mod new_session_rpc;
 pub mod profiles;
 pub mod remote_tunnel;

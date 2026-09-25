@@ -326,6 +326,9 @@ impl AppView {
             .unwrap_or_else(|| "◈".into())
     }
     pub(super) fn selected_row(&self) -> Option<&SessionRow> {
+        if self.new_session.active {
+            return Some(&self.new_session.toolbar_row);
+        }
         let key = self.chat.selected_session.as_ref()?;
         self.rows
             .iter()
@@ -515,7 +518,7 @@ impl AppView {
                         this.refresh_sidebar_avatars(cx);
                         this.sync_sidebar_activity(cx);
                         this.sync_sidebar_pull_requests(cx);
-                        if this.chat.selected_session.is_none() {
+                        if this.chat.selected_session.is_none() && !this.new_session.active {
                             this.queue_session_selection(this.agent_home());
                         }
                     }

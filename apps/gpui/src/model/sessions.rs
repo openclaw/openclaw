@@ -79,6 +79,8 @@ pub struct SessionRow {
     pub model_provider: Option<String>,
     pub thinking_level: Option<String>,
     pub permission_mode: Option<String>,
+    pub permission_mode_pending: bool,
+    pub tool_overrides: Option<Value>,
     pub total_tokens: Option<f64>,
     pub total_tokens_fresh: Option<bool>,
     pub effective_queue_mode: Option<String>,

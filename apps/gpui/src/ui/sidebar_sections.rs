@@ -414,39 +414,58 @@ impl AppView {
             } else {
                 header.into_any_element()
             };
-            content = content.child(div().h_flex().child(header).when_some(
-                person,
-                |el, person| {
-                    let id = person.id.clone();
-                    let active = self.sidebar_state.preferences.owner_id.as_deref() == Some(&id);
-                    el.child(
-                        Button::new(SharedString::from(format!("person-filter:{key}")))
-                            .ghost()
-                            .small()
-                            .size(px(24.))
-                            .icon(
-                                Icon::new(IconName::ListFilter)
-                                    .size(px(12.))
-                                    .text_color(if active { p.accent } else { p.muted }),
-                            )
-                            .accessibility_label(if active {
-                                "Show everyone".to_owned()
-                            } else {
-                                format!("Show only {}", person.label())
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.change_sidebar_preferences(
-                                    |prefs| {
-                                        prefs.owner_id =
-                                            if active { None } else { Some(id.clone()) };
-                                        prefs.involving_me = false;
-                                    },
-                                    cx,
+            let new_group = section.id.strip_prefix("category:").map(str::to_owned);
+            let supports_new_group = new_group.is_some() || section.id == "ungrouped";
+            content = content.child(
+                div()
+                    .h_flex()
+                    .child(header)
+                    .when(supports_new_group, |el| {
+                        el.child(
+                            Button::new(SharedString::from(format!("group-new:{key}")))
+                                .ghost()
+                                .small()
+                                .size(px(24.))
+                                .icon(Icon::new(IconName::Plus).size(px(14.)))
+                                .accessibility_label(format!("New chat in {}", section.label))
+                                .disabled(self.session.is_none())
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.new_chat_in_group(new_group.clone(), window, cx)
+                                })),
+                        )
+                    })
+                    .when_some(person, |el, person| {
+                        let id = person.id.clone();
+                        let active =
+                            self.sidebar_state.preferences.owner_id.as_deref() == Some(&id);
+                        el.child(
+                            Button::new(SharedString::from(format!("person-filter:{key}")))
+                                .ghost()
+                                .small()
+                                .size(px(24.))
+                                .icon(
+                                    Icon::new(IconName::ListFilter)
+                                        .size(px(12.))
+                                        .text_color(if active { p.accent } else { p.muted }),
                                 )
-                            })),
-                    )
-                },
-            ));
+                                .accessibility_label(if active {
+                                    "Show everyone".to_owned()
+                                } else {
+                                    format!("Show only {}", person.label())
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.change_sidebar_preferences(
+                                        |prefs| {
+                                            prefs.owner_id =
+                                                if active { None } else { Some(id.clone()) };
+                                            prefs.involving_me = false;
+                                        },
+                                        cx,
+                                    )
+                                })),
+                        )
+                    }),
+            );
         }
         if !collapsed {
             let limit = self

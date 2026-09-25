@@ -14,7 +14,31 @@ use gpui_kit::{
 use std::path::PathBuf;
 
 impl AppView {
+    fn composer_attachment_target(
+        &self,
+        scope: &Option<crate::model::chat::RequestScope>,
+        draft: Option<u64>,
+    ) -> bool {
+        match draft {
+            Some(generation) => {
+                self.new_session.active
+                    && self.new_session.generation == generation
+                    && !self.new_session.locked()
+            }
+            None => {
+                !self.new_session.active
+                    && scope
+                        .as_ref()
+                        .is_some_and(|scope| self.chat.is_current(scope))
+            }
+        }
+    }
     pub(super) fn composer_save_draft(&mut self, cx: &App) {
+        if self.new_session.active {
+            self.new_session.message = self.composer.read(cx).value().to_string();
+            self.new_session.attachments = self.composer_state.attachments.clone();
+            return;
+        }
         self.composer_state.drafts.save(Draft {
             text: self.composer.read(cx).value().to_string(),
             attachments: self.composer_state.attachments.clone(),
@@ -28,6 +52,12 @@ impl AppView {
         cx: &mut Context<Self>,
     ) {
         self.composer_save_draft(cx);
+        self.new_session.bind_gateway(gateway);
+        self.new_session.active = false;
+        self.new_session.submitting = false;
+        self.new_session.generation += 1;
+        self.new_session.picker = None;
+        self.composer_capabilities.reset();
         self.composer_state.drafts.bind_gateway(gateway);
         self.composer_state.restore_pending = true;
         self.composer_state.attachment_generation += 1;
@@ -61,6 +91,9 @@ impl AppView {
     }
 
     pub(super) fn composer_restore_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.composer.update(cx, |input, cx| {
+            input.set_placeholder("Message OpenClaw", window, cx)
+        });
         let draft = self
             .chat
             .selected_session
@@ -393,9 +426,14 @@ impl AppView {
     }
 
     pub(super) fn pick_attachments(&mut self, cx: &mut Context<Self>) {
-        let Some(scope) = self.chat.scope() else {
+        let scope = self.chat.scope();
+        let draft_generation = self
+            .new_session
+            .active
+            .then_some(self.new_session.generation);
+        if scope.is_none() && draft_generation.is_none() {
             return;
-        };
+        }
         let epoch = self.epoch;
         let prompt = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -406,7 +444,8 @@ impl AppView {
         cx.spawn(async move |this, cx| {
             let result = prompt.await;
             let _ = this.update(cx, |this, cx| {
-                if this.epoch != epoch || !this.chat.is_current(&scope) {
+                if this.epoch != epoch || !this.composer_attachment_target(&scope, draft_generation)
+                {
                     return;
                 }
                 match result {
@@ -429,9 +468,14 @@ impl AppView {
                 return;
             }
         };
-        let Some(scope) = self.chat.scope() else {
+        let scope = self.chat.scope();
+        let draft_generation = self
+            .new_session
+            .active
+            .then_some(self.new_session.generation);
+        if scope.is_none() && draft_generation.is_none() {
             return;
-        };
+        }
         let epoch = self.epoch;
         let generation = self.composer_state.attachment_generation;
         self.composer_state.reading += 1;
@@ -445,7 +489,7 @@ impl AppView {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 if this.epoch != epoch
-                    || !this.chat.is_current(&scope)
+                    || !this.composer_attachment_target(&scope, draft_generation)
                     || this.composer_state.attachment_generation != generation
                 {
                     return;
@@ -476,6 +520,9 @@ impl AppView {
     }
 
     pub(super) fn composer_paste(&mut self, item: &ClipboardItem, cx: &mut Context<Self>) -> bool {
+        if self.new_session.active && self.new_session.locked() {
+            return true;
+        }
         let image = item.entries().iter().find_map(|entry| {
             if let ClipboardEntry::Image(image) = entry {
                 Some(image)
@@ -548,6 +595,12 @@ impl AppView {
     }
 
     pub(super) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.new_session.active {
+            if !self.composer_is_composing(window, cx) {
+                self.submit_new_session(cx);
+            }
+            return;
+        }
         if self.session.is_none()
             || self.chat.loading
             || self.composer_state.reading > 0

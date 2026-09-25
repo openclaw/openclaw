@@ -89,7 +89,7 @@ impl AppView {
                         ),
                 )
             })
-            .when(!self.web.settings_open, |el| {
+            .when(!self.web.settings_open && !self.new_session.active, |el| {
                 el.child(
                     Button::new("header-panels")
                         .ghost()
@@ -104,19 +104,22 @@ impl AppView {
                 !self.web.settings_open && self.chat.active_run.is_some(),
                 |el| el.child(Spinner::new().small().color(p.muted)),
             )
-            .when_some(selected.filter(|_| !self.web.settings_open), |el, row| {
-                el.child(
-                    Button::new("chat-header-menu")
-                        .ghost()
-                        .small()
-                        .size(px(28.))
-                        .icon(Icon::new(IconName::Ellipsis).size(px(16.)))
-                        .accessibility_label("Conversation actions")
-                        .dropdown_menu(move |menu, window, cx| {
-                            session_menu(menu, row.clone(), view.clone(), &main_key, window, cx)
-                        }),
-                )
-            })
+            .when_some(
+                selected.filter(|_| !self.web.settings_open && !self.new_session.active),
+                |el, row| {
+                    el.child(
+                        Button::new("chat-header-menu")
+                            .ghost()
+                            .small()
+                            .size(px(28.))
+                            .icon(Icon::new(IconName::Ellipsis).size(px(16.)))
+                            .accessibility_label("Conversation actions")
+                            .dropdown_menu(move |menu, window, cx| {
+                                session_menu(menu, row.clone(), view.clone(), &main_key, window, cx)
+                            }),
+                    )
+                },
+            )
             .into_any_element()
     }
 }

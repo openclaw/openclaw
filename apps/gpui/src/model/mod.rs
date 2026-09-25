@@ -11,6 +11,8 @@ pub mod tools;
 pub mod web_urls;
 
 pub mod avatars;
+pub mod composer_capabilities;
+pub mod new_session;
 pub mod people;
 pub mod session_links;
 pub mod sidebar;
