@@ -124,7 +124,7 @@ import {
   prepareRootedExecutionCapability,
   type PreparedRootedExecutionCapability,
 } from "../rooted-run-params.js";
-import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
+import { collectRuntimeChannelCapabilities, originClientFields } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
@@ -1851,7 +1851,6 @@ async function prepareCliRunContextWithinReadFence(
             sessionKey: params.sessionKey?.trim() || params.sessionId,
           });
     assertSkillsCurrent();
-    const systemPromptSkillsPrompt = preparedSkills.prompt;
     const runtimeChannel = skipsTurnPreparation
       ? undefined
       : normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
@@ -1861,6 +1860,7 @@ async function prepareCliRunContextWithinReadFence(
           cfg: params.config,
           channel: runtimeChannel,
           accountId: params.agentAccountId,
+          ...originClientFields(params),
         });
     const builtSystemPrompt = isControlOperation
       ? ""
@@ -1880,7 +1880,7 @@ async function prepareCliRunContextWithinReadFence(
             ownerNumbers: params.ownerNumbers,
             docsPath: openClawReferences.docsPath ?? undefined,
             sourcePath: openClawReferences.sourcePath ?? undefined,
-            skillsPrompt: systemPromptSkillsPrompt,
+            skillsPrompt: preparedSkills.prompt,
             tools: promptTools,
             contextFiles,
             bootstrapMode,
@@ -2065,7 +2065,7 @@ async function prepareCliRunContextWithinReadFence(
         : { mode: "off", sandboxed: false },
       systemPrompt,
       injectedWorkspaceFiles: bootstrapInjectionStats,
-      skillsPrompt: systemPromptSkillsPrompt,
+      skillsPrompt: preparedSkills.prompt,
       tools: promptTools,
       currentTurn: {
         ...(params.currentInboundEventKind ? { kind: params.currentInboundEventKind } : {}),

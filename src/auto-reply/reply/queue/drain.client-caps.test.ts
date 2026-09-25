@@ -13,6 +13,19 @@ describe("followup delivery context", () => {
     );
   });
 
+  it("separates installed native clients from other clients that share a capability list", () => {
+    const browser = createQueueTestRun({ prompt: "browser" });
+    browser.run.clientCaps = ["agent-kind", "inline-widgets"];
+    browser.run.clientId = "webchat";
+    const installed = createQueueTestRun({ prompt: "installed" });
+    installed.run.clientCaps = ["agent-kind", "inline-widgets"];
+    installed.run.clientId = "openclaw-macos";
+
+    expect(resolveFollowupDeliveryContextKey(browser)).not.toBe(
+      resolveFollowupDeliveryContextKey(installed),
+    );
+  });
+
   it("normalizes capability order and duplicates", () => {
     const first = createQueueTestRun({ prompt: "first" });
     first.run.clientCaps = ["tool-events", "inline-widgets"];

@@ -107,6 +107,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.model,
     execution.messageProvider ?? "",
     JSON.stringify([...new Set(execution.clientCaps ?? [])].toSorted()),
+    execution.clientId ?? "",
     stableStringify(resolveReplyScreenToolTarget(run) ?? null),
     resolveReplyThemeProfileId(run) ?? "",
     stableStringify(execution.toolBindings ?? null),

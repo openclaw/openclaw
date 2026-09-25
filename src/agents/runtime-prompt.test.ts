@@ -71,7 +71,12 @@ describe("resolveAgentRuntimePrompt", () => {
       chatType: "group",
     });
 
-    const channelContext = { cfg: config, channel: "telegram", accountId: "work" };
+    const channelContext = {
+      cfg: config,
+      channel: "telegram",
+      accountId: "work",
+      clientCaps: undefined,
+    };
     expect(collectRuntimeChannelCapabilitiesMock).toHaveBeenCalledWith(channelContext);
     expect(resolveChannelReactionGuidanceMock).toHaveBeenCalledWith(channelContext);
     expect(resolveChannelMessageToolHintsMock).toHaveBeenCalledWith(channelContext);

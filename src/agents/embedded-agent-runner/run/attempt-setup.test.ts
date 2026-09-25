@@ -75,6 +75,23 @@ describe("prepareEmbeddedAttemptSetup", () => {
     resolveSandboxContext.mockClear();
   });
 
+  it("keeps the originating client id on the foreground prompt context", () => {
+    const context = buildEmbeddedForegroundPromptContext(
+      {
+        agentId: "main",
+        sessionId: "session",
+        sessionKey: "agent:main:main",
+        workspaceDir: "/tmp/workspace",
+        clientCaps: ["inline-widgets"],
+        clientId: "openclaw-ios",
+      } as Parameters<typeof buildEmbeddedForegroundPromptContext>[0],
+      "/tmp/agent",
+    );
+
+    expect(context.clientCaps).toEqual(["inline-widgets"]);
+    expect(context.clientId).toBe("openclaw-ios");
+  });
+
   it("prepares the identity that owns the current agent session", async () => {
     const setup = await prepareEmbeddedAttemptSetup({
       model: attemptModel,

@@ -3,6 +3,7 @@ import OpenClawProtocol
 public enum OpenClawGatewayClientCapability {
     public static let agentKind = "agent-kind"
     public static let inlineWidgets = "inline-widgets"
+    public static let markdownDetails = "markdown-details"
     public static let modelSelectionPolicy = "model-selection-policy"
     public static let usageRefreshing = "usage-refreshing"
 }

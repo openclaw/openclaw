@@ -445,6 +445,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       messageProvider,
       mediaNormalizationOwner: opts?.mediaNormalizationOwner,
       clientCaps: ctx.GatewayClientCaps,
+      ...(ctx.GatewayClientId ? { clientId: ctx.GatewayClientId } : {}),
       bootstrapUserProfileId: personalBootstrapEligible
         ? sessionPersonalProfileId(preparedSessionState.sessionEntry)
         : undefined,

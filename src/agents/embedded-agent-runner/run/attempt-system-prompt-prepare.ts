@@ -149,6 +149,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     model: `${attempt.provider}/${attempt.modelId}`,
     channel: attempt.messageChannel ?? attempt.messageProvider,
     accountId: attempt.agentAccountId,
+    clientCaps: attempt.clientCaps,
+    ...(attempt.clientId ? { clientId: attempt.clientId } : {}),
     chatType: attempt.chatType,
   });
   const promptMode =

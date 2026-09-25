@@ -128,6 +128,7 @@ export async function compactEmbeddedRunForRecovery(
       messageChannel: runParams.messageChannel,
       messageProvider: runParams.messageProvider,
       clientCaps: runParams.clientCaps,
+      ...(runParams.clientId ? { clientId: runParams.clientId } : {}),
       pinnedWidgetAuthoring: runParams.pinnedWidgetAuthoring,
       chatType: runParams.chatType,
       agentAccountId: runParams.agentAccountId,

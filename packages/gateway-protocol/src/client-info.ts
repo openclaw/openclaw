@@ -81,6 +81,7 @@ export const GATEWAY_CLIENT_CAPS = {
   APPROVALS: "approvals",
   EXEC_APPROVALS: "exec-approvals",
   INLINE_WIDGETS: "inline-widgets",
+  MARKDOWN_DETAILS: "markdown-details",
   MODEL_CATALOG_SNAPSHOT: "model-catalog-snapshot",
   MODEL_SELECTION_POLICY: "model-selection-policy",
   RUN_TOOL_BINDINGS: "run-tool-bindings",

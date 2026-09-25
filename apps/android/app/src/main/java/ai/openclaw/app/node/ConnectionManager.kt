@@ -43,6 +43,7 @@ class ConnectionManager internal constructor(
 
     internal const val AGENT_KIND_CLIENT_CAPABILITY = "agent-kind"
     internal const val INLINE_WIDGETS_CLIENT_CAPABILITY = "inline-widgets"
+    internal const val MARKDOWN_DETAILS_CLIENT_CAPABILITY = "markdown-details"
     internal const val USAGE_REFRESHING_CLIENT_CAPABILITY = "usage-refreshing"
     internal const val MODEL_SELECTION_POLICY_CLIENT_CAPABILITY = "model-selection-policy"
 
@@ -165,6 +166,7 @@ class ConnectionManager internal constructor(
         buildList {
           add(AGENT_KIND_CLIENT_CAPABILITY)
           if (inlineWidgetsAvailable()) add(INLINE_WIDGETS_CLIENT_CAPABILITY)
+          add(MARKDOWN_DETAILS_CLIENT_CAPABILITY)
           add(USAGE_REFRESHING_CLIENT_CAPABILITY)
           add(MODEL_SELECTION_POLICY_CLIENT_CAPABILITY)
         },

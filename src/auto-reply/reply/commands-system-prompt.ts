@@ -269,6 +269,8 @@ export async function resolveCommandsSystemPromptBundle(
       model: `${params.provider}/${params.model}`,
       channel: params.command.channel,
       accountId,
+      clientCaps: params.ctx.GatewayClientCaps,
+      ...(params.ctx.GatewayClientId ? { clientId: params.ctx.GatewayClientId } : {}),
       chatType: normalizeChatType(params.ctx.ChatType ?? targetSessionEntry?.chatType),
     });
   const fullAccessState = resolveEmbeddedFullAccessState({

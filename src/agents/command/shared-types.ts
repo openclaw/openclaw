@@ -63,6 +63,8 @@ export type AgentRunClientContext = {
   bootstrapUserProfileId?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Gateway client id for the process that originated this run. */
+  clientId?: string;
   gatewayUiCommandTarget?: import("../../gateway/ui-command-target.types.js").GatewayUiCommandTarget;
   /** Host-admitted dashboard authoring without an originating inline renderer. */
   pinnedWidgetAuthoring?: boolean;

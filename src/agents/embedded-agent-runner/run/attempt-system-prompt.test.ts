@@ -83,6 +83,7 @@ async function preparePermissionPrompt(
   thinkLevel?: EmbeddedRunAttemptParams["thinkLevel"],
   requireExplicitMessageTarget?: boolean,
   session?: Pick<EmbeddedRunAttemptParams, "sessionKey" | "sandboxSessionKey">,
+  client?: { messageChannel?: string; clientCaps?: string[]; clientId?: string },
 ) {
   const tool = (name: string): AgentTool => ({
     name,
@@ -121,6 +122,9 @@ async function preparePermissionPrompt(
     thinkLevel,
     sourceReplyDeliveryMode:
       requireExplicitMessageTarget === undefined ? undefined : "message_tool_only",
+    ...(client?.messageChannel ? { messageChannel: client.messageChannel } : {}),
+    ...(client && Object.hasOwn(client, "clientCaps") ? { clientCaps: client.clientCaps } : {}),
+    ...(client?.clientId ? { clientId: client.clientId } : {}),
   } as EmbeddedRunAttemptParams;
   const capabilityToolNames = new Set(tools.map(({ name }) => name));
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
@@ -168,6 +172,36 @@ async function preparePermissionPrompt(
 }
 
 describe("buildAttemptSystemPrompt", () => {
+  it("forwards handshake capabilities into disclosure guidance", async () => {
+    const capable = await preparePermissionPrompt(false, undefined, undefined, undefined, {
+      messageChannel: "webchat",
+      clientCaps: ["markdown-details"],
+    });
+    const explicitWithoutFlag = await preparePermissionPrompt(
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        messageChannel: "webchat",
+        clientCaps: ["tool-events"],
+      },
+    );
+    const installedNative = await preparePermissionPrompt(false, undefined, undefined, undefined, {
+      messageChannel: "webchat",
+      clientId: "openclaw-macos",
+      clientCaps: ["agent-kind", "inline-widgets"],
+    });
+    const omittedList = await preparePermissionPrompt(false, undefined, undefined, undefined, {
+      messageChannel: "webchat",
+    });
+
+    expect(capable.prepared.systemPromptText).toContain("## Collapsible Details");
+    expect(explicitWithoutFlag.prepared.systemPromptText).not.toContain("## Collapsible Details");
+    expect(installedNative.prepared.systemPromptText).toContain("## Collapsible Details");
+    expect(omittedList.prepared.systemPromptText).not.toContain("## Collapsible Details");
+  });
+
   it.each([undefined, "agent:main:execution"])(
     "keeps the system prompt identical when execution-owned processes change: %s",
     async (sessionKey) => {

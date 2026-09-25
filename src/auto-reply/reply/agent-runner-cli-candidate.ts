@@ -425,6 +425,7 @@ export async function runCliFallbackCandidate(
             messageChannel: turn.followupRun.originatingChannel ?? undefined,
             messageProvider: hookMessageProvider,
             clientCaps: turn.followupRun.run.clientCaps,
+            ...(turn.followupRun.run.clientId ? { clientId: turn.followupRun.run.clientId } : {}),
             bootstrapUserProfileId: turn.followupRun.run.bootstrapUserProfileId,
             gatewayUiCommandTarget: turn.followupRun.run.gatewayUiCommandTarget,
             currentChannelId:

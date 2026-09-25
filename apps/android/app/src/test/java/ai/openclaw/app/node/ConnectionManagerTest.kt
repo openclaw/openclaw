@@ -174,6 +174,7 @@ class ConnectionManagerTest {
       listOf(
         ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY,
         ConnectionManager.INLINE_WIDGETS_CLIENT_CAPABILITY,
+        ConnectionManager.MARKDOWN_DETAILS_CLIENT_CAPABILITY,
         ConnectionManager.USAGE_REFRESHING_CLIENT_CAPABILITY,
         ConnectionManager.MODEL_SELECTION_POLICY_CLIENT_CAPABILITY,
       ),
@@ -188,6 +189,7 @@ class ConnectionManagerTest {
     assertEquals(
       listOf(
         ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY,
+        ConnectionManager.MARKDOWN_DETAILS_CLIENT_CAPABILITY,
         ConnectionManager.USAGE_REFRESHING_CLIENT_CAPABILITY,
         ConnectionManager.MODEL_SELECTION_POLICY_CLIENT_CAPABILITY,
       ),

@@ -71,6 +71,7 @@ import { formatTokenCount } from "../../utils/token-format.js";
 import { isRenderablePayload } from "../reply-payload.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { buildPreflightCompactSessionParams } from "./agent-runner-memory.preflight-params.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
@@ -971,61 +972,20 @@ export async function runSessionCompactionIfNeeded(params: {
     await notifyStartCompaction();
     assertActive();
     const result = await compactEmbeddedAgentSession(
-      {
-        sessionId: entry.sessionId,
-        sessionKey: compactionSessionKey,
-        sessionTarget: { ...compactionTarget, sessionId: entry.sessionId },
-        sandboxSessionKey: params.runtimePolicySessionKey,
-        allowGatewaySubagentBinding: true,
-        messageChannel: params.followupRun.run.messageProvider,
-        clientCaps: params.followupRun.run.clientCaps,
-        conversationToolPolicy: params.followupRun.run.conversationToolPolicy,
-        groupId: entry.groupId ?? params.followupRun.run.groupId,
-        groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
-        groupSpace: entry.space ?? params.followupRun.run.groupSpace,
-        senderId: params.followupRun.run.senderId,
-        senderName: params.followupRun.run.senderName,
-        senderUsername: params.followupRun.run.senderUsername,
-        senderE164: params.followupRun.run.senderE164,
-        inputProvenance: params.followupRun.run.inputProvenance,
-        sessionFile: compactionSessionKey,
-        workspaceDir: params.followupRun.run.workspaceDir,
-        cwd: params.followupRun.run.cwd,
-        agentDir: params.followupRun.run.agentDir,
-        config: params.cfg,
-        // Group session keys do not encode account identity, so without this the
-        // preflight path resolves the root history limit after prompt preparation
-        // already used the account limit.
-        agentAccountId: params.followupRun.run.agentAccountId,
-        conversationRoutePeerId: params.followupRun.run.conversationRoutePeerId,
-        chatType: params.followupRun.run.chatType,
-        skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,
-        provider: params.followupRun.run.provider,
-        model: params.followupRun.run.model,
-        authProfileId: params.followupRun.run.authProfileId,
-        authProfileIdSource: params.followupRun.run.authProfileIdSource,
-        sessionEntry: entry,
-        agentHarnessId:
-          params.agentHarnessId ??
-          (entry.sessionId === params.followupRun.run.sessionId
-            ? entry.modelSelectionLocked === true
-              ? resolvePersistedSessionRuntimeId(entry)
-              : runtimeId
-            : undefined),
-        modelSelectionLocked: entry.modelSelectionLocked === true,
-        thinkLevel: params.followupRun.run.thinkLevel,
-        bashElevated: params.followupRun.run.bashElevated,
-        trigger: "budget",
-        force: true,
-        forcePreflight: true,
-        preflightRequired: true,
-        preflightCompactionTrigger: compactionTrigger,
-        deferOwningContextEngineCompaction: false,
-        contextTokenBudget: contextWindowTokens,
+      buildPreflightCompactSessionParams({
+        entry,
+        run: params.followupRun.run,
+        cfg: params.cfg,
+        agentHarnessId: params.agentHarnessId,
+        runtimeId,
+        runtimePolicySessionKey: params.runtimePolicySessionKey,
+        compactionSessionKey,
+        compactionTarget,
+        compactionTrigger,
+        contextWindowTokens,
         currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
-        ownerNumbers: params.followupRun.run.ownerNumbers,
         abortSignal: params.abortSignal,
-      },
+      }),
       {
         assertActive,
         requestBudget: params.compactionRequestBudget,

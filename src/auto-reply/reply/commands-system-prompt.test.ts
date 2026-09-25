@@ -273,6 +273,21 @@ describe("resolveCommandsSystemPromptBundle", () => {
     expect(toolParams.senderE164).toBe("+15551234567");
   });
 
+  it("forwards gateway handshake capabilities into prompt preparation", async () => {
+    const params = makeParams();
+    params.ctx.GatewayClientCaps = ["markdown-details"];
+    params.command.channel = "webchat";
+
+    await resolveCommandsSystemPromptBundle(params);
+
+    expect(vi.mocked(collectRuntimeChannelCapabilities)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "webchat",
+        clientCaps: ["markdown-details"],
+      }),
+    );
+  });
+
   it("includes the current communication channel in reconstructed prompts", async () => {
     const params = makeParams();
     params.ctx.AccountId = "work";
@@ -289,16 +304,19 @@ describe("resolveCommandsSystemPromptBundle", () => {
       cfg: params.cfg,
       channel: "telegram",
       accountId: "work",
+      clientCaps: undefined,
     });
     expect(vi.mocked(resolveChannelReactionGuidance)).toHaveBeenCalledWith({
       cfg: params.cfg,
       channel: "telegram",
       accountId: "work",
+      clientCaps: undefined,
     });
     expect(vi.mocked(resolveChannelMessageToolHints)).toHaveBeenCalledWith({
       cfg: params.cfg,
       channel: "telegram",
       accountId: "work",
+      clientCaps: undefined,
     });
     const runtimeParams = requireFirstArg(
       vi.mocked(buildSystemPromptParams),

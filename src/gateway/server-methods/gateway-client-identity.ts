@@ -131,6 +131,7 @@ export function resolveChatSendCallerContext(
         : {}),
       GatewayClientScopes: client?.connect?.scopes ?? [],
       GatewayClientCaps: client?.connect?.caps ?? [],
+      GatewayClientId: clientInfo?.id,
     },
     commandSenderAuthority,
   );

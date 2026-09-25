@@ -166,6 +166,7 @@ final class GatewayOperatorFleet {
             scopes: ["operator.read", "operator.write", "operator.talk.secrets"],
             caps: [
                 OpenClawGatewayClientCapability.inlineWidgets,
+                OpenClawGatewayClientCapability.markdownDetails,
                 OpenClawGatewayClientCapability.modelSelectionPolicy,
             ],
             commands: [],

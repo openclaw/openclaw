@@ -120,11 +120,48 @@ describe("handleCompactCommand", () => {
     expect(call.senderName).toBe("Alice");
     expect(call.senderUsername).toBe("alice_u");
     expect(call.senderE164).toBe("+15551234567");
+    expect(call.clientId).toBeUndefined();
     expect(call.agentDir).toBe("/tmp/openclaw-agent-compact");
     expect(call.authProfileId).toBe("github-copilot:work");
     expect(call.authProfileIdSource).toBe("user");
     expect(vi.mocked(abortEmbeddedAgentRun)).not.toHaveBeenCalled();
     expect(vi.mocked(waitForEmbeddedAgentRunEnd)).not.toHaveBeenCalled();
+  });
+
+  it("forwards the originating gateway client into manual compaction", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+    });
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        ctx: {
+          Provider: "whatsapp",
+          Surface: "whatsapp",
+          CommandSource: "text",
+          CommandBody: "/compact",
+          commandText: "/compact",
+          From: "+15550001",
+          To: "+15550002",
+          GatewayClientCaps: ["agent-kind", "inline-widgets"],
+          GatewayClientId: "openclaw-ios",
+        },
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    const call = requireCompactEmbeddedAgentSessionCall();
+    expect(call.clientCaps).toEqual(["agent-kind", "inline-widgets"]);
+    expect(call.clientId).toBe("openclaw-ios");
   });
 
   it("keeps the verified current owner in bounded manual-compaction prompt guidance", async () => {
