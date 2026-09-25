@@ -153,12 +153,6 @@ export class ModelProviderLoginController implements ReactiveController {
     }
     for (const group of groups.values()) {
       group.label ||= providerDisplayLabel(group.id);
-      group.choices.sort(
-        (a, b) =>
-          Number(b.featured) - Number(a.featured) ||
-          a.label.localeCompare(b.label) ||
-          a.id.localeCompare(b.id),
-      );
     }
     return [...groups.values()].toSorted(
       (a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id),
