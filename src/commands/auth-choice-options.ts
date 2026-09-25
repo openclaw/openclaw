@@ -46,31 +46,25 @@ function resolveProviderChoiceOptions(params?: {
   return resolveProviderSetupFlowContributions({
     ...params,
     scope: "text-inference",
-  }).map((contribution) =>
-    Object.assign(
-      {},
-      { value: contribution.option.value as AuthChoice, label: contribution.option.label },
-      { providerId: contribution.providerId },
-      contribution.option.modelTarget ? { modelTarget: contribution.option.modelTarget } : {},
-      contribution.option.hint ? { hint: contribution.option.hint } : {},
-      contribution.option.assistantPriority !== undefined
-        ? { assistantPriority: contribution.option.assistantPriority }
-        : {},
-      contribution.option.assistantVisibility
-        ? { assistantVisibility: contribution.option.assistantVisibility }
-        : {},
-      contribution.option.group
-        ? {
-            groupId: contribution.option.group.id as AuthChoiceGroupId,
-            groupLabel: contribution.option.group.label,
-            ...(contribution.option.group.hint
-              ? { groupHint: contribution.option.group.hint }
-              : {}),
-          }
-        : {},
-      contribution.option.onboardingFeatured ? { onboardingFeatured: true } : {},
-    ),
-  );
+  }).map(({ option, providerId }) => ({
+    value: option.value,
+    label: option.label,
+    providerId,
+    ...(option.modelTarget ? { modelTarget: option.modelTarget } : {}),
+    ...(option.hint ? { hint: option.hint } : {}),
+    ...(option.assistantPriority !== undefined
+      ? { assistantPriority: option.assistantPriority }
+      : {}),
+    ...(option.assistantVisibility ? { assistantVisibility: option.assistantVisibility } : {}),
+    ...(option.group
+      ? {
+          groupId: option.group.id,
+          groupLabel: option.group.label,
+          ...(option.group.hint ? { groupHint: option.group.hint } : {}),
+        }
+      : {}),
+    ...(option.onboardingFeatured ? { onboardingFeatured: true } : {}),
+  }));
 }
 
 /**
@@ -120,7 +114,7 @@ function buildAuthChoiceOptions(params: {
   const detectedProviders = new Set(
     [...(params.detectedProviderIds ?? [])].map(normalizeProviderId),
   );
-  const options: AuthChoiceOption[] = Array.from(optionByValue.values())
+  return Array.from(optionByValue.values())
     .toSorted(compareOptionLabels)
     .filter(
       (option) =>
@@ -131,8 +125,6 @@ function buildAuthChoiceOptions(params: {
     .filter((option) =>
       params.assistantVisibleOnly ? option.assistantVisibility !== "manual-only" : true,
     );
-
-  return options;
 }
 
 /** Build grouped auth choices, filtering manual-only methods by default. */

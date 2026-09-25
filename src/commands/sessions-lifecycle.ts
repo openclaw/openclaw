@@ -3,6 +3,7 @@ import type {
   PreservedSessionWorktree,
   SessionRow,
   SessionsDeleteResult,
+  SessionsPatchResult,
   WorktreePreservationReason,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
@@ -52,12 +53,6 @@ type SessionsListRow = Pick<SessionRow, "key" | "sessionId" | "agentId" | "archi
 
 type SessionsDescribeResult = {
   session: SessionsListRow | null;
-};
-
-type SessionsPatchResult = {
-  ok?: boolean;
-  key?: string;
-  entry?: { archivedAt?: number };
 };
 
 type SessionsLifecycleRpcOptions = Parameters<typeof callGatewayFromCliWithTransport>[1];

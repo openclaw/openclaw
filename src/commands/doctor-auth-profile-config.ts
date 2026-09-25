@@ -1,7 +1,7 @@
 /** Protects active auth profile metadata while doctor repairs broader config state. */
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
-  normalizeLowercaseStringOrEmpty,
+  normalizeLowercaseStringOrEmpty as normalizeProviderId,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -21,14 +21,6 @@ type AuthProfileConfigProtectionResult = {
   repairs: string[];
   warnings: string[];
 };
-
-function normalizeProviderId(value: unknown): string {
-  return normalizeLowercaseStringOrEmpty(value);
-}
-
-function normalizeProfileId(value: unknown): string | null {
-  return normalizeOptionalString(value) ?? null;
-}
 
 function normalizeMode(value: unknown): AuthProfileConfig["mode"] | null {
   return typeof value === "string" && AUTH_PROFILE_MODES.has(value as AuthProfileConfig["mode"])
@@ -95,7 +87,7 @@ function collectActiveAuthHints(config: OpenClawConfig): {
       continue;
     }
     for (const profileId of profileIds) {
-      const normalized = normalizeProfileId(profileId);
+      const normalized = normalizeOptionalString(profileId);
       if (normalized) {
         explicitProfileIds.add(normalized);
       }
@@ -142,7 +134,9 @@ function buildProfileMetadata(params: {
   return repaired;
 }
 
-function ensureAuthProfiles(config: OpenClawConfig): Record<string, AuthProfileConfig> {
+export function ensureConfigAuthProfiles(
+  config: OpenClawConfig,
+): Record<string, AuthProfileConfig> {
   const root = config as Record<string, unknown>;
   const auth: Record<string, unknown> = isRecord(root.auth) ? root.auth : {};
   if (root.auth !== auth) {
@@ -211,7 +205,7 @@ export function protectActiveAuthProfileConfig(params: {
       );
       continue;
     }
-    const profiles = ensureAuthProfiles(config);
+    const profiles = ensureConfigAuthProfiles(config);
     profiles[profileId] = repaired;
     repairs.push(
       `Repaired auth.profiles.${profileId} metadata for active ${repaired.provider} auth.`,

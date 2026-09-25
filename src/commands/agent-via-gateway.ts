@@ -853,44 +853,18 @@ async function abortAcceptedGatewayAgentRunWithGatewayCall(params: {
       config: params.config,
       ...params.gatewayIdentity,
     });
-  const retryDelaysMs = resolveGatewayAbortRetryDelaysMs();
-  for (const [attempt, retryDelayMs] of [...retryDelaysMs, 0].entries()) {
-    const isFinalAttempt = attempt === retryDelaysMs.length;
-    const aborted = await abortAcceptedGatewayAgentRunWithRequest({
-      runId: params.runId,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      signal: params.signal,
-      runtime: params.runtime,
-      request,
-      logFailure: isFinalAttempt,
-    });
-    if (aborted || isFinalAttempt) {
-      return;
-    }
-    await delayMs(retryDelayMs);
-  }
+  await abortAcceptedGatewayAgentRunWithRetries({ ...params, request });
 }
 
-async function abortAcceptedGatewayAgentRunOnActiveConnection(params: {
-  runId: string | undefined;
-  sessionKey: string | undefined;
-  agentId?: string;
-  signal: AgentCliSignal | undefined;
-  runtime: RuntimeEnv;
-  request: GatewayRequestFunction;
-}): Promise<boolean> {
+async function abortAcceptedGatewayAgentRunWithRetries(
+  params: Parameters<typeof abortAcceptedGatewayAgentRunWithRequest>[0],
+): Promise<boolean> {
   const retryDelaysMs = resolveGatewayAbortRetryDelaysMs();
   for (const [attempt, retryDelayMs] of [...retryDelaysMs, 0].entries()) {
     const isFinalAttempt = attempt === retryDelaysMs.length;
     const aborted = await abortAcceptedGatewayAgentRunWithRequest({
-      runId: params.runId,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      signal: params.signal,
-      runtime: params.runtime,
-      request: params.request,
-      logFailure: false,
+      ...params,
+      logFailure: params.logFailure !== false && isFinalAttempt,
     });
     if (aborted || isFinalAttempt) {
       return aborted;
@@ -1110,13 +1084,14 @@ async function agentViaGatewayCommand(
           },
           onSignalAbort: async (request) => {
             activeConnectionAbortAttempted = true;
-            activeConnectionAbortSucceeded = await abortAcceptedGatewayAgentRunOnActiveConnection({
+            activeConnectionAbortSucceeded = await abortAcceptedGatewayAgentRunWithRetries({
               runId: runContext.accepted?.runId ?? idempotencyKey,
               sessionKey: runContext.accepted?.sessionKey ?? abortSessionKey,
               agentId: runContext.accepted?.agentId,
               signal: signalBridge.getReceivedSignal(),
               runtime,
               request,
+              logFailure: false,
             });
           },
           ...gatewayIdentity,

@@ -200,6 +200,11 @@ Install, update, registry refresh, and doctor flows may read fresh package metad
 
 ### Runtime instance and source lifetime
 
+Inference verification fingerprints the artifact selected by the runtime's
+source/build preference, including explicit bundled source overrides. Loading an
+unchanged plugin preserves that proof; changing its selected runtime files
+invalidates it.
+
 A managed runtime instance owns its module results, registered callables, and
 runtime-store slots. With Node's synchronous module hooks, it also owns a captured
 source artifact. Package plugins capture their package inputs when the instance
