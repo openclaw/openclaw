@@ -260,6 +260,7 @@ src/channels/chat-meta.ts
 src/channels/config-metadata.ts
 src/channels/config-presence.ts
 src/channels/ids.ts
+src/channels/message/ingress-queue-read-contract.ts
 src/channels/plugins/bootstrap-registry.ts
 src/channels/plugins/bundled-ids.ts
 src/channels/plugins/bundled-root.ts
