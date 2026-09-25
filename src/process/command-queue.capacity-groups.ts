@@ -3,6 +3,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 // lanes, with per-member reservations. Split out of command-queue.ts to keep
 // that file within its size budget; the queue supplies its own `drainLane` so
 // this module never has to import the queue runtime.
+import { effectivePriority, isPreferredQueueHead } from "./command-queue.priority.js";
 import {
   getQueueState,
   normalizeLane,
@@ -210,13 +211,15 @@ export function installCommandLaneGroup(next: LaneGroupState): void {
 }
 
 /**
- * Select the highest-priority, oldest currently admissible member head.
+ * Select the highest aged-priority admissible member head.
+ * Equal effective priority keeps global sequence, then lane name.
  */
 function resolveNextGroupLane(group: LaneGroupState): string | undefined {
   let selected:
     | {
         lane: string;
         priority: number;
+        enqueuedAt: number;
         sequence: number;
       }
     | undefined;
@@ -235,12 +238,17 @@ function resolveNextGroupLane(group: LaneGroupState): string | undefined {
     }
     if (
       !selected ||
-      head.priority > selected.priority ||
-      (head.priority === selected.priority &&
-        (head.sequence < selected.sequence ||
-          (head.sequence === selected.sequence && lane < selected.lane)))
+      isPreferredQueueHead(head, selected) ||
+      (head.sequence === selected.sequence &&
+        effectivePriority(head) === effectivePriority(selected) &&
+        lane < selected.lane)
     ) {
-      selected = { lane, priority: head.priority, sequence: head.sequence };
+      selected = {
+        lane,
+        priority: head.priority,
+        enqueuedAt: head.enqueuedAt,
+        sequence: head.sequence,
+      };
     }
   }
   return selected?.lane;
@@ -249,9 +257,10 @@ function resolveNextGroupLane(group: LaneGroupState): string | undefined {
 /**
  * Drain a capacity group one admission at a time.
  *
- * Per-lane queues already order entries by priority and global sequence. The
- * group applies the same order across member queue heads so a completing lane
- * cannot synchronously reclaim shared capacity ahead of an older sibling.
+ * Per-lane queues already order entries by drain-time aged priority and global
+ * sequence. The group applies the same order across member queue heads so a
+ * completing lane cannot synchronously reclaim shared capacity ahead of an
+ * older sibling.
  */
 export function drainCommandLaneGroup(lane: string, drainLane: BoundedDrainLaneFn): void {
   const group = getLaneGroup(lane);

@@ -1,6 +1,7 @@
 // Shared command-queue runtime state, split out of command-queue.ts so the
 // capacity-group policy can read lane state without importing the queue itself.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { pickNextAmongHeads } from "./command-queue.priority.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
 
@@ -111,7 +112,22 @@ export function enqueueLaneQueue(queue: LaneQueue, entry: QueueEntry): number {
 }
 
 export function peekLaneQueue(queue: LaneQueue): QueueEntry | undefined {
-  return queue.foreground.head ?? queue.normal.head ?? queue.background.head;
+  // Fresh foreground always drains first. Aged lower tiers cannot become
+  // foreground, so a nonempty foreground list never yields to drain-time promotion.
+  const foreground = queue.foreground.head;
+  if (foreground) {
+    return foreground;
+  }
+  const heads: QueueEntry[] = [];
+  const normal = queue.normal.head;
+  const background = queue.background.head;
+  if (normal) {
+    heads.push(normal);
+  }
+  if (background) {
+    heads.push(background);
+  }
+  return pickNextAmongHeads(heads);
 }
 
 export function dequeueLaneQueue(queue: LaneQueue): QueueEntry | undefined {
