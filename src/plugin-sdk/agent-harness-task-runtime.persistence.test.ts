@@ -1,5 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { identifiedClient, runTaskHandler } from "../gateway/server-methods/tasks.test-helpers.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -9,8 +12,8 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-runtime-scope.js";
-import { withTaskCancellationContext } from "../tasks/task-cancellation-context.js";
 import { getTaskFlowRegistryStore } from "../tasks/task-flow-registry.store.js";
 import {
   getTaskActivitySnapshot,
@@ -115,18 +118,47 @@ it.each([
   "incognito",
   "registry retired",
   "caller revoked",
+  "requester reassigned",
+  "session write revoked",
+  "session read revoked after stop",
 ] as const)("binds command cancellation to its original task outcome (%s)", async (scenario) => {
   await withTaskRegistryTempDir(
     async () => {
       let current = true;
       let stops = 0;
-      let callerCurrent = true;
       const agentRegistry = createEmptyPluginRegistry();
       const requestSignal = new AbortController().signal;
-      const requestClient = identifiedClient(["operator.admin"]);
+      const sessionPolicyCase =
+        scenario === "session write revoked" || scenario === "session read revoked after stop";
+      const role: GatewayOperatorRoleDefinition = {
+        sessions: { others: "write" },
+        agents: "*",
+        scopes: ["operator.read", "operator.write"],
+      };
+      const config: OpenClawConfig = sessionPolicyCase
+        ? {
+            gateway: {
+              roles: { default: "task-operator", definitions: { "task-operator": role } },
+            },
+          }
+        : {};
+      const requestClient = sessionPolicyCase
+        ? identifiedClient(role.scopes, ensureProfileForEmail("viewer@example.com").id)
+        : identifiedClient(["operator.admin"]);
       let replacement: ReturnType<typeof updateTask> | undefined;
       const ownerKey =
         scenario === "incognito" ? "agent:main:dashboard:incognito-command" : "agent:main:command";
+      if (sessionPolicyCase) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: ownerKey },
+          {
+            sessionId: "command-session",
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: "owner@example.com" },
+            visibility: "shared",
+          },
+        );
+      }
       const command = await withPluginRuntimeGenerationScope(
         { metadataSnapshot: createPluginMetadataSnapshotFixture(), pluginRegistry: agentRegistry },
         () =>
@@ -144,9 +176,21 @@ it.each([
             async cancel(_reason, assertTaskCurrent) {
               expect(getPluginRuntimeGatewayRequestScope()?.signal).toBe(requestSignal);
               expect(getPluginRuntimeGatewayRequestScope()?.client).toBe(requestClient);
-              if (scenario === "caller revoked") {
+              if (
+                scenario === "caller revoked" ||
+                scenario === "requester reassigned" ||
+                scenario === "session write revoked"
+              ) {
                 await Promise.resolve();
-                callerCurrent = false;
+                if (scenario === "caller revoked") {
+                  requestClient.invalidated = true;
+                } else if (scenario === "requester reassigned") {
+                  updateTask(command.task.taskId, {
+                    requesterSessionKey: "agent:main:another-session",
+                  });
+                } else {
+                  role.sessions = { others: "view" };
+                }
                 assertTaskCurrent();
               }
               stops += 1;
@@ -163,6 +207,9 @@ it.each([
                   status: scenario === "succeeded" ? "succeeded" : "cancelled",
                   endedAt: Date.now(),
                 });
+                if (scenario === "session read revoked after stop") {
+                  role.sessions = { others: "none" };
+                }
               }
             },
           }),
@@ -177,7 +224,7 @@ it.each([
         if (scenario === "replacement before stop") {
           replacement = updateTask(command.task.taskId, { taskKind: "successor-command" });
         }
-        const result = await withPluginRuntimeGatewayRequestScope(
+        const request = withPluginRuntimeGatewayRequestScope(
           {
             pluginRegistry: createEmptyPluginRegistry(),
             client: requestClient,
@@ -185,30 +232,32 @@ it.each([
             isWebchatConnect: () => true,
           },
           () =>
-            withTaskCancellationContext(
-              () => {
-                if (!callerCurrent) {
-                  throw new Error("request authority retired");
-                }
-              },
-              () =>
-                runTaskHandler("tasks.cancel", { taskId: command.task.taskId }, {}, requestClient),
-            ),
+            runTaskHandler("tasks.cancel", { taskId: command.task.taskId }, config, requestClient),
         );
-        expect(result.payload?.cancelled).toBe(
-          scenario === "cancelled" || scenario === "incognito",
-        );
+        if (scenario === "caller revoked") {
+          await expect(request).rejects.toThrow("Gateway requester authority changed");
+        } else {
+          const result = await request;
+          expect(result.payload?.cancelled).toBe(
+            scenario === "cancelled" ||
+              scenario === "incognito" ||
+              scenario === "session read revoked after stop",
+          );
+          if (scenario === "session read revoked after stop") {
+            expect(result.payload).toMatchObject({ found: true, cancelled: true });
+            expect(result.payload?.task).toBeUndefined();
+          }
+        }
         expect(stops).toBe(
           scenario === "revoked" ||
             scenario === "replacement before stop" ||
             scenario === "registry retired" ||
-            scenario === "caller revoked"
+            scenario === "caller revoked" ||
+            scenario === "requester reassigned" ||
+            scenario === "session write revoked"
             ? 0
             : 1,
         );
-        if (scenario === "caller revoked") {
-          expect(callerCurrent).toBe(false);
-        }
         if (scenario === "incognito") {
           expect(JSON.stringify(getTaskById(command.task.taskId))).not.toContain(
             "SYNTHETIC_TASK_CONTENT",
