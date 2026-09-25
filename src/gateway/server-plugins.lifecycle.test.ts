@@ -1046,4 +1046,55 @@ describe("gateway plugin instance bindings", () => {
       expect(coordinator.serviceStops).toBe(serviceStopFailure === "timeout" ? 3 : 1);
     },
   );
+
+  it(
+    "a retained-work reload refusal leaves the serving runtime generation authoritative",
+    { timeout: 120_000 },
+    async () => {
+      const { coordinator } = await prepareInstanceBindingTest();
+      const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const server = await startTestGatewayServer(claim, {
+        auth: { mode: "none" },
+        controlUiEnabled: false,
+        sidecarStartup: "start",
+      });
+      started.push(server);
+      await server.startupSettled;
+      const socket = await connectWebchatClient({ port: claim.port, scopes: ["operator.admin"] });
+      sockets.push(socket);
+
+      const registry = getActivePluginRegistry();
+      const record = registry?.plugins.find((entry) => entry.id === "instance-binding-probe");
+      const instance = record && getPluginInstance(record);
+      if (!instance) {
+        throw new Error("instance-binding-probe instance missing");
+      }
+      const { runtime } = await requireBoundRuntime(coordinator.runtimes, "initial retained owner");
+      const before = await requestInstanceBindingProbe(runtime);
+      const releaseWork = instance.retainWork();
+      const hostCleanup = await import("../plugins/host-hook-cleanup-timeout.js");
+      const withCleanupTimeout = hostCleanup.withPluginHostCleanupTimeout;
+      const cleanupSpy = vi
+        .spyOn(hostCleanup, "withPluginHostCleanupTimeout")
+        .mockImplementation(async (label, run, timeoutMs) =>
+          withCleanupTimeout(label, run, label === "retained plugin work" ? 1 : timeoutMs),
+        );
+      try {
+        const reloading = rpcReq(socket, "plugins.reload", {
+          plugins: [{ pluginId: "instance-binding-probe" }],
+        });
+        await expect
+          .poll(async () => await requestInstanceBindingProbe(runtime), { timeout: 30_000 })
+          .toEqual(before);
+        const reload = await reloading;
+        expect(reload.ok).toBe(false);
+        expect(reload.error?.message).toMatch(/admitted work did not settle|active retained work/i);
+        await expect(requestInstanceBindingProbe(runtime)).resolves.toEqual(before);
+        expect(getActivePluginRegistry()).toBe(registry);
+      } finally {
+        cleanupSpy.mockRestore();
+        releaseWork();
+      }
+    },
+  );
 });
