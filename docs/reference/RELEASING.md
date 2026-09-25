@@ -1275,6 +1275,18 @@ Use this box to answer "does the release behave correctly in QA scenarios and li
 
 The Package box is the installable-product gate. It is backed by `Package Acceptance` and the resolver `scripts/resolve-openclaw-package-candidate.mts`. The resolver normalizes a candidate into the `package-under-test` tarball consumed by Docker E2E, validates the package inventory, records the package version and SHA-256, and keeps the workflow harness ref separate from the package source ref.
 
+The bundled Chrome MCP artifact checker selects a trusted, exact patch-byte
+contract from the candidate's declared dependency pin and requires the bundled
+manifest to match it. The supported contracts are `1.8.0` (shipped in
+`v2026.9.6` at `eb377ac59e6c9fd6c7705028034812becf00271b`) and `1.9.0`.
+Both retain their original runtime hashes, required assets, ESM manifest, and
+bundled CLI resolution checks. Ranges, unknown versions, mixed contracts, and
+artifact-supplied hash tables cannot authorize a payload. Retain the `1.8.0`
+contract while supported frozen release targets pin it; retire it explicitly
+when those targets retire or migrate to a qualified newer pin, not merely when
+main updates its dependency. This does not change the candidate dependency or
+waive any package acceptance gate.
+
 Supported candidate sources:
 
 - `source=npm`: `openclaw@beta`, `openclaw@latest`, or an exact OpenClaw release version

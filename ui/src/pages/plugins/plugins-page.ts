@@ -86,6 +86,7 @@ class PluginsPage extends OpenClawLightDomElement {
     onCatalogUrlsChange: (urls) => {
       this.catalogIconUrls = urls;
     },
+    onLoadingChange: () => this.requestUpdate(),
   });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -351,7 +352,7 @@ class PluginsPage extends OpenClawLightDomElement {
     this.consentController.reset();
   }
 
-  private replaceResult(result: PluginListResult | null, preserveIcons = false) {
+  private replaceResult(result: PluginListResult | null) {
     // Uninstall publishes generations before its final result. Keep the selected
     // view intact until settlement refreshes inventory and retires its detail.
     if (this.uninstallingSelection) {
@@ -365,7 +366,8 @@ class PluginsPage extends OpenClawLightDomElement {
       // A late removal failure must survive the disappearance of its row.
       this.pageNotice = this.messages[pluginRowKey(this.detail.pluginId)] ?? this.pageNotice;
     }
-    if (preserveIcons) {
+    // Route changes reuse artwork; a new Gateway plugin generation retires it.
+    if (this.result?.generation === result?.generation) {
       this.icons.reconcileInstalled(result);
     } else {
       this.icons.resetInstalled();
@@ -503,7 +505,7 @@ class PluginsPage extends OpenClawLightDomElement {
 
   private applyMutationResult(result: PluginMutationResult) {
     this.icons.invalidateInstalled(result.plugin.id);
-    this.replaceResult(mergePluginCatalogItem(this.result, result.plugin), true);
+    this.replaceResult(mergePluginCatalogItem(this.result, result.plugin));
   }
 
   private showDetails(pluginId: string | null) {
@@ -629,6 +631,8 @@ class PluginsPage extends OpenClawLightDomElement {
       pageNotice: this.pageNotice,
       iconUrls: this.iconUrls,
       catalogIconUrls: this.catalogIconUrls,
+      iconLoading: this.icons.isInstalledLoading,
+      catalogIconLoading: this.icons.isCatalogLoading,
       catalogDetail: this.catalogDetail,
       installedDetailTab: this.installedDetailTab,
       canMutate: this.canMutate(),

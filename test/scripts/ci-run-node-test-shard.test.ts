@@ -203,8 +203,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     "preserves selected UI discovery before runtime partitioning under %s",
     async (policy) => {
       vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
-      const bunFile = "ui/src/pages/skills/view.test.ts";
-      const nodeFile = "ui/src/pages/chat/chat-pane-retained-presentation.test.ts";
+      const bunFile = "ui/src/pages/chat/chat-pane-retained-presentation.test.ts";
+      const nodeFile = "ui/src/pages/usage/usage-page-details.test.ts";
       const includePatterns = [bunFile, nodeFile];
       const seen: Array<{ runtime: string | undefined; membership?: string[] }> = [];
       await expect(
@@ -524,6 +524,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       const nativeCompilerTest = "test/scripts/native-typescript.test.ts";
       const compilerGraphTest = "test/scripts/ts-topology.test.ts";
       const mixedCompilerTest = "src/plugin-sdk/provider-tools.test.ts";
+      const missingDockerTest = "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts";
       const nodeFiles = [
         skippedOnBun,
         v8HeapTest,
@@ -533,7 +534,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         compilerGraphTest,
         mixedCompilerTest,
       ];
-      const includePatterns = [bunTarget, ...nodeFiles];
+      const bunFiles = [bunTarget, missingDockerTest];
+      const includePatterns = [...bunFiles, ...nodeFiles];
       const shard = {
         configs: [bunConfig],
         includePatterns,
@@ -580,7 +582,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           label: `${nodePrefix}partition`,
           timing: `${nodePrefix}partition`,
         },
-        { runtime: "bun", includes: [bunTarget], label: "bun:partition", timing: "bun:partition" },
+        { runtime: "bun", includes: bunFiles, label: "bun:partition", timing: "bun:partition" },
       ]);
       expect(new Set(seen.flatMap(({ includes }) => includes))).toEqual(new Set(includePatterns));
     },
@@ -855,8 +857,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
       const seen: string[] = [];
       let receiptFile: string | undefined;
-      const nodeFile = "ui/src/pages/chat/chat-pane-retained-presentation.test.ts";
-      const bunFile = "ui/src/pages/skills/view.test.ts";
+      const nodeFile = "ui/src/pages/usage/usage-page-details.test.ts";
+      const bunFile = "ui/src/pages/chat/chat-pane-retained-presentation.test.ts";
       await expect(
         runShardPlans([{ kind: "group", name: "ui", plan: { configs: ["ui/vitest.config.ts"] } }], {
           env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible" },
@@ -867,7 +869,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
               const included = JSON.parse(
                 readFileSync(env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE!, "utf8"),
               );
-              expect(included).toEqual([nodeFile, "ui/src/pages/usage/usage-page-details.test.ts"]);
+              expect(included).toEqual([nodeFile]);
               return 0;
             }
             receiptFile = env.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT;

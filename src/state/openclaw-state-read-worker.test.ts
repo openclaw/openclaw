@@ -816,6 +816,42 @@ it.each([
   },
 );
 
+it("does not retain caller context in no-input ingress health reads", async () => {
+  const { pathname, options } = source();
+  const context = captureOpenClawStateWorkerContext(options);
+  const command = {
+    type: "channelIngress.failedHealth" as const,
+    callerContext: { onClosed: () => {} },
+  };
+  const transport = createOpenClawStateReadTransport(command);
+  const task = queueTask();
+  const reply: OpenClawStateReadReply = {
+    ok: true,
+    type: command.type,
+    sourceAdmitted: true,
+    result: [],
+  };
+  const read = transport.read(
+    { context, location: pathname, checkFreshAdmission: false },
+    { signal: new AbortController().signal, assertCurrent: () => {} },
+  );
+  try {
+    const request = await Promise.race([
+      task.captured,
+      read.then(() => {
+        throw new Error("Read completed before dispatch");
+      }),
+    ]);
+    expect(request.command).toEqual({ type: command.type });
+    task.result.resolve(reply);
+    await expect(read).resolves.toEqual({ value: reply });
+  } finally {
+    task.result.resolve(reply);
+    await Promise.allSettled([read]);
+    await transport.close();
+  }
+});
+
 it("captures cron recovery markers and charges their retained bytes before dispatch", async () => {
   const { pathname, options } = source();
   const context = captureOpenClawStateWorkerContext(options);

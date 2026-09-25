@@ -6,12 +6,6 @@ import type { CommandRunner, RunStepOptions } from "./update-runner-types.js";
 
 const PREFLIGHT_CLEANUP_TIMEOUT_MS = 60_000;
 
-async function removePathRecursive(target: string) {
-  await fs
-    .rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
-    .catch(() => {});
-}
-
 async function repairPreflightCleanup(worktreeDir: string, preflightRoot: string) {
   try {
     await fs.rm(worktreeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
@@ -68,7 +62,9 @@ export async function cleanupGitPreflight(
   await runCleanupCommand(["git", "-C", options.cwd, "worktree", "prune"], {
     cwd: options.cwd,
   }).catch(() => null);
-  await removePathRecursive(preflightRoot);
+  await fs
+    .rm(preflightRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
+    .catch(() => {});
   options.progress?.onStepComplete?.({
     ...removeStep,
     index: options.stepIndex,

@@ -1,4 +1,3 @@
-// Filters heartbeat event text before it is added to prompts.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -44,10 +43,7 @@ export function isRelayableExecCompletionEvent(evt: string): boolean {
   if (!parsed) {
     return isExecCompletionEvent(evt);
   }
-  if (parsed.output) {
-    return true;
-  }
-  return !parsed.succeeded;
+  return Boolean(parsed.output) || !parsed.succeeded;
 }
 
 function formatExecEventPromptText(pendingEvents: string[]): {
@@ -75,9 +71,6 @@ function formatExecEventPromptText(pendingEvents: string[]): {
   return { text: lines.join("\n").trim(), hasMissingOutputFailure };
 }
 
-// Build a dynamic prompt for cron events by embedding the actual event content.
-// This ensures the model sees the reminder text directly instead of relying on
-// "shown in the system messages above" which may not be visible in context.
 export function buildCronEventPrompt(
   pendingEvents: string[],
   opts?: {
@@ -96,17 +89,14 @@ export function buildCronEventPrompt(
         : `Handle this internally and reply ${SILENT_REPLY_TOKEN} when nothing needs user-facing follow-up.`;
     return `A scheduled cron event was triggered, but no event content was found. ${completionInstruction}`;
   }
-  if (!deliverToUser) {
-    return (
-      "A scheduled reminder has been triggered. The reminder content is:\n\n" +
-      eventText +
-      "\n\nHandle this reminder internally. Do not relay it to the user unless explicitly requested."
-    );
-  }
+  const instruction = deliverToUser
+    ? "Please relay this reminder to the user in a helpful and friendly way."
+    : "Handle this reminder internally. Do not relay it to the user unless explicitly requested.";
   return (
     "A scheduled reminder has been triggered. The reminder content is:\n\n" +
     eventText +
-    "\n\nPlease relay this reminder to the user in a helpful and friendly way."
+    "\n\n" +
+    instruction
   );
 }
 
@@ -128,16 +118,12 @@ export function buildExecEventPrompt(
     return `An async command completion event was triggered, but no command output was found. ${completionInstruction} Do not mention, summarize, or reuse output from any earlier run.`;
   }
   if (!deliverToUser) {
-    if (useHeartbeatResponseTool) {
-      return (
-        "An async command completion event was triggered, but user delivery is disabled for this run. " +
-        `Handle the result internally. ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS} ` +
-        "Do not mention, summarize, or reuse command output."
-      );
-    }
+    const completionInstruction = useHeartbeatResponseTool
+      ? `Handle the result internally. ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`
+      : `Handle the result internally and reply ${SILENT_REPLY_TOKEN} only.`;
     return (
       "An async command completion event was triggered, but user delivery is disabled for this run. " +
-      `Handle the result internally and reply ${SILENT_REPLY_TOKEN} only. Do not mention, summarize, or reuse command output.`
+      `${completionInstruction} Do not mention, summarize, or reuse command output.`
     );
   }
   if (hasMissingOutputFailure) {
@@ -187,7 +173,6 @@ export function isHeartbeatDeliveryAwarenessEvent(event: { contextKey?: string |
   return event.contextKey?.startsWith(HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX) ?? false;
 }
 
-// Returns true when a system event should be treated as real cron reminder content.
 export function isCronSystemEvent(evt: string) {
   if (!evt.trim()) {
     return false;

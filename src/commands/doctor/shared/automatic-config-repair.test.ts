@@ -21,14 +21,12 @@ import { isPathInside } from "../../../infra/path-guards.js";
 import * as pluginModuleLoader from "../../../plugins/plugin-module-loader-cache.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { VERSION } from "../../../version.js";
 import { withDoctorConfigPreflightHome } from "../../doctor-config-preflight.test-support.js";
 import {
   commitAutomaticConfigRepair,
-  isStartupConfigRepairResult,
   planAutomaticConfigRepair,
-  resolveStartupConfigSnapshot,
-} from "./automatic-startup-config-repair.js";
+  resolveLegacyConfigSnapshotForBackup,
+} from "./automatic-config-repair.js";
 
 function invalidSnapshot(params: {
   config: OpenClawConfig;
@@ -52,7 +50,7 @@ function invalidSnapshot(params: {
   };
 }
 
-describe("automatic startup config repair", () => {
+describe("automatic config repair", () => {
   it("preserves a resolved legacy channel owner in the same repair as the explicit roster", async () => {
     const coreSourceRoot = fileURLToPath(new URL("../../../", import.meta.url));
     const loadModule = pluginModuleLoader.getCachedPluginModuleLoader;
@@ -130,7 +128,7 @@ describe("automatic startup config repair", () => {
           "QUOTED_REPAIR_KEY",
         );
 
-        const repaired = resolveStartupConfigSnapshot(snapshot);
+        const repaired = resolveLegacyConfigSnapshotForBackup(snapshot);
         expect(repaired?.valid).toBe(true);
         expect(repaired?.sourceConfig.session?.reset?.idleMinutes).toBe(45);
         expect(collectEnvSecretRefIds(repaired?.sourceConfig)).toEqual(
@@ -240,7 +238,7 @@ describe("automatic startup config repair", () => {
   });
 
   it.each(["${STARTUP_MEMORY_KEY}", "$${STARTUP_MEMORY_KEY}"])(
-    "accepts the committed startup repair with a moved %s reference",
+    "preserves a moved %s reference through Doctor repair",
     async (apiKey) => {
       await withDoctorConfigPreflightHome(async (home) => {
         await withEnvAsync(
@@ -254,7 +252,7 @@ describe("automatic startup config repair", () => {
             const originalBytes = await fs.readFile(configPath, "utf8");
             const snapshot = await readConfigFileSnapshot();
             expect(snapshot.valid).toBe(false);
-            expect(resolveStartupConfigSnapshot(snapshot)?.valid).toBe(true);
+            expect(resolveLegacyConfigSnapshotForBackup(snapshot)?.valid).toBe(true);
             const plan = planAutomaticConfigRepair(snapshot);
             if (!plan) {
               throw new Error("expected a repairable memory config");
@@ -267,14 +265,6 @@ describe("automatic startup config repair", () => {
             expect(reloaded.sourceConfig.memory?.search?.remote?.apiKey).toBe(
               apiKey.startsWith("$$") ? "${STARTUP_MEMORY_KEY}" : "fixture-memory-key",
             );
-            expect(isStartupConfigRepairResult(snapshot, reloaded)).toBe(true);
-            expect(resolveStartupConfigSnapshot(reloaded)).toBe(reloaded);
-            expect(
-              isStartupConfigRepairResult(snapshot, {
-                ...reloaded,
-                sourceConfig: { ...reloaded.sourceConfig, gateway: { mode: "remote" } },
-              }),
-            ).toBe(false);
             await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(originalBytes);
           },
         );
@@ -324,60 +314,8 @@ describe("automatic startup config repair", () => {
     expect(snapshot.sourceConfig).toHaveProperty("meta.lastTouchedAt");
   });
 
-  it("accepts the canonical writer metadata stamped onto the repaired stable config", () => {
-    const before = invalidSnapshot({
-      config: {
-        meta: {
-          lastTouchedAt: "2026-08-01T00:00:00.000Z",
-          lastTouchedVersion: "2026.7.1-2",
-        },
-        agents: {
-          defaults: { heartbeat: { skipWhenBusy: true }, workspace: "/tmp/workspace" },
-          entries: { main: {} },
-        },
-        gateway: { mode: "local" },
-      } as OpenClawConfig,
-      issuePaths: ["meta", "agents.defaults.heartbeat"],
-    });
-    const repaired = {
-      meta: {
-        lastTouchedVersion: VERSION,
-        migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true },
-      },
-      agents: { defaults: { workspace: "/tmp/workspace" }, entries: { main: {} } },
-      gateway: { mode: "local" },
-    } as OpenClawConfig;
-    const after: ConfigFileSnapshot = {
-      ...before,
-      raw: JSON.stringify(repaired),
-      parsed: repaired,
-      sourceConfig: repaired,
-      resolved: repaired,
-      runtimeConfig: repaired,
-      config: repaired,
-      valid: true,
-      issues: [],
-      legacyIssues: [],
-    };
-
-    expect(isStartupConfigRepairResult(before, after)).toBe(true);
-    expect(isStartupConfigRepairResult(before, { ...after, path: "/tmp/other.json" })).toBe(false);
-    expect(
-      isStartupConfigRepairResult(before, {
-        ...after,
-        sourceConfig: { ...repaired, gateway: { mode: "remote" } },
-      }),
-    ).toBe(false);
-    expect(
-      isStartupConfigRepairResult(before, {
-        ...after,
-        sourceConfig: { ...repaired, session: { reset: { mode: "idle" } } },
-      }),
-    ).toBe(false);
-  });
-
   it("plans a config whose only migration is plugin-owned after state admission", () => {
-    // The full planner owns plugin contracts; pre-bootstrap uses core-only selection.
+    // Doctor's full planner owns plugin contracts; backup projection uses core-only selection.
     const snapshot = invalidSnapshot({
       config: {
         plugins: { entries: { "active-memory": { config: { qmd: { enabled: true } } } } },
@@ -391,8 +329,8 @@ describe("automatic startup config repair", () => {
     expect(resolved?.sourceConfig.plugins?.entries?.["active-memory"]?.config).toEqual({});
   });
 
-  it("previews repairable snapshots without touching the shared state database", async () => {
-    // Backup discovery and gateway pre-bootstrap resolve before state-database admission;
+  it("projects legacy backup roots without touching the shared state database", async () => {
+    // Backup discovery resolves before state-database admission;
     // a broken store (here: a directory at the canonical path) must not break the preview.
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-startup-repair-preview-"));
     try {
@@ -409,7 +347,7 @@ describe("automatic startup config repair", () => {
           } as OpenClawConfig,
           issuePaths: ["session.idleMinutes"],
         });
-        const resolved = resolveStartupConfigSnapshot(snapshot);
+        const resolved = resolveLegacyConfigSnapshotForBackup(snapshot);
         expect(resolved?.valid).toBe(true);
         expect(resolved?.sourceConfig.session).toEqual({
           reset: { mode: "idle", idleMinutes: 45 },
@@ -448,7 +386,7 @@ describe("automatic startup config repair", () => {
     );
     const snapshot = invalidSnapshot({ config, issuePaths: ["session.idleMinutes"] });
 
-    const resolved = resolveStartupConfigSnapshot(snapshot);
+    const resolved = resolveLegacyConfigSnapshotForBackup(snapshot);
 
     expect(resolved?.sourceConfig.session).toEqual({ reset: { mode: "idle", idleMinutes: 45 } });
     expect(collectEnvSecretRefIds(resolved?.sourceConfig)).toEqual(new Set(["SHORTHAND_KEY"]));
@@ -472,12 +410,11 @@ describe("automatic startup config repair", () => {
     );
     const snapshot = invalidSnapshot({ config, issuePaths: ["session.idleMinutes"] });
 
-    const resolved = resolveStartupConfigSnapshot(snapshot);
+    const resolved = resolveLegacyConfigSnapshotForBackup(snapshot);
 
     expect(resolved?.sourceConfig.session).toEqual({ reset: { mode: "idle", idleMinutes: 45 } });
     expect(getResolvedConfigEnvSecretRef(resolved?.sourceConfig, "session.idleMinutes")).toBeNull();
-    // The variable is still referenced by the operator's config, so pre-bootstrap cleanup reads
-    // the pre-repair snapshot as well and keeps it out of the delete set.
+    // The read-only projection preserves the authored snapshot and its reference facts.
     expect(collectEnvSecretRefIds(snapshot.sourceConfig)).toEqual(new Set(["MOVED_KEY"]));
   });
 
@@ -514,11 +451,10 @@ describe("automatic startup config repair", () => {
       expect(collectEnvSecretRefIds(snapshot.sourceConfig)).toEqual(new Set(["LEGACY_REPAIR_KEY"]));
       expect(snapshot.valid).toBe(false);
 
-      const resolved = resolveStartupConfigSnapshot(snapshot);
+      const resolved = resolveLegacyConfigSnapshotForBackup(snapshot);
 
       expect(resolved?.sourceConfig.session).toEqual({ reset: { mode: "idle", idleMinutes: 45 } });
-      // Without the fact transfer the repaired clone reports the substituted literal as an
-      // ordinary value, so pre-bootstrap deletes the managed key the config still depends on.
+      // The projection must retain provenance instead of treating the substituted value as authored.
       expect(collectEnvSecretRefIds(resolved?.sourceConfig)).toEqual(
         new Set(["LEGACY_REPAIR_KEY"]),
       );
@@ -602,7 +538,7 @@ describe("automatic startup config repair", () => {
 
     expect(planAutomaticConfigRepair(snapshot)).toBeNull();
     if (config.plugins && "installs" in config.plugins) {
-      expect(resolveStartupConfigSnapshot(snapshot)).toBeUndefined();
+      expect(resolveLegacyConfigSnapshotForBackup(snapshot)).toBeUndefined();
     }
   });
 });

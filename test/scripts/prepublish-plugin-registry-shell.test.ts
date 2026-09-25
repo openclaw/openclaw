@@ -407,6 +407,7 @@ check_gateway_probes() { test -n "$gateway_pid"; test -f "$READY"; }
 stop_gateway() { :; }
 phase() { shift; "$@"; }
 registry_before="$NPM_CONFIG_REGISTRY"
+normalize_baseline
 if [ "$STAGE" = install ]; then
   install_baseline
   test "$baseline_version" = "$BASELINE_VERSION"

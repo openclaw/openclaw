@@ -57,7 +57,7 @@ export function formatSchemaRefusalLines(
     }),
     ...schemas.indeterminate.map(
       (database) =>
-        `${prefix}: could not inspect ${database.kind} database ${database.path}: ${database.reason}; retry once the gateway releases it.`,
+        `${prefix}: could not inspect ${database.kind} database ${database.path}: ${database.reason}; check database access and free disk space, then retry the update.`,
     ),
     OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
     "Installing manually via npm bypasses this guard; back up first and verify compatibility.",
@@ -83,6 +83,7 @@ async function checkTargetDatabaseSchemas(
   return preflightOpenClawDatabaseSchemas({
     env: context.env,
     supportedVersions,
+    preserveSourceArtifacts: false,
     // Include default on-disk stores that update-time Doctor can later touch,
     // without resolving configured candidates into writable migration owners.
     configuredAgentDatabaseTargets: [],

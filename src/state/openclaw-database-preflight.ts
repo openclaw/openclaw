@@ -307,10 +307,11 @@ export async function preflightOpenClawDatabaseSchemas(
   }
   try {
     if (statePresence.status === "present") {
-      // Even a read-only source connection can create WAL/SHM. The copy worker
-      // preserves source artifacts and cannot release this process's writer locks.
+      // Native source opens stay in the copy worker, preserving this process's locks.
+      // Updates opt into online backup; other inspections retain artifact preservation.
       stateSnapshot = await prepareSqliteReadOnlyLocation(realpathSync.native(statePath), {
-        preserveSourceArtifacts: true,
+        preserveSourceArtifacts: options.preserveSourceArtifacts ?? true,
+        allowLiveOwner: options.preserveSourceArtifacts !== false,
         signal: options.signal,
       });
       options.signal?.throwIfAborted();
@@ -520,10 +521,10 @@ export async function preflightOpenClawDatabaseSchemas(
           schemaInspection = await inspectSchema(schemaInput, options.signal);
         }
         if (!schemaInspection) {
-          // Raw private recovery reuses the slot's snapshot worker without the
-          // native async-backup/IPC stall; the parent retains cleanup ownership.
+          // The parent retains cleanup ownership for the isolated snapshot worker.
           agentSnapshot = await prepareSqliteReadOnlyLocation(realAgentPath, {
-            preserveSourceArtifacts: true,
+            preserveSourceArtifacts: options.preserveSourceArtifacts ?? true,
+            allowLiveOwner: options.preserveSourceArtifacts !== false,
             signal: options.signal,
           });
           options.signal?.throwIfAborted();

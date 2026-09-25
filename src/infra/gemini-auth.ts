@@ -1,19 +1,5 @@
-/**
- * Shared Gemini authentication utilities.
- *
- * Supports both traditional API keys and OAuth JSON format.
- */
-
-/**
- * Parse Gemini API key and return appropriate auth headers.
- *
- * OAuth format: `{"token": "...", "projectId": "..."}`
- *
- * @param apiKey - Either a traditional API key string or OAuth JSON
- * @returns Headers object with appropriate authentication
- */
+/** Accepts an API key or serialized OAuth credentials containing a token. */
 export function parseGeminiAuth(apiKey: string): { headers: Record<string, string> } {
-  // Try parsing as OAuth JSON format
   if (apiKey.startsWith("{")) {
     try {
       const parsed = JSON.parse(apiKey) as { token?: string; projectId?: string };
@@ -26,11 +12,10 @@ export function parseGeminiAuth(apiKey: string): { headers: Record<string, strin
         };
       }
     } catch {
-      // Parse failed, fallback to API key mode
+      // Malformed JSON remains an API key, matching non-JSON credentials.
     }
   }
 
-  // Default: traditional API key
   return {
     headers: {
       "x-goog-api-key": apiKey,

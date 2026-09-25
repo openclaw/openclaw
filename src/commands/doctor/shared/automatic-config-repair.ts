@@ -216,29 +216,14 @@ export async function importAutomaticConfigRepairInstallRecords(snapshot: Config
 }
 
 /**
- * Pre-bootstrap selection must not open state while deciding whether startup is safe.
- * Full plugin-contract validation belongs to the admitted preflight's repair plan.
+ * Backup inventory and restore overlap checks need legacy roots without changing state.
+ * Full plugin-contract validation belongs to Doctor's repair plan.
  */
-export function resolveStartupConfigSnapshot(snapshot: ConfigFileSnapshot) {
+export function resolveLegacyConfigSnapshotForBackup(snapshot: ConfigFileSnapshot) {
   if (snapshot.valid) {
     return snapshot;
   }
   return planConfigRepair(snapshot, false)?.snapshot;
-}
-
-/** Matches only the canonical writer result for a previously admitted startup repair. */
-export function isStartupConfigRepairResult(
-  before: ConfigFileSnapshot,
-  after: ConfigFileSnapshot,
-): boolean {
-  const plan = planAutomaticConfigRepair(before);
-  const expected = plan ? prepareAutomaticConfigRepairWrite(before, plan.writeConfig) : null;
-  return Boolean(
-    expected &&
-    after.valid &&
-    before.path === after.path &&
-    isDeepStrictEqual(expected, after.sourceConfig),
-  );
 }
 
 /** Commits a planned repair against the exact snapshot admitted by its caller. */
@@ -273,7 +258,7 @@ async function writeAutomaticConfigRepair(
       // The checked receipt proves these removed records already have a durable owner.
       allowConfigSizeDrop: options.pluginInstallConfigImport !== undefined,
       // The reader retired legacy markers; persist their canonical owners in this write.
-      // Startup verification above uses the same writer topology preparation.
+      // Planning above validates the same writer topology preparation.
       persistCanonicalAgentRoster: true,
     },
   });

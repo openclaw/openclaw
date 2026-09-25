@@ -135,25 +135,39 @@ export function repairStateSchema(
       return { changes: indexChanges, warnings: [] };
     }
     if (scope === "readability") {
-      return {
-        changes: runSqliteImmediateTransactionSync(
+      const changes = runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          const schemaChanges = repairAdmittedSchema();
+          if (schemaChanges.length > 0) {
+            assertOpenClawStateDatabaseOwner(db, { pathname });
+            assertSqliteTableIntegrity(db, pathname, "skill_workshop_collection_reviews");
+          }
+          return schemaChanges;
+        },
+        {
+          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+          databaseLabel: pathname,
+          operationLabel: "state.schema.readability-repair",
+        },
+      );
+      // Recovery snapshots committed source bytes in another process. Publish
+      // catalog readability before its preservation transaction inspects them.
+      changes.push(
+        ...runSqliteImmediateTransactionSync(
           db,
           () => {
-            const changes = repairAdmittedSchema();
-            if (changes.length > 0) {
-              assertOpenClawStateDatabaseOwner(db, { pathname });
-              assertSqliteTableIntegrity(db, pathname, "skill_workshop_collection_reviews");
-            }
-            return changes;
+            assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+            return recoverOrphanTaskDeliveryRows(db, pathname);
           },
           {
             busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
             databaseLabel: pathname,
-            operationLabel: "state.schema.readability-repair",
+            operationLabel: "state.schema.readability-recovery",
           },
         ),
-        warnings: [],
-      };
+      );
+      return { changes, warnings: [] };
     }
     const applied: string[] = [...indexChanges];
     const changes = runStateSchemaMigrationTransaction(
