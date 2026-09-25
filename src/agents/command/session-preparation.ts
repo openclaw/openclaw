@@ -18,6 +18,7 @@ import {
   buildCurrentRunRestartRecoveryClaim,
   prepareCommandHarnessCompletionRecovery,
 } from "../agent-command-restart-recovery.js";
+import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
@@ -98,7 +99,6 @@ export async function prepareEmbeddedSessionState(params: {
   sessionAgentId: string;
   lifecycleGeneration: string;
   runId: string;
-  workspaceDir: string;
   executionWorkspaceDir: string;
   watchSkills: boolean;
   isNewSession: boolean;
@@ -146,7 +146,7 @@ export async function prepareEmbeddedSessionState(params: {
     agentId: params.sessionAgentId,
   });
   const skillSnapshotState = await resolveReusableWorkspaceSkillSnapshot({
-    workspaceDir: params.workspaceDir,
+    workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId),
     executionWorkspaceDir: params.executionWorkspaceDir,
     config: params.cfg,
     agentId: params.sessionAgentId,

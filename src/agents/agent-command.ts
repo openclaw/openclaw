@@ -445,7 +445,6 @@ async function agentCommandInternal(
             sessionAgentId,
             lifecycleGeneration,
             runId,
-            workspaceDir,
             executionWorkspaceDir:
               sessionEntry?.worktree?.canonicalWorkspaceDir ?? cwd ?? workspaceDir,
             watchSkills,
