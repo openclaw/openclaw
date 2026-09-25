@@ -10,6 +10,7 @@ import {
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
+import type { InheritedToolPolicyV2 } from "../inherited-tool-policy.schema.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -182,9 +183,71 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
               operation.toolAuthorityRoute?.provider === route.provider &&
               operation.toolAuthorityRoute.model === route.model);
           assertRegistered();
+          const getInheritedToolPolicy = handle.getInheritedToolPolicy;
+          const getDelegatedToolParameterPolicy = handle.getDelegatedToolParameterPolicy;
+          const getEnforcedDelegatedToolParameterPolicy =
+            handle.getEnforcedDelegatedToolParameterPolicy;
+          const addDelegatedInputPolicies = handle.addDelegatedInputPolicies;
           return {
             source: operation ? "reply" : "attempt",
             assertActive: assertRegistered,
+            ...(getInheritedToolPolicy
+              ? {
+                  getInheritedToolPolicy: () => {
+                    assertRegistered();
+                    if (!ownsOperation()) {
+                      throw new Error("Target reply operation no longer owns its policy.");
+                    }
+                    const policy = getInheritedToolPolicy();
+                    assertRegistered();
+                    return policy;
+                  },
+                }
+              : {}),
+            ...(getDelegatedToolParameterPolicy
+              ? {
+                  getDelegatedToolParameterPolicy: () => {
+                    assertRegistered();
+                    if (!ownsOperation()) {
+                      throw new Error("Target reply operation no longer owns its policy.");
+                    }
+                    const policy = getDelegatedToolParameterPolicy();
+                    assertRegistered();
+                    return policy;
+                  },
+                }
+              : {}),
+            ...(getEnforcedDelegatedToolParameterPolicy
+              ? {
+                  getEnforcedDelegatedToolParameterPolicy: () => {
+                    assertRegistered();
+                    if (!ownsOperation()) {
+                      throw new Error("Target reply operation no longer owns its policy.");
+                    }
+                    const policy = getEnforcedDelegatedToolParameterPolicy();
+                    assertRegistered();
+                    return policy;
+                  },
+                }
+              : {}),
+            ...(addDelegatedInputPolicies
+              ? {
+                  addDelegatedInputPolicies: (policies: readonly InheritedToolPolicyV2[]) => {
+                    assertRegistered();
+                    if (!ownsOperation()) {
+                      throw new Error("Target reply operation no longer owns its policy.");
+                    }
+                    const release = addDelegatedInputPolicies(policies);
+                    try {
+                      assertRegistered();
+                    } catch (error) {
+                      release();
+                      throw error;
+                    }
+                    return release;
+                  },
+                }
+              : {}),
             project: (overlay) => {
               assertRegistered();
               if (!ownsOperation()) {

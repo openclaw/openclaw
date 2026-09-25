@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import { parseInheritedToolPolicyV2 } from "../agents/inherited-tool-policy.schema.js";
 import {
   parseExecutionIdentityAdmissionToken,
   type ExecutionIdentityAdmissionToken,
@@ -148,11 +149,24 @@ const sessionSpawnContextSchema = z
         model: normalizedRequiredStringSchema,
       })
       .optional(),
-    inheritedToolPolicy: z.object({
-      version: z.literal(1),
-      allow: stringListSchema,
-      deny: stringListSchema,
-    }),
+    inheritedToolPolicy: z.discriminatedUnion("version", [
+      z.object({
+        version: z.literal(1),
+        allow: stringListSchema,
+        deny: stringListSchema,
+      }),
+      z.strictObject({
+        version: z.literal(2),
+        policy: z.unknown().transform((value, context) => {
+          try {
+            return parseInheritedToolPolicyV2(value);
+          } catch {
+            context.addIssue({ code: "custom", message: "Invalid inherited tool policy v2" });
+            return z.NEVER;
+          }
+        }),
+      }),
+    ]),
     spawnModelAutoSelection: spawnModelAutoSelectionSchema.optional(),
   })
   .transform((context): AgentRuntimeSessionSpawnContext => ({

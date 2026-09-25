@@ -128,6 +128,7 @@ export function buildConversationToolPolicyPipelineSteps(params: {
       : []),
     {
       policy: params.policies.inheritedToolPolicy,
+      inheritedActionPolicy: params.capabilityProfile.policy.inheritedActionPolicy,
       source: { kind: "session" },
       label: "inherited tools",
       unavailableCoreToolReason: params.unavailableCoreToolReason,

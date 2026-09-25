@@ -32,7 +32,7 @@ import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
 
-function rejectUnknownSessionEntryOutcome(message: string, cause: unknown): never {
+export function rejectUnknownSessionWriteOutcome(message: string, cause: unknown): never {
   if (hasSqliteWorkerOutcomeUnknown(cause)) {
     throw cause;
   }
@@ -205,7 +205,7 @@ export async function initializeSessionTranscriptInWorker(
           publication.settle(receipt, unknown);
         }
         if (unknown) {
-          rejectUnknownSessionEntryOutcome(
+          rejectUnknownSessionWriteOutcome(
             "Session transcript initialization has no confirmed native completion and commit receipt",
             outcome.ok ? undefined : outcome.error,
           );
@@ -302,7 +302,7 @@ export async function commitSessionEntryReplacementsInWorker(
           // Keep the executing scope and FIFO writer through native publication settlement.
           // Close joins this callback; a delayed result cannot borrow a successor owner.
           if (await settle()) {
-            rejectUnknownSessionEntryOutcome(
+            rejectUnknownSessionWriteOutcome(
               "Session replacement has no confirmed native completion and commit receipt",
               outcome.ok ? undefined : outcome.error,
             );

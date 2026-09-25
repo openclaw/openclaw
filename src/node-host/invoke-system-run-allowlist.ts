@@ -10,11 +10,11 @@ import {
   type ExecCommandSegment,
   type ExecSegmentSatisfiedBy,
   type ExecSecurity,
-  type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
 import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import type { SkillBinTrustEntry } from "../infra/exec-skill-bin-trust.js";
 import {
   normalizeExecutableToken,
   POSIX_PARSEABLE_SHELL_WRAPPERS,

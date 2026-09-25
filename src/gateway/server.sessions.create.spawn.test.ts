@@ -45,6 +45,17 @@ test.each([false, true])(
   async (required) => {
     const { storePath } = await createSessionStoreDir();
     const parentSessionKey = "agent:main:main";
+    const policy = {
+      clauses: [{ kind: "configured" as const, allow: ["read", "sessions_spawn"], deny: ["exec"] }],
+      parameters: { fileTools: [], exec: [], sandbox: [], unsupported: [] },
+    };
+    const expectedPolicy = required
+      ? { inheritedToolPolicyVersion: 2, inheritedToolPolicy: policy }
+      : {
+          inheritedToolPolicyVersion: 1,
+          inheritedToolAllow: ["read", "sessions_spawn"],
+          inheritedToolDeny: ["exec"],
+        };
     const actor = { type: "human", source: "profile", id: "visible-spawn-creator" } as const;
     await writeSessionStore({
       entries: {
@@ -88,11 +99,9 @@ test.each([false, true])(
               actor: { type: "agent", id: "main" },
               requesterSessionKey: parentSessionKey,
               completionOwnerSessionKey: "agent:main:discord:direct:alice",
-              inheritedToolPolicy: {
-                version: 1,
-                allow: ["read", "sessions_spawn"],
-                deny: ["exec"],
-              },
+              inheritedToolPolicy: required
+                ? { version: 2, policy }
+                : { version: 1, allow: ["read", "sessions_spawn"], deny: ["exec"] },
             },
           },
         } as never,
@@ -107,18 +116,14 @@ test.each([false, true])(
       completionOwnerSessionKey: "agent:main:discord:direct:alice",
       parentSessionKey,
       spawnDepth: 1,
-      inheritedToolPolicyVersion: 1,
-      inheritedToolAllow: ["read", "sessions_spawn"],
-      inheritedToolDeny: ["exec"],
+      ...expectedPolicy,
     });
     const key = requireNonEmptyString(created.payload?.key, "visible child key");
     const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
     expect(child).toMatchObject({
       spawnedBy: parentSessionKey,
       completionOwnerSessionKey: "agent:main:discord:direct:alice",
-      inheritedToolPolicyVersion: 1,
-      inheritedToolAllow: ["read", "sessions_spawn"],
-      inheritedToolDeny: ["exec"],
+      ...expectedPolicy,
       createdActor: required ? actor : { type: "agent", id: "main" },
     });
     expect(child?.sandbox).toBe(required ? "required" : undefined);

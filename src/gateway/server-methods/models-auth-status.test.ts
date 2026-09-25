@@ -78,7 +78,8 @@ vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
-vi.mock("../../agents/agent-scope.js", () => ({
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   listAgentIds: mocks.listAgentIds,
   resolveAgentDir: mocks.resolveAgentDir,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
@@ -105,15 +106,10 @@ vi.mock("../../commands/models/auth-logout.js", () => ({
   removeModelAuthCredentials: mocks.removeModelAuthCredentials,
 }));
 
-vi.mock("../../agents/auth-health.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/auth-health.js")>(
-    "../../agents/auth-health.js",
-  );
-  return {
-    ...actual,
-    buildAuthHealthSummary: mocks.buildAuthHealthSummary,
-  };
-});
+vi.mock("../../agents/auth-health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-health.js")>()),
+  buildAuthHealthSummary: mocks.buildAuthHealthSummary,
+}));
 
 vi.mock("../../infra/provider-usage.load.js", () => ({
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,

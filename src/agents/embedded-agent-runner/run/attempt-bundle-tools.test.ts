@@ -59,7 +59,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       .mockImplementation((tools: unknown[]) => ({ tools, diagnostics: [] }));
   });
 
-  function createInput(inheritedToolAllowlist: string[], toolsRaw: unknown[]) {
+  function createInput(toolsRaw: unknown[]) {
     return {
       agentDir: "/tmp/agent",
       attempt: {
@@ -76,7 +76,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       preparedToolBase: {
         cronCreatorToolAllowlist: [],
         effectiveToolsAllow: undefined,
-        inheritedToolAllowlist,
         localModelLeanPreserveToolNames: [],
         runtimeCapabilityProfile: resolveConversationCapabilityProfile({}),
         toolsEnabled: true,
@@ -100,7 +99,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     { allow: ["chrome"], expected: [], discover: false },
     { allow: [], expected: [], discover: false },
   ])("discovers configured MCP for $allow without widening final tools", async (testCase) => {
-    const input = createInput([], []);
+    const input = createInput([]);
     input.attempt.config = {
       plugins: { enabled: false },
       mcp: { servers: { chrome: { command: "unused" }, other: { command: "unused" } } },
@@ -133,7 +132,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     { allow: ["read*"], expected: [], discover: false },
     { allow: [], expected: [], discover: false },
   ])("discovers LSP for $allow without widening final tools", async (testCase) => {
-    const input = createInput([], []);
+    const input = createInput([]);
     input.attempt.toolsAllow = testCase.allow;
     input.preparedToolBase.effectiveToolsAllow = testCase.allow;
     const lspTools = ["lsp_hover_typescript", "lsp_definition_typescript"].map((name) => {
@@ -156,7 +155,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     { enabled: true, override: false, expected: false },
     { enabled: false, override: true, expected: true },
   ])("uses effective MCP enablement $enabled/$override", async (testCase) => {
-    const input = createInput([], []);
+    const input = createInput([]);
     input.attempt.config = {
       plugins: { enabled: false },
       mcp: { servers: { chrome: { command: "unused", enabled: testCase.enabled } } },
@@ -178,7 +177,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     { servers: ["a".repeat(31), "a".repeat(32)], allow: `${"a".repeat(28)}-2*` },
     { servers: ["bash"], allow: "bash*" },
   ])("uses canonical namespace allocation for $servers", async ({ servers, allow }) => {
-    const input = createInput([], []);
+    const input = createInput([]);
     input.attempt.config = {
       plugins: { enabled: false },
       mcp: { servers: Object.fromEntries(servers.map((name) => [name, { command: "unused" }])) },
@@ -193,7 +192,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
   it.each(["disableTools", "raw", "restart", "model"])(
     "does not discover matching MCP when tools are disabled by %s",
     async (mode) => {
-      const input = createInput([], []);
+      const input = createInput([]);
       input.attempt.config = { mcp: { servers: { chrome: { command: "unused" } } } };
       input.attempt.toolsAllow = ["chrome*"];
       input.attempt.disableTools = mode === "disableTools";
@@ -208,7 +207,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
   );
 
   it("allocates configured namespaces after colliding enabled plugin servers", async () => {
-    const input = createInput([], []);
+    const input = createInput([]);
     input.attempt.config = {
       plugins: { entries: { "native-mcp": { enabled: true } } },
       mcp: { servers: { "chrome-dev": { command: "unused" } } },
@@ -286,7 +285,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       expected: ["client_read"],
     },
   ])("applies the effective client-function capability to $name", async (testCase) => {
-    const input = createInput([], []);
+    const input = createInput([]);
     const providedClientTools = testCase.clients.map((name) => ({
       type: "function" as const,
       function: { name, parameters: { type: "object" as const } },
@@ -304,7 +303,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
   });
 
   it("removes unauthorized client names before MCP and LSP tool reservation", async () => {
-    const input = createInput([], [{ name: "message" }]);
+    const input = createInput([{ name: "message" }]);
     input.attempt.toolsAllow = ["client_allowed", "bundle-mcp", "lsp_probe"];
     input.preparedToolBase.effectiveToolsAllow = input.attempt.toolsAllow;
     input.attempt.clientTools = ["client_allowed", "client_forbidden"].map((name) => ({
@@ -326,7 +325,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
   });
 
   it("never exposes client functions when the attempt disables every tool", async () => {
-    const input = createInput([], []);
+    const input = createInput([]);
     input.attempt.disableTools = true;
     input.attempt.clientTools = [
       {
@@ -341,39 +340,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     expect(mocks.acquireSessionMcpRuntime).not.toHaveBeenCalled();
     expect(mocks.materializeBundleMcpToolsForRun).not.toHaveBeenCalled();
     expect(mocks.createBundleLspToolRuntime).not.toHaveBeenCalled();
-  });
-
-  it("refreshes spawned-child inheritance after authorized MCP tools materialize", async () => {
-    const inheritedToolAllowlist = ["sessions_spawn"];
-    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
-    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
-      tools: [{ name: "server__read" }],
-    });
-
-    await prepareEmbeddedAttemptBundleTools(
-      createInput(inheritedToolAllowlist, [{ name: "sessions_spawn" }]),
-    );
-
-    expect(inheritedToolAllowlist).toEqual(["sessions_spawn", "server__read"]);
-  });
-
-  it("never adds policy-denied bundled tools to spawned-child inheritance", async () => {
-    const inheritedToolAllowlist = ["sessions_spawn"];
-    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
-    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
-      tools: [{ name: "server__read" }, { name: "server__delete" }],
-    });
-    mocks.applyFinalEffectiveToolPolicy.mockImplementation(
-      ({ bundledTools }: { bundledTools: Array<{ name: string }> }) =>
-        bundledTools.filter((tool) => tool.name !== "server__delete"),
-    );
-
-    await prepareEmbeddedAttemptBundleTools(
-      createInput(inheritedToolAllowlist, [{ name: "sessions_spawn" }]),
-    );
-
-    expect(inheritedToolAllowlist).toEqual(["sessions_spawn", "server__read"]);
-    expect(inheritedToolAllowlist).not.toContain("server__delete");
   });
 
   it("captures the post-quarantine creator cap with plugin ownership", async () => {
@@ -393,7 +359,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       tools: tools.filter((tool) => tool.name !== "mail__broken"),
       diagnostics: [{ toolName: "mail__broken", violations: ["unsupported"] }],
     }));
-    const input = createInput([], [coreTool]);
+    const input = createInput([coreTool]);
     const captureRef: { value?: { version: 1; source: "final-executable-surface" } } = {};
     input.preparedToolBase.cronCreatorToolAllowlistCaptureRef = captureRef;
 
@@ -420,8 +386,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     bundled.parameters = bundledSchema;
     setPluginToolMeta(bundled, { pluginId: "bundle-mcp", optional: false });
     const core = [first];
-    const inherited = ["initial"];
-    const input = createInput(inherited, core);
+    const input = createInput(core);
     const creatorTools = input.preparedToolBase.cronCreatorToolAllowlist;
     input.preparedToolBase.cronCreatorToolAllowlistCaptureRef = {};
     mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
@@ -439,7 +404,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
 
     expect(retained.map((tool) => tool.name)).toEqual(["core_second"]);
     expect(core).toEqual([second]);
-    expect(inherited).toEqual(["core_second"]);
     expect(creatorTools).toEqual([{ name: "core_second" }]);
 
     core.splice(0, core.length, first);
@@ -448,7 +412,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
 
     expect(retained.map((tool) => tool.name)).toEqual(["core_first", "server__read"]);
     expect(core).toEqual([first]);
-    expect(inherited).toEqual(["core_first", "server__read"]);
     expect(creatorTools).toEqual([
       { name: "core_first" },
       { name: "server__read", pluginId: "bundle-mcp" },
@@ -481,7 +444,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         throw new Error("bundle policy failed");
       });
 
-      const input = createInput([], []);
+      const input = createInput([]);
 
       const cleanupScope = createAgentCleanupScope();
       await expect(

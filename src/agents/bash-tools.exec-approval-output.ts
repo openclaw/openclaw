@@ -221,3 +221,26 @@ export function resizeExecApprovalContinuationPrompt(params: {
   const resized = capContinuationOutput(resultText, params.maxOutputUtf16Units);
   return `${prompt.slice(0, range.start)}${resized}${prompt.slice(range.end)}`;
 }
+
+export function buildGatewayExecApprovalDeniedToolResult(params: {
+  approvalId?: string;
+  deniedReason: string;
+  command: string;
+  cwd: string;
+}): AgentToolResult<ExecToolDetails> {
+  const denialContext = params.approvalId
+    ? `gateway id=${params.approvalId}, ${params.deniedReason}`
+    : params.deniedReason;
+  const text = `Exec denied (${denialContext}): ${params.command}`;
+  return {
+    content: [{ type: "text", text }],
+    details: {
+      status: "failed",
+      exitCode: null,
+      durationMs: 0,
+      aggregated: text,
+      timedOut: params.deniedReason.includes("timeout"),
+      cwd: params.cwd,
+    },
+  };
+}

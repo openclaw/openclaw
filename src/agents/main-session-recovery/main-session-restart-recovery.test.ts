@@ -117,6 +117,11 @@ import {
 import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
 import { createRestartRecoveryTranscriptFixture } from "./main-session-restart-recovery-fixture.test-support.js";
+import {
+  registerRecoveryInputPolicyTests,
+  registerPendingDeliveryInputRecoveryTests,
+  registerMissingTerminalSourceRecoveryTest,
+} from "./main-session-restart-recovery-policy.test-support.js";
 import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
 import {
@@ -414,8 +419,11 @@ async function writeMainSessionTranscript(
 }
 
 async function writeCompletedToolTranscript(sessionsDir: string): Promise<void> {
+  const sourceRunId = Object.values(readStore(path.join(sessionsDir, "sessions.json"))).find(
+    (entry) => entry.sessionId === "main-session",
+  )?.restartRecoveryDeliverySourceRunId;
   await writeTranscript(sessionsDir, "main-session", [
-    makeUserMessage("run the tool"),
+    makeUserMessage("run the tool", sourceRunId ? { idempotencyKey: `${sourceRunId}:user` } : {}),
     { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
     makeToolResultMessage(),
   ]);
@@ -472,7 +480,27 @@ function getHarnessRecoveryFixture() {
   };
 }
 
+function getInputPolicyRecoveryFixture() {
+  return {
+    tmpDir,
+    makeMainSessionFixture,
+    makeDeliveredReceiptFixture,
+    makePendingFinalDelivery,
+    makeSessionsDir,
+    writeMainSession,
+    writeTranscript,
+    expectRecovery,
+    mockRecoveryRuntime,
+    gatewayParams,
+    loadSessionEntry,
+    recoverRestartAbortedMainSessions,
+    sendRecoveryNotice,
+  };
+}
+
 describe("main-session-restart-recovery", () => {
+  registerRecoveryInputPolicyTests(getInputPolicyRecoveryFixture);
+
   it.each([
     { name: "stale same-id rows", keys: ["active"], live: true },
     { name: "cross-session run fences", keys: ["active", "sibling"], live: true },
@@ -2694,55 +2722,7 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
   });
 
-  it.each([
-    ["missing", undefined],
-    ["empty", []],
-  ] as const)(
-    "resumes safely when pending final delivery identities are %s",
-    async (_, deliveries) => {
-      const sessionsDir = await makeSessionsDir();
-      const pendingPayload = "The final answer is 42.";
-      await writeMainSession({
-        sessionsDir,
-        restartRecoveryForceSafeTools: true,
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: pendingPayload,
-          createdAt: Date.now() - 5_000,
-          ...(deliveries ? { deliveries: [...deliveries] } : {}),
-          context: {
-            channel: "discord",
-            to: "discord:dm:final",
-            accountId: "main",
-          },
-        },
-        restartRecoveryBeforeAgentReplyState: "handled-reply",
-        restartRecoveryDeliveryRunId: "discord-message-1",
-        restartRecoveryDeliverySourceRunId: "discord-message-1",
-        restartRecoverySourceIngress: "channel",
-        restartRecoveryDeliveryContext: {
-          channel: "discord",
-          to: "discord:dm:stale",
-          accountId: "old",
-        },
-      });
-      await writeTranscript(sessionsDir, "main-session", [
-        { role: "user", content: "calculate the answer" },
-        { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "calc" }] },
-        { role: "toolResult", content: "42" },
-      ]);
-
-      await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 }, {});
-      expect(callGateway).toHaveBeenCalledOnce();
-      expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-      expect(gatewayParams().message).toContain(pendingPayload);
-      expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          idempotencyKey: expect.stringMatching(/:resumed-notice$/),
-        }),
-      );
-    },
-  );
+  registerPendingDeliveryInputRecoveryTests(getInputPolicyRecoveryFixture);
 
   it("retries a prepared pending final only when no queue owner exists", async () => {
     const sessionsDir = await makeSessionsDir();
@@ -4261,10 +4241,10 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "recover only me" },
+      makeUserMessage("recover only me", { idempotencyKey: "source-main:user" }),
     ]);
     await writeTranscript(sessionsDir, "other-session", [
-      { role: "user", content: "leave me pending" },
+      makeUserMessage("leave me pending", { idempotencyKey: "source-other:user" }),
     ]);
 
     const result = await retryRestartAbortedMainSessionRecovery({
@@ -4596,7 +4576,7 @@ describe("main-session-restart-recovery", () => {
       restartRecoveryDeliverySourceRunId: "source-main",
     });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "recover without a socket" },
+      makeUserMessage("recover without a socket", { idempotencyKey: "source-main:user" }),
     ]);
     const dispatchAgent = vi.fn(
       async (
@@ -4704,7 +4684,7 @@ describe("main-session-restart-recovery", () => {
       restartRecoveryDeliverySourceRunId: "source-main",
     });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "recover without losing the owner" },
+      makeUserMessage("recover without losing the owner", { idempotencyKey: "source-main:user" }),
     ]);
     const scheduleSpy = vi
       .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
@@ -4808,7 +4788,9 @@ describe("main-session-restart-recovery", () => {
         restartRecoveryDeliverySourceRunId: "source-main",
       });
       await writeTranscript(sessionsDir, "main-session", [
-        { role: "user", content: "recover after a stalled accepted dispatch" },
+        makeUserMessage("recover after a stalled accepted dispatch", {
+          idempotencyKey: "source-main:user",
+        }),
       ]);
       const scheduleSpy = vi
         .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
@@ -4891,7 +4873,12 @@ describe("main-session-restart-recovery", () => {
           },
         });
 
-        await accepted.promise;
+        await Promise.race([
+          accepted.promise,
+          recovery.then(() => {
+            throw new Error("Recovery completed before its Gateway accepted dispatch");
+          }),
+        ]);
         await vi.advanceTimersByTimeAsync(10_000);
         await expect(recovery).resolves.toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
         expect(abort).toHaveBeenCalledOnce();
@@ -4927,7 +4914,9 @@ describe("main-session-restart-recovery", () => {
         restartRecoveryDeliverySourceRunId: "source-main",
       },
     });
-    await writeTranscript(sessionsDir, sessionId, [{ role: "user", content: "recover me" }]);
+    await writeTranscript(sessionsDir, sessionId, [
+      makeUserMessage("recover me", { idempotencyKey: "source-main:user" }),
+    ]);
     const dispatchEntered = createDeferred();
     const releaseDispatch = createDeferred();
     vi.mocked(callGateway).mockImplementationOnce(async () => {
@@ -4947,7 +4936,12 @@ describe("main-session-restart-recovery", () => {
     let mutationRan = false;
     let mutation: Promise<void> | undefined;
     try {
-      await dispatchEntered.promise;
+      await Promise.race([
+        dispatchEntered.promise,
+        recovery.then(() => {
+          throw new Error("Recovery completed before entering its targeted Gateway dispatch");
+        }),
+      ]);
       expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(true);
       mutation = runExclusiveSessionLifecycleMutation({
         scope: storePath,
@@ -5221,11 +5215,6 @@ describe("main-session-restart-recovery", () => {
       messages: [makeUserMessage("do the thing", { idempotencyKey: "discord-message-1" })],
     },
     {
-      label: "missing durable source turn",
-      sourceTurnId: "discord-message-missing",
-      messages: [makeMessageToolCall()],
-    },
-    {
       label: "checkpoint from an earlier turn",
       sourceTurnId: "discord-message-current",
       messages: [
@@ -5289,6 +5278,8 @@ describe("main-session-restart-recovery", () => {
       });
     },
   );
+
+  registerMissingTerminalSourceRecoveryTest(getInputPolicyRecoveryFixture);
 
   it("completes a checkpointed silent before_agent_reply result without dispatch", async () => {
     const { sessionsDir, storePath, sessionKey } = await makeMainSessionFixture({
@@ -5418,7 +5409,7 @@ describe("main-session-restart-recovery", () => {
       restartRecoveryDeliveryContext: discordDeliveryContext,
     });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "do the thing" },
+      makeUserMessage("do the thing", { idempotencyKey: "discord-message-1:user" }),
       {
         role: "assistant",
         content: [{ type: "text", text: "not this turn's terminal answer" }],

@@ -1,9 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isInternalSessionEffectsKey } from "../../../config/sessions/internal-session-key.js";
-import {
-  loadExactSessionEntryReadOnly,
-  loadSessionEntryByIdReadOnly,
-} from "../../../config/sessions/session-accessor.js";
+import { loadSessionEntryByIdReadOnly } from "../../../config/sessions/session-accessor.js";
+import { loadExactSessionEntryReadOnlyResult } from "../../../config/sessions/session-accessor.sqlite-entry-availability.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 
 type PersistedSessionCapabilityEntry = Pick<
@@ -15,6 +13,7 @@ type PersistedSessionCapabilityEntry = Pick<
   | "spawnedBy"
   | "completionOwnerSessionKey"
   | "inheritedToolPolicyVersion"
+  | "inheritedToolPolicy"
   | "inheritedToolAllow"
   | "inheritedToolDeny"
 >;
@@ -30,6 +29,8 @@ export type SessionCapabilityLookup = {
   scope?: { storePath: string; agentId: string };
   get: (sessionKey: string) => SessionCapabilityEntry | undefined;
   getById: (sessionId: string) => SessionCapabilityEntry | undefined;
+  /** Policy admission cannot interpret an unavailable owner read as an absent policy. */
+  assertAvailable?: () => void;
 };
 
 export type SessionCapabilityStore =
@@ -73,25 +74,40 @@ export function createSubagentSessionStore(
 ): SessionCapabilityLookup {
   const entries = new Map<string, SessionCapabilityEntry | undefined>();
   const ids = new Map<string, SessionCapabilityEntry | undefined>();
+  const readFailures: unknown[] = [];
   if (prepared && !isInternalSessionEffectsKey(prepared.sessionKey)) {
     entries.set(prepared.sessionKey, prepared.entry);
   }
   return {
     scope: { storePath, agentId },
+    assertAvailable: () => {
+      if (readFailures.length > 0) {
+        throw new Error("Inherited tool policy could not be read from its session owner.", {
+          cause: readFailures[0],
+        });
+      }
+    },
     get: (sessionKey) => {
       if (!entries.has(sessionKey)) {
         let entry: SessionCapabilityEntry | undefined;
         try {
           if (!isInternalSessionEffectsKey(sessionKey)) {
-            entry = loadExactSessionEntryReadOnly({
+            const result = loadExactSessionEntryReadOnlyResult({
               storePath,
               agentId,
               sessionKey,
               projection: "list",
-            })?.entry;
+              canonicalValidation: "selected",
+            });
+            if (result.found) {
+              entry = result.value?.entry;
+            } else {
+              readFailures.push(new Error(`Session policy owner unavailable: ${result.reason}.`));
+            }
           }
-        } catch {
+        } catch (error) {
           // Preserve the depth/key fallback for missing or unavailable stores.
+          readFailures.push(error);
         }
         entries.set(sessionKey, entry);
       }
@@ -115,8 +131,9 @@ export function createSubagentSessionStore(
           if (selected && !entries.has(selected.sessionKey)) {
             entries.set(selected.sessionKey, selected.entry);
           }
-        } catch {
+        } catch (error) {
           // Preserve the depth/key fallback for missing or unavailable stores.
+          readFailures.push(error);
         }
         ids.set(id, entry);
       }

@@ -2,6 +2,8 @@
  * Normalizes inherited tool allow/deny lists and ACP compatibility errors.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { assertInheritedToolPolicyCompatible } from "./inherited-tool-policy.js";
+import type { InheritedToolPolicyV2 } from "./inherited-tool-policy.schema.js";
 import { createToolPolicyMatcher } from "./tool-policy-match.js";
 import { normalizeToolPolicyName } from "./tool-policy-shared.js";
 
@@ -81,4 +83,52 @@ export function formatAcpInheritedToolDenyError(toolName: string): string {
 
 export function formatAcpInheritedToolAllowError(toolName: string): string {
   return `runtime="acp" is unavailable because the requester does not allow ${toolName}. Use runtime="subagent".`;
+}
+
+// ACP runs on the Gateway host and cannot enforce native tool, filesystem,
+// approval, or sandbox predicates. This bounds its possible actions rather
+// than deriving permission from whichever tools happen to be available.
+const ACP_ACTION_UPPER_BOUND: InheritedToolPolicyV2 = {
+  clauses: [],
+  parameters: {
+    fileTools: [
+      {
+        workspaceOnly: false,
+        readOnly: false,
+        applyPatchEnabled: true,
+        applyPatchWorkspaceOnly: false,
+        applyPatchAllowModels: null,
+      },
+    ],
+    exec: [
+      {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+        autoReview: false,
+        bypassHostApprovalFloors: true,
+        host: "gateway",
+        elevation: "off",
+        strictInlineEval: false,
+        safeBins: [],
+        safeBinProfiles: [],
+      },
+    ],
+    sandbox: [],
+    unsupported: [],
+  },
+};
+
+export function resolveAcpInheritedToolPolicyError(
+  policy: InheritedToolPolicyV2,
+): string | undefined {
+  try {
+    assertInheritedToolPolicyCompatible({ source: policy, target: ACP_ACTION_UPPER_BOUND });
+    return undefined;
+  } catch (error) {
+    if (!(error instanceof Error)) {
+      throw error;
+    }
+    return `ACP cannot satisfy the source action restrictions: ${error.message} Use runtime="subagent" for this task.`;
+  }
 }

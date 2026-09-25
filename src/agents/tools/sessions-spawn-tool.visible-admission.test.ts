@@ -1,7 +1,9 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import type { InheritedToolPolicyV2 } from "../inherited-tool-policy.schema.js";
 import type { prepareModelChoice } from "../model-runtime-choice.js";
+import { captureTestSpawnToolPolicy } from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 
 const hoisted = vi.hoisted(() => ({ prepareModelChoiceMock: vi.fn<typeof prepareModelChoice>() }));
@@ -23,6 +25,7 @@ it("rejects an unsupported visible model before creating a session or registerin
       error: "Unknown model: xai/nonexistent-native-fixture",
     });
     const tool = createSessionsSpawnTool({
+      captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
       agentSessionKey: "agent:main:main",
       config: {
         session: { store: path.join(dir, "sessions.json") },
@@ -61,6 +64,7 @@ it("reports the human owner returned by visible session creation", async () => {
     entry: { owner: { actor: { type: "human", id: "profile-vito" } } },
   }));
   const tool = createSessionsSpawnTool({
+    captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
     agentSessionKey: "agent:main:main",
     config: {
       agents: {
@@ -96,6 +100,7 @@ it("preserves the configured agent label for an ID-only stored owner", async () 
     entry: { owner: { actor: { type: "agent", id: "main" } } },
   }));
   const tool = createSessionsSpawnTool({
+    captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
     agentSessionKey: "agent:main:main",
     config: {
       agents: {
@@ -120,7 +125,10 @@ it("preserves the configured agent label for an ID-only stored owner", async () 
 });
 
 it("reports every unsupported visible parameter in one error", async () => {
-  const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+  const tool = createSessionsSpawnTool({
+    captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
+    agentSessionKey: "agent:main:main",
+  });
 
   await expect(
     tool.execute("visible-unsupported-many", {
@@ -138,3 +146,58 @@ it("reports every unsupported visible parameter in one error", async () => {
     'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thinking: thinking overrides are not wired to the sessions.create path; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
   );
 });
+
+it.each(["changed-source", "unsupported-root"] as const)(
+  "refuses visible delegation before creation when its policy is %s",
+  async (failure) => {
+    let policy: InheritedToolPolicyV2 = {
+      clauses: [{ kind: "configured", allow: ["read"] }],
+      parameters: {
+        fileTools: [],
+        exec: [],
+        sandbox: [],
+        unsupported:
+          failure === "unsupported-root"
+            ? [{ scope: "fileTools", reason: "source-filesystem-root" }]
+            : [],
+      },
+    };
+    hoisted.prepareModelChoiceMock.mockImplementation(async () => {
+      if (failure === "changed-source") {
+        policy = { ...policy, clauses: [{ kind: "configured", allow: ["message"] }] };
+      }
+      return { kind: "automatic", ref: { provider: "mock-provider", model: "primary" } };
+    });
+    const callGateway = vi.fn(async () => {
+      throw new Error("Unexpected Gateway creation");
+    });
+    const registerRun = vi.fn();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { defaults: { model: "mock-provider/primary" }, entries: { main: {} } } },
+      captureInheritedToolPolicyForDelegation: async () => {
+        const captured = policy;
+        return {
+          policy: captured,
+          assertCurrent: () => {
+            if (policy !== captured) {
+              throw new Error("The source task's action restrictions changed before acceptance.");
+            }
+          },
+        };
+      },
+      callGateway,
+      registerRun,
+      countActiveRuns: () => 0,
+    });
+    await expect(
+      tool.execute("policy-visible", { task: "inspect", visible: true }),
+    ).rejects.toThrow(
+      failure === "changed-source"
+        ? "source task's action restrictions changed"
+        : "source-filesystem-root",
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(registerRun).not.toHaveBeenCalled();
+  },
+);

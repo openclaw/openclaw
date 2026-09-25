@@ -1,4 +1,3 @@
-// User turn persistence tests cover the shared transcript writer.
 import fs from "node:fs";
 import {
   initializeGlobalHookRunner,
@@ -9,6 +8,9 @@ import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
+import { emptyDelegatedToolParameterPolicy } from "../agents/inherited-tool-parameters.js";
+import { captureInheritedToolPolicy } from "../agents/inherited-tool-policy.js";
+import type { InheritedToolPolicyV2 } from "../agents/inherited-tool-policy.schema.js";
 import { formatChatWorkContext } from "../chat/work-context.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSessionTranscriptDatabasePath } from "../config/sessions/session-accessor.transcript-target.js";
@@ -663,6 +665,10 @@ describe("persistUserTurnTranscript", () => {
 
   it("preserves transcript metadata when before_message_write replaces a user turn", async () => {
     let hookCalls = 0;
+    const delegatedInputPolicy = captureInheritedToolPolicy({
+      policies: [{ allow: ["read"] }],
+      parameters: emptyDelegatedToolParameterPolicy(),
+    });
     const provenance = {
       kind: "inter_session" as const,
       sourceSessionKey: "source-main",
@@ -676,12 +682,16 @@ describe("persistUserTurnTranscript", () => {
             hookCalls += 1;
             const message = (event as { message: Record<string, unknown> }).message;
             const meta = message["__openclaw"] as {
+              delegatedInputPolicy?: InheritedToolPolicyV2;
               transport?: {
                 conversationRef?: string;
                 messageId?: string;
                 clients?: Array<{ displayName?: string }>;
               };
             };
+            if (meta.delegatedInputPolicy) {
+              meta.delegatedInputPolicy.clauses.length = 0;
+            }
             if (meta.transport) {
               meta.transport.conversationRef = "conv_tampered";
               meta.transport.messageId = "tampered-message";
@@ -708,6 +718,7 @@ describe("persistUserTurnTranscript", () => {
       ...target,
       input: {
         text: "secret prompt",
+        delegatedInputPolicy,
         idempotencyKey: "chat-run-1:user",
         replyToId: "transcript-reply-1",
         replyToPreview: { text: "Original reply", senderLabel: "Molty" },
@@ -728,6 +739,7 @@ describe("persistUserTurnTranscript", () => {
       ...target,
       input: {
         text: "secret prompt",
+        delegatedInputPolicy,
         idempotencyKey: "chat-run-1:user",
         replyToId: "transcript-reply-1",
         replyToPreview: { text: "Original reply", senderLabel: "Molty" },
@@ -753,6 +765,8 @@ describe("persistUserTurnTranscript", () => {
         provenance,
         __openclaw: {
           hookOwned: true,
+          delegatedInputPolicyVersion: 2,
+          delegatedInputPolicy,
           replyToId: "transcript-reply-1",
           replyToPreview: { text: "Original reply", senderLabel: "Molty" },
           senderIsOwner: false,

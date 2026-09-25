@@ -160,6 +160,40 @@ In Code Mode, the conversation tools reuse their exact Gateway output contracts.
 
 ## Sending cross-session messages
 
+For an independent assessment, use `sessions_spawn` with `context: "isolated"`,
+even when the assessment needs only one status read. It can return an ordinary
+inline result while the target agent's existing task continues. A request to
+pause or change active work must use a control path that actually performs that
+operation; a separate assessment does not satisfy it.
+
+Agent-originated `sessions_send` work carries the source task's action
+restrictions. The receiving execution must already satisfy them. OpenClaw
+checks at admission and consumption rather than reducing the permissions of
+the target conversation. An incompatible or unsupported target produces an
+explicit non-outcome. `sessions_send` does not silently spawn another task.
+Accepted requirements remain with that work across retries; later unrelated
+turns keep their own policy. Normal sender completion does not revoke accepted
+work. Source execution approval restrictions are captured at delegation,
+including the source's approval timeout fallback. Receiver grants or timeout
+fallbacks cannot widen those captured restrictions. ACP delegation is available
+when its host execution can satisfy the captured policy. Native tool-name,
+workspace, approval, or sandbox restrictions that ACP cannot enforce produce
+an explicit refusal; use `sessions_spawn`'s native subagent backend for that
+work. An available ACP backend remains discoverable even when a particular
+request is incompatible. Accepted ACP children retain their policy after the
+sender finishes.
+
+Restricted notifications remain in the process-local queue until a compatible
+turn can consume them. Their queued receipt does not prove consumption or start
+a run; the existing queue bounds and restart loss still apply. Completion
+replies follow their authorized return path without imposing the receiver's
+action restrictions on unrelated requester work.
+
+Once consumed, the notification's restrictions stay with that logical run and
+its interrupted-work recovery. OpenClaw records them with the original input or
+the next assistant or tool-result entry before effects proceed. This does not
+make notification text durable or restrict a later unrelated turn.
+
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. The resulting reply can still be announced through the established requester or target delivery context; that existing behavior is unchanged. For exact external delivery, use a conversation tool or `message` with an explicit channel and target.
 
 Sessions keep their addresses when execution moves between the Gateway, a paired device, and a cloud worker. An OpenClaw worker can send to an authorized parent, child, or sibling using its exact session key, including a target running on the Gateway. The Gateway validates the current session identities and normal visibility policy before admitting the target turn; target placement does not grant messaging access. Targets outside the configured visibility scope, archived targets, and replaced targets remain denied.

@@ -1,5 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import {
+  drainFormattedDelegatedSystemEvents,
+  drainFormattedSystemEvents,
+} from "../../auto-reply/reply/session-system-events.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -13,6 +17,8 @@ import {
   createContext,
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import * as execApprovalsStore from "../../infra/exec-approvals-store.js";
+import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
@@ -20,6 +26,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import * as sessionStateEvents from "../../sessions/session-state-events.js";
+import { readUserTurnDelegatedInputPolicy } from "../../sessions/user-turn-transcript.metadata.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createOpenClawTestState,
@@ -27,7 +34,22 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
+import { captureDelegatedExecRestriction } from "../delegated-exec-policy.js";
+import { setActiveEmbeddedRun } from "../embedded-agent-runner/runs.js";
+import {
+  createEmbeddedRunHandle,
+  testing as embeddedRunsTesting,
+} from "../embedded-agent-runner/runs.test-support.js";
+import { emptyDelegatedToolParameterPolicy } from "../inherited-tool-parameters.js";
+import * as inheritedToolPolicy from "../inherited-tool-policy.js";
+import { captureInheritedToolPolicy } from "../inherited-tool-policy.js";
+import type {
+  InheritedToolPolicyRef,
+  InheritedToolPolicyV2,
+} from "../inherited-tool-policy.schema.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import "../test-helpers/fast-openclaw-tools-sessions.js";
 import * as inProcessGateway from "./in-process-gateway.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
@@ -56,6 +78,8 @@ describe("sessions_send dispatch admission", () => {
     setRuntimeConfigSnapshot(config);
     setActivePluginRegistry(createSessionConversationTestRegistry());
     resetGatewayWorkAdmission();
+    embeddedRunsTesting.resetActiveEmbeddedRuns();
+    resetSystemEventsForTest();
     vi.mocked(runSessionsSendA2AFlow).mockClear();
     registerWatch = vi.spyOn(sessionStateEvents, "registerSessionStateWatch");
     for (const [sessionKey, sessionId] of [
@@ -72,8 +96,437 @@ describe("sessions_send dispatch admission", () => {
   afterEach(async () => {
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     registerWatch.mockRestore();
+    embeddedRunsTesting.resetActiveEmbeddedRuns();
+    resetSystemEventsForTest();
     resetGatewayWorkAdmission();
     await state.cleanup();
+  });
+
+  const policy = (...executionAllow: string[]) =>
+    captureInheritedToolPolicy({
+      policies: [],
+      executionAllow,
+      parameters: emptyDelegatedToolParameterPolicy(),
+    });
+  const sourcePolicy = () => policy("read", "sessions_send");
+  const callAsSource = <T>(run: () => Promise<T>, isCurrent = () => true) =>
+    withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: requesterSessionKey,
+        operationalRunInstance: { runId: "source-run", instanceId: "source-instance" },
+        receiptAuthority: isCurrent,
+      },
+      run,
+    );
+  const resolveTarget = vi
+    .fn()
+    .mockImplementation(async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+      if (request.method === "sessions.resolve") {
+        return { key: targetSessionKey, agentId: "main" };
+      }
+      if (request.method === "sessions.list") {
+        return { sessions: [{ key: targetSessionKey, agentId: "main", kind: "direct" }] };
+      }
+      throw new Error(`Unexpected Gateway method: ${request.method}`);
+    });
+
+  it.each([
+    { receiver: "compatible names", broader: false, commandPolicy: undefined },
+    { receiver: "broader names", broader: true, commandPolicy: undefined },
+    { receiver: "configured allowlist only", broader: false, commandPolicy: "configured" },
+    { receiver: "installed inherited allowlist", broader: false, commandPolicy: "installed" },
+    { receiver: "exec denied", broader: false, commandPolicy: "denied" },
+  ] as const)(
+    "checks the actual active receiver before steering ($receiver)",
+    async ({ broader, commandPolicy }) => {
+      const source = commandPolicy ? policy("exec", "sessions_send") : sourcePolicy();
+      const receiving = commandPolicy
+        ? policy("exec")
+        : broader
+          ? policy("read", "exec")
+          : policy("read");
+      if (commandPolicy) {
+        source.parameters.exec = [
+          captureDelegatedExecRestriction({
+            host: "gateway",
+            security: "allowlist",
+            ask: "off",
+            safeBins: ["cat"],
+          }).restriction,
+        ];
+        receiving.parameters.exec =
+          commandPolicy === "denied"
+            ? [captureDelegatedExecRestriction({ host: "gateway", security: "deny" }).restriction]
+            : source.parameters.exec;
+      }
+      const rejected = broader || commandPolicy === "configured";
+      let sourceAlive = true;
+      const release = vi.fn();
+      const addPolicies = vi.fn((_policies: readonly InheritedToolPolicyV2[]) => release);
+      const queued = vi.fn<
+        NonNullable<
+          ReturnType<typeof createEmbeddedRunHandle>["messageInjectionV2"]
+        >["queueMessage"]
+      >(async (_text, options, assertCurrent) => {
+        assertCurrent();
+        expect(addPolicies).toHaveBeenCalledExactlyOnceWith([source]);
+        expect(
+          readUserTurnDelegatedInputPolicy(
+            await options?.userTurnTranscriptRecorder?.resolveMessage(),
+          ),
+        ).toEqual(source);
+        options?.onQueueAccepted?.(true);
+        sourceAlive = false;
+        assertCurrent();
+      });
+      const handle = createEmbeddedRunHandle({
+        runId: "target-run",
+        supportsTranscriptCommitWait: true,
+      });
+      handle.messageInjectionV2 = { version: 2, isAvailable: () => true, queueMessage: queued };
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: targetSessionKey,
+          embeddedRunToolAuthorityBinding: () => ({
+            source: "attempt",
+            assertActive: () => {},
+            project: () => undefined,
+            getInheritedToolPolicy: () => receiving,
+            getEnforcedDelegatedToolParameterPolicy: () =>
+              commandPolicy === "installed" ? source.parameters : undefined,
+            addDelegatedInputPolicies: addPolicies,
+          }),
+        },
+        () => setActiveEmbeddedRun("target-session", handle, targetSessionKey),
+      );
+      const result = await callAsSource(
+        () =>
+          createSessionsSendTool({
+            agentSessionKey: requesterSessionKey,
+            config,
+            callGateway: resolveTarget,
+            captureInheritedToolPolicyForDelegation: async () => {
+              const captured = source;
+              return {
+                policy: captured,
+                assertCurrent: () => {
+                  if (source !== captured) {
+                    throw new Error("Session send source policy changed");
+                  }
+                },
+              };
+            },
+          }).execute("delegated-steer", {
+            sessionKey: targetSessionKey,
+            message: "Assess this task",
+            mode: "steer",
+            timeoutSeconds: 0,
+          }),
+        () => sourceAlive,
+      );
+      expect(result.details).toMatchObject({ status: rejected ? "error" : "accepted" });
+      expect(queued).toHaveBeenCalledTimes(rejected ? 0 : 1);
+      expect(addPolicies).toHaveBeenCalledTimes(rejected ? 0 : 1);
+      expect(release).not.toHaveBeenCalled();
+    },
+  );
+
+  async function prepareNativeDelegation(security: "deny" | "full", ask: "off" | "always") {
+    const receiverKey = "agent:helper:dashboard:native-floor-target";
+    const nativeConfig = {
+      ...config,
+      agents: { ownership: "explicit", entries: { main: {}, helper: {} } },
+      tools: { ...config.tools, profile: "full", exec: { host: "gateway", mode: "full" } },
+    } satisfies OpenClawConfig;
+    setRuntimeConfigSnapshot(nativeConfig);
+    execApprovalsStore.saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "off", askFallback: "deny" },
+      agents: { main: { security, ask }, helper: { security: "full", ask: "off" } },
+    });
+    await replaceSessionEntry(
+      { agentId: "helper", sessionKey: receiverKey },
+      { sessionId: "native-receiver-session", updatedAt: 1 },
+    );
+    const makeTools = (
+      agentId: "main" | "helper",
+      ref: InheritedToolPolicyRef,
+      signal?: AbortSignal,
+    ) =>
+      createOpenClawCodingToolsInternal({
+        config: nativeConfig,
+        agentId,
+        sessionKey: agentId === "main" ? requesterSessionKey : receiverKey,
+        sessionId: agentId === "main" ? "requester-session" : "native-receiver-session",
+        workspaceDir: state.workspaceDir,
+        agentDir: state.agentDir(agentId),
+        senderIsOwner: true,
+        inheritedToolPolicyRef: ref,
+        abortSignal: signal,
+        wrapBeforeToolCallHook: false,
+      }).find((tool) => tool.name === "sessions_send")!;
+    const receiverRef: InheritedToolPolicyRef = {};
+    const receiverTool = makeTools("helper", receiverRef);
+    const queued = vi.fn<
+      NonNullable<ReturnType<typeof createEmbeddedRunHandle>["messageInjectionV2"]>["queueMessage"]
+    >(async (_text, options, assertCurrent) => {
+      assertCurrent();
+      await options?.userTurnTranscriptRecorder?.resolveMessage();
+      options?.onQueueAccepted?.(true);
+    });
+    const acceptedPolicies = vi.fn((_policies: readonly InheritedToolPolicyV2[]) => () => {});
+    const handle = createEmbeddedRunHandle({
+      runId: "native-receiver-run",
+      supportsTranscriptCommitWait: true,
+    });
+    handle.messageInjectionV2 = { version: 2, isAvailable: () => true, queueMessage: queued };
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "helper",
+        sessionKey: receiverKey,
+        embeddedRunToolAuthorityBinding: () => ({
+          source: "attempt",
+          assertActive: () => {},
+          project: () => undefined,
+          getInheritedToolPolicy: () => receiverRef.current!,
+          addDelegatedInputPolicies: acceptedPolicies,
+        }),
+      },
+      () => setActiveEmbeddedRun("native-receiver-session", handle, receiverKey),
+    );
+    const gateway = vi
+      .spyOn(inProcessGateway, "callAgentToolGatewayRequest")
+      .mockImplementation(async (request) => {
+        if (request.method === "sessions.resolve") {
+          return { key: receiverKey, agentId: "helper" };
+        }
+        if (request.method === "sessions.list") {
+          return { sessions: [{ key: receiverKey, agentId: "helper", kind: "direct" }] };
+        }
+        throw new Error(`Unexpected Gateway method: ${request.method}`);
+      });
+    const send = (tool: typeof receiverTool, agentId: "main" | "helper" = "main") =>
+      withGatewayToolCallerIdentity(
+        {
+          agentId,
+          sessionKey: agentId === "main" ? requesterSessionKey : receiverKey,
+          operationalRunInstance: { runId: `native-${agentId}`, instanceId: `native-${agentId}` },
+          receiptAuthority: () => true,
+        },
+        () =>
+          tool.execute("native-source-delegation", {
+            sessionKey: receiverKey,
+            message: "Assess this task",
+            mode: "steer",
+            timeoutSeconds: 0,
+          }),
+      );
+    return { makeTools, receiverTool, queued, acceptedPolicies, gateway, send };
+  }
+
+  it.each([
+    { security: "deny", ask: "off", rejected: true },
+    { security: "full", ask: "always", rejected: true },
+    { security: "full", ask: "off", rejected: false },
+  ] as const)(
+    "checks native source agent approval floors before registered steering ($security/$ask)",
+    async ({ security, ask, rejected }) => {
+      const native = await prepareNativeDelegation(security, ask);
+      try {
+        const source = native.makeTools("main", {});
+        expect(source).toBeDefined();
+        const result = await native.send(source);
+        expect(result.details).toMatchObject({ status: rejected ? "error" : "accepted" });
+        if (rejected) {
+          expect(result.details).toMatchObject({
+            error: "receiver exec policy does not retain the source restriction",
+          });
+        }
+        expect(native.queued).toHaveBeenCalledTimes(rejected ? 0 : 1);
+        expect(native.acceptedPolicies).toHaveBeenCalledTimes(rejected ? 0 : 1);
+        // The receiver's own ordinary work keeps its full policy after a rejected source input.
+        const control = await native.send(native.receiverTool, "helper");
+        expect(control.details).toMatchObject({ status: "accepted" });
+        expect(native.queued).toHaveBeenCalledTimes(rejected ? 1 : 2);
+      } finally {
+        native.gateway.mockRestore();
+      }
+    },
+  );
+
+  it.each(["aborted", "replaced"] as const)(
+    "rejects a native source generation %s during its readonly approval capture",
+    async (retirement) => {
+      const native = await prepareNativeDelegation("full", "off");
+      const sourceRef: InheritedToolPolicyRef = {};
+      const abort = new AbortController();
+      const source = native.makeTools("main", sourceRef, abort.signal);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const captureSettled = createDeferredCore();
+      const capture = inheritedToolPolicy.captureDelegatedSourceToolPolicy;
+      const captureOwner = vi
+        .spyOn(inheritedToolPolicy, "captureDelegatedSourceToolPolicy")
+        .mockImplementationOnce(async (params) => {
+          try {
+            return await capture(params);
+          } finally {
+            captureSettled.resolve();
+          }
+        });
+      const load = execApprovalsStore.loadExecApprovalsReadOnlyAsync;
+      const reader = vi
+        .spyOn(execApprovalsStore, "loadExecApprovalsReadOnlyAsync")
+        .mockImplementationOnce(async (options) => {
+          const approvals = await load(options);
+          entered.resolve();
+          await release.promise;
+          return approvals;
+        });
+      const attempt = native.send(source);
+      try {
+        expect(
+          await Promise.race([entered.promise.then(() => true), attempt.then(() => false)]),
+        ).toBe(true);
+        const replacement =
+          retirement === "replaced" ? native.makeTools("main", sourceRef) : undefined;
+        if (retirement === "aborted") {
+          abort.abort(new Error("Native source retired"));
+        }
+        release.resolve();
+        if (retirement === "aborted") {
+          await expect(attempt).rejects.toThrow("Aborted");
+        } else {
+          expect((await attempt).details).toMatchObject({ status: "forbidden" });
+        }
+        await captureSettled.promise;
+        expect(native.gateway).not.toHaveBeenCalled();
+        expect(native.queued).not.toHaveBeenCalled();
+        expect(native.acceptedPolicies).not.toHaveBeenCalled();
+        const control = await native.send(
+          replacement ?? native.receiverTool,
+          replacement ? "main" : "helper",
+        );
+        expect(control.details).toMatchObject({ status: "accepted" });
+        expect(native.queued).toHaveBeenCalledOnce();
+      } finally {
+        release.resolve();
+        await attempt.catch(() => {});
+        if (captureOwner.mock.calls.length) {
+          await captureSettled.promise;
+        }
+        captureOwner.mockRestore();
+        reader.mockRestore();
+        native.gateway.mockRestore();
+      }
+    },
+  );
+
+  it("rejects a source policy change during target lookup before starting any turn", async () => {
+    let source = sourcePolicy();
+    const callGateway = vi.fn();
+    callGateway.mockImplementation(
+      async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+        const result = await resolveTarget(request);
+        source = policy("read");
+        return result;
+      },
+    );
+    const result = await callAsSource(() =>
+      createSessionsSendTool({
+        agentSessionKey: requesterSessionKey,
+        config,
+        callGateway,
+        captureInheritedToolPolicyForDelegation: async () => {
+          const captured = source;
+          return {
+            policy: captured,
+            assertCurrent: () => {
+              if (source !== captured) {
+                throw new Error("Session send source policy changed");
+              }
+            },
+          };
+        },
+      }).execute("changed-source", {
+        sessionKey: targetSessionKey,
+        message: "Assess this task",
+        mode: "followup",
+        timeoutSeconds: 0,
+      }),
+    );
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("source policy changed"),
+    });
+    expect(callGateway.mock.calls.map(([request]) => request.method)).not.toContain("agent");
+  });
+
+  it("preserves delegated notification order without blocking an ordinary event", async () => {
+    const sources = [sourcePolicy(), policy("read", "exec", "sessions_send")];
+    for (const [index, source] of sources.entries()) {
+      const result = await callAsSource(() =>
+        createSessionsSendTool({
+          agentSessionKey: requesterSessionKey,
+          config,
+          callGateway: resolveTarget,
+          captureInheritedToolPolicyForDelegation: async () => {
+            const captured = source;
+            return {
+              policy: captured,
+              assertCurrent: () => {
+                if (source !== captured) {
+                  throw new Error("Session send source policy changed");
+                }
+              },
+            };
+          },
+        }).execute("delegated-notify", {
+          sessionKey: targetSessionKey,
+          message: index === 0 ? "Delegated assessment ready" : "Later compatible assessment",
+          mode: "notify",
+        }),
+      );
+      expect(result.details).toMatchObject({ status: "queued" });
+    }
+    enqueueSystemEvent("Ordinary progress", { sessionKey: targetSessionKey });
+    const ordinary = await drainFormattedSystemEvents({
+      cfg: config,
+      agentId: "main",
+      sessionKey: targetSessionKey,
+      isMainSession: false,
+      isNewSession: false,
+    });
+    expect(ordinary).toContain("Ordinary progress");
+    expect(ordinary).not.toContain("Delegated assessment ready");
+    const deferred = drainFormattedDelegatedSystemEvents({
+      cfg: config,
+      agentId: "main",
+      sessionKey: targetSessionKey,
+      policy: policy("read", "exec"),
+      accept: () => true,
+    });
+    expect(deferred).toEqual({ text: undefined, policies: [], deferred: 2 });
+    const unavailable = drainFormattedDelegatedSystemEvents({
+      cfg: config,
+      agentId: "main",
+      sessionKey: targetSessionKey,
+      policy: policy("read"),
+      accept: () => false,
+    });
+    expect(unavailable).toEqual({ text: undefined, policies: [], deferred: 2 });
+    const consumed = drainFormattedDelegatedSystemEvents({
+      cfg: config,
+      agentId: "main",
+      sessionKey: targetSessionKey,
+      policy: policy("read"),
+      accept: () => true,
+    });
+    expect(consumed.text).toMatch(/Delegated assessment ready[\s\S]*Later compatible assessment/);
+    expect(consumed.policies).toEqual(sources);
+    expect(consumed.deferred).toBe(0);
   });
 
   it("keeps the accepted reply source until the detached flow actually settles", async () => {

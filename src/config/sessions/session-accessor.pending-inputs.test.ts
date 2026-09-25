@@ -25,6 +25,10 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
+  registerPendingInputPolicyTests,
+  registerPendingInputAggregatePolicyTest,
+} from "./session-accessor.pending-input-policy.test-support.js";
+import {
   bindSessionPendingInputSources,
   listSessionPendingInputReceipts,
   listSessionPendingInputs,
@@ -101,6 +105,9 @@ describe("accepted input custody", () => {
     }
     closeOpenClawAgentDatabasesForTest();
   });
+
+  const policyFixture = { scope, database, message, stage, promote, receipts };
+  registerPendingInputPolicyTests(policyFixture);
 
   it("keeps accepted input outside the active transcript and applies its hook once across replay and promotion", async () => {
     await appendTranscriptMessage(scope(), { message: message("active", "First task") });
@@ -468,29 +475,7 @@ describe("accepted input custody", () => {
     expect(pendingIds).toEqual([first.inputId]);
   });
 
-  it("rolls aggregate append and every source consumption back as one transaction", async () => {
-    const first = await stage("atomic-a");
-    const second = await stage("atomic-b");
-    const aggregate = bindSessionPendingInputSources([first, second], message("atomic-c"))!;
-    receipts.push(aggregate);
-    const before = await loadTranscriptEvents(scope());
-    database().db.exec(
-      "CREATE TRIGGER reject_collect_consume BEFORE UPDATE OF consumed_event_id ON session_pending_inputs WHEN OLD.run_id = 'atomic-b' BEGIN SELECT RAISE(ABORT, 'collect consume failed'); END",
-    );
-    await expect(promote(aggregate)).rejects.toThrow("collect consume failed");
-    expect(await loadTranscriptEvents(scope())).toEqual(before);
-    expect(listSessionPendingInputs(scope()).total).toBe(2);
-    expect(listSessionPendingInputReceipts(scope(), { runIds: ["atomic-a", "atomic-b"] })).toEqual([
-      { runId: "atomic-a", state: "pending" },
-      { runId: "atomic-b", state: "pending" },
-    ]);
-    database().db.exec("DROP TRIGGER reject_collect_consume");
-    expect(await promote(aggregate)).toMatchObject({
-      appended: true,
-      messageId: aggregate.inputId,
-    });
-    expect(listSessionPendingInputs(scope()).total).toBe(0);
-  });
+  registerPendingInputAggregatePolicyTest(policyFixture);
 
   it("revalidates every collected source after an await and rejects copied receipt fields", async () => {
     const first = await stage("fence-a");

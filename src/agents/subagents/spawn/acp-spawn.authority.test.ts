@@ -1,7 +1,8 @@
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
+import type { AcpRuntime, AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createBackgroundTaskRecord } from "../../../acp/control-plane/manager.background-task.js";
@@ -28,8 +29,16 @@ import {
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
+import {
+  captureGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
+} from "../../../gateway/device-revocation.js";
 import { withLocalGatewayRequestScope } from "../../../gateway/local-request-context.js";
+import { invalidateOperatorRolePolicy } from "../../../gateway/operator-role-policy.js";
+import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
 import { handleChatAbortRequest } from "../../../gateway/server-methods/chat-abort-handler.js";
+import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import { createOperatorClient } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import { getSessionRowProjection } from "../../../gateway/session-row-projection-access.js";
 import {
@@ -38,28 +47,38 @@ import {
   type SessionBindingAdapter,
 } from "../../../infra/outbound/session-binding-service.js";
 import { flushLogger, resetLogger } from "../../../logging/logger.js";
-import { loadActivatedBundledPluginPublicSurfaceModule } from "../../../plugin-sdk/facade-runtime.js";
-import { getActivePluginRegistry } from "../../../plugins/runtime.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
+import { setCanonicalUserProfileRole } from "../../../state/user-profile-writes.js";
 import { listTasksForRelatedSessionKey } from "../../../tasks/task-registry-query.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
-import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../../agent-tool-metadata.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
-import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
+import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
+import { resolveConversationToolPolicies } from "../../conversation-tool-policy-pipeline.js";
+import { prepareDelegatedToolParameterTarget } from "../../delegated-tool-parameter-target.js";
+import { captureDelegatedToolParameters } from "../../inherited-tool-parameters.js";
+import {
+  captureDelegatedSourceToolPolicy,
+  captureInheritedToolPolicy,
+} from "../../inherited-tool-policy.js";
+import type { InheritedToolPolicyV2 } from "../../inherited-tool-policy.schema.js";
+import { refreshPreparedModelRuntimeSnapshots } from "../../prepared-model-runtime.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../../prepared-model-runtime.test-support.js";
+import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -73,11 +92,6 @@ import {
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import * as acpSpawnRuntime from "./acp-spawn-runtime.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
-
-vi.mock("../../runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle:
-    vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
-}));
 
 const parentSessionKey = "agent:main:main";
 const parentRunId = "acp-spawn-parent";
@@ -106,26 +120,60 @@ beforeEach(async () => {
     JSON.stringify({
       logging: { file: path.join(stateDir, "gateway.log"), audit: { enabled: false } },
       acp: { enabled: true, backend: backendId, allowedAgents: ["fixture"] },
+      gateway: {
+        roles: {
+          default: "allowed",
+          definitions: {
+            allowed: {
+              sessions: { others: "write" },
+              agents: ["main", "fixture"],
+              scopes: ["operator.admin", "operator.read", "operator.write"],
+            },
+            denied: { sessions: { others: "none" }, agents: [], scopes: [] },
+          },
+        },
+      },
+      tools: {
+        profile: "full",
+        fs: { workspaceOnly: false },
+        exec: {
+          host: "gateway",
+          mode: "full",
+          applyPatch: { enabled: true, workspaceOnly: false },
+        },
+      },
       agents: {
         ownership: "explicit",
-        defaults: { workspace: stateDir },
+        defaults: { workspace: stateDir, model: { primary: "custom/test-model" } },
         entries: { main: { workspace: stateDir }, fixture: { workspace: stateDir } },
       },
+      models: {
+        mode: "replace",
+        providers: {
+          custom: {
+            api: "openai-completions",
+            baseUrl: "https://example.invalid/v1",
+            models: [
+              {
+                id: "test-model",
+                name: "Synthetic model",
+                reasoning: false,
+                input: ["text"],
+                maxTokens: 1024,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+      plugins: { enabled: false, allow: [] },
     }),
   );
   clearConfigCache();
   clearRuntimeConfigSnapshot();
-  // Prepare the real browser cleanup surface outside the provisional-session RPC deadline.
-  await loadActivatedBundledPluginPublicSurfaceModule({
-    dirName: "browser",
-    artifactBasename: "browser-maintenance.js",
-  });
   managerTesting.resetAcpSessionManagerForTests();
   resetSubagentRegistryForTests({ persist: false });
   resetTaskRegistryForTests({ persist: false });
-  vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(
-    () => getActivePluginRegistry() ?? createTestRegistry([]),
-  );
 });
 
 afterEach(async () => {
@@ -133,12 +181,12 @@ afterEach(async () => {
     await disposeAcpSessionManagerInstance(getAcpSessionManager(), "test-cleanup");
     managerTesting.resetAcpSessionManagerForTests();
     unregisterAcpRuntimeBackend(backendId);
+    await resetPreparedModelRuntimeSnapshotsForTest();
     await settleSubagentRegistryPersistenceWork();
     resetSubagentRegistryForTests({ persist: false });
     resetTaskRegistryForTests({ persist: false });
     await cleanupSessionStateForTest({ stateDir });
   } finally {
-    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
     spawnTesting.setDepsForTest();
     vi.restoreAllMocks();
     clearRuntimeConfigSnapshot();
@@ -157,7 +205,9 @@ describe("pending ACP spawn authority", () => {
   it.each([
     ["runtime", "abort"],
     ["runtime", "admission close"],
-    ["runtime", "live"],
+    ["runtime", "live", "unchanged"],
+    ["runtime", "live", "device revoked"],
+    ["runtime", "live", "role reassigned"],
     ["row", "admission close"],
     ["transcript", "admission close"],
     ["thread", "admission close"],
@@ -166,8 +216,8 @@ describe("pending ACP spawn authority", () => {
     ["metadata", "admission close"],
     ["initialized", "admission close"],
   ] as const)(
-    "transfers initialized ACP work only from its live parent: %s / %s",
-    async (stage, closure) => {
+    "transfers initialized ACP work only from its live parent: %s / %s / %s",
+    async (stage, closure, operatorChange?: "unchanged" | "device revoked" | "role reassigned") => {
       const cfg = getRuntimeConfig();
       await writeSubagentSessionEntry({
         stateDir,
@@ -175,8 +225,18 @@ describe("pending ACP spawn authority", () => {
         sessionKey: parentSessionKey,
         defaultSessionId: "parent-session",
       });
-      const proveDelegatedCredit = stage === "runtime" && closure === "live";
-      if (proveDelegatedCredit) {
+      await sessionAccessor.patchSessionEntryCore(
+        { sessionKey: parentSessionKey, agentId: "main" },
+        () => ({ permissionMode: "full", sessionRoot: stateDir }),
+      );
+      const realGatewayTurn = stage === "runtime" && closure === "live";
+      const proveDelegatedCredit = realGatewayTurn && operatorChange === "unchanged";
+      if (realGatewayTurn) {
+        await refreshPreparedModelRuntimeSnapshots(cfg, {
+          gatewayLifecycle: true,
+          catalogMode: "static",
+          defaultWorkspaceDir: stateDir,
+        });
         await recordSessionParticipant(
           { agentId: "main", sessionKey: parentSessionKey },
           { identity: { type: "profile", id: "human-contributor" }, promptedAt: 1 },
@@ -189,7 +249,33 @@ describe("pending ACP spawn authority", () => {
       const work = new AsyncWorkScope();
       const trackExecution = context.trackExecution;
       context.trackExecution = (run) => work.track(() => trackExecution(run));
+      const connection = new AbortController();
+      const operatorClient = realGatewayTurn
+        ? createOperatorClient({
+            profileName: "acp-spawn-operator",
+            scopes: ["operator.admin", "operator.read", "operator.write"],
+          })
+        : undefined;
+      const device = operatorClient
+        ? captureGatewayDeviceRevocation(
+            context,
+            { deviceId: "acp-operator-device", role: "operator" },
+            () => !connection.signal.aborted,
+            connection.signal,
+          )
+        : undefined;
+      const operator = operatorClient
+        ? await captureGatewayOperatorRunAuthority({
+            client: operatorClient,
+            context,
+            hasCurrentClientAuthority: device?.isCurrent,
+          })
+        : undefined;
+      if (realGatewayTurn && !operator) {
+        throw new Error("The ACP effect proof requires captured operator authority");
+      }
       const admission = prepareAgentRunAdmission({
+        operatorAuthority: operator?.authority,
         cfg,
         operationalRunInstance: createOperationalRunInstanceRef(parentRunId),
         facts: {
@@ -212,8 +298,70 @@ describe("pending ACP spawn authority", () => {
       bindGatewayContextResolver(admitted, () => context);
       parent.bindAgentRunDelegatedAuthority(getAdmittedRunDelegatedAuthority(admitted)!);
       expect(admitted.executionIdentityToken).toBeUndefined();
+      const assertSourceCurrent = resolveAdmittedRunActiveAssertion(
+        admitted,
+        parent.controller.signal,
+      );
+      const sourceEntry = loadSessionEntry({ sessionKey: parentSessionKey, agentId: "main" });
+      if (
+        !assertSourceCurrent ||
+        sourceEntry?.permissionMode !== "full" ||
+        sourceEntry.sessionRoot !== stateDir
+      ) {
+        throw new Error("The source fixture requires its current admitted session");
+      }
+      const sourceFacts = prepareDelegatedToolParameterTarget({
+        config: cfg,
+        agentId: "main",
+        sessionEntry: sourceEntry,
+        sessionPermissionPolicy: {
+          mode: sourceEntry.permissionMode,
+          root: sourceEntry.sessionRoot,
+        },
+        rootIsWorkspace: true,
+        elevated: null,
+        sandbox: resolveSandboxRuntimeStatus({
+          cfg,
+          agentId: "main",
+          sessionKey: parentSessionKey,
+          preparedSessionEntry: sourceEntry,
+        }),
+        modelProvider: "custom",
+        modelId: "test-model",
+      });
+      const sourcePolicy = captureInheritedToolPolicy({
+        policies: Object.values(
+          resolveConversationToolPolicies({
+            capabilityProfile: resolveConversationCapabilityProfile({
+              config: cfg,
+              agentId: "main",
+              sessionKey: parentSessionKey,
+            }),
+          }),
+        ),
+        parameters: captureDelegatedToolParameters(sourceFacts),
+      });
+      let capturedPolicy: InheritedToolPolicyV2 | undefined;
       const entered = createDeferred<string>();
       const release = createDeferred();
+      const backendPrompt = vi.fn<(text: string) => void>();
+      const finishBackend = createDeferred();
+      const beforePrompt = createDeferred();
+      const resumePrompt = createDeferred();
+      if (realGatewayTurn) {
+        const manager = getAcpSessionManager();
+        const runTurn = manager.runTurn.bind(manager);
+        vi.spyOn(manager, "runTurn").mockImplementation((input) =>
+          runTurn({
+            ...input,
+            onBeforePrompt: async () => {
+              beforePrompt.resolve();
+              await resumePrompt.promise;
+              await input.onBeforePrompt?.();
+            },
+          }),
+        );
+      }
       const pause = async (sessionKey: string) => {
         entered.resolve(sessionKey);
         await release.promise;
@@ -328,8 +476,14 @@ describe("pending ACP spawn authority", () => {
             backendSessionId: `fixture:${input.sessionKey}`,
           };
         },
-        runTurn() {
-          throw new Error("No external harness turn belongs in this boundary test");
+        async *runTurn(input): AsyncGenerator<AcpRuntimeEvent> {
+          if (!realGatewayTurn) {
+            throw new Error("No external harness turn belongs in this boundary test");
+          }
+          backendPrompt(input.text);
+          await finishBackend.promise;
+          yield { type: "text_delta", text: "bounded child completed", stream: "output" };
+          yield { type: "done", status: "completed", stopReason: "end_turn" };
         },
         async cancel() {},
         close: closeRuntime,
@@ -337,10 +491,12 @@ describe("pending ACP spawn authority", () => {
       registerAcpRuntimeBackend({ id: backendId, runtime });
       const dispatch = vi.fn();
       let acceptedTaskId: string | undefined;
+      let acceptedRunId: string | undefined;
       spawnTesting.setDepsForTest({
         dispatchGatewayMethodInProcess: async <T>(
           method: string,
           params: Record<string, unknown>,
+          options?: Parameters<typeof dispatchGatewayMethodInProcess>[2],
         ) => {
           if (method !== "agent") {
             throw new Error(`Unexpected spawn RPC ${method}`);
@@ -348,6 +504,15 @@ describe("pending ACP spawn authority", () => {
           dispatch(params);
           if (typeof params.sessionKey !== "string" || typeof params.idempotencyKey !== "string") {
             throw new Error("Accepted ACP work requires session and run identities");
+          }
+          if (realGatewayTurn) {
+            const receipt = await dispatchGatewayMethodInProcess<T>(method, params, options);
+            expect(receipt).toMatchObject({ status: "accepted", runId: params.idempotencyKey });
+            acceptedRunId = params.idempotencyKey;
+            admission.close();
+            operator?.release();
+            device?.release();
+            return receipt;
           }
           const task = createBackgroundTaskRecord(
             {
@@ -379,6 +544,18 @@ describe("pending ACP spawn authority", () => {
         agentSessionKey: parentSessionKey,
         requesterRunId: parentRunId,
         requesterTurnRunId: parentRunId,
+        captureInheritedToolPolicyForDelegation: async () => {
+          capturedPolicy = await captureDelegatedSourceToolPolicy({
+            policy: sourcePolicy,
+            exec: sourceFacts.exec,
+            sandboxed: sourceFacts.sandbox.sandboxed,
+            config: cfg,
+            agentId: "main",
+            assertCurrent: assertSourceCurrent,
+          });
+          assertSourceCurrent();
+          return { policy: capturedPolicy, assertCurrent: assertSourceCurrent };
+        },
         ...(stage === "thread"
           ? {
               agentChannel: "discord",
@@ -410,7 +587,12 @@ describe("pending ACP spawn authority", () => {
         abortSignal: parent.controller.signal,
       });
       const wrapped = withPluginRuntimeGatewayRequestScope(
-        { context, isWebchatConnect: () => false },
+        {
+          context,
+          client: operatorClient,
+          hasCurrentClientAuthority: device?.isCurrent,
+          isWebchatConnect: () => false,
+        },
         () =>
           withGatewayToolCallerIdentity(
             createAdmittedGatewayToolCallerIdentity({
@@ -471,7 +653,41 @@ describe("pending ACP spawn authority", () => {
           closes: closeRuntime.mock.calls.length,
         };
         await wrappedOutcome;
-        await work.drain();
+        if (realGatewayTurn) {
+          expect(result, JSON.stringify(result)).toMatchObject({
+            details: { status: "accepted", childSessionKey },
+          });
+          expect(acceptedRunId).toBeDefined();
+          expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
+          expect(parent.controller.signal.aborted).toBe(false);
+          await Promise.race([
+            beforePrompt.promise,
+            work.runWhenIdle(() => {
+              throw new Error("Accepted ACP work ended before its final prompt boundary");
+            }),
+          ]);
+          expect(backendPrompt).not.toHaveBeenCalled();
+          operator!.authority.assertCurrent();
+          if (operatorChange === "device revoked") {
+            invalidateGatewayDeviceRevocation(context, "acp-operator-device", "operator");
+          } else if (operatorChange === "role reassigned") {
+            await setCanonicalUserProfileRole(operator!.authority.profileId, "denied", {
+              onCommitted: invalidateOperatorRolePolicy,
+            });
+          }
+          if (operatorChange !== "unchanged") {
+            expect(operator!.authority.assertCurrent).toThrow();
+          }
+          resumePrompt.resolve();
+        }
+        finishBackend.resolve();
+        await work.runWhenIdle(() => {});
+        if (realGatewayTurn) {
+          expect(backendPrompt).toHaveBeenCalledTimes(operatorChange === "unchanged" ? 1 : 0);
+          acceptedTaskId = listTasksForRelatedSessionKey(childSessionKey).find(
+            (task) => task.runId === acceptedRunId,
+          )?.taskId;
+        }
         expect
           .soft(lateMetadata, "closed parent must not publish ACP metadata after async planning")
           .not.toHaveBeenCalled();
@@ -485,16 +701,77 @@ describe("pending ACP spawn authority", () => {
           .soft(bindThread, "a closed parent must not create an external thread")
           .toHaveBeenCalledTimes(stage === "thread" && closure === "live" ? 1 : 0);
         if (closure === "live") {
-          expect(result).toMatchObject({ details: { status: "accepted", childSessionKey } });
+          const details = JSON.stringify(asOptionalRecord(result)?.details);
+          if (proveDelegatedCredit) {
+            expect(acceptedRunId, details).toBeDefined();
+          }
+          expect(result, details).toMatchObject({
+            details: { status: "accepted", childSessionKey },
+          });
           expect(dispatch).toHaveBeenCalledOnce();
           expect(subagentRuns.size).toBe(1);
+          expect(acceptedTaskId).toBeDefined();
           expect(
             listTasksForRelatedSessionKey(childSessionKey).map((task) => ({
               taskId: task.taskId,
               runtime: task.runtime,
             })),
           ).toEqual([{ taskId: acceptedTaskId, runtime: "acp" }]);
-          expect(closeRuntime).not.toHaveBeenCalled();
+          if (proveDelegatedCredit) {
+            expect(sourceBoundary.closes).toBe(0);
+            expect(closeRuntime).toHaveBeenCalledExactlyOnceWith({
+              handle: expect.objectContaining({ sessionKey: childSessionKey }),
+              reason: "oneshot-complete",
+            });
+            expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
+            expect(parent.controller.signal.aborted).toBe(false);
+            expect(backendPrompt).toHaveBeenCalledExactlyOnceWith("bounded child");
+            expect(capturedPolicy?.parameters.fileTools.length).toBeGreaterThan(0);
+            expect(capturedPolicy?.parameters.exec.length).toBeGreaterThan(0);
+            expect(sourceBoundary.entry).toMatchObject({
+              inheritedToolPolicyVersion: 2,
+              inheritedToolPolicy: capturedPolicy,
+              spawnDepth: 1,
+            });
+            expect(
+              loadSessionEntry({ sessionKey: childSessionKey, agentId: "fixture" }),
+            ).toMatchObject({
+              inheritedToolPolicyVersion: 2,
+              inheritedToolPolicy: capturedPolicy,
+            });
+            const retainedPolicy = capturedPolicy;
+            if (!retainedPolicy) {
+              throw new Error("Accepted child must retain the captured source policy");
+            }
+            await sessionAccessor.patchSessionEntryCore(
+              { sessionKey: childSessionKey, agentId: "fixture" },
+              () => ({
+                inheritedToolPolicy: {
+                  ...retainedPolicy,
+                  clauses: [...retainedPolicy.clauses, { kind: "configured", deny: ["exec"] }],
+                },
+              }),
+            );
+            await expect(
+              withPluginRuntimeGatewayRequestScope(
+                { context, client: operatorClient, isWebchatConnect: () => false },
+                () =>
+                  dispatchGatewayMethodInProcess(
+                    "agent",
+                    {
+                      sessionKey: childSessionKey,
+                      message: "must not reach the external harness",
+                      idempotencyKey: "acp-retained-restriction",
+                      acpTurnSource: "manual_spawn",
+                    },
+                    { forceSyntheticClient: true, expectFinal: true },
+                  ),
+              ),
+            ).rejects.toThrow("ACP cannot satisfy the source action restrictions");
+            expect(backendPrompt).toHaveBeenCalledTimes(1);
+          } else if (!realGatewayTurn) {
+            expect(closeRuntime).not.toHaveBeenCalled();
+          }
         } else {
           expect
             .soft(dispatch, "closed parent must never dispatch new ACP work")
@@ -517,11 +794,16 @@ describe("pending ACP spawn authority", () => {
         }
       } finally {
         release.resolve();
+        resumePrompt.resolve();
+        finishBackend.resolve();
         await forwarded;
         await wrappedOutcome;
         admission.close();
         parent.cleanup();
         await work.drain();
+        operator?.release();
+        device?.release();
+        connection.abort();
         const projection = getSessionRowProjection(context);
         projection?.dispose();
         await projection?.ensureMaterialized();

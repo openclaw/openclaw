@@ -14,7 +14,10 @@ import type {
   SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { AgentRuntimeSpawnModelAutoSelection } from "./agent-runtime-session-spawn-context.js";
+import type {
+  AgentRuntimeInheritedToolPolicy,
+  AgentRuntimeSpawnModelAutoSelection,
+} from "./agent-runtime-session-spawn-context.js";
 import type {
   ModelAccountConnectAction,
   UserModelAccountSelection,
@@ -131,11 +134,8 @@ export type CreateGatewaySessionParams = {
    */
   spawnDepth?: number;
   /** Trusted effective policy captured by an in-process visible spawn. */
-  spawnToolPolicy?: {
-    version: 1;
+  spawnToolPolicy?: AgentRuntimeInheritedToolPolicy & {
     completionOwnerSessionKey?: string;
-    allow: string[];
-    deny: string[];
   };
   spawnedCwd?: string;
   sessionRoot?: string;

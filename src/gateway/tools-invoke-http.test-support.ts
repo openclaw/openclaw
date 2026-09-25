@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { expect } from "vitest";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
@@ -59,3 +60,21 @@ export function createToolsInvokeHttpTestServer(params: {
     },
   };
 }
+
+export const postToolsInvoke = async (params: {
+  port: number;
+  headers?: Record<string, string>;
+  body: Record<string, unknown>;
+}) =>
+  await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...params.headers },
+    body: JSON.stringify(params.body),
+  });
+
+export const expectOkInvokeResponse = async (res: Response) => {
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body).toMatchObject({ ok: true });
+  return body as { ok: boolean; result?: Record<string, unknown> };
+};

@@ -428,12 +428,31 @@ export async function runSqliteSessionReclamation(params: {
   diagnostics?: SqliteSessionReclamationDiagnostics;
   assertCommitAllowed?: () => void;
   forceInProcess: boolean;
+  workerDatabaseIdentity?: string;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
   onWorkerResult?: (result: SqliteSessionReclamationResult) => void;
   plan: SqliteSessionReclamationPlan;
 }): Promise<SqliteSessionReclamationResult> {
   if (params.diagnostics) {
     params.diagnostics.kind = params.plan.kind;
+  }
+  if (params.workerDatabaseIdentity && !params.forceInProcess) {
+    if (
+      params.plan.kind !== "maintenance-plan" &&
+      params.plan.kind !== "maintenance-finalize" &&
+      params.plan.kind !== "maintenance-statistics"
+    ) {
+      throw new Error("Cold maintenance received another reclamation operation");
+    }
+    const { runSessionMaintenanceInWorker } =
+      await import("./session-accessor.sqlite-maintenance-execution.js");
+    return runSessionMaintenanceInWorker({
+      options: params.plan.databaseOptions,
+      databaseIdentity: params.workerDatabaseIdentity,
+      plan: params.plan,
+      assertCurrent: params.assertCommitAllowed ?? (() => {}),
+      onResult: params.onWorkerResult,
+    });
   }
   if (
     params.forceInProcess ||

@@ -10,14 +10,19 @@
  * enforced exactly.
  */
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addSubagentRunForTests,
   getSubagentRunByRunId,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { consumeSwarmStructuredOutput } from "../agents/tools/structured-output-tool.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { resolveMcpLoopbackScopedTools } from "./mcp-http.runtime.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
@@ -105,6 +110,31 @@ function resolveLoopbackGrantToolNames(toolsAllow: string[], admittedRunId: stri
     },
   }).then((scoped) => scoped.tools.map((tool) => (tool as { name: string }).name));
 }
+
+let state: OpenClawTestState;
+beforeAll(async () => {
+  state = await createOpenClawTestState({ label: "gateway-swarm-collector" });
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: "agent:main:main" },
+    { sessionId: "collector-parent", updatedAt: 1 },
+  );
+  for (const [sessionKey, sessionId] of Object.entries(admittedRunIdBySessionKey)) {
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      {
+        sessionId,
+        updatedAt: 1,
+        spawnedBy: "agent:main:main",
+        completionOwnerSessionKey: "agent:main:main",
+        spawnDepth: 1,
+        inheritedToolPolicyVersion: 1,
+      },
+    );
+  }
+});
+afterAll(async () => {
+  await state.cleanup();
+});
 
 beforeEach(() => {
   resetSubagentRegistryForTests({ persist: false });

@@ -8,6 +8,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
+  captureTestSpawnToolPolicy,
   expectRegisteredSubagentRun,
   supportedSpawnModelChoice,
 } from "../subagents/spawn/subagent-spawn.test-helpers.js";
@@ -88,6 +89,7 @@ describe("visible session placement and authority", () => {
     async ({ visible, placement }) => {
       const callGateway = vi.fn();
       const tool = createSessionsSpawnTool({
+        captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
         agentSessionKey: "agent:main:dashboard:parent",
         workspaceDir: "/workspace/parent",
         callGateway,
@@ -189,7 +191,11 @@ describe("visible session placement and authority", () => {
     "rejects cloud creation outside a hosted Gateway (embedded: %s)",
     async (embedded) => {
       const callGateway = vi.fn();
-      const tool = createSessionsSpawnTool({ callGateway, countActiveRuns: () => 0 });
+      const tool = createSessionsSpawnTool({
+        captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
+        callGateway,
+        countActiveRuns: () => 0,
+      });
       const invoke = () =>
         tool.execute("unhosted-cloud", {
           task: "test",
@@ -228,6 +234,7 @@ describe("visible session placement and authority", () => {
         });
         const registerRun = vi.fn();
         const tool = createSessionsSpawnTool({
+          captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
           agentSessionKey: "agent:main:main",
           config: {
             session: { store: storePath },
@@ -315,7 +322,11 @@ describe("visible session placement and authority", () => {
     })),
   ])("rejects invalid placement before creating a child: %j", async (args) => {
     const callGateway = vi.fn();
-    const tool = createSessionsSpawnTool({ callGateway, countActiveRuns: () => 0 });
+    const tool = createSessionsSpawnTool({
+      captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
+      callGateway,
+      countActiveRuns: () => 0,
+    });
     await expect(tool.execute("invalid-cloud", { task: "inspect", ...args })).rejects.toThrow(
       /Omit placement for local.*configured cloud profile/,
     );
@@ -373,6 +384,7 @@ describe("visible session placement and authority", () => {
         }
       });
       const tool = createSessionsSpawnTool({
+        captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
         agentSessionKey: "agent:main:main",
         config: {
           session: { store: storePath },
@@ -445,6 +457,7 @@ describe("visible session placement and authority", () => {
         runId: "run-visible",
       }));
       const tool = createSessionsSpawnTool({
+        captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
         agentSessionKey: "agent:main:main",
         ...(mode ? { sessionPermissionPolicy: { mode, root: "/workspace/main" } } : {}),
         config: { agents: { list: [{ id: "main" }] } },

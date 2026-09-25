@@ -22,6 +22,7 @@ import {
   type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import type { AdmittedRunContext } from "./admitted-run-context.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { isMidTurnPrecheckAssistantError } from "./embedded-agent-runner/run/midturn-precheck.js";
 import { resolveLiveToolResultMaxChars } from "./embedded-agent-runner/tool-result-truncation.js";
@@ -55,6 +56,7 @@ type GuardedSessionManager = SessionManager & {
     skipBeforeMessageWriteHooks: boolean | undefined,
     assistantErrorTranscript: AssistantErrorTranscript | undefined,
     inputProvenance: InputProvenance | undefined,
+    admittedRunContext?: AdmittedRunContext,
   ) => void;
 };
 
@@ -67,6 +69,7 @@ export function guardSessionManager(
   opts?: {
     agentId?: string;
     runId?: string;
+    admittedRunContext?: AdmittedRunContext;
     prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
     sessionKey?: string;
     config?: OpenClawConfig;
@@ -113,6 +116,7 @@ export function guardSessionManager(
       skipBeforeMessageWriteHooks,
       opts?.assistantErrorTranscript,
       inputProvenance,
+      opts?.admittedRunContext,
     );
     return guardedSessionManager;
   }
@@ -242,6 +246,7 @@ export function guardSessionManager(
     sessionKey: opts?.sessionKey,
     agentId: opts?.agentId,
     runId: opts?.runId,
+    admittedRunContext: opts?.admittedRunContext,
     transformMessageForPersistence: (message) => {
       queuedUserTurnTranscriptRecorder = undefined;
       const withProvenance = applyInputProvenanceToUserMessage(message, inputProvenance);
@@ -329,8 +334,9 @@ export function guardSessionManager(
     skipHooks,
     errors,
     provenance,
+    admittedRunContext,
   ) => {
-    guard.setTranscriptRunId(runId, errors);
+    guard.setTranscriptRunId(runId, errors, admittedRunContext);
     prepareAssistantTranscriptMessage = prepare;
     skipBeforeMessageWriteHooks = skipHooks;
     inputProvenance = provenance;

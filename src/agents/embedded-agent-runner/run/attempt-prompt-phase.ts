@@ -162,6 +162,10 @@ export async function runEmbeddedAttemptPromptPhase(
       sessionAgentId,
       runtimeModel: runtimeInfo.model,
       systemPromptText,
+      getInheritedToolPolicy: prepared.toolBase.getInheritedToolPolicy,
+      getEnforcedDelegatedToolParameterPolicy:
+        prepared.toolBase.getEnforcedDelegatedToolParameterPolicy,
+      addDelegatedInputPolicies: prepared.toolBase.addDelegatedInputPolicies,
       setActiveSessionSystemPrompt,
       applyPromptBuildToolsAllow: (toolsAllow) => {
         // Hook authority follows reachable capabilities, not just provider-visible controls.

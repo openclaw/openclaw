@@ -399,6 +399,13 @@ export async function handleInlineActions(params: {
           provider,
           model,
           senderIsOwner: command.senderIsOwner,
+          elevated: {
+            enabled: elevatedEnabled,
+            allowed: elevatedAllowed,
+            defaultLevel: resolvedElevatedLevel,
+          },
+          execOverrides,
+          assertInvocationCurrent: () => opts?.abortSignal?.throwIfAborted(),
           senderId: command.senderId,
           currentChannelId: command.channelId,
           groupId: extractExplicitGroupId(ctx.From),

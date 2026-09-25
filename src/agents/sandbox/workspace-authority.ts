@@ -9,8 +9,10 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../agent-tools.policy.js";
+import { createInheritedToolPolicyMatcher } from "../inherited-tool-policy.js";
 import { buildModelAliasIndex, resolveModelRefFromString } from "../model-selection.js";
 import { resolveSessionModelRef } from "../session-model-ref.js";
+import { resolvePersistedSubagentToolPolicyEnvelope } from "../subagents/spawn/subagent-capabilities.js";
 import { isToolAllowedByPolicies } from "../tool-policy-match.js";
 import {
   expandToolGroups,
@@ -141,7 +143,19 @@ export function resolveSandboxWorkspaceAuthority(params: {
   sessionKey: string;
   sessionEntry?: Pick<
     SessionEntry,
-    "execHost" | "execNode" | "model" | "modelProvider" | "modelOverride" | "providerOverride"
+    | "execHost"
+    | "execNode"
+    | "model"
+    | "modelProvider"
+    | "modelOverride"
+    | "providerOverride"
+    | "sessionId"
+    | "spawnedBy"
+    | "completionOwnerSessionKey"
+    | "inheritedToolPolicyVersion"
+    | "inheritedToolPolicy"
+    | "inheritedToolAllow"
+    | "inheritedToolDeny"
   >;
   confinedToolNames?: readonly string[];
   requiredToolNames?: readonly string[];
@@ -215,9 +229,21 @@ export function resolveSandboxWorkspaceAuthority(params: {
         modelId: model.model,
         sandboxPolicy: sandbox.tools,
       });
+      const envelope =
+        params.sessionEntry &&
+        resolvePersistedSubagentToolPolicyEnvelope(params.sessionKey, {
+          store: { [params.sessionKey]: params.sessionEntry },
+        });
+      const inheritedAllows =
+        envelope?.version === 2
+          ? createInheritedToolPolicyMatcher({ policy: envelope.policy })
+          : undefined;
       const unavailableTool = (params.requiredToolNames ?? [])
         .map(normalizeToolPolicyName)
-        .find((name) => !isToolAllowedByPolicies(name, policies));
+        .find(
+          (name) =>
+            !isToolAllowedByPolicies(name, policies) || inheritedAllows?.({ name }) === false,
+        );
       if (unavailableTool) {
         confinementError = `target tool policy blocks required tool ${unavailableTool}.`;
       } else {

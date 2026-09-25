@@ -1,6 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
-import { readSessionTranscriptRunInputVisibilityFromProjection } from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
+import {
+  readSessionTranscriptRunInputPolicyFromProjection,
+  readSessionTranscriptRunInputVisibilityFromProjection,
+} from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
 import { readTranscriptDisplayDeltaFromProjection } from "../config/sessions/session-accessor.sqlite-history-query.js";
 import {
   readCurrentProjectionSnapshot,
@@ -112,6 +115,10 @@ export function createReadonlySessionHistoryReader(target: PreparedSessionHistor
     return result.value.value;
   };
   return {
+    readRunInputPolicy: (params: { sourceTurnId?: string; runIds: readonly string[] }) =>
+      readSnapshot((projection) =>
+        readSessionTranscriptRunInputPolicyFromProjection(projection, params),
+      ),
     readTranscriptBinding: (run?: { id: string; maxBytes: number }) =>
       readSnapshot((projection) => readSessionTranscriptBindingFromProjection(projection, run)),
     readTranscriptDisplayDelta: (limits: SessionTranscriptRawDeltaLimits) =>

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/index.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
@@ -18,6 +19,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { getOwedHarnessCompletionTask } from "../../tasks/agent-harness-completion-recovery.js";
+import type { InheritedToolPolicyV2 } from "../inherited-tool-policy.schema.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../tool-outcome-instructions.js";
 import {
   runWithMainSessionRecoveryAdmission,
@@ -31,6 +33,7 @@ import {
 import { scheduleMainSessionRecoveryPendingTarget } from "./main-session-recovery-owner-release.js";
 import {
   isMainSessionRecoveryPending,
+  normalizeMainSessionRecoveryRunFences,
   type MainSessionRecoveryObservation,
   type MainSessionRecoveryReservation,
 } from "./main-session-recovery-state.js";
@@ -161,6 +164,7 @@ type ResumeMainSessionParams = {
   canonicalSessionKey?: string;
   cfg?: OpenClawConfig;
   entry: SessionEntry;
+  delegatedInputPolicy?: InheritedToolPolicyV2;
   observation: MainSessionRecoveryObservation;
   recoveryAttempt: number;
   storePath: string;
@@ -365,6 +369,13 @@ async function resumeMainSessionWithinAdmission(
         if (
           !entry ||
           entry.sessionId !== params.entry.sessionId ||
+          entry.lifecycleRevision !== params.entry.lifecycleRevision ||
+          normalizeOptionalString(entry.lifecycleRunId) !==
+            normalizeOptionalString(params.entry.lifecycleRunId) ||
+          !isDeepStrictEqual(
+            normalizeMainSessionRecoveryRunFences(entry.restartRecoveryRuns ?? []),
+            normalizeMainSessionRecoveryRunFences(params.entry.restartRecoveryRuns ?? []),
+          ) ||
           (harnessCompletion &&
             (entry.lifecycleRevision !== harnessCompletion.lifecycleRevision ||
               entry.restartRecoveryHarnessCompletion?.taskId !== harnessCompletion.taskId)) ||
@@ -410,6 +421,7 @@ async function resumeMainSessionWithinAdmission(
       message: buildResumeMessage(sanitizedPendingText, params.forceRestartSafeTools),
       sessionKey: dispatchSessionKey,
       expectedExistingSessionId: params.entry.sessionId,
+      expectedExistingSessionLifecycleRevision: params.entry.lifecycleRevision ?? null,
       internalRuntimeHandoffId: params.recoveryAdmission.handoffId,
       ...(isExecutionIdentityCollectionEnabled(params.cfg)
         ? { internalExecutionIdentityRetry: params.recoveryAttempt > 1 }
@@ -454,6 +466,17 @@ async function resumeMainSessionWithinAdmission(
     let stopTyping: (() => void) | undefined;
     const dispatchOutcome = await dispatchRestartRecoveryWithinCapacity({
       agentParams,
+      policyAdmission: params.delegatedInputPolicy
+        ? {
+            kind: "recovery",
+            policy: params.delegatedInputPolicy,
+            assertCurrent: () => {
+              if (!params.recoveryAdmission.shouldContinue()) {
+                throw new Error("Restart recovery input owner changed before admission.");
+              }
+            },
+          }
+        : undefined,
       capacity: params.recoveryCapacity,
       beginDispatch: params.recoveryAdmission.beginDispatch,
       gatewayRuntime: params.gatewayRuntime,

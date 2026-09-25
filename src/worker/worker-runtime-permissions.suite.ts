@@ -2,6 +2,9 @@ import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { WorkerInferenceStartParams } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { prepareDelegatedToolParameterTarget } from "../agents/delegated-tool-parameter-target.js";
+import { captureDelegatedToolParameters } from "../agents/inherited-tool-parameters.js";
+import { captureInheritedToolPolicy } from "../agents/inherited-tool-policy.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals.js";
 import * as logger from "../logger.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
@@ -26,63 +29,91 @@ type WorkerPermissionFixture = {
 export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture) {
   it.each([
     {
+      source: "session",
       mode: "read-only" as const,
       omittedTools: ["write", "edit", "apply_patch"],
       denial: /host=gateway security=deny/u,
     },
     {
+      source: "session",
       mode: "guarded" as const,
       omittedTools: [],
       denial:
         /approval_required.*worker guarded permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
     },
     {
+      source: "session",
       mode: "workspace" as const,
       omittedTools: [],
       denial:
         /approval_required.*worker workspace permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
     },
-    { mode: "full" as const, omittedTools: [], denial: null },
-  ])("applies the $mode worker permission clamp", async ({ mode, omittedTools, denial }) => {
-    const { gateway, workspaceDir, launch } = await setup({
-      inferencePlans: ["tool", "text"],
-      ...(mode === "full"
-        ? {
-            execApprovals: {
-              version: 1,
-              defaults: { security: "full", ask: "always" },
-              agents: {},
-            },
-          }
-        : {}),
-    });
-    launch.assignment.permissionMode = mode;
-    launch.assignment.workerContainmentRoot = workspaceDir;
+    { source: "session", mode: "full" as const, omittedTools: [], denial: null },
+    {
+      source: "inherited",
+      mode: "full" as const,
+      omittedTools: ["write", "edit", "apply_patch"],
+      denial: /host=gateway security=deny/u,
+    },
+  ])(
+    "applies the $source worker restriction over $mode permission",
+    async ({ source, mode, omittedTools, denial }) => {
+      const { gateway, workspaceDir, launch } = await setup({
+        inferencePlans: ["tool", "text"],
+        ...(mode === "full"
+          ? {
+              execApprovals: {
+                version: 1,
+                defaults: { security: "full", ask: "always" },
+                agents: {},
+              },
+            }
+          : {}),
+      });
+      launch.assignment.permissionMode = mode;
+      launch.assignment.workerContainmentRoot = workspaceDir;
+      if (source === "inherited") {
+        launch.assignment.toolAuthority.inheritedToolPolicy = captureInheritedToolPolicy({
+          policies: [],
+          parameters: captureDelegatedToolParameters(
+            prepareDelegatedToolParameterTarget({
+              config: {},
+              agentId: "source",
+              sessionEntry: null,
+              sessionPermissionPolicy: { mode: "read-only", root: workspaceDir },
+              rootIsWorkspace: true,
+              elevated: null,
+              sandbox: { sandboxed: false, sandboxRequired: false },
+            }),
+          ),
+        });
+      }
 
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
 
-    const toolNames = gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name) ?? [];
-    for (const toolName of omittedTools) {
-      expect(toolNames).not.toContain(toolName);
-    }
-    const toolResult = JSON.stringify(
-      gateway.inferenceRequests[1]?.context.messages.find(
-        (message) => message.role === "toolResult",
-      ),
-    );
-    if (denial) {
-      expect(toolResult).toMatch(denial);
-      await expect(
-        readFile(path.join(workspaceDir, "local-proof.txt"), "utf8"),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-    } else {
-      await expect(readFile(path.join(workspaceDir, "local-proof.txt"), "utf8")).resolves.toBe(
-        "worker-local",
+      const toolNames = gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name) ?? [];
+      for (const toolName of omittedTools) {
+        expect(toolNames).not.toContain(toolName);
+      }
+      const toolResult = JSON.stringify(
+        gateway.inferenceRequests[1]?.context.messages.find(
+          (message) => message.role === "toolResult",
+        ),
       );
-      expect(toolResult).not.toMatch(/approval_required|approval-pending/iu);
-      expect(gateway.methods.some((method) => method.includes("approval"))).toBe(false);
-    }
-  });
+      if (denial) {
+        expect(toolResult).toMatch(denial);
+        await expect(
+          readFile(path.join(workspaceDir, "local-proof.txt"), "utf8"),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        await expect(readFile(path.join(workspaceDir, "local-proof.txt"), "utf8")).resolves.toBe(
+          "worker-local",
+        );
+        expect(toolResult).not.toMatch(/approval_required|approval-pending/iu);
+        expect(gateway.methods.some((method) => method.includes("approval"))).toBe(false);
+      }
+    },
+  );
 
   it.each(["guarded", "workspace"] as const)(
     "denies default safe bins under the %s worker permission policy",

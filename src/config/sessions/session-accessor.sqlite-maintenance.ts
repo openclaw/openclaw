@@ -6,7 +6,10 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
+import {
+  publishSessionStateArchives,
+  publishSessionStateArchivesInWorker,
+} from "./session-accessor.sqlite-archive-store.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import {
   materializeSessionStateDeletePlans,
@@ -59,7 +62,7 @@ const plannerMaintenanceByStore = new Map<string, Promise<void>>();
 export async function refreshSqliteSessionPlannerStatisticsBestEffort(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   deletedEntries: number,
-  options: { isCurrent?: () => boolean } = {},
+  options: { isCurrent?: () => boolean; workerDatabaseIdentity?: string } = {},
 ): Promise<void> {
   const isCurrent = options.isCurrent ?? (() => true);
   if (deletedEntries < SESSION_PLANNER_ANALYSIS_MIN_DELETED_ENTRIES || !isCurrent()) {
@@ -73,6 +76,7 @@ export async function refreshSqliteSessionPlannerStatisticsBestEffort(
   }
   const completion = runSqliteSessionReclamation({
     diagnostics: { kind: "maintenance-statistics" },
+    workerDatabaseIdentity: options.workerDatabaseIdentity,
     assertCommitAllowed: () => {
       if (!isCurrent()) {
         throw new Error("SQLite maintenance planner owner retired");
@@ -335,7 +339,11 @@ export function applySessionEntryMaintenance(
 export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   plans: readonly SessionEntryMaintenancePlan[],
-  options: { deletedEntriesBeforeMaintenance?: number; isCurrent?: () => boolean } = {},
+  options: {
+    deletedEntriesBeforeMaintenance?: number;
+    isCurrent?: () => boolean;
+    workerDatabaseIdentity?: string;
+  } = {},
 ): Promise<SessionEntryMaintenanceResult> {
   const isCurrent = options.isCurrent ?? (() => true);
   const committedCounts = {
@@ -385,7 +393,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     await refreshSqliteSessionPlannerStatisticsBestEffort(
       scope,
       options.deletedEntriesBeforeMaintenance ?? 0,
-      { isCurrent },
+      { isCurrent, workerDatabaseIdentity: options.workerDatabaseIdentity },
     );
     return emptyResult();
   }
@@ -401,7 +409,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     await refreshSqliteSessionPlannerStatisticsBestEffort(
       scope,
       options.deletedEntriesBeforeMaintenance ?? 0,
-      { isCurrent },
+      { isCurrent, workerDatabaseIdentity: options.workerDatabaseIdentity },
     );
     return emptyResult();
   }
@@ -434,6 +442,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
         async (assertCurrent) =>
           await runSqliteSessionReclamation({
             diagnostics: { kind: "maintenance-finalize" },
+            workerDatabaseIdentity: options.workerDatabaseIdentity,
             assertCommitAllowed: () => {
               assertCurrent();
               if (!isCurrent()) {
@@ -484,13 +493,28 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
       }
     }
     try {
-      publishedTranscripts.push(...(await publishSessionStateArchives(scope, archivedTranscripts)));
+      const published = options.workerDatabaseIdentity
+        ? await publishSessionStateArchivesInWorker(
+            scope,
+            options.workerDatabaseIdentity,
+            archivedTranscripts,
+            () => {
+              if (!isCurrent()) {
+                throw new Error("SQLite automatic maintenance owner retired");
+              }
+            },
+          )
+        : await publishSessionStateArchives(scope, archivedTranscripts);
+      publishedTranscripts.push(...published);
     } catch (error) {
       warn("SQLite session maintenance archive publication failed", error, batch.stateDeletePlans);
     }
   }
   if (isCurrent()) {
-    await refreshSqliteSessionPlannerStatisticsBestEffort(scope, deletedEntries, { isCurrent });
+    await refreshSqliteSessionPlannerStatisticsBestEffort(scope, deletedEntries, {
+      isCurrent,
+      workerDatabaseIdentity: options.workerDatabaseIdentity,
+    });
   }
   return { archivedTranscripts: publishedTranscripts, ...committedCounts };
 }

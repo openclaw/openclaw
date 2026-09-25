@@ -23,6 +23,9 @@ import {
   getAdmittedRunSource,
   prepareAgentRunAdmission,
   readAdmittedRunOperatorAuthority,
+  readAdmittedRunDelegatedInputPolicies,
+  readRunDelegatedInputPolicies,
+  retainAdmittedRunDelegatedInputPolicies,
   readPreparedRunOperatorAuthority,
   retainAdmittedRunBeforeToolCallRecovery,
   resolveAdmittedRunActiveAssertion,
@@ -30,6 +33,8 @@ import {
   type PreparedAgentRunAdmission,
 } from "./admitted-run-context.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
+import { emptyDelegatedToolParameterPolicy } from "./inherited-tool-parameters.js";
+import { captureInheritedToolPolicy } from "./inherited-tool-policy.js";
 
 const enabledConfig = { logging: { audit: { enabled: true, executionIdentity: true } } };
 const facts = {
@@ -304,6 +309,13 @@ describe("prepared run admission", () => {
     expect(getAdmittedRunSource(first)).toBe("operator-schedule");
     expect(getAdmittedRunSource({ ...first })).toBeUndefined();
     expect(validateAgentRunDelegatedAuthority(first)).toBe(true);
+    const policy = captureInheritedToolPolicy({
+      policies: [{ allow: ["read"] }],
+      parameters: emptyDelegatedToolParameterPolicy(),
+    });
+    const releaseRejected = retainAdmittedRunDelegatedInputPolicies(admitted, [policy]);
+    retainAdmittedRunDelegatedInputPolicies(admitted, [policy]);
+    releaseRejected();
     await expect(
       resolvePreparedRunAdmission({
         runId: "run-lease",
@@ -312,12 +324,21 @@ describe("prepared run admission", () => {
       }),
     ).resolves.toBe(admitted);
     expect(getAdmittedRunDelegatedAuthority(admitted)).toBe(first);
+    expect(readRunDelegatedInputPolicies({ preparedRunAdmission: prepared })).toEqual([policy]);
     prepared.close();
+    expect(() => readAdmittedRunDelegatedInputPolicies(admitted)).toThrow("no longer active");
     expect(() => prepared.assertSourceCurrent()).not.toThrow();
     expect(validateAgentRunDelegatedAuthority(first)).toBe(false);
     expect(getAdmittedRunSource(first)).toBeUndefined();
     expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(false);
     await expect(prepared.admit(runtime.kind)).rejects.toThrow("already closed");
+    const next = prepareAgentRunAdmission({
+      cfg: {},
+      facts: { ...admissionFacts, runId: "run-lease" },
+      operationalRunInstance: createOperationalRunInstanceRef("run-lease"),
+    });
+    expect(readAdmittedRunDelegatedInputPolicies(await next.admit(runtime.kind))).toEqual([]);
+    next.close();
   });
 
   it.each([undefined, "operator-schedule"] as const)(

@@ -1,11 +1,15 @@
 // Shared sessions_spawn test harness for gateway, registry, and lifecycle mocks.
-import os from "node:os";
-import path from "node:path";
 import { vi, type Mock } from "vitest";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { useToolPolicySessionFixture } from "./agent-tools.session-policy.test-support.js";
 import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
-import { supportedSpawnModelChoice } from "./subagents/spawn/subagent-spawn.test-helpers.js";
+import {
+  captureTestSpawnToolPolicy,
+  supportedSpawnModelChoice,
+} from "./subagents/spawn/subagent-spawn.test-helpers.js";
 
 type SessionsSpawnTestConfig = ReturnType<
   (typeof import("../config/config.js"))["getRuntimeConfig"]
@@ -50,7 +54,6 @@ type EventWaiter = {
 const hoisted = vi.hoisted(() => {
   // Hoisted state backs module mocks that must exist before test imports resolve.
   const callGatewayMock = vi.fn();
-  const sessionStore: Record<string, TestSessionEntry> = {};
   let nextRunId = 0;
   const defaultConfigOverride = {
     session: {
@@ -135,17 +138,16 @@ const hoisted = vi.hoisted(() => {
       nextRunId += 1;
       return `run-${nextRunId}`;
     },
-    sessionStore,
     state,
   };
 });
 
 let cachedCreateSessionsSpawnTool: CreateSessionsSpawnTool | null = null;
 let cachedSubagentSpawnTesting: SubagentSpawnTesting | null = null;
-const sessionStorePath = path.join(
-  os.tmpdir(),
-  `openclaw-sessions-spawn-test-store-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}.json`,
-);
+useToolPolicySessionFixture({
+  "agent:main:main": { sessionId: "main-session", updatedAt: Date.now() },
+  "agent:main:discord:group:req": { sessionId: "discord-requester", updatedAt: Date.now() },
+});
 
 export function getCallGatewayMock(): Mock {
   return hoisted.callGatewayMock;
@@ -248,7 +250,10 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
     ({ createSessionsSpawnTool: cachedCreateSessionsSpawnTool } =
       await import("./tools/sessions-spawn-tool.js"));
   }
-  return cachedCreateSessionsSpawnTool(opts);
+  return cachedCreateSessionsSpawnTool({
+    captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
+    ...opts,
+  });
 }
 
 export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMockOptions): {
@@ -286,11 +291,10 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
         childRunId = runId;
         childSessionKey = params.sessionKey ?? "";
         if (childSessionKey) {
-          hoisted.sessionStore[childSessionKey] = {
-            sessionId: `sess-${childSessionKey}`,
-            updatedAt: Date.now(),
-            ...setupOpts.subagentSessionEntryPatch,
-          };
+          await patchSessionEntryCore(
+            { agentId: resolveAgentIdFromSessionKey(childSessionKey), sessionKey: childSessionKey },
+            () => ({ updatedAt: Date.now(), ...setupOpts.subagentSessionEntryPatch }),
+          );
         }
         setupOpts.onAgentSubagentSpawn?.(params);
       }
@@ -389,34 +393,6 @@ vi.mock("./subagents/announce/subagent-announce.js", async (importOriginal) => {
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => hoisted.state.configOverride,
   resolveGatewayPort: () => 18789,
-}));
-
-vi.mock("../config/sessions.js", async () => ({
-  isPerAgentSessionStoreConfig: (await import("../config/sessions/session-store-config.js"))
-    .isPerAgentSessionStoreConfig,
-  isConfiguredSessionStoreAgentId: (
-    cfg: { agents?: { list?: Array<{ id?: string }> } },
-    agentId: string,
-  ) => agentId === "main" || cfg.agents?.list?.some((agent) => agent.id === agentId) === true,
-  loadSessionStore: () => hoisted.sessionStore,
-  mergeSessionEntry: (existing: object | undefined, patch: object) => ({
-    ...existing,
-    ...patch,
-  }),
-  resolveAgentIdFromSessionKey: (sessionKey: string) =>
-    sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
-  resolveAgentMainSessionKey: (params: {
-    cfg?: { session?: { mainKey?: string } };
-    agentId: string;
-  }) => `agent:${params.agentId}:${params.cfg?.session?.mainKey ?? "main"}`,
-  resolveExistingAgentSessionStoreTargetsSync: () => [],
-  resolveSessionStorePathCore: () => sessionStorePath,
-  updateSessionStore: async (
-    _storePath: string,
-    mutator: (store: typeof hoisted.sessionStore) => void | Promise<void>,
-  ) => {
-    await mutator(hoisted.sessionStore);
-  },
 }));
 
 vi.mock("../tasks/detached-task-runtime.js", () => ({

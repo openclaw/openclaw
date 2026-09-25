@@ -1,6 +1,7 @@
 // Verifies createOpenClawTools wires shared config and context into the TTS tool.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { useToolPolicySessionFixture } from "./agent-tools.session-policy.test-support.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import type { MediaGenerateToolOptions } from "./tools/media-generate-background.js";
@@ -378,6 +379,17 @@ describe("createOpenClawTools transcript ownership wiring", () => {
 });
 
 describe("createOpenClawTools media generation session wiring", () => {
+  useToolPolicySessionFixture({
+    "agent:main:main": { sessionId: "media-parent", updatedAt: 1 },
+    "agent:main:subagent:media-child": {
+      sessionId: "media-child",
+      updatedAt: 1,
+      spawnedBy: "agent:main:main",
+      spawnDepth: 1,
+      inheritedToolPolicyVersion: 1,
+    },
+  });
+
   beforeEach(() => {
     mocks.createImageGenerateToolOptions.mockClear();
     mocks.createMusicGenerateToolOptions.mockClear();

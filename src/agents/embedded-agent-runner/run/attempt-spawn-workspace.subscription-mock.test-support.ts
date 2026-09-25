@@ -91,3 +91,19 @@ export function createSubscriptionMock(): SubscriptionMock {
     isCompactionInFlight: () => false,
   };
 }
+
+type TestAgentStream = {
+  result: () => Promise<unknown>;
+  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
+};
+
+export function createCompletedAssistantStream(): TestAgentStream {
+  return {
+    async result() {
+      return { role: "assistant", content: "done" };
+    },
+    [Symbol.asyncIterator]() {
+      return (async function* () {})();
+    },
+  };
+}

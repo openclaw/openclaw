@@ -46,7 +46,6 @@ import {
   normalizePathPrepend,
   resolveExecTarget,
   resolveApprovalRunningNoticeMs,
-  buildExecRuntimeErrorOutcome,
   runExecProcess,
   execSchema,
 } from "./bash-tools.exec-runtime.js";
@@ -57,6 +56,7 @@ import {
 import {
   attachExecApprovalReview,
   buildExecForegroundResult,
+  buildUnavailableWorkdirResult,
   createExecHostResolver,
   createExecProcessSettlement,
   resolveExecElevatedMode,
@@ -67,8 +67,13 @@ import type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
-import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
+import { resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
+import {
+  applyDelegatedExecRestrictions,
+  assertDelegatedExecTarget,
+  needsDelegatedExecCommandPolicy,
+} from "./delegated-exec-policy.js";
 import {
   createExecToolExecutionTimeoutResolver,
   resolveExecDefaultTimeoutSec,
@@ -85,8 +90,15 @@ const BACKGROUND_EXEC_FOLLOW_UP =
 
 /** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(
-  defaults?: ExecToolDefaults,
+  providedDefaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
+  const defaults = providedDefaults?.delegatedRestrictions?.length
+    ? applyDelegatedExecRestrictions(
+        providedDefaults,
+        providedDefaults.delegatedRestrictions,
+        Boolean(providedDefaults.sandbox),
+      )
+    : providedDefaults;
   const secretEgressEnabled = isSecretEgressProxyActive();
   const cleanupMs = defaults?.cleanupMs;
   const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
@@ -156,20 +168,6 @@ export function createExecTool(
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
   const resolveHostForParams = createExecHostResolver(defaults);
-  const buildUnavailableWorkdirResult = (params: {
-    cwd: string;
-    startedAt?: number;
-    warningText?: string;
-  }) =>
-    buildExecForegroundResult({
-      outcome: buildExecRuntimeErrorOutcome({
-        error: formatUnavailableWorkdirFailure(params.cwd),
-        aggregated: "",
-        durationMs: params.startedAt ? Date.now() - params.startedAt : 0,
-      }),
-      cwd: params.cwd,
-      warningText: params.warningText,
-    });
   const requestPreparation = createExecRequestPreparation({
     defaults,
     agentId,
@@ -293,6 +291,11 @@ export function createExecTool(
         sandboxRequired: defaults?.sandboxRequired,
       });
       const host = target.effectiveHost;
+      assertDelegatedExecTarget({
+        restrictions: defaults?.delegatedRestrictions ?? [],
+        host,
+        elevated: elevatedMode,
+      });
 
       const explicitSecurity = defaults?.security;
       const configuredSecurity = explicitSecurity ?? (host === "sandbox" ? "deny" : "full");
@@ -331,11 +334,12 @@ export function createExecTool(
       const trustedAsk = defaults?.messageProvider && hostAsk === "off" ? undefined : requestedAsk;
       let ask = maxAsk(hostAsk, trustedAsk ?? hostAsk);
       const bypassApprovals =
-        (defaults?.bypassHostApprovalFloors === true && modePolicy.ask === "off") ||
-        (elevatedRequested &&
-          elevatedMode === "full" &&
-          modePolicyAllowsFullBypass &&
-          hostPolicyAllowsFullBypass);
+        !defaults?.delegatedRestrictions?.some(needsDelegatedExecCommandPolicy) &&
+        ((defaults?.bypassHostApprovalFloors === true && modePolicy.ask === "off") ||
+          (elevatedRequested &&
+            elevatedMode === "full" &&
+            modePolicyAllowsFullBypass &&
+            hostPolicyAllowsFullBypass));
       if (bypassApprovals) {
         ask = "off";
       }
@@ -506,6 +510,8 @@ export function createExecTool(
             security,
             ask,
             bypassHostApprovalFloors: defaults?.bypassHostApprovalFloors,
+            delegatedRestrictions: defaults?.delegatedRestrictions,
+            delegatedReceiverSecurity: defaults?.delegatedReceiverSecurity,
             autoReview,
             autoReviewer,
             signal,

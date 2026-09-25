@@ -69,6 +69,7 @@ export function resolveSessionEntry(
     allowCanonicalMove?: boolean;
     databaseAgentId?: string;
     projection?: SessionEntryReadScope["projection"];
+    canonicalValidation?: SessionEntryReadScope["canonicalValidation"];
     continuation?: CanonicalSessionReaderContinuation;
     onReadSource?: (source: CapturedSessionEntryReadSource) => void;
     onReadError?: (error: unknown, database: OpenClawAgentDatabase["db"]) => never;
@@ -98,7 +99,7 @@ export function resolveSessionEntry(
   ): ResolvedSqliteSessionEntry => {
     let selected: ReturnType<typeof readQualifiedSessionEntryRow> = undefined;
     let failure: { error: unknown } | undefined;
-    if (options.onReadError) {
+    if (options.onReadError && options.canonicalValidation !== "selected") {
       try {
         // Let the admission owner's snapshot-required control exception reach that owner.
         assertCanonicalSqliteSessionKeysCurrent(database);
@@ -113,12 +114,14 @@ export function resolveSessionEntry(
       try {
         const projection = options.readOnly ? options.projection : "full";
         selected =
-          options.keyFormat === "agent-qualified"
-            ? readQualifiedSessionEntryRow(database, resolved.agentId, resolved.sessionKey, {
-                allowCanonicalMove: options.allowCanonicalMove,
-                projection,
-              })
-            : readSessionEntryRow(database, resolved.sessionKey, projection);
+          options.canonicalValidation === "selected"
+            ? readExactSessionEntryRow(database, resolved.sessionKey, projection, "canonical")
+            : options.keyFormat === "agent-qualified"
+              ? readQualifiedSessionEntryRow(database, resolved.agentId, resolved.sessionKey, {
+                  allowCanonicalMove: options.allowCanonicalMove,
+                  projection,
+                })
+              : readSessionEntryRow(database, resolved.sessionKey, projection);
       } catch (error) {
         if (!options.onReadError) {
           throw error;
@@ -156,6 +159,9 @@ export function resolveSessionEntry(
         ),
       toDatabaseOptions(resolved),
     );
+    if (!result.found && options.canonicalValidation === "selected") {
+      throw new Error(`Session policy owner unavailable: ${result.reason}.`);
+    }
     return result.found
       ? result.value
       : { existing: undefined, legacyKeys: [], normalizedKey: resolved.sessionKey };
@@ -199,6 +205,7 @@ export function loadSessionEntryReadOnlyResultInScope(
         readOnly: true,
         databaseAgentId: scope.databaseAgentId,
         projection: scope.projection,
+        canonicalValidation: scope.canonicalValidation,
         continuation,
         onReadSource,
         onReadError(error, database) {

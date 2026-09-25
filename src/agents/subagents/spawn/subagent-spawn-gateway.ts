@@ -28,6 +28,19 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./subagent-spawn.runtime.js";
 
+/** Capture the request-owned Gateway and operator authority before asynchronous spawn planning. */
+export function resolveSubagentSpawnGatewayAuthority() {
+  const caller = getGatewayToolCallerIdentity();
+  const scope = getPluginRuntimeGatewayRequestScope();
+  return {
+    gatewayContextResolver:
+      caller?.gatewayContextResolver ??
+      scope?.resolveGatewayContext ??
+      scope?.context?.resolveGatewayContext,
+    operatorAuthority: caller?.operatorAuthority ?? scope?.client?.internal?.operatorRunAuthority,
+  };
+}
+
 const DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 60_000;
 const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
 const SUBAGENT_AGENT_RECONCILE_INTERVAL_MS = 800;

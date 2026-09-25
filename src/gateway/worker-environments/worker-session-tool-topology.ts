@@ -1,7 +1,123 @@
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { isDeepStrictEqual } from "node:util";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import type { GatewayContextResolver } from "../server-methods/types.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { isCurrentPlacementTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
+
+export type WorkerSessionToolRowRead = (
+  sessionKey: string,
+  options?: { agentId?: string },
+) => {
+  agentId: string;
+  canonicalKey: string;
+  entry: SessionEntry | undefined;
+};
+
+function topologyFacts(entry: SessionEntry | undefined) {
+  return (
+    entry && {
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+      archivedAt: entry.archivedAt,
+      parentSessionKey: entry.parentSessionKey,
+      parentSessionId: entry.parentSessionId,
+      spawnedBy: entry.spawnedBy,
+      spawnDepth: entry.spawnDepth,
+      permissionMode: entry.permissionMode,
+    }
+  );
+}
+
+/** Existing worker read custody plus published row facts fence asynchronous topology consumers. */
+export async function withPreparedWorkerSessionToolRows<T>(params: {
+  resolveGatewayContext: GatewayContextResolver;
+  sessionKeys: readonly string[];
+  assertCurrent: () => void;
+  consume: (read: WorkerSessionToolRowRead) => Promise<T>;
+}): Promise<T> {
+  const context = params.resolveGatewayContext();
+  const projection = getSessionRowProjection(context);
+  if (!context || !projection) {
+    throw new Error("Worker session authority is unavailable.");
+  }
+  await projection.prepareMembership();
+  const assertOwner = () => {
+    params.assertCurrent();
+    if (
+      params.resolveGatewayContext() !== context ||
+      getSessionRowProjection(context) !== projection
+    ) {
+      throw new Error("Worker session authority changed.");
+    }
+  };
+  assertOwner();
+  const prepared = new Map<
+    string,
+    { agentId: string; entry: SessionEntry | undefined; assertCurrent: () => void }
+  >();
+  const keys = [...new Set(params.sessionKeys)];
+  const prepare = async (index: number): Promise<T> => {
+    const key = keys[index];
+    if (key === undefined) {
+      return params.consume((sessionKey, options) => {
+        assertOwner();
+        for (const value of prepared.values()) {
+          value.assertCurrent();
+        }
+        const row = prepared.get(sessionKey);
+        if (!row || (options?.agentId && row.agentId !== options.agentId)) {
+          throw new Error("Worker session row was not prepared.");
+        }
+        return { agentId: row.agentId, canonicalKey: sessionKey, entry: row.entry };
+      });
+    }
+    const agentId = parseAgentSessionKey(key)?.agentId;
+    if (!agentId) {
+      throw new Error("Worker session operation requires a canonical session key.");
+    }
+    const initial = projection.sharingTargetState({ key, agentId });
+    if (initial.status === "pending") {
+      throw new Error("Worker session row is preparing; retry the operation.");
+    }
+    const storePath =
+      initial.status === "ready"
+        ? initial.target.storePath
+        : resolveSessionStorePathCore(projection.getPolicyConfig().session?.store, { agentId });
+    return withSessionEntryReadOnlyInWorker(
+      { sessionKey: key, agentId, storePath },
+      assertOwner,
+      async (result, assertReadCurrent) => {
+        if (!result.ok) {
+          throw result.error;
+        }
+        const facts = structuredClone(topologyFacts(result.value));
+        const assertCurrent = () => {
+          assertReadCurrent();
+          assertOwner();
+          const current = projection.sharingTargetState({ key, agentId, storePath });
+          if (
+            current.status === "pending" ||
+            (current.status === "ready"
+              ? current.target.storePath !== storePath ||
+                !isDeepStrictEqual(topologyFacts(current.target.entry), facts)
+              : facts !== undefined)
+          ) {
+            throw new Error("Worker session topology changed during the operation.");
+          }
+        };
+        assertCurrent();
+        prepared.set(key, { agentId, entry: result.value, assertCurrent });
+        return prepare(index + 1);
+      },
+    );
+  };
+  return prepare(0);
+}
 
 export type WorkerSessionToolSource = {
   agentId: string;
@@ -10,7 +126,7 @@ export type WorkerSessionToolSource = {
   turnClaim: NonNullable<WorkerConnectionIdentity["turnClaim"]> & {
     owner: { kind: "worker"; environmentId: string; ownerEpoch: number };
   };
-  entry: NonNullable<ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"]>;
+  entry: SessionEntry;
 };
 
 export type WorkerSessionToolTarget = {
@@ -33,6 +149,7 @@ export { relationKey as workerSessionRelationKey };
 export function resolveWorkerSessionToolSource(params: {
   identity: WorkerConnectionIdentity;
   placements: WorkerSessionPlacementStore;
+  readEntry: WorkerSessionToolRowRead;
 }): WorkerSessionToolSource {
   const identity = params.identity;
   const claim = identity.turnClaim;
@@ -47,7 +164,7 @@ export function resolveWorkerSessionToolSource(params: {
   ) {
     throw new Error("Worker source session placement changed");
   }
-  const loaded = loadGatewaySessionEntryReadOnly(placement.sessionKey, {
+  const loaded = params.readEntry(placement.sessionKey, {
     agentId: placement.agentId,
   });
   if (
@@ -69,8 +186,9 @@ export function resolveWorkerSessionToolSource(params: {
 export function resolveWorkerSessionToolTarget(params: {
   source: WorkerSessionToolSource;
   requestedSessionKey: string;
+  readEntry: WorkerSessionToolRowRead;
 }): WorkerSessionToolTarget {
-  const loaded = loadGatewaySessionEntryReadOnly(params.requestedSessionKey);
+  const loaded = params.readEntry(params.requestedSessionKey);
   const entry = loaded.entry;
   const targetSessionId = entry?.sessionId;
   if (
@@ -98,7 +216,7 @@ export function resolveWorkerSessionToolTarget(params: {
   );
   const parent =
     sharedParentIncarnation && sourceParent && sourceParentId
-      ? loadGatewaySessionEntryReadOnly(sourceParent)
+      ? params.readEntry(sourceParent)
       : undefined;
   const siblingToSibling = Boolean(
     parent &&
@@ -127,8 +245,9 @@ export function assertWorkerSessionToolChild(params: {
   sourceSessionKey: string;
   sourceSessionId: string;
   targetAgentId: string;
+  readEntry: WorkerSessionToolRowRead;
 }): void {
-  const loaded = loadGatewaySessionEntryReadOnly(params.childSessionKey, {
+  const loaded = params.readEntry(params.childSessionKey, {
     agentId: params.targetAgentId,
   });
   const parent =

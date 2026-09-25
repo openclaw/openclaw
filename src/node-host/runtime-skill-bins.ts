@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
+import type { SkillBinTrustEntry } from "../infra/exec-skill-bin-trust.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import type { NodeHostClient } from "./client.js";
 import type { SkillBinsProvider } from "./invoke.js";

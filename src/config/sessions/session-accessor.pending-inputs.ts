@@ -1,11 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
-import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
-import {
-  normalizeMessageClientSources,
-  readMessageClientSources,
-} from "../../chat/message-client-source.js";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -16,6 +10,7 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { readUserTurnDelegatedInputPolicy } from "../../sessions/user-turn-transcript.metadata.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -29,6 +24,10 @@ import {
   hasPendingInputConsumptionColumn,
   hasSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import {
+  createSessionPendingInputReceipt,
+  type SessionPendingInputReceipt,
+} from "./session-accessor.pending-input-receipt.js";
 import {
   preparePendingInputRequest,
   resolveCommittedPendingInputRequestHash,
@@ -49,14 +48,11 @@ import {
   readSessionPendingInputOwnerIds,
   registerSessionPendingInputOwner,
   finishSessionPendingInputOwner,
-  runWithSessionPendingInput,
-  runWithSessionPendingInputPersistence,
   withSessionPendingInputRelocation,
   type SessionPendingInput,
   type SessionPendingInputOwner,
   type SessionPendingInputPage,
   type SessionPendingInputRow,
-  type SessionPendingInputState,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import {
   getSessionKysely,
@@ -75,112 +71,12 @@ import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 export { withSessionPendingInputRelocation };
 export type { SessionPendingInput, SessionPendingInputPage };
 type PendingInputScope = SessionAccessScope & { agentId: string; sessionId: string };
-export type SessionPendingInputReceipt = {
-  state: "queued" | "consumed";
-  inputId: string;
-  message: PersistedUserTurnMessage;
-  run: <T>(operation: () => T) => T;
-  finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
-  completion?: AgentRunTerminalOutcome;
-  complete?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome;
-};
-const receiptOwners = new WeakMap<SessionPendingInputReceipt, SessionPendingInputOwner>();
-
-function ownerReceipt(owner: SessionPendingInputOwner): SessionPendingInputReceipt {
-  const receipt: SessionPendingInputReceipt = {
-    state: "queued",
-    inputId: owner.inputId,
-    message: parseSessionPendingInputMessage(owner.messageJson),
-    run: (operation) => runWithSessionPendingInput(owner, operation),
-    finish: owner.finish,
-  };
-  receiptOwners.set(receipt, owner);
-  return receipt;
-}
-
-/** Install only a private receipt's persistence context; this does not reopen execution authority. */
-export function withSessionPendingInputPersistence<T>(
-  receipt: SessionPendingInputReceipt,
-  persist: () => T,
-): T {
-  const owner = receiptOwners.get(receipt);
-  return owner ? runWithSessionPendingInputPersistence(owner, persist) : receipt.run(persist);
-}
-
-/** Bind one collected message to its private admitted sources without creating another durable queue. */
-export function bindSessionPendingInputSources(
-  receipts: readonly SessionPendingInputReceipt[],
-  message: PersistedUserTurnMessage,
-): SessionPendingInputReceipt | undefined {
-  const sources = [
-    ...new Set(
-      receipts.flatMap((receipt) => {
-        if (receipt.state === "consumed") {
-          throw new Error("Collected input has already been consumed");
-        }
-        const owner = receiptOwners.get(receipt);
-        return owner ? (owner.sources ?? [owner]) : [];
-      }),
-    ),
-  ];
-  const first = sources[0];
-  if (!first) {
-    return undefined;
-  }
-  const idempotencyKey = readMessageIdempotencyKey(message);
-  if (
-    !idempotencyKey ||
-    sources.some(
-      (source) =>
-        source.databasePath !== first.databasePath ||
-        source.sessionId !== first.sessionId ||
-        source.sessionKey !== first.sessionKey ||
-        source.idempotencyKey === idempotencyKey,
-    )
-  ) {
-    throw new Error("Collected input requires one exact session and a distinct aggregate identity");
-  }
-  // Collected framing still passes storage redaction; its staged sources have
-  // already passed approval and must not run through another plugin hook.
-  const clients = normalizeMessageClientSources(
-    receipts.flatMap((receipt) => readMessageClientSources(receipt.message)),
-  );
-  const collectedMessage = { ...message };
-  if (clients.length) {
-    collectedMessage["__openclaw"] = {
-      ...message["__openclaw"],
-      transport: { ...asOptionalRecord(message["__openclaw"]?.transport), clients },
-    };
-  }
-  const messageJson = JSON.stringify(
-    redactTranscriptMessageForStorage(collectedMessage, { config: sources.at(-1)?.config }),
-  );
-  if (Buffer.byteLength(messageJson, "utf8") > MAX_PAYLOAD_BYTES) {
-    throw new Error("Collected input exceeds the Gateway payload limit");
-  }
-  const aggregateInputId = randomUUID();
-  return ownerReceipt({
-    ...first,
-    inputId: aggregateInputId,
-    transcriptInputId: aggregateInputId,
-    idempotencyKey,
-    messageJson,
-    sources,
-    finish: (disposition) => {
-      const failures: unknown[] = [];
-      for (const source of sources) {
-        try {
-          source.finish(disposition);
-        } catch (error) {
-          failures.push(error);
-        }
-      }
-      if (failures.length) {
-        throw new AggregateError(failures, "Failed to finish collected input custody");
-      }
-    },
-  });
-}
+export {
+  bindSessionPendingInputSources,
+  retainSessionPendingInputDelegatedPolicies,
+  withSessionPendingInputPersistence,
+  type SessionPendingInputReceipt,
+} from "./session-accessor.pending-input-receipt.js";
 
 /** Accept durable input without changing the active transcript or scheduling execution. */
 export async function stageSessionPendingInput(
@@ -302,7 +198,10 @@ export async function stageSessionPendingInput(
       );
       if (committed) {
         const committedMessage = parseSessionPendingInputMessage(JSON.stringify(committed.message));
-        if (options.trackCompletion) {
+        if (
+          options.trackCompletion ||
+          Object.hasOwn(committedMessage["__openclaw"] ?? {}, "delegatedInputRequirements")
+        ) {
           const committedRequestHash = resolveCommittedPendingInputRequestHash(
             {
               ...options,
@@ -341,6 +240,7 @@ export async function stageSessionPendingInput(
       if (!prepared) {
         return undefined;
       }
+      readUserTurnDelegatedInputPolicy(prepared);
       const messageJson =
         existing?.message_json ??
         JSON.stringify(redactTranscriptMessageForStorage(prepared, { config: options.config }));
@@ -426,7 +326,7 @@ export async function stageSessionPendingInput(
         },
       };
       registerSessionPendingInputOwner(owner);
-      const receipt = ownerReceipt(owner);
+      const receipt = createSessionPendingInputReceipt(owner);
       if (complete) {
         receipt.complete = complete;
       }

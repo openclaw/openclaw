@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -22,10 +23,12 @@ import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-d
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
+  getOpenClawAgentDatabaseIfOpen,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import * as configEnv from "../config-env-vars.js";
+import { getRuntimeConfig } from "../io.runtime.js";
 import {
   readCommittedSessionEntryCache,
   readSessionEntryCache,
@@ -36,11 +39,16 @@ import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
+import { SESSION_ENTRY_MAINTENANCE_INTERVAL_MS } from "./session-accessor.sqlite-maintenance-age.js";
+import * as maintenanceExecution from "./session-accessor.sqlite-maintenance-execution.js";
+import * as maintenance from "./session-accessor.sqlite-maintenance.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation.js";
 import {
   applySessionEntryCanonicalReplacements,
   applySessionEntryExactReplacements,
 } from "./session-accessor.sqlite-replacement-projection.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
+import { readSessionEntriesFromStoreInWorker } from "./session-entry-read-runtime.js";
 
 it("commits platform-normalized replacements without entering a caller-thread SQLite write transaction", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -238,15 +246,37 @@ it("discovers the schema owner for an unkeyed exact-store replacement without ho
   });
 });
 
-it("creates a missing durable replacement database entirely through its worker owner", async () => {
+it("creates and maintains a cold database off-thread, then retires its age timer on close", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = state.statePath("new-replacement.sqlite");
     const sessionKey = "agent:main:replacement-created";
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    const staleKey = "agent:main:subagent:replacement-stale";
+    const options = { agentId: "main", path: storePath };
+    const finalize = maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
+    const finalized = createDeferredCore();
+    const finalization = vi
+      .spyOn(maintenance, "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort")
+      .mockImplementation(async (...args) => {
+        const result = await finalize(...args);
+        if (args[2]?.workerDatabaseIdentity) {
+          // Only the next age pass uses fake timers; the write and cleanup execute in real workers.
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          finalized.resolve();
+        }
+        return result;
+      });
+    const execution = vi.spyOn(maintenanceExecution, "runSessionMaintenanceInWorker");
+    getRuntimeConfig();
+    const sql = observeHostDataSql();
+    let closing: Promise<boolean> | undefined;
     try {
+      expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
       await applySessionEntryCanonicalReplacements({
+        agentId: "main",
         storePath,
-        sessionKeys: [sessionKey],
+        activeSessionKey: sessionKey,
+        sessionKeys: [sessionKey, staleKey],
+        deferMaintenance: true,
         update: (entries) => {
           expect(entries).toEqual([]);
           return {
@@ -255,18 +285,122 @@ it("creates a missing durable replacement database entirely through its worker o
               {
                 sessionKey,
                 previousSessionKeys: [],
-                entry: { sessionId: "created", updatedAt: 1 },
+                entry: { sessionId: "created", updatedAt: Date.now() },
+              },
+              {
+                sessionKey: staleKey,
+                previousSessionKeys: [],
+                entry: { sessionId: "stale", updatedAt: 1 },
               },
             ],
           };
         },
       });
-      expect(exec.mock.calls.filter(([sql]) => /\bBEGIN\s+IMMEDIATE\b/i.test(sql))).toEqual([]);
+      await finalized.promise;
+      await yieldToEventLoop();
+      expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
+      const read = await readSessionEntriesFromStoreInWorker({
+        agentId: "main",
+        storePath,
+        sessionKeys: [sessionKey, staleKey],
+      });
+      expect(read.entries).toEqual([
+        expect.objectContaining({
+          sessionKey,
+          entry: expect.objectContaining({ sessionId: "created" }),
+        }),
+      ]);
+      expect(sql.queries).toEqual([]);
+      sql.restore();
+
+      const completedMaintenance = execution.mock.calls.length;
+      expect(completedMaintenance).toBeGreaterThan(0);
+      closing = closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+      await closing;
+      const successor = openOpenClawAgentDatabase(options);
+      writeSessionEntry(successor, staleKey, { sessionId: "successor-stale", updatedAt: 1 });
+      await vi.advanceTimersByTimeAsync(SESSION_ENTRY_MAINTENANCE_INTERVAL_MS + 1);
+      await yieldToEventLoop();
+      expect(execution).toHaveBeenCalledTimes(completedMaintenance);
+      const successorRead = await readSessionEntriesFromStoreInWorker({
+        agentId: "main",
+        storePath,
+        sessionKeys: [sessionKey, staleKey],
+      });
+      expect(
+        Object.fromEntries(
+          successorRead.entries.map(({ sessionKey: key, entry }) => [key, entry.sessionId]),
+        ),
+      ).toEqual({ [sessionKey]: "created", [staleKey]: "successor-stale" });
     } finally {
-      exec.mockRestore();
+      sql.restore();
+      await closing;
+      vi.useRealTimers();
+      finalization.mockRestore();
+      execution.mockRestore();
     }
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-    expect(readExactSessionEntryRow(database, sessionKey)?.entry.sessionId).toBe("created");
+  });
+});
+
+it("joins pending cold maintenance on close and refuses its old authority after reopen", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = state.statePath("pending-maintenance.sqlite");
+    const sessionKey = "agent:main:pending-maintenance";
+    const staleKey = "agent:main:subagent:pending-maintenance-stale";
+    const entered = createDeferredCore<() => void>();
+    const release = createDeferredCore();
+    const runMaintenance = maintenanceExecution.runSessionMaintenanceInWorker;
+    const execution = vi
+      .spyOn(maintenanceExecution, "runSessionMaintenanceInWorker")
+      .mockImplementationOnce(async (params) => {
+        entered.resolve(params.assertCurrent);
+        await release.promise;
+        return await runMaintenance(params);
+      });
+    let closing: Promise<boolean> | undefined;
+    try {
+      await applySessionEntryCanonicalReplacements({
+        agentId: "main",
+        storePath,
+        activeSessionKey: sessionKey,
+        sessionKeys: [sessionKey, staleKey],
+        deferMaintenance: true,
+        update: () => ({
+          result: undefined,
+          replacements: [
+            {
+              sessionKey,
+              previousSessionKeys: [],
+              entry: { sessionId: "active", updatedAt: Date.now() },
+            },
+            {
+              sessionKey: staleKey,
+              previousSessionKeys: [],
+              entry: { sessionId: "stale", updatedAt: 1 },
+            },
+          ],
+        }),
+      });
+      const assertCurrent = await entered.promise;
+      let closed = false;
+      closing = closeOpenClawAgentDatabaseByPathAsync(storePath, "main").then((result) => {
+        closed = true;
+        return result;
+      });
+      expect(assertCurrent).toThrow();
+      await Promise.resolve();
+      expect(closed).toBe(false);
+      release.resolve();
+      await closing;
+      const successor = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      expect(assertCurrent).toThrow();
+      expect(readExactSessionEntryRow(successor, staleKey)?.entry.sessionId).toBe("stale");
+      expect(readExactSessionEntryRow(successor, sessionKey)?.entry.sessionId).toBe("active");
+    } finally {
+      release.resolve();
+      await closing;
+      execution.mockRestore();
+    }
   });
 });
 
@@ -425,10 +559,13 @@ it("refuses a replaced pathname while retaining the committed native execution",
 });
 
 it.each([
-  "lost delivery after native completion",
-  "lost result and commit receipt after final grant",
-  "unknown native settlement after commit",
-] as const)("settles canonical replacement with %s", async (fault) => {
+  ["replacement", "lost delivery after native completion"],
+  ["replacement", "lost result and commit receipt after final grant"],
+  ["replacement", "unknown native settlement after commit"],
+  ["maintenance", "lost result and commit receipt after final grant"],
+  ["maintenance", "unknown native settlement after commit"],
+] as const)("settles %s with %s", async (operationKind, fault) => {
+  const maintenanceRun = operationKind === "maintenance";
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const sessionKey = "agent:main:replacement-native-settlement";
@@ -460,7 +597,11 @@ it.each([
         );
       }
     });
-    const deliveryFailure = new Error("Replacement committed but its reply was lost");
+    const expectedEntry = readExactSessionEntryRow(database, sessionKey)?.entry;
+    if (!expectedEntry) {
+      throw new Error("Expected the canonical session mutation fixture");
+    }
+    const deliveryFailure = new Error("Session mutation committed but its reply was lost");
     const missingReceipt = fault === "lost result and commit receipt after final grant";
     const nativeUnknown = fault === "unknown native settlement after commit";
     const committedLifecycle = vi.fn();
@@ -488,7 +629,9 @@ it.each([
             (worker) =>
               operation({
                 execute: async (command, options) => {
-                  replacing = command.type === "session.entries.replace";
+                  replacing =
+                    command.type ===
+                    (maintenanceRun ? "session.maintenance" : "session.entries.replace");
                   const result = await worker.execute(command, options);
                   if (!replacing) {
                     return result;
@@ -503,11 +646,15 @@ it.each([
                     committed: { facts: { kind: "session-entry-replacements" } },
                   });
                   expect(await nativeRetention?.settled).toEqual({ kind: "completed" });
-                  expect(readExactSessionEntryRow(database, sessionKey)?.entry.visibility).toBe(
-                    "read-only",
-                  );
+                  if (maintenanceRun) {
+                    expect(readExactSessionEntryRow(database, sessionKey)).toBeUndefined();
+                  } else {
+                    expect(readExactSessionEntryRow(database, sessionKey)?.entry.visibility).toBe(
+                      "read-only",
+                    );
+                  }
                   if (!nativeAdmission || !nativeSettlement) {
-                    throw new Error("Real replacement did not provide native settlement");
+                    throw new Error("Real session mutation did not provide native settlement");
                   }
                   if (missingReceipt) {
                     const receipt = vi
@@ -559,31 +706,47 @@ it.each([
         },
       );
     try {
-      const replacement = applySessionEntryCanonicalReplacements({
-        agentId: "main",
-        storePath: database.path,
-        sessionKeys: [sessionKey],
-        onLifecycleCommitted: committedLifecycle,
-        afterCommitted: followup,
-        update: ([row]) => ({
-          result: "replacement-result",
-          replacements: [
-            {
-              sessionKey,
-              previousSessionKeys: [],
-              entry: { ...row!.entry, visibility: "read-only" },
+      const operation = maintenanceRun
+        ? runSqliteSessionReclamation({
+            forceInProcess: false,
+            workerDatabaseIdentity: identity,
+            onWorkerResult: followup,
+            plan: {
+              kind: "maintenance-finalize",
+              agentId: "main",
+              databaseOptions: { agentId: "main", path: database.path, env: { ...process.env } },
+              entries: [{ sessionKey, expectedEntry }],
+              materializedPlans: [],
             },
-          ],
-        }),
-      });
-      const outcome = await replacement.then(
+          })
+        : applySessionEntryCanonicalReplacements({
+            agentId: "main",
+            storePath: database.path,
+            sessionKeys: [sessionKey],
+            onLifecycleCommitted: committedLifecycle,
+            afterCommitted: followup,
+            update: ([row]) => ({
+              result: "replacement-result",
+              replacements: [
+                {
+                  sessionKey,
+                  previousSessionKeys: [],
+                  entry: { ...row!.entry, visibility: "read-only" },
+                },
+              ],
+            }),
+          });
+      const outcome = await operation.then(
         (value) => ({ kind: "returned" as const, value }),
         (error: unknown) => ({ kind: "failed" as const, error }),
       );
-      expect(verifiedCommits).toBe(1);
+      expect(
+        verifiedCommits,
+        outcome.kind === "failed" ? String(outcome.error) : JSON.stringify(outcome),
+      ).toBe(1);
       expect(outcome.kind).toBe("failed");
       if (outcome.kind !== "failed") {
-        throw new Error("Uncertain replacement unexpectedly continued");
+        throw new Error("Uncertain session mutation unexpectedly continued");
       }
       if (missingReceipt || nativeUnknown) {
         expect(isSqliteWorkerError(outcome.error, "outcome-unknown")).toBe(true);
@@ -591,17 +754,24 @@ it.each([
         expect(outcome.error).toBe(deliveryFailure);
       }
       expect(followup).not.toHaveBeenCalled();
-      expect(committedLifecycle).toHaveBeenCalledTimes(missingReceipt ? 0 : 1);
-      expect(observed).toEqual([
-        missingReceipt ? undefined : { visibility: "read-only", membership: ["member"] },
-      ]);
-      expect(sharing.readCurrent()?.entry?.visibility).toBe(
-        missingReceipt ? undefined : "read-only",
-      );
-      expect(readExactSessionEntryRow(database, sessionKey)?.entry).toMatchObject({
-        ...entry,
-        visibility: "read-only",
-      });
+      if (maintenanceRun) {
+        expect(committedLifecycle).not.toHaveBeenCalled();
+        expect(observed).toEqual([undefined]);
+        expect(sharing.readCurrent()).toBeUndefined();
+        expect(readExactSessionEntryRow(database, sessionKey)).toBeUndefined();
+      } else {
+        expect(committedLifecycle).toHaveBeenCalledTimes(missingReceipt ? 0 : 1);
+        expect(observed).toEqual([
+          missingReceipt ? undefined : { visibility: "read-only", membership: ["member"] },
+        ]);
+        expect(sharing.readCurrent()?.entry?.visibility).toBe(
+          missingReceipt ? undefined : "read-only",
+        );
+        expect(readExactSessionEntryRow(database, sessionKey)?.entry).toMatchObject({
+          ...entry,
+          visibility: "read-only",
+        });
+      }
     } finally {
       for (const restore of restoreFaults.toReversed()) {
         restore();

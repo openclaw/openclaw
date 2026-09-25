@@ -9,9 +9,9 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/agent-tools.before-tool-call.js";
-import type { ExecSessionDefaults } from "../agents/exec-defaults.js";
+import { createInheritedToolPolicyMatcher } from "../agents/inherited-tool-policy.js";
+import { parseInheritedToolPolicyV2 } from "../agents/inherited-tool-policy.schema.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -21,7 +21,11 @@ import {
   baseOpenRequest,
   makeFakePty,
 } from "./terminal/session-manager.test-helpers.js";
-import { createToolsInvokeHttpTestServer } from "./tools-invoke-http.test-support.js";
+import {
+  createToolsInvokeHttpTestServer,
+  postToolsInvoke,
+  expectOkInvokeResponse,
+} from "./tools-invoke-http.test-support.js";
 
 type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
 type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
@@ -40,7 +44,10 @@ const hookMocks = vi.hoisted(() => ({
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 
 let cfg: Record<string, unknown> = {};
-let lastCreateOpenClawToolsContext: Record<string, unknown> | undefined;
+type ToolFactoryOptions = NonNullable<
+  Parameters<typeof import("../agents/openclaw-tools.js").createOpenClawTools>[0]
+>;
+let lastCreateOpenClawToolsContext: ToolFactoryOptions | undefined;
 
 // Perf: keep this suite pure unit. Mock heavyweight config/session modules.
 vi.mock("../config/config.js", () => ({
@@ -149,7 +156,9 @@ vi.mock("../agents/openclaw-tools.js", async () => {
           agentTo: lastCreateOpenClawToolsContext?.agentTo,
           agentThreadId: lastCreateOpenClawToolsContext?.agentThreadId,
         },
-        inheritedToolDenylist: lastCreateOpenClawToolsContext?.inheritedToolDenylist,
+        inheritedToolPolicy: (
+          await lastCreateOpenClawToolsContext?.captureInheritedToolPolicyForDelegation?.()
+        )?.policy,
       }),
     },
     {
@@ -241,7 +250,7 @@ vi.mock("../agents/openclaw-tools.js", async () => {
   ];
 
   return {
-    createOpenClawTools: (ctx: Record<string, unknown>) => {
+    createOpenClawTools: (ctx: ToolFactoryOptions) => {
       lastCreateOpenClawToolsContext = ctx;
       const selected = ctx.disablePluginTools
         ? tools.filter((tool) => tool.name !== "browser")
@@ -256,8 +265,8 @@ vi.mock("../agents/openclaw-tools.js", async () => {
           agentSessionKey:
             typeof ctx.agentSessionKey === "string" ? ctx.agentSessionKey : undefined,
           sessionId: typeof ctx.sessionId === "string" ? ctx.sessionId : undefined,
-          config: ctx.config as OpenClawConfig | undefined,
-          execSession: (ctx.execSession as ExecSessionDefaults | undefined) ?? {},
+          config: ctx.config,
+          execSession: ctx.execSession ?? {},
         }),
       ];
     },
@@ -330,17 +339,6 @@ const allowAgentsListForMain = () => {
   };
 };
 
-const postToolsInvoke = async (params: {
-  port: number;
-  headers?: Record<string, string>;
-  body: Record<string, unknown>;
-}) =>
-  await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...params.headers },
-    body: JSON.stringify(params.body),
-  });
-
 const withOptionalSessionKey = (body: Record<string, unknown>, sessionKey?: string) => ({
   ...body,
   ...(sessionKey ? { sessionKey } : {}),
@@ -412,13 +410,6 @@ const invokeToolAuthed = async (params: {
     headers: gatewayAuthHeaders(),
     ...params,
   });
-
-const expectOkInvokeResponse = async (res: Response) => {
-  expect(res.status).toBe(200);
-  const body = await res.json();
-  expect(body.ok).toBe(true);
-  return body as { ok: boolean; result?: Record<string, unknown> };
-};
 
 const firstHookCallArg = () => {
   const call = hookMocks.runBeforeToolCallHook.mock.calls[0];
@@ -1016,9 +1007,11 @@ describe("POST /tools/invoke", () => {
     });
 
     const body = await expectOkInvokeResponse(res);
-    expect(body.result?.inheritedToolDenylist).toEqual(
-      expect.arrayContaining(["automations", "gateway", "nodes"]),
-    );
+    const allowed = createInheritedToolPolicyMatcher({
+      policy: parseInheritedToolPolicyV2(body.result?.inheritedToolPolicy),
+    });
+    expect(["automations", "gateway", "nodes"].filter((name) => allowed({ name }))).toEqual([]);
+    expect(allowed({ name: "sessions_spawn" })).toBe(true);
   });
 
   it("denies sessions_send via HTTP gateway", async () => {

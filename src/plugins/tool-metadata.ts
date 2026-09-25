@@ -36,7 +36,7 @@ type PluginToolMeta = {
   mcp?: PluginToolMcpMeta;
 };
 
-const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
+const pluginToolMeta = new WeakMap<object, PluginToolMeta>();
 
 /** Attaches plugin ownership metadata to a concrete agent tool instance. */
 export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): void {
@@ -44,7 +44,7 @@ export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): voi
 }
 
 /** Reads plugin ownership metadata for a concrete agent tool instance. */
-export function getPluginToolMeta(tool: AnyAgentTool): PluginToolMeta | undefined {
+export function getPluginToolMeta(tool: object): PluginToolMeta | undefined {
   return pluginToolMeta.get(tool);
 }
 

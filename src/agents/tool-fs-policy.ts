@@ -5,6 +5,8 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
+import { isApplyPatchAllowedForModel } from "./apply-patch-policy.js";
+import type { DelegatedFileToolRestriction } from "./inherited-tool-parameters.types.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { isToolAllowedByPolicies } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
@@ -55,4 +57,63 @@ export function resolveEffectiveToolFsRootExpansionAllowed(params: {
   const globalPolicy = pickSandboxToolPolicy(globalTools);
   const agentPolicy = pickSandboxToolPolicy(agentTools);
   return isToolAllowedByPolicies("read", [profilePolicy, globalPolicy, agentPolicy]);
+}
+
+/** Capture configured patch eligibility, not eligibility for the source's current model. */
+export function captureDelegatedFileToolRestriction(params: {
+  workspaceOnly: boolean;
+  readOnly: boolean;
+  applyPatchWorkspaceOnly: boolean;
+  configuredApplyPatchEnabled: boolean;
+  applyPatchAllowModels?: readonly string[] | null;
+}): DelegatedFileToolRestriction {
+  return {
+    workspaceOnly: params.workspaceOnly,
+    readOnly: params.readOnly,
+    applyPatchEnabled: params.configuredApplyPatchEnabled,
+    applyPatchWorkspaceOnly: params.applyPatchWorkspaceOnly,
+    applyPatchAllowModels: params.applyPatchAllowModels?.length
+      ? [
+          ...new Set(
+            params.applyPatchAllowModels.map((value) => value.trim().toLowerCase()).filter(Boolean),
+          ),
+        ].toSorted()
+      : null,
+  };
+}
+
+/** Apply each predicate to the receiver's admitted workspace and current model. */
+export function applyDelegatedFileToolRestrictions(params: {
+  restrictions: readonly DelegatedFileToolRestriction[];
+  workspaceOnly: boolean;
+  readOnly: boolean;
+  applyPatchEnabled: boolean;
+  applyPatchWorkspaceOnly: boolean;
+  modelProvider?: string;
+  modelId?: string;
+}) {
+  const readOnly = params.readOnly || params.restrictions.some((entry) => entry.readOnly);
+  const workspaceOnly =
+    params.workspaceOnly || params.restrictions.some((entry) => entry.workspaceOnly);
+  return {
+    workspaceOnly,
+    readOnly,
+    applyPatchWorkspaceOnly:
+      workspaceOnly ||
+      params.applyPatchWorkspaceOnly ||
+      params.restrictions.some((entry) => entry.applyPatchWorkspaceOnly),
+    applyPatchEnabled:
+      params.applyPatchEnabled &&
+      !readOnly &&
+      params.restrictions.every(
+        (entry) =>
+          entry.applyPatchEnabled &&
+          (entry.applyPatchAllowModels === null || entry.applyPatchAllowModels.length > 0) &&
+          isApplyPatchAllowedForModel({
+            modelProvider: params.modelProvider,
+            modelId: params.modelId,
+            allowModels: entry.applyPatchAllowModels ?? undefined,
+          }),
+      ),
+  };
 }

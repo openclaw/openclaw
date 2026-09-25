@@ -29,7 +29,6 @@ import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
   resolvePolicyTestTargets,
-  type CompactNodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import {
   CI_PROOF_TEST_FILES,
@@ -325,6 +324,20 @@ function listExecutableExtensionFiles(roots: string[]) {
 
 function fallbackGroups(shards: ReturnType<typeof createChangedExtensionFallbackShards>) {
   return shards.flatMap((shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }]);
+}
+
+function createPreciseTemplateBundles(runnerBackend: string) {
+  // Precise plans inherit templates before whole-plan runtime relocation.
+  const placement = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
+  try {
+    return createNodeTestShardBundles({
+      compactMode: "pull-request",
+      runnerBackend,
+      includeReleaseOnlyPluginShards: false,
+    });
+  } finally {
+    placement.mockRestore();
+  }
 }
 
 function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
@@ -744,18 +757,7 @@ describe("CI changed Node test plan", () => {
         "src/agents/embedded-agent-runner/run.incomplete-turn.classification.test.ts",
         "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
       ];
-      // Precise plans inherit templates before whole-plan runtime relocation.
-      const placement = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
-      let full: CompactNodeTestShard[];
-      try {
-        full = createNodeTestShardBundles({
-          compactMode: "pull-request",
-          runnerBackend,
-          includeReleaseOnlyPluginShards: false,
-        });
-      } finally {
-        placement.mockRestore();
-      }
+      const full = createPreciseTemplateBundles(runnerBackend);
       for (const targets of [[embeddedTest], [...siblings, embeddedTest]]) {
         const shards = createChangedNodeTestShards(targets, { runnerBackend });
         expect(shards).not.toBeNull();
@@ -3303,6 +3305,7 @@ describe("CI changed Node test plan", () => {
       expect(toolingFiles, unrelated).not.toContain(unrelated);
     }
     expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
+    const preciseOwners = createPreciseTemplateBundles(options.runnerBackend);
     const precise = createChangedNodeTestShards(paths, { ...options, dedicatedUiE2e: false });
     expect(precise).not.toBeNull();
     const preciseFiles = selectedFiles(precise);
@@ -3322,7 +3325,7 @@ describe("CI changed Node test plan", () => {
     for (const job of precise ?? []) {
       for (const group of job.groups ?? []) {
         const ownerJob = expectDefined(
-          full.find((candidate) =>
+          preciseOwners.find((candidate) =>
             candidate.groups.some((owner) => owner.shard_name === group.shard_name),
           ),
           `canonical UI consumer job for ${group.shard_name}`,

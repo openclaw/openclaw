@@ -3,6 +3,8 @@
  *
  * Caps large tool results, repairs missing results, applies redaction, and emits transcript update events.
  */
+import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
@@ -13,10 +15,17 @@ import type {
 } from "../plugins/types.js";
 import {
   attachSessionTranscriptRunId,
+  readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../sessions/transcript-events.js";
 import { withRuntimeUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript-runtime-context.js";
+import { readUserTurnDelegatedInputPolicy } from "../sessions/user-turn-transcript.metadata.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
+import {
+  markAdmittedRunDelegatedInputPolicyTranscript,
+  readAdmittedRunDelegatedInputPolicyCheckpoint,
+  type AdmittedRunContext,
+} from "./admitted-run-context.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
@@ -34,6 +43,7 @@ import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcr
 import type { SessionManager } from "./sessions/index.js";
 import { withSessionCompactionPersistence } from "./sessions/session-compaction-persistence.js";
 import type { CompactionAppendPersistence } from "./sessions/session-compaction-persistence.js";
+import { canonicalizeSessionEntry } from "./sessions/session-manager-persistence.js";
 import { withSessionManagerWrite } from "./sessions/session-manager-write-admission.js";
 import {
   extractToolCallsFromAssistant,
@@ -137,6 +147,7 @@ export function installSessionToolResultGuard(
     agentId?: string;
     /** Exact run that owns terminal assistant transcript updates. */
     runId?: string;
+    admittedRunContext?: AdmittedRunContext;
     /**
      * Optional transform applied to any message before persistence.
      */
@@ -186,7 +197,11 @@ export function installSessionToolResultGuard(
   clearPendingToolResults: () => void;
   clearNextUserMessagePersistenceSuppression: () => void;
   getPendingIds: () => string[];
-  setTranscriptRunId: (runId: string | undefined, errors?: AssistantErrorTranscript) => void;
+  setTranscriptRunId: (
+    runId: string | undefined,
+    errors?: AssistantErrorTranscript,
+    admittedRunContext?: AdmittedRunContext,
+  ) => void;
 } {
   const originalAppend = getRawSessionAppendMessage(sessionManager);
   const originalAppendWithTranscriptAnchor =
@@ -220,6 +235,32 @@ export function installSessionToolResultGuard(
   const maxToolResultChars = resolveMaxToolResultChars(opts);
   const transcriptSeqByEntryId = new Map<string, number>();
   let transcriptRunId = opts?.runId;
+  let admittedRunContext = opts?.admittedRunContext;
+  let checkpointGeneration = 0;
+  const registerPolicyTranscriptOwner = () => {
+    if (!admittedRunContext) {
+      return;
+    }
+    if (admittedRunContext.operationalRunInstance.runId !== transcriptRunId) {
+      throw new Error("Delegated input transcript requires its exact admitted run.");
+    }
+    if (sessionManager.getSessionTarget()) {
+      markAdmittedRunDelegatedInputPolicyTranscript(admittedRunContext);
+    }
+  };
+  registerPolicyTranscriptOwner();
+  const pendingPolicyCheckpoint = () =>
+    admittedRunContext
+      ? readAdmittedRunDelegatedInputPolicyCheckpoint(admittedRunContext, checkpointGeneration)
+      : undefined;
+  const assertPolicyCheckpointNotSuppressed = (message: AgentMessage) => {
+    if (
+      (message.role === "assistant" || message.role === "toolResult") &&
+      pendingPolicyCheckpoint()
+    ) {
+      throw new Error("Delegated input requirements must persist before this run can continue.");
+    }
+  };
   let assistantErrorTranscript = opts?.assistantErrorTranscript;
   let suppressNextUserMessagePersistence = opts?.suppressNextUserMessagePersistence === true;
 
@@ -326,7 +367,43 @@ export function installSessionToolResultGuard(
     },
     AppendReceipt
   > {
-    const runOwnedMessage = attachSessionTranscriptRunId(message, transcriptRunId);
+    const checkpoint =
+      message.role === "assistant" || message.role === "toolResult"
+        ? pendingPolicyCheckpoint()
+        : undefined;
+    // Materialize extension serialization before stamping host fields. This envelope is
+    // only a codec input; the append owner assigns the committed row's identity.
+    const materializedMessage = checkpoint
+      ? canonicalizeSessionEntry(
+          {
+            type: "message",
+            id: transcriptRunId!,
+            parentId: sessionManager.getLeafId(),
+            timestamp: new Date().toISOString(),
+            message,
+          },
+          options,
+        ).message
+      : message;
+    if (checkpoint && materializedMessage.role !== message.role) {
+      throw new Error("Delegated input checkpoint serialization changed the message role.");
+    }
+    let policyOwnedMessage = materializedMessage;
+    if (admittedRunContext && (message.role === "assistant" || message.role === "toolResult")) {
+      // Model output and write hooks cannot mint, remove, or replace the host's recovery policy.
+      const metadata = {
+        ...asOptionalRecord(asOptionalRecord(materializedMessage)?.["__openclaw"]),
+      };
+      delete metadata.delegatedInputPolicyVersion;
+      delete metadata.delegatedInputPolicy;
+      delete metadata.delegatedInputRequirements;
+      if (checkpoint) {
+        metadata.delegatedInputPolicyVersion = 2;
+        metadata.delegatedInputPolicy = checkpoint.policy;
+      }
+      policyOwnedMessage = Object.assign({}, materializedMessage, { __openclaw: metadata });
+    }
+    const runOwnedMessage = attachSessionTranscriptRunId(policyOwnedMessage, transcriptRunId);
     copyCodeModeSourceAppend(message, runOwnedMessage, sourceAppend);
     const parentEntryId = sessionManager.getLeafId();
     const originalTarget = sessionManager.getSessionTarget();
@@ -338,6 +415,15 @@ export function installSessionToolResultGuard(
       message: persistedMessage,
       viewWasSuperseded,
     } = yield { message: runOwnedMessage, options, sourceAppend };
+    if (checkpoint) {
+      if (
+        readSessionTranscriptRunId(persistedMessage) !== transcriptRunId ||
+        !isDeepStrictEqual(readUserTurnDelegatedInputPolicy(persistedMessage), checkpoint.policy)
+      ) {
+        throw new Error("Delegated input transcript checkpoint was not committed intact.");
+      }
+      checkpointGeneration = checkpoint.generation;
+    }
     const sessionTarget = anchor
       ? {
           agentId: anchor.agentId,
@@ -470,6 +556,7 @@ export function installSessionToolResultGuard(
         allowedToolNames: opts?.allowedToolNames,
       });
       if (sanitized.length === 0) {
+        assertPolicyCheckpointNotSuppressed(message);
         if (pending.size > 0) {
           yield* flushPendingToolResultsOperation();
         }
@@ -477,6 +564,7 @@ export function installSessionToolResultGuard(
       }
       const sanitizedMessage = sanitized.at(0);
       if (!sanitizedMessage) {
+        assertPolicyCheckpointNotSuppressed(message);
         return undefined;
       }
       nextMessage = sanitizedMessage;
@@ -507,7 +595,11 @@ export function installSessionToolResultGuard(
       });
       const persisted = applyBeforeWriteHook(transformed);
       if (!persisted) {
+        assertPolicyCheckpointNotSuppressed(message);
         return undefined;
+      }
+      if (persisted.message.role !== "toolResult") {
+        assertPolicyCheckpointNotSuppressed(message);
       }
       // A blocked or failed append must remain pending for transcript repair.
       return (yield* appendMessageAndCacheTranscriptSeq(
@@ -553,6 +645,7 @@ export function installSessionToolResultGuard(
     const transformedMessage = persistMessage(nextMessage, sourceAppend);
     const finalWrite = applyBeforeWriteHook(transformedMessage, sourceAppend);
     if (!finalWrite) {
+      assertPolicyCheckpointNotSuppressed(message);
       if (isUserAgentMessage(transformedMessage)) {
         opts?.onUserMessageBlocked?.(transformedMessage);
       }
@@ -560,11 +653,15 @@ export function installSessionToolResultGuard(
     }
     let finalMessage = finalWrite.message;
     const finalRole = (finalMessage as { role?: unknown }).role;
+    if (finalRole !== message.role) {
+      assertPolicyCheckpointNotSuppressed(message);
+    }
     if (
       finalRole === "assistant" &&
       toolCalls.length === 0 &&
       opts?.suppressTranscriptOnlyAssistantPersistence === true
     ) {
+      assertPolicyCheckpointNotSuppressed(message);
       return undefined;
     }
     if (
@@ -580,6 +677,7 @@ export function installSessionToolResultGuard(
           message,
         );
         if (!replayMessage) {
+          assertPolicyCheckpointNotSuppressed(message);
           return undefined;
         }
         copyCodeModeSourceAppend(finalMessage, replayMessage, sourceAppend);
@@ -656,8 +754,13 @@ export function installSessionToolResultGuard(
       suppressNextUserMessagePersistence = false;
     },
     getPendingIds: () => Array.from(pending.keys()),
-    setTranscriptRunId: (runId, errors) => {
+    setTranscriptRunId: (runId, errors, context) => {
+      if (context !== admittedRunContext) {
+        checkpointGeneration = 0;
+      }
+      admittedRunContext = context;
       transcriptRunId = runId;
+      registerPolicyTranscriptOwner();
       assistantErrorTranscript = errors;
     },
   };

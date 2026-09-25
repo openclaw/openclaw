@@ -498,7 +498,7 @@ async function sendMainSessionToolCall(params: {
 
 async function readOkMcpPayload(response: Response) {
   const payload = await readMcpPayload(response);
-  expect(response.status).toBe(200);
+  expect(response.status, JSON.stringify({ payload, warnings: logWarnMock.mock.calls })).toBe(200);
   return payload;
 }
 

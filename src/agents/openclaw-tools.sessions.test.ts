@@ -37,6 +37,7 @@ import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import { setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
 import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
+import type { InheritedToolPolicySourceCapture } from "./inherited-tool-policy.schema.js";
 import { registerSessionsSendParticipantTests } from "./openclaw-tools.sessions-participants.test-support.js";
 import { registerSessionsSendResumeTests } from "./openclaw-tools.sessions-resume.test-support.js";
 import {
@@ -70,16 +71,6 @@ const TEST_CONFIG = {
     agentToAgent: { enabled: true },
   },
 } as OpenClawConfig;
-
-function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
-  let count = 0;
-  for (const item of items) {
-    if (predicate(item)) {
-      count += 1;
-    }
-  }
-  return count;
-}
 
 const resolveSessionConversationStub: NonNullable<
   ChannelMessagingAdapter["resolveSessionConversation"]
@@ -148,6 +139,7 @@ function installMessagingTestRegistry() {
 }
 
 function createOpenClawTools(options?: {
+  captureInheritedToolPolicyForDelegation?: InheritedToolPolicySourceCapture;
   agentSessionKey?: string;
   agentChannel?: string;
   sandboxed?: boolean;
@@ -176,9 +168,8 @@ function createOpenClawTools(options?: {
       callGateway: gatewayCall,
     }),
     createSessionsSendTool({
-      agentSessionKey: options?.agentSessionKey,
+      ...options,
       agentChannel: options?.agentChannel as never,
-      sandboxed: options?.sandboxed,
       config,
       callGateway: gatewayCall,
     }),
@@ -1594,7 +1585,7 @@ describe("sessions tools", () => {
     const waitedDetails = sessionsSendDetails(waited.details);
     expect(waitedDetails.status).toBe("ok");
     expect(waitedDetails.reply).toBe("initial");
-    await waitForCalls(() => countMatching(calls, (call) => call.method === "send"), 1);
+    await waitForCalls(() => calls.filter((call) => call.method === "send").length, 1);
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(6);
@@ -1702,6 +1693,8 @@ describe("sessions tools", () => {
     expect(queuedText).toContain("[Inter-session message]");
     expect(queuedText).toContain("[TASK-COMPLETE] re-portal occupancy ready");
     expect(queueMessage).toHaveBeenCalledWith(queuedText, {
+      queueIdentity: expect.any(String),
+      onQueueAccepted: expect.any(Function),
       steeringMode: "all",
       debounceMs: 0,
       deliveryTimeoutMs: 30_000,
@@ -1879,7 +1872,7 @@ describe("sessions tools", () => {
     expect(params.sessionKey).toBe(durableCronCallerKey);
     expect(params.message).toContain("[Inter-session message]");
     expect(params.message).toContain("[TASK-COMPLETE] re-portal occupancy ready");
-    await waitForCalls(() => countMatching(calls, (call) => call.method === "agent.wait"), 1);
+    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 1);
     expect(calls.find((call) => call.method === "agent.wait")?.params).toMatchObject({
       runId: "durable-fallback-run",
     });
@@ -2202,7 +2195,7 @@ describe("sessions tools", () => {
     expect(waitedDetails.reply).toBe("initial");
     await vi.waitFor(
       () => {
-        expect(countMatching(calls, (call) => call.method === "send")).toBe(1);
+        expect(calls.filter((call) => call.method === "send").length).toBe(1);
       },
       { timeout: 2_000, interval: 5 },
     );

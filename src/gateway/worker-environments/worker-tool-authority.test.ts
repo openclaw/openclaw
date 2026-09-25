@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveNodeExecutionTarget } from "../../agents/bash-tools.exec-host-node-phases.js";
 import type { ExecuteNodeHostCommandParams } from "../../agents/bash-tools.exec-host-node.types.js";
+import { createInheritedToolPolicyMatcher } from "../../agents/inherited-tool-policy.js";
+import { parseInheritedToolPolicyV2 } from "../../agents/inherited-tool-policy.schema.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 
 const gatewayMocks = vi.hoisted(() => ({ callGatewayTool: vi.fn() }));
@@ -46,6 +49,35 @@ afterEach(() => {
 });
 
 describe("resolveWorkerToolAuthority", () => {
+  it("retains configured eligibility independently of optional worker availability", () => {
+    const resolved = resolvedAuthority({ config: { tools: { allow: ["browser", "read"] } } });
+    expect(resolved.allowedToolNames).toEqual(["read"]);
+    const encodedPolicy = JSON.stringify(resolved.delegationToolPolicy);
+    const saved = parseInheritedToolPolicyV2(JSON.parse(encodedPolicy));
+    const matches = createInheritedToolPolicyMatcher({ policy: saved });
+    expect(matches({ name: "browser" })).toBe(true);
+    expect(matches({ name: "exec" })).toBe(false);
+  });
+
+  it("retains independent runtime intersections and hidden execution limits in the worker source", () => {
+    const toolsAllow = attachToolAllowlistIntersection(
+      ["read", "write", "browser"],
+      [
+        ["read", "write"],
+        ["read", "browser"],
+      ],
+    );
+    const resolved = resolvedAuthority({ toolsAllow, toolExecutionAllow: ["write"] });
+    expect(resolved.allowedToolNames).toEqual([]);
+    const encodedPolicy = JSON.stringify(resolved.delegationToolPolicy);
+    const saved = parseInheritedToolPolicyV2(JSON.parse(encodedPolicy));
+    const matches = createInheritedToolPolicyMatcher({ policy: saved });
+    for (const name of ["read", "write", "browser"]) {
+      expect(matches({ name })).toBe(false);
+    }
+    expect(saved.clauses.filter((clause) => clause.kind === "runtime")).toHaveLength(2);
+  });
+
   it.each([
     { modelHasVision: true, allowed: true },
     { modelHasVision: false, allowed: false },

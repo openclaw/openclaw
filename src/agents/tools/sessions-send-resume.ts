@@ -1,6 +1,10 @@
 /** Parent task continuation with one completion owner across execution turns. */
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  bindInProcessSessionSendPolicy,
+  type SessionSendPolicyAdmission,
+} from "../../gateway/in-process-session-send-policy.js";
 import { bindInProcessSubagentResume } from "../../gateway/in-process-subagent-resume.js";
 import type { TrustedAgentToolCaller } from "../../gateway/server-methods/types.js";
 import { bindParentSubagentResume } from "../../gateway/session-subagent-resume.js";
@@ -34,6 +38,7 @@ export async function resumeSessionsSendTask(params: {
   expectedSessionId?: string;
   sendParams: Record<string, unknown>;
   callGateway: AgentToolGatewayRequestCaller;
+  policyAdmission?: SessionSendPolicyAdmission;
 }): Promise<ReturnType<typeof jsonResult>> {
   try {
     const entry = loadSessionEntryByKey(params.sessionKey, params.targetAgentId);
@@ -60,17 +65,20 @@ export async function resumeSessionsSendTask(params: {
       taskRunId: string;
       status: string;
     }>(
-      bindInProcessSubagentResume(
-        {
-          method: "agent",
-          params: {
-            ...params.sendParams,
-            expectedExistingSessionId: subagentResume.childSessionId,
+      bindInProcessSessionSendPolicy(
+        bindInProcessSubagentResume(
+          {
+            method: "agent",
+            params: {
+              ...params.sendParams,
+              expectedExistingSessionId: subagentResume.childSessionId,
+            },
+            assertDispatchCurrent: params.caller.assertCurrent,
+            timeoutMs: 10_000,
           },
-          assertDispatchCurrent: params.caller.assertCurrent,
-          timeoutMs: 10_000,
-        },
-        subagentResume,
+          subagentResume,
+        ),
+        params.policyAdmission,
       ),
     );
     if (accepted.status !== "accepted" || accepted.taskRunId !== subagentResume.taskRunId) {

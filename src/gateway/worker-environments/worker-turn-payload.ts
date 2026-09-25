@@ -24,6 +24,10 @@ import {
   createUsageAccumulator,
   mergeUsageIntoAccumulator,
 } from "../../agents/embedded-agent-runner/usage-accumulator.js";
+import type {
+  InheritedToolPolicyRef,
+  InheritedToolPolicyV2,
+} from "../../agents/inherited-tool-policy.schema.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
@@ -103,6 +107,9 @@ type PrepareWorkerAgentRuntimeIdentityParams = Omit<
   placements: WorkerSessionPlacementStore;
   sessionTarget: BoundAgentRunSessionTarget;
   assertSourceCurrent: () => void;
+  getInheritedToolPolicy?: () => InheritedToolPolicyV2;
+  captureDelegationToolPolicy?: InheritedToolPolicyRef["captureSource"];
+  requiredToolPolicy?: InheritedToolPolicyV2;
 };
 
 export async function prepareWorkerAgentRuntimeIdentity(
@@ -138,6 +145,8 @@ export async function prepareWorkerAgentRuntimeIdentity(
     assertActive,
     params.turn.prepareAssistantTranscriptMessage,
     readAdmittedRunOperatorAuthority(admittedRunContext),
+    params.getInheritedToolPolicy,
+    params.captureDelegationToolPolicy,
   );
   capability.receiptAuthority();
   const runtimeIdentity = await capability.run((owner) => ({
@@ -147,6 +156,14 @@ export async function prepareWorkerAgentRuntimeIdentity(
       turnClaim: owner.turnClaim,
     }),
     approvalAuthority: owner.delegatedAuthority,
+    ...(params.requiredToolPolicy
+      ? {
+          sessionSpawnContext: {
+            inheritedToolPolicy: { version: 2 as const, policy: params.requiredToolPolicy },
+            resolvedModel: resolveTurnModelRef(params.turn),
+          },
+        }
+      : {}),
   }));
   return {
     operationalRunInstance: admittedRunContext.operationalRunInstance,

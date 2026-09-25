@@ -1,4 +1,5 @@
 import type { FastMode } from "../../../shared/fast-mode.js";
+import type { InheritedToolPolicySourceCapture } from "../../inherited-tool-policy.schema.js";
 import type { SpawnedToolContext } from "../../spawned-context.js";
 import type {
   SpawnSubagentContextMode,
@@ -40,7 +41,11 @@ export type SpawnSubagentParams = {
   attachMountPath?: string;
 };
 
-export type SpawnSubagentContext = SpawnedToolContext & {
+export type SpawnSubagentContext = Omit<
+  SpawnedToolContext,
+  "captureInheritedToolPolicyForDelegation" | "inheritedToolAllowlist" | "inheritedToolDenylist"
+> & {
+  captureInheritedToolPolicyForDelegation: InheritedToolPolicySourceCapture;
   onSpawnEffectsStart?: () => void;
   agentSessionKey?: string;
   requesterTurnRunId?: string;

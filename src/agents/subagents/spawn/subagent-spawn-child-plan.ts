@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveAgentDir } from "../../agent-scope-config.js";
+import type { InheritedToolPolicyV2 } from "../../inherited-tool-policy.schema.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.js";
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
 import {
@@ -16,7 +17,11 @@ import type {
   SpawnSubagentParams,
   SpawnSubagentResult,
 } from "./subagent-spawn-contract.js";
-import { resolveSubagentModelAndThinkingPlan, splitModelRef } from "./subagent-spawn-plan.js";
+import {
+  assertSubagentActionPolicySupported,
+  resolveSubagentModelAndThinkingPlan,
+  splitModelRef,
+} from "./subagent-spawn-plan.js";
 import {
   readRequesterFastMode,
   readRequesterModel,
@@ -47,6 +52,7 @@ export async function resolveSubagentChildPlan(params: {
   request: SpawnSubagentParams;
   ctx: SpawnSubagentContext;
   cfg: OpenClawConfig;
+  inheritedToolPolicy: InheritedToolPolicyV2;
   requesterInternalKey: string;
   requesterAgentId: string;
   targetAgentId: string;
@@ -205,6 +211,20 @@ export async function resolveSubagentChildPlan(params: {
           },
         }
       : undefined;
+  assertSubagentActionPolicySupported({
+    cfg: params.cfg,
+    targetAgentId: params.targetAgentId,
+    resolvedModel,
+    workspaceDir: spawnedWorkspaceDir,
+    sessionPermissionPolicy: params.ctx.sessionPermissionPolicy,
+    inheritedToolPolicy: params.inheritedToolPolicy,
+    sandbox: resolveSandboxRuntimeStatus({
+      cfg: params.cfg,
+      agentId: params.targetAgentId,
+      sessionKey: childSessionKey,
+      preparedSessionEntry: creationPolicy,
+    }),
+  });
   return {
     ok: true as const,
     resolved: {

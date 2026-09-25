@@ -6,12 +6,14 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
 import {
   createSubagentSpawnTestConfig,
+  captureTestSpawnToolPolicy,
   installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
 } from "./subagent-spawn.test-helpers.js";
 
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
+  loadSessionStoreMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
   emitSessionLifecycleEventMock: vi.fn(),
@@ -71,6 +73,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
   beforeAll(async () => {
     ({ spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
+      loadSessionStoreMock: hoisted.loadSessionStoreMock,
       getRuntimeConfig: () => currentConfig,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
@@ -125,6 +128,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
   }
 
   beforeEach(() => {
+    hoisted.loadSessionStoreMock.mockReset();
     routableProjection = true;
     installChannelRouteProjectionPluginsForTest();
     currentConfig = createSubagentSpawnTestConfig(os.tmpdir(), {
@@ -322,6 +326,17 @@ describe("spawnSubagentDirect thread binding delivery", () => {
   });
 
   it("uses controller ownership for thread binding while completion routes to owner", async () => {
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:main:subagent:controller": {
+        sessionId: "controller",
+        spawnedBy: "agent:main:main",
+        completionOwnerSessionKey: "agent:main:main",
+        spawnDepth: 1,
+        inheritedToolPolicyVersion: 2,
+        inheritedToolPolicy: (await captureTestSpawnToolPolicy()).policy,
+      },
+      "agent:main:main": { sessionId: "requester" },
+    });
     const result = await spawnSubagentDirect(
       {
         task: "reply with a marker",
@@ -330,7 +345,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
         context: "isolated",
       },
       {
-        agentSessionKey: "agent:main:matrix:default:room:456",
+        agentSessionKey: "agent:main:subagent:controller",
         completionOwnerKey: "agent:main:main",
         agentChannel: "matrix",
         agentAccountId: "default",
@@ -340,7 +355,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
 
     expect(result.status).toBe("accepted");
     const registeredRun = firstRegisteredSubagentRun();
-    expect(registeredRun.controllerSessionKey).toBe("agent:main:matrix:default:room:456");
+    expect(registeredRun.controllerSessionKey).toBe("agent:main:subagent:controller");
     expect(registeredRun.requesterSessionKey).toBe("agent:main:main");
     expect(registeredRun.requesterDisplayKey).toBe("agent:main:main");
   });

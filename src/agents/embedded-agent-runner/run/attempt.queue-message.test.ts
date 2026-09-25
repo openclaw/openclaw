@@ -8,6 +8,7 @@ import { registerQueuedUserMessageRetirement } from "../../sessions/queued-user-
 import {
   reportSteeringMessagePersistenceFailure,
   setSteeringMessageIdentity,
+  wasSteeringMessageNotInjected,
 } from "../../sessions/steering-message-identity.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt-queue-message.js";
 
@@ -131,6 +132,34 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       expect(steer).toHaveBeenCalledTimes(kind === "text" ? 0 : 1);
     },
   );
+
+  it("retires exactly the reserved steer when acceptance rejects after enqueue", async () => {
+    const targetMessage = queuedTextMessage("reserved steer", 1);
+    const ordinary = queuedTextMessage("ordinary work", 2);
+    const queueMessages = [targetMessage, ordinary];
+    const retireDisplay = registerDisplayRetirement(targetMessage);
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      agent: createCancelableAgent(queueMessages),
+      steer: createIdentityAwareSteer(targetMessage),
+      subscribe: () => () => {},
+    };
+    const rejection = await steerActiveSessionWithOptionalDeliveryWait(
+      activeSession,
+      "reserved steer",
+      {
+        queueIdentity: "reserved-input",
+        waitForTranscriptCommit: true,
+        onQueueAccepted: () => {
+          throw new Error("receiving policy changed");
+        },
+      },
+    ).catch((error: unknown) => error);
+    expect(rejection).toMatchObject({ message: "receiving policy changed" });
+    expect(wasSteeringMessageNotInjected(rejection, "reserved-input")).toBe(true);
+    expect(wasSteeringMessageNotInjected(rejection, "ordinary-input")).toBe(false);
+    expect(queueMessages).toEqual([ordinary]);
+    expect(retireDisplay).toHaveBeenCalledOnce();
+  });
 
   it("forwards prepared transcript context with a queued steering message", async () => {
     const steer = vi.fn(async () => undefined);

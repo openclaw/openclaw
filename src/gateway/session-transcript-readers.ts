@@ -146,3 +146,20 @@ export async function readSessionMessageCountAsync(
     return await readCount();
   }
 }
+
+/** Exact interrupted-work recovery; missing claimed input never becomes ordinary work. */
+export async function readSessionRunInputPolicyAsync(
+  scope: SessionTranscriptReadScope,
+  params: { sourceTurnId?: string; runIds: readonly string[] },
+) {
+  const target = captureHistoryReadScope(scope);
+  if (usesProcessHeldTranscript(target)) {
+    throw new Error("Process-held incognito work does not support restart recovery.");
+  }
+  const { readSessionHistoryPageInWorker } =
+    await import("../config/sessions/session-history-worker-runtime.js");
+  return readSessionHistoryPageInWorker({
+    kind: "run-input-policy",
+    params: { target, sourceTurnId: params.sourceTurnId, runIds: [...params.runIds] },
+  });
+}

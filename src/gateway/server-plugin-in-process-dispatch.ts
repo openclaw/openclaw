@@ -15,6 +15,7 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
+import { transferInProcessSessionSendPolicy } from "./in-process-session-send-policy.js";
 import {
   bindInProcessSubagentResume,
   readInProcessSubagentResume,
@@ -272,6 +273,9 @@ function resolveInProcessGatewayDispatch(
     options.agentToolCaller?.agentId === caller.agentId &&
     options.agentToolCaller.sessionKey === caller.sessionKey;
   const assertInvocationCurrent = () => {
+    if (transfersCreatedInput) {
+      options.agentToolCaller?.assertCurrent?.();
+    }
     assertSettleWakeCurrent?.();
     if (!isHostOwnedAgentRun || !operatorRunAuthority) {
       inheritedOperatorAuthority?.signal.throwIfAborted();
@@ -462,6 +466,7 @@ function resolveInProcessGatewayDispatch(
       : scopedClient
     : syntheticClient;
   const resume = readInProcessSubagentResume(options);
+  transferInProcessSessionSendPolicy(method, options, client);
   if (resume) {
     if (method !== "agent" || options?.forceSyntheticClient !== true || !client.internal) {
       throw new Error("Task resume requires a synthetic agent admission.");
@@ -638,8 +643,6 @@ async function withInProcessGatewayDispatch<T>(
   }
 }
 
-export type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.js";
-
 export async function dispatchGatewayMethodInProcessRaw(
   method: string,
   params: unknown,
@@ -685,7 +688,7 @@ export async function dispatchGatewayMethodInProcessRaw(
   });
 }
 
-export { getInProcessGatewayRequestContext } from "../plugins/runtime/gateway-request-scope.js";
+export { getInProcessGatewayRequestContext, type GatewayMethodDispatchResponse };
 
 export async function dispatchGatewayMethodInProcess<T>(
   method: string,

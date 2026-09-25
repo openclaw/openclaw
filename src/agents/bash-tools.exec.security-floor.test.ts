@@ -16,6 +16,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool as createExecToolImpl } from "./bash-tools.exec-run.js";
+import { registerDelegatedExecPolicyTests } from "./bash-tools.exec.delegation.test-support.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -170,6 +171,14 @@ describe("exec security floor", () => {
     expect(text).not.toMatch(/exec denied/i);
     expect(text).not.toMatch(/allowlist miss/i);
     expect(text.trim()).toContain("hello");
+  });
+
+  registerDelegatedExecPolicyTests({
+    getRoot: () => tempRoot ?? os.tmpdir(),
+    createExecTool,
+    writeExecApprovalsFixture,
+    installAllowlistedGogFixture,
+    mockApprovalGateway,
   });
 
   it("does not load optional review or delivery runtimes for full/off execution", async () => {

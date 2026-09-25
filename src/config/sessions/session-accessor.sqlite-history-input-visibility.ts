@@ -1,8 +1,14 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
+import {
+  conjoinInheritedToolPolicies,
+  type InheritedToolPolicyV2,
+} from "../../agents/inherited-tool-policy.schema.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { readUserTurnDelegatedInputPolicy } from "../../sessions/user-turn-transcript.metadata.js";
 import {
   resolveHistoryMessageSequence,
   resolveVisibleHistoryProjection,
@@ -14,7 +20,7 @@ import {
 } from "./session-accessor.sqlite-projection-read.js";
 import { resolveVisibleMessagePositions } from "./session-accessor.sqlite-reset-window.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import { transcriptEventNavigationSql } from "./transcript-payload.js";
+import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
 
 // These derived facts omit transcript bodies and remain inside the admitted snapshot.
 const inputMessageJson =
@@ -157,4 +163,114 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
     }
   }
   return hidden;
+}
+
+/** Recovery reads exact accepted work from the raw branch, outside the model/display windows. */
+export function readSessionTranscriptRunInputPolicyFromProjection(
+  projection: CurrentTranscriptProjection,
+  params: { sourceTurnId?: string; runIds: readonly string[] },
+): InheritedToolPolicyV2 | undefined {
+  const runIds = [...new Set(params.runIds)];
+  if (runIds.some((id) => !id.trim()) || params.sourceTurnId === "") {
+    throw new Error("Invalid interrupted-run input policy lookup.");
+  }
+  resolveSqliteSessionTranscriptReadFence({
+    database: projection.database,
+    ...projection.resolved,
+  });
+  const db = getActiveTranscriptKysely(projection.database);
+  const payload = transcriptEventJsonSql(projection.database.db, "event");
+  const navigation = transcriptEventNavigationSql("event");
+  const policyMessage =
+    /* kysely-allow-raw: Read only canonical policy metadata for exact source/run matches; never hydrate message text. */
+    sql<string>`json_object('role', json_extract(${payload}, '$.message.role'),
+      '__openclaw', json_extract(${payload}, '$.message.__openclaw'))`;
+  const rows = db
+    .selectFrom("session_transcript_active_events as active")
+    .innerJoin("transcript_events as event", (join) =>
+      join
+        .onRef("event.session_id", "=", "active.session_id")
+        .onRef("event.seq", "=", "active.event_seq"),
+    )
+    .select(["active.event_seq", policyMessage.as("message_json")])
+    .where("active.session_id", "=", projection.resolved.sessionId);
+  let retainedPolicy: InheritedToolPolicyV2 | undefined;
+  const collect = (messageJson: string) => {
+    const message: unknown = JSON.parse(messageJson);
+    const policy = readUserTurnDelegatedInputPolicy(message);
+    if (policy) {
+      retainedPolicy = retainedPolicy
+        ? conjoinInheritedToolPolicies([retainedPolicy, policy])
+        : policy;
+    }
+    return asOptionalRecord(message);
+  };
+  if (params.sourceTurnId) {
+    const sourceRows = rows
+      .innerJoin("transcript_event_identities as identity", (join) =>
+        join
+          .onRef("identity.session_id", "=", "active.session_id")
+          .onRef("identity.seq", "=", "active.event_seq"),
+      )
+      .where("identity.message_idempotency_key", "in", [
+        params.sourceTurnId,
+        `${params.sourceTurnId}:user`,
+      ]);
+    let sources = 0;
+    for (const row of iterateSqliteQuerySync(projection.database.db, sourceRows)) {
+      const message = collect(row.message_json);
+      if (message?.role !== "user" || asOptionalRecord(message["__openclaw"])?.steerTargetRunId) {
+        throw new Error("Interrupted-run source is not its original accepted input.");
+      }
+      sources++;
+    }
+    if (sources !== 1) {
+      throw new Error(
+        "Interrupted-run source input is missing or ambiguous; cannot resume its work.",
+      );
+    }
+  }
+  for (const runId of runIds) {
+    const steers = rows.where(
+      /* kysely-allow-raw: Steering belongs only to its exact persisted receiving run. */
+      sql<string>`json_extract(${navigation}, '$.message.__openclaw.steerTargetRunId')`,
+      "=",
+      runId,
+    );
+    for (const row of iterateSqliteQuerySync(projection.database.db, steers)) {
+      if (collect(row.message_json)?.role !== "user") {
+        throw new Error("Interrupted-run steering input is malformed.");
+      }
+    }
+    const checkpoint = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      rows
+        .where(
+          /* kysely-allow-raw: Requirement checkpoints are host-owned generated rows, not user input metadata. */
+          sql<string>`json_extract(${navigation}, '$.message.role')`,
+          "in",
+          ["assistant", "toolResult"],
+        )
+        .where(
+          /* kysely-allow-raw: Only the exact host-owned run may contribute a requirement checkpoint. */
+          sql<string>`json_extract(${navigation}, '$.message.__openclaw.runId')`,
+          "=",
+          runId,
+        )
+        .where(
+          /* kysely-allow-raw: Canonical marker presence selects changed-generation checkpoints, including malformed versions. */
+          sql<boolean>`(json_type(${payload}, '$.message.__openclaw.delegatedInputPolicyVersion') IS NOT NULL
+          OR json_type(${payload}, '$.message.__openclaw.delegatedInputPolicy') IS NOT NULL)`,
+        )
+        .orderBy("active.event_seq", "desc")
+        .limit(1),
+    );
+    if (checkpoint) {
+      const role = collect(checkpoint.message_json)?.role;
+      if (role !== "assistant" && role !== "toolResult") {
+        throw new Error("Interrupted-run policy checkpoint is not host-owned output.");
+      }
+    }
+  }
+  return retainedPolicy;
 }

@@ -211,6 +211,7 @@ async function runEmbeddedAgentViaCliBackend(
     );
     const result = await runCliAgent({
       admittedRunContext,
+      delegatedInputPolicy: params.delegatedInputPolicy,
       sessionManager: params.sessionManager,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,

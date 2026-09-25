@@ -26,7 +26,6 @@ import {
   resolveExecApprovalAllowedDecisions,
   type ExecSecurity,
   buildEnforcedShellCommand,
-  evaluateShellAllowlistWithAuthorization,
   hasDurableExecApproval,
   hasExactCommandDurableExecApproval,
   minSecurity,
@@ -69,6 +68,7 @@ import {
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   buildExecAutoReviewDeniedToolResult,
+  buildGatewayExecApprovalDeniedToolResult,
   formatExecApprovalContinuationSourceOutput,
 } from "./bash-tools.exec-approval-output.js";
 import {
@@ -101,6 +101,10 @@ import type {
   ExecToolApprovalReview,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+import {
+  evaluateDelegatedExecPolicy,
+  resolveExecAllowlistTimeoutFallback,
+} from "./delegated-exec-policy.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
@@ -376,29 +380,6 @@ function buildGatewayExecApprovalFollowupSummary(params: {
   return appendExecTimeoutRetryGuidance(summary, params.outcome.exitReason);
 }
 
-function buildGatewayExecApprovalDeniedToolResult(params: {
-  approvalId?: string;
-  deniedReason: string;
-  command: string;
-  cwd: string;
-}): AgentToolResult<ExecToolDetails> {
-  const denialContext = params.approvalId
-    ? `gateway id=${params.approvalId}, ${params.deniedReason}`
-    : params.deniedReason;
-  const text = `Exec denied (${denialContext}): ${params.command}`;
-  return {
-    content: [{ type: "text", text }],
-    details: {
-      status: "failed",
-      exitCode: null,
-      durationMs: 0,
-      aggregated: text,
-      timedOut: params.deniedReason.includes("timeout"),
-      cwd: params.cwd,
-    },
-  };
-}
-
 async function resolveGatewayExecApprovalDrift(params: {
   binding?: SystemRunMutableFileBinding;
   cwdSnapshot?: ApprovedCwdSnapshot;
@@ -464,7 +445,12 @@ export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
   const cleanupMs = params.cleanupMs;
-  const { approvals, hostSecurity, hostAsk, askFallback } = await resolveExecHostApprovalContext({
+  const {
+    approvals,
+    hostSecurity,
+    hostAsk,
+    askFallback: receiverAskFallback,
+  } = await resolveExecHostApprovalContext({
     agentId: params.agentId,
     security: params.security,
     ask: params.ask,
@@ -489,8 +475,13 @@ export async function processGatewayAllowlist(
     file: approvals.file,
     agentId: params.agentId,
   });
-  const fallbackSecurity = minSecurity(hostSecurity, askFallback);
-  const allowlistEval = await evaluateShellAllowlistWithAuthorization({
+  const {
+    evaluation: allowlistEval,
+    commandAllowed: delegatedCommandAllowed,
+    fallbackAllowed: delegatedFallbackAllowed,
+    askFallback,
+    deniedByOff,
+  } = await evaluateDelegatedExecPolicy({
     command: params.command,
     allowlist: approvals.allowlist,
     safeBins: params.safeBins,
@@ -499,23 +490,43 @@ export async function processGatewayAllowlist(
     env: params.env,
     platform: process.platform,
     trustedSafeBinDirs: params.trustedSafeBinDirs,
+    restrictions: params.delegatedRestrictions,
+    receiverSecurity: minSecurity(
+      params.delegatedReceiverSecurity ?? params.security,
+      params.bypassHostApprovalFloors ? "full" : approvals.agent.security,
+    ),
+    receiverAskFallback,
   });
+  const fallbackSecurity = minSecurity(hostSecurity, askFallback);
+  if (deniedByOff) {
+    return {
+      deniedResult: buildGatewayExecApprovalDeniedToolResult({
+        deniedReason: "delegated-allowlist-miss",
+        command: params.command,
+        cwd: params.workdir,
+      }),
+    };
+  }
   const allowlistMatches = allowlistEval.allowlistMatches;
   const analysisOk = allowlistEval.analysisOk;
   const allowlistSatisfied =
-    hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
+    hostSecurity === "allowlist" && analysisOk && delegatedCommandAllowed
+      ? allowlistEval.allowlistSatisfied
+      : false;
   const obsoleteGeneratedApprovalCount = countObsoleteGeneratedExecApprovals(approvals.file);
   if (hostSecurity === "allowlist" && !allowlistSatisfied && obsoleteGeneratedApprovalCount > 0) {
     params.warnings.push(
       `${obsoleteGeneratedApprovalCount} older generated exec ${obsoleteGeneratedApprovalCount === 1 ? "approval is" : "approvals are"} inactive because they are not tied to a working directory. Run "openclaw doctor --fix", then rerun the workflow and choose "Always allow here".`,
     );
   }
-  const durableApprovalSatisfied = hasDurableExecApproval({
-    analysisOk,
-    segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
-    allowlist: approvals.allowlist,
-    commandText: params.command,
-  });
+  const durableApprovalSatisfied =
+    delegatedCommandAllowed &&
+    hasDurableExecApproval({
+      analysisOk,
+      segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
+      allowlist: approvals.allowlist,
+      commandText: params.command,
+    });
   const inlineEvalHit =
     params.strictInlineEval === true ? detectPolicyInlineEval(allowlistEval.segments) : null;
   const allowAlwaysPersistence = resolveAllowAlwaysPersistenceDecision({
@@ -535,11 +546,14 @@ export async function processGatewayAllowlist(
       )}.`,
     );
   }
-  const exactCommandDurableApprovalSatisfied = hasExactCommandDurableExecApproval({
-    allowlist: approvals.allowlist,
-    commandText: params.command,
-  });
-  const allowlistAuthorizationSatisfied = analysisOk && allowlistEval.allowlistSatisfied;
+  const exactCommandDurableApprovalSatisfied =
+    delegatedCommandAllowed &&
+    hasExactCommandDurableExecApproval({
+      allowlist: approvals.allowlist,
+      commandText: params.command,
+    });
+  const allowlistAuthorizationSatisfied =
+    analysisOk && delegatedCommandAllowed && allowlistEval.allowlistSatisfied;
   const shouldPrepareAllowlistExecution =
     hostSecurity === "allowlist" || fallbackSecurity === "allowlist";
   const gatewayEnforcedCommand =
@@ -580,34 +594,14 @@ export async function processGatewayAllowlist(
       : undefined;
   const fallbackAllowlistAuthorizationSatisfied =
     fallbackSecurity === "allowlist" &&
+    delegatedFallbackAllowed &&
     (allowlistAuthorizationSatisfied || exactCommandDurableApprovalSatisfied);
   const fallbackAllowlistPlanSatisfied =
     exactCommandDurableApprovalSatisfied || fallbackEnforcedCommand !== undefined;
-  // Timeout fallback is current policy, not human approval. Require the live
-  // allowlist basis plus an enforceable plan before treating it as executable.
-  const applyTimedOutAllowlistFallback = (state: {
-    baseDecision: { timedOut: boolean };
-    approvedByAsk: boolean;
-    deniedReason: string | null;
-  }) => {
-    if (!state.baseDecision.timedOut || fallbackSecurity !== "allowlist") {
-      return state;
-    }
-    if (!fallbackAllowlistAuthorizationSatisfied) {
-      return {
-        ...state,
-        approvedByAsk: false,
-        deniedReason: "approval-timeout: allowlist-miss",
-      };
-    }
-    if (!fallbackAllowlistPlanSatisfied) {
-      return {
-        ...state,
-        approvedByAsk: false,
-        deniedReason: "approval-timeout: execution-plan-miss",
-      };
-    }
-    return { ...state, approvedByAsk: true, deniedReason: null };
+  const fallbackPolicy = {
+    security: fallbackSecurity,
+    authorizationSatisfied: fallbackAllowlistAuthorizationSatisfied,
+    planSatisfied: fallbackAllowlistPlanSatisfied,
   };
   let assertCommittedAuthorization: (() => void) | undefined;
   const assertCurrent = () => {
@@ -812,6 +806,7 @@ export async function processGatewayAllowlist(
     params.runId && params.agentId ? lookupCronRunExecSource(params.runId) : undefined;
   const cronStandingGrantEligible =
     policyRequiresAsk &&
+    delegatedCommandAllowed &&
     // Mirror durable-approval semantics: ask "always" and security "deny"
     // always keep their prompt/deny behavior regardless of standing trust.
     hostAsk !== "always" &&
@@ -1177,7 +1172,7 @@ export async function processGatewayAllowlist(
       register: registerGatewayApproval,
       askFallback,
       resolveTimedOut: (state) => {
-        const adjusted = applyTimedOutAllowlistFallback(state);
+        const adjusted = resolveExecAllowlistTimeoutFallback(state, fallbackPolicy);
         return {
           approvedByAsk: adjusted.approvedByAsk,
           deniedReason: adjusted.deniedReason,
@@ -1294,7 +1289,7 @@ export async function processGatewayAllowlist(
         signal: params.signal,
         askFallback,
         resolveTimedOut: (state) => {
-          const adjusted = applyTimedOutAllowlistFallback(state);
+          const adjusted = resolveExecAllowlistTimeoutFallback(state, fallbackPolicy);
           return {
             approvedByAsk: adjusted.approvedByAsk,
             deniedReason: adjusted.deniedReason,

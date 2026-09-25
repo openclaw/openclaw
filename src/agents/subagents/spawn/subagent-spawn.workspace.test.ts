@@ -66,7 +66,7 @@ const hoisted = vi.hoisted(() => ({
   },
 }));
 
-let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+let spawnSubagentDirect: import("./subagent-spawn.test-helpers.js").SpawnSubagentForTest;
 let resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 
 function createConfigOverride(overrides?: Record<string, unknown>) {

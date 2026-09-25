@@ -434,11 +434,22 @@ describe("worker session tool send delivery", () => {
       });
 
       const result = await send("replaced-during-admission");
-      expect(result.resultJson).toContain(
-        replaced === "target"
-          ? "target incarnation changed"
-          : "outside the authorized session tree",
+      expect(scopedSessionAccess).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          expectedSessionId: PARENT.sessionId,
+          targetSessionKey: PARENT.sessionKey,
+        }),
       );
+      expect(
+        sessionEntries.get(replaced === "target" ? TARGET.sessionKey : PARENT.sessionKey)
+          ?.sessionId,
+      ).toBe(replaced === "target" ? "replacement-target" : "replacement-parent");
+      expect(JSON.parse(result.resultJson)).toMatchObject({
+        details: {
+          status: "error",
+          error: "Worker session topology changed during the operation.",
+        },
+      });
       expect(delivered).not.toHaveBeenCalled();
     },
   );

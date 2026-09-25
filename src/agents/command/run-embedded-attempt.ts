@@ -160,6 +160,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
       ...(!suppressUserTurnPersistence && (recorderTranscriptText || hasTranscriptMedia)
         ? {
             input: {
+              delegatedInputPolicy: params.opts.delegatedInputPolicy,
               text: recorderTranscriptText,
               ...(hasTranscriptMedia ? { media: transcriptMedia } : {}),
               senderIsOwner: params.opts.senderIsOwner,

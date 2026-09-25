@@ -8,7 +8,10 @@ import {
   serializeWorkerSessionToolResult,
   type WorkerSessionToolRequest,
 } from "./worker-session-tool-result.js";
-import { resolveWorkerSessionToolSource } from "./worker-session-tool-topology.js";
+import {
+  resolveWorkerSessionToolSource,
+  type WorkerSessionToolRowRead,
+} from "./worker-session-tool-topology.js";
 
 type WorkerPortalToolRequest = Extract<WorkerSessionToolRequest, { toolName: "portal" }>;
 
@@ -24,11 +27,15 @@ export type WorkerPortalToolExecutorDependencies = {
 
 /** Executes worker portals only while their exact placement and turn retain authority. */
 export function createWorkerPortalToolExecutor(params: WorkerPortalToolExecutorDependencies) {
-  return async (request: WorkerPortalToolRequest): Promise<WorkerSessionToolResult> => {
+  return async (
+    request: WorkerPortalToolRequest,
+    readEntry: WorkerSessionToolRowRead,
+  ): Promise<WorkerSessionToolResult> => {
     const assertPortalAuthority = () => {
       const current = resolveWorkerSessionToolSource({
         identity: request.identity,
         placements: params.placements,
+        readEntry,
       });
       if (!params.placements.isWorkerTurnToolAuthorized(current.turnClaim, "portal")) {
         throw new Error("Worker session tool authority changed");

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { persistSubagentSessionTiming } from "../agents/subagents/registry/subagent-registry-helpers.js";
+import { captureTestSpawnToolPolicy } from "../agents/subagents/spawn/subagent-spawn.test-helpers.js";
 import { createSessionsSpawnTool } from "../agents/tools/sessions-spawn-tool.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
@@ -215,6 +216,7 @@ test.each([
     });
     const registerRun = vi.fn();
     const tool = createSessionsSpawnTool({
+      captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
       agentSessionKey: parentKey,
       config: getRuntimeConfig(),
       registerRun,
@@ -308,6 +310,7 @@ test.each([
     const bindChild = vi.spyOn(sessionAccess, "createSessionEntryWithTranscript");
     const registerRun = vi.fn();
     const tool = createSessionsSpawnTool({
+      captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
       agentSessionKey: parentKey,
       config: getRuntimeConfig(),
       registerRun,
@@ -441,6 +444,7 @@ test("visible spawn tool preserves project validation and external cwd authoriza
   });
   const registerRun = vi.fn();
   const tool = createSessionsSpawnTool({
+    captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
     agentSessionKey: parentKey,
     config: getRuntimeConfig(),
     registerRun,

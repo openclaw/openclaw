@@ -31,6 +31,7 @@ import { announceTesting as subagentAnnounceTesting } from "../announce/subagent
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import * as completionStore from "../completion/subagent-completion-admission.store.js";
 import { registerRequesterFinalAttachment } from "../requester-final-attachment.js";
+import { captureTestSpawnToolPolicy } from "../spawn/subagent-spawn.test-helpers.js";
 import type {
   GatewayRequest,
   SessionStoreEntry,
@@ -360,6 +361,7 @@ describe("requester settle wake product flow", () => {
       sandbox: "inherit",
       expectsCompletionMessage: true,
       options: {
+        captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
         agentSessionKey: MAIN_REQUESTER_SESSION_KEY,
         requesterTurnRunId: params.requesterTurnRunId,
         requesterAgentIdOverride: "main",

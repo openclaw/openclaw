@@ -112,9 +112,9 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
       );
 
       expect(getSubagentDepthFromSessionStore(childSessionKey, { cfg: params.cfg })).toBe(1);
-      expect(
+      expect(() =>
         resolvePersistedSubagentToolPolicyEnvelope(childSessionKey, { cfg: params.cfg }),
-      ).toBeUndefined();
+      ).toThrow("Inherited tool policy could not be read from its session owner.");
 
       for (const [requested, stored, matches] of [
         ["Agent:MAIN:telegram:group:ROOM", "agent:main:telegram:group:room", true],

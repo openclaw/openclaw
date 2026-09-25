@@ -57,6 +57,7 @@ export type AgentTurnContext = Pick<
   | "nodeSendToSession"
   | "removeChatRun"
   | "requestEntryLifetime"
+  | "sessionRowProjectionOwner"
   | "resolveGatewayContext"
   | "trackExecution"
   | "validateAgentRuntimeApprovalAuthority"

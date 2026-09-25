@@ -8,9 +8,11 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../../agents/agent-tools.policy.js";
+import { createInheritedToolPolicyMatcher } from "../../agents/inherited-tool-policy.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
+  resolvePersistedSubagentToolPolicyEnvelope,
 } from "../../agents/subagents/spawn/subagent-capabilities.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
@@ -159,6 +161,16 @@ export function resolveStableMessageToolAvailability(params: {
   const inheritedToolPolicy = resolveInheritedToolPolicyForSession(cfg, params.sessionKey, {
     store: subagentStore,
   });
+  const envelope = resolvePersistedSubagentToolPolicyEnvelope(params.sessionKey, {
+    cfg,
+    store: subagentStore,
+  });
+  if (
+    envelope?.version === 2 &&
+    !createInheritedToolPolicyMatcher({ policy: envelope.policy })({ name: "message" })
+  ) {
+    return false;
+  }
   return isToolAllowedByPolicies("message", [
     profilePolicy,
     providerProfilePolicy,

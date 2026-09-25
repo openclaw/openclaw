@@ -1,4 +1,10 @@
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
+import { recordSessionCreated } from "../../../sessions/session-created.js";
+import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
+import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
@@ -75,4 +81,40 @@ export function createSubagentSpawnLifecycleEmitter(params: {
       }
     }
   };
+}
+
+/** Record creation now; participation follows the accepted launch or queued collector start. */
+export function recordSubagentSpawnState(params: {
+  cfg: OpenClawConfig;
+  entry?: SessionEntry;
+  childSessionKey: string;
+  childRunId: string;
+  requesterSessionKey: string;
+  agentId: string;
+  promptedAt: number;
+  requesterAgentId: string;
+}) {
+  if (params.entry) {
+    recordSessionCreated(params.cfg, {
+      sessionKey: params.childSessionKey,
+      agentId: params.agentId,
+      entry: params.entry,
+    });
+  }
+  recordSubagentSpawned({
+    childSessionKey: params.childSessionKey,
+    childRunId: params.childRunId,
+    requesterSessionKey: params.requesterSessionKey,
+    agentId: params.agentId,
+  });
+  return () =>
+    recordSessionParticipantBestEffort({
+      promptedAt: params.promptedAt,
+      identity: { type: "agent", id: params.requesterAgentId },
+      agentId: params.agentId,
+      sessionKey: params.childSessionKey,
+      storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+        agentId: params.agentId,
+      }),
+    });
 }

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { toErrorObject } from "../../infra/errors.js";
 import type { ImageContent, TextContent } from "../../llm/types.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -24,7 +25,10 @@ import type { CustomMessage } from "./messages.js";
 import { expandPromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
-import { setSteeringMessageIdentity } from "./steering-message-identity.js";
+import {
+  recordSteeringMessageNotInjected,
+  setSteeringMessageIdentity,
+} from "./steering-message-identity.js";
 
 type PostAgentRunAction = "continue" | "settled" | "handoff";
 
@@ -452,20 +456,23 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     queueIdentity?: string,
     canInject?: () => boolean,
   ): Promise<void> {
-    // Check for extension commands (cannot be queued)
-    if (text.startsWith("/")) {
-      this.throwIfExtensionCommand(text);
-    }
-
-    // Expand skill commands and prompt templates
-    let expandedText = this.expandSkillCommand(text);
-    expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
-
-    const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
-    // Transcript preparation may outlive the captured attempt. Recheck its owner
-    // fence immediately before enqueue so a successor cannot inherit this steer.
-    if (canInject && !canInject()) {
-      throw new Error("active session is finalizing");
+    let expandedText: string;
+    let preparedMessage: PersistedUserTurnMessage | undefined;
+    try {
+      if (text.startsWith("/")) {
+        this.throwIfExtensionCommand(text);
+      }
+      expandedText = expandPromptTemplate(this.expandSkillCommand(text), [...this.promptTemplates]);
+      preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
+      // Transcript preparation may outlive the captured attempt. Recheck its owner
+      // fence immediately before enqueue so a successor cannot inherit this steer.
+      if (canInject && !canInject()) {
+        throw new Error("active session is finalizing");
+      }
+    } catch (error) {
+      const rejection = toErrorObject(error, "Steering preparation rejected");
+      recordSteeringMessageNotInjected(rejection, queueIdentity);
+      throw rejection;
     }
     await this.queueSteer(
       expandedText,

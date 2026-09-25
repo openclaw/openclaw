@@ -11,6 +11,8 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-native.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { withSqliteTranscriptArchiveSession } from "./session-accessor.sqlite-archive-session.js";
@@ -33,6 +35,7 @@ import {
   resolveSessionReclamationDatabaseOptions,
   runSqliteSessionReclamation,
 } from "./session-accessor.sqlite-reclamation.js";
+import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptArchiveDirectory,
@@ -49,15 +52,66 @@ type SessionArchivePublicationStorage = {
   record(results: readonly TranscriptArchivePublishResult[]): Promise<void>;
 };
 
+/** Archive files retain their existing owner; canonical publication rows use the same worker. */
+export async function publishSessionStateArchivesInWorker(
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+  databaseIdentity: string,
+  requested: readonly SessionLifecycleArchivedTranscript[],
+  assertCurrent: () => void,
+): Promise<SessionLifecycleArchivedTranscript[]> {
+  const databaseOptions = toDatabaseOptions(scope);
+  const options = {
+    ...databaseOptions,
+    path: resolveOpenClawAgentSqlitePath(databaseOptions),
+  };
+  const run = <T>(operation: (worker: AgentDatabaseExecutionScope) => Promise<T>) =>
+    withSessionEntryWorker(options, databaseIdentity, assertCurrent, async (execution, source) => {
+      const result = await execution.runExisting(source, async (worker) => ({
+        value: await operation(worker),
+      }));
+      if (!result) {
+        throw new Error("Session archive publication lost its database");
+      }
+      return result.value;
+    });
+  return withSqliteTranscriptArchiveSession(
+    options,
+    () =>
+      publishPreparedSessionStateArchives(requested, {
+        prepare: async (archives) => {
+          const plans = await run((worker) =>
+            worker.execute({
+              type: "session.archives.preparePublication",
+              input: {
+                archiveDirectory: resolveSqliteTranscriptArchiveDirectory(scope),
+                requested: archives,
+              },
+            }),
+          );
+          assertCurrent();
+          // The file worker must read the same physical database as metadata preparation.
+          for (const plan of plans) {
+            plan.databaseIdentity = databaseIdentity;
+          }
+          return plans;
+        },
+        record: (results) =>
+          run((worker) =>
+            worker.execute({
+              type: "session.archives.recordPublication",
+              input: { results, nowMs: Date.now() },
+            }),
+          ),
+      }),
+    assertCurrent,
+  );
+}
+
 /** Publishes derived archive files after their canonical rows and deletions commit. */
 export async function publishSessionStateArchives(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   requested: readonly SessionLifecycleArchivedTranscript[],
-  storage?: SessionArchivePublicationStorage,
 ): Promise<SessionLifecycleArchivedTranscript[]> {
-  if (storage) {
-    return publishPreparedSessionStateArchives(requested, storage);
-  }
   const databaseOptions = resolveSessionReclamationDatabaseOptions(toDatabaseOptions(scope));
   const forceInProcess =
     hasPreparedNativeSessionDeletion() || !supportsOpenClawAgentDatabaseExecution(databaseOptions);

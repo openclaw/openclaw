@@ -20,6 +20,7 @@ import {
   getCurrentPluginMetadataSnapshotMock,
   mockCompactHooksPluginMetadata,
 } from "./compact.hooks.metadata.test-support.js";
+import { maybeCompactAgentHarnessSessionMock } from "./compact.hooks.native.test-support.js";
 import { mockCompactHooksTools } from "./compact.hooks.tools.test-support.js";
 import { createCompactionSessionManagerMock } from "./compact.session-manager.test-support.js";
 import type { resolveModelAsync } from "./model.js";
@@ -325,9 +326,6 @@ const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | und
 export const resolveSandboxContextMock = vi.fn<
   typeof import("../sandbox/context.js").resolveSandboxContext
 >(async () => null);
-export const maybeCompactAgentHarnessSessionMock: Mock<
-  (params?: unknown, options?: unknown) => Promise<unknown>
-> = vi.fn(async () => undefined);
 export const rotateTranscriptAfterCompactionMock: Mock<
   (_params?: unknown) => Promise<{
     rotated: boolean;

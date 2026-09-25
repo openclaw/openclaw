@@ -9,6 +9,10 @@ import type { CallGatewayOptions } from "../../gateway/call.js";
 import { withInProcessAgentRuntimeIdentity } from "../../gateway/in-process-agent-runtime-identity.js";
 import { readInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
 import {
+  bindInProcessSessionSendPolicy,
+  readInProcessSessionSendPolicy,
+} from "../../gateway/in-process-session-send-policy.js";
+import {
   bindInProcessSubagentResume,
   readInProcessSubagentResume,
 } from "../../gateway/in-process-subagent-resume.js";
@@ -39,6 +43,8 @@ import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-conte
 import { callGatewayTool } from "./gateway.js";
 
 type InProcessGatewayCallOptions = {
+  /** Spawn admission ends when the Gateway takes custody of the initial input. */
+  assertCreationCurrent?: () => void;
   onExecution?: (execution: Promise<void>) => void;
   resolveGatewayContext?: GatewayContextResolver;
   sessionMutationCommitGuard?: () => void;
@@ -81,7 +87,10 @@ export function withAgentToolGatewayRuntimeIdentity<T extends object>(
   }
   const carried = { ...request };
   agentToolGatewayRuntimeIdentities.set(carried, identity);
-  return bindInProcessSubagentResume(carried, readInProcessSubagentResume(request));
+  return bindInProcessSessionSendPolicy(
+    bindInProcessSubagentResume(carried, readInProcessSubagentResume(request)),
+    readInProcessSessionSendPolicy(request),
+  );
 }
 
 export type AgentToolGatewayRequestCaller = <T = Record<string, unknown>>(
@@ -233,6 +242,9 @@ async function callAgentToolGatewayRequestBound<T>(
     if (readInProcessSubagentResume(request)) {
       throw new Error("Task resume requires trusted in-process Gateway dispatch.");
     }
+    if (readInProcessSessionSendPolicy(request)) {
+      throw new Error("Delegated session input requires trusted in-process Gateway dispatch.");
+    }
     if (runtimeIdentity) {
       throw new Error("trusted agent runtime identity requires in-process Gateway dispatch");
     }
@@ -298,9 +310,12 @@ async function callAgentToolGatewayRequestBound<T>(
       await dispatchGatewayMethodInProcess<T>(
         method,
         (request.params ?? {}) as Record<string, unknown>,
-        bindInProcessSubagentResume(
-          withInProcessAgentRuntimeIdentity(dispatchOptions, runtimeIdentity),
-          readInProcessSubagentResume(request),
+        bindInProcessSessionSendPolicy(
+          bindInProcessSubagentResume(
+            withInProcessAgentRuntimeIdentity(dispatchOptions, runtimeIdentity),
+            readInProcessSubagentResume(request),
+          ),
+          readInProcessSessionSendPolicy(request),
         ),
       ),
     assertCurrent,
@@ -353,10 +368,23 @@ async function callInProcessGatewayToolBound<T>(
   },
   fallback: (scopes: ReturnType<typeof resolveLeastPrivilegeOperatorScopesForMethod>) => Promise<T>,
 ): Promise<T> {
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const assertAdmittedCallerCurrent = captureGatewayToolCallerAssertion();
+  const assertCreationCurrent = options.assertCreationCurrent;
+  if (
+    assertCreationCurrent &&
+    (method !== "sessions.create" || options.sessionCreation?.via !== "spawn")
+  ) {
+    throw new Error("Creation admission requires trusted session spawn dispatch.");
+  }
+  const assertCallerCurrent = assertCreationCurrent
+    ? () => {
+        assertAdmittedCallerCurrent?.();
+        assertCreationCurrent();
+      }
+    : assertAdmittedCallerCurrent;
   const caller = getGatewayToolCallerIdentity();
   const agentToolCaller =
-    options.sessionCreation?.via === "spawn" && caller && assertCallerCurrent
+    options.sessionCreation?.via === "spawn" && caller && assertAdmittedCallerCurrent
       ? {
           agentId: caller.agentId,
           sessionKey: caller.sessionKey,
@@ -432,12 +460,7 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
   method: string,
   params: Record<string, unknown>,
   creation: TrustedSessionCreation,
-  options: {
-    resolveGatewayContext?: GatewayContextResolver;
-    sessionMutationCommitGuard?: () => void;
-    signal?: AbortSignal;
-    timeoutMs?: number | null;
-  } = {},
+  options: InProcessGatewayCallOptions = {},
 ): Promise<T> {
   const requesterProfileId = getGatewayToolCallerIdentity()?.operatorAuthority?.profileId;
   const trustedCreation =

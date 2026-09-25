@@ -29,11 +29,17 @@ export type SqliteSessionEntryReplacement = SessionEntryReplacement & {
   previousSessionKeys?: readonly string[];
 };
 
+export type SessionEntryReplacementPrecondition = {
+  sessionKey: string;
+  expected: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "skillLibrarySelections">;
+};
+
 export type SessionEntryReplacementCommit = {
   expectedRows: Map<string, ResolvedSessionEntryRow>;
   labelOwnerKeys: string[];
   includeLabelOwners?: string;
   validationKeys: string[];
+  preconditions?: readonly SessionEntryReplacementPrecondition[];
   replacements: SqliteSessionEntryReplacement[];
   consumePendingReset?: boolean;
   maintenance?: SessionEntryMaintenanceInput;
@@ -99,6 +105,17 @@ export function commitSessionEntryReplacementsInDatabase(
     }
     if (transactionRow) {
       transactionEntries.set(sessionKey, transactionRow.entry);
+    }
+  }
+  for (const { sessionKey, expected } of input.preconditions ?? []) {
+    const current = readExactSessionEntryRow(database, sessionKey)?.entry;
+    if (
+      current?.sessionId !== expected.sessionId ||
+      current.lifecycleRevision !== expected.lifecycleRevision ||
+      JSON.stringify(current.skillLibrarySelections) !==
+        JSON.stringify(expected.skillLibrarySelections)
+    ) {
+      throw new Error(`Session entry prerequisite changed before replacement for ${sessionKey}`);
     }
   }
   assertCommitAllowed();

@@ -15,7 +15,7 @@ const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 
 let resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
-let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+let spawnSubagentDirect: import("./subagent-spawn.test-helpers.js").SpawnSubagentForTest;
 
 describe("spawnSubagentDirect runtime model persistence", () => {
   beforeAll(async () => {

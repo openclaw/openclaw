@@ -4,6 +4,7 @@
  * tool result details consumed across exec hosts and process controls.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ExecReviewerConfig } from "../config/types.tools.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type {
   ExecApprovalDecision,
@@ -19,9 +20,9 @@ import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
-import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
-import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
+import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/sandbox-info.types.js";
 import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.js";
+import type { DelegatedExecRestriction } from "./inherited-tool-parameters.types.js";
 
 /** Failure categories used to explain exec process exits. */
 type ExecProcessFailureKind =
@@ -63,6 +64,9 @@ export type ExecProcessOutcome =
 
 /** Runtime defaults passed into exec/process tool factories. */
 export type ExecToolDefaults = {
+  delegatedRestrictions?: readonly DelegatedExecRestriction[];
+  /** Preserve the receiver's command policy separately from inherited predicates. */
+  delegatedReceiverSecurity?: ExecSecurity;
   hasCronTool?: boolean;
   host?: ExecTarget;
   mode?: ExecMode;

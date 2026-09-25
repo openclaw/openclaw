@@ -491,6 +491,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     finalizePromptForResolvedTools:
       pluginHarnessPrompt === undefined ? params.finalizePromptForResolvedTools : undefined,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    delegatedInputPolicy: params.delegatedInputPolicy,
     // The outer run-loop owns the begun lease; the inner attempt reports only
     // the accepted candidate boundary to that owner.
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,

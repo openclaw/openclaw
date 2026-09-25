@@ -74,7 +74,6 @@ import {
   listRegisteredPluginAgentPromptGuidanceMock,
   limitHistoryTurnsMock,
   loadCompactHooksHarness,
-  maybeCompactAgentHarnessSessionMock,
   resolveAgentHarnessPolicyMock,
   registerProviderStreamForModelMock,
   resolveAgentConfigMock,
@@ -106,6 +105,10 @@ import {
   triggerInternalHookMock,
 } from "./compact.hooks.harness.js";
 import { createCompactHooksPreparedModelRuntime } from "./compact.hooks.metadata.test-support.js";
+import {
+  maybeCompactAgentHarnessSessionMock,
+  mockPendingNativeCompaction,
+} from "./compact.hooks.native.test-support.js";
 import {
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
@@ -159,21 +162,6 @@ function mockPendingContextEngineCompaction() {
       reason: undefined,
       result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
     };
-  });
-  return pending;
-}
-
-function mockPendingNativeCompaction() {
-  const pending = {
-    signal: undefined as AbortSignal | undefined,
-    started: createDeferred(),
-    terminal: createDeferred<{ ok: false; compacted: false; reason: string }>(),
-  };
-  maybeCompactAgentHarnessSessionMock.mockImplementationOnce(async (...args: unknown[]) => {
-    const [params] = args;
-    pending.signal = (params as { abortSignal?: AbortSignal }).abortSignal;
-    pending.started.resolve(undefined);
-    return await pending.terminal.promise;
   });
   return pending;
 }
@@ -1102,6 +1090,11 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it("does not require an implicit default owner for direct compaction", async () => {
+    const target = await compactionFixture.prepareTarget(
+      "marie-clawndo",
+      "agent:marie-clawndo:dashboard:session-1",
+      TEST_SESSION_ID,
+    );
     resolveDefaultAgentDirMock.mockImplementation(() => {
       throw new Error("ambiguous default agent");
     });
@@ -1112,24 +1105,19 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     const result = await compactEmbeddedAgentSessionDirect(
       wrappedCompactionArgs({
+        ...target,
         agentId: "marie-clawndo",
         config: {
+          ...target.config,
           agents: {
             ownership: "explicit",
             list: [{ id: "main" }, { id: "marie-clawndo" }],
           },
         },
-        sessionKey: "agent:marie-clawndo:dashboard:session-1",
-        sessionTarget: {
-          agentId: "marie-clawndo",
-          sessionId: TEST_SESSION_ID,
-          sessionKey: "agent:marie-clawndo:dashboard:session-1",
-          storePath: TEST_STORE_PATH,
-        },
       }),
     );
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, JSON.stringify(result)).toBe(true);
     expect(mockCallArg(acquireAgentRunPreparedModelRuntimeMock)).toEqual(
       expect.objectContaining({ agentId: "marie-clawndo" }),
     );
@@ -1252,14 +1240,19 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   );
 
   it("uses subagent prompt surface and guidance for compacted subagent prompt rebuilds", async () => {
-    await compactEmbeddedAgentSessionDirect({
-      sessionId: TEST_SESSION_ID,
-      sessionKey: "agent:main:subagent:worker",
+    const result = await compactEmbeddedAgentSessionDirect({
+      ...(await compactionFixture.prepareTarget(
+        "main",
+        "agent:main:subagent:worker",
+        TEST_SESSION_ID,
+        { spawnedBy: TEST_SESSION_KEY, spawnDepth: 1, inheritedToolPolicyVersion: 1 },
+      )),
       sessionFile: TEST_SESSION_KEY,
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
       cwd: join(TEST_WORKSPACE_DIR, "task-repo"),
     });
 
+    expect(result.ok, JSON.stringify(result)).toBe(true);
     expect(listRegisteredPluginAgentPromptGuidanceMock).toHaveBeenCalledWith({
       surface: "subagent",
     });
@@ -1397,13 +1390,17 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it("uses ACP prompt surface and guidance for compacted ACP prompt rebuilds", async () => {
-    await compactEmbeddedAgentSessionDirect({
-      sessionId: TEST_SESSION_ID,
-      sessionKey: "agent:codex:acp:worker",
+    const result = await compactEmbeddedAgentSessionDirect({
+      ...(await compactionFixture.prepareTarget(
+        "codex",
+        "agent:codex:acp:worker",
+        TEST_SESSION_ID,
+      )),
       sessionFile: TEST_SESSION_KEY,
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
     });
 
+    expect(result.ok, JSON.stringify(result)).toBe(true);
     expect(listRegisteredPluginAgentPromptGuidanceMock).toHaveBeenCalledWith({
       surface: "acp_backend",
     });

@@ -51,6 +51,7 @@ import {
 import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
+import { mergeForcedEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
@@ -407,7 +408,15 @@ async function runEmbeddedAttemptOwned(
         tools: preparedBundleTools.tools,
         catalogRef: preparedToolBase.toolSearchCatalogRef,
         codeModeControlsEnabled: preparedToolBase.codeModeControlsEnabledForRun,
-        onApplied: (surface) => {
+        onApplied: (surface, toolsAllow) => {
+          preparedToolBase.setPromptToolPolicy(
+            mergeForcedEmbeddedAttemptToolsAllow(toolsAllow, {
+              forceToolNames: [
+                ...(preparedToolBase.forceDirectMessageTool ? ["message"] : []),
+                ...(params.swarmCollector && params.swarmOutputSchema ? ["structured_output"] : []),
+              ],
+            }),
+          );
           const allowedNames = new Set([
             ...surface.activeToolNames,
             ...surface.uncompactedEffectiveTools.map((tool) => tool.name),

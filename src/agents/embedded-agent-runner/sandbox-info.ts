@@ -10,7 +10,7 @@ import {
   withPreparedToolConstruction,
   type ToolConstructionPreparationOptions,
 } from "../tool-construction-preparation.js";
-import type { EmbeddedFullAccessBlockedReason, EmbeddedSandboxInfo } from "./types.js";
+import type { EmbeddedFullAccessBlockedReason, EmbeddedSandboxInfo } from "./sandbox-info.types.js";
 
 /**
  * Resolves the sandbox/elevated-exec facts exposed to embedded agent results.

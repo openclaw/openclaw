@@ -10,6 +10,17 @@ import {
   modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability,
 } from "../../agent-scope.js";
+import { resolveEffectiveToolPolicy } from "../../agent-tools.policy.js";
+import { prepareDelegatedToolParameterTarget } from "../../delegated-tool-parameter-target.js";
+import {
+  applyDelegatedToolParameters,
+  emptyDelegatedToolParameterPolicy,
+} from "../../inherited-tool-parameters.js";
+import {
+  captureInheritedToolPolicy,
+  createInheritedToolPolicyMatcher,
+} from "../../inherited-tool-policy.js";
+import type { InheritedToolPolicyV2 } from "../../inherited-tool-policy.schema.js";
 import { splitTrailingAuthProfile } from "../../model-ref-profile.js";
 import {
   type ModelRef,
@@ -17,7 +28,10 @@ import {
   resolveSubagentSpawnModelSelection,
 } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
+import type { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
+import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../tool-policy.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 import { prepareModelChoice } from "./subagent-spawn.runtime.js";
 
@@ -180,4 +194,68 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
       ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
     },
   };
+}
+
+/** Refuse constraints the target cannot enforce before allocating durable child state. */
+export function assertSubagentActionPolicySupported(params: {
+  cfg: OpenClawConfig;
+  targetAgentId: string;
+  resolvedModel: string;
+  workspaceDir?: string;
+  sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
+  inheritedToolPolicy: InheritedToolPolicyV2;
+  sandbox: ReturnType<typeof resolveSandboxRuntimeStatus>;
+}): void {
+  const model = splitModelRef(params.resolvedModel);
+  const effective = resolveEffectiveToolPolicy({
+    config: params.cfg,
+    agentId: params.targetAgentId,
+    modelProvider: model.provider,
+    modelId: model.model,
+  });
+  const prospective = captureInheritedToolPolicy({
+    policies: [
+      mergeAlsoAllowPolicy(resolveToolProfilePolicy(effective.profile), effective.profileAlsoAllow),
+      mergeAlsoAllowPolicy(
+        resolveToolProfilePolicy(effective.providerProfile),
+        effective.providerProfileAlsoAllow,
+      ),
+      effective.globalPolicy,
+      effective.globalProviderPolicy,
+      effective.agentPolicy,
+      effective.agentProviderPolicy,
+    ],
+    inherited: params.inheritedToolPolicy,
+    parameters: emptyDelegatedToolParameterPolicy(),
+  });
+  const allows = createInheritedToolPolicyMatcher({
+    policy: {
+      ...prospective,
+      clauses: prospective.clauses.filter((clause) => clause.kind !== "restart-safe"),
+    },
+  });
+  const permitted = (name: string) => allows({ name });
+  applyDelegatedToolParameters({
+    ...prepareDelegatedToolParameterTarget({
+      config: params.cfg,
+      agentId: params.targetAgentId,
+      sessionPermissionPolicy: params.sessionPermissionPolicy,
+      sessionEntry: null,
+      rootIsWorkspace:
+        !params.sessionPermissionPolicy?.root ||
+        params.sessionPermissionPolicy.root === params.workspaceDir,
+      elevated: null,
+      sandbox: params.sandbox,
+      modelProvider: model.provider,
+      modelId: model.model,
+    }),
+    policy: params.inheritedToolPolicy.parameters,
+    applicability: {
+      exec: permitted("exec"),
+      fileTools: ["read", "write", "edit", "apply_patch"].some(permitted),
+      fileWrites: ["write", "edit", "apply_patch"].some(permitted),
+      applyPatch: permitted("apply_patch"),
+      sandbox: ["exec", "read", "write", "edit", "apply_patch", "browser"].some(permitted),
+    },
+  });
 }

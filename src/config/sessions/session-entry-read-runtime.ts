@@ -77,7 +77,10 @@ function isNativeSessionEntryRead(scope: SessionEntryReadScope, agentId: string 
 export async function withSessionEntryReadOnlyInWorker<T>(
   input: SessionEntryReadScope,
   assertCallerCurrent: () => void,
-  consume: (read: Result<SessionEntry | undefined, unknown>) => Promise<T>,
+  consume: (
+    read: Result<SessionEntry | undefined, unknown>,
+    assertReadCurrent: () => void,
+  ) => Promise<T>,
 ): Promise<T> {
   const { scope, agentId } = captureSessionEntryReadScope(input);
   assertCallerCurrent();
@@ -85,13 +88,13 @@ export async function withSessionEntryReadOnlyInWorker<T>(
   if (isNativeSessionEntryRead(scope, agentId)) {
     const read = loadSessionEntryReadOnlyResultInScope(scope);
     assertCallerCurrent();
-    const result = await consume(read);
+    const result = await consume(read, assertCallerCurrent);
     assertCallerCurrent();
     return result;
   }
   return await withSessionEntryReadOnlyWorkerSource(scope, assertCallerCurrent, async (source) => {
     if (!source.ok) {
-      return await consume(source);
+      return await consume(source, assertCallerCurrent);
     }
     const owner = source.value;
     const read = await owner.reader.readEntryResult({
@@ -99,7 +102,7 @@ export async function withSessionEntryReadOnlyInWorker<T>(
       continuation: owner.continuation,
     });
     owner.assertCurrent();
-    return await consume(read);
+    return await consume(read, owner.assertCurrent);
   });
 }
 

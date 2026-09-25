@@ -16,6 +16,8 @@
     "../../src/agents/bootstrap-files.remote.test.ts",
     "../../src/agents/code-mode*.test.ts",
     "../../src/agents/code-mode*.test.tsx",
+    "../../src/agents/inherited-tool*.test.ts",
+    "../../src/agents/inherited-tool*.test.tsx",
     "../../src/agents/model-catalog.test.ts",
     "../../src/agents/model-catalog.planning.test.ts",
     "../../src/agents/model-catalog-view.test.ts",

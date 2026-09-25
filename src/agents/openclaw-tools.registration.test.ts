@@ -24,6 +24,10 @@ import {
   shouldIncludeProgressCardToolForOpenClawTools,
   shouldIncludeSecretsToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
+import {
+  createTestOpenClawTools,
+  withDefaultRoster,
+} from "./openclaw-tools.registration.test-support.js";
 import { textResult, type AnyAgentTool } from "./tools/common.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
@@ -36,13 +40,6 @@ vi.mock("./openclaw-plugin-tools.js", () => ({
 
 type ProgressCardGatingParams = Parameters<typeof shouldIncludeProgressCardToolForOpenClawTools>[0];
 type CreateOpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawTools>[0]>;
-
-function withDefaultRoster(config: OpenClawConfig | undefined): OpenClawConfig {
-  return {
-    ...config,
-    agents: config?.agents ?? { entries: { main: { default: true } } },
-  };
-}
 
 function expectProgressCardEnabled(params: ProgressCardGatingParams, expected: boolean): void {
   expect(
@@ -67,13 +64,6 @@ function createFastToolNames(options: CreateOpenClawToolsOptions): string[] {
       ...options,
     }),
   );
-}
-
-function createTestOpenClawTools(options: CreateOpenClawToolsOptions = {}) {
-  return createOpenClawTools({
-    ...options,
-    config: withDefaultRoster(options.config),
-  });
 }
 
 function expectToolNamed(

@@ -3,6 +3,12 @@ import type { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
 
+export function createGatewayDrainingError(): Error {
+  const error = new Error("Gateway is draining for restart; new tasks are not accepted");
+  error.name = "GatewayDrainingError";
+  return error;
+}
+
 export function createInboundBody<T extends string>(body: T) {
   return { Body: body, RawBody: body, CommandBody: body };
 }

@@ -49,7 +49,7 @@ import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
-} from "./embedded-agent-runner/types.js";
+} from "./embedded-agent-runner/sandbox-info.types.js";
 import { MAX_OWNER_PROMPT_CONTENT_BYTES, resolveOwnerPromptNumbers } from "./owner-display.js";
 import { filterProjectScopedCuratedContextFiles } from "./project-memory-bootstrap.js";
 import { buildPromisedWorkPromptSection } from "./promised-work-prompt.js";

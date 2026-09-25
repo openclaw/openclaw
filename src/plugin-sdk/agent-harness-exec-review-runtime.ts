@@ -25,9 +25,7 @@ export async function reviewExecRequestWithConfiguredModel(params: {
   const reviewer = createModelExecAutoReviewer({
     cfg: params.cfg,
     agentId: params.agentId,
-    reviewer: params.reviewer as
-      | import("../agents/exec-auto-reviewer.js").ExecReviewerConfig
-      | undefined,
+    reviewer: params.reviewer as import("../config/types.tools.js").ExecReviewerConfig | undefined,
   });
   return reviewer(params.input);
 }

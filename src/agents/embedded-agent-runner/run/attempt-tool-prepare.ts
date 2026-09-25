@@ -11,6 +11,12 @@ import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
+import { readUserTurnDelegatedInputPolicy } from "../../../sessions/user-turn-transcript.metadata.js";
+import {
+  readAdmittedRunDelegatedInputPolicies,
+  resolveAdmittedRunActiveAssertion,
+  retainAdmittedRunDelegatedInputPolicies,
+} from "../../admitted-run-context.js";
 import {
   createOpenClawCodingToolsInternal,
   resolveToolLoopDetectionConfig,
@@ -20,9 +26,20 @@ import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
 import { loadPairedComputerUseAvailabilityForSurface } from "../../computer-use-node-capabilities.js";
-import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../conversation-tool-policy-pipeline.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
+import { emptyDelegatedToolParameterPolicy } from "../../inherited-tool-parameters.js";
+import {
+  assertInheritedToolPolicyCompatible,
+  captureInheritedToolPolicy,
+} from "../../inherited-tool-policy.js";
+import {
+  parseInheritedToolPolicyV2,
+  type InheritedToolPolicyRef,
+  type InheritedToolPolicySourceCapture,
+  type InheritedToolPolicyV2,
+} from "../../inherited-tool-policy.schema.js";
 import {
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
@@ -36,7 +53,7 @@ import {
   type PreparedSessionPermissionPolicy,
 } from "../../tool-fs-policy.js";
 import { toolPolicyRestrictsTools } from "../../tool-policy.js";
-import { isAgentToolRestartSafe } from "../../tool-replay-safety.js";
+import { isRegisteredAgentToolRestartSafe } from "../../tool-replay-safety.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import type { ComputerContextEpoch } from "../../tools/computer-tool.js";
@@ -158,7 +175,72 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     : params.codeModeSkills;
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
-  const inheritedToolAllowlist: string[] = [];
+  const inheritedToolPolicyRef: InheritedToolPolicyRef = {};
+  const assertRunCurrent = resolveAdmittedRunActiveAssertion(attempt.admittedRunContext);
+  if (!assertRunCurrent) {
+    throw new Error("Tool policy preparation requires an active admitted run.");
+  }
+  let promptToolsAllow: string[] | undefined;
+  const readAcceptedInputPolicies = () =>
+    readAdmittedRunDelegatedInputPolicies(attempt.admittedRunContext);
+  const getInheritedToolPolicy = (): InheritedToolPolicyV2 => {
+    params.runAbortController.signal.throwIfAborted();
+    const base = inheritedToolPolicyRef.current;
+    if (!base) {
+      throw new Error("The current task's action restrictions are not prepared.");
+    }
+    const target = captureInheritedToolPolicy({
+      policies: [],
+      inherited: base,
+      parameters: emptyDelegatedToolParameterPolicy(),
+      runtimeAllow: promptToolsAllow,
+      executionAllow: attempt.toolExecutionAllow,
+      restartSafe: attempt.forceRestartSafeTools,
+    });
+    for (const source of readAcceptedInputPolicies()) {
+      assertInheritedToolPolicyCompatible({
+        source,
+        target,
+        targetEnforcedParameters: runtimeCapabilityProfile.policy.inheritedActionPolicy?.parameters,
+      });
+    }
+    return target;
+  };
+  const addDelegatedInputPolicies = (policies: readonly InheritedToolPolicyV2[]) => {
+    const target = getInheritedToolPolicy();
+    const saved = policies.map(parseInheritedToolPolicyV2);
+    for (const source of saved) {
+      assertInheritedToolPolicyCompatible({
+        source,
+        target,
+        targetEnforcedParameters: runtimeCapabilityProfile.policy.inheritedActionPolicy?.parameters,
+      });
+    }
+    return retainAdmittedRunDelegatedInputPolicies(attempt.admittedRunContext, saved);
+  };
+  const captureInheritedToolPolicyForDelegation: InheritedToolPolicySourceCapture = async () => {
+    const source = getInheritedToolPolicy();
+    const sourceBytes = JSON.stringify(source);
+    const captureSource = inheritedToolPolicyRef.captureSource;
+    const sourceSignal = toolAbortSignal;
+    if (!captureSource) {
+      throw new Error("The current task's source policy capture is not prepared.");
+    }
+    const assertCurrent = () => {
+      sourceSignal.throwIfAborted();
+      assertRunCurrent();
+      if (
+        inheritedToolPolicyRef.captureSource !== captureSource ||
+        JSON.stringify(getInheritedToolPolicy()) !== sourceBytes
+      ) {
+        throw new Error("The source task's action restrictions changed before acceptance.");
+      }
+    };
+    assertCurrent();
+    const policy = await captureSource(source, assertCurrent);
+    assertCurrent();
+    return { policy, assertCurrent };
+  };
   const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const generationCleanups: Array<(reason: string) => Promise<void>> = [];
   const retiringGenerations = new Set<Promise<void>>();
@@ -206,19 +288,31 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     skillsSnapshot: params.skillsSnapshot,
     runtimeToolAllowlist: effectiveToolsAllow,
   });
-  const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
-    ...buildConversationContext(),
-    agentId: attempt.sandboxAgentId ?? params.setup.sessionAgentId,
-    conversationToolPolicy: attempt.conversationToolPolicy,
-    isCanonicalWorkspace: attempt.isCanonicalWorkspace,
-    promptMode: attempt.promptMode,
-    sandboxToolPolicy: params.setup.sandbox?.tools,
-    inheritRuntimeToolAllowlist: true,
-    runtimePluginToolGrant: attempt.runtimePluginToolGrant,
-    inputProvenance: attempt.inputProvenance,
-    trustedInternalHandoff: attempt.trustedInternalHandoff,
-    pluginMetadataSnapshot: attempt.preparedModelRuntime?.metadataSnapshot,
-  });
+  const runtimeCapabilityProfile = await prepareConversationCapabilityProfile(
+    {
+      ...buildConversationContext(),
+      agentId: attempt.sandboxAgentId ?? params.setup.sessionAgentId,
+      conversationToolPolicy: attempt.conversationToolPolicy,
+      isCanonicalWorkspace: attempt.isCanonicalWorkspace,
+      promptMode: attempt.promptMode,
+      sandboxToolPolicy: params.setup.sandbox?.tools,
+      inheritRuntimeToolAllowlist: true,
+      runtimePluginToolGrant: attempt.runtimePluginToolGrant,
+      inputProvenance: attempt.inputProvenance,
+      trustedInternalHandoff: attempt.trustedInternalHandoff,
+      pluginMetadataSnapshot: attempt.preparedModelRuntime?.metadataSnapshot,
+    },
+    {
+      storePath:
+        params.setup.sandboxSessionKey === attempt.sessionKey
+          ? attempt.sessionTarget?.storePath
+          : undefined,
+      assertCurrent: () => {
+        params.runAbortController.signal.throwIfAborted();
+        assertRunCurrent();
+      },
+    },
+  );
   const computerTransport = resolveSessionPlacementComputer(
     attempt.admittedRunContext.operationalRunInstance,
   );
@@ -250,20 +344,11 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   });
   const replaySafetyOptions = {
     declaredReplaySafe: (candidate: { name?: string }) => {
-      const pluginMeta = getPluginToolMeta(candidate as Parameters<typeof getPluginToolMeta>[0]);
+      const pluginMeta = getPluginToolMeta(candidate);
       if (pluginMeta) {
         return pluginMeta.replaySafe === true;
       }
-      return getChannelAgentToolMeta(candidate as never) ? false : undefined;
-    },
-  };
-  const restartSafetyOptions = {
-    declaredReplaySafe: (candidate: { name?: string }) => {
-      const pluginMeta = getPluginToolMeta(candidate as Parameters<typeof getPluginToolMeta>[0]);
-      if (pluginMeta?.mcp) {
-        return false;
-      }
-      return replaySafetyOptions.declaredReplaySafe(candidate);
+      return getChannelAgentToolMeta(candidate) ? false : undefined;
     },
   };
   const constructTools = (
@@ -331,7 +416,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             forceMessageTool: attempt.forceMessageTool,
             enableHeartbeatTool: attempt.enableHeartbeatTool,
             forceHeartbeatTool: attempt.forceHeartbeatTool,
-            inheritedToolAllowlistRef: inheritedToolAllowlist,
+            inheritedToolPolicyRef,
+            captureInheritedToolPolicyForDelegation,
             cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
             cronCreatorToolAllowlistCaptureRef,
             authProfileStore: attempt.authProfileStore,
@@ -360,13 +446,21 @@ export async function prepareEmbeddedAttemptToolBase(params: {
           return filteredTools;
         })();
     const toolsRaw = attempt.forceRestartSafeTools
-      ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
+      ? constructedToolsRaw.filter((tool) => isRegisteredAgentToolRestartSafe(tool))
       : constructedToolsRaw;
     if (attempt.forceRestartSafeTools) {
       log.info(
         `restart-safe recovery tool policy retained ${toolsRaw.length}/${constructedToolsRaw.length} concrete tools`,
       );
     }
+    if (!shouldConstructTools) {
+      inheritedToolPolicyRef.current = captureInheritedToolPolicy({
+        policies: [],
+        parameters: emptyDelegatedToolParameterPolicy(),
+        executionAllow: [],
+      });
+    }
+    getInheritedToolPolicy();
     return toolsRaw;
   };
   let toolAbortController = new AbortController();
@@ -390,6 +484,22 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   // Until preparation returns, the attempt cannot own these registered resources.
   try {
     const toolsRaw = constructTools(params.setup.sessionPermissionPolicy, toolAbortSignal);
+    const pendingPolicy = readUserTurnDelegatedInputPolicy(
+      attempt.userTurnTranscriptRecorder?.getPendingInputMessage?.(),
+    );
+    // Prompt hooks may narrow the final surface. Defer compatibility until that
+    // boundary; retaining a requirement never changes the target's own policy.
+    for (const policy of [pendingPolicy, attempt.delegatedInputPolicy]) {
+      if (
+        policy &&
+        !readAcceptedInputPolicies().some(
+          (saved) => JSON.stringify(saved) === JSON.stringify(policy),
+        )
+      ) {
+        retainAdmittedRunDelegatedInputPolicies(attempt.admittedRunContext, [policy]);
+      }
+    }
+
     return {
       toolHookContext: {
         agentId: params.setup.sessionAgentId,
@@ -438,7 +548,32 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       effectiveToolsAllow,
       forceDirectMessageTool,
       requireExplicitMessageTarget,
-      inheritedToolAllowlist,
+      getInheritedToolPolicy,
+      getEnforcedDelegatedToolParameterPolicy: () => {
+        getInheritedToolPolicy();
+        return runtimeCapabilityProfile.policy.inheritedActionPolicy?.parameters;
+      },
+      getDelegatedToolParameterPolicy: () => {
+        getInheritedToolPolicy();
+        const restrictions = [
+          runtimeCapabilityProfile.policy.inheritedActionPolicy,
+          ...readAcceptedInputPolicies(),
+        ].filter((policy): policy is InheritedToolPolicyV2 => policy !== undefined);
+        return captureInheritedToolPolicy({
+          policies: [],
+          parameters: {
+            fileTools: restrictions.flatMap((policy) => policy.parameters.fileTools),
+            exec: restrictions.flatMap((policy) => policy.parameters.exec),
+            sandbox: restrictions.flatMap((policy) => policy.parameters.sandbox),
+            unsupported: restrictions.flatMap((policy) => policy.parameters.unsupported),
+          },
+        }).parameters;
+      },
+      addDelegatedInputPolicies,
+      setPromptToolPolicy: (toolsAllow: string[] | undefined) => {
+        promptToolsAllow = toolsAllow;
+        getInheritedToolPolicy();
+      },
       localModelLeanEnabled,
       localModelLeanPreserveToolNames,
       replaySafetyOptions,

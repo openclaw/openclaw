@@ -106,6 +106,11 @@ export type SqliteSessionReclamationPlan =
       sessionId: string;
     });
 
+export type SessionMaintenanceExecutionPlan = Extract<
+  SqliteSessionReclamationPlan,
+  { kind: "maintenance-plan" | "maintenance-finalize" | "maintenance-statistics" }
+>;
+
 export type SqliteSessionReclamationResult =
   | { kind: "archive-publish-prepare"; value: TranscriptArchivePublishPlan[] }
   | { kind: "archive-publish-record"; value: true }

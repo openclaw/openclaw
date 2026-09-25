@@ -57,7 +57,7 @@ const bindingMocks = vi.hoisted(() => ({
 }));
 
 let resetSubagentRegistryForTests: typeof import("./subagents/registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
-let spawnSubagentDirect: typeof import("./subagents/spawn/subagent-spawn.js").spawnSubagentDirect;
+let spawnSubagentDirect: import("./subagents/spawn/subagent-spawn.test-helpers.js").SpawnSubagentForTest;
 
 function getGatewayRequests(): GatewayRequest[] {
   // Gateway call list is the observable side effect for spawn orchestration.

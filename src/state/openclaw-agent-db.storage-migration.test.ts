@@ -668,3 +668,71 @@ describe.each([21, 22])("agent schema %s storage cutover", (version) => {
     },
   );
 });
+
+it.each([false, true])(
+  "fences schema23 readers without rewriting existing sessions (publication refused=%s)",
+  async (refusePublication) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const pathname = state.path("policy23.sqlite");
+      const db = new DatabaseSync(pathname);
+      const scope = createOpenClawDatabaseMaintenanceScope();
+      const refusal = new Error("Recovery backup coverage is no longer current");
+      try {
+        db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+        db.exec(`PRAGMA user_version = 23;
+          INSERT INTO schema_meta(meta_key, role, schema_version, agent_id, created_at, updated_at)
+          VALUES ('primary', 'agent', 23, 'main', 1, 1);`);
+        const entries: [string, string, string][] = [
+          ["agent:main:ordinary", "ordinary", ' {"sessionId":"ordinary","updatedAt":1} '],
+          [
+            "agent:main:subagent:legacy",
+            "legacy",
+            ' {"sessionId":"legacy","updatedAt":1,"spawnedBy":"agent:main:ordinary","spawnDepth":1,"inheritedToolPolicyVersion":1,"inheritedToolAllow":["read"],"inheritedToolDeny":["exec"]} ',
+          ],
+        ];
+        const insert = db.prepare(
+          "INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)",
+        );
+        for (const [key, id, entry] of entries) {
+          insert.run(key, id, entry);
+        }
+        const rows = () => db.prepare("SELECT * FROM session_nodes ORDER BY session_key").all();
+        const before = rows();
+        let reachedPublication = false;
+        scope.addAgentSchemaMigrationCheck(() => {
+          if (db.prepare("PRAGMA user_version").get()?.user_version === 24) {
+            reachedPublication = true;
+            if (refusePublication) {
+              throw refusal;
+            }
+          }
+        });
+        const migrate = scope.run(() =>
+          withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+            ensureOpenClawAgentDatabaseSchema(db, {
+              agentId: "main",
+              path: pathname,
+              env: state.env,
+            });
+          }),
+        );
+        if (refusePublication) {
+          await expect(migrate).rejects.toBe(refusal);
+        } else {
+          await migrate;
+        }
+        expect(reachedPublication).toBe(true);
+        const expectedVersion = refusePublication ? 23 : 24;
+        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(expectedVersion);
+        expect(
+          db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get()
+            ?.schema_version,
+        ).toBe(expectedVersion);
+        expect(rows()).toEqual(before);
+      } finally {
+        await scope.close();
+        db.close();
+      }
+    });
+  },
+);

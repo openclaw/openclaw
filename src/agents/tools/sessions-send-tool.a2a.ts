@@ -14,6 +14,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { InheritedToolPolicyV2 } from "../inherited-tool-policy.schema.js";
 import {
   type AgentWaitResult,
   isTerminalAgentWaitTimeout,
@@ -121,6 +122,7 @@ export async function runSessionsSendA2AFlow(params: {
   waitRunId?: string;
   replyRunId?: string;
   notifyRequesterOnWaitFailure?: boolean;
+  delegatedInputPolicy?: InheritedToolPolicyV2;
 }) {
   const runContextId = params.replyRunId ?? params.waitRunId ?? crypto.randomUUID();
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
@@ -335,6 +337,9 @@ export async function runSessionsSendA2AFlow(params: {
           sourceSessionKey: source.sessionKey,
           sourceChannel: source.channel,
           sourceTool: "sessions_send",
+          ...(current.role === "target"
+            ? { delegatedInputPolicy: params.delegatedInputPolicy }
+            : {}),
           callGateway: gatewayCall,
         });
         if (!replyText || isNonDeliverableSessionsReply(replyText)) {
@@ -360,6 +365,7 @@ export async function runSessionsSendA2AFlow(params: {
       extraSystemPrompt: announcePrompt,
       timeoutMs: params.announceTimeoutMs,
       transcriptMessage: "",
+      delegatedInputPolicy: params.delegatedInputPolicy,
       sourceSessionKey: params.requesterSessionKey,
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",

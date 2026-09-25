@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { getChannelAgentToolMeta, setChannelAgentToolMeta } from "./channel-tool-metadata.js";
@@ -14,6 +15,7 @@ import {
 } from "./tool-description-presets.js";
 import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 import { createConversationsSendTool } from "./tools/conversation-tools.js";
+import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
@@ -142,11 +144,6 @@ describe("createOpenClawCodingTools availability guidance", () => {
   it.each([
     { name: "process", description: "plugin process", available: [] },
     {
-      name: "sessions_send",
-      description: describeSessionsSendTool(),
-      available: ["conversations_list", "conversations_send"],
-    },
-    {
       name: "sessions_search",
       description: describeSessionsSearchTool(),
       available: ["sessions_history"],
@@ -256,19 +253,25 @@ describe("createOpenClawCodingTools availability guidance", () => {
       expected: ["conversations_list", "conversations_send", "conversations_turn"],
     },
   ])("describes only executable conversation routes: $available", ({ available, expected }) => {
-    const [tool] = applyToolAvailabilityDescriptions([
-      { name: "sessions_send", description: describeSessionsSendTool() },
-      ...available.map((name) => ({ name, description: "available" })),
-    ] as AnyAgentTool[]);
-
+    const tools = applyToolAvailabilityDescriptions([
+      createSessionsSendTool(),
+      ...available.map((name) => ({ name, description: "available" }) as AnyAgentTool),
+    ]);
+    const tool = tools[0]!;
+    finalizeAgentToolAvailability(tools);
     for (const name of ["conversations_list", "conversations_send", "conversations_turn"]) {
-      expect(tool?.description.includes(name)).toBe(expected.includes(name));
+      expect(tool.description.includes(name)).toBe(expected.includes(name));
     }
+    expect(tool.description.match(/For an exact external destination/g)?.length ?? 0).toBe(
+      expected.length > 0 ? 1 : 0,
+    );
+    finalizeAgentToolAvailability(tools, { toolExecutionAllow: ["sessions_send"] });
+    expect(tool.description).not.toContain("conversations_");
   });
 
   it("renders the authorized session-send modes and external routes", () => {
     const [tool] = applyToolAvailabilityDescriptions([
-      { name: "sessions_send", description: describeSessionsSendTool() },
+      createSessionsSendTool(),
       { name: "conversations_list", description: "list" },
       { name: "conversations_send", description: "send" },
       { name: "conversations_turn", description: "turn" },
@@ -279,6 +282,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
         "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label.",
         "A session identifies model context, not an external address; its reply may still announce through established delivery context.",
         'Accepted results report target admission as `targetDisposition: "queued"` or `"steered"`; `delivery.status` is only later announcement state, and neither proves target completion.',
+        "Use this tool to continue or control the target work. If control is refused, state what did not happen; a separate assessment does not pause, cancel, or change the active task.",
         "Omit mode to automatically continue your paused native child task; returns runId/taskRunId with task-owned completion instead of an inline wait or watch. Other sessions use ordinary message delivery. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work. mode:followup starts a separate turn without steering or resuming a paused task. mode:resume requires a paused native child task and rejects watch:true and positive timeoutSeconds.",
         "For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`.",
         'Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available; status "no_reply" is terminal, so do not wait for an announcement.',
@@ -371,7 +375,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
     expect(tool?.description).toContain("`groupId` groups a batch; await with agents_wait.");
     expect(tool?.description).toContain("(all: all sessions, cross-agent per tools.agentToAgent)");
     expect(tool?.description).toContain(
-      "No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn,",
+      "Check spawns via `subagents`/`sessions_history`. After spawn,",
     );
     expect(tool?.description).toContain(
       "When diagnosing a missing result from an announcing child, use `subagents` to inspect execution and delivery status. Recover existing results or follow up within the still-authorized task; respect intentional cancellation and never loop-poll.",

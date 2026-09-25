@@ -1,6 +1,9 @@
 import { vi } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
-import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestOptions,
+} from "../../../gateway/server-methods/types.js";
 
 export function makeGatewayContext(): GatewayRequestContext {
   return {
@@ -25,4 +28,20 @@ export function makeGatewayContext(): GatewayRequestContext {
     getSessionEventSubscriberConnIds: () => new Set(),
     getRuntimeConfig,
   } as unknown as GatewayRequestContext;
+}
+
+export function externalCliClient(): GatewayRequestOptions["client"] {
+  return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: "cli",
+        version: "test",
+        platform: "test",
+        mode: "cli",
+      },
+      scopes: ["operator.write"],
+    },
+  } as GatewayRequestOptions["client"];
 }

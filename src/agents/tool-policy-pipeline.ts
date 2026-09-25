@@ -5,6 +5,8 @@
  */
 import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { createInheritedToolPolicyMatcher } from "./inherited-tool-policy.js";
+import type { InheritedToolPolicyV2 } from "./inherited-tool-policy.schema.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
 import { auditToolPolicyFilter } from "./tool-policy-audit.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
@@ -16,6 +18,7 @@ import {
   type DeclaredToolAllowlistContext,
   type ToolPolicyLike,
 } from "./tool-policy.js";
+import { isRegisteredAgentToolRestartSafe } from "./tool-replay-safety.js";
 
 const MAX_TOOL_POLICY_WARNING_CACHE = 256;
 const seenToolPolicyWarnings = new Set<string>();
@@ -52,6 +55,7 @@ function rememberToolPolicyWarning(warning: string): boolean {
 /** One named policy layer in the effective runtime tool policy pipeline. */
 export type ToolPolicyPipelineStep = {
   policy: ToolPolicyLike | undefined;
+  inheritedActionPolicy?: InheritedToolPolicyV2;
   label: string;
   source?: ToolPolicySource;
   stripPluginOnlyAllowlist?: boolean;
@@ -178,6 +182,15 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
 
   let filtered = params.tools;
   for (const step of params.steps) {
+    if (step.inheritedActionPolicy) {
+      filtered = filtered.filter(
+        createInheritedToolPolicyMatcher({
+          policy: step.inheritedActionPolicy,
+          toolMeta: params.toolMeta,
+          restartSafe: isRegisteredAgentToolRestartSafe,
+        }),
+      );
+    }
     if (!step.policy) {
       continue;
     }

@@ -5,10 +5,10 @@ type ChannelAgentToolMeta = {
   channelId: string;
 };
 
-const channelAgentToolMeta = new WeakMap<ChannelAgentTool, ChannelAgentToolMeta>();
+const channelAgentToolMeta = new WeakMap<object, ChannelAgentToolMeta>();
 
 /** Read channel metadata attached to a channel-owned agent tool. */
-export function getChannelAgentToolMeta(tool: ChannelAgentTool): ChannelAgentToolMeta | undefined {
+export function getChannelAgentToolMeta(tool: object): ChannelAgentToolMeta | undefined {
   return channelAgentToolMeta.get(tool);
 }
 

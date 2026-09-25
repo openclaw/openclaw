@@ -1638,7 +1638,6 @@ src/agents/embedded-agent-runner/run/attempt-stream.ts	6
 src/agents/embedded-agent-runner/run/attempt-tool-call-replay-sanitization.ts	9
 src/agents/embedded-agent-runner/run/attempt-tool-call-stream-normalization.ts	2
 src/agents/embedded-agent-runner/run/attempt-tool-call-text-promotion.ts	3
-src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts	3
 src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle.ts	1
 src/agents/embedded-agent-runner/run/attempt-user-transcript-context-registry.ts	1
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts	5
@@ -3214,7 +3213,7 @@ src/sessions/session-lifecycle-admission.ts	1
 src/sessions/session-upstream-monitor.ts	2
 src/sessions/user-turn-transcript-runtime-context.ts	2
 src/sessions/user-turn-transcript.media-normalize.ts	2
-src/sessions/user-turn-transcript.ts	5
+src/sessions/user-turn-transcript.ts	1
 src/shared/account-enabled.ts	1
 src/shared/bounded-serial-queue.ts	1
 src/shared/chat-content.ts	2

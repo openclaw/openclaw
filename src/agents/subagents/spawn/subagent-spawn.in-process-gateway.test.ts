@@ -12,7 +12,6 @@ import { prepareAgentRequestPreflight } from "../../../gateway/agent-turn/agent-
 import { createAgentTurnIo } from "../../../gateway/agent-turn/io.js";
 import { readInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
 import { resolveGatewayAgentTaskTrackingMode } from "../../../gateway/server-methods/agent-task-tracking.js";
-import type { GatewayRequestOptions } from "../../../gateway/server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import type { WorkerSessionTurnClaim } from "../../../gateway/worker-environments/placement-record.js";
@@ -58,9 +57,15 @@ import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import { buildSubagentExecutionSessionSpawnContext } from "./subagent-spawn-execution-identity.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
-import { makeGatewayContext } from "./subagent-spawn.in-process-gateway.test-support.js";
-import { spawnSubagentDirect } from "./subagent-spawn.js";
+import {
+  externalCliClient,
+  makeGatewayContext,
+} from "./subagent-spawn.in-process-gateway.test-support.js";
+import { spawnSubagentDirect as spawnSubagentWithPolicy } from "./subagent-spawn.js";
+import { withTestSpawnPolicy } from "./subagent-spawn.test-helpers.js";
 import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
+
+const spawnSubagentDirect = withTestSpawnPolicy(spawnSubagentWithPolicy);
 
 vi.mock("../../runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle:
@@ -70,22 +75,6 @@ vi.mock("../registry/subagent-registry-state.js", { spy: true });
 
 const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
 let stateDir = "";
-
-function externalCliClient(): GatewayRequestOptions["client"] {
-  return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: "cli",
-        version: "test",
-        platform: "test",
-        mode: "cli",
-      },
-      scopes: ["operator.write"],
-    },
-  } as GatewayRequestOptions["client"];
-}
 
 async function waitForAssertion(assertion: () => void, timeoutMs = 2_000): Promise<void> {
   let lastError: unknown;
@@ -109,6 +98,10 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       buildSubagentExecutionSessionSpawnContext({
         enabled: false,
         backend: "subagent",
+        inheritedToolPolicy: {
+          clauses: [],
+          parameters: { fileTools: [], exec: [], sandbox: [], unsupported: [] },
+        },
         parentAgentId: "main",
         requesterRef: "agent:main:main",
         controllerRef: "agent:main:main",
@@ -131,8 +124,10 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
           depth: 1,
           targetAgentId: "worker",
           sandbox: "inherit",
-          inheritedToolAllowlist: allow,
-          inheritedToolDenylist: deny,
+          inheritedToolPolicy: {
+            clauses: [{ kind: "configured", allow, deny }],
+            parameters: { fileTools: [], exec: [], sandbox: [], unsupported: [] },
+          },
         }),
       )?.localPolicyRefs;
 

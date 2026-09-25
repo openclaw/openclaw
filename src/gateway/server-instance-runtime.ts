@@ -18,6 +18,10 @@ import "./agent-turn/agent-job.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { InternalAgentTurnPrincipalOptions } from "./agent-turn/internal-facade.types.js";
 import {
+  bindInProcessSessionSendPolicy,
+  readInProcessSessionSendPolicy,
+} from "./in-process-session-send-policy.js";
+import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   APPROVALS_SCOPE,
   WRITE_SCOPE,
@@ -172,6 +176,8 @@ export function createGatewayInstanceRuntime(
       dispatchOptions: GatewayInstanceAgentDispatchOptions = {},
     ) => {
       assertDispatchAvailable("agent");
+      const inputPolicy = readInProcessSessionSendPolicy(dispatchOptions);
+      inputPolicy?.assertCurrent?.();
       const delegatedToolPolicyHandoffId = dispatchOptions.delegatedToolPolicyHandoff
         ? registerSubagentCompletionToolHandoff(dispatchOptions.delegatedToolPolicyHandoff)
         : undefined;
@@ -182,28 +188,36 @@ export function createGatewayInstanceRuntime(
         dispatchOptions.internalDeliveryMediaUrls ||
         dispatchOptions.runtimeContextFragments ||
         dispatchOptions.internalDeliverySuppressText === true ||
+        inputPolicy ||
         delegatedToolPolicyHandoffId ||
         dispatchOptions.scopes ||
         dispatchOptions.syntheticScopes,
       );
-      const agentTurns = needsDedicatedPrincipal
-        ? createAgentTurnFacade({
-            client: createSyntheticPluginRuntimeClient({
-              operatorRoleActor: { kind: "system" },
-              allowModelOverride:
-                dispatchOptions.allowModelOverride === true ||
-                dispatchOptions.allowSyntheticModelOverride === true,
-              cronRunContinuation: dispatchOptions.allowSyntheticCronRunContinuation === true,
-              internalDeliveryMediaUrls: dispatchOptions.internalDeliveryMediaUrls,
-              runtimeContextFragments: dispatchOptions.runtimeContextFragments,
-              internalDeliverySuppressText: dispatchOptions.internalDeliverySuppressText,
-              delegatedToolPolicyHandoffId,
-              scopes: dispatchOptions.scopes ?? dispatchOptions.syntheticScopes,
-            }),
-          })
-        : recoveryAgentTurns;
       try {
+        let agentTurns = recoveryAgentTurns;
+        if (needsDedicatedPrincipal) {
+          const client = createSyntheticPluginRuntimeClient({
+            operatorRoleActor: { kind: "system" },
+            allowModelOverride:
+              dispatchOptions.allowModelOverride === true ||
+              dispatchOptions.allowSyntheticModelOverride === true,
+            cronRunContinuation: dispatchOptions.allowSyntheticCronRunContinuation === true,
+            internalDeliveryMediaUrls: dispatchOptions.internalDeliveryMediaUrls,
+            runtimeContextFragments: dispatchOptions.runtimeContextFragments,
+            internalDeliverySuppressText: dispatchOptions.internalDeliverySuppressText,
+            delegatedToolPolicyHandoffId,
+            scopes: dispatchOptions.scopes ?? dispatchOptions.syntheticScopes,
+          });
+          if (inputPolicy) {
+            if (!client.internal) {
+              throw new Error("Recovered input restrictions require an internal principal.");
+            }
+            bindInProcessSessionSendPolicy(client.internal, inputPolicy);
+          }
+          agentTurns = createAgentTurnFacade({ client });
+        }
         return await agentTurns.dispatch<T>(payload, {
+          assertAdmissionCurrent: inputPolicy?.assertCurrent,
           expectFinal: dispatchOptions.expectFinal,
           onAccepted: dispatchOptions.onAccepted,
           onStartOwner: dispatchOptions.onStartOwner,

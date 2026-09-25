@@ -572,6 +572,8 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
           }),
           // Keep the in-process caller so materialized agent roots retain their creation stamp.
           createSessionsSendTool({
+            captureInheritedToolPolicyForDelegation:
+              options?.captureInheritedToolPolicyForDelegation,
             agentId: sessionAgentId,
             // Match sessions_spawn: spawned children record the durable run
             // session as spawnedBy, so the parent check must use the same key.
@@ -615,6 +617,8 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             swarmCollector: options?.swarmCollector,
             workspaceDir: spawnWorkspaceDir,
             sessionPermissionPolicy: options?.sessionPermissionPolicy,
+            captureInheritedToolPolicyForDelegation:
+              options?.captureInheritedToolPolicyForDelegation,
             inheritedToolAllowlist: options?.inheritedToolAllowlist,
             inheritedToolDenylist: options?.inheritedToolDenylist,
           }),

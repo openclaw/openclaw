@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   type InternalSessionEntry as SessionEntry,
   resolveSessionWorkStartError,
@@ -12,7 +13,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
-import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
+import {
+  readSessionMessagesAsync,
+  readSessionRunInputPolicyAsync,
+} from "../../gateway/session-transcript-readers.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { findDeliveryIntentOwners } from "../../infra/outbound/delivery-queue-storage.js";
 import {
@@ -363,12 +367,42 @@ export async function recoverStore(params: {
       if (stopped()) {
         return false;
       }
+      const runIds = normalizeUniqueStringEntries([
+        ...(entry.restartRecoveryRuns ?? []).map(({ runId }) => runId),
+        ...(entry.lifecycleRunId ? [entry.lifecycleRunId] : []),
+        ...(entry.restartRecoveryDeliveryRunId ? [entry.restartRecoveryDeliveryRunId] : []),
+      ]);
+      let delegatedInputPolicy: Awaited<ReturnType<typeof readSessionRunInputPolicyAsync>>;
+      try {
+        delegatedInputPolicy =
+          expectedRecoverySourceRunId || runIds.length
+            ? await readSessionRunInputPolicyAsync(
+                { ...target, sessionId: entry.sessionId },
+                { sourceTurnId: expectedRecoverySourceRunId, runIds },
+              )
+            : undefined;
+      } catch (error) {
+        if (stopped()) {
+          return false;
+        }
+        mainSessionRecoveryLog.warn(
+          `cannot restore interrupted input restrictions for ${sessionKey}: ${String(error)}`,
+        );
+        result.failed++;
+        return true;
+      }
+      if (stopped()) {
+        return false;
+      }
+      // The reservation and exact-claim transaction revalidate this snapshot
+      // before dispatch. Settlement-only branches do not enter this continuation.
       recordResumeResult(
         await resumeMainSession({
           ...target,
           canonicalSessionKey: dispatchSessionKey,
           cfg: params.cfg,
           entry,
+          delegatedInputPolicy,
           observation: recoveryView.observation,
           recoveryAttempt: recoveryView.nextAttempt,
           recoveryAdmission: params.recoveryAdmission,

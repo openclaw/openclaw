@@ -22,6 +22,7 @@ import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
 import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
+import type { InheritedToolPolicyV2 } from "../inherited-tool-policy.schema.js";
 import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery/main-session-recovery-store.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
@@ -55,6 +56,8 @@ export type AgentRunContext = {
 /** Full trusted option surface for running an agent command. */
 export type AgentCommandOpts = {
   message: string;
+  /** Trusted restriction of this accepted input; never a persistent session override. */
+  delegatedInputPolicy?: InheritedToolPolicyV2;
   /** User-visible transcript body; defaults to message and excludes runtime-only context. */
   transcriptMessage?: string;
   /** Durable media metadata for the user-visible transcript turn. */

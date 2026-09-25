@@ -1,3 +1,4 @@
+import type { InheritedToolPolicyV2 } from "../agents/inherited-tool-policy.schema.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals-core.js";
 
 export const WORKER_REQUIRED_LOCAL_TOOL_NAMES = [
@@ -48,6 +49,8 @@ type WorkerExecAuthority = {
 
 export type WorkerToolAuthority = {
   allowedToolNames: WorkerToolName[];
+  /** Configured conjunctions, independent of this worker's available catalog. */
+  inheritedToolPolicy?: InheritedToolPolicyV2;
   /**
    * Effective exec policy resolved at the Gateway. Optional for protocol compatibility only;
    * consumers must treat an absent value as denied rather than re-deriving it worker-side.

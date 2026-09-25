@@ -12,13 +12,15 @@ import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.j
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "../agents/agent-tools.abort.js";
 import { finalizeAgentTools } from "../agents/agent-tools.finalize.js";
-import { isApplyPatchAllowedForModel } from "../agents/apply-patch-policy.js";
 import { buildBootstrapContextForFiles } from "../agents/bootstrap-files.js";
 import { createCoreCodingTools } from "../agents/core-coding-tools.js";
+import { prepareDelegatedToolParameterTarget } from "../agents/delegated-tool-parameter-target.js";
 import { createEmbeddedAgentResourceLoader } from "../agents/embedded-agent-runner/resource-loader.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/embedded-agent-runner/run/setup.js";
 import { recordModelFallbackStop } from "../agents/failover-error.js";
 import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.js";
+import { applyDelegatedToolParameters } from "../agents/inherited-tool-parameters.js";
+import { createInheritedToolPolicyMatcher } from "../agents/inherited-tool-policy.js";
 import {
   projectEffectiveExecPolicy,
   resolveSessionPermissionCoreToolPolicy,
@@ -30,6 +32,7 @@ import { createAgentSession } from "../agents/sessions/sdk.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { SettingsManager } from "../agents/sessions/settings-manager.js";
 import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
+import { isAgentToolRestartSafe } from "../agents/tool-replay-safety.js";
 import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -106,6 +109,7 @@ type RunWorkerEmbeddedTurnParams = {
   allowedToolNames: readonly WorkerToolName[];
   permissionMode?: import("../../packages/gateway-protocol/src/schema/sessions-row.js").SessionPermissionMode;
   execAuthority: WorkerToolAuthority["exec"];
+  inheritedToolPolicy?: WorkerToolAuthority["inheritedToolPolicy"];
   browser?: WorkerBrowserLaunchDescriptor;
   browserRuntime?: WorkerBrowserRuntime;
   computer?: Omit<Parameters<typeof createWorkerComputerTool>[0], "runId" | "registerRunCleanup">;
@@ -208,11 +212,20 @@ async function runWorkerEmbeddedTurnWithResources(
   const permissionToolPolicy = params.permissionMode
     ? resolveSessionPermissionCoreToolPolicy({ mode: params.permissionMode })
     : undefined;
-  const omittedToolNames = permissionToolPolicy?.readOnly
+  const permissionOmittedToolNames = permissionToolPolicy?.readOnly
     ? new Set<WorkerToolName>(["write", "edit", "apply_patch"])
     : undefined;
-  const activeToolNames = WORKER_TOOL_NAMES.filter(
-    (name) => allowedToolNameSet.has(name) && !omittedToolNames?.has(name),
+  const inheritedMatches = params.inheritedToolPolicy
+    ? createInheritedToolPolicyMatcher({
+        policy: params.inheritedToolPolicy,
+        restartSafe: isAgentToolRestartSafe,
+      })
+    : undefined;
+  const selectedToolNames = WORKER_TOOL_NAMES.filter(
+    (name) =>
+      allowedToolNameSet.has(name) &&
+      !permissionOmittedToolNames?.has(name) &&
+      (inheritedMatches?.({ name }) ?? true),
   );
   const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
   const headlessApprovalText = params.permissionMode
@@ -234,51 +247,87 @@ async function runWorkerEmbeddedTurnWithResources(
     overrides: execAuthority,
     permissionPolicy: params.permissionMode ? { mode: params.permissionMode } : undefined,
   });
+  const execDefaults = {
+    bypassHostApprovalFloors:
+      permissionToolPolicy?.bypassHostApprovalFloors && execSecurity === "full",
+    safeBins: execAuthority.safeBins ?? [],
+    host: execAuthority.host,
+    node: execAuthority.host === "node" ? execAuthority.node : undefined,
+    security: execSecurity,
+    ask: execAsk,
+    ...(execMode ? { mode: execMode } : {}),
+    // Host-specific approvals are not portable; misses require local execution.
+    // Worker LLM review and interactive approval RPC remain a named follow-up.
+    nonInteractiveApproval: Boolean(
+      permissionToolPolicy && permissionToolPolicy.execMode !== "full",
+    ),
+    approvalFollowupText: headlessApprovalText,
+    config: WORKER_TOOL_CONFIG,
+    ...(params.github ? { preparedRunEnvironment: params.github } : {}),
+    commandHighlighting: false,
+    agentId: params.agentId,
+    allowBackground: true,
+    scopeKey: params.sessionKey,
+    sessionKey: params.sessionKey,
+    runId: params.runId,
+    notifySessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    eventRouting: { preserveSessionKey: false },
+  };
+  const parameterFacts = prepareDelegatedToolParameterTarget({
+    config: WORKER_TOOL_CONFIG,
+    agentId: params.agentId,
+    sessionPermissionPolicy: params.permissionMode
+      ? { mode: params.permissionMode, root: params.workerContainmentRoot }
+      : undefined,
+    sessionEntry: null,
+    rootIsWorkspace: true,
+    elevated: null,
+    sandbox: { sandboxed: false, sandboxRequired: false },
+    modelProvider: params.modelRef.provider,
+    modelId: params.modelRef.model,
+  });
+  const appliedParameters = params.inheritedToolPolicy
+    ? applyDelegatedToolParameters({
+        ...parameterFacts,
+        exec: execDefaults,
+        policy: params.inheritedToolPolicy.parameters,
+        applicability: {
+          exec: selectedToolNames.includes("exec"),
+          fileTools: selectedToolNames.some((name) =>
+            ["read", "write", "edit", "apply_patch"].includes(name),
+          ),
+          fileWrites: selectedToolNames.some((name) =>
+            ["write", "edit", "apply_patch"].includes(name),
+          ),
+          applyPatch: selectedToolNames.includes("apply_patch"),
+          sandbox: selectedToolNames.some((name) =>
+            ["exec", "read", "write", "edit", "apply_patch", "browser"].includes(name),
+          ),
+        },
+      })
+    : { exec: execDefaults, fileTools: parameterFacts.fileTools };
+  const omittedToolNames = new Set<WorkerToolName>(
+    appliedParameters.fileTools.readOnly ? ["write", "edit", "apply_patch"] : [],
+  );
+  if (!appliedParameters.fileTools.applyPatchEnabled) {
+    omittedToolNames.add("apply_patch");
+  }
+  const activeToolNames = selectedToolNames.filter((name) => !omittedToolNames.has(name));
   const coreTools = createCoreCodingTools({
     skillsSnapshot,
     codingRoot: params.cwd,
     containmentRoot: params.workerContainmentRoot,
     includeBaseCodingTools: true,
     shellTools: execUnavailable ? "patch-only" : "full",
-    workspaceOnly: permissionToolPolicy?.workspaceOnly ?? false,
-    readOnly: permissionToolPolicy?.readOnly ?? false,
+    workspaceOnly: appliedParameters.fileTools.workspaceOnly,
+    readOnly: appliedParameters.fileTools.readOnly,
     modelContextWindowTokens: model.contextWindow,
     imageSanitization: {},
-    applyPatchEnabled:
-      permissionToolPolicy?.readOnly !== true &&
-      isApplyPatchAllowedForModel({
-        modelProvider: params.modelRef.provider,
-        modelId: params.modelRef.model,
-      }),
-    applyPatchWorkspaceOnly: permissionToolPolicy?.applyPatchWorkspaceOnly ?? true,
+    applyPatchEnabled: appliedParameters.fileTools.applyPatchEnabled,
+    applyPatchWorkspaceOnly: appliedParameters.fileTools.applyPatchWorkspaceOnly,
     applyPatchContainmentSource: permissionToolPolicy ? "session" : "worker",
-    execDefaults: {
-      bypassHostApprovalFloors:
-        permissionToolPolicy?.bypassHostApprovalFloors && execSecurity === "full",
-      safeBins: execAuthority.safeBins ?? [],
-      host: execAuthority.host,
-      node: execAuthority.host === "node" ? execAuthority.node : undefined,
-      security: execSecurity,
-      ask: execAsk,
-      ...(execMode ? { mode: execMode } : {}),
-      // Host-specific approvals are not portable; misses require local execution.
-      // Worker LLM review and interactive approval RPC remain a named follow-up.
-      nonInteractiveApproval: Boolean(
-        permissionToolPolicy && permissionToolPolicy.execMode !== "full",
-      ),
-      approvalFollowupText: headlessApprovalText,
-      config: WORKER_TOOL_CONFIG,
-      ...(params.github ? { preparedRunEnvironment: params.github } : {}),
-      commandHighlighting: false,
-      agentId: params.agentId,
-      allowBackground: true,
-      scopeKey: params.sessionKey,
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-      notifySessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      eventRouting: { preserveSessionKey: false },
-    },
+    execDefaults: appliedParameters.exec,
     processDefaults: { scopeKey: params.sessionKey },
   });
   const browserRuntime = params.browser
@@ -362,7 +411,7 @@ async function runWorkerEmbeddedTurnWithResources(
       const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
       for (const toolName of WORKER_REQUIRED_LOCAL_TOOL_NAMES) {
         if (
-          omittedToolNames?.has(toolName) ||
+          omittedToolNames.has(toolName) ||
           (execUnavailable && (toolName === "exec" || toolName === "process"))
         ) {
           continue;

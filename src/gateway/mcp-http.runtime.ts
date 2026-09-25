@@ -218,6 +218,8 @@ function resolveMcpLoopbackTools(
     isGrantCurrent: params.isGrantCurrent,
     excludeToolNames,
     mediatedToolNames: mediatedNativeTools,
+    runtimeToolAllowlist: mode === "policy" ? toolsAllow : undefined,
+    toolExecutionAllowlist: mode === "exact" ? toolsAllow : undefined,
     includeNodeExecTool,
     nodeExecAvailable: params.nodeExecAvailability?.isAvailable,
     pairedNodeComputerUse: params.pairedComputerUseAvailability?.prepared,

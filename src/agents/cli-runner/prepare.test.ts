@@ -139,6 +139,8 @@ import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { registerCliThinkingPreparationTests } from "./prepare-thinking.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
+  createLegacyCliSubagentSessionParams,
+  registerCliActionPolicyPreflightTests,
   resetCliRunnerPrepareTestDeps,
   setCliRunnerPrepareTestDeps,
 } from "./prepare.test-support.js";
@@ -865,7 +867,7 @@ describe("prepareCliRunContext", () => {
         trigger: "user",
         sessionKey: sessionTarget.sessionKey,
       }),
-    ).rejects.toThrow("authority");
+    ).rejects.toThrow("admitted run input policy is no longer active");
     expect(
       (await claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" }))?.summary,
     ).toBe("Keep revoked-owner outcome");
@@ -3099,8 +3101,11 @@ describe("prepareCliRunContext", () => {
   ] as const)(
     "reuses normal/$trigger/normal CLI bindings for $sessionKey",
     async ({ trigger, sessionKey }) => {
+      const sessionParams = sessionKey.includes(":subagent:")
+        ? createLegacyCliSubagentSessionParams(fixture.session.sessionTarget, sessionKey)
+        : { sessionKey };
       const cliSessionBindingFacts = { extraSystemPromptStatic: "" };
-      const first = await fixture.prepare({ sessionKey, cliSessionBindingFacts });
+      const first = await fixture.prepare({ ...sessionParams, cliSessionBindingFacts });
       const binding = {
         sessionId: "cli-session",
         extraSystemPromptHash: first.extraSystemPromptHash,
@@ -3111,14 +3116,14 @@ describe("prepareCliRunContext", () => {
         mcpResumeHash: first.preparedBackend.mcpResumeHash,
       };
       const background = await fixture.prepare({
-        sessionKey,
+        ...sessionParams,
         cliSessionBindingFacts,
         trigger,
         requireExplicitMessageTarget: true,
         cliSessionBinding: binding,
       });
       const normal = await fixture.prepare({
-        sessionKey,
+        ...sessionParams,
         cliSessionBindingFacts,
         cliSessionBinding: binding,
       });
@@ -3134,7 +3139,10 @@ describe("prepareCliRunContext", () => {
 
   it("requires explicit message targets by default for CLI subagents", async () => {
     const context = await fixture.prepare({
-      sessionKey: "agent:main:subagent:child",
+      ...createLegacyCliSubagentSessionParams(
+        fixture.session.sessionTarget,
+        "agent:main:subagent:child",
+      ),
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
@@ -4478,25 +4486,10 @@ describe("prepareCliRunContext", () => {
     },
   );
 
-  it("fails closed with upgrade guidance when a backend cannot enforce a runtime toolsAllow", async () => {
-    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
-      port: 31783,
-      ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
-    }));
-    setCliRunnerPrepareTestDeps({
-      getActiveMcpLoopbackRuntime,
-    });
-
-    const run = fixture.prepare({
-      config: createCliBackendConfig({ bundleMcp: true }),
-      toolsAllow: ["read", "web_search"],
-    });
-    await expect(run).rejects.toThrow(
-      `CLI backend "test-cli" cannot enforce this run's tool cap. Upgrade its plugin and retry; if current, ask its maintainer to add exact-cap support. OpenClaw did not start the run.`,
-    );
-
-    expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+  registerCliActionPolicyPreflightTests({
+    prepare: (params) => fixture.prepare(params),
+    createConfig: () => createCliBackendConfig({ bundleMcp: true }),
+    getSession: () => fixture.session,
   });
 
   it("materializes runtime toolsAllow for selectable backends without bundle MCP", async () => {

@@ -45,6 +45,8 @@ type SpawnPipelineParams<TState> = {
   assertActive?: () => void;
   admissionReservation?: { release: () => void };
   buildRegistration: (state: TState, runId: string) => RegisterSubagentRunInput;
+  /** An accepted backend can transfer registration into authority captured before launch. */
+  runRegistration?: (register: () => void | Promise<void>) => void | Promise<void>;
   hookRunner?: SubagentLifecycleHookRunner | null;
   progressOrigin?: SpawnProgressOrigin;
   /** Session key the started-progress hook fires against. Backends differ on
@@ -73,14 +75,16 @@ export async function runSpawnPipeline<TState>(
       phase = "register";
       params.assertActive?.();
       registration = params.buildRegistration(state, runId);
-      const completion = registration.queued
-        ? registerSubagentRun(registration, {
-            assertCurrent: params.assertActive,
-            retainOwnership: (scope) => {
-              registrationScope = scope;
-            },
-          })
-        : registerSubagentRun(registration, { assertCurrent: params.assertActive });
+      const register = () =>
+        registration.queued
+          ? registerSubagentRun(registration, {
+              assertCurrent: params.assertActive,
+              retainOwnership: (scope) => {
+                registrationScope = scope;
+              },
+            })
+          : registerSubagentRun(registration, { assertCurrent: params.assertActive });
+      const completion = params.runRegistration ? params.runRegistration(register) : register();
       if (completion) {
         await completion;
       }

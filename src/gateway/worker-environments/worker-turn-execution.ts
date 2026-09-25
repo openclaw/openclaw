@@ -207,15 +207,21 @@ export async function executeWorkerTurn(
     agentRuntime: "openclaw",
     level: turn.thinkLevel,
   });
-  const { browser, computer, preparedComputer, toolAuthority } =
-    await prepareWorkerDesktopLaunchPlan({
-      desktop: environment.desktop,
-      protocolFeatures: bootstrapReceipt.protocolFeatures,
-      prepareComputer: () => params.environments.prepareComputer?.(params.turnClaim),
-      modelRef,
-      turn,
-      portalAvailable,
-    });
+  const {
+    browser,
+    computer,
+    preparedComputer,
+    toolAuthority,
+    delegationToolPolicy,
+    captureDelegationToolPolicy,
+  } = await prepareWorkerDesktopLaunchPlan({
+    desktop: environment.desktop,
+    protocolFeatures: bootstrapReceipt.protocolFeatures,
+    prepareComputer: () => params.environments.prepareComputer?.(params.turnClaim),
+    modelRef,
+    turn,
+    portalAvailable,
+  });
   params.placements.authorizeWorkerTurnTools(params.turnClaim, toolAuthority.allowedToolNames);
   const { operationalRunInstance, runtimeIdentity, assertActive, takeFinishingOutcome } =
     await prepareWorkerAgentRuntimeIdentity({
@@ -225,6 +231,9 @@ export async function executeWorkerTurn(
       sessionKey: placement.sessionKey,
       sessionTarget: transcriptTarget,
       assertSourceCurrent,
+      getInheritedToolPolicy: () => structuredClone(delegationToolPolicy),
+      captureDelegationToolPolicy,
+      requiredToolPolicy: toolAuthority.inheritedToolPolicy,
       turn,
       turnClaim: params.turnClaim,
     });

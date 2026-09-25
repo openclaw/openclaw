@@ -4,10 +4,9 @@
  * entire gateway/channel stack.
  */
 export { getRuntimeConfig } from "../../../config/config.js";
-export {
-  loadSessionEntryReadOnly as loadSessionEntry,
-  upsertSessionEntryCore,
-} from "../../../config/sessions/session-accessor.js";
+export { loadSessionEntryReadOnly as loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+export { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+export { applySessionEntryCanonicalReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 export { forkSessionEntryFromParent } from "../../../auto-reply/reply/session-fork.js";
 export { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
 export { resolveContextEngine } from "../../../context-engine/registry.js";

@@ -24,11 +24,13 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { registerCodingToolsDelegationTests } from "./agent-tools.delegation.test-support.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
 import {
@@ -44,8 +46,11 @@ import {
   runWithCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapabilityResolver,
 } from "./cron-creator-authority-context.js";
+import { createInheritedToolPolicyMatcher } from "./inherited-tool-policy.js";
+import { parseInheritedToolPolicyV2 } from "./inherited-tool-policy.schema.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
@@ -55,11 +60,7 @@ import {
   createSandboxFsBridgeFromResolver,
 } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
-import {
-  attachToolAllowlistIntersection,
-  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
-  normalizeToolPolicyName,
-} from "./tool-policy.js";
+import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolPolicyName } from "./tool-policy.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -165,6 +166,14 @@ function latestCreateOpenClawToolsOptions(): OpenClawToolsOptions {
     throw new Error("expected createOpenClawTools call");
   }
   return options;
+}
+
+async function captureLatestDelegationPolicy() {
+  const capture = latestCreateOpenClawToolsOptions().captureInheritedToolPolicyForDelegation;
+  if (!capture) {
+    throw new Error("Expected a delegation policy capture on the registered source tools");
+  }
+  return (await capture()).policy;
 }
 
 function expectListIncludes(
@@ -664,99 +673,11 @@ describe("createOpenClawCodingTools", () => {
     expectListIncludes(options.pluginToolAllowlist, ["memory_search", "memory_get"]);
   });
 
-  it("does not inherit native-harness bridge runtime allowlists", () => {
-    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
-    createOpenClawToolsMock.mockClear();
-
-    createOpenClawCodingTools({
-      config: testConfig,
-      runtimeToolAllowlist: ["sessions_spawn", "memory_search"],
-    });
-
-    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
-    expect(latestCreateOpenClawToolsOptions().pluginToolAllowlist).toEqual([
-      "sessions_spawn",
-      "memory_search",
-    ]);
-    expect(latestCreateOpenClawToolsOptions().inheritedToolAllowlist).toEqual([]);
-  });
-
-  it("inherits embedded runtime toolsAllow when explicitly marked as parent capability", () => {
-    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
-    createOpenClawToolsMock.mockClear();
-    const runtimeToolAllowlist = ["sessions_spawn", "memory_search"];
-
-    createOpenClawCodingTools({
-      config: testConfig,
-      runtimeToolAllowlist,
-      conversationCapabilityProfile: resolveConversationCapabilityProfile({
-        config: testConfig,
-        runtimeToolAllowlist,
-        inheritRuntimeToolAllowlist: true,
-      }),
-    });
-
-    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
-    const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
-    expectListIncludes(inheritedAllow, ["sessions_spawn"]);
-    expect(inheritedAllow?.includes("read")).toBe(false);
-    expect(inheritedAllow?.includes("exec")).toBe(false);
-  });
-
-  it.each([
-    {
-      label: "explicit tools",
-      toolsAllow: ["sessions_spawn", "read"],
-      expected: ["sessions_spawn", "read"],
-    },
-    {
-      label: "overlapping globs",
-      toolsAllow: attachToolAllowlistIntersection([], [["sessions_*"], ["*_spawn"]]),
-      expected: ["sessions_spawn"],
-    },
-  ])("lets direct callers inherit $label into subagent spawns", ({ toolsAllow, expected }) => {
-    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
-    createOpenClawToolsMock.mockClear();
-
-    createOpenClawCodingTools({
-      config: testConfig,
-      runtimeToolAllowlist: toolsAllow,
-      inheritRuntimeToolAllowlist: true,
-    });
-
-    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
-    const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
-    expectListIncludes(inheritedAllow, expected);
-    expect(inheritedAllow?.includes("exec")).toBe(false);
-  });
-
-  it("keeps restricted spawn inheritance in the caller-owned runtime snapshot", () => {
-    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
-    createOpenClawToolsMock.mockClear();
-    const inheritedToolAllowlistRef: string[] = [];
-
-    createOpenClawCodingTools({
-      config: { tools: { allow: ["read", "sessions_spawn"] } },
-      inheritedToolAllowlistRef,
-    });
-
-    expect(latestCreateOpenClawToolsOptions().inheritedToolAllowlist).toBe(
-      inheritedToolAllowlistRef,
-    );
-    expectListIncludes(inheritedToolAllowlistRef, ["read", "sessions_spawn"]);
-    expect(inheritedToolAllowlistRef).not.toContain("exec");
-  });
-
-  it("does not snapshot additive alsoAllow policies for spawn inheritance", () => {
-    const inheritedToolAllowlistRef: string[] = [];
-
-    createOpenClawCodingTools({
-      config: { tools: { alsoAllow: ["read"], deny: ["exec"] } },
-      inheritedToolAllowlistRef,
-    });
-
-    expect(inheritedToolAllowlistRef).toEqual([]);
-    expect(latestCreateOpenClawToolsOptions().inheritedToolDenylist).toContain("exec");
+  registerCodingToolsDelegationTests({
+    testConfig,
+    latestCreateOpenClawToolsOptions,
+    captureLatestDelegationPolicy,
+    expectListIncludes,
   });
 
   it("preserves runtime-allowed message through restrictive profiles", () => {
@@ -1038,6 +959,9 @@ describe("createOpenClawCodingTools", () => {
     const verifiedLineage = !("verifiedLineage" in testCase) || testCase.verifiedLineage !== false;
 
     try {
+      await writeSessionStore(storeTemplate, "main", {
+        [requesterSessionKey]: { sessionId: requesterSessionId, updatedAt: Date.now() },
+      });
       if (verifiedLineage) {
         await writeSessionStore(storeTemplate, "main", {
           [childSessionKey]: {
@@ -1351,7 +1275,24 @@ describe("createOpenClawCodingTools", () => {
     const resolvePluginToolsSpy = vi
       .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
       .mockReturnValue([]);
-    const preparedModelRuntime = { metadataSnapshot: {} } as never;
+    const preparedModelRuntime: PreparedModelRuntimeSnapshot = {
+      catalogOwner: undefined,
+      agentDir: "/tmp/agent",
+      activeProjectKeys: [],
+      config: testConfig,
+      observationConfig: testConfig,
+      isCurrent: () => true,
+      authModes: {},
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      allowGatewaySubagentBinding: false,
+      modelCatalog: { entries: [], routeVariants: [] },
+      configuredRuntimeModels: [],
+      findConfiguredRuntimeModel: () => undefined,
+      inlineProviderModels: [],
+      createStores: () => {
+        throw new Error("Tool construction must not load model stores.");
+      },
+    };
 
     try {
       createOpenClawCodingTools({
@@ -1799,7 +1740,7 @@ describe("createOpenClawCodingTools", () => {
     ]);
   });
 
-  it("passes effective allow-list-restricted tool surface to spawned sessions", () => {
+  it("passes effective allow-list-restricted tool surface to spawned sessions", async () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
 
@@ -1808,10 +1749,11 @@ describe("createOpenClawCodingTools", () => {
     });
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
-    const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
-    expectListIncludes(inheritedAllow, ["read", "sessions_spawn"]);
-    expect(inheritedAllow?.includes("exec")).toBe(false);
-    expect(inheritedAllow?.includes("process")).toBe(false);
+    const saved = parseInheritedToolPolicyV2(await captureLatestDelegationPolicy());
+    const allows = createInheritedToolPolicyMatcher({ policy: saved });
+    expect(
+      ["read", "sessions_spawn", "exec", "process"].filter((name) => allows({ name })),
+    ).toEqual(["read", "sessions_spawn"]);
   });
 
   it("passes group-restricted tool surface to cron-created agent turns", () => {
@@ -2201,10 +2143,19 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("supports allow-only sub-agent tool policy", () => {
+  it("supports allow-only sub-agent tool policy", async () => {
+    const store = path.join(
+      tempDirs.make("openclaw-subagent-policy-"),
+      "{agentId}",
+      "sessions.json",
+    );
+    await writeSessionStore(store, "main", {
+      "agent:main:subagent:test": { sessionId: "test-child", updatedAt: Date.now() },
+    });
     const tools = createOpenClawCodingTools({
       sessionKey: "agent:main:subagent:test",
       config: {
+        session: { store },
         tools: {
           subagents: {
             tools: {
@@ -2275,8 +2226,17 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("browser")).toBe(true);
   });
 
-  it("keeps browser out of coding-profile subagents unless profile-stage alsoAllow adds it", () => {
+  it("keeps browser out of coding-profile subagents unless profile-stage alsoAllow adds it", async () => {
+    const store = path.join(
+      tempDirs.make("openclaw-subagent-browser-policy-"),
+      "{agentId}",
+      "sessions.json",
+    );
+    await writeSessionStore(store, "main", {
+      "agent:main:subagent:test": { sessionId: "test-child", updatedAt: Date.now() },
+    });
     const baseConfig = {
+      session: { store },
       browser: { enabled: true },
       plugins: { entries: { browser: { enabled: true } } },
       tools: { profile: "coding" },

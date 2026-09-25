@@ -12,10 +12,10 @@ import {
   contextEngineCompactMock,
   hookRunner,
   loadCompactHooksHarness,
-  maybeCompactAgentHarnessSessionMock,
   resetCompactHooksHarnessMocks,
   resolveContextEngineMock,
 } from "./compact.hooks.harness.js";
+import { maybeCompactAgentHarnessSessionMock } from "./compact.hooks.native.test-support.js";
 import type { QueuedCompactionHostOptions } from "./compact.queued-execution.js";
 import type { AcceptedCompactionSuccessor } from "./compaction-successor.js";
 

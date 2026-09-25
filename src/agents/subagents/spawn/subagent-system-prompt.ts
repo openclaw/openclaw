@@ -46,7 +46,6 @@ export function buildSubagentSpawnEnvelope(params: {
   requesterOrigin?: DeliveryContext;
   childSessionKey: string;
   label?: string;
-  acpEnabled?: boolean;
   /** Plugin-owned prompt guidance for registered native slash commands. */
   nativeCommandGuidanceLines?: string[];
   childDepth?: number;
@@ -99,16 +98,7 @@ export function buildSubagentSpawnEnvelope(params: {
       "Use child-status tooling only on-demand for status/debug, never busy-poll. Track expected run and session ids.",
       ...(params.completionMode === "collector"
         ? []
-        : [
-            ...normalizeUniqueStringEntries(params.nativeCommandGuidanceLines),
-            ...(params.acpEnabled
-              ? [
-                  "ACP harness: use the available ACP spawn capability; set `agentId` unless default. Codex only explicit ACP/acpx.",
-                  "Local subagent list/status tools cover OpenClaw runtime=subagent only; ACP ids come from `acp.allowedAgents`.",
-                  "Never ask the user for slash/CLI or exec openclaw/acpx when delegation tools can act.",
-                ]
-              : []),
-          ]),
+        : normalizeUniqueStringEntries(params.nativeCommandGuidanceLines)),
       "",
     );
   } else if (childDepth >= 2) {

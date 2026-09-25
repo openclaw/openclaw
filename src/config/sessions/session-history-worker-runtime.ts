@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { InheritedToolPolicyV2 } from "../../agents/inherited-tool-policy.schema.js";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import { prepareGatewaySessionStoreReadSources } from "../../gateway/session-utils-store-sources.js";
 import {
@@ -129,6 +130,16 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       sessionEntry: target.sessionEntry ? { sessionId: target.sessionEntry.sessionId } : undefined,
       ...(target.env ? { env: captureSessionTranscriptStorageEnvironment(target.env) } : {}),
     };
+    if (request.kind === "run-input-policy") {
+      return {
+        kind: request.kind,
+        params: {
+          target: capturedTarget,
+          sourceTurnId: request.params.sourceTurnId,
+          runIds: [...request.params.runIds],
+        },
+      };
+    }
     if (request.kind === "transcript-binding") {
       return {
         kind: request.kind,
@@ -219,6 +230,10 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
 }
 
 export function readSessionHistoryPageInWorker(
+  request: Extract<SessionHistoryWorkerRequest, { kind: "run-input-policy" }>,
+  signal?: AbortSignal,
+): Promise<InheritedToolPolicyV2 | undefined>;
+export function readSessionHistoryPageInWorker(
   request: Extract<SessionHistoryWorkerRequest, { kind: "transcript-binding" }>,
   signal?: AbortSignal,
 ): Promise<SessionHistoryTranscriptBinding | undefined>;
@@ -250,6 +265,7 @@ export async function readSessionHistoryPageInWorker(
   request: SessionHistoryWorkerRequest,
   signal?: AbortSignal,
 ): Promise<
+  | InheritedToolPolicyV2
   | SessionHistoryTranscriptBinding
   | undefined
   | ChatHistoryPage
@@ -438,6 +454,9 @@ export async function readSessionHistoryPageInWorker(
     const result = acquired.result;
     if (result.kind !== capturedRequest.kind) {
       throw new Error("Session history worker returned the wrong page type");
+    }
+    if (result.kind === "run-input-policy") {
+      return result.policy;
     }
     if (result.kind === "transcript-binding") {
       return result.binding;

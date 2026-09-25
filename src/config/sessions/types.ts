@@ -16,6 +16,7 @@ import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/lo
 import type { SessionGoal } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import type { InheritedToolPolicyV2 } from "../../agents/inherited-tool-policy.schema.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type {
   CronScheduledToolCallerOrigin,
@@ -382,8 +383,10 @@ type SessionEntryCore = SessionRestartRecoveryState &
     subagentRole?: "orchestrator" | "leaf";
     /** Explicit control scope assigned at spawn time for subagent control decisions. */
     subagentControlScope?: "children" | "none";
-    /** Version of the requester tool-policy snapshot captured when this child was spawned. */
-    inheritedToolPolicyVersion?: 1;
+    /** Version of the requester action restrictions captured when this child was spawned. */
+    inheritedToolPolicyVersion?: 1 | 2;
+    /** Host-authored action restrictions; v2 replaces the legacy allow/deny snapshot. */
+    inheritedToolPolicy?: InheritedToolPolicyV2;
     /** Session-scoped tool deny entries inherited from the caller that created this session. */
     inheritedToolDeny?: string[];
     /** Session-scoped tool allow entries inherited from the caller that created this session. */

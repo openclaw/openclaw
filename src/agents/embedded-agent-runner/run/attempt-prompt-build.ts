@@ -5,6 +5,7 @@
 import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
+import { drainFormattedDelegatedSystemEvents } from "../../../auto-reply/reply/session-system-events.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import {
@@ -17,8 +18,13 @@ import {
 } from "../../../infra/heartbeat-summary.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { buildInterSessionPromptContext } from "../../../sessions/input-provenance.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import {
+  hasAdmittedRunDelegatedInputPolicyTranscript,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
+import type { DelegatedToolParameterPolicy } from "../../inherited-tool-parameters.types.js";
+import type { InheritedToolPolicyV2 } from "../../inherited-tool-policy.schema.js";
 import {
   buildAgentInternalEventContext,
   resolveInternalEventPromptBody,
@@ -111,6 +117,9 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   runtimeModel: string;
   systemPromptText: string;
   applyPromptBuildToolsAllow: (toolsAllow: string[] | undefined) => string[];
+  getInheritedToolPolicy?: () => InheritedToolPolicyV2;
+  getEnforcedDelegatedToolParameterPolicy?: () => DelegatedToolParameterPolicy | undefined;
+  addDelegatedInputPolicies?: (policies: readonly InheritedToolPolicyV2[]) => () => void;
   prepareSystemPrompt?: (currentSystemPrompt: string) => Promise<string>;
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
   setLeasedSteering: (lease: EmbeddedAttemptSteeringLease) => void;
@@ -187,6 +196,47 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
           activeToolNames: callableToolNames,
           assertHostActive,
         });
+  if (
+    !preserveExactPrompt &&
+    attempt.sessionKey &&
+    input.getInheritedToolPolicy &&
+    input.addDelegatedInputPolicies
+  ) {
+    assertHostActive?.();
+    const notifications = drainFormattedDelegatedSystemEvents({
+      cfg: attempt.config ?? getRuntimeConfig(),
+      agentId: input.sessionAgentId,
+      sessionKey: attempt.sessionKey,
+      policy: input.getInheritedToolPolicy(),
+      targetEnforcedParameters: input.getEnforcedDelegatedToolParameterPolicy?.(),
+      accept: (policies) => {
+        const release = input.addDelegatedInputPolicies?.(policies);
+        try {
+          if (
+            attempt.userTurnTranscriptRecorder?.retainDelegatedInputPoliciesBeforePersistence?.(
+              policies,
+            ) ||
+            hasAdmittedRunDelegatedInputPolicyTranscript(attempt.admittedRunContext)
+          ) {
+            return true;
+          }
+          release?.();
+          return false;
+        } catch (error) {
+          release?.();
+          throw error;
+        }
+      },
+    });
+    if (notifications.text) {
+      effectivePrompt = `${notifications.text}\n\n${effectivePrompt}`;
+    }
+    if (notifications.deferred > 0) {
+      log.info(
+        `Deferred ${notifications.deferred} delegated notification(s): receiving input cannot currently accept their action policy.`,
+      );
+    }
+  }
   const promptBeforeResolvedToolFinalization = effectivePrompt;
   effectivePrompt = applyResolvedToolPromptFinalizer({
     prompt: effectivePrompt,

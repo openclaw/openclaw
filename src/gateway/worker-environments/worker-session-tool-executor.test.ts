@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { emptyDelegatedToolParameterPolicy } from "../../agents/inherited-tool-parameters.js";
+import { captureInheritedToolPolicy } from "../../agents/inherited-tool-policy.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import { claimAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
@@ -263,9 +265,11 @@ describe("worker session tool topology", () => {
       delegatedAuthority: expect.objectContaining({ kind: "worker", turnClaim: sourceClaim }),
       sessionSpawnContext: {
         inheritedToolPolicy: {
-          version: 1,
-          allow: ["sessions_spawn", "sessions_send"],
-          deny: [],
+          version: 2,
+          policy: {
+            clauses: [],
+            parameters: { fileTools: [], exec: [], sandbox: [], unsupported: [] },
+          },
         },
       },
     });
@@ -419,6 +423,17 @@ describe("worker session tool topology", () => {
         storePath: path.join(getFixture().root, "sessions.json"),
       },
       () => {},
+      undefined,
+      undefined,
+      () =>
+        captureInheritedToolPolicy({
+          policies: [],
+          parameters: emptyDelegatedToolParameterPolicy(),
+        }),
+      async (policy, assertCurrent) => {
+        assertCurrent();
+        return policy;
+      },
     );
     const childIdentity: WorkerConnectionIdentity = {
       ...identity,
@@ -456,10 +471,18 @@ describe("worker session tool topology", () => {
       },
     );
 
-    await execute({
+    const grandchildSpawn = await execute({
       identity: childIdentity,
       toolName: "sessions_spawn",
       request: { toolCallId: "spawn-grandchild", task: "start the grandchild" },
+    });
+    expect(JSON.parse(grandchildSpawn.resultJson)).toMatchObject({
+      details: {
+        status: "accepted",
+        runId: "spawned-grandchild-run",
+        runStarted: true,
+        sessionId: GRANDCHILD.sessionId,
+      },
     });
     expect(spawnCallerIdentity.mock.calls.map((call) => call[0]?.executionIdentityToken)).toEqual([
       PARENT_EXECUTION_IDENTITY_TOKEN,
@@ -514,6 +537,17 @@ describe("worker session tool topology", () => {
         storePath: path.join(getFixture().root, "sessions.json"),
       },
       () => {},
+      undefined,
+      undefined,
+      () =>
+        captureInheritedToolPolicy({
+          policies: [],
+          parameters: emptyDelegatedToolParameterPolicy(),
+        }),
+      async (policy, assertCurrent) => {
+        assertCurrent();
+        return policy;
+      },
     );
     const grandchildSend = await execute({
       identity: {

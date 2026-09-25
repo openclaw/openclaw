@@ -12,7 +12,6 @@ import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
 import { createRuntimeToolMatcher } from "../../tool-policy-match.js";
-import { replaceWithEffectiveToolAllowlist } from "../../tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
@@ -40,7 +39,6 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
     effectiveToolsAllow,
-    inheritedToolAllowlist,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
     toolsEnabled,
@@ -229,12 +227,6 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
           schemaProjection.tools,
           (tool) => getPluginToolMeta(tool),
         );
-      }
-      if (inheritedToolAllowlist?.length) {
-        // Spawn tools close over this ref before MCP/LSP materialize. Refresh it
-        // only after final policy and schema projection so children inherit the
-        // parent's complete authorized surface, never denied bundled tools.
-        replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, schemaProjection.tools);
       }
       logRuntimeToolSchemaQuarantine({
         diagnostics: schemaProjection.diagnostics,

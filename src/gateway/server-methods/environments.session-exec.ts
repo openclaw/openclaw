@@ -78,7 +78,8 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
           if (
             policy.security !== "full" ||
             policy.ask === "always" ||
-            toolPolicy.cronExecAskAlways
+            toolPolicy.cronExecAskAlways ||
+            toolPolicy.requiresInheritedApproval()
           ) {
             await approveSessionEnvironmentCommand({
               options,
@@ -100,7 +101,8 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
               !approved &&
               (policy.security !== "full" ||
                 policy.ask === "always" ||
-                toolPolicy.cronExecAskAlways)
+                toolPolicy.cronExecAskAlways ||
+                toolPolicy.requiresInheritedApproval())
             ) {
               throw new Error(
                 "Environment execution policy now requires approval; retry the command",

@@ -1,6 +1,7 @@
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { filterLocalModelLeanTools } from "./local-model-lean.js";
 import { resolveNativeWebSearchRoute } from "./native-web-search.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
@@ -9,6 +10,7 @@ export function applyModelProviderToolPolicy(
   toolsInput: AnyAgentTool[],
   params?: {
     config?: OpenClawConfig;
+    conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
     modelProvider?: string;
     modelApi?: string;
     modelBaseUrl?: string;
@@ -35,6 +37,7 @@ export function applyModelProviderToolPolicy(
     params?.suppressManagedWebSearch !== false &&
     resolveNativeWebSearchRoute({
       config: params?.config,
+      conversationCapabilityProfile: params?.conversationCapabilityProfile,
       modelProvider: params?.modelProvider,
       modelApi: params?.modelApi,
       modelBaseUrl: params?.modelBaseUrl,

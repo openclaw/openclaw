@@ -11,7 +11,7 @@ const callGateway = vi.fn();
 const registerRun = vi.fn();
 const resolveEngine = vi.fn();
 const startQueuedRun = vi.fn();
-let spawn: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+let spawn: import("./subagent-spawn.test-helpers.js").SpawnSubagentForTest;
 let createCallbacks: typeof import("./subagent-spawn-collector.js").createCollectorLaunchCallbacks;
 let resetScheduler: () => void;
 let isActive: typeof import("../swarm/swarm-scheduler.js").isSwarmRunActive;

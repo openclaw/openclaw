@@ -167,6 +167,8 @@ describe("applyModelProviderToolPolicy", () => {
     const filtered = testing.applyModelProviderToolPolicy(baseTools, {
       config: {
         tools: {
+          profile: "minimal",
+          alsoAllow: ["read", "exec", "web_search"],
           web: {
             search: {
               enabled: true,

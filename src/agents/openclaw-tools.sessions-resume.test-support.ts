@@ -2,15 +2,42 @@ import { Value } from "typebox/value";
 import { expect, it, type Mock } from "vitest";
 import { readInProcessSubagentResume } from "../gateway/in-process-subagent-resume.js";
 import { createOperationalRunInstanceRef } from "./admitted-run-context.js";
+import { captureInheritedToolPolicy } from "./inherited-tool-policy.js";
+import type { InheritedToolPolicySourceCapture } from "./inherited-tool-policy.schema.js";
 import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
 import { addSubagentRunForTests } from "./subagents/registry/subagent-registry.test-helpers.js";
 import type { AnyAgentTool } from "./tools/common.js";
-import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import {
+  captureGatewayToolCallerAssertion,
+  withGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 type SessionsSendResumeFixtures = {
-  getSessionTool: (name: "sessions_send", options: { agentSessionKey: string }) => AnyAgentTool;
+  getSessionTool: (
+    name: "sessions_send",
+    options: {
+      agentSessionKey: string;
+      captureInheritedToolPolicyForDelegation?: InheritedToolPolicySourceCapture;
+    },
+  ) => AnyAgentTool;
   callGatewayMock: Mock;
   loadSessionEntryByKeyMock: Mock;
+};
+
+const captureResumeSourcePolicy: InheritedToolPolicySourceCapture = async () => {
+  const assertCurrent = captureGatewayToolCallerAssertion();
+  if (!assertCurrent) {
+    throw new Error("Resume fixture requires an admitted source");
+  }
+  assertCurrent();
+  return {
+    policy: captureInheritedToolPolicy({
+      policies: [],
+      executionAllow: ["sessions_list", "sessions_history", "sessions_search", "sessions_send"],
+      parameters: { fileTools: [], exec: [], sandbox: [], unsupported: [] },
+    }),
+    assertCurrent,
+  };
 };
 
 export function registerSessionsSendResumeTests({
@@ -108,7 +135,10 @@ export function registerSessionsSendResumeTests({
           ? { status: "ok", terminalReply: { disposition: "empty" } }
           : {};
       });
-      const tool = getSessionTool("sessions_send", { agentSessionKey: parent });
+      const tool = getSessionTool("sessions_send", {
+        agentSessionKey: parent,
+        captureInheritedToolPolicyForDelegation: captureResumeSourcePolicy,
+      });
       try {
         const result = await withGatewayToolCallerIdentity(
           {
@@ -176,7 +206,10 @@ export function registerSessionsSendResumeTests({
     "sessions_send resume rejects competing delivery options %j",
     async (options) => {
       const parent = "agent:main:main";
-      const tool = getSessionTool("sessions_send", { agentSessionKey: parent });
+      const tool = getSessionTool("sessions_send", {
+        agentSessionKey: parent,
+        captureInheritedToolPolicyForDelegation: captureResumeSourcePolicy,
+      });
       await expect(
         withGatewayToolCallerIdentity(
           {

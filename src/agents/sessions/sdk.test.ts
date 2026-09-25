@@ -19,6 +19,7 @@ import {
   disposeOpenClawAgentDatabaseByPath,
 } from "../../state/openclaw-agent-db.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { wasSteeringMessageNotInjected } from "./steering-message-identity.js";
 
 const thinkingMocks = vi.hoisted(() => ({
   resolveThinkingDefaultForModel: vi.fn(() => "medium"),
@@ -393,7 +394,11 @@ describe("AgentSession queued user turns", () => {
     canInject = false;
     resolveInput();
 
-    await expect(queued).rejects.toThrow("active session is finalizing");
+    const rejection = await queued.catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).toMatchObject({ message: "active session is finalizing" });
+    expect(wasSteeringMessageNotInjected(rejection, "queue-identity")).toBe(true);
+    expect(wasSteeringMessageNotInjected(rejection, "another-input")).toBe(false);
     expect(steer).not.toHaveBeenCalled();
   });
 

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { captureDelegatedExecRestriction } from "../../agents/delegated-exec-policy.js";
+import type { InheritedToolPolicyV2 } from "../../agents/inherited-tool-policy.schema.js";
 import type { ExecAsk, ExecSecurity } from "../../infra/exec-approvals.js";
 import type { WorkerWorkspaceCommand } from "../worker-environments/tunnel-contract.js";
 import { environmentsSessionExecHandlers } from "./environments.session-exec.js";
@@ -60,7 +62,11 @@ const result = {
   termination: "exit",
 };
 
-function fixture(denied: string[] = [], runtimeAllow?: string[]) {
+function fixture(
+  denied: string[] = [],
+  runtimeAllow?: string[],
+  runtimePolicy?: InheritedToolPolicyV2,
+) {
   const execute = vi.fn(async (_binding: unknown, command: WorkerWorkspaceCommand) => {
     command.assertCurrent?.();
     return result;
@@ -70,13 +76,15 @@ function fixture(denied: string[] = [], runtimeAllow?: string[]) {
     req: { type: "req", id: "exec-1", method: "environments.session.exec" },
     params: {},
     client:
-      runtimeAllow === undefined
+      runtimeAllow === undefined && !runtimePolicy
         ? null
         : {
             internal: {
               agentRuntimeIdentity: {
                 sessionSpawnContext: {
-                  inheritedToolPolicy: { version: 1, allow: runtimeAllow, deny: [] },
+                  inheritedToolPolicy: runtimePolicy
+                    ? { version: 2, policy: runtimePolicy }
+                    : { version: 1, allow: runtimeAllow, deny: [] },
                 },
               },
             },
@@ -109,6 +117,61 @@ beforeEach(() => {
 });
 
 describe("conversation environment execution RPC", () => {
+  it.each([
+    { mode: "ask" as const, strictInlineEval: false, allowed: true, approvals: 1 },
+    { mode: "allowlist" as const, strictInlineEval: false, allowed: false, approvals: 0 },
+    { mode: "full" as const, strictInlineEval: true, allowed: false, approvals: 0 },
+  ])(
+    "enforces inherited $mode/strict=$strictInlineEval at the environment RPC",
+    async ({ mode, strictInlineEval, allowed, approvals }) => {
+      mocks.ambient = false;
+      const captured = captureDelegatedExecRestriction({ mode, strictInlineEval });
+      const policy: InheritedToolPolicyV2 = {
+        clauses: [],
+        parameters: {
+          fileTools: [],
+          exec: [captured.restriction],
+          sandbox: [],
+          unsupported: captured.unsupported,
+        },
+      };
+      const { call, execute } = fixture([], undefined, policy);
+      expect((await call({ argv: ["node", "app.js"] }))?.[0]).toBe(allowed);
+      expect(execute).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(mocks.approve).toHaveBeenCalledTimes(approvals);
+      const ordinary = fixture([], ["exec"]);
+      expect((await ordinary.call({ argv: ["node", "ordinary.js"] }))?.[0]).toBe(true);
+      expect(ordinary.execute).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("rechecks receiver authority after inherited approval preparation", async () => {
+    mocks.ambient = false;
+    const captured = captureDelegatedExecRestriction({ mode: "ask" });
+    const policy: InheritedToolPolicyV2 = {
+      clauses: [],
+      parameters: {
+        fileTools: [],
+        exec: [captured.restriction],
+        sandbox: [],
+        unsupported: captured.unsupported,
+      },
+    };
+    const entered = createDeferred();
+    const decision = createDeferred();
+    mocks.approve.mockImplementation(() => {
+      entered.resolve();
+      return decision.promise;
+    });
+    const { call, execute } = fixture([], undefined, policy);
+    const pending = call({ argv: ["node", "app.js"] });
+    await entered.promise;
+    mocks.current = false;
+    decision.resolve();
+    expect((await pending)?.[0]).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it.each([
     { allow: [], allowed: false },
     { allow: ["read"], allowed: false },

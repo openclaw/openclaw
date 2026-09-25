@@ -1,3 +1,4 @@
+import type { InheritedToolPolicyV2 } from "../../agents/inherited-tool-policy.schema.js";
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
 import type {
   SessionTranscriptDisplayDeltaResult,
@@ -110,6 +111,10 @@ export type SessionHistoryTranscriptBinding = { sessionKey: string; sessionId: s
 
 export type SessionHistoryWorkerRequest =
   | {
+      kind: "run-input-policy";
+      params: { target: SessionTranscriptReadScope; sourceTurnId?: string; runIds: string[] };
+    }
+  | {
       kind: "transcript-binding";
       params: { target: SessionTranscriptReadScope; run?: { id: string; maxBytes: number } };
     }
@@ -140,6 +145,7 @@ export type SessionHistoryWorkerRequest =
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
+  | { kind: "run-input-policy"; policy: InheritedToolPolicyV2 | undefined }
   | { kind: "transcript-binding"; binding: SessionHistoryTranscriptBinding | undefined }
   | { kind: "rpc"; page: ChatHistoryPage }
   | { kind: "message-lookup"; messages: unknown[] }

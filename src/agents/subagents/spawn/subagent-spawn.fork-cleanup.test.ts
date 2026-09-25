@@ -7,11 +7,14 @@ import type { ExecutionDecisionWork } from "../../../audit/execution-decision-wo
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { loadSubagentSpawnModuleForTest } from "./subagent-spawn.test-helpers.js";
+import {
+  captureTestSpawnToolPolicy,
+  loadSubagentSpawnModuleForTest,
+} from "./subagent-spawn.test-helpers.js";
 
 type ForkSession =
   typeof import("../../../auto-reply/reply/session-fork.js").forkSessionEntryFromParent;
-type SpawnSubagent = typeof import("./subagent-spawn.js").spawnSubagentDirect;
+type SpawnSubagent = import("./subagent-spawn.test-helpers.js").SpawnSubagentForTest;
 type SpawnFailure = "thread binding" | "context engine" | "launch" | "registration" | "collector";
 
 describe("subagent fork context through SQLite and tool boundaries", () => {
@@ -35,7 +38,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   let resetScheduler: () => void;
   let swarmScheduler: typeof import("../swarm/swarm-scheduler.js");
   let restoreActivation: (() => void) | undefined;
-  let restoreUpsert: () => void;
+  let restoreReplacement: () => void;
   let failure: SpawnFailure;
   let forkedEntry: SessionEntry | undefined;
   const registerSubagentRun = vi.fn();
@@ -120,10 +123,12 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     const { testing } = await import("../swarm/swarm-scheduler.test-support.js");
     resetScheduler = () => testing.reset();
     const runtime = await import("./subagent-spawn.runtime.js");
-    const upsert = vi
-      .spyOn(runtime, "upsertSessionEntryCore")
-      .mockImplementation(sessions.upsertSessionEntryCore);
-    restoreUpsert = () => upsert.mockRestore();
+    const { applySessionEntryCanonicalReplacements } =
+      await import("../../../config/sessions/session-accessor.sqlite-replacement-projection.js");
+    const replacement = vi
+      .spyOn(runtime, "applySessionEntryCanonicalReplacements")
+      .mockImplementation(applySessionEntryCanonicalReplacements);
+    restoreReplacement = () => replacement.mockRestore();
     ({ createSessionsSpawnTool } = await import("../../tools/sessions-spawn-tool.js"));
     ({ createAgentsWaitTool } = await import("../../tools/agents-wait-tool.js"));
     ({ finalizeAgentToolAvailability } = await import("../../agent-tool-availability.js"));
@@ -232,7 +237,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   });
 
   afterAll(() => {
-    restoreUpsert();
+    restoreReplacement();
     vi.doUnmock("./subagent-spawn.runtime.js");
     vi.doUnmock("./subagent-depth.js");
     vi.doUnmock("../registry/subagent-registry.js");
@@ -349,6 +354,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       });
       const tool = createSessionsSpawnTool({
         config,
+        captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
         agentSessionKey: parentKey,
         agentChannel: "discord",
         agentAccountId: "default",
@@ -568,7 +574,11 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
           return { rollback };
         },
       );
-      const tool = createSessionsSpawnTool({ config, agentSessionKey: parentKey });
+      const tool = createSessionsSpawnTool({
+        config,
+        agentSessionKey: parentKey,
+        captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
+      });
       const result = await callerContext.withGatewayToolCallerIdentity(
         { agentId: "main", sessionKey: parentKey, receiptAuthority: () => active },
         () =>

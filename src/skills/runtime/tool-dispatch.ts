@@ -1,7 +1,17 @@
+import path from "node:path";
+import { captureAgentToolSourceExecutionGuard } from "../../agents/agent-tool-source-execution-guard.js";
 import { applyToolAvailabilityDescriptions } from "../../agents/agent-tools.deferred-followup.js";
 // Skill tool dispatch routes runtime skill tool calls through the active session context.
 import { resolveEffectiveToolPolicy } from "../../agents/agent-tools.policy.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
+import type { ExecElevatedDefaults } from "../../agents/bash-tools.exec-types.js";
+import { prepareDelegatedToolParameterTarget } from "../../agents/delegated-tool-parameter-target.js";
+import type { ExecPolicyOverrides } from "../../agents/exec-defaults.js";
+import { captureDelegatedToolParameters } from "../../agents/inherited-tool-parameters.js";
+import {
+  captureDelegatedSourceToolPolicy,
+  captureInheritedToolPolicy,
+} from "../../agents/inherited-tool-policy.js";
 import type { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import { filterRequesterYieldTools } from "../../agents/openclaw-tools.requester-yield.js";
 import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy.js";
@@ -14,9 +24,7 @@ import {
 import {
   collectExplicitDenylist,
   collectExplicitAllowlist,
-  hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
-  replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
   type ToolPolicyLike,
 } from "../../agents/tool-policy.js";
@@ -68,6 +76,9 @@ export function resolveSkillDispatchTools(
     provider: string;
     model: string;
     senderIsOwner: boolean;
+    elevated?: ExecElevatedDefaults;
+    execOverrides?: ExecPolicyOverrides;
+    assertInvocationCurrent?: () => void;
     senderId?: string;
     currentChannelId?: string;
     skillCommand?: Pick<SkillCommandSpec, "name" | "skillFile" | "skillName" | "skillSource"> & {
@@ -123,11 +134,13 @@ export function resolveSkillDispatchTools(
     senderUsername: params.message.senderUsername,
     senderE164: params.message.senderE164,
   });
-  const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
+  const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy, inheritedActionPolicy } =
+    requesterPolicies;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     agentId: resolvedAgentId,
     sessionKey: params.sessionKey,
+    preparedSessionEntry: params.sessionEntry ?? null,
   });
   const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
   const ownerOnlyCoreToolPolicy = !params.senderIsOwner
@@ -148,7 +161,34 @@ export function resolveSkillDispatchTools(
     ownerOnlyCoreToolPolicy,
   ];
   const explicitDenylist = collectExplicitDenylist(explicitPolicyList);
-  const inheritedToolAllowlist: string[] = [];
+  const parameterFacts = prepareDelegatedToolParameterTarget({
+    config: params.cfg,
+    agentId: resolvedAgentId ?? params.agentId,
+    sessionEntry: params.sessionEntry ?? null,
+    sessionPermissionPolicy: params.sessionEntry?.permissionMode
+      ? {
+          root: params.sessionEntry.sessionRoot ?? params.workspaceDir,
+          mode: params.sessionEntry.permissionMode,
+        }
+      : undefined,
+    rootIsWorkspace:
+      !params.sessionEntry?.sessionRoot ||
+      path.resolve(params.sessionEntry.sessionRoot) === path.resolve(params.workspaceDir),
+    execOverrides: params.execOverrides,
+    elevated: params.elevated ?? null,
+    sandbox: sandboxRuntime,
+    modelProvider: params.provider,
+    modelId: params.model,
+  });
+  const capturedPolicy = captureInheritedToolPolicy({
+    policies: [
+      profilePolicyWithAlsoAllow,
+      providerProfilePolicyWithAlsoAllow,
+      ...explicitPolicyList.slice(2),
+    ],
+    inherited: inheritedActionPolicy,
+    parameters: captureDelegatedToolParameters(parameterFacts),
+  });
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const beforeToolCallHookContext = params.skillCommand
     ? {
@@ -195,8 +235,23 @@ export function resolveSkillDispatchTools(
     pluginToolAllowlist: collectExplicitAllowlist(explicitPolicyList),
     pluginToolDenylist: explicitDenylist,
     cronCreatorToolAllowlist,
-    inheritedToolAllowlist,
-    inheritedToolDenylist: explicitDenylist,
+    captureInheritedToolPolicyForDelegation: async () => {
+      const assertSource = captureAgentToolSourceExecutionGuard();
+      const assertCurrent = () => {
+        params.assertInvocationCurrent?.();
+        assertSource();
+      };
+      const policy = await captureDelegatedSourceToolPolicy({
+        policy: capturedPolicy,
+        exec: parameterFacts.exec,
+        sandboxed: sandboxRuntime.sandboxed,
+        config: params.cfg,
+        agentId: resolvedAgentId ?? params.agentId,
+        assertCurrent,
+      });
+      assertCurrent();
+      return { policy, assertCurrent };
+    },
   });
   const policyFiltered = applyToolPolicyPipeline({
     tools,
@@ -220,7 +275,7 @@ export function resolveSkillDispatchTools(
       }),
       { policy: sandboxPolicy, label: "sandbox tools.allow" },
       { policy: subagentPolicy, label: "subagent tools.allow" },
-      { policy: inheritedToolPolicy, label: "inherited tools" },
+      { policy: inheritedToolPolicy, inheritedActionPolicy, label: "inherited tools" },
       { policy: ownerOnlyCoreToolPolicy, label: "gateway sender owner-only tools" },
     ],
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
@@ -229,9 +284,6 @@ export function resolveSkillDispatchTools(
       toolDenylist: explicitDenylist,
     }),
   });
-  if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, policyFiltered);
-  }
   replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, policyFiltered, (tool) =>
     getPluginToolMeta(tool),
   );

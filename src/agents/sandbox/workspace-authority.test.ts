@@ -188,7 +188,7 @@ describe("resolveSandboxWorkspaceAuthority", () => {
       config,
       agentId: "main",
       sessionKey: "agent:main:subagent:workboard-card",
-      sessionEntry: { execHost: "gateway" },
+      sessionEntry: { sessionId: "workboard-card", execHost: "gateway" },
     });
     expect(gateway.confinementError).toContain("outside the sandbox");
 
@@ -196,7 +196,7 @@ describe("resolveSandboxWorkspaceAuthority", () => {
       config,
       agentId: "main",
       sessionKey: "agent:main:subagent:workboard-card",
-      sessionEntry: { execHost: "auto", execNode: "build-node" },
+      sessionEntry: { sessionId: "workboard-card", execHost: "auto", execNode: "build-node" },
     });
     expect(node.confinementError).toContain("outside the sandbox");
   });

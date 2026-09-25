@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
+import {
+  assertUserTurnSourceHasNoHostRequirements,
+  readUserTurnOriginalSourceMessage,
+} from "../../sessions/user-turn-transcript.metadata.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionPendingInputRow } from "./session-accessor.sqlite-pending-inputs.js";
@@ -45,6 +49,7 @@ export type PendingInputRequest = {
 };
 
 export function preparePendingInputRequest(params: PendingInputRequest) {
+  assertUserTurnSourceHasNoHostRequirements(params.message);
   const idempotencyKey = readMessageIdempotencyKey(params.message);
   if (!idempotencyKey || !params.runId) {
     throw new Error("Pending input requires an exact run and message idempotency key");
@@ -137,7 +142,8 @@ export function resolveCommittedPendingInputRequestHash(
     prepared,
     { config: options.config },
   );
-  const { timestamp: _committedTimestamp, ...stableCommitted } = committedMessage;
+  const { timestamp: _committedTimestamp, ...stableCommitted } =
+    readUserTurnOriginalSourceMessage(committedMessage);
   if (stableStringify(stablePrepared) !== stableStringify(stableCommitted)) {
     throw new Error("Input completion retry conflicts with the committed input");
   }

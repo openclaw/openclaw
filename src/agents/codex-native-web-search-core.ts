@@ -101,6 +101,7 @@ export function hasAvailableCodexAuth(params: {
 
 /** Resolves whether native search is active or why managed search should remain. */
 export function resolveCodexNativeSearchActivation(params: {
+  conversationCapabilityProfile?: WebSearchToolPolicyParams["conversationCapabilityProfile"];
   webSearchEnabled?: boolean;
   config?: OpenClawConfig;
   modelProvider?: string;

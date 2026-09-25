@@ -3,12 +3,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { parseInheritedToolPolicyV2 } from "../../agents/inherited-tool-policy.schema.js";
 import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { resolveSkillDispatchTools, type SkillToolDispatchDependencies } from "./tool-dispatch.js";
+
+vi.mock("../../infra/exec-approvals-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/exec-approvals-store.js")>()),
+  loadExecApprovalsReadOnlyAsync: vi.fn(async () => ({
+    version: 1,
+    defaults: { security: "full", ask: "off" },
+  })),
+}));
 
 function makeTool(name: string) {
   return {
@@ -148,6 +157,39 @@ describe("resolveSkillDispatchTools", () => {
       { name: "exec" },
       { name: "conversations_send" },
     ]);
+  });
+
+  it("captures prepared caller exec and elevation restrictions for skill delegation", async () => {
+    resolveSkillDispatchTools(
+      {
+        message: { surface: "webchat" },
+        cfg: { tools: { exec: { mode: "auto" } } },
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        workspaceDir: "/synthetic/workspace",
+        provider: "synthetic",
+        model: "synthetic",
+        senderIsOwner: true,
+        execOverrides: { mode: "ask" },
+        elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      },
+      dependencies,
+    );
+    const capture =
+      createOpenClawToolsMock.mock.calls.at(-1)?.[0]?.captureInheritedToolPolicyForDelegation;
+    if (!capture) {
+      throw new Error("Expected skill delegation policy capture");
+    }
+    const encodedPolicy = JSON.stringify((await capture()).policy);
+    const policy = parseInheritedToolPolicyV2(JSON.parse(encodedPolicy));
+    expect(policy.parameters.exec).toContainEqual(
+      expect.objectContaining({
+        security: "allowlist",
+        ask: "on-miss",
+        autoReview: false,
+        elevation: "ask",
+      }),
+    );
   });
 
   it("carries command skill file identity into tool diagnostics", () => {

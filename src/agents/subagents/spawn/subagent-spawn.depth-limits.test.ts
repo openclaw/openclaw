@@ -18,7 +18,7 @@ const hoisted = vi.hoisted(() => ({
   registerSubagentRunMock: vi.fn(),
 }));
 
-let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+let spawnSubagentDirect: import("./subagent-spawn.test-helpers.js").SpawnSubagentForTest;
 let persistedStore: Record<string, Record<string, unknown>> | undefined;
 
 type SpawnResult = Awaited<ReturnType<typeof spawnSubagentDirect>>;
@@ -192,8 +192,15 @@ describe("subagent spawn depth + child limits", () => {
       {
         agentSessionKey: "agent:main:main",
         workspaceDir: "/tmp/workspace-main",
-        inheritedToolAllowlist: ["sessions_spawn", "read", ""],
-        inheritedToolDenylist: ["bash", "exec", "read", ""],
+        captureInheritedToolPolicyForDelegation: async () => ({
+          policy: {
+            clauses: [
+              { kind: "configured", allow: ["sessions_spawn", "read"], deny: ["exec", "read"] },
+            ],
+            parameters: { fileTools: [], exec: [], sandbox: [], unsupported: [] },
+          },
+          assertCurrent: () => {},
+        }),
       },
     );
 
@@ -202,9 +209,12 @@ describe("subagent spawn depth + child limits", () => {
     if (!childSession) {
       throw new Error("Expected persisted child session");
     }
-    expect(childSession.inheritedToolAllow).toEqual(["sessions_spawn", "read"]);
-    expect(childSession.inheritedToolDeny).toEqual(["exec", "read"]);
-    expect(childSession.inheritedToolPolicyVersion).toBe(1);
+    expect(childSession.inheritedToolPolicy).toMatchObject({
+      clauses: [{ kind: "configured", allow: ["read", "sessions_spawn"], deny: ["exec", "read"] }],
+    });
+    expect(childSession.inheritedToolAllow).toBeUndefined();
+    expect(childSession.inheritedToolDeny).toBeUndefined();
+    expect(childSession.inheritedToolPolicyVersion).toBe(2);
   });
 
   it("rejects callers when stored spawn depth is already at the configured max", async () => {

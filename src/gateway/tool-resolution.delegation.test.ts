@@ -22,10 +22,7 @@ const hoisted = vi.hoisted(() => {
     makeTool,
     cronExecute,
     createOpenClawToolsMock: vi.fn(
-      (_options?: {
-        inheritedToolAllowlist?: string[];
-        cronCreatorToolAllowlist?: Array<{ name: string }>;
-      }) => [
+      (_options?: { cronCreatorToolAllowlist?: Array<{ name: string }> }) => [
         makeTool("read"),
         makeTool("sessions_spawn"),
         makeTool("sessions_send"),
@@ -95,7 +92,6 @@ describe("resolveGatewayScopedTools delegationCapability", () => {
     });
 
     const options = hoisted.createOpenClawToolsMock.mock.calls.at(-1)?.[0];
-    expect(options?.inheritedToolAllowlist).toEqual(["read", "automations", "gateway", "nodes"]);
     expect(options?.cronCreatorToolAllowlist).toEqual([
       { name: "read" },
       { name: "automations" },

@@ -132,6 +132,7 @@ async function createHostedChildFixture(
   let hostCurrent = true;
   let gatewayCurrent = true;
   let invocationCurrent = true;
+  let creationCurrent = true;
   const signal = new AbortController();
   const beforeInputCommit = vi.fn(() => {});
   const registry = getTestPluginRegistry();
@@ -241,6 +242,11 @@ async function createHostedChildFixture(
         inheritedToolPolicy: { version: 1, allow: [], deny: [] },
       },
       {
+        assertCreationCurrent: () => {
+          if (!creationCurrent) {
+            throw new Error("creation admission closed");
+          }
+        },
         signal: signal.signal,
         sessionMutationCommitGuard: () => {
           if (!hostCurrent) {
@@ -325,6 +331,9 @@ async function createHostedChildFixture(
     persistenceResult,
     dispatchEntered: dispatchEntered.promise,
     closeParent: () => parent.close(),
+    closeCreation: () => {
+      creationCurrent = false;
+    },
     closeInvocation: () => {
       invocationCurrent = false;
     },
@@ -526,6 +535,7 @@ describe("hosted creation transfers accepted child input", () => {
         // Returning from send has already aborted the real invocation envelope's signal.
         fixture.closeInvocation();
         fixture.closeParent();
+        fixture.closeCreation();
         await fixture.finish();
         expect(fixture.provider).toHaveBeenCalledOnce();
         expect(userMessages(scope)).toHaveLength(1);
@@ -576,6 +586,7 @@ describe("hosted creation transfers accepted child input", () => {
         expect(pending).toMatchObject({ total: 1, items: [{ state: "queued" }] });
         expect(userMessages(scope)).toEqual([]);
         fixture.closeParent();
+        fixture.closeCreation();
         await fixture.finish();
         expect(fixture.provider).toHaveBeenCalledOnce();
         expect(userMessages(scope)).toHaveLength(1);
@@ -643,16 +654,25 @@ describe("hosted creation transfers accepted child input", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps the parent receipt through child input COMMIT (system=%s)",
-    async (system) => {
+  it.each([
+    { system: false, boundary: "parent" },
+    { system: true, boundary: "parent" },
+    { system: false, boundary: "creation" },
+    { system: true, boundary: "creation" },
+  ])(
+    "keeps the $boundary receipt through child input COMMIT (system=$system)",
+    async ({ system, boundary }) => {
       const fixture = await createHostedChildFixture(system);
-      fixture.beforeInputCommit.mockImplementation(() => fixture.closeParent());
+      fixture.beforeInputCommit.mockImplementation(() =>
+        boundary === "creation" ? fixture.closeCreation() : fixture.closeParent(),
+      );
       try {
         await expect(fixture.send()).rejects.toThrow(
-          system
-            ? "agent tool caller authority is no longer active"
-            : "operator execution authority is no longer active",
+          boundary === "creation"
+            ? "creation admission closed"
+            : system
+              ? "agent tool caller authority is no longer active"
+              : "operator execution authority is no longer active",
         );
         expect(fixture.beforeInputCommit).toHaveBeenCalledOnce();
         expect(listSessionPendingInputs(fixture.scope())).toEqual({ items: [], total: 0 });

@@ -86,11 +86,7 @@ import {
   resolveCliAuthEpoch,
 } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
-import {
-  buildCliSessionDriftNote,
-  hashCliSessionText,
-  resolveCliSessionReuse,
-} from "../cli-session.js";
+import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
@@ -150,7 +146,7 @@ import {
   type BundledCliBackendAuthPolicy,
 } from "./cli-backend-auth-policy.js";
 import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
-import { resolveCliSessionId } from "./cli-run-recovery.js";
+import { resolveCliSessionId, prependCliSessionDriftUserContext } from "./cli-run-recovery.js";
 import {
   createCliRunCurrentAssertion,
   resolveCliExecutionTarget,
@@ -165,7 +161,8 @@ import {
   normalizeOptionalMcpContextValue,
 } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
-import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, detectNodeClaudePlacement } from "./prepare-claude.js";
+import { resolveClaudeCliContextModelId, detectNodeClaudePlacement } from "./prepare-claude.js";
+import { withCliDelegatedActionPolicy } from "./prepare-policy.js";
 import {
   buildCliTurnAppendContext,
   composeCliPromptContext,
@@ -202,11 +199,6 @@ function unsupportedIsolatedCompletionError(backendId: string): Error & { code: 
   return error;
 }
 
-function resolveClaudeCliContextModelId(modelId: string): string {
-  const trimmed = modelId.trim();
-  const lower = trimmed.toLowerCase();
-  return CLAUDE_CLI_CONTEXT_MODEL_ALIASES[lower] ?? trimmed;
-}
 type RunCliAgentPrepareParams = RunCliAgentParams & {
   /** Ring-zero tool transport supplied only by the OpenClaw orchestrator. */
   systemAgentTool?: import("../tools/system-agent-tool.js").SystemAgentToolOptions;
@@ -238,24 +230,6 @@ const defaultPrepareDeps = {
   loadManifestModelCatalog,
 };
 const prepareDeps = { ...defaultPrepareDeps };
-
-function prependCliSessionDriftUserContext(
-  context: RunCliAgentParams["currentInboundContext"],
-  reusableCliSession: CliReusableSession,
-): RunCliAgentParams["currentInboundContext"] {
-  if (reusableCliSession.mode !== "reuse-with-drift") {
-    return context;
-  }
-  const note = buildCliSessionDriftNote(reusableCliSession.drift.reasons);
-  if (!context) {
-    return { text: note };
-  }
-  return {
-    ...context,
-    text: [note, context.text].join("\n\n"),
-    ...(context.resumableText ? { resumableText: [note, context.resumableText].join("\n\n") } : {}),
-  };
-}
 
 async function resolveCliSkillsPrompt(params: {
   assertCurrent: () => void;
@@ -384,6 +358,12 @@ function shouldResolveAuthProfileForExecution(params: {
 
 /** Builds the complete context required to execute a CLI-backed agent run. */
 export async function prepareCliRunContext(
+  inputParams: RunCliAgentParams,
+): Promise<PreparedCliRunContext> {
+  return withCliDelegatedActionPolicy(inputParams, prepareCliRunContextWithPreparedPolicy);
+}
+
+async function prepareCliRunContextWithPreparedPolicy(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
   if (!inputParams.sessionManager && inputParams.sessionTarget) {

@@ -38,7 +38,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
-import { resolveCollectedRun } from "./collected-run.js";
+import { requiresIndividualCollectDrain, resolveCollectedRun } from "./collected-run.js";
 import {
   collectRuntimeMetadata,
   createOverflowSummaryRetrySource,
@@ -360,10 +360,6 @@ function collectQueuedPromptMedia(
   };
 }
 
-function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
-  return item.currentInboundEventKind === "room_event" || item.currentInboundAudio === true;
-}
-
 function buildCollectTranscriptInput(
   items: FollowupRun[],
   messages?: (PersistedUserTurnMessage | undefined)[],
@@ -483,18 +479,6 @@ function resolveAggregateOwner(items: readonly FollowupRun[]): FollowupRun | und
     items.findLast((item) => item.abortSignal) ??
     items.findLast((item) => item.turnAdoptionLifecycle) ??
     items.at(-1)
-  );
-}
-
-function requiresIndividualCollectDrain(item: FollowupRun): boolean {
-  return (
-    // A definitive native rejection can return an already-committed source.
-    // Keep its original recorder/event; only unconsumed sources may regroup.
-    item.userTurnTranscriptRecorder?.hasPersisted() === true ||
-    item.disableCollectBatching === true ||
-    item.run.skillWorkshopProposalRevision !== undefined ||
-    item.run.skillLibraryAuthoring !== undefined ||
-    hasRuntimeOnlyFollowupMetadata(item)
   );
 }
 

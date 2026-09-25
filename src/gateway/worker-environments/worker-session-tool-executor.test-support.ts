@@ -6,6 +6,8 @@ import {
   createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
 } from "../../agents/admitted-run-context.js";
+import { emptyDelegatedToolParameterPolicy } from "../../agents/inherited-tool-parameters.js";
+import { captureInheritedToolPolicy } from "../../agents/inherited-tool-policy.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -14,12 +16,12 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
@@ -42,16 +44,36 @@ export function workerSessionToolTestMocks() {
   return sharedMocks;
 }
 
-vi.mock("../session-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session-utils.js")>();
-  return {
-    ...actual,
-    loadGatewaySessionEntryReadOnly: (sessionKey: string) => ({
-      agentId: parseAgentSessionKey(sessionKey)?.agentId,
-      canonicalKey: sessionKey,
-      entry: structuredClone(sharedMocks.sessionEntries.get(sessionKey)),
-    }),
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  withSessionEntryReadOnlyInWorker: async (
+    input: { sessionKey: string },
+    assertCurrent: () => void,
+    consume: (
+      value: { ok: true; value: SessionEntry | undefined },
+      assertCurrent: () => void,
+    ) => Promise<unknown>,
+  ) => {
+    assertCurrent();
+    const result = await consume(
+      { ok: true, value: structuredClone(sharedMocks.sessionEntries.get(input.sessionKey)) },
+      assertCurrent,
+    );
+    assertCurrent();
+    return result;
+  },
+}));
+vi.mock("../session-row-projection-access.js", () => {
+  const projection = {
+    prepareMembership: async () => {},
+    getPolicyConfig: () => ({}),
+    sharingTargetState: ({ key }: { key: string }) => {
+      const entry = sharedMocks.sessionEntries.get(key);
+      return entry
+        ? { status: "ready", target: { entry, storePath: "/worker-fixture.sqlite" } }
+        : { status: "missing" };
+    },
   };
+  return { getSessionRowProjection: () => projection };
 });
 
 vi.mock("../../agents/tools/sessions-send-tool.js", () => ({
@@ -149,7 +171,8 @@ export const PARENT_EXECUTION_IDENTITY_TOKEN = {
   createdAt: 1,
 } satisfies ExecutionIdentityAdmissionToken;
 
-export const resolveGatewayContext = () => undefined;
+const gatewayContext = createContext();
+export const resolveGatewayContext = () => gatewayContext;
 
 type WorkerSessionToolTestMocks = {
   sessionEntries: Map<string, SessionEntry>;
@@ -236,6 +259,15 @@ async function createWorkerSessionToolTestFixture(
             assertCurrent: () => {},
           })
         : undefined,
+      () =>
+        captureInheritedToolPolicy({
+          policies: [],
+          parameters: emptyDelegatedToolParameterPolicy(),
+        }),
+      async (policy, assertCurrent) => {
+        assertCurrent();
+        return policy;
+      },
     );
   });
   const identity: WorkerConnectionIdentity = {

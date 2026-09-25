@@ -4,7 +4,10 @@ import type {
   SessionCreatedVia,
 } from "../../config/sessions/session-entry-provenance.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import type { AgentRuntimeSpawnModelAutoSelection } from "../agent-runtime-session-spawn-context.js";
+import type {
+  AgentRuntimeInheritedToolPolicy,
+  AgentRuntimeSpawnModelAutoSelection,
+} from "../agent-runtime-session-spawn-context.js";
 
 export type TrustedSessionCreation = {
   skillLibrarySelections?: import("../../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
@@ -21,11 +24,7 @@ export type TrustedSessionCreation = {
   /** Prepared parent selection; never accepted from public creation parameters. */
   resolvedModel?: ProviderModelRef;
   /** Effective caller tool-policy snapshot for an in-process visible spawn. */
-  inheritedToolPolicy?: {
-    version: 1;
-    allow: string[];
-    deny: string[];
-  };
+  inheritedToolPolicy?: AgentRuntimeInheritedToolPolicy;
   /** Config-selected model provenance from the trusted spawning tool. */
   spawnModelAutoSelection?: AgentRuntimeSpawnModelAutoSelection;
 };

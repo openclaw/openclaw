@@ -66,7 +66,7 @@ describe("spawn context-engine resource custody", () => {
   const config = createSubagentSpawnTestConfig(undefined, {
     tools: { swarm: { enabled: true, maxConcurrent: 1 } },
   });
-  let spawn: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+  let spawn: import("./subagent-spawn.test-helpers.js").SpawnSubagentForTest;
   let scheduler: typeof import("../swarm/swarm-scheduler.js");
   let resetScheduler: () => void;
   let GatewayDrainingError: typeof import("../../../process/gateway-work-admission.js").GatewayDrainingError;

@@ -21,6 +21,10 @@ import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
+import {
+  readOpenClawAgentDatabaseIdentity,
+  type OpenClawAgentDatabaseIdentity,
+} from "../state/openclaw-agent-db-identity.js";
 import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import {
@@ -41,6 +45,7 @@ import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 type PreparedSessionSourceFacts = PreparedSessionMutationFacts & {
   /** Physical source retained by the same read custody as the sharing facts. */
   sourcePath?: string;
+  databaseIdentity?: OpenClawAgentDatabaseIdentity;
 };
 
 type ExistingSessionMutationFacts = PreparedSessionSourceFacts & {
@@ -235,6 +240,9 @@ export async function prepareSessionMutationFacts(
       const sessionId = initial?.entry?.sessionId;
       const lifecycleRevision = initial?.entry?.lifecycleRevision;
       expectedPlaceholder = initial?.placeholder;
+      const databaseIdentity = database
+        ? readOpenClawAgentDatabaseIdentity(database).identity
+        : undefined;
       selectedPaths.add(path.resolve(storePath));
       releases.push(
         registerOpenClawAgentDatabaseAsyncResource({
@@ -268,6 +276,7 @@ export async function prepareSessionMutationFacts(
         }
         return {
           sourcePath: storePath,
+          databaseIdentity,
           target: {
             agentId,
             canonicalKey,
@@ -445,6 +454,7 @@ export async function prepareSessionMutationFacts(
         };
         facts = {
           sourcePath: sharing.source.path,
+          databaseIdentity: sharing.databaseIdentity,
           target,
           membership: new Set(
             sharing.members.find((member) => member.sessionKey === match.key)?.identityIds,
@@ -475,6 +485,7 @@ export async function prepareSessionMutationFacts(
           }
           return {
             sourcePath: sharing.source.path,
+            databaseIdentity: sharing.databaseIdentity,
             target: { ...target, entry: current.entry },
             membership: current.membership,
           };

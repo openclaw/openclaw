@@ -7,6 +7,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
+  readSessionRunInputPolicyAsync,
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
@@ -95,7 +96,7 @@ describe("session transcript reader marker projection", () => {
 
   async function writeTranscript(
     sessionId: string,
-    events: Array<{ id: string }>,
+    events: readonly { id: string }[],
   ): Promise<SessionTranscriptReadScope> {
     const scope = {
       agentId: "main",
@@ -109,6 +110,79 @@ describe("session transcript reader marker projection", () => {
     ]);
     return scope;
   }
+
+  test("recovers only exact source, bound steering, and changed requirements outside the compacted prompt", async () => {
+    const policy = (allow: string[]) => ({
+      clauses: [{ kind: "configured", allow }],
+      parameters: { fileTools: [], exec: [], sandbox: [], unsupported: [] },
+    });
+    const metadata = (allow: string[]) => ({
+      delegatedInputPolicyVersion: 2,
+      delegatedInputPolicy: policy(allow),
+    });
+    const events = [
+      {
+        ...message("source", "accepted source"),
+        message: {
+          role: "user",
+          content: "accepted source",
+          idempotencyKey: "source-run:user",
+          __openclaw: metadata(["read", "write"]),
+        },
+      },
+      {
+        ...message("steer", "accepted steer"),
+        message: {
+          role: "user",
+          content: "accepted steer",
+          __openclaw: { ...metadata(["read"]), steerTargetRunId: "physical-run" },
+        },
+      },
+      {
+        ...message("checkpoint", "generated fragment", "assistant"),
+        message: {
+          role: "assistant",
+          content: "generated fragment",
+          __openclaw: { ...metadata(["read", "status"]), runId: "physical-run" },
+        },
+      },
+      {
+        ...message("unrelated", "ordinary later input"),
+        message: {
+          role: "user",
+          content: "ordinary later input",
+          idempotencyKey: "later-run:user",
+        },
+      },
+      compaction("boundary", "unrelated"),
+      message("later-reply", "ordinary answer", "assistant"),
+    ];
+    const scope = await writeTranscript("input-policy-recovery", events);
+    const recovered = await readSessionRunInputPolicyAsync(scope, {
+      sourceTurnId: "source-run",
+      runIds: ["physical-run"],
+    });
+    expect(recovered?.clauses).toHaveLength(3);
+    expect(recovered?.clauses).toEqual(
+      expect.arrayContaining([
+        { kind: "configured", allow: ["read", "write"] },
+        { kind: "configured", allow: ["read"] },
+        { kind: "configured", allow: ["read", "status"] },
+      ]),
+    );
+    expect(
+      await readSessionRunInputPolicyAsync(scope, {
+        sourceTurnId: "later-run",
+        runIds: ["later-run"],
+      }),
+    ).toBeUndefined();
+    await expect(
+      readSessionRunInputPolicyAsync(scope, {
+        sourceTurnId: "lost-source",
+        runIds: ["physical-run"],
+      }),
+    ).rejects.toThrow("source input is missing");
+  });
 
   test("pages pre-compaction history and token savings from the transcript without checkpoints", async () => {
     const scope = await writeTranscript("metrics", [

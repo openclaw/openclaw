@@ -19,13 +19,6 @@ import { createWorkerPortalToolExecutor } from "./worker-portal-tool-executor.js
 
 const sessionEntries = vi.hoisted(() => new Map<string, SessionEntry>());
 
-vi.mock("../session-utils.js", () => ({
-  loadGatewaySessionEntryReadOnly: (sessionKey: string) => ({
-    canonicalKey: sessionKey,
-    entry: structuredClone(sessionEntries.get(sessionKey)),
-  }),
-}));
-
 const SOURCE = {
   agentId: "main",
   sessionId: "source-session",
@@ -54,7 +47,9 @@ describe("worker portal tool execution", () => {
   let sourceEnvironmentEpoch: number;
   let sourceNodeDeviceId: string | null;
   let sourceSshEndpoint: { host: string } | null;
-  let execute: ReturnType<typeof createWorkerPortalToolExecutor>;
+  let execute: (
+    request: Parameters<ReturnType<typeof createWorkerPortalToolExecutor>>[0],
+  ) => ReturnType<ReturnType<typeof createWorkerPortalToolExecutor>>;
   const portalOpen = vi.fn();
   const portalList = vi.fn();
   const portalWorkerList = vi.fn();
@@ -156,7 +151,7 @@ describe("worker portal tool execution", () => {
     sourceEnvironmentEpoch = SOURCE.ownerEpoch;
     sourceNodeDeviceId = "worker-node";
     sourceSshEndpoint = null;
-    execute = createWorkerPortalToolExecutor({
+    const executePrepared = createWorkerPortalToolExecutor({
       placements,
       portals: {
         getService: () =>
@@ -186,6 +181,12 @@ describe("worker portal tool execution", () => {
             : undefined,
       } as never,
     });
+    execute = (request) =>
+      executePrepared(request, (sessionKey) => ({
+        agentId: SOURCE.agentId,
+        canonicalKey: sessionKey,
+        entry: structuredClone(sessionEntries.get(sessionKey)),
+      }));
   });
 
   afterEach(async () => {

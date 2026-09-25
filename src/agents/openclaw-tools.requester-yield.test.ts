@@ -5,6 +5,7 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import type { OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { useToolPolicySessionFixture } from "./agent-tools.session-policy.test-support.js";
 import { addSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -21,6 +22,22 @@ import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.t
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 const CRON_RUN_KEY = "agent:main:cron:daily-report:run:run-42";
+
+useToolPolicySessionFixture({
+  "agent:main:main": { sessionId: "yield-parent", updatedAt: 1 },
+  ...Object.fromEntries(
+    ["worker", "finished-worker", "watcher"].map((id) => [
+      `agent:main:subagent:${id}`,
+      {
+        sessionId: `${id}-session`,
+        updatedAt: 1,
+        spawnedBy: "agent:main:main",
+        spawnDepth: 1,
+        inheritedToolPolicyVersion: 1 as const,
+      },
+    ]),
+  ),
+});
 
 function seedRequiredChild(
   requesterSessionKey = CRON_RUN_KEY,

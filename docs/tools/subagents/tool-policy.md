@@ -12,6 +12,39 @@ Sub-agents use the same profile and tool-policy pipeline as the parent or
 target agent first. After that, OpenClaw applies the sub-agent restriction
 layer.
 
+New native children also retain the originating task's configured action
+restrictions. Receiver restrictions apply alongside them, including supported
+exec, filesystem, and sandbox constraints. The capture describes restrictions,
+not just the tools available at launch: enabling an optional tool later cannot
+erase a deny rule, and a temporarily unavailable permitted tool is not
+permanently excluded. Nested children retain the conjunction.
+
+Acceptance transfers these restrictions to the child. They survive normal
+sender completion, child resume, and Gateway restart. Receiver credentials,
+approvals, and live execution authority remain with their existing owners;
+creating a child does not transfer them. If a backend cannot enforce a required
+constraint, the spawn fails explicitly. ACP accepts and retains saved policies
+when its host execution can satisfy them. Constraints ACP cannot enforce cause
+an explicit refusal; use the native subagent backend for that work. Standalone
+CLI execution does not accept these saved native action restrictions.
+
+An isolated transcript is separate conversation context, not proof of resource
+isolation. File-tool workspace restrictions do not confine shell commands, and
+a sandbox does not automatically confine custom plugin operations. See
+[Sandboxing](/gateway/sandboxing).
+
+Completion still returns through the requester's authorized reply path. These
+action restrictions do not make the answer confidential or restrict unrelated
+work in the requesting conversation.
+
+Existing version-1 tasks keep their recorded legacy tool-policy interpretation.
+The new saved format requires agent database schema 24. After migration, older
+binaries refuse the database, including databases without delegated tasks.
+Binary-only rollback is therefore unavailable; use the existing verified
+pre-upgrade backup recovery procedure with compatible binaries. Restoring that
+backup can lose work created afterward. See
+[Database versioning](/reference/database-schemas/versioning).
+
 Sub-agents always lose `gateway`, `agents_list`, `session_status`, `progress_card`, `cron`,
 `message`, `sessions_send`, and the `conversations_*` tools regardless of
 depth or role (system-level/interactive tools, parent-owned progress cards, direct delivery surfaces, or

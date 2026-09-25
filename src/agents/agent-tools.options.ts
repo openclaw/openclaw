@@ -18,6 +18,10 @@ import type {
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import type { DelegationCapability } from "./delegation-capability.js";
+import type {
+  InheritedToolPolicyRef,
+  InheritedToolPolicySourceCapture,
+} from "./inherited-tool-policy.schema.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import type { OpenClawSharedToolsOptions } from "./openclaw-tools.types.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
@@ -98,8 +102,11 @@ export type OpenClawCodingToolsOptions = {
   memberRoleIds?: string[];
   /** True when runtimeToolAllowlist is real parent authority that child sessions inherit. */
   inheritRuntimeToolAllowlist?: boolean;
-  /** Mutable spawn capability snapshot refreshed after late-bound runtime tools are authorized. */
+  /** Legacy SDK surface snapshot; native delegation captures configured restrictions separately. */
   inheritedToolAllowlistRef?: string[];
+  /** Host generation capture; independent of the advertised tool surface. */
+  inheritedToolPolicyRef?: InheritedToolPolicyRef;
+  captureInheritedToolPolicyForDelegation?: InheritedToolPolicySourceCapture;
   /** Mutable cron creator cap ref for callers that append final runtime tools later. */
   cronCreatorToolAllowlistRef?: CronCreatorToolAllowlistEntry[];
   /** Mutable proof that the cron cap reached the final executable surface. */

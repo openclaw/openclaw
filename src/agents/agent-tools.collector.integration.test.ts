@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { useToolPolicySessionFixture } from "./agent-tools.session-policy.test-support.js";
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { buildEmbeddedAttemptToolRunContext } from "./embedded-agent-runner/run/attempt-tool-run-context.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagents/registry/subagent-registry-state.js";
@@ -18,6 +19,16 @@ vi.mock("./subagents/registry/subagent-registry-state.js", { spy: true });
 
 const runId = "collector-tool-contract";
 const sessionKey = "agent:main:subagent:collector-contract";
+useToolPolicySessionFixture({
+  "agent:main:main": { sessionId: "collector-parent", updatedAt: 1 },
+  [sessionKey]: {
+    sessionId: "collector-session",
+    updatedAt: 1,
+    spawnedBy: "agent:main:main",
+    spawnDepth: 1,
+    inheritedToolPolicyVersion: 1,
+  },
+});
 const schema = {
   type: "object",
   properties: { answer: { type: "string" } },

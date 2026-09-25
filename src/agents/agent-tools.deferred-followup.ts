@@ -51,18 +51,6 @@ function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<s
       description = description.replace(original, expanded);
     }
   }
-  if (tool.name === "sessions_send") {
-    const deliveryTools = ["conversations_send", "conversations_turn"].filter((name) =>
-      availableTools.has(name),
-    );
-    if (availableTools.has("conversations_list") && deliveryTools.length > 0) {
-      const guidance = `For an exact external destination, use \`conversations_list\` plus ${deliveryTools.map((name) => `\`${name}\``).join("/")}.`;
-      description = description.replace(
-        " Thread chats rejected:",
-        ` ${guidance} Thread chats rejected:`,
-      );
-    }
-  }
   if (tool.name === "sessions_spawn") {
     const statusTools = ["subagents", "sessions_history"].filter((name) =>
       availableTools.has(name),
@@ -70,8 +58,8 @@ function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<s
     if (statusTools.length > 0) {
       const guidance = statusTools.map((name) => `\`${name}\``).join("/");
       description = description.replace(
-        "No spawn for quick lookup/single read.",
-        `No spawn for quick lookup/single read. Check spawns via ${guidance}.`,
+        "After spawn, do non-overlap work; follow the receipt's completion mode.",
+        `Check spawns via ${guidance}. After spawn, do non-overlap work; follow the receipt's completion mode.`,
       );
     }
     // Only subagents exposes execution and delivery status; history is a transcript.

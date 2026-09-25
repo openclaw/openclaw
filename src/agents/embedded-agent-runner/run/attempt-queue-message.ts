@@ -1,7 +1,7 @@
 /**
  * Steers active embedded sessions and waits for transcript commits when needed.
  */
-import { toErrorObject } from "../../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import { hasPromptImageInput } from "../../../media/prompt-image-input.js";
@@ -15,6 +15,7 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { retireQueuedUserMessage } from "../../sessions/queued-user-message-retirement.js";
 import {
   getSteeringMessageIdentity,
+  recordSteeringMessageNotInjected,
   subscribeSteeringMessagePersistenceFailure,
 } from "../../sessions/steering-message-identity.js";
 import { log } from "../logger.js";
@@ -200,14 +201,18 @@ async function steerAndWaitForTranscriptCommit(
       }
       // Cancellation is best-effort but must finish before rejecting so callers
       // do not return while a stale queued message can leak into the next turn.
+      const rejection = new Error(message);
       cancellation ??= cancelQueuedSteeringMessage(activeSession, queueIdentity).then((removed) => {
+        if (removed) {
+          recordSteeringMessageNotInjected(rejection, queueIdentity);
+        }
         if (!removed && wasAccepted && !allowReplay) {
           log.warn("failed to find queued steering message for cancellation");
           throw new EmbeddedSteeringAcceptedUnconfirmedError(message);
         }
       });
       void cancellation.then(
-        () => finish(new Error(message)),
+        () => finish(rejection),
         (error: unknown) => {
           if (!(error instanceof EmbeddedSteeringAcceptedUnconfirmedError)) {
             log.warn(`failed to cancel queued steering message: ${String(error)}`);
@@ -225,7 +230,9 @@ async function steerAndWaitForTranscriptCommit(
     const rejectBeforeAcceptance = (message: string) => {
       acceptanceOpen = false;
       reportAcceptance(false);
-      finish(new Error(message));
+      const rejection = new Error(message);
+      recordSteeringMessageNotInjected(rejection, queueIdentity);
+      finish(rejection);
     };
     const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(
       () => {
@@ -274,7 +281,12 @@ async function steerAndWaitForTranscriptCommit(
           return;
         }
         accepted = true;
-        reportAcceptance(true);
+        try {
+          reportAcceptance(true);
+        } catch (error) {
+          rejectAfterCancellation(formatErrorMessage(error));
+          return;
+        }
         if (abortRequested) {
           rejectAfterCancellation("queued steering message was cancelled before delivery");
         }

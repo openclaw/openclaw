@@ -6,11 +6,13 @@
 import crypto from "node:crypto";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { bindInProcessSessionSendPolicy } from "../../gateway/in-process-session-send-policy.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import type { InheritedToolPolicyV2 } from "../inherited-tool-policy.schema.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunReply } from "../run-wait.js";
 import {
@@ -56,6 +58,7 @@ export async function runAgentStep(
     sourceTool?: string;
     sourceRole?: "subagent";
     callGateway?: GatewayCaller;
+    delegatedInputPolicy?: InheritedToolPolicyV2;
   } & (
     | {
         transcriptMessage?: undefined;
@@ -84,6 +87,7 @@ export async function runAgentStep(
     // Keep announce bookkeeping off the wire without expanding the model-authored RPC surface.
     const ingress: Parameters<AgentCommandRunner>[0] = {
       message,
+      delegatedInputPolicy: params.delegatedInputPolicy,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       transcriptMessage: params.transcriptMessage,
       sessionKey: params.sessionKey,
@@ -100,29 +104,36 @@ export async function runAgentStep(
     const result = await agentCommandFromIngress(ingress);
     return extractAgentCommandReply(result);
   }
-  const response = await gatewayCall({
-    method: "agent",
-    params: {
-      message,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      sessionKey: params.sessionKey,
-      idempotencyKey: stepIdem,
-      expectedExistingSessionId: params.expectedSession?.sessionId,
-      expectedExistingSessionLifecycleRevision: params.expectedSession
-        ? (params.expectedSession.lifecycleRevision ?? null)
+  const response = await gatewayCall(
+    bindInProcessSessionSendPolicy(
+      {
+        method: "agent",
+        params: {
+          message,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          sessionKey: params.sessionKey,
+          idempotencyKey: stepIdem,
+          expectedExistingSessionId: params.expectedSession?.sessionId,
+          expectedExistingSessionLifecycleRevision: params.expectedSession
+            ? (params.expectedSession.lifecycleRevision ?? null)
+            : undefined,
+          accountId: params.deliveryContext?.accountId,
+          to: params.deliveryContext?.to,
+          threadId: stringifyRouteThreadId(params.deliveryContext?.threadId),
+          deliver: false,
+          sourceReplyDeliveryMode: "message_tool_only",
+          channel,
+          lane,
+          extraSystemPrompt: params.extraSystemPrompt,
+          inputProvenance,
+        },
+        timeoutMs: 10_000,
+      },
+      params.delegatedInputPolicy
+        ? { kind: "delegation", policy: params.delegatedInputPolicy }
         : undefined,
-      accountId: params.deliveryContext?.accountId,
-      to: params.deliveryContext?.to,
-      threadId: stringifyRouteThreadId(params.deliveryContext?.threadId),
-      deliver: false,
-      sourceReplyDeliveryMode: "message_tool_only",
-      channel,
-      lane,
-      extraSystemPrompt: params.extraSystemPrompt,
-      inputProvenance,
-    },
-    timeoutMs: 10_000,
-  });
+    ),
+  );
 
   if (params.sourceAgentId && params.agentId) {
     recordSessionParticipantBestEffort({

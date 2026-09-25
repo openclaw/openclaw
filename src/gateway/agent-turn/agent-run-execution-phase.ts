@@ -36,6 +36,7 @@ import {
 } from "../../sessions/input-provenance.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
+import { readInProcessSessionSendPolicy } from "../in-process-session-send-policy.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run-model-selection.js";
@@ -455,6 +456,8 @@ export async function startAgentRunExecution(params: {
               ingressOpts: {
                 skillLibraryAuthoring,
                 message,
+                delegatedInputPolicy: readInProcessSessionSendPolicy(params.client?.internal)
+                  ?.policy,
                 images: params.images,
                 imageOrder: params.imageOrder,
                 media: params.media,

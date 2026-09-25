@@ -71,6 +71,8 @@ export type RunCliAgentParams = {
   /** Session identity used only for sandbox and tool-policy resolution. */
   runtimePolicySessionKey?: string;
   sessionEntry?: SessionEntry;
+  /** Accepted source action restrictions; native CLI adapters must enforce them explicitly. */
+  delegatedInputPolicy?: import("../inherited-tool-policy.schema.js").InheritedToolPolicyV2;
   trigger?: EmbeddedRunTrigger;
   sessionFile: string;
   /** Host-owned task root; preparation must mediate all tools through its filesystem policy. */

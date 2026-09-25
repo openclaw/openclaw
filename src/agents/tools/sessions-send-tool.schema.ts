@@ -44,6 +44,7 @@ export const SessionsSendOutputSchema = Type.Union([
       sessionKey: Type.String(),
       notificationId: Type.String(),
       durability: Type.Literal("process"),
+      deliveryCondition: Type.Optional(Type.Literal("compatible-receiving-policy")),
       runStarted: Type.Literal(false),
     },
     { additionalProperties: false },

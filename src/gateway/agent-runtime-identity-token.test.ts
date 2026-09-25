@@ -266,7 +266,18 @@ describe("agent runtime identity token", () => {
       };
       const executionIdentity = createExecutionIdentityAdmissionToken("run-1");
       const sessionSpawnContext = lineage.withAgentRuntimeExecutionLineage(
-        { inheritedToolPolicy: { version: 1, allow: ["read"], deny: ["exec"] } },
+        {
+          inheritedToolPolicy:
+            mode === "signed"
+              ? {
+                  version: 2,
+                  policy: {
+                    clauses: [{ kind: "configured", allow: ["read"], deny: ["exec"] }],
+                    parameters: { fileTools: [], exec: [], sandbox: [], unsupported: [] },
+                  },
+                }
+              : { version: 1, allow: ["read"], deny: ["exec"] },
+        },
         {
           relation: "sessions_spawn",
           requesterRef: "requester",

@@ -14,12 +14,15 @@ import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/s
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { AgentRouteBinding } from "../../config/types.agents.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SessionSendPolicyAdmission } from "../../gateway/in-process-session-send-policy.js";
 import { shouldResumeParentSubagent } from "../../gateway/session-subagent-resume.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store-lookup.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
-import { enqueueSystemEventEntry } from "../../infra/system-events.js";
+import {
+  enqueueSystemEventEntry,
+  enqueueDelegatedSystemEventEntry,
+} from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   logSessionOwnershipLookupFailure,
@@ -37,7 +40,6 @@ import {
   normalizeAccountId,
   normalizeAgentId,
   normalizeAgentIdStrict,
-  toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
@@ -50,7 +52,9 @@ import { recordSessionParticipantBestEffort } from "../../sessions/session-parti
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
+import { bindAgentToolAvailability } from "../agent-tool-availability.js";
+import { parseInheritedToolPolicyV2 } from "../inherited-tool-policy.schema.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
 import {
@@ -67,11 +71,12 @@ import { ToolInputError } from "../tool-input-error.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
 import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
+import {
   callAgentToolGatewayRequest,
-  callInProcessGatewayToolWithCreation,
-  hasInProcessGatewayToolContext,
   runWithGatewayToolContinuationContext,
-  type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
@@ -87,6 +92,11 @@ import {
 } from "./sessions-helpers.js";
 import { buildAgentToAgentMessageContext } from "./sessions-send-helpers.js";
 import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
+import {
+  resolveConfiguredAgentMainSessionKey,
+  isConfiguredAgentMainSessionKey,
+  createConfiguredAgentMainSession,
+} from "./sessions-send-target.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import { normalizeSessionsSendArguments } from "./sessions-send-tool.arguments.js";
 import { startSessionsSendAgentRun } from "./sessions-send-tool.delivery.js";
@@ -95,86 +105,7 @@ import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
 
-type GatewayCaller = AgentToolGatewayRequestCaller;
 const NO_REPLY_MESSAGE = "No visible reply or pending announcement. Continue or retry if needed.";
-
-function resolveConfiguredAgentMainSessionKey(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  mainKey: string;
-}): string | undefined {
-  const agentId = normalizeAgentId(params.agentId);
-  if (!listAgentIds(params.cfg).includes(agentId)) {
-    return undefined;
-  }
-  return toAgentStoreSessionKey({
-    agentId,
-    requestKey: "main",
-    mainKey: params.mainKey,
-  });
-}
-
-function isConfiguredAgentMainSessionKey(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  sessionKey: string;
-  mainKey: string;
-}): boolean {
-  if (isUnscopedSessionKeySentinel(params.sessionKey)) {
-    return false;
-  }
-  if (params.sessionKey === params.mainKey) {
-    return true;
-  }
-  const agentId = params.agentId ?? parseAgentSessionKey(params.sessionKey)?.agentId;
-  return agentId
-    ? params.sessionKey ===
-        resolveConfiguredAgentMainSessionKey({
-          cfg: params.cfg,
-          agentId,
-          mainKey: params.mainKey,
-        })
-    : false;
-}
-
-async function createConfiguredAgentMainSession(params: {
-  cfg: OpenClawConfig;
-  callGateway: GatewayCaller;
-  agentId?: string;
-  sessionKey: string;
-  requesterSessionKey?: string;
-  useTrustedInProcessCreation: boolean;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
-  const targetAgentId =
-    params.agentId ?? resolveSessionAgentId({ config: params.cfg, sessionKey: params.sessionKey });
-  try {
-    const createParams = {
-      key: params.sessionKey,
-      agentId: targetAgentId,
-    };
-    if (
-      params.useTrustedInProcessCreation &&
-      params.requesterSessionKey &&
-      hasInProcessGatewayToolContext()
-    ) {
-      // sessions.create serializes keyed creation and adopts an existing row,
-      // so concurrent first sends can safely race after the missing resolution.
-      await callInProcessGatewayToolWithCreation("sessions.create", createParams, {
-        via: "internal",
-        actor: { type: "agent", id: params.requesterSessionKey },
-      });
-    } else {
-      await params.callGateway({
-        method: "sessions.create",
-        params: createParams,
-        timeoutMs: 10_000,
-      });
-    }
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: formatErrorMessage(err) };
-  }
-}
 
 function isPendingErrorAgentWaitTimeout(result: AgentWaitResult): boolean {
   return (
@@ -184,7 +115,7 @@ function isPendingErrorAgentWaitTimeout(result: AgentWaitResult): boolean {
 
 export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgentTool {
   const requesterOrigin = normalizeDeliveryContext(opts?.requesterOrigin);
-  return {
+  const tool: AnyAgentTool = {
     label: "Session Send",
     name: "sessions_send",
     displaySummary: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
@@ -209,6 +140,34 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         mode !== "resume"
       ) {
         throw new ToolInputError("mode must be notify, steer, followup, or resume");
+      }
+      let policyAdmission: SessionSendPolicyAdmission | undefined;
+      try {
+        const caller = getGatewayToolCallerIdentity();
+        const assertCurrent = captureGatewayToolCallerAssertion();
+        if (
+          caller?.operationalRunInstance &&
+          (!opts?.captureInheritedToolPolicyForDelegation || !assertCurrent)
+        ) {
+          throw new Error("Session send has no prepared source delegation policy.");
+        }
+        assertCurrent?.();
+        if (opts?.captureInheritedToolPolicyForDelegation) {
+          const source = await opts.captureInheritedToolPolicyForDelegation();
+          assertCurrent?.();
+          source.assertCurrent();
+          policyAdmission = {
+            kind: "delegation",
+            policy: parseInheritedToolPolicyV2(source.policy),
+            assertCurrent: () => {
+              assertCurrent?.();
+              source.assertCurrent();
+              assertCurrent?.();
+            },
+          };
+        }
+      } catch (error) {
+        return jsonResult({ status: "forbidden", error: formatErrorMessage(error) });
       }
       const resumeCaller =
         mode === undefined || mode === "resume" ? captureSessionsSendResumeCaller() : undefined;
@@ -795,13 +754,15 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             ...(requesterIsSubagent ? { sourceRole: "subagent" as const } : {}),
           };
           if (mode === "notify") {
-            const event = enqueueSystemEventEntry(
-              annotateInterSessionPromptText(message, inputProvenance),
-              withSystemEventOwner(
-                { sessionKey: resolvedKey, contextKey: `session-notify:${idempotencyKey}` },
-                targetAgentId,
-              ),
+            policyAdmission?.assertCurrent?.();
+            const eventText = annotateInterSessionPromptText(message, inputProvenance);
+            const eventOptions = withSystemEventOwner(
+              { sessionKey: resolvedKey, contextKey: `session-notify:${idempotencyKey}` },
+              targetAgentId,
             );
+            const event = policyAdmission
+              ? enqueueDelegatedSystemEventEntry(eventText, eventOptions, policyAdmission.policy)
+              : enqueueSystemEventEntry(eventText, eventOptions);
             if (!event?.id) {
               return jsonResult({
                 runId,
@@ -816,6 +777,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               notificationId: event.id,
               durability: "process",
               runStarted: false,
+              ...(policyAdmission ? { deliveryCondition: "compatible-receiving-policy" } : {}),
             });
           }
           const sendParams = {
@@ -853,6 +815,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               runId,
               expectedSessionId,
               sendParams,
+              policyAdmission,
               callGateway: gatewayCall,
             });
           }
@@ -878,6 +841,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             runId,
             mode,
             sendParams,
+            policyAdmission,
             sourceOrigin: sameSession ? requesterOrigin : undefined,
             sessionKey: mode ? resolvedKey : displayKey,
             sessionStoreTarget: targetSession,
@@ -981,6 +945,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                         replyRunId: runId,
                         notifyRequesterOnWaitFailure:
                           notifyRequesterOnWaitFailure && !isIsolatedCronRequester,
+                        delegatedInputPolicy: policyAdmission?.policy,
                       }),
                     ),
                   ),
@@ -1071,5 +1036,12 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       });
     },
   };
+  return bindAgentToolAvailability(tool, {
+    prepare: (current, callableTools) => {
+      current.description = describeSessionsSendTool({
+        availableTools: new Set(callableTools.keys()),
+      });
+    },
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

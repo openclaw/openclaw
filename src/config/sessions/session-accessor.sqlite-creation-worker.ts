@@ -1,7 +1,7 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
+import { publishSessionStateArchivesInWorker } from "./session-accessor.sqlite-archive-store.js";
 import {
   withSessionEntryCreationPublication,
   runWithSessionEntryCreationPublication,
@@ -11,12 +11,10 @@ import {
   commitSessionEntryReplacementsInWorker,
   initializeSessionTranscriptInWorker,
   prepareSessionEntryReplacementDatabase,
-  withSessionEntryWorker,
 } from "./session-accessor.sqlite-replacement-worker.js";
 import type { ResolvedSqliteScope } from "./session-accessor.sqlite-scope.js";
 import {
   runExclusiveSqliteSessionWrite,
-  resolveSqliteTranscriptArchiveDirectory,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type {
@@ -126,48 +124,13 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
         if (transcriptError !== undefined) {
           return { ok: false, error: transcriptError, phase: "transcript" };
         }
-        const publishArchives = async () => {
-          // Match lifecycle adoption recovery, after registration and writer release.
-          // The archive owner retains batching, byte validation, events and failure semantics.
-          const run = <T>(
-            execute: (
-              worker: import("../../state/openclaw-agent-execution-native.js").AgentDatabaseExecutionScope,
-            ) => Promise<T>,
-          ) =>
-            withSessionEntryWorker(
-              databaseOptions,
-              databaseIdentity,
-              assertCurrent,
-              async (execution, source) => {
-                const result = await execution.runExisting(source, async (worker) => ({
-                  value: await execute(worker),
-                }));
-                if (!result) {
-                  throw new Error("Session database disappeared before archive publication");
-                }
-                return result.value;
-              },
-            );
-          await publishSessionStateArchives({ ...scope, agentId: databaseOptions.agentId }, [], {
-            prepare: (requested) =>
-              run((worker) =>
-                worker.execute({
-                  type: "session.archives.preparePublication",
-                  input: {
-                    archiveDirectory: resolveSqliteTranscriptArchiveDirectory(scope),
-                    requested,
-                  },
-                }),
-              ),
-            record: (results) =>
-              run((worker) =>
-                worker.execute({
-                  type: "session.archives.recordPublication",
-                  input: { results, nowMs: Date.now() },
-                }),
-              ),
-          });
-        };
+        const publishArchives = () =>
+          publishSessionStateArchivesInWorker(
+            { ...scope, agentId: databaseOptions.agentId },
+            databaseIdentity,
+            [],
+            assertCurrent,
+          );
         if (legacyKeys.length > 0) {
           // Admitted folded aliases still belong to canonical replacement: it owns
           // their row CAS, native deletion preparation, and atomic artifact rehoming.

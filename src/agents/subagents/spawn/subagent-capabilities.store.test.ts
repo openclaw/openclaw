@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
+import * as sessionAvailability from "../../../config/sessions/session-accessor.sqlite-entry-availability.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import {
@@ -11,6 +12,7 @@ import {
 } from "../../../state/openclaw-agent-db.js";
 import {
   isSubagentEnvelopeSession,
+  resolvePersistedSubagentToolPolicyEnvelope,
   resolveStoredSubagentCapabilities,
   resolveStoredSubagentInheritedToolAllowlist,
   resolveStoredSubagentInheritedToolDenylist,
@@ -29,6 +31,89 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("persisted subagent capability lookups", () => {
+  it("keeps unrelated corrupt rows outside exact policy admission", () => {
+    const storePath = path.join(tempDirs.make("subagent-policy-exact-"), "sessions.sqlite");
+    const key = "agent:main:subagent:child";
+    const corruptKey = "agent:main:subagent:corrupt";
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        writeSessionEntry(database, key, {
+          sessionId: "child",
+          updatedAt: 1,
+          spawnedBy: "agent:main:parent",
+          spawnDepth: 1,
+          inheritedToolPolicyVersion: 1,
+          inheritedToolAllow: ["read"],
+        });
+        database.db
+          .prepare(
+            "INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at) VALUES (?, 'corrupt', '{broken', 1)",
+          )
+          .run(corruptKey);
+      },
+      { agentId: "main", path: storePath },
+    );
+    const cfg = { session: { store: storePath } };
+    expect(resolvePersistedSubagentToolPolicyEnvelope(key, { cfg })).toMatchObject({
+      version: 1,
+      inheritedToolAllow: ["read"],
+    });
+    expect(() => resolvePersistedSubagentToolPolicyEnvelope(corruptKey, { cfg })).toThrow(
+      "Inherited tool policy could not be read from its session owner",
+    );
+  });
+
+  it.each([
+    { inheritedToolPolicyVersion: 3 },
+    { inheritedToolPolicy: {} },
+    { inheritedToolPolicyVersion: 2 },
+    { inheritedToolPolicyVersion: 2, spawnedBy: undefined },
+    { inheritedToolPolicyVersion: 2, completionOwnerSessionKey: undefined },
+    { inheritedToolPolicyVersion: 2, inheritedToolDeny: ["exec"] },
+  ])("rejects an unsupported or incomplete persisted policy: %j", (patch) => {
+    const key = "agent:main:subagent:child";
+    expect(() =>
+      resolvePersistedSubagentToolPolicyEnvelope(key, {
+        store: {
+          [key]: {
+            sessionId: "child",
+            spawnDepth: 1,
+            spawnedBy: "agent:main:parent",
+            completionOwnerSessionKey: "agent:main:parent",
+            ...patch,
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("does not turn a lost expected v2 row or an unavailable owner into legacy fallback", () => {
+    const key = "agent:main:subagent:child";
+    expect(() =>
+      resolvePersistedSubagentToolPolicyEnvelope(key, { store: {}, requiredVersion: 2 }),
+    ).toThrow("Expected inherited tool policy v2 is unavailable");
+    const cfg = {
+      session: {
+        store: path.join(tempDirs.make("subagent-policy-unavailable-"), "sessions.sqlite"),
+      },
+    };
+    expect(() => resolvePersistedSubagentToolPolicyEnvelope(key, { cfg })).toThrow(
+      "Inherited tool policy could not be read from its session owner",
+    );
+    const unavailable = new Error("Owner database is unavailable");
+    vi.spyOn(sessionAvailability, "loadExactSessionEntryReadOnlyResult").mockImplementation(() => {
+      throw unavailable;
+    });
+    vi.spyOn(sessionAccessor, "loadSessionEntryByIdReadOnly").mockImplementation(() => {
+      throw unavailable;
+    });
+    const store = resolveSubagentCapabilityStore(key, { cfg });
+    expect(resolveStoredSubagentCapabilities(key, { cfg, store }).depth).toBe(1);
+    expect(() => resolvePersistedSubagentToolPolicyEnvelope(key, { cfg, store })).toThrow(
+      "Inherited tool policy could not be read from its session owner",
+    );
+  });
+
   it("memoizes exact reads and misses only within one capability resolution", () => {
     const storePath = path.join(tempDirs.make("subagent-capability-memo-"), "sessions.sqlite");
     const cfg = { session: { store: storePath } };
@@ -46,7 +131,7 @@ describe("persisted subagent capability lookups", () => {
         { agentId: "main", path: storePath },
       );
     write(2);
-    const exact = vi.spyOn(sessionAccessor, "loadExactSessionEntryReadOnly");
+    const exact = vi.spyOn(sessionAvailability, "loadExactSessionEntryReadOnlyResult");
     const byId = vi.spyOn(sessionAccessor, "loadSessionEntryByIdReadOnly");
     const store = resolveSubagentCapabilityStore(key, { cfg });
     expect(exact).not.toHaveBeenCalled();
@@ -59,6 +144,9 @@ describe("persisted subagent capability lookups", () => {
     }
     expect(exact).toHaveBeenCalledTimes(2);
     expect(byId).toHaveBeenCalledTimes(1);
+    expect(
+      resolvePersistedSubagentToolPolicyEnvelope("agent:main:subagent:missing", { cfg, store }),
+    ).toBeUndefined();
     write(4);
     expect(resolveStoredSubagentCapabilities(key, { cfg }).depth).toBe(4);
     expect(exact).toHaveBeenCalledTimes(3);
@@ -73,7 +161,7 @@ describe("persisted subagent capability lookups", () => {
       );
       const cfg = { session: { store: storePath } };
       const key = "agent:main:subagent:child";
-      const exact = vi.spyOn(sessionAccessor, "loadExactSessionEntryReadOnly");
+      const exact = vi.spyOn(sessionAvailability, "loadExactSessionEntryReadOnlyResult");
       const store = resolveSubagentCapabilityStore(key, {
         cfg,
         preparedSessionEntry: {

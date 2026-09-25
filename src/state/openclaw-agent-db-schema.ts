@@ -321,6 +321,19 @@ function ensureAgentSchema(
         previousVersion === 0 &&
         readExistingAgentSchemaMeta(db) === null &&
         !db.prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get();
+      if (previousVersion === AGENT_STORAGE_SCHEMA_VERSION && previousVersion < targetVersion) {
+        // The v2 policy fence changes only reader admission, never retained session bytes.
+        finishAgentSchemaMigration(
+          db,
+          agentId,
+          pathname,
+          targetVersion,
+          schemaSql,
+          identityMigration,
+          assertMigration,
+        );
+        return;
+      }
       const requiresStorageMigration =
         !isEmptyDatabase &&
         previousVersion < AGENT_STORAGE_SCHEMA_VERSION &&

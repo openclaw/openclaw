@@ -11,6 +11,7 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "./agent-tools.policy.js";
+import type { InheritedToolPolicyV2 } from "./inherited-tool-policy.schema.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import {
@@ -20,11 +21,13 @@ import {
 import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
 import {
   isSubagentEnvelopeSession,
+  requiresSubagentCapabilityStore,
   resolvePersistedSubagentToolPolicyEnvelope,
   resolveSubagentCapabilityStore,
   type PreparedSessionCapabilityEntry,
   type SessionCapabilityStore,
 } from "./subagents/spawn/subagent-capabilities.js";
+import { asSessionCapabilityLookup } from "./subagents/spawn/subagent-session-store.js";
 
 const MAX_DELEGATION_LINEAGE_DEPTH = 32;
 
@@ -38,6 +41,7 @@ type RequesterToolPolicyResolution = {
   senderPolicy?: SandboxToolPolicy;
   subagentPolicy?: SandboxToolPolicy;
   inheritedToolPolicy?: SandboxToolPolicy;
+  inheritedActionPolicy?: InheritedToolPolicyV2;
   subagentStore?: SessionCapabilityStore;
 };
 
@@ -77,7 +81,7 @@ type RequesterToolPolicyParams = {
 function policyFromEnvelope(
   envelope: ReturnType<typeof resolvePersistedSubagentToolPolicyEnvelope>,
 ): SandboxToolPolicy | undefined {
-  if (!envelope) {
+  if (!envelope || envelope.version !== 1) {
     return undefined;
   }
   return envelope.inheritedToolAllow.length > 0 || envelope.inheritedToolDeny.length > 0
@@ -86,6 +90,40 @@ function policyFromEnvelope(
         ...(envelope.inheritedToolDeny.length > 0 ? { deny: envelope.inheritedToolDeny } : {}),
       }
     : undefined;
+}
+
+/** Find the saved policy captured by an ancestor, excluding intermediate receiver restrictions. */
+export function resolveOriginalRequesterPolicyEnvelope(params: {
+  config: OpenClawConfig;
+  sourceSessionKey: string;
+  targetSessionKey: string;
+  store?: SessionCapabilityStore;
+}) {
+  const target = resolveRequesterStoreKey(params.config, params.targetSessionKey);
+  let source = resolveRequesterStoreKey(params.config, params.sourceSessionKey);
+  const visited = new Set<string>();
+  for (let depth = 0; depth < MAX_DELEGATION_LINEAGE_DEPTH; depth += 1) {
+    if (visited.has(source)) {
+      return undefined;
+    }
+    visited.add(source);
+    const envelope = resolvePersistedSubagentToolPolicyEnvelope(source, {
+      cfg: params.config,
+      store: resolveSubagentCapabilityStore(source, {
+        cfg: params.config,
+        store: params.store,
+      }),
+    });
+    if (!envelope) {
+      return undefined;
+    }
+    const parent = resolveRequesterStoreKey(params.config, envelope.spawnedBy);
+    if (parent === target) {
+      return envelope;
+    }
+    source = parent;
+  }
+  return undefined;
 }
 
 function resolveDelegatedPolicy(
@@ -97,6 +135,7 @@ function resolveDelegatedPolicy(
       delegated: true;
       source: Exclude<RequesterToolPolicySource, "current-request">;
       policy?: SandboxToolPolicy;
+      actionPolicy?: InheritedToolPolicyV2;
     } {
   const provenance = normalizeInputProvenance(params.inputProvenance);
   const hasExternalRequester =
@@ -143,10 +182,51 @@ function resolveDelegatedPolicy(
         ? resolveRequesterStoreKey(params.config, envelope.completionOwnerSessionKey)
         : undefined;
       if ((completionOwnerSessionKey ?? parentSessionKey) === targetSessionKey) {
+        let requesterEnvelope = envelope;
+        if (
+          envelope.version === 2 &&
+          parentSessionKey !== targetSessionKey &&
+          requiresSubagentCapabilityStore(parentSessionKey)
+        ) {
+          const parentStore = resolveSubagentCapabilityStore(parentSessionKey, {
+            cfg: params.config,
+            store: params.preparedSessionCapabilityStore,
+          });
+          const parentEntry = parentStore
+            ? asSessionCapabilityLookup(parentStore).get(parentSessionKey)
+            : undefined;
+          if (!parentEntry) {
+            throw new Error("The completion's original requester policy is unavailable.");
+          }
+          const parentEnvelope = resolvePersistedSubagentToolPolicyEnvelope(parentSessionKey, {
+            cfg: params.config,
+            store: parentStore,
+          });
+          if (
+            parentEnvelope ||
+            isSubagentEnvelopeSession(parentSessionKey, {
+              cfg: params.config,
+              store: parentStore,
+              entry: parentEntry,
+            })
+          ) {
+            const originalRequesterEnvelope = resolveOriginalRequesterPolicyEnvelope({
+              config: params.config,
+              sourceSessionKey: parentSessionKey,
+              targetSessionKey,
+              store: parentStore,
+            });
+            if (!originalRequesterEnvelope) {
+              throw new Error("The completion's original requester policy is unavailable.");
+            }
+            requesterEnvelope = originalRequesterEnvelope;
+          }
+        }
         return {
           delegated: true,
           source: "completion-handoff",
-          policy: policyFromEnvelope(envelope),
+          policy: policyFromEnvelope(requesterEnvelope),
+          actionPolicy: requesterEnvelope.version === 2 ? requesterEnvelope.policy : undefined,
         };
       }
       currentSessionKey = parentSessionKey;
@@ -165,6 +245,7 @@ function resolveDelegatedPolicy(
         delegated: true,
         source: "persisted-child",
         policy: policyFromEnvelope(ownEnvelope),
+        actionPolicy: ownEnvelope.version === 2 ? ownEnvelope.policy : undefined,
       };
     }
   }
@@ -217,6 +298,7 @@ export function resolveRequesterToolPolicies(
       requesterPolicySource: delegatedPolicy.source,
       subagentPolicy,
       inheritedToolPolicy: delegatedPolicy.policy,
+      inheritedActionPolicy: delegatedPolicy.actionPolicy,
       subagentStore,
     };
   }
@@ -224,6 +306,10 @@ export function resolveRequesterToolPolicies(
   const shouldResolveSenderPolicy =
     senderPolicyMode === "always" ||
     (senderPolicyMode === "when-sender-id" && Boolean(params.senderId));
+  const ownEnvelope = resolvePersistedSubagentToolPolicyEnvelope(subagentSessionKey, {
+    cfg: params.config,
+    store: subagentStore,
+  });
   return {
     delegated: false,
     requesterPolicySource: "current-request",
@@ -258,6 +344,7 @@ export function resolveRequesterToolPolicies(
         })
       : undefined,
     subagentPolicy,
+    inheritedActionPolicy: ownEnvelope?.version === 2 ? ownEnvelope.policy : undefined,
     inheritedToolPolicy: resolveInheritedToolPolicyForSession(params.config, subagentSessionKey, {
       store: subagentStore,
     }),

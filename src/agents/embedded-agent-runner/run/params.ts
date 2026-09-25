@@ -191,6 +191,8 @@ export type RunEmbeddedAgentParams = {
   toolsAllow?: string[];
   /** Preserve the visible tool schemas while allowing execution only for these names. */
   toolExecutionAllow?: readonly string[];
+  /** Host-owned requirements for this accepted input, never a session-wide policy. */
+  delegatedInputPolicy?: import("../../inherited-tool-policy.schema.js").InheritedToolPolicyV2;
   /** Owner-scoped plugin tool grant; normal policy and deny rules still apply. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   /** Consumed in-process subagent-completion capability; never derived from public input. */

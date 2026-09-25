@@ -8,6 +8,7 @@ import type {
   ExecToolApprovalReview,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+import type { DelegatedExecRestriction } from "./inherited-tool-parameters.types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 /** Full input bundle for gateway-host allowlist and approval processing. */
@@ -25,6 +26,8 @@ export type ProcessGatewayAllowlistParams = {
   security: ExecSecurity;
   ask: ExecAsk;
   bypassHostApprovalFloors?: boolean;
+  delegatedRestrictions?: readonly DelegatedExecRestriction[];
+  delegatedReceiverSecurity?: ExecSecurity;
   autoReview?: boolean;
   autoReviewer?: ExecAutoReviewer;
   signal?: AbortSignal;

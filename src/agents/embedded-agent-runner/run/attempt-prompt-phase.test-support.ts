@@ -180,6 +180,9 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     submissionInput.onSteeringAcknowledged();
   });
   mocks.handlePromptError.mockResolvedValue({});
+  const unexpectedDelegationPolicy = () => {
+    throw new Error("The prompt phase fixture must not invoke delegated policy callbacks.");
+  };
   const input = {
     attempt: {
       model: { id: "model-1", provider: "test" },
@@ -202,6 +205,11 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     },
     diagnostics: { diagnosticTrace: {}, runTrace: {} },
     prepared: {
+      toolBase: {
+        getInheritedToolPolicy: unexpectedDelegationPolicy,
+        getEnforcedDelegatedToolParameterPolicy: unexpectedDelegationPolicy,
+        addDelegatedInputPolicies: unexpectedDelegationPolicy,
+      },
       sessionRuntime: {
         agentSession: {
           activeSession,

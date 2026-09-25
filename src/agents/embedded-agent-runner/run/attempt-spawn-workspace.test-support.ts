@@ -24,7 +24,10 @@ import { makeEmptyPluginMetadataOwners } from "../../../plugins/current-plugin-m
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import type { OpenClawCodingToolsOptions } from "../../agent-tools.options.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
+import { emptyDelegatedToolParameterPolicy } from "../../inherited-tool-parameters.js";
+import { captureInheritedToolPolicy } from "../../inherited-tool-policy.js";
 import type { Agent, AgentMessage, StreamFn } from "../../runtime/index.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
@@ -34,8 +37,12 @@ import {
   initializeModelRegistryRuntime,
 } from "../../sessions/model-registry-runtime.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
+import { prepareAttemptSessionFixture } from "./attempt-setup.test-support.js";
 import type { SessionManagerMocks } from "./attempt-spawn-workspace.session-manager-mock.test-support.js";
-import { createSubscriptionMock } from "./attempt-spawn-workspace.subscription-mock.test-support.js";
+import {
+  createCompletedAssistantStream,
+  createSubscriptionMock,
+} from "./attempt-spawn-workspace.subscription-mock.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type SubscribeEmbeddedAgentSessionFn =
@@ -609,11 +616,24 @@ vi.mock("../../cache-trace.js", () => ({
   createCacheTrace: () => undefined,
 }));
 
-vi.mock("../../agent-tools.js", () => ({
-  createOpenClawCodingTools: hoisted.createOpenClawCodingToolsMock,
-  createOpenClawCodingToolsInternal: hoisted.createOpenClawCodingToolsMock,
-  resolveToolLoopDetectionConfig: () => undefined,
-}));
+vi.mock("../../agent-tools.js", () => {
+  const createTools = (...args: unknown[]) => {
+    const options = args[0] as OpenClawCodingToolsOptions | undefined;
+    if (options?.inheritedToolPolicyRef) {
+      options.inheritedToolPolicyRef.current = captureInheritedToolPolicy({
+        policies: [options.config?.tools],
+        runtimeAllow: options.runtimeToolAllowlist,
+        parameters: emptyDelegatedToolParameterPolicy(),
+      });
+    }
+    return hoisted.createOpenClawCodingToolsMock(...args);
+  };
+  return {
+    createOpenClawCodingTools: createTools,
+    createOpenClawCodingToolsInternal: createTools,
+    resolveToolLoopDetectionConfig: () => undefined,
+  };
+});
 
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
   createBundleMcpToolRuntime: async () => undefined,
@@ -673,12 +693,6 @@ vi.mock(
   "../../sandbox/runtime-status.js",
   () => import("./attempt-spawn-workspace.sandbox-mock.test-support.js"),
 );
-
-vi.mock("../../tool-fs-policy.js", () => ({
-  resolveSessionPermissionExecMode: (policy: { mode: string }) =>
-    ({ "read-only": "deny", guarded: "ask", workspace: "auto", full: "full" })[policy.mode],
-  resolveEffectiveToolFsWorkspaceOnly: () => false,
-}));
 
 vi.mock("../../transcript-policy.js", () => ({
   resolveTranscriptPolicy: () => ({
@@ -899,21 +913,6 @@ type SessionPromptOverride = (
   options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
 ) => Promise<void>;
 
-type TestAgentStream = {
-  result: () => Promise<unknown>;
-  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
-};
-
-function createCompletedAssistantStream(): TestAgentStream {
-  return {
-    async result() {
-      return { role: "assistant", content: "done" };
-    },
-    [Symbol.asyncIterator]() {
-      return (async function* () {})();
-    },
-  };
-}
 const ATTEMPT_SPAWN_WORKSPACE_TEST_SPECIFIER = "./attempt.ts?spawn-workspace-test";
 
 const loadRunEmbeddedAttempt = createLazyPromise(
@@ -956,12 +955,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.ensureGlobalUndiciDispatcherStreamTimeoutsMock.mockReset();
   hoisted.ensureGlobalUndiciStreamTimeoutsMock.mockReset();
   hoisted.createOpenClawCodingToolsMock.mockReset().mockImplementation((...args: unknown[]) => {
-    const options = args[0] as
-      | {
-          workspaceDir?: string;
-          spawnWorkspaceDir?: string;
-        }
-      | undefined;
+    const options = args[0] as OpenClawCodingToolsOptions | undefined;
     return [
       {
         name: "sessions_spawn",
@@ -1326,7 +1320,7 @@ export async function createContextEngineAttemptRunner(params: {
       sessionKey: params.sessionKey,
       sessionFile: params.sessionKey,
       sessionTarget: {
-        agentId: "main",
+        agentId: params.attemptOverrides?.agentId ?? "main",
         sessionId: "embedded-session",
         sessionKey: params.sessionKey,
         storePath: sessionStore,
@@ -1371,6 +1365,7 @@ export async function createContextEngineAttemptRunner(params: {
       },
       ...params.attemptOverrides,
     };
+    await prepareAttemptSessionFixture(attempt);
     const admission = prepareSystemAgentRunAdmission(
       attempt.config ?? {},
       attempt.runId,

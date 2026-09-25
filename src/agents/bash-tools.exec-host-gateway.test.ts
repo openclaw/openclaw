@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import {
@@ -32,7 +33,7 @@ import {
 import type {
   ExecAllowlistEntry,
   ExecApprovalDecision,
-  ExecApprovalsDefaults,
+  ExecApprovalsResolved,
   ExecApprovalsFile,
   ExecAsk,
   ExecCommandSegment,
@@ -66,6 +67,10 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import {
+  createExecApprovalsFixture,
+  planAllowlistedNodeVersion,
+} from "./bash-tools.exec-host-gateway.plan.test-support.js";
 import type {
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
@@ -105,7 +110,7 @@ type MockExecHostApprovalContext = {
   approvals: {
     allowlist: ExecAllowlistEntry[];
     file: ExecApprovalsFile;
-    agent?: Required<ExecApprovalsDefaults>;
+    agent: ExecApprovalsResolved["agent"];
   };
   hostSecurity: ExecSecurity;
   hostAsk: ExecAsk;
@@ -208,12 +213,7 @@ const resolveApprovalDecisionOrUndefinedMock = vi.hoisted(() =>
 );
 const runAbortedApprovalError = vi.hoisted(() => new Error("run aborted"));
 const resolveExecHostApprovalContextMock = vi.hoisted(() =>
-  vi.fn((): MockExecHostApprovalContext => ({
-    approvals: { allowlist: [], file: { version: 1, agents: {} } },
-    hostSecurity: "allowlist",
-    hostAsk: "off",
-    askFallback: "deny",
-  })),
+  vi.fn<() => MockExecHostApprovalContext>(),
 );
 const runExecProcessMock = vi.hoisted(() => vi.fn());
 const startupCancellationMocks = vi.hoisted(() => ({
@@ -390,9 +390,13 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
   ),
 );
 
+vi.mock("../infra/exec-approvals-allowlist.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/exec-approvals-allowlist.js")>()),
+  evaluateShellAllowlistWithAuthorization: evaluateShellAllowlistWithAuthorizationMock,
+}));
+
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/exec-approvals.js")>()),
-  evaluateShellAllowlistWithAuthorization: evaluateShellAllowlistWithAuthorizationMock,
   hasDurableExecApproval: hasDurableExecApprovalMock,
   hasExactCommandDurableExecApproval: hasExactCommandDurableExecApprovalMock,
   buildEnforcedShellCommand: buildEnforcedShellCommandMock,
@@ -457,7 +461,7 @@ type GatewayAllowlistParams = Parameters<typeof processGatewayAllowlist>[0];
 
 function createAllowlistOnMissContext(): MockExecHostApprovalContext {
   return {
-    approvals: { allowlist: [], file: { version: 1, agents: {} } },
+    approvals: createExecApprovalsFixture(),
     hostSecurity: "allowlist",
     hostAsk: "on-miss",
     askFallback: "deny",
@@ -527,6 +531,8 @@ function captureSecurityEvents(): {
   return { events, stop };
 }
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("processGatewayAllowlist", () => {
   beforeAll(async () => {
     ({ processGatewayAllowlist } = await import("./bash-tools.exec-host-gateway.js"));
@@ -578,7 +584,7 @@ describe("processGatewayAllowlist", () => {
     shouldResolveExecApprovalUnavailableInlineMock.mockReturnValue(false);
     resolveExecHostApprovalContextMock.mockReset();
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "allowlist",
       hostAsk: "off",
       askFallback: "deny",
@@ -668,28 +674,6 @@ describe("processGatewayAllowlist", () => {
     );
   }
 
-  async function planAllowlistedNodeVersion() {
-    const command = "node --version";
-    const authorizationPlan = await planShellAuthorization({ command, env: process.env });
-    expect(authorizationPlan.ok).toBe(true);
-    if (!authorizationPlan.ok) {
-      throw new Error(authorizationPlan.reason);
-    }
-    const segments = authorizationPlan.groups.flatMap((group) =>
-      group.candidates.map((candidate) => candidate.sourceSegment),
-    );
-    const enforced = buildAuthorizedShellCommandFromPlan({
-      plan: authorizationPlan,
-      mode: "enforced",
-      segmentSatisfiedBy: ["allowlist"],
-    });
-    expect(enforced.ok).toBe(true);
-    if (!enforced.ok) {
-      throw new Error(enforced.reason);
-    }
-    return { command, authorizationPlan, segments, enforcedCommand: enforced.command };
-  }
-
   async function configurePlanBackedCommand(params: {
     command: string;
     env?: NodeJS.ProcessEnv;
@@ -724,7 +708,7 @@ describe("processGatewayAllowlist", () => {
       authorizationPlan,
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "allowlist",
       hostAsk: params.hostAsk ?? "on-miss",
       askFallback: params.askFallback ?? "deny",
@@ -745,7 +729,7 @@ describe("processGatewayAllowlist", () => {
   }) {
     buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: params.security,
       hostAsk: "always",
       askFallback: params.askFallback,
@@ -1719,7 +1703,7 @@ Command: ${command}`;
       segmentSatisfiedBy: ["allowlist"],
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "full",
       hostAsk: "off",
       askFallback: "allowlist",
@@ -1865,6 +1849,7 @@ Command: ${command}`;
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: {
+        ...createExecApprovalsFixture(),
         allowlist: [{ pattern: exactCommandMarker(command), source: "allow-always" }],
         file: { version: 1, agents: {} },
       },
@@ -1918,7 +1903,7 @@ Command: ${command}`;
 
   it("rejects unprompted full execution when the locked policy commit sees revocation", async () => {
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "full",
       hostAsk: "off",
       askFallback: "deny",
@@ -2112,6 +2097,7 @@ Command: ${command}`;
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: {
+        ...createExecApprovalsFixture(),
         allowlist: [
           allowlistEntry,
           { pattern: exactCommandMarker(command), source: "allow-always" },
@@ -2339,19 +2325,23 @@ Command: ${command}`;
   it.runIf(process.platform !== "win32")(
     "reviews bound dispatch-wrapper compound plans",
     async () => {
+      const binDir = tempDirs.make("openclaw-review-dispatch-wrapper-");
+      fs.copyFileSync("/usr/bin/true", path.join(binDir, "timeout"));
+      const env = { ...process.env, PATH: binDir + path.delimiter + (process.env.PATH ?? "") };
       const command = "timeout 5 node --version && node --version";
-      const { authorizationPlan } = await configurePlanBackedCommand({ command });
+      const { authorizationPlan } = await configurePlanBackedCommand({ command, env });
       const wrapperChain =
         authorizationPlan.groups[0]?.candidates[0]?.sourceSegment.resolution?.wrapperChain;
       expect(wrapperChain).toContain("timeout");
 
       const result = await runGatewayAllowlist({
         command,
+        env,
         ask: "on-miss",
         autoReview: true,
       });
 
-      expect(defaultExecAutoReviewerMock).toHaveBeenCalledWith(
+      expect(defaultExecAutoReviewerMock, JSON.stringify(result)).toHaveBeenCalledWith(
         expect.objectContaining({ command }),
       );
       expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
@@ -2387,7 +2377,7 @@ Command: ${command}`;
       segmentAllowlistEntries: [],
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "allowlist",
       hostAsk: "on-miss",
       askFallback: "full",
@@ -2436,7 +2426,7 @@ Command: ${command}`;
       rationale: "needs a person",
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "allowlist",
       hostAsk: "on-miss",
       askFallback: "full",
@@ -2475,7 +2465,7 @@ Command: ${command}`;
 
   it("requires approval for security audit suppression edits unless yolo mode is active", async () => {
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "full",
       hostAsk: "on-miss",
       askFallback: "deny",
@@ -2494,7 +2484,7 @@ Command: ${command}`;
   it("keeps security audit suppression edits off the auto-review path", async () => {
     const warnings: string[] = [];
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "full",
       hostAsk: "on-miss",
       askFallback: "deny",
@@ -2516,7 +2506,7 @@ Command: ${command}`;
 
   it("does not require approval for security audit suppression edits in yolo mode", async () => {
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "full",
       hostAsk: "off",
       askFallback: "deny",
@@ -2543,7 +2533,7 @@ Command: ${command}`;
       segmentSatisfiedBy: [null],
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "full",
       hostAsk: "on-miss",
       askFallback: "deny",
@@ -2573,7 +2563,7 @@ Command: ${command}`;
       segmentSatisfiedBy: [null],
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "full",
       hostAsk: "on-miss",
       askFallback: "deny",
@@ -2603,7 +2593,7 @@ Command: ${command}`;
       segmentAllowlistEntries: [],
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "full",
       hostAsk: "on-miss",
       askFallback: "deny",
@@ -2631,7 +2621,7 @@ Command: ${command}`;
       segmentAllowlistEntries: [],
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "full",
       hostAsk: "on-miss",
       askFallback: "deny",
@@ -2668,7 +2658,7 @@ Command: ${command}`;
       segmentAllowlistEntries: [],
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "full",
       hostAsk: "on-miss",
       askFallback: "deny",
@@ -2704,6 +2694,7 @@ EOF`,
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: {
+        ...createExecApprovalsFixture(),
         allowlist: [{ pattern: exactCommandMarker(command), source: "allow-always" }],
         file: { version: 1, agents: {} },
       },
@@ -2838,7 +2829,7 @@ EOF`,
 
   it("uses async agent followups for explicit webchat approval mode", async () => {
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "allowlist",
       hostAsk: "always",
       askFallback: "deny",
@@ -2963,7 +2954,7 @@ EOF`,
 
   it("keeps multiline gateway approval follow-up output intact", async () => {
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "allowlist",
       hostAsk: "always",
       askFallback: "deny",
@@ -3327,6 +3318,7 @@ EOF`,
       hasExactCommandDurableExecApprovalMock.mockReturnValue(true);
       resolveExecHostApprovalContextMock.mockReturnValue({
         approvals: {
+          ...createExecApprovalsFixture(),
           allowlist: [{ pattern: exactCommandMarker(command), source: "allow-always" }],
           file: { version: 1, agents: {} },
         },
@@ -3813,7 +3805,7 @@ EOF`,
       authorizationPlan,
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "allowlist",
       hostAsk: "always",
       askFallback: "allowlist",
@@ -3863,7 +3855,7 @@ EOF`,
       command: enforcedCommand,
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "full",
       hostAsk: "always",
       askFallback: "allowlist",
@@ -3911,7 +3903,7 @@ EOF`,
       authorizationPlan,
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "full",
       hostAsk: "always",
       askFallback: "allowlist",
@@ -3952,7 +3944,7 @@ EOF`,
       segmentSatisfiedBy: ["allowlist"],
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "full",
       hostAsk: "always",
       askFallback: "allowlist",
@@ -3991,7 +3983,7 @@ EOF`,
       segmentSatisfiedBy: [],
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "full",
       hostAsk: "always",
       askFallback: "full",
@@ -4030,7 +4022,7 @@ EOF`,
       deniedReason: null,
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      approvals: createExecApprovalsFixture(),
       hostSecurity: "full",
       hostAsk: "always",
       askFallback: "full",

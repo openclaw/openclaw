@@ -18,6 +18,7 @@ export function collectAttemptExplicitToolAllowlistSources(params: {
     sandboxPolicy,
     subagentPolicy,
     inheritedToolPolicy,
+    inheritedActionPolicy,
   } = params.capabilityProfile.policy;
   return collectExplicitToolAllowlistSources([
     { label: "tools.allow", allow: globalPolicy?.allow },
@@ -34,6 +35,11 @@ export function collectAttemptExplicitToolAllowlistSources(params: {
     { label: "sandbox tools.allow", allow: sandboxPolicy?.allow },
     { label: "subagent tools.allow", allow: subagentPolicy?.allow },
     { label: "inherited tools.allow", allow: inheritedToolPolicy?.allow },
+    ...(inheritedActionPolicy?.clauses.flatMap((clause) =>
+      clause.kind === "restart-safe"
+        ? []
+        : [{ label: "inherited action policy", allow: clause.allow }],
+    ) ?? []),
     { label: "runtime toolsAllow", allow: params.toolsAllow, enforceWhenToolsDisabled: true },
   ]);
 }

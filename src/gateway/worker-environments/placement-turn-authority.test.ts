@@ -7,6 +7,7 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import { emptyDelegatedToolParameterPolicy } from "../../agents/inherited-tool-parameters.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -139,11 +140,43 @@ it("rolls back claim fencing and never revives a retained approval after same-ID
   const claim = store.claimTurn(input);
   const instance = createOperationalRunInstanceRef(claim.runId);
   const delegated = claimAgentRunDelegatedAuthority(instance);
-  await bindWorkerTurnOwner(store, claim, undefined, instance, sessionTarget, () => {});
+  const policy = { clauses: [], parameters: emptyDelegatedToolParameterPolicy() };
+  const captureRelease = createDeferredCore();
+  let holdCapture = false;
+  await bindWorkerTurnOwner(
+    store,
+    claim,
+    undefined,
+    instance,
+    sessionTarget,
+    () => {},
+    undefined,
+    undefined,
+    () => policy,
+    async (current, assertCurrent) => {
+      assertCurrent();
+      if (holdCapture) {
+        await captureRelease.promise;
+      }
+      return current;
+    },
+  );
   const capability = getWorkerTurnExecutionIdentityCapability(store, claim);
   if (!capability) {
     throw new Error("expected retained worker capability");
   }
+  const retainedPolicy = await capability.run((owner) => owner.getInheritedToolPolicy);
+  expect(retainedPolicy?.()).toEqual(policy);
+  const captureSource = await capability.run(
+    (owner) => owner.captureInheritedToolPolicyForDelegation,
+  );
+  if (!captureSource) {
+    throw new Error("expected the current worker delegation capture");
+  }
+  const capturedSource = await captureSource();
+  expect(capturedSource.policy).toEqual(policy);
+  expect(() => capturedSource.assertCurrent()).not.toThrow();
+  let delayedCapture: ReturnType<typeof captureSource> | undefined;
   const validate = createAgentRuntimeApprovalAuthorityValidator(store);
   const identityParams = await capability.run((owner) => ({
     agentId: owner.agentId,
@@ -175,6 +208,11 @@ it("rolls back claim fencing and never revives a retained approval after same-ID
     expect(validate(identity)).toBe(true);
     await expect(capability.run(() => "still current")).resolves.toBe("still current");
     expect(closed).not.toHaveBeenCalled();
+    expect(retainedPolicy?.()).toEqual(policy);
+    holdCapture = true;
+    delayedCapture = captureSource();
+    // Attach rejection observation before replacing the actual placement owner.
+    void delayedCapture.catch(() => {});
 
     const replacement = runOpenClawStateWriteTransaction(
       () => {
@@ -194,6 +232,10 @@ it("rolls back claim fencing and never revives a retained approval after same-ID
     );
     expect(validate({ ...identity })).toBe(false);
     expect(validate(delayedIdentity)).toBe(false);
+    expect(() => retainedPolicy?.()).toThrow("worker turn authority changed");
+    expect(() => capturedSource.assertCurrent()).toThrow("worker turn authority changed");
+    captureRelease.resolve();
+    await expect(delayedCapture).rejects.toThrow("worker turn authority changed");
     await expect(capability.run(() => "stale")).rejects.toThrow("worker turn authority changed");
     expect(validateAgentRunDelegatedAuthority(delegated)).toBe(true);
     const next = await nextOwner.capability.run((owner) =>
@@ -210,6 +252,8 @@ it("rolls back claim fencing and never revives a retained approval after same-ID
     next.delegatedAuthority.turnClaim = { ...replacement, claimId: "another claim" };
     expect(validate(next)).toBe(false);
   } finally {
+    captureRelease.resolve();
+    await delayedCapture?.catch(() => {});
     unregister();
     releaseAgentRunDelegatedAuthority(delegated);
   }

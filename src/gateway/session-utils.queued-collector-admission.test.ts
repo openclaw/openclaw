@@ -9,6 +9,7 @@ import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { isSubagentRunQueued } from "../agents/subagents/registry/subagent-registry-read.js";
 import { spawnSubagentDirect } from "../agents/subagents/spawn/subagent-spawn.js";
+import { captureTestSpawnToolPolicy } from "../agents/subagents/spawn/subagent-spawn.test-helpers.js";
 import { testing as spawnTesting } from "../agents/subagents/spawn/subagent-spawn.test-support.js";
 import { closeSwarmScheduler } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
@@ -126,6 +127,7 @@ describe("queued collector native admission", () => {
           },
           {
             agentSessionKey: parentKey,
+            captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
             requesterRunId: "parent-turn",
             requesterTurnRunId: "parent-turn",
           },

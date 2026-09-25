@@ -305,6 +305,7 @@ export function projectSessionSharingEntry(entry: SessionEntry): SessionSharingE
     incognito: entry.incognito,
     createdActor: entry.createdActor ? { ...entry.createdActor } : undefined,
     sandbox: entry.sandbox,
+    skillLibrarySelections: entry.skillLibrarySelections?.map((selection) => ({ ...selection })),
   };
 }
 

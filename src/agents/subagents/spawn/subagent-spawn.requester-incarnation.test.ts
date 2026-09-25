@@ -32,8 +32,11 @@ import {
 } from "../registry/subagent-registry.persistence.test-support.js";
 import { loadSubagentRunsByRunIdsFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import { spawnAcpDirect } from "./acp-spawn.js";
-import { spawnSubagentDirect } from "./subagent-spawn.js";
+import { spawnSubagentDirect as spawnSubagentWithPolicy } from "./subagent-spawn.js";
+import { withTestSpawnPolicy, captureTestSpawnToolPolicy } from "./subagent-spawn.test-helpers.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
+
+const spawnSubagentDirect = withTestSpawnPolicy(spawnSubagentWithPolicy);
 
 const fixture = installSpawnAuthorityFixture();
 const backendId = "requester-incarnation-fixture";
@@ -48,6 +51,8 @@ it.each([
   "keeps the birth requester window through async $backend launch (original=$originalSessionId, global=$globalRequester)",
   async ({ backend, originalSessionId, globalRequester }) => {
     const requesterSessionKey = globalRequester ? "global" : "agent:main:completion-owner";
+    const controllerSessionKey =
+      backend !== "acp" ? "agent:main:subagent:controller" : fixture.parentSessionKey;
     if (globalRequester) {
       const cfg = getRuntimeConfig();
       await writeFile(
@@ -74,9 +79,23 @@ it.each([
     await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
       agentId: "main",
-      sessionKey: fixture.parentSessionKey,
+      sessionKey: controllerSessionKey,
       defaultSessionId: "controller-session",
     });
+    if (backend !== "acp") {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: controllerSessionKey },
+        {
+          sessionId: "controller-session",
+          updatedAt: 1,
+          spawnedBy: requesterSessionKey,
+          completionOwnerSessionKey: requesterSessionKey,
+          spawnDepth: 1,
+          inheritedToolPolicyVersion: 2,
+          inheritedToolPolicy: (await captureTestSpawnToolPolicy()).policy,
+        },
+      );
+    }
     if (originalSessionId) {
       await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
@@ -134,7 +153,10 @@ it.each([
       },
     });
     const ctx = {
-      agentSessionKey: fixture.parentSessionKey,
+      agentSessionKey: controllerSessionKey,
+      ...(backend !== "acp"
+        ? { captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy }
+        : {}),
       completionOwnerKey: requesterSessionKey,
       ...(globalRequester ? { requesterAgentIdOverride: "main" } : {}),
     };
@@ -183,7 +205,7 @@ it.each([
         { sessionId: "replacement-requester", updatedAt: Date.now() },
       );
       const result = await pending;
-      expect(result).toMatchObject({ status: "accepted" });
+      expect(result, JSON.stringify(result)).toMatchObject({ status: "accepted" });
       const runId = result?.runId;
       if (typeof runId !== "string") {
         throw new Error("Expected an accepted child run");
@@ -193,7 +215,7 @@ it.each([
       expect(restored).toMatchObject({
         runId,
         requesterSessionKey,
-        controllerSessionKey: fixture.parentSessionKey,
+        controllerSessionKey,
         expectsCompletionMessage: true,
       });
       expect(restored?.completionRequesterSessionId).toBe(originalSessionId);

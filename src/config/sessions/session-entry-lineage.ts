@@ -31,3 +31,22 @@ export function preserveSqliteSameKeySessionRolloverLineage(params: {
     ]),
   };
 }
+
+/** Reset replaces execution state while retaining this logical session's saved delegation. */
+export function preserveSessionResetLineage(entry: SessionEntry | undefined) {
+  return {
+    spawnedBy: entry?.spawnedBy,
+    completionOwnerSessionKey: entry?.completionOwnerSessionKey,
+    inheritedToolPolicyVersion: entry?.inheritedToolPolicyVersion,
+    inheritedToolPolicy: entry?.inheritedToolPolicy,
+    inheritedToolAllow: entry?.inheritedToolAllow,
+    inheritedToolDeny: entry?.inheritedToolDeny,
+    parentSessionKey: entry?.parentSessionKey,
+    parentSessionId: entry?.parentSessionId,
+    forkSource: entry?.forkSource,
+    forkedFromParent: sessionEntryForkedFromParent(entry) ? true : undefined,
+    spawnDepth: entry?.spawnDepth,
+    subagentRole: entry?.subagentRole,
+    subagentControlScope: entry?.subagentControlScope,
+  };
+}

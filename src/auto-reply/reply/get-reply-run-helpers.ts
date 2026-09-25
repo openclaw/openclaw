@@ -1,6 +1,6 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
+import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/sandbox-info.types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
 import { isImageMediaFact, type MediaFact } from "../../media/media-facts.js";

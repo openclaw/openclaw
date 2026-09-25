@@ -15,8 +15,10 @@ vi.mock("../tools/computer-tool.js", () => ({
   createComputerTool: () => stubTool("computer"),
 }));
 
-vi.mock("../tools/cron-tool.js", () => ({
+vi.mock("../tools/cron-tool.js", async () => ({
   createCronTool: () => stubTool("automations"),
+  replaceWithEffectiveCronCreatorToolAllowlist: (await import("../tools/cron-tool-creator-cap.js"))
+    .replaceWithEffectiveCronCreatorToolAllowlist,
 }));
 
 vi.mock("../tools/gateway-tool.js", () => ({

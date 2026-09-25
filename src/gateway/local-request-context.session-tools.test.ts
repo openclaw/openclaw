@@ -4,6 +4,7 @@ import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/i
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import * as modelRuntimeChoice from "../agents/model-runtime-choice.js";
 import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
+import { captureTestSpawnToolPolicy } from "../agents/subagents/spawn/subagent-spawn.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
@@ -242,6 +243,7 @@ describe("built-in session tool role authority", () => {
                   sandbox: "inherit",
                   expectsCompletionMessage: false,
                   options: {
+                    captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
                     config: cfg,
                     agentSessionKey: REQUESTER,
                     registerRun,
@@ -384,7 +386,12 @@ describe("built-in session tool role authority", () => {
                 runtime: "subagent",
                 sandbox: "inherit",
                 expectsCompletionMessage: false,
-                options: { config: cfg, agentSessionKey: REQUESTER, callGateway },
+                options: {
+                  config: cfg,
+                  agentSessionKey: REQUESTER,
+                  callGateway,
+                  captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
+                },
               }),
           );
           expect(result).toMatchObject({

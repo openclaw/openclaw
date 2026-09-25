@@ -12,7 +12,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 let resetSubagentRegistryForTests: typeof import("./subagents/registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
-let spawnSubagentDirect: typeof import("./subagents/spawn/subagent-spawn.js").spawnSubagentDirect;
+let spawnSubagentDirect: import("./subagents/spawn/subagent-spawn.test-helpers.js").SpawnSubagentForTest;
 
 function resolveAgentConfigFromList(cfg: Record<string, unknown>, agentId: string) {
   const agents = (cfg.agents as { list?: Array<Record<string, unknown>> } | undefined)?.list;

@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import { createInheritedToolPolicyMatcher } from "../agents/inherited-tool-policy.js";
+import { parseInheritedToolPolicyV2 } from "../agents/inherited-tool-policy.schema.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import {
   captureGatewayToolCallerAssertion,
@@ -115,9 +117,14 @@ export async function prepareGatewaySessionAccessAuthority(request: {
   const assertAmbient = ambient ? captureGatewayToolCallerAssertion() : undefined;
   const owner = tool ?? runtime ?? (assertAmbient ? ambient : undefined);
   const inherited = runtime?.sessionSpawnContext?.inheritedToolPolicy;
-  const inheritedPolicy = inherited
-    ? { allow: [...inherited.allow], deny: [...inherited.deny] }
-    : undefined;
+  const inheritedPolicy =
+    inherited?.version === 1
+      ? { allow: [...inherited.allow], deny: [...inherited.deny] }
+      : undefined;
+  const inheritedActionMatcher =
+    inherited?.version === 2
+      ? createInheritedToolPolicyMatcher({ policy: parseInheritedToolPolicyV2(inherited.policy) })
+      : undefined;
   if (!client || (client.internal?.syntheticClient && !owner) || (tool && !tool.assertCurrent)) {
     denied("Session resources require an authenticated operator or an admitted agent run.");
   }
@@ -154,7 +161,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
           denied();
         }
         ambient.assertToolAllowed(requiredTool);
-      } else if (!inheritedPolicy) {
+      } else if (!inheritedPolicy && !inheritedActionMatcher) {
         denied();
       }
       if (
@@ -162,6 +169,9 @@ export async function prepareGatewaySessionAccessAuthority(request: {
         (!isRuntimeToolAllowed(requiredTool, inheritedPolicy.allow) ||
           !isToolAllowedByPolicyName(requiredTool, { deny: inheritedPolicy.deny }))
       ) {
+        denied();
+      }
+      if (!ambient && inheritedActionMatcher && !inheritedActionMatcher({ name: requiredTool })) {
         denied();
       }
     }

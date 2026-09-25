@@ -300,13 +300,19 @@ describe("Gateway GitHub publication attribution", () => {
     }
     const childKey = "agent:main:subagent:delegated-publication";
     const child = await createInitialSubagentSession({
+      inheritedToolPolicy: {
+        clauses: [],
+        parameters: { fileTools: [], exec: [], sandbox: [], unsupported: [] },
+      },
       cfg: config,
       targetAgentId: "main",
       childSessionKey: childKey,
       incognito: false,
       requesterInternalKey: SESSION_KEY,
+      requesterAgentId: "main",
       creationPolicy: { actor: { type: "agent", id: "main" } },
       completionOwnerSessionKey: SESSION_KEY,
+      admissionPatch: { spawnDepth: 1 },
       modelPatch: {},
       collect: false,
     });

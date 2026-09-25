@@ -25,6 +25,17 @@ export function applySessionsPatchSubagentPolicy(params: {
   storeKey: string;
 }): string | undefined {
   const { existing, next, patch, storeKey } = params;
+  if ("inheritedToolPolicy" in patch) {
+    return "inheritedToolPolicy is host-owned and cannot be patched";
+  }
+  if (
+    existing?.inheritedToolPolicyVersion === 2 &&
+    ["inheritedToolPolicyVersion", "inheritedToolAllow", "inheritedToolDeny"].some(
+      (field) => field in patch,
+    )
+  ) {
+    return "inherited tool policy v2 is immutable";
+  }
   if ("completionOwnerSessionKey" in patch) {
     const raw = patch.completionOwnerSessionKey;
     if (raw === null && existing?.completionOwnerSessionKey) {

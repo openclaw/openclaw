@@ -123,6 +123,9 @@ export type ExecToolConfig = Omit<NonNullable<SchemaToolsConfig["exec"]>, "safeB
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
 };
 
+/** Config for the optional model-backed exec reviewer. */
+export type ExecReviewerConfig = NonNullable<NonNullable<ToolsConfig["exec"]>["reviewer"]>;
+
 export type FsToolsConfig = NonNullable<SchemaToolsConfig["fs"]>;
 
 export type SessionsSpawnToolsConfig = NonNullable<SchemaToolsConfig["sessions_spawn"]>;

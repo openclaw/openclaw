@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { SessionPermissionMode } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 /**
  * Shared process-local state for active and abandoned embedded-agent runs.
@@ -25,6 +27,8 @@ import {
 import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OperationalRunInstanceRef } from "../admitted-run-context.js";
+import type { DelegatedToolParameterPolicy } from "../inherited-tool-parameters.types.js";
+import type { InheritedToolPolicyV2 } from "../inherited-tool-policy.schema.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 
 /**
@@ -44,6 +48,11 @@ export type EmbeddedAgentQueueHandle = {
   startedAtMs?: number;
   /** Exact authority of the concrete provider/model attempt behind this handle. */
   toolAuthorityFingerprint?: string;
+  /** Current prepared generation; absent on backends without restriction projection. */
+  getInheritedToolPolicy?: () => InheritedToolPolicyV2;
+  getDelegatedToolParameterPolicy?: () => DelegatedToolParameterPolicy;
+  getEnforcedDelegatedToolParameterPolicy?: () => DelegatedToolParameterPolicy | undefined;
+  addDelegatedInputPolicies?: (policies: readonly InheritedToolPolicyV2[]) => () => void;
   /** Shared outer-run owner survives an intentional native-turn replacement. */
   permissionChangeOwner?: object;
   /** Fences prior tools, revokes their approvals, then acknowledges installed permissions. */
@@ -119,6 +128,11 @@ export type EmbeddedRunToolAuthorityBinding = (registration: {
 }) => {
   source: "reply" | "attempt";
   project: (overlay: ReplyToolAuthorityOverlay) => string | undefined;
+  /** Configured restrictions of this prepared generation, before availability filtering. */
+  getInheritedToolPolicy?: () => InheritedToolPolicyV2;
+  getDelegatedToolParameterPolicy?: () => DelegatedToolParameterPolicy;
+  getEnforcedDelegatedToolParameterPolicy?: () => DelegatedToolParameterPolicy | undefined;
+  addDelegatedInputPolicies?: (policies: readonly InheritedToolPolicyV2[]) => () => void;
   assertActive: () => void;
 };
 
@@ -403,4 +417,30 @@ export function setActiveEmbeddedRunLifecycleGeneration(
   }
   ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS.set(handle, lifecycleGeneration);
   return lifecycleGeneration;
+}
+
+export function normalizeSessionFileRegistryKey(
+  sessionFile: string | undefined,
+): string | undefined {
+  const normalized = sessionFile?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized.startsWith("agent:") ||
+    normalized.startsWith("sqlite:") ||
+    normalized.startsWith("in-memory:")
+  ) {
+    return normalized;
+  }
+  const resolved = path.resolve(normalized);
+  const parent = path.dirname(resolved);
+  try {
+    // Canonicalize only the parent so a registry key stays stable when the
+    // transcript file itself is created or removed during the active run.
+    // Artifact-file symlinks are not runtime session identity after SQLite migration.
+    return path.join(fs.realpathSync(parent), path.basename(resolved));
+  } catch {
+    return resolved;
+  }
 }

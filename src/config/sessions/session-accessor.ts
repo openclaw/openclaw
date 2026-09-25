@@ -11,6 +11,7 @@ export {
   listSessionPendingInputs,
   readSessionPendingInput,
   readSessionSubmittedInput,
+  retainSessionPendingInputDelegatedPolicies,
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
   withSessionPendingInputRelocation,

@@ -3,6 +3,11 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import {
+  conjoinInheritedToolPolicies,
+  parseInheritedToolPolicyV2,
+  type InheritedToolPolicyV2,
+} from "../agents/inherited-tool-policy.schema.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { normalizeInputProvenance } from "./input-provenance.js";
@@ -15,6 +20,144 @@ import type {
 const REPLY_PREVIEW_TEXT_MAX_CHARS = 2000;
 const REPLY_PREVIEW_SENDER_MAX_CHARS = 200;
 const STEER_TARGET_RUN_ID_MAX_CHARS = 512;
+
+function readHostDelegatedInputRequirements(
+  metadata: Record<string, unknown> | undefined,
+): { policy: InheritedToolPolicyV2; sourceMetadataPresent: boolean } | undefined {
+  if (!metadata || !Object.hasOwn(metadata, "delegatedInputRequirements")) {
+    return undefined;
+  }
+  const envelope = asOptionalRecord(metadata.delegatedInputRequirements);
+  if (
+    !envelope ||
+    envelope.version !== 2 ||
+    typeof envelope.sourceMetadataPresent !== "boolean" ||
+    Object.keys(envelope).some(
+      (key) => key !== "version" && key !== "policy" && key !== "sourceMetadataPresent",
+    )
+  ) {
+    throw new Error("Accepted input has invalid host delegated requirements.");
+  }
+  return {
+    policy: parseInheritedToolPolicyV2(envelope.policy),
+    sourceMetadataPresent: envelope.sourceMetadataPresent,
+  };
+}
+
+/** Accepted input recovery must reject missing or malformed expected restrictions. */
+export function readUserTurnDelegatedInputPolicy(
+  message: unknown,
+): InheritedToolPolicyV2 | undefined {
+  const metadata = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  if (!metadata) {
+    return undefined;
+  }
+  const policies: InheritedToolPolicyV2[] = [];
+  if (
+    Object.hasOwn(metadata, "delegatedInputPolicyVersion") ||
+    Object.hasOwn(metadata, "delegatedInputPolicy")
+  ) {
+    if (metadata.delegatedInputPolicyVersion !== 2) {
+      throw new Error("Accepted input has an unsupported delegated tool policy version.");
+    }
+    policies.push(parseInheritedToolPolicyV2(metadata.delegatedInputPolicy));
+  }
+  const host = readHostDelegatedInputRequirements(metadata);
+  if (host) {
+    policies.push(host.policy);
+  }
+  return policies.length ? conjoinInheritedToolPolicies(policies) : undefined;
+}
+
+/** Collected sources keep their conjunction on the single aggregate input. */
+export function withUserTurnDelegatedInputPolicies(
+  message: PersistedUserTurnMessage,
+  requirements: readonly InheritedToolPolicyV2[],
+): PersistedUserTurnMessage {
+  const policies = [readUserTurnDelegatedInputPolicy(message), ...requirements].filter(
+    (policy): policy is InheritedToolPolicyV2 => policy !== undefined,
+  );
+  if (!policies.length) {
+    return message;
+  }
+  const metadata = { ...message["__openclaw"] };
+  delete metadata.delegatedInputRequirements;
+  return {
+    ...message,
+    __openclaw: {
+      ...metadata,
+      delegatedInputPolicyVersion: 2,
+      delegatedInputPolicy: conjoinInheritedToolPolicies(policies),
+    },
+  };
+}
+
+/** Only private pending-input custody may install this first-append projection. */
+export function withUserTurnHostDelegatedInputRequirements(
+  message: PersistedUserTurnMessage,
+  requirements: readonly InheritedToolPolicyV2[],
+): PersistedUserTurnMessage {
+  const previous = readHostDelegatedInputRequirements(message["__openclaw"]);
+  const policies = [previous?.policy, ...requirements].filter(
+    (policy): policy is InheritedToolPolicyV2 => policy !== undefined,
+  );
+  if (!policies.length) {
+    return message;
+  }
+  return {
+    ...message,
+    __openclaw: {
+      ...message["__openclaw"],
+      delegatedInputRequirements: {
+        version: 2,
+        policy: conjoinInheritedToolPolicies(policies),
+        sourceMetadataPresent:
+          previous?.sourceMetadataPresent ?? Object.hasOwn(message, "__openclaw"),
+      },
+    },
+  };
+}
+
+export function assertUserTurnSourceHasNoHostRequirements(message: PersistedUserTurnMessage): void {
+  if (message["__openclaw"] && Object.hasOwn(message["__openclaw"], "delegatedInputRequirements")) {
+    throw new Error("Host delegated input requirements cannot be supplied by an input source.");
+  }
+}
+
+/** Retry compares every original source field; the committed host projection remains authoritative. */
+export function readUserTurnOriginalSourceMessage(
+  message: PersistedUserTurnMessage,
+): PersistedUserTurnMessage {
+  const host = readHostDelegatedInputRequirements(message["__openclaw"]);
+  if (!host) {
+    return message;
+  }
+  const metadata = { ...message["__openclaw"] };
+  delete metadata.delegatedInputRequirements;
+  const original = { ...message };
+  delete original["__openclaw"];
+  if (host.sourceMetadataPresent || Object.keys(metadata).length) {
+    original["__openclaw"] = metadata;
+  }
+  return original;
+}
+
+function restoreDelegatedInputMetadata(
+  preparedMessage: PersistedUserTurnMessage,
+  target: Record<string, unknown>,
+): void {
+  readUserTurnDelegatedInputPolicy(preparedMessage);
+  for (const key of [
+    "delegatedInputPolicyVersion",
+    "delegatedInputPolicy",
+    "delegatedInputRequirements",
+  ]) {
+    delete target[key];
+    if (preparedMessage["__openclaw"] && Object.hasOwn(preparedMessage["__openclaw"], key)) {
+      target[key] = structuredClone(preparedMessage["__openclaw"][key]);
+    }
+  }
+}
 
 export function buildRunUserTurnIdempotencyKey(runId: string): string {
   return `${runId}:user`;
@@ -62,6 +205,12 @@ export function buildPersistedUserTurnMetadata(
   const replyPreviewText = normalizeOptionalString(input.replyToPreview?.text);
   const replyPreviewSender = normalizeOptionalString(input.replyToPreview?.senderLabel);
   return {
+    ...(input.delegatedInputPolicy
+      ? {
+          delegatedInputPolicyVersion: 2,
+          delegatedInputPolicy: parseInheritedToolPolicyV2(input.delegatedInputPolicy),
+        }
+      : {}),
     // Privileged synthetic handoffs may execute owner tools but never author trusted memory.
     ...(input.senderIsOwner === undefined
       ? {}
@@ -154,6 +303,7 @@ export function restorePreparedUserTurnOperationalMetaForRuntime<
     nextMessage.display = false;
   }
   const runtimeMeta = { ...nextMessage["__openclaw"] };
+  restoreDelegatedInputMetadata(params.preparedMessage, runtimeMeta);
   delete runtimeMeta.intent;
   if (preparedMeta?.intent) {
     runtimeMeta.intent = preparedMeta.intent;
@@ -224,6 +374,8 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     typeof originalIdempotencyKey === "string" ? originalIdempotencyKey : undefined;
   const provenance = normalizeInputProvenance(Reflect.get(message, "provenance"));
   const originalMeta = message["__openclaw"];
+  const delegatedInputSource = { ...message, __openclaw: structuredClone(message["__openclaw"]) };
+  readUserTurnDelegatedInputPolicy(delegatedInputSource);
   const originalContent =
     originalMeta?.humanMentions === undefined && originalMeta?.workContext === undefined
       ? undefined
@@ -285,6 +437,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     ...(mediaImageLayout === undefined ? {} : { mediaImageLayout }),
     ...(intent === undefined ? {} : { intent }),
   };
+  restoreDelegatedInputMetadata(delegatedInputSource, protectedMeta);
   if (intent === undefined) {
     delete protectedMeta.intent;
   }

@@ -93,7 +93,7 @@ describe("sessions_spawn delegation guidance", () => {
       "Default to a hidden subagent for internal QA, research, coding, review, tests, and parallel work supporting the current task. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. Omit `visible` or set it false, and report results through the parent.",
     );
     expect(description).toContain(
-      "A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. No spawn for quick lookup/single read.",
+      "A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. Use an isolated native child for independent assessment by another agent, even one status read, while its active work continues.",
     );
     expect(description).not.toContain("trial-and-error");
     expect(description).not.toContain("auth probing");

@@ -49,6 +49,7 @@ export function createPromptBuildToolPolicy<
       surface: ReturnType<
         typeof applyPromptBuildToolsAllow<TEffectiveTool, TUncompactedTool, TTool>
       >,
+      toolsAllow: string[] | undefined,
     ) => void;
   },
 ) {
@@ -68,7 +69,7 @@ export function createPromptBuildToolPolicy<
   const apply = (nextToolsAllow: string[] | undefined) => {
     toolsAllow = nextToolsAllow;
     Object.assign(current, applyPromptBuildToolsAllow({ ...params, baseline, toolsAllow }));
-    params.onApplied?.(current);
+    params.onApplied?.(current, toolsAllow);
     return current;
   };
   return {

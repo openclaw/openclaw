@@ -44,6 +44,7 @@ import { normalizeAssistantReplayContent } from "./embedded-agent-runner/replay-
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+import { registerInputPolicyTranscriptCheckpointTest } from "./session-tool-result-guard.policy.test-support.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import {
@@ -83,6 +84,8 @@ afterEach(async () => {
 });
 
 describe("guardSessionManager transcript updates", () => {
+  registerInputPolicyTranscriptCheckpointTest(openPersistedSessionManager);
+
   it("preserves prepared source and redaction when a concurrent append forces a retry", async () => {
     const { sessionManager: manager, target } = await openPersistedSessionManager();
     const baseId = manager.appendMessage(makeUserMessage("Compute a value", 1));

@@ -2,6 +2,10 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  bindInProcessSessionSendPolicy,
+  type SessionSendPolicyAdmission,
+} from "../../gateway/in-process-session-send-policy.js";
 import type { GatewaySessionStoreTarget } from "../../gateway/session-utils-store.types.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -12,12 +16,16 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { resolveActiveEmbeddedRunSessionId } from "../embedded-agent-runner/active-run-projections.js";
+import { captureActiveEmbeddedRunInheritedToolPolicy } from "../embedded-agent-runner/run-tool-policy.js";
 import {
   type EmbeddedAgentQueueMessageOptions,
   type EmbeddedAgentQueueMessageOutcome,
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
+  queueGuardedEmbeddedAgentMessageWithOutcomeAsync,
 } from "../embedded-agent-runner/runs.js";
+import { assertInheritedToolPolicyCompatible } from "../inherited-tool-policy.js";
+import { wasSteeringMessageNotInjected } from "../sessions/steering-message-identity.js";
 import { jsonResult } from "./common.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 
@@ -77,6 +85,7 @@ export async function startSessionsSendAgentRun(params: {
   expectedSessionId?: string;
   sourceOrigin?: DeliveryContext;
   mode?: "steer" | "followup";
+  policyAdmission?: SessionSendPolicyAdmission;
 }): Promise<
   | {
       ok: true;
@@ -109,16 +118,51 @@ export async function startSessionsSendAgentRun(params: {
     }
     const { inputProvenance, message: messageText, sourceReplyDeliveryMode } = params.sendParams;
     if (activeRunSessionId && messageText) {
+      let accepted = false;
+      const targetPolicy = params.policyAdmission
+        ? captureActiveEmbeddedRunInheritedToolPolicy(activeRunSessionId)
+        : undefined;
+      let releasePolicy: (() => void) | undefined;
+      const assertCompatible = () => {
+        if (!params.policyAdmission || !targetPolicy) {
+          return true;
+        }
+        if (!accepted) {
+          params.policyAdmission.assertCurrent?.();
+        }
+        assertInheritedToolPolicyCompatible({
+          source: params.policyAdmission.policy,
+          target: targetPolicy.get(),
+          targetEnforcedParameters: targetPolicy.getEnforcedParameters(),
+        });
+        return true;
+      };
+      assertCompatible();
+      const canInject = () => {
+        assertCompatible();
+        if (!releasePolicy && params.policyAdmission) {
+          releasePolicy = targetPolicy?.accept(params.policyAdmission.policy);
+        }
+        return true;
+      };
+      const queueIdentity = crypto.randomUUID();
       const queueOptions: EmbeddedAgentQueueMessageOptions = {
         steeringMode: "all",
+        queueIdentity,
         debounceMs: 0,
         deliveryTimeoutMs: params.deliveryTimeoutMs,
         waitForTranscriptCommit: true,
+        onQueueAccepted: (value) => {
+          if (value) {
+            accepted = true;
+          }
+        },
         ...(params.mode === "steer" ? {} : { sourceReplyDeliveryMode }),
         // Carry the same input facts as a new run; transcript ownership stays
         // with the receiving runtime and its exact session incarnation.
         userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
           input: {
+            delegatedInputPolicy: params.policyAdmission?.policy,
             text: messageText,
             provenance: inputProvenance,
             ...(inputProvenance.sourceRole === "subagent" ? { display: false as const } : {}),
@@ -135,22 +179,40 @@ export async function startSessionsSendAgentRun(params: {
           },
         }),
       };
-      let queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-        activeRunSessionId,
-        messageText,
-        queueOptions,
-      );
+      const queueMessage = (options: EmbeddedAgentQueueMessageOptions) =>
+        params.policyAdmission
+          ? queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
+              activeRunSessionId,
+              messageText,
+              options,
+              canInject,
+            )
+          : queueEmbeddedAgentMessageWithOutcomeAsync(activeRunSessionId, messageText, options);
+      let queueOutcome = await queueMessage(queueOptions);
       if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
         const bestEffortQueueOptions = { ...queueOptions };
         delete bestEffortQueueOptions.waitForTranscriptCommit;
-        queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-          activeRunSessionId,
-          messageText,
-          bestEffortQueueOptions,
-        );
+        queueOutcome = await queueMessage(bestEffortQueueOptions);
       }
       if (queueOutcome.queued) {
         return { ok: true, runId: params.runId, targetDisposition: "steered" };
+      }
+      if (
+        queueOutcome.reason !== "runtime_rejected" ||
+        wasSteeringMessageNotInjected(queueOutcome, queueIdentity)
+      ) {
+        releasePolicy?.();
+      } else if (releasePolicy) {
+        return {
+          ok: false,
+          result: jsonResult({
+            runId: params.runId,
+            status: "error",
+            sentBeforeError: true,
+            error: "Steering delivery could not be confirmed; inspect the target before retrying.",
+            sessionKey: params.sessionKey,
+          }),
+        };
       }
       fallbackSessionKey = resolveCronRunScopedFallbackSessionKey(params.sessionKey);
       if (
@@ -177,17 +239,23 @@ export async function startSessionsSendAgentRun(params: {
           threadId: stringifyRouteThreadId(sourceOrigin.threadId),
         }
       : params.sendParams;
-    const response = await params.callGateway<{ runId: string; admissionPending?: boolean }>({
-      method: "agent",
-      params: fallbackSessionKey
-        ? {
-            ...sendParams,
-            sessionKey: fallbackSessionKey,
-            idempotencyKey: crypto.randomUUID(),
-          }
-        : sendParams,
-      timeoutMs: 10_000,
-    });
+    params.policyAdmission?.assertCurrent?.();
+    const response = await params.callGateway<{ runId: string; admissionPending?: boolean }>(
+      bindInProcessSessionSendPolicy(
+        {
+          method: "agent",
+          params: fallbackSessionKey
+            ? {
+                ...sendParams,
+                sessionKey: fallbackSessionKey,
+                idempotencyKey: crypto.randomUUID(),
+              }
+            : sendParams,
+          timeoutMs: 10_000,
+        },
+        params.policyAdmission,
+      ),
+    );
     const responseRunId =
       typeof response?.runId === "string" && response.runId ? response.runId : params.runId;
     if (response?.admissionPending === true) {

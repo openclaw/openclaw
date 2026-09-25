@@ -14,6 +14,7 @@ import {
   markSubagentRunTerminated,
   registerSubagentRun,
 } from "../agents/subagents/registry/subagent-registry.js";
+import { captureAdmittedTestSpawnToolPolicy } from "../agents/subagents/spawn/subagent-spawn.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -129,6 +130,7 @@ async function arrangeAuthorityProof(name: string) {
   });
   const send = (caller = parent, approvalSignal?: AbortSignal, mode?: "resume") => {
     const tool = createSessionsSendTool({
+      captureInheritedToolPolicyForDelegation: captureAdmittedTestSpawnToolPolicy,
       agentSessionKey: caller,
       config: { tools: { sessions: { visibility: "all" } } },
       idempotencyKey: runId,
@@ -254,7 +256,14 @@ it("rejects parent authority revoked while durable input preparation awaits", as
   try {
     const proof = await arrangeAuthorityProof("revoked-parent");
     sending = proof.send(proof.parent, parentAuthority.signal);
-    await prepared.promise;
+    await Promise.race([
+      prepared.promise,
+      sending.then((result) => {
+        throw new Error(
+          `Resume settled before durable input preparation: ${JSON.stringify(result.details)}`,
+        );
+      }),
+    ]);
     expect(preparation).toHaveBeenCalledTimes(1);
     expect(listSessionPendingInputs(proof.scope)).toMatchObject({
       total: 1,
@@ -460,6 +469,7 @@ it.each(["explicit", "automatic"] as const)(
         return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1 } };
       });
       const tool = createSessionsSendTool({
+        captureInheritedToolPolicyForDelegation: captureAdmittedTestSpawnToolPolicy,
         agentSessionKey: parent,
         config: { tools: { sessions: { visibility: "all" } } },
       });

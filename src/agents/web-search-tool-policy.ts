@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import { resolveEffectiveToolPolicy, resolveGroupToolPolicy } from "./agent-tools.policy.js";
+import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { createInheritedToolPolicyMatcher } from "./inherited-tool-policy.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import {
@@ -14,6 +16,7 @@ import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js
 
 export type WebSearchToolPolicyParams = {
   webSearchEnabled?: boolean;
+  conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
   config?: OpenClawConfig;
   modelProvider?: string;
   modelId?: string;
@@ -49,6 +52,7 @@ export function resolveWebSearchToolPolicy(
   if (params.webSearchEnabled === false) {
     return { allowed: false, persistentAllowed: false };
   }
+  const preparedPolicy = params.conversationCapabilityProfile?.policy;
   const {
     agentId,
     globalPolicy,
@@ -59,16 +63,23 @@ export function resolveWebSearchToolPolicy(
     providerProfile,
     profileAlsoAllow,
     providerProfileAlsoAllow,
-  } = resolveEffectiveToolPolicy({
-    config: params.config,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-  });
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
+  } =
+    preparedPolicy ??
+    resolveEffectiveToolPolicy({
+      config: params.config,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+    });
+  const profilePolicy = mergeAlsoAllowPolicy(
+    preparedPolicy ? preparedPolicy.profilePolicy : resolveToolProfilePolicy(profile),
+    profileAlsoAllow,
+  );
   const providerProfilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(providerProfile),
+    preparedPolicy
+      ? preparedPolicy.providerProfilePolicy
+      : resolveToolProfilePolicy(providerProfile),
     providerProfileAlsoAllow,
   );
   const callerContext = resolveScheduledToolCallerContext({
@@ -95,22 +106,24 @@ export function resolveWebSearchToolPolicy(
     sessionKey: params.sessionKey,
     messageProvider: params.messageProvider,
   };
-  const requesterPolicies = resolveRequesterToolPolicies({
-    ...groupPolicyParams,
-    agentId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-    inputProvenance: params.inputProvenance,
-    trustedInternalHandoff: params.trustedInternalHandoff,
-    sessionId: params.sessionId,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-    senderPolicyMode: params.scheduledToolPolicy ? "never" : "always",
-    groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
-    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
-  });
+  const requesterPolicies =
+    preparedPolicy ??
+    resolveRequesterToolPolicies({
+      ...groupPolicyParams,
+      agentId,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      inputProvenance: params.inputProvenance,
+      trustedInternalHandoff: params.trustedInternalHandoff,
+      sessionId: params.sessionId,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+      senderPolicyMode: params.scheduledToolPolicy ? "never" : "always",
+      groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
+      requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
+    });
   const persistentGroupPolicy = requesterPolicies.delegated
     ? undefined
     : resolveGroupToolPolicy(groupPolicyParams);
@@ -127,13 +140,19 @@ export function resolveWebSearchToolPolicy(
     agentProviderPolicy,
   ];
   const trailingPolicies = [
-    params.sandboxToolPolicy,
+    preparedPolicy ? preparedPolicy.sandboxPolicy : params.sandboxToolPolicy,
     requesterPolicies.subagentPolicy,
     requesterPolicies.inheritedToolPolicy,
   ];
+  const inheritedAllowed =
+    !requesterPolicies.inheritedActionPolicy ||
+    createInheritedToolPolicyMatcher({ policy: requesterPolicies.inheritedActionPolicy })({
+      name: "web_search",
+    });
   return {
     // Runtime caps apply only to this turn; persistent policy keeps provider sessions reusable.
     allowed:
+      inheritedAllowed &&
       isRuntimeToolAllowed("web_search", params.runtimeToolAllowlist) &&
       isToolAllowedByPolicies("web_search", [
         ...fixedPolicies,
@@ -141,11 +160,13 @@ export function resolveWebSearchToolPolicy(
         requesterPolicies.senderPolicy,
         ...trailingPolicies,
       ]),
-    persistentAllowed: isToolAllowedByPolicies("web_search", [
-      ...fixedPolicies,
-      persistentGroupPolicy,
-      persistentSenderPolicy,
-      ...trailingPolicies,
-    ]),
+    persistentAllowed:
+      inheritedAllowed &&
+      isToolAllowedByPolicies("web_search", [
+        ...fixedPolicies,
+        persistentGroupPolicy,
+        persistentSenderPolicy,
+        ...trailingPolicies,
+      ]),
   };
 }

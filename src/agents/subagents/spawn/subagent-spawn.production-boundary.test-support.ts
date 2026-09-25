@@ -32,6 +32,7 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
+import { captureAdmittedTestSpawnToolPolicy } from "./subagent-spawn.test-helpers.js";
 
 export function createSpawnOperatorSource() {
   const revocation = new AbortController();
@@ -217,6 +218,7 @@ export function createBoundSpawnInvocation(
     requesterRunId: parentRunId,
     requesterTurnRunId: parentRunId,
     requesterModel,
+    captureInheritedToolPolicyForDelegation: captureAdmittedTestSpawnToolPolicy,
   });
   let tool = source;
   if (request?.collect) {

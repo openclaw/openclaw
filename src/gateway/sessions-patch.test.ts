@@ -15,36 +15,11 @@ import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-ha
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { withAgentSessionModelPatchOrigin } from "./session-model-patch-origin.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
-
-async function applySessionsPatchToStore(
-  params: Omit<
-    Parameters<typeof projectSessionsPatchEntry>[0],
-    "existingEntry" | "isLabelInUse"
-  > & {
-    store: Record<string, SessionEntry>;
-    loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
-  },
-) {
-  const load = params.loadGatewayModelCatalog;
-  const projected = await projectSessionsPatchEntry({
-    ...params,
-    loadGatewayModelCatalogSnapshot: load
-      ? async () => {
-          const entries = await load();
-          return { entries, routeVariants: entries };
-        }
-      : undefined,
-    existingEntry: params.store[params.storeKey],
-    isLabelInUse: (label) =>
-      Object.entries(params.store).some(
-        ([sessionKey, entry]) => sessionKey !== params.storeKey && entry.label === label,
-      ),
-  });
-  if (projected.ok) {
-    params.store[params.storeKey] = projected.entry;
-  }
-  return projected;
-}
+import {
+  applySessionsPatchToStore,
+  expectPatchOk,
+  expectPatchError,
+} from "./sessions-patch.test-support.js";
 
 const acpSessionMetaMocks = vi.hoisted(() => ({
   readAcpSessionMetaForEntry: vi.fn(),
@@ -120,27 +95,6 @@ async function runPatch(params: {
     providerAuthMetadataSnapshot: params.providerAuthMetadataSnapshot,
     archivedBy: params.archivedBy,
   });
-}
-
-function expectPatchOk(
-  result: Awaited<ReturnType<typeof applySessionsPatchToStore>>,
-): SessionEntry {
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error(result.error.message);
-  }
-  return result.entry;
-}
-
-function expectPatchError(
-  result: Awaited<ReturnType<typeof applySessionsPatchToStore>>,
-  message: string,
-): void {
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    throw new Error(`Expected patch failure containing: ${message}`);
-  }
-  expect(result.error.message).toContain(message);
 }
 
 function mainStoreEntry(overrides: Partial<SessionEntry>): Record<string, SessionEntry> {
@@ -1963,6 +1917,39 @@ describe("gateway sessions patch", () => {
       patch: { key: "agent:main:acp:child", inheritedToolPolicyVersion: null },
     });
     expectPatchError(result, "inheritedToolPolicyVersion cannot be cleared once set");
+  });
+
+  test.each([
+    { inheritedToolPolicyVersion: 1 as const },
+    { inheritedToolPolicyVersion: null },
+    { inheritedToolAllow: ["*"] },
+    { inheritedToolDeny: null },
+  ])("cannot rewrite a v2 child through legacy public fields: %j", async (patch) => {
+    const key = "agent:main:acp:child";
+    const entry: SessionEntry = {
+      sessionId: "v2-child",
+      updatedAt: 1,
+      inheritedToolPolicyVersion: 2,
+      inheritedToolPolicy: {
+        clauses: [{ kind: "configured", allow: ["read"] }],
+        parameters: { fileTools: [], exec: [], sandbox: [], unsupported: [] },
+      },
+    };
+    const store = { [key]: entry };
+    expectPatchError(
+      await runPatch({ storeKey: key, store, patch: { key, ...patch } }),
+      "inherited tool policy v2 is immutable",
+    );
+    expect(store[key]).toEqual(entry);
+  });
+
+  test("rejects host-only v2 policy fields even before protocol validation", async () => {
+    const key = "agent:main:acp:child";
+    const hostOnly = { inheritedToolPolicy: null };
+    expectPatchError(
+      await runPatch({ storeKey: key, patch: { key, ...hostOnly } }),
+      "inheritedToolPolicy is host-owned",
+    );
   });
 
   test("sets inheritedToolDeny for ACP sessions", async () => {

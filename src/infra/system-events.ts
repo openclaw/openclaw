@@ -1,15 +1,17 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Lightweight in-memory queue for human-readable system events that should be
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
-
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { DelegatedToolParameterPolicy } from "../agents/inherited-tool-parameters.types.js";
+import { assertInheritedToolPolicyCompatible } from "../agents/inherited-tool-policy.js";
+import type { InheritedToolPolicyV2 } from "../agents/inherited-tool-policy.schema.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -45,6 +47,11 @@ type SessionQueue = {
 };
 
 const SYSTEM_EVENT_QUEUES_KEY = Symbol.for("openclaw.systemEvents.queues");
+
+const delegatedPolicies = resolveGlobalSingleton<WeakMap<SystemEvent, InheritedToolPolicyV2>>(
+  Symbol.for("openclaw.systemEvents.delegatedPolicies"),
+  () => new WeakMap(),
+);
 
 const queues = resolveGlobalMap<string, SessionQueue>(SYSTEM_EVENT_QUEUES_KEY, "close-only");
 registerSystemEventStoreOwner(SYSTEM_EVENT_QUEUES_KEY, () => {
@@ -103,10 +110,15 @@ function getOrCreateSessionQueue(key: string): SessionQueue {
 }
 
 function cloneSystemEvent(event: SystemEvent): SystemEvent {
-  return {
+  const cloned = {
     ...event,
     ...(event.deliveryContext ? { deliveryContext: { ...event.deliveryContext } } : {}),
   };
+  const policy = delegatedPolicies.get(event);
+  if (policy) {
+    delegatedPolicies.set(cloned, policy);
+  }
+  return cloned;
 }
 
 export function isSystemEventContextChanged(
@@ -130,6 +142,7 @@ function enqueueOwnedSystemEventEntry(
   text: string,
   options: SystemEventOptions,
   receiptOptions?: ReceiptOptions,
+  delegatedPolicy?: InheritedToolPolicyV2,
 ): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
   const sessionStorePath =
@@ -180,11 +193,62 @@ function enqueueOwnedSystemEventEntry(
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
   };
+  if (delegatedPolicy) {
+    delegatedPolicies.set(event, delegatedPolicy);
+  }
   entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
   }
   return event;
+}
+
+/** A delegated notification is only disclosed after the receiving tools are prepared. */
+export function enqueueDelegatedSystemEventEntry(
+  text: string,
+  options: SystemEventOptions,
+  policy: InheritedToolPolicyV2,
+): SystemEvent | null {
+  const event = enqueueOwnedSystemEventEntry(text, options, undefined, policy);
+  return event ? cloneSystemEvent(event) : null;
+}
+
+/** Incompatible events stay pending without restricting the ordinary receiving turn. */
+export function consumeDelegatedSystemEventEntries(
+  sessionKey: string,
+  target: InheritedToolPolicyV2,
+  accept: (policies: readonly InheritedToolPolicyV2[]) => boolean,
+  targetEnforcedParameters?: DelegatedToolParameterPolicy,
+): { events: SystemEvent[]; policies: InheritedToolPolicyV2[]; deferred: number } {
+  const candidates = getSessionQueue(sessionKey)?.queue ?? [];
+  const compatible: SystemEvent[] = [];
+  let deferred = 0;
+  for (const event of candidates) {
+    const source = delegatedPolicies.get(event);
+    if (!source) {
+      continue;
+    }
+    if (deferred > 0) {
+      deferred += 1;
+      continue;
+    }
+    try {
+      assertInheritedToolPolicyCompatible({ source, target, targetEnforcedParameters });
+      compatible.push(event);
+    } catch {
+      deferred += 1;
+    }
+  }
+  const policies = compatible.flatMap((event) => delegatedPolicies.get(event) ?? []);
+  if (policies.length > 0 && !accept(policies)) {
+    return { events: [], policies: [], deferred: deferred + compatible.length };
+  }
+  const events = consumeSelectedSystemEventEntries(sessionKey, compatible);
+  return {
+    events,
+    policies: events.flatMap((event) => delegatedPolicies.get(event) ?? []),
+    deferred,
+  };
 }
 
 export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
@@ -215,11 +279,10 @@ function drainSystemEventsWith<T>(sessionKey: string, project: (event: SystemEve
   if (!entry || entry.queue.length === 0) {
     return [];
   }
-  const out = entry.queue.map(project);
-  // Reentrant consumers may hold this array; clear it in place before removing the queue.
-  entry.queue.length = 0;
-  entry.lastContextKey = null;
-  queues.delete(key);
+  const selected = entry.queue.filter((event) => !delegatedPolicies.has(event));
+  const out = selected.map(project);
+  entry.queue = entry.queue.filter((event) => delegatedPolicies.has(event));
+  resetQueueState(key, entry);
   return out;
 }
 
@@ -295,11 +358,19 @@ export function drainSystemEvents(sessionKey: string): string[] {
 }
 
 export function peekSystemEventEntries(sessionKey: string): SystemEvent[] {
-  return getSessionQueue(sessionKey)?.queue.map(cloneSystemEvent) ?? [];
+  return (
+    getSessionQueue(sessionKey)
+      ?.queue.filter((event) => !delegatedPolicies.has(event))
+      .map(cloneSystemEvent) ?? []
+  );
 }
 
 export function peekSystemEvents(sessionKey: string): string[] {
-  return getSessionQueue(sessionKey)?.queue.map((event) => event.text) ?? [];
+  return (
+    getSessionQueue(sessionKey)
+      ?.queue.filter((event) => !delegatedPolicies.has(event))
+      .map((event) => event.text) ?? []
+  );
 }
 
 export function hasSystemEvents(sessionKey: string) {

@@ -81,25 +81,20 @@ describe("subagent spawn envelope", () => {
     expect(envelope.systemPrompt).toContain("May delegate descendants");
   });
 
-  it.each([false, true])(
-    "gates ACP guidance without overriding collector restrictions: acp=%s",
-    (acpEnabled) => {
-      const options = {
-        childDepth: 1,
-        maxSpawnDepth: 2,
-        acpEnabled,
-        nativeCommandGuidanceLines: ["Plugin-owned native command guidance."],
-      };
-      const normal = buildEnvelope(options).systemPrompt;
-      expect(normal.includes("ACP harness:")).toBe(acpEnabled);
-      expect(normal).toContain("Plugin-owned native command guidance.");
-      expect(normal).toContain("Follow each descendant's accepted completion mode");
-      const collector = buildEnvelope({ ...options, completionMode: "collector" }).systemPrompt;
-      expect(collector).toContain("Descendants must also be collectors");
-      expect(collector).toContain("Explicitly collect all required results");
-      expect(collector).not.toMatch(/ACP|Plugin-owned|turn-yield|auto-announce|push-based/);
-    },
-  );
+  it("preserves native command guidance without overriding collector restrictions", () => {
+    const options = {
+      childDepth: 1,
+      maxSpawnDepth: 2,
+      nativeCommandGuidanceLines: ["Plugin-owned native command guidance."],
+    };
+    const normal = buildEnvelope(options).systemPrompt;
+    expect(normal).toContain("Plugin-owned native command guidance.");
+    expect(normal).toContain("Follow each descendant's accepted completion mode");
+    const collector = buildEnvelope({ ...options, completionMode: "collector" }).systemPrompt;
+    expect(collector).toContain("Descendants must also be collectors");
+    expect(collector).toContain("Explicitly collect all required results");
+    expect(collector).not.toMatch(/ACP|Plugin-owned|turn-yield|auto-announce|push-based/);
+  });
 
   it("keeps persistent thread follow-ups in both sides of the envelope", () => {
     const envelope = buildEnvelope({ spawnMode: "session", completionMode: "thread-direct" });

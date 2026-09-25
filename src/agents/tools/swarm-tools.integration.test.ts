@@ -27,7 +27,10 @@ import {
   restoreSubagentRunsFromDisk,
 } from "../subagents/registry/subagent-registry-state.js";
 import { resetSubagentRegistryForTests } from "../subagents/registry/subagent-registry.test-helpers.js";
-import { supportedSpawnModelChoice } from "../subagents/spawn/subagent-spawn.test-helpers.js";
+import {
+  captureTestSpawnToolPolicy,
+  supportedSpawnModelChoice,
+} from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import { testing as spawnTesting } from "../subagents/spawn/subagent-spawn.test-support.js";
 import { testing as swarmSchedulerTesting } from "../subagents/swarm/swarm-scheduler.test-support.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
@@ -200,6 +203,7 @@ describe("swarm tools integration", () => {
     }));
 
     const spawn = createSessionsSpawnTool({
+      captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
       agentSessionKey: requesterSessionKey,
       requesterRunId: "parent-run",
       config,

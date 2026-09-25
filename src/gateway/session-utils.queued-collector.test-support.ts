@@ -7,6 +7,7 @@ import {
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createInitialSubagentSession } from "../agents/subagents/spawn/subagent-spawn-session-patch.js";
 import { spawnSubagentDirect } from "../agents/subagents/spawn/subagent-spawn.js";
+import { captureTestSpawnToolPolicy } from "../agents/subagents/spawn/subagent-spawn.test-helpers.js";
 import { testing as spawnTesting } from "../agents/subagents/spawn/subagent-spawn.test-support.js";
 import { closeSwarmScheduler, reserveSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
@@ -211,6 +212,7 @@ export function useQueuedCollectorFixture() {
           },
           {
             agentSessionKey: parentKey,
+            captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
             completionOwnerKey,
             requesterRunId: "parent-turn",
             requesterTurnRunId: "parent-turn",
@@ -218,7 +220,10 @@ export function useQueuedCollectorFixture() {
         ),
       ),
     );
-    expect(results.map((result) => result.status)).toEqual(labels.map(() => "accepted"));
+    expect(
+      results.map((result) => result.status),
+      JSON.stringify(results),
+    ).toEqual(labels.map(() => "accepted"));
     await vi.waitFor(() => expect(launchedRunIds).toEqual([results[0]?.runId]));
     return results;
   }
@@ -233,21 +238,26 @@ export function useQueuedCollectorFixture() {
     const runId = `${name}-collector`;
     const groupId = `swarm:${parentKey}:parent-turn`;
     reserveSwarmRun({ runId, groupId, maxConcurrent: 1, activeRunIds: [] });
-    expect(
-      await createInitialSubagentSession({
-        cfg: getRuntimeConfig(),
-        targetAgentId: "main",
-        childSessionKey,
-        label: "Reserved collector",
-        incognito: false,
-        requesterInternalKey: parentKey,
-        completionOwnerSessionKey: parentKey,
-        creationPolicy,
-        modelPatch: {},
-        swarmGroupId: groupId,
-        collect: true,
-      }),
-    ).toMatchObject({ status: "ok" });
+    const creation = await createInitialSubagentSession({
+      inheritedToolPolicy: {
+        clauses: [],
+        parameters: { fileTools: [], exec: [], sandbox: [], unsupported: [] },
+      },
+      cfg: getRuntimeConfig(),
+      targetAgentId: "main",
+      childSessionKey,
+      label: "Reserved collector",
+      incognito: false,
+      requesterInternalKey: parentKey,
+      requesterAgentId: "main",
+      completionOwnerSessionKey: parentKey,
+      creationPolicy,
+      admissionPatch: { spawnDepth: 1 },
+      modelPatch: {},
+      swarmGroupId: groupId,
+      collect: true,
+    });
+    expect(creation, JSON.stringify(creation)).toMatchObject({ status: "ok" });
     const registration = {
       runId,
       childSessionKey,

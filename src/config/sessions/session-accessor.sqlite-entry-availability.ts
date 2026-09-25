@@ -9,7 +9,10 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import type { ExactSessionEntry, SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { prepareSqliteSessionEntryRowDecoder } from "./session-accessor.sqlite-entry-read.js";
-import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-store.js";
+import {
+  readExactSessionEntryRow,
+  readExactSessionEntryRowValidated,
+} from "./session-accessor.sqlite-entry-store.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
@@ -18,6 +21,7 @@ import {
   type SessionSqliteTargetResolutionCache,
 } from "./session-accessor.sqlite-scope.js";
 import { sessionEntryMetadataJson } from "./session-accessor.sqlite-status.js";
+import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import type { SessionEntry } from "./types.js";
 
@@ -38,7 +42,7 @@ type ExactSessionEntryReadOnlyResult =
 
 /** Exact persisted-key probe that preserves database and row availability. */
 export function loadExactSessionEntryReadOnlyResult(
-  scope: SessionAccessScope,
+  scope: SessionAccessScope & Pick<SessionEntryReadScope, "projection" | "canonicalValidation">,
 ): ExactSessionEntryReadOnlyResult {
   const sessionKey = scope.sessionKey.trim();
   if (!sessionKey) {
@@ -50,7 +54,11 @@ export function loadExactSessionEntryReadOnlyResult(
     | { found: false; reason: "database-missing" | "schema-missing" };
   try {
     result = withOpenClawAgentDatabaseReadOnly((database) => {
-      const entry = readExactSessionEntryRowValidated(database, sessionKey)?.entry;
+      const entry = (
+        scope.canonicalValidation === "selected"
+          ? readExactSessionEntryRow(database, sessionKey, scope.projection, "canonical")
+          : readExactSessionEntryRowValidated(database, sessionKey, scope.projection)
+      )?.entry;
       const rowExists = entry
         ? true
         : Boolean(

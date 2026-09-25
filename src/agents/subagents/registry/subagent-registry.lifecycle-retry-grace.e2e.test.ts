@@ -19,6 +19,7 @@ import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent
 import { testing as subagentAnnounceOutputTesting } from "../announce/subagent-announce-output.test-support.js";
 import { announceTesting as subagentAnnounceTesting } from "../announce/subagent-announce-overrides.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
+import { captureTestSpawnToolPolicy } from "../spawn/subagent-spawn.test-helpers.js";
 import {
   getAgentResultsForChildSession,
   type LifecycleData,
@@ -360,6 +361,7 @@ describe("subagent registry lifecycle error grace", () => {
       sandbox: "inherit",
       expectsCompletionMessage: true,
       options: {
+        captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
         agentSessionKey: MAIN_REQUESTER_SESSION_KEY,
         requesterTurnRunId,
         requesterAgentIdOverride: "main",

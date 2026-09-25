@@ -1,4 +1,8 @@
 import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-computer.js";
+import type {
+  InheritedToolPolicyRef,
+  InheritedToolPolicyV2,
+} from "../../agents/inherited-tool-policy.schema.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveManifestActivationPluginIds } from "../../plugins/activation-planner.js";
 import type { WorkerDesktopEndpoint } from "../../plugins/types.js";
@@ -25,6 +29,8 @@ export async function prepareWorkerDesktopLaunchPlan(params: {
   browser?: WorkerBrowserLaunchDescriptor;
   computer?: WorkerComputerLaunchDescriptor;
   toolAuthority: WorkerToolAuthority;
+  delegationToolPolicy: InheritedToolPolicyV2;
+  captureDelegationToolPolicy: NonNullable<InheritedToolPolicyRef["captureSource"]>;
   preparedComputer?: PreparedWorkerComputer;
 }> {
   const computerSupported =
@@ -48,14 +54,17 @@ export async function prepareWorkerDesktopLaunchPlan(params: {
   if (computer) {
     availableOptionalToolNames.push("computer");
   }
-  const toolAuthority = resolveWorkerToolAuthority({
-    modelRef: params.modelRef,
-    turn: params.turn,
-    portalAvailable: params.portalAvailable,
-    availableOptionalToolNames,
-  });
+  const { delegationToolPolicy, captureDelegationToolPolicy, ...toolAuthority } =
+    resolveWorkerToolAuthority({
+      modelRef: params.modelRef,
+      turn: params.turn,
+      portalAvailable: params.portalAvailable,
+      availableOptionalToolNames,
+    });
   return {
     toolAuthority,
+    delegationToolPolicy,
+    captureDelegationToolPolicy,
     ...(computer && toolAuthority.allowedToolNames.includes("computer")
       ? { computer, preparedComputer }
       : {}),

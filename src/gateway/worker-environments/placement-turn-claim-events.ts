@@ -1,9 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   AdmittedRunOperatorAuthority,
   OperationalRunInstanceRef,
 } from "../../agents/admitted-run-context.js";
+import type {
+  InheritedToolPolicyRef,
+  InheritedToolPolicySourceCapture,
+  InheritedToolPolicyV2,
+} from "../../agents/inherited-tool-policy.schema.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
@@ -57,6 +63,8 @@ export type WorkerTurnExecutionIdentity = Readonly<{
   operationalRunInstance: OperationalRunInstanceRef;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   receiptAuthority: () => void;
+  getInheritedToolPolicy?: () => InheritedToolPolicyV2;
+  captureInheritedToolPolicyForDelegation?: InheritedToolPolicySourceCapture;
   sessionKey: string;
   sessionTarget: Readonly<BoundAgentRunSessionTarget>;
   turnClaim: WorkerSessionTurnClaim;
@@ -135,6 +143,8 @@ export async function bindWorkerTurnOwner(
   assertRunActive: () => void,
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage,
   operatorAuthority?: AdmittedRunOperatorAuthority,
+  getInheritedToolPolicy?: () => InheritedToolPolicyV2,
+  captureDelegationToolPolicy?: InheritedToolPolicyRef["captureSource"],
 ): Promise<
   Readonly<{
     capability: WorkerTurnExecutionIdentityCapability;
@@ -205,6 +215,34 @@ export async function bindWorkerTurnOwner(
     operationalRunInstance,
     ...(operatorAuthority ? { operatorAuthority } : {}),
     receiptAuthority: assertActive,
+    ...(getInheritedToolPolicy && captureDelegationToolPolicy
+      ? {
+          captureInheritedToolPolicyForDelegation: async () => {
+            assertActive();
+            const current = structuredClone(getInheritedToolPolicy());
+            const assertCurrent = () => {
+              assertActive();
+              if (!isDeepStrictEqual(current, getInheritedToolPolicy())) {
+                throw new Error("Worker source tool policy changed before delegation.");
+              }
+              assertActive();
+            };
+            const policy = await captureDelegationToolPolicy(current, assertCurrent);
+            assertCurrent();
+            return { policy, assertCurrent };
+          },
+        }
+      : {}),
+    ...(getInheritedToolPolicy
+      ? {
+          getInheritedToolPolicy: () => {
+            assertActive();
+            const policy = getInheritedToolPolicy();
+            assertActive();
+            return policy;
+          },
+        }
+      : {}),
     sessionKey: sessionTarget.sessionKey,
     sessionTarget,
     turnClaim: claim,

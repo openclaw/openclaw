@@ -6,7 +6,11 @@ import { resolveAgentConfig } from "./agent-scope-config.js";
 import { getActiveBackgroundExecSession } from "./bash-process-registry.js";
 import { EXEC_RETENTION_CAP_NOTE, renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolArgs } from "./bash-tools.exec-request-preparation.js";
-import { resolveExecTarget, type ExecProcessHandle } from "./bash-tools.exec-runtime.js";
+import {
+  buildExecRuntimeErrorOutcome,
+  resolveExecTarget,
+  type ExecProcessHandle,
+} from "./bash-tools.exec-runtime.js";
 import {
   type BackgroundExecTaskHandle,
   createBackgroundExecTask,
@@ -18,6 +22,7 @@ import type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+import { formatUnavailableWorkdirFailure } from "./bash-tools.exec-workdir.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { failedTextResult, textResult } from "./tools/common.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -179,3 +184,18 @@ export function createExecHostResolver(defaults?: ExecToolDefaults) {
     }).effectiveHost;
   };
 }
+
+export const buildUnavailableWorkdirResult = (params: {
+  cwd: string;
+  startedAt?: number;
+  warningText?: string;
+}) =>
+  buildExecForegroundResult({
+    outcome: buildExecRuntimeErrorOutcome({
+      error: formatUnavailableWorkdirFailure(params.cwd),
+      aggregated: "",
+      durationMs: params.startedAt ? Date.now() - params.startedAt : 0,
+    }),
+    cwd: params.cwd,
+    warningText: params.warningText,
+  });

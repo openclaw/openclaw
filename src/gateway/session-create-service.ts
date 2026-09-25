@@ -16,10 +16,6 @@ import {
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
-import {
-  normalizeInheritedToolAllowlist,
-  normalizeInheritedToolDenylist,
-} from "../agents/inherited-tool-deny.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import {
   resolveDefaultModelForAgent,
@@ -88,6 +84,7 @@ import { existingSessionSelectionWouldChange } from "./session-create-existing-s
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import {
   prepareSessionCreateParent,
+  prepareSessionCreateSpawnPolicy,
   resolveSessionCreateInheritance,
 } from "./session-create-inheritance.js";
 import {
@@ -568,17 +565,10 @@ export async function createGatewaySession(
     params.emitCommandHooks === true ||
     params.fork === true ||
     params.authorizedPluginId !== undefined;
-  const spawnToolPolicy =
-    params.spawnToolPolicy && canonicalParentSessionKey
-      ? {
-          completionOwnerSessionKey: normalizeOptionalString(
-            params.spawnToolPolicy.completionOwnerSessionKey,
-          ),
-          allow: normalizeInheritedToolAllowlist(params.spawnToolPolicy.allow),
-          deny: normalizeInheritedToolDenylist(params.spawnToolPolicy.deny),
-          parentSessionKey: canonicalParentSessionKey,
-        }
-      : undefined;
+  const spawnToolPolicy = prepareSessionCreateSpawnPolicy(
+    params.spawnToolPolicy,
+    canonicalParentSessionKey,
+  );
   const createChildSession = async (): Promise<GatewaySessionCommitResult> => {
     commitGuard?.();
     if (preparedCreation) {
@@ -1111,21 +1101,7 @@ export async function createGatewaySession(
           // and plugin sessions) persists as a depth-0 root. Reused entries keep
           // their stored depth.
           ...(existingEntry === undefined ? { spawnDepth: params.spawnDepth ?? 0 } : {}),
-          ...(existingEntry === undefined && spawnToolPolicy
-            ? {
-                spawnedBy: spawnToolPolicy.parentSessionKey,
-                ...(spawnToolPolicy.completionOwnerSessionKey
-                  ? { completionOwnerSessionKey: spawnToolPolicy.completionOwnerSessionKey }
-                  : {}),
-                inheritedToolPolicyVersion: 1 as const,
-                ...(spawnToolPolicy.allow.length > 0
-                  ? { inheritedToolAllow: spawnToolPolicy.allow }
-                  : {}),
-                ...(spawnToolPolicy.deny.length > 0
-                  ? { inheritedToolDeny: spawnToolPolicy.deny }
-                  : {}),
-              }
-            : {}),
+          ...(existingEntry === undefined ? spawnToolPolicy : {}),
           ...(existingEntry === undefined && incognito ? { incognito: true as const } : {}),
         };
         const initialized = { ...patched, entry: initializedEntry };

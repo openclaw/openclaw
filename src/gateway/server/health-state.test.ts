@@ -32,7 +32,8 @@ vi.mock("../../config/io.js", async (importOriginal) => ({
   getRuntimeConfig: getRuntimeConfigMock,
 }));
 
-vi.mock("../../config/runtime-snapshot.js", () => ({
+vi.mock("../../config/runtime-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/runtime-snapshot.js")>()),
   getRuntimeConfigAppliedHash: () => "internal-applied-hash",
   getRuntimeConfigSourceSnapshot: () => null,
 }));

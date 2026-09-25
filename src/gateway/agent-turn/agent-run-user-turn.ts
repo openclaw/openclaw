@@ -34,6 +34,7 @@ import {
   type ChatImageContent,
   type OffloadedRef,
 } from "../chat-attachments.js";
+import { readInProcessSessionSendPolicy } from "../in-process-session-send-policy.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
 import { gatewayClientSenderFields } from "../server-methods/gateway-client-identity.js";
@@ -131,6 +132,7 @@ export function recordAgentRunUserTurnParticipant(
 
 export async function prepareAgentRunUserTurn(params: {
   assertCurrent: () => void;
+  assertPreparationCurrent?: () => void;
   assertCompletionCurrent?: () => void;
   privateCompletion?: true;
   settleWakeReplay?: RequesterSettleWakeReplay;
@@ -263,6 +265,7 @@ export async function prepareAgentRunUserTurn(params: {
         entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
       );
       const input: UserTurnInput = {
+        delegatedInputPolicy: readInProcessSessionSendPolicy(params.client?.internal)?.policy,
         ...(params.privateCompletion ||
         isCompletionReportInputProvenance(params.inputProvenance) ||
         isSubagentCoordinationInputProvenance(params.inputProvenance)
@@ -324,6 +327,7 @@ export async function prepareAgentRunUserTurn(params: {
           runId: params.runId,
           assertCurrent: () => {
             params.assertCurrent();
+            params.assertPreparationCurrent?.();
             settleWakeReplay?.assertCurrent();
           },
           assertAdmittedCurrent: params.assertCurrent,

@@ -1,8 +1,6 @@
 /**
  * Manages active embedded-agent run handles, queues, aborts, and waiters.
  */
-import fs from "node:fs";
-import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
@@ -55,8 +53,13 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { QuestionAnswerUnconfirmedError } from "../harness/gateway-question-dispatch.js";
 import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-forced-terminal-settlement.js";
+import {
+  recordSteeringMessageNotInjected,
+  wasSteeringMessageNotInjected,
+} from "../sessions/steering-message-identity.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import {
+  normalizeSessionFileRegistryKey,
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
@@ -172,30 +175,6 @@ function clearActiveRunSessionIndex(
     if (activeSessionId === sessionId) {
       index.delete(entryKey);
     }
-  }
-}
-
-function normalizeSessionFileRegistryKey(sessionFile: string | undefined): string | undefined {
-  const normalized = sessionFile?.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  if (
-    normalized.startsWith("agent:") ||
-    normalized.startsWith("sqlite:") ||
-    normalized.startsWith("in-memory:")
-  ) {
-    return normalized;
-  }
-  const resolved = path.resolve(normalized);
-  const parent = path.dirname(resolved);
-  try {
-    // Canonicalize only the parent so a registry key stays stable when the
-    // transcript file itself is created or removed during the active run.
-    // Artifact-file symlinks are not runtime session identity after SQLite migration.
-    return path.join(fs.realpathSync(parent), path.basename(resolved));
-  } catch {
-    return resolved;
   }
 }
 
@@ -619,7 +598,6 @@ export async function claimPendingEmbeddedAgentQuestionAnswer(
   return { runId };
 }
 
-/** Source-bound callers require an explicitly guarded backend, never a V1 fallback. */
 export async function queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
   sessionId: string,
   text: string,
@@ -658,7 +636,11 @@ async function queueEmbeddedAgentMessageAsync(
     }
     const errorMessage = formatErrorMessage(error);
     diag.debug(`queue message rejected: sessionId=${sessionId} err=${errorMessage}`);
-    return createQueueFailureOutcome(sessionId, "runtime_rejected", errorMessage);
+    const outcome = createQueueFailureOutcome(sessionId, "runtime_rejected", errorMessage);
+    if (wasSteeringMessageNotInjected(error, options?.queueIdentity)) {
+      recordSteeringMessageNotInjected(outcome, options?.queueIdentity);
+    }
+    return outcome;
   };
   if (prepared.kind === "complete") {
     if (

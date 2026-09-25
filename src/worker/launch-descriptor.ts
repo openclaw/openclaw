@@ -37,6 +37,7 @@ import {
   type WorkerSkillWorkshopBinding,
 } from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import { parseInheritedToolPolicyV2 } from "../agents/inherited-tool-policy.schema.js";
 import {
   ComputerUseCapabilityDescriptorSchema,
   type ComputerUseCapabilityDescriptor,
@@ -130,6 +131,7 @@ const ToolAuthoritySchema = workerProtocolObject({
     )
     .transform((names) => [...names]),
   exec: ExecAuthoritySchema.optional(),
+  inheritedToolPolicy: z.unknown().transform(parseInheritedToolPolicyV2).optional(),
 }).transform(({ exec, ...authority }): WorkerToolAuthority =>
   exec === undefined ? authority : { ...authority, exec },
 );

@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../../audit/execution-identity-admission.js";
 import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import { AGENT_LANE_SUBAGENT } from "../../lanes.js";
@@ -6,7 +7,7 @@ import {
   buildSubagentExecutionSessionSpawnContext,
   withSubagentGatewayExecutionIdentity,
 } from "./subagent-spawn-execution-identity.js";
-import { callSubagentGateway } from "./subagent-spawn-gateway.js";
+import { callSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
 
 export async function launchAcpChildThroughGateway(params: {
   assertDispatchCurrent?: () => void;
@@ -57,5 +58,15 @@ export async function launchAcpChildThroughGateway(params: {
     sessionKey: params.sessionKey,
     storePath: params.participantStorePath,
   });
-  return response;
+  const receipt = asOptionalRecord(response);
+  const runId = readGatewayRunId(response);
+  if (
+    !runId ||
+    receipt?.admissionPending === true ||
+    (receipt?.status !== "accepted" && receipt?.status !== "in_flight")
+  ) {
+    params.assertDispatchCurrent?.();
+    throw new Error("Gateway did not confirm ACP task acceptance.");
+  }
+  return { runId };
 }

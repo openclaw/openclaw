@@ -20,6 +20,11 @@ import {
 } from "../infra/agent-run-registry.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
+import {
+  conjoinInheritedToolPolicies,
+  parseInheritedToolPolicyV2,
+  type InheritedToolPolicyV2,
+} from "./inherited-tool-policy.schema.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
 /** Operational lifecycle correlation. This is never identity or authorization evidence. */
@@ -207,6 +212,7 @@ export type PreparedAgentRunAdmission = Readonly<{
   assertSourceCurrent: () => void;
   /** Host-only source restriction available before the runtime prepares its tools. */
   readOperatorAuthority?: () => AdmittedRunOperatorAuthority | undefined;
+  readDelegatedInputPolicies?: () => readonly InheritedToolPolicyV2[];
   /** Idempotently closes the exact delegated approval lease, if admission occurred. */
   close: () => void;
 }>;
@@ -216,6 +222,11 @@ type DelegatedAuthorityLease = {
   foregroundClosed: boolean;
   assertSourceCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  delegatedInputPolicyState: {
+    policies: Set<InheritedToolPolicyV2>;
+    generation: number;
+    hasTranscriptOwner: boolean;
+  };
 };
 
 const delegatedAuthorityLeases = new WeakMap<AdmittedRunContext, DelegatedAuthorityLease>();
@@ -237,7 +248,19 @@ function bindAdmittedRunDelegatedAuthority(
   const previousRecovery = activeNativeHookRecoveryLeases.get(context.operationalRunInstance.runId);
   activeNativeHookRecoveryLeases.delete(context.operationalRunInstance.runId);
   previousRecovery?.releaseOperatorAuthority?.();
-  const lease = { authority, foregroundClosed: false, assertSourceCurrent, operatorAuthority };
+  const existingContext = admittedContextsByAuthority.get(authority);
+  const lease = {
+    authority,
+    foregroundClosed: false,
+    assertSourceCurrent,
+    operatorAuthority,
+    delegatedInputPolicyState: (existingContext &&
+      delegatedAuthorityLeases.get(existingContext)?.delegatedInputPolicyState) ?? {
+      policies: new Set<InheritedToolPolicyV2>(),
+      generation: 0,
+      hasTranscriptOwner: false,
+    },
+  };
   delegatedAuthorityLeases.set(context, lease);
   if (!admittedContextsByAuthority.has(authority)) {
     admittedContextsByAuthority.set(authority, context);
@@ -252,6 +275,76 @@ export function getAdmittedRunDelegatedAuthority(
   return lease && !lease.foregroundClosed && validateAgentRunDelegatedAuthority(lease.authority)
     ? lease.authority
     : undefined;
+}
+
+/** Accepted work belongs to the logical run, including every retry and runtime fallback. */
+export function readAdmittedRunDelegatedInputPolicies(
+  context: AdmittedRunContext | undefined,
+): readonly InheritedToolPolicyV2[] {
+  if (!context) {
+    return [];
+  }
+  if (!getAdmittedRunDelegatedAuthority(context)) {
+    throw new Error("admitted run input policy is no longer active");
+  }
+  return [...delegatedAuthorityLeases.get(context)!.delegatedInputPolicyState.policies];
+}
+
+export function readRunDelegatedInputPolicies(params: {
+  admittedRunContext?: AdmittedRunContext;
+  preparedRunAdmission?: PreparedAgentRunAdmission;
+}): readonly InheritedToolPolicyV2[] {
+  return params.admittedRunContext
+    ? readAdmittedRunDelegatedInputPolicies(params.admittedRunContext)
+    : (params.preparedRunAdmission?.readDelegatedInputPolicies?.() ?? []);
+}
+
+/** Release is reserved for a definite non-acceptance; attempt teardown must retain accepted work. */
+export function retainAdmittedRunDelegatedInputPolicies(
+  context: AdmittedRunContext,
+  policies: readonly InheritedToolPolicyV2[],
+): () => void {
+  readAdmittedRunDelegatedInputPolicies(context);
+  const saved = policies.map(parseInheritedToolPolicyV2);
+  const retained = delegatedAuthorityLeases.get(context)!.delegatedInputPolicyState.policies;
+  const state = delegatedAuthorityLeases.get(context)!.delegatedInputPolicyState;
+  for (const policy of saved) {
+    retained.add(policy);
+  }
+  if (saved.length) {
+    state.generation++;
+  }
+  return () => {
+    let changed = false;
+    for (const policy of saved) {
+      changed = retained.delete(policy) || changed;
+    }
+    if (changed) {
+      state.generation++;
+    }
+  };
+}
+
+/** The native transcript producer commits a changed requirement before dispatching its tools. */
+export function markAdmittedRunDelegatedInputPolicyTranscript(context: AdmittedRunContext): void {
+  readAdmittedRunDelegatedInputPolicies(context);
+  delegatedAuthorityLeases.get(context)!.delegatedInputPolicyState.hasTranscriptOwner = true;
+}
+
+export function hasAdmittedRunDelegatedInputPolicyTranscript(context: AdmittedRunContext): boolean {
+  readAdmittedRunDelegatedInputPolicies(context);
+  return delegatedAuthorityLeases.get(context)!.delegatedInputPolicyState.hasTranscriptOwner;
+}
+
+export function readAdmittedRunDelegatedInputPolicyCheckpoint(
+  context: AdmittedRunContext,
+  previousGeneration: number,
+): { generation: number; policy: InheritedToolPolicyV2 } | undefined {
+  const policies = readAdmittedRunDelegatedInputPolicies(context);
+  const { generation } = delegatedAuthorityLeases.get(context)!.delegatedInputPolicyState;
+  return generation === previousGeneration || generation === 0
+    ? undefined
+    : { generation, policy: conjoinInheritedToolPolicies(policies) };
 }
 
 /** Captures the operator's source lifetime from a live run, including for detached children. */
@@ -497,6 +590,7 @@ export function prepareAgentRunAdmission(params: {
       }
       return operatorAuthority;
     },
+    readDelegatedInputPolicies: () => readAdmittedRunDelegatedInputPolicies(admittedContext),
     close: () => {
       if (closed) {
         return;

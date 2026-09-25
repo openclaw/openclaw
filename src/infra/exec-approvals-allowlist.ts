@@ -3,7 +3,6 @@ import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-  normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { isInterpreterLikeAllowlistPattern } from "./command-analysis/inline-eval.js";
 import { detectInlineEvalArgv } from "./command-analysis/risks.js";
@@ -47,6 +46,11 @@ import {
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
 import { isSafeBuiltinSegment } from "./exec-safe-builtins.js";
 import {
+  buildSkillBinTrustIndex,
+  isSkillAutoAllowedSegment,
+  type SkillBinTrustEntry,
+} from "./exec-skill-bin-trust.js";
+import {
   extractBindableShellWrapperInlineCommand,
   isShellWrapperExecutable,
   normalizeExecutableToken,
@@ -69,6 +73,8 @@ import {
   resolvePowerShellInlineCommandMatch,
 } from "./shell-inline-command.js";
 import { analyzeWindowsShellCommand } from "./windows-shell-command.js";
+
+export type { SkillBinTrustEntry } from "./exec-skill-bin-trust.js";
 
 function hasShellLineContinuation(command: string): boolean {
   return /\\(?:\r\n|\n|\r)/.test(command);
@@ -174,10 +180,6 @@ export function isSafeBinUsage(params: {
   return validateSafeBinArgv(argv, profile, { binName: execName });
 }
 
-function isPathScopedExecutableToken(token: string): boolean {
-  return token.includes("/") || token.includes("\\");
-}
-
 export type ExecAllowlistEvaluation = {
   allowlistSatisfied: boolean;
   allowlistMatches: ExecAllowlistEntry[];
@@ -192,10 +194,6 @@ export type ExecSegmentSatisfiedBy =
   | "safeBuiltins"
   | "skills"
   | null;
-export type SkillBinTrustEntry = {
-  name: string;
-  resolvedPath: string;
-};
 type ExecAllowlistContext = {
   allowlist: ExecAllowlistEntry[];
   safeBins: Set<string>;
@@ -222,69 +220,6 @@ function pickExecAllowlistContext(params: ExecAllowlistContext): ExecAllowlistCo
     autoAllowSkills: params.autoAllowSkills,
     allowShellBuiltins: params.allowShellBuiltins,
   };
-}
-
-function normalizeSkillBinName(value: string | undefined): string | null {
-  const trimmed = normalizeOptionalLowercaseString(value);
-  return trimmed && trimmed.length > 0 ? trimmed : null;
-}
-
-function normalizeSkillBinResolvedPath(value: string | undefined): string | null {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return null;
-  }
-  const resolved = path.resolve(trimmed);
-  if (process.platform === "win32") {
-    return normalizeLowercaseStringOrEmpty(resolved.replace(/\\/g, "/"));
-  }
-  return resolved;
-}
-
-function buildSkillBinTrustIndex(
-  entries: readonly SkillBinTrustEntry[] | undefined,
-): Map<string, Set<string>> {
-  const trustByName = new Map<string, Set<string>>();
-  if (!entries || entries.length === 0) {
-    return trustByName;
-  }
-  for (const entry of entries) {
-    const name = normalizeSkillBinName(entry.name);
-    const resolvedPath = normalizeSkillBinResolvedPath(entry.resolvedPath);
-    if (!name || !resolvedPath) {
-      continue;
-    }
-    const paths = trustByName.get(name) ?? new Set<string>();
-    paths.add(resolvedPath);
-    trustByName.set(name, paths);
-  }
-  return trustByName;
-}
-
-function isSkillAutoAllowedSegment(params: {
-  segment: ExecCommandSegment;
-  allowSkills: boolean;
-  skillBinTrust: ReadonlyMap<string, ReadonlySet<string>>;
-}): boolean {
-  if (!params.allowSkills) {
-    return false;
-  }
-  const resolution = params.segment.resolution;
-  const execution = resolveExecutionTargetResolution(resolution);
-  const trustPath = resolveExecutionTargetTrustPath(resolution);
-  if (!execution?.resolvedPath || !trustPath) {
-    return false;
-  }
-  const rawExecutable = execution.rawExecutable?.trim() ?? "";
-  if (!rawExecutable || isPathScopedExecutableToken(rawExecutable)) {
-    return false;
-  }
-  const executableName = normalizeSkillBinName(execution.executableName);
-  const resolvedPath = normalizeSkillBinResolvedPath(trustPath);
-  if (!executableName || !resolvedPath) {
-    return false;
-  }
-  return Boolean(params.skillBinTrust.get(executableName)?.has(resolvedPath));
 }
 
 const MAX_SHELL_WRAPPER_INLINE_EVAL_DEPTH = 3;
@@ -897,6 +832,23 @@ export type ExecAllowlistAnalysis = {
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
   authorizationPlan?: ExecAuthorizationPlan;
 };
+
+/** Apply another policy to the same resolved command, without reparsing or resolving paths. */
+export function evaluatePreparedShellAllowlist(
+  params: { analysis: ExecAllowlistAnalysis } & ExecAllowlistContext,
+): ExecAllowlistAnalysis {
+  const context = { ...pickExecAllowlistContext(params), allowShellBuiltins: true };
+  if (params.analysis.authorizationPlan) {
+    return evaluateAuthorizationPlan({ plan: params.analysis.authorizationPlan, context });
+  }
+  return {
+    ...params.analysis,
+    ...evaluateExecAllowlist({
+      ...context,
+      analysis: { ok: params.analysis.analysisOk, segments: params.analysis.segments },
+    }),
+  };
+}
 
 function hasSegmentExecutableMatch(
   segment: ExecCommandSegment,

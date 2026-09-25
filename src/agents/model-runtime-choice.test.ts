@@ -12,6 +12,7 @@ import {
 } from "./prepared-model-runtime-auth.js";
 import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configured-completion.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
+import { captureTestSpawnToolPolicy } from "./subagents/spawn/subagent-spawn.test-helpers.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
@@ -291,6 +292,7 @@ describe("prepared model support admission", () => {
           throw new Error("Reached session creation");
         });
         const tool = createSessionsSpawnTool({
+          captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
           agentSessionKey: "agent:main:main",
           config,
           callGateway,
@@ -320,6 +322,7 @@ describe("prepared model support admission", () => {
           expect(callGateway).toHaveBeenCalledExactlyOnceWith(
             "sessions.create",
             expect.objectContaining({ model }),
+            { assertCreationCurrent: expect.any(Function) },
           );
         } else {
           expect((await result).details).toMatchObject({ status: "error" });
@@ -701,6 +704,7 @@ describe("prepared model support admission", () => {
         throw new Error("Reached session creation");
       });
       const tool = createSessionsSpawnTool({
+        captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
         agentSessionKey: "agent:main:main",
         config,
         callGateway,
@@ -713,6 +717,7 @@ describe("prepared model support admission", () => {
       expect(callGateway).toHaveBeenCalledExactlyOnceWith(
         "sessions.create",
         expect.objectContaining({ model: "xai/unknown-primary" }),
+        { assertCreationCurrent: expect.any(Function) },
       );
     });
   });

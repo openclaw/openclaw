@@ -98,12 +98,29 @@ export function describeSessionsSearchTool(options?: SessionLinkDescriptionOptio
 }
 
 /** Describes the sessions_send tool for model-facing instructions. */
-export function describeSessionsSendTool(): string {
+export function describeSessionsSendTool(options?: {
+  availableTools?: ReadonlySet<string>;
+}): string {
+  const availableTools = options?.availableTools;
+  const deliveryTools = ["conversations_send", "conversations_turn"].filter((name) =>
+    availableTools?.has(name),
+  );
   return [
     "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label.",
     "A session identifies model context, not an external address; its reply may still announce through established delivery context.",
     SESSIONS_SEND_RESULT_GUIDANCE,
+    ...(availableTools?.has("sessions_spawn")
+      ? [
+          'Use `sessions_spawn` with `context="isolated"` for an independent assessment, even a short status check; return its answer here while the active task continues.',
+        ]
+      : []),
+    "Use this tool to continue or control the target work. If control is refused, state what did not happen; a separate assessment does not pause, cancel, or change the active task.",
     "Omit mode to automatically continue your paused native child task; returns runId/taskRunId with task-owned completion instead of an inline wait or watch. Other sessions use ordinary message delivery. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work. mode:followup starts a separate turn without steering or resuming a paused task. mode:resume requires a paused native child task and rejects watch:true and positive timeoutSeconds.",
+    ...(availableTools?.has("conversations_list") && deliveryTools.length > 0
+      ? [
+          `For an exact external destination, use \`conversations_list\` plus ${deliveryTools.map((name) => `\`${name}\``).join("/")}.`,
+        ]
+      : []),
     'Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available; status "no_reply" is terminal, so do not wait for an announcement.',
     "watch:true: notice arrives when others later change target session.",
   ].join(" ");
@@ -153,9 +170,11 @@ export function describeSessionsSpawnTool(options?: {
     "Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message.",
     ...(options?.acpAvailable === false
       ? []
-      : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
+      : [
+          '`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP. ACP must satisfy the source action restrictions; use a native subagent when unsupported.',
+        ]),
     describeSubagentSpawnContext(options?.subagentThreadAvailable === true),
-    "A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. No spawn for quick lookup/single read.",
+    "A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. Use an isolated native child for independent assessment by another agent, even one status read, while its active work continues. Return the answer here; ask no session or permission-routing questions.",
     "After spawn, do non-overlap work; follow the receipt's completion mode.",
   ].join(" ");
 }

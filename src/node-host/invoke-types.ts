@@ -1,5 +1,6 @@
 /** Shared node-host request, result, event, and approval-bin provider contracts. */
-import type { SkillBinTrustEntry, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import type { SkillBinTrustEntry } from "../infra/exec-skill-bin-trust.js";
 
 /**
  * Shared request/result/event types for node-host command execution.

@@ -353,17 +353,23 @@ describe("manual library resources through embedded and host-bound reads", () =>
           { sessionId: "manual-parent-id", updatedAt: Date.now(), skillLibrarySelections: pins },
         );
         const child = await createInitialSubagentSession({
+          inheritedToolPolicy: {
+            clauses: [],
+            parameters: { fileTools: [], exec: [], sandbox: [], unsupported: [] },
+          },
           cfg: config,
           targetAgentId: "main",
           childSessionKey: childKey,
           incognito: false,
           requesterInternalKey: parentKey,
+          requesterAgentId: "main",
           completionOwnerSessionKey: parentKey,
           creationPolicy: { actor: { type: "agent", id: "main" } },
+          admissionPatch: { spawnDepth: 1 },
           modelPatch: {},
           collect: false,
         });
-        expect(child.status).toBe("ok");
+        expect(child.status, JSON.stringify(child)).toBe("ok");
         const childEntry = loadSessionEntry({ agentId: "main", sessionKey: childKey });
         expect(childEntry?.skillLibrarySelections).toEqual(pins);
         const childSnapshot = (

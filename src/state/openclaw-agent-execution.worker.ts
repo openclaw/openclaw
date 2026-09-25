@@ -287,6 +287,9 @@ function openAgentDatabaseBackend(
         assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity;
       }
     | undefined;
+  let maintenance:
+    | typeof import("../config/sessions/session-accessor.sqlite-maintenance-execution.worker.js")
+    | undefined;
   let replacements:
     | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
     | undefined;
@@ -346,6 +349,13 @@ function openAgentDatabaseBackend(
             assertIdentity: scope.assertSqliteTranscriptWriteIdentity,
           };
         });
+      }
+      if (command.type === "session.maintenance") {
+        return import("../config/sessions/session-accessor.sqlite-maintenance-execution.worker.js").then(
+          (module) => {
+            maintenance = module;
+          },
+        );
       }
       if (command.type === "session.entries.replace") {
         return import("../config/sessions/session-accessor.sqlite-replacement-state.js").then(
@@ -471,6 +481,20 @@ function openAgentDatabaseBackend(
           },
           options,
           { operationLabel: "session.entry.create-with-transcript" },
+        );
+      }
+      if (command.type === "session.maintenance" && maintenance) {
+        openWriter();
+        return maintenance.executeSessionMaintenanceInWorker(
+          {
+            ...command.input,
+            databaseOptions: {
+              ...options,
+              path: input.databasePath,
+              env: options.env ?? process.env,
+            },
+          },
+          admit,
         );
       }
       if (command.type === "session.entries.replace" && replacements) {

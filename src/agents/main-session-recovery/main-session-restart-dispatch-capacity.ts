@@ -1,3 +1,4 @@
+import type { SessionSendPolicyAdmission } from "../../gateway/in-process-session-send-policy.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { AgentRunRequest } from "../../gateway/server-methods/agent-request-types.js";
 import { hasLiveAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -10,6 +11,7 @@ import {
 
 export async function dispatchRestartRecoveryWithinCapacity(params: {
   agentParams: AgentRunRequest;
+  policyAdmission?: SessionSendPolicyAdmission;
   capacity?: MainSessionRecoveryCapacity;
   gatewayRuntime: GatewayRecoveryRuntime;
   onSettled?: () => void;
@@ -39,6 +41,7 @@ export async function dispatchRestartRecoveryWithinCapacity(params: {
   try {
     const outcome = await dispatchRestartRecoveryUntilStarted({
       agentParams: params.agentParams,
+      policyAdmission: params.policyAdmission,
       gatewayRuntime: params.gatewayRuntime,
       onSettled,
     });

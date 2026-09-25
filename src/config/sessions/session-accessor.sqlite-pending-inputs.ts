@@ -4,6 +4,8 @@ import { classifyAgentRunTerminalOutcome } from "@openclaw/normalization-core/ag
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
+import type { InheritedToolPolicyV2 } from "../../agents/inherited-tool-policy.schema.js";
+import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
 import {
   isAgentEventLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
@@ -13,6 +15,10 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import {
+  readUserTurnDelegatedInputPolicy,
+  withUserTurnHostDelegatedInputRequirements,
+} from "../../sessions/user-turn-transcript.metadata.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SessionPendingInputs } from "../../state/openclaw-agent-db.generated.js";
@@ -54,6 +60,8 @@ export type SessionPendingInputOwner = {
   idempotencyKey: string;
   lifecycleGeneration: string;
   messageJson: string;
+  /** Host-only first-append projection; durable accepted bytes and request hash stay unchanged. */
+  promotionMessageJson?: string;
   config?: OpenClawConfig;
   assertCurrent: () => void;
   /** Published only after the exact input was consumed by a committed transcript write. */
@@ -152,6 +160,34 @@ function assertPendingInputOwnerCurrent(owner: SessionPendingInputOwner): void {
   owner.assertCurrent();
 }
 
+export function readSessionPendingInputPromotionMessage(
+  owner: SessionPendingInputOwner,
+): PersistedUserTurnMessage {
+  return parseSessionPendingInputMessage(owner.promotionMessageJson ?? owner.messageJson);
+}
+
+/** A consumed notification can constrain this input's continuation, never later ordinary turns. */
+export function retainSessionPendingInputPolicies(
+  owner: SessionPendingInputOwner,
+  policies: readonly InheritedToolPolicyV2[],
+): boolean {
+  if (owner.consumed || owner.sources?.some((source) => source.consumed)) {
+    return false;
+  }
+  assertPendingInputOwnerCurrent(owner);
+  const next = JSON.stringify(
+    withUserTurnHostDelegatedInputRequirements(
+      readSessionPendingInputPromotionMessage(owner),
+      policies,
+    ),
+  );
+  if (Buffer.byteLength(next, "utf8") > MAX_PAYLOAD_BYTES) {
+    throw new Error("Accepted input policy exceeds the Gateway payload limit");
+  }
+  owner.promotionMessageJson = next;
+  return true;
+}
+
 export function runWithSessionPendingInput<T>(owner: SessionPendingInputOwner, run: () => T): T {
   assertPendingInputOwnerCurrent(owner);
   return owners.current.run(owner, run);
@@ -179,7 +215,7 @@ export function withSessionPendingInputRelocation<T>(
     return append();
   }
   assertPendingInputOwnerCurrent(owner);
-  if (JSON.stringify(message) !== owner.messageJson) {
+  if (JSON.stringify(message) !== (owner.promotionMessageJson ?? owner.messageJson)) {
     throw new Error("Pending input relocation does not match its admitted transcript entry");
   }
   return owners.relocation.run({ owner, sourceInputId }, append);
@@ -226,6 +262,7 @@ export function parseSessionPendingInputMessage(messageJson: string): PersistedU
   if (asOptionalRecord(value)?.role !== "user") {
     throw new Error("Pending input has an invalid persisted user message");
   }
+  readUserTurnDelegatedInputPolicy(value);
   // SAFETY: only typed admission writes this JSON; parsing preserves its canonical message shape.
   return value as PersistedUserTurnMessage;
 }
@@ -517,7 +554,7 @@ export function resolveSessionPendingInputAppend(
     }
     return {
       inputId: transcriptInputId,
-      message: parseSessionPendingInputMessage(owner.messageJson),
+      message: readSessionPendingInputPromotionMessage(owner),
       alreadyPromoted,
       sourceInputIds: sources.map((source) => source.input_id),
       ...(alreadyPromoted && stageRelocation ? { stageRelocation } : {}),
@@ -527,10 +564,16 @@ export function resolveSessionPendingInputAppend(
   // must prove the existing message; this never permits a new append.
   if (row) {
     assertPendingInputOwnerCurrent(owner);
+    if (owner.promotionMessageJson !== undefined && row.message_json !== owner.messageJson) {
+      throw new SessionPendingInputCustodyError("Accepted input changed before policy promotion");
+    }
   }
   return {
     inputId: transcriptInputId,
-    message: parseSessionPendingInputMessage(row?.message_json ?? owner.messageJson),
+    message:
+      owner.promotionMessageJson !== undefined
+        ? readSessionPendingInputPromotionMessage(owner)
+        : parseSessionPendingInputMessage(row?.message_json ?? owner.messageJson),
     alreadyPromoted: !row,
     ...(!row && stageRelocation ? { stageRelocation } : {}),
   };

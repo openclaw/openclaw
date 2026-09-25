@@ -7,7 +7,10 @@ import {
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
-import { supportedSpawnModelChoice } from "../subagents/spawn/subagent-spawn.test-helpers.js";
+import {
+  captureTestSpawnToolPolicy,
+  supportedSpawnModelChoice,
+} from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 
@@ -84,6 +87,8 @@ describe("sessions_spawn with retained completion deliveries", () => {
       });
       const registerRun = vi.fn();
       const tool = createSessionsSpawnTool({
+        captureInheritedToolPolicyForDelegation:
+          label === "acp" ? undefined : captureTestSpawnToolPolicy,
         agentSessionKey: "agent:main:main",
         config: {
           session: { store: path.join(dir, "sessions.json") },
@@ -103,6 +108,7 @@ describe("sessions_spawn with retained completion deliveries", () => {
         expect(callGateway).toHaveBeenCalledExactlyOnceWith(
           "sessions.create",
           expect.objectContaining({ parentSessionKey: "agent:main:main" }),
+          { assertCreationCurrent: expect.any(Function) },
         );
         expect(registerRun).toHaveBeenCalledOnce();
       }

@@ -5,6 +5,7 @@
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeChatType } from "../channels/chat-type.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -26,10 +27,14 @@ import {
   type ScheduledToolPolicyContext,
 } from "./scheduled-tool-policy.js";
 import { resolveSessionPlacementSandboxToolPolicy } from "./session-placement-computer.js";
-import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
-import type {
-  PreparedSessionCapabilityEntry,
-  SessionCapabilityStore,
+import {
+  isTrustedSubagentCompletionHandoffForRun,
+  type TrustedSubagentCompletionHandoff,
+} from "./subagents/announce/subagent-announce-handoff.js";
+import {
+  requiresSubagentCapabilityStore,
+  type PreparedSessionCapabilityEntry,
+  type SessionCapabilityStore,
 } from "./subagents/spawn/subagent-capabilities.js";
 import type { PromptMode } from "./system-prompt.types.js";
 import {
@@ -319,6 +324,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       sandboxPolicy: sandboxToolPolicy,
       subagentPolicy,
       inheritedToolPolicy,
+      inheritedActionPolicy: requesterPolicies.inheritedActionPolicy,
       delegated: requesterPolicies.delegated,
       requesterPolicySource: requesterPolicies.requesterPolicySource,
       runtimeToolPolicyForInheritance,
@@ -334,6 +340,74 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
 export type ResolvedConversationCapabilityProfile = ReturnType<
   typeof resolveConversationCapabilityProfile
 >;
+
+/** Publish policy facts once; current run and tool-generation owners gate their later use. */
+export async function prepareConversationCapabilityProfile(
+  params: ConversationCapabilityProfileParams,
+  owner: { assertCurrent: () => void; storePath?: string },
+): Promise<ResolvedConversationCapabilityProfile> {
+  owner.assertCurrent();
+  const config = params.config;
+  const sessionKey = params.sandboxSessionKey ?? params.sessionKey;
+  const trustedCompletion = isTrustedSubagentCompletionHandoffForRun({
+    handoff: params.trustedInternalHandoff,
+    inputProvenance: params.inputProvenance,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    provider: params.modelProvider,
+    model: params.modelId,
+  });
+  const extraSessionKeys =
+    trustedCompletion && params.trustedInternalHandoff?.sourceSessionKey
+      ? [params.trustedInternalHandoff.sourceSessionKey]
+      : [];
+  if (
+    !config ||
+    !sessionKey ||
+    params.preparedSessionCapabilityStore ||
+    (!requiresSubagentCapabilityStore(sessionKey) && extraSessionKeys.length === 0)
+  ) {
+    return resolveConversationCapabilityProfile(params);
+  }
+  const { withPreparedSubagentCapabilityStore } =
+    await import("./subagents/spawn/subagent-capability-preparation.js");
+  const prepare = (entry: SessionEntry | undefined, assertCurrent: () => void) =>
+    withPreparedSubagentCapabilityStore({
+      cfg: config,
+      preparedSessionEntry: { sessionKey, agentId: params.agentId, entry },
+      storePath: owner.storePath,
+      extraSessionKeys,
+      assertCurrent,
+      consume: async ({ store }) =>
+        resolveConversationCapabilityProfile({
+          ...params,
+          preparedSessionCapabilityStore: store,
+        }),
+    });
+  if (!requiresSubagentCapabilityStore(sessionKey)) {
+    return prepare(undefined, owner.assertCurrent);
+  }
+  const { withSessionEntryReadOnlyInWorker } =
+    await import("../config/sessions/session-entry-read-runtime.js");
+  return withSessionEntryReadOnlyInWorker(
+    {
+      sessionKey,
+      agentId: params.agentId,
+      storePath: owner.storePath,
+      projection: "list",
+      canonicalValidation: "selected",
+    },
+    owner.assertCurrent,
+    async (read, assertCurrent) => {
+      if (!read.ok) {
+        throw new Error("Task action restrictions could not be read from the session owner.", {
+          cause: read.error,
+        });
+      }
+      return prepare(read.value, assertCurrent);
+    },
+  );
+}
 
 function resolveConversationScope(params: {
   chatType?: string;

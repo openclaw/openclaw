@@ -1,9 +1,12 @@
 import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
-import { isCliSessionInvalidatingFailoverReason } from "../cli-session.js";
+import {
+  buildCliSessionDriftNote,
+  isCliSessionInvalidatingFailoverReason,
+} from "../cli-session.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { type FailoverError, isFailoverError } from "../failover-error.js";
 import { cliBackendLog } from "./log.js";
-import type { CliReusableSession, PreparedCliRunContext } from "./types.js";
+import type { CliReusableSession, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 export type CliRecoveryOptions = {
   timeoutMs?: number;
@@ -212,4 +215,22 @@ export async function runCliRecovery<TAttempt>(params: {
     }
     return await failTerminal(recoveryError);
   }
+}
+
+export function prependCliSessionDriftUserContext(
+  context: RunCliAgentParams["currentInboundContext"],
+  reusableCliSession: CliReusableSession,
+): RunCliAgentParams["currentInboundContext"] {
+  if (reusableCliSession.mode !== "reuse-with-drift") {
+    return context;
+  }
+  const note = buildCliSessionDriftNote(reusableCliSession.drift.reasons);
+  if (!context) {
+    return { text: note };
+  }
+  return {
+    ...context,
+    text: [note, context.text].join("\n\n"),
+    ...(context.resumableText ? { resumableText: [note, context.resumableText].join("\n\n") } : {}),
+  };
 }

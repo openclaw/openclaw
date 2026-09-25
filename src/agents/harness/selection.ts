@@ -12,10 +12,12 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { claimHeartbeatContextForUserRun } from "../../infra/heartbeat-outcome-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { readUserTurnDelegatedInputPolicy } from "../../sessions/user-turn-transcript.metadata.js";
 import {
   assertOperatorModelAllowed,
   bindOperatorModelExecution,
   readRunOperatorAuthority,
+  readRunDelegatedInputPolicies,
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
@@ -34,7 +36,6 @@ import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
 } from "../provider-secret-egress.js";
-import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
@@ -44,9 +45,9 @@ import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-a
 import { AgentHarnessPreflightError } from "./errors.js";
 import {
   assertAgentHarnessExecutionEnvironment,
+  preparePluginHarnessParams,
   resolvePluginHarnessDenyAllToolPolicyPrompt,
   resolvePluginHarnessToolPolicies,
-  type ResolvedPluginHarnessToolPolicies,
 } from "./execution-environment.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import {
@@ -209,6 +210,19 @@ export async function runAgentHarnessAttempt(
         })
       : selectPreparedAgentHarness(params);
   const harness = selection.harness;
+  if (
+    !selection.builtIn &&
+    (params.delegatedInputPolicy ||
+      readRunDelegatedInputPolicies(params).length > 0 ||
+      readUserTurnDelegatedInputPolicy(
+        params.userTurnTranscriptRecorder?.getPendingInputMessage?.() ??
+          params.userTurnTranscriptRecorder?.message,
+      ))
+  ) {
+    throw new AgentHarnessPreflightError(
+      "This runtime cannot verify delegated input against its active tool policy. Use the embedded OpenClaw runtime.",
+    );
+  }
   const nativeOwnsModel = nativeSessionRuntime?.auth === "native";
   const nativeModelPolicySupported = harness.nativeModelPolicySupport === "exact";
   assertHarnessModelPolicySupport(harness, params);
@@ -340,22 +354,25 @@ export async function runAgentHarnessAttempt(
           isHostScopedAgentToolActive("openclaw") &&
           isSystemAgentOnlyAllowlist(pluginAttempt.params.toolsAllow);
         const nativePermissionsConsented = assertAgentHarnessExecutionEnvironment(harness, params);
-        const preparedParams = selection.builtIn
-          ? pluginAttempt.params
+        const preparedPolicy = selection.builtIn
+          ? { params: pluginAttempt.params, inheritedActionPolicyRestricted: false }
           : preparePluginHarnessParams(
               pluginAttempt.params,
               harness,
               nativePermissionsConsented,
               pluginAttempt.setInputAttachmentReadAllowed,
             );
+        const preparedParams = preparedPolicy.params;
         const effectiveAttemptParams =
-          hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
+          hostOpenClawAuthority &&
+          !preparedPolicy.inheritedActionPolicyRestricted &&
+          preparedParams.pluginHarnessToolPolicyRestricted
             ? { ...preparedParams, pluginHarnessToolPolicyRestricted: false }
             : preparedParams;
         assertPluginHarnessConversationToolPolicySupport(
           harness,
           effectiveAttemptParams.pluginHarnessToolPolicyRestricted === true &&
-            !nativePermissionsConsented,
+            (!nativePermissionsConsented || preparedPolicy.inheritedActionPolicyRestricted),
         );
         // Load the calculator only after admission and final host policy preparation.
         return import("./tool-authority.runtime.js").then(
@@ -622,79 +639,6 @@ function withoutPluginHarnessPrivateState(
     __openclawSourceReplyDeliveryRuntime?: unknown;
   };
   return pluginParams;
-}
-
-function preparePluginHarnessParams(
-  params: import("./types.js").AgentHarnessAttemptParamsV2,
-  harness: AgentHarness,
-  nativePermissionsConsented: boolean,
-  setInputAttachmentReadAllowed: (allowed: boolean) => void,
-): import("./types.js").AgentHarnessAttemptParamsV2 {
-  const boundary = "plugin harness handoff";
-  const resolvedApiKey = params.resolvedApiKey
-    ? unwrapSecretSentinelsForProviderEgress(params.resolvedApiKey, boundary)
-    : params.resolvedApiKey;
-  const model = unwrapModelHeaderSentinelsForProviderEgress(params.model, boundary);
-  const preparedParams =
-    model === params.model && resolvedApiKey === params.resolvedApiKey
-      ? params
-      : { ...params, model, resolvedApiKey };
-  const policies = resolvePluginHarnessToolPolicies(
-    preparedParams,
-    harness.conversationToolPolicySupport === "exact"
-      ? harness.conversationToolPolicySafeDenyTools
-      : undefined,
-    harness.conversationToolPolicyNativeTools,
-  );
-  const policyParams = {
-    ...preparedParams,
-    pluginHarnessToolPolicySafeDeniedTools:
-      policies.safeDeniedToolNames.length > 0 ? policies.safeDeniedToolNames : undefined,
-    pluginHarnessToolPolicyRestricted: policies.toolPolicyRestricted,
-  };
-  const effectiveParams = nativePermissionsConsented
-    ? policyParams
-    : applyPluginHarnessDenyAllToolPolicy(policyParams, policies);
-  setInputAttachmentReadAllowed(
-    isRuntimeToolAllowed("read", effectiveParams.toolsAllow) &&
-      isRuntimeToolAllowed("read", effectiveParams.toolExecutionAllow) &&
-      isToolAllowedByPolicies("read", [
-        policies.senderPolicy,
-        policies.groupPolicy,
-        ...policies.runtimePolicies,
-      ]),
-  );
-  return effectiveParams;
-}
-
-function applyPluginHarnessDenyAllToolPolicy(
-  params: import("./types.js").AgentHarnessAttemptParamsV2,
-  policies: ResolvedPluginHarnessToolPolicies,
-): import("./types.js").AgentHarnessAttemptParamsV2 {
-  if (
-    isHostScopedAgentToolActive("openclaw") &&
-    params.toolsAllow?.length === 1 &&
-    normalizeToolPolicyName(params.toolsAllow[0] ?? "") === "openclaw"
-  ) {
-    return params;
-  }
-  const prompt = resolvePluginHarnessDenyAllToolPolicyPrompt(policies);
-  if (!prompt) {
-    return params;
-  }
-  return {
-    ...params,
-    toolsAllow: [],
-    extraSystemPrompt: appendPluginHarnessToolPolicyPrompt(params.extraSystemPrompt, prompt),
-  };
-}
-
-function appendPluginHarnessToolPolicyPrompt(existing: string | undefined, prompt: string): string {
-  const trimmed = existing?.trim();
-  if (!trimmed) {
-    return prompt;
-  }
-  return trimmed.includes(prompt) ? trimmed : `${trimmed}\n\n${prompt}`;
 }
 
 function buildSelectionDecision(params: {

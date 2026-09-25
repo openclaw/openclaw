@@ -7,7 +7,7 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ToolsConfig } from "../config/types.tools.js";
+import type { ExecReviewerConfig } from "../config/types.tools.js";
 import {
   buildExecAutoReviewFailureDecision,
   defaultExecAutoReviewer,
@@ -43,9 +43,6 @@ const execAutoReviewResponseSchema = z
     user_authorization: z.enum(["unknown", "low", "medium", "high"]).optional(),
   })
   .strict();
-
-/** Config for the optional model-backed exec reviewer. */
-export type ExecReviewerConfig = NonNullable<NonNullable<ToolsConfig["exec"]>["reviewer"]>;
 
 type ExecReviewerDeps = {
   acquireSimpleCompletionModelForAgent?: typeof acquireSimpleCompletionModelForAgent;

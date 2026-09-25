@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { AgentTurnIo } from "../../gateway/agent-turn/types.js";
+import type { AgentTurnIo, AgentTurnPrincipal } from "../../gateway/agent-turn/types.js";
 import {
   registerChatAbortController,
   resolveAgentRunExpiresAtMs,
 } from "../../gateway/chat-abort.js";
+import {
+  readInProcessSessionSendPolicy,
+  type SessionSendPolicyAdmission,
+} from "../../gateway/in-process-session-send-policy.js";
 import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
@@ -27,7 +31,9 @@ const sessionId = "recovery-session";
 const runId = "recovery-run";
 const sessionLane = `session:${sessionKey}`;
 const globalLane = "recovery-capacity-global";
-const startTurn = vi.hoisted(() => vi.fn<(params: { io: AgentTurnIo }) => Promise<void>>());
+const startTurn = vi.hoisted(() =>
+  vi.fn<(params: { io: AgentTurnIo; principal: AgentTurnPrincipal }) => Promise<void>>(),
+);
 
 vi.mock("../../gateway/server-methods.js", () => ({
   authorizeGatewayRequestPreDispatch: async () => ({ error: null }),
@@ -160,6 +166,14 @@ describe("restart recovery startup ownership", () => {
       return execution;
     });
     const onSettled = vi.fn();
+    const policyAdmission: SessionSendPolicyAdmission = {
+      kind: "recovery",
+      policy: {
+        clauses: [{ kind: "configured", deny: ["exec"] }],
+        parameters: { fileTools: [], exec: [], sandbox: [], unsupported: [] },
+      },
+      assertCurrent: () => registration.controller.signal.throwIfAborted(),
+    };
     const recovery = dispatchRestartRecoveryUntilStarted({
       agentParams: {
         agentId: "main",
@@ -169,11 +183,15 @@ describe("restart recovery startup ownership", () => {
         sessionKey,
       },
       gatewayRuntime: runtime.recovery,
+      policyAdmission,
       onSettled,
     });
     try {
       await registered.promise;
       await vi.advanceTimersByTimeAsync(0);
+      expect(readInProcessSessionSendPolicy(startTurn.mock.calls[0]?.[0].principal.internal)).toBe(
+        policyAdmission,
+      );
       if (blockedLane) {
         expect(getCommandLaneSnapshot(blockedLane).queuedCount).toBe(1);
       }
@@ -207,6 +225,9 @@ describe("restart recovery startup ownership", () => {
         setCommandLaneConcurrency(blockedLane, 1);
       }
       await execution?.catch(() => {});
+      // Cached in-flight dispatch observes its registered owner on this clock,
+      // including cleanup after an assertion fails before the ordinary tick.
+      await vi.advanceTimersByTimeAsync(10_000);
       await recovery;
       await vi.advanceTimersByTimeAsync(0);
       if (stage !== "cached queue" && stage !== "expired startup") {

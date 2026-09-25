@@ -39,13 +39,14 @@ const sessions = resolveGlobalSingleton<{
 export async function withSqliteTranscriptArchiveSession<T>(
   options: OpenClawAgentDatabaseOptions,
   run: () => Promise<T>,
+  assertSourceCurrent?: () => void,
 ): Promise<T> {
   const current = sessions.context.getStore();
-  if (current?.matches(options)) {
+  if (current?.matches(options) && !assertSourceCurrent) {
     current.assertCurrent();
     return run();
   }
-  const session = new ArchiveSession(options);
+  const session = new ArchiveSession(options, assertSourceCurrent);
   try {
     return await sessions.context.run(session, run);
   } finally {
@@ -73,7 +74,10 @@ class ArchiveSession {
   private revoked = false;
   private operationId = 0;
 
-  constructor(options: OpenClawAgentDatabaseOptions) {
+  constructor(
+    options: OpenClawAgentDatabaseOptions,
+    private readonly assertSourceCurrent?: () => void,
+  ) {
     const env = { ...(options.env ?? process.env) };
     env.OPENCLAW_STATE_DIR = resolveStateDir(env);
     this.options = {
@@ -121,6 +125,7 @@ class ArchiveSession {
       throw new Error("SQLite archive session was revoked");
     }
     this.state.assertCurrent();
+    this.assertSourceCurrent?.();
   }
 
   async run(

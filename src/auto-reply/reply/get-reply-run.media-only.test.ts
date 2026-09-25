@@ -58,6 +58,7 @@ import {
 import { runPreparedReply } from "./get-reply-run.js";
 import {
   baseParams,
+  createGatewayDrainingError,
   createInboundBody,
   createInboundTurn,
   createSessionBody,
@@ -162,6 +163,7 @@ vi.mock("../../agents/agent-tools.policy.js", () => ({
 vi.mock("../../agents/subagents/spawn/subagent-capabilities.js", () => ({
   isSubagentEnvelopeSession: vi.fn().mockReturnValue(false),
   resolveSubagentCapabilityStore: vi.fn().mockReturnValue(undefined),
+  resolvePersistedSubagentToolPolicyEnvelope: vi.fn().mockReturnValue(undefined),
 }));
 
 const resolveAgentHarnessDeliveryDefaultsMock = vi.hoisted(() =>
@@ -368,12 +370,6 @@ vi.mock("./session-reset-prompt.js", () => ({
 vi.mock("./typing-mode.js", () => ({
   resolveTypingMode: vi.fn().mockReturnValue("off"),
 }));
-
-function createGatewayDrainingError(): Error {
-  const error = new Error("Gateway is draining for restart; new tasks are not accepted");
-  error.name = "GatewayDrainingError";
-  return error;
-}
 
 const ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE =
   "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.";

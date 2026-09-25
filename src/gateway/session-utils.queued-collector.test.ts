@@ -14,6 +14,7 @@ import {
   releaseSubagentRun,
   releaseSubagentRunKillClaim,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { captureTestSpawnToolPolicy } from "../agents/subagents/spawn/subagent-spawn.test-helpers.js";
 import {
   activateSwarmRun,
   holdQueuedSwarmRun,
@@ -616,6 +617,22 @@ describe("queued collector session projection", () => {
   it("keeps the controlling parent authoritative when native completion routing differs", async () => {
     const completionOwner = "agent:main:dashboard:completion-recipient";
     const context = requestContext();
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: completionOwner },
+      { sessionId: "completion-recipient", updatedAt: 1 },
+    );
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: parentKey },
+      {
+        sessionId: "controller",
+        updatedAt: 1,
+        spawnedBy: completionOwner,
+        completionOwnerSessionKey: completionOwner,
+        spawnDepth: 1,
+        inheritedToolPolicyVersion: 2,
+        inheritedToolPolicy: (await captureTestSpawnToolPolicy()).policy,
+      },
+    );
     const [, second] = await spawnCollectors(undefined, completionOwner);
     const entry = expectDefined(subagentRuns.get(second!.runId!), "proxied queued collector");
     expect(entry).toMatchObject({

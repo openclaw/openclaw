@@ -3,6 +3,8 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../../agents/date-time.js";
+import type { DelegatedToolParameterPolicy } from "../../agents/inherited-tool-parameters.types.js";
+import type { InheritedToolPolicyV2 } from "../../agents/inherited-tool-policy.schema.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import {
@@ -15,6 +17,7 @@ import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
+  consumeDelegatedSystemEventEntries,
   peekSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
@@ -115,21 +118,7 @@ export async function drainFormattedSystemEvents(params: {
   if (sessionStateTargets.length > 0) {
     acknowledgeSessionStateNotices(params.sessionKey, sessionStateTargets);
   }
-  for (const event of queued) {
-    const compacted = compactSystemEvent(event);
-    if (!compacted) {
-      continue;
-    }
-    const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
-    let index = 0;
-    // Inbound text is deliberately not rewritten to neutralize look-alike `System:` lines.
-    // Role separation plus external-content wrapping is the boundary.
-    // This is an explicit product decision.
-    for (const subline of compacted.split("\n")) {
-      systemLines.push(`System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
-      index += 1;
-    }
-  }
+  systemLines.push(...formatSystemEventLines(queued, params.cfg));
   if (params.isMainSession && params.isNewSession) {
     const summary = await buildChannelSummary(params.cfg);
     if (summary.length > 0) {
@@ -149,4 +138,47 @@ export async function drainFormattedSystemEvents(params: {
   return summaryLines.length > 0
     ? [...summaryLines, ...systemLines].join("\n")
     : systemLines.join("\n");
+}
+
+function formatSystemEventLines(queued: readonly SystemEvent[], cfg: OpenClawConfig): string[] {
+  const systemLines: string[] = [];
+  for (const event of queued) {
+    const compacted = compactSystemEvent(event);
+    if (!compacted) {
+      continue;
+    }
+    const timestamp = `[${formatSystemEventTimestamp(event.ts, cfg)}]`;
+    let index = 0;
+    // Inbound text is deliberately not rewritten to neutralize look-alike `System:` lines.
+    // Role separation plus external-content wrapping is the boundary.
+    // This is an explicit product decision.
+    for (const subline of compacted.split("\n")) {
+      systemLines.push(`System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
+      index += 1;
+    }
+  }
+  return systemLines;
+}
+
+/** Runs only once the receiving generation has its finalized action policy. */
+export function drainFormattedDelegatedSystemEvents(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  policy: InheritedToolPolicyV2;
+  targetEnforcedParameters?: DelegatedToolParameterPolicy;
+  accept: (policies: readonly InheritedToolPolicyV2[]) => boolean;
+}): { text: string | undefined; policies: InheritedToolPolicyV2[]; deferred: number } {
+  const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
+  const result = consumeDelegatedSystemEventEntries(
+    queueKey,
+    params.policy,
+    params.accept,
+    params.targetEnforcedParameters,
+  );
+  return {
+    text: formatSystemEventLines(result.events, params.cfg).join("\n") || undefined,
+    policies: result.policies,
+    deferred: result.deferred,
+  };
 }

@@ -2,7 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { useToolPolicySessionFixture } from "./agent-tools.session-policy.test-support.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+
+useToolPolicySessionFixture({
+  "agent:worker:main": { sessionId: "collector-parent", updatedAt: 1 },
+  "agent:worker:subagent:child": {
+    sessionId: "collector-session",
+    updatedAt: 1,
+    spawnedBy: "agent:worker:main",
+    spawnDepth: 1,
+    inheritedToolPolicyVersion: 1,
+  },
+});
 
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],

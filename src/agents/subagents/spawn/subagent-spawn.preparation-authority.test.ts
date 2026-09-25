@@ -53,6 +53,7 @@ import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { resolveSubagentAttachmentDir } from "../subagent-attachment-paths.js";
 import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
+import { captureAdmittedTestSpawnToolPolicy } from "./subagent-spawn.test-helpers.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 const fixture = installSpawnAuthorityFixture();
@@ -166,6 +167,7 @@ describe("pending spawn preparation authority", () => {
       const [tool] = finalizeAgentTools({
         tools: [
           createSessionsSpawnTool({
+            captureInheritedToolPolicyForDelegation: captureAdmittedTestSpawnToolPolicy,
             config: cfg,
             agentSessionKey: parentSessionKey,
             requesterRunId: parentRunId,
@@ -455,6 +457,7 @@ describe("pending spawn preparation authority", () => {
         })
       : undefined;
     const source = createSessionsSpawnTool({
+      captureInheritedToolPolicyForDelegation: captureAdmittedTestSpawnToolPolicy,
       config: cfg,
       agentSessionKey: parentSessionKey,
       requesterRunId: parentRunId,

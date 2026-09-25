@@ -1,6 +1,8 @@
 /**
  * Defines the narrow set of tool instances that blind attempt retries may repeat.
  */
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { normalizeToolPolicyName } from "./tool-policy-shared.js";
 
 const UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES = new Set([
@@ -67,6 +69,19 @@ export function isAgentToolRestartSafe(
     return declaredReplaySafe;
   }
   return UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES.has(normalizeToolPolicyName(tool.name ?? ""));
+}
+
+/** Resolve restart safety from the registered instance's owner, including deferred tools. */
+export function isRegisteredAgentToolRestartSafe(tool: NamedTool): boolean {
+  const plugin = getPluginToolMeta(tool);
+  return isAgentToolRestartSafe(tool, {
+    declaredReplaySafe: () =>
+      plugin
+        ? !plugin.mcp && plugin.replaySafe === true
+        : getChannelAgentToolMeta(tool)
+          ? false
+          : undefined,
+  });
 }
 
 /**

@@ -1,6 +1,31 @@
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 const STEERING_MESSAGE_IDENTITY = Symbol.for("openclaw.steeringMessageIdentity");
+const notInjected = resolveGlobalSingleton<WeakMap<object, string>>(
+  Symbol.for("openclaw.steeringMessageNotInjected"),
+  () => new WeakMap(),
+);
+
+/** Native queue-owner proof, bound to the exact attempted input identity. */
+export function recordSteeringMessageNotInjected(
+  result: object,
+  identity: string | undefined,
+): void {
+  if (identity) {
+    notInjected.set(result, identity);
+  }
+}
+
+export function wasSteeringMessageNotInjected(
+  result: unknown,
+  identity: string | undefined,
+): boolean {
+  return Boolean(
+    identity && result && typeof result === "object" && notInjected.get(result) === identity,
+  );
+}
+
 const steeringMessagePersistenceFailureListeners = new Map<string, Set<(error: unknown) => void>>();
 
 export function setSteeringMessageIdentity(

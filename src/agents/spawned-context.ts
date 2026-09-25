@@ -8,6 +8,7 @@ import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import type { InheritedToolPolicySourceCapture } from "./inherited-tool-policy.schema.js";
 import type { ModelRef } from "./model-ref-shared.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.types.js";
 
@@ -30,6 +31,7 @@ export type SpawnedToolContext = {
   /** Effective parent-turn model; saved preferences may describe a later turn. */
   requesterModel?: ModelRef;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
+  captureInheritedToolPolicyForDelegation?: InheritedToolPolicySourceCapture;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
 };

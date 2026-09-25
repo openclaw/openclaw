@@ -29,7 +29,9 @@ import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
+import { runGlobalSessionSendPolicyScenario } from "./server.sessions-send.global-target.test-support.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
@@ -47,6 +49,7 @@ installGatewayTestHooks({ scope: "suite" });
 
 let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
 let gatewayPort: number;
+let gatewayContext: GatewayRequestContext;
 const gatewayToken = "test-gateway-token-1234567890";
 let envSnapshot: ReturnType<typeof captureEnv>;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -131,6 +134,7 @@ async function emitLifecycleAssistantReply(params: {
   };
   await persistSessionTranscriptTurn(
     {
+      agentId: commandParams.agentId,
       sessionId,
       sessionKey: commandParams.sessionKey,
       ...(testState.sessionStorePath ? { storePath: testState.sessionStorePath } : {}),
@@ -178,7 +182,20 @@ beforeAll(async () => {
   gatewayPort = portClaim.port;
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
-  server = await startTestGatewayServer(portClaim);
+  const kernelModule = await import("./server-kernel.js");
+  const createKernel = kernelModule.createGatewayKernel;
+  const capture = vi
+    .spyOn(kernelModule, "createGatewayKernel")
+    .mockImplementation(async (...args) => {
+      const kernel = await createKernel(...args);
+      gatewayContext = kernel.gatewayRequestContext;
+      return kernel;
+    });
+  try {
+    server = await startTestGatewayServer(portClaim);
+  } finally {
+    capture.mockRestore();
+  }
   // Prepare the real history handler before the RPC deadline starts.
   await import("./server-methods/chat.js");
 });
@@ -707,6 +724,24 @@ describe("sessions_send label lookup", () => {
 });
 
 describe("sessions_send agent targeting", () => {
+  it("admits a global target using the selected agent's policy and physical session", async () => {
+    await runGlobalSessionSendPolicyScenario({
+      dir: tempDirs.make("openclaw-sessions-send-global-policy-"),
+      context: gatewayContext,
+      reply: (opts) =>
+        emitLifecycleAssistantReply({
+          opts,
+          defaultSessionId: "selected-global",
+          resolveText: (prompt) =>
+            prompt?.includes("Agent-to-agent reply step")
+              ? "REPLY_SKIP"
+              : prompt?.includes("Agent-to-agent announce step")
+                ? "ANNOUNCE_SKIP"
+                : "selected global assessment",
+        }),
+    });
+  });
+
   it.each([
     { name: "default cross-agent access", tools: undefined },
     {

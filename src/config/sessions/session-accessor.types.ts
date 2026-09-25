@@ -66,6 +66,8 @@ export type LogicalSessionAccessScope = {
 export type SessionEntryReadScope = SessionAccessScope & {
   /** Metadata views omit the large per-run prompt snapshots before decoding. */
   projection?: "full" | "list";
+  /** Exact policy reads validate their selected row without admitting unrelated rows. */
+  canonicalValidation?: "selected";
 };
 
 /** Address of the physical store admitted by an entry read; never retains its handle. */

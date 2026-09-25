@@ -9,6 +9,7 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { toErrorObject } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import {
   closeDiagnosticEmbeddedRunOwner,
@@ -23,6 +24,8 @@ import {
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
+import type { DelegatedToolParameterPolicy } from "../../inherited-tool-parameters.types.js";
+import type { InheritedToolPolicyV2 } from "../../inherited-tool-policy.schema.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
@@ -31,6 +34,7 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { recordSteeringMessageNotInjected } from "../../sessions/steering-message-identity.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
@@ -80,6 +84,10 @@ type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
 
 type PrepareEmbeddedAttemptStreamInput = {
   attempt: EmbeddedRunAttemptInternalParams;
+  getInheritedToolPolicy?: () => InheritedToolPolicyV2;
+  getDelegatedToolParameterPolicy?: () => DelegatedToolParameterPolicy;
+  getEnforcedDelegatedToolParameterPolicy?: () => DelegatedToolParameterPolicy | undefined;
+  addDelegatedInputPolicies?: (policies: readonly InheritedToolPolicyV2[]) => () => void;
   agentSession: Pick<
     Awaited<ReturnType<typeof prepareEmbeddedAttemptAgentSession>>,
     | "activeSession"
@@ -444,8 +452,14 @@ function prepareStream(
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
   ) => {
     const canInjectMessage = composeInjectionGuard(assertCurrent);
-    if (!canInjectMessage()) {
-      throw new Error("active session is finalizing");
+    try {
+      if (!canInjectMessage()) {
+        throw new Error("active session is finalizing");
+      }
+    } catch (error) {
+      const rejection = toErrorObject(error, "Steering admission rejected");
+      recordSteeringMessageNotInjected(rejection, options?.queueIdentity);
+      throw rejection;
     }
     activeQueueAdmissions++;
     try {
@@ -504,6 +518,10 @@ function prepareStream(
     diagnosticOwner: input.diagnosticOwner,
     closeDiagnostics: () => closeDiagnosticEmbeddedRunOwner(input.diagnosticOwner),
     startedAtMs: attempt.startedAtMs,
+    getInheritedToolPolicy: input.getInheritedToolPolicy,
+    getDelegatedToolParameterPolicy: input.getDelegatedToolParameterPolicy,
+    getEnforcedDelegatedToolParameterPolicy: input.getEnforcedDelegatedToolParameterPolicy,
+    addDelegatedInputPolicies: input.addDelegatedInputPolicies,
     get toolAuthorityFingerprint() {
       return attempt.toolAuthorityFingerprint;
     },

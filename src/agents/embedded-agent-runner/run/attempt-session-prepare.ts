@@ -619,6 +619,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     }),
   );
   const sessionManager = guardSessionManager(unguardedSessionManager, {
+    admittedRunContext: attempt.admittedRunContext,
     agentId: input.sessionAgentId,
     runId: attempt.runId,
     sessionKey: attempt.sessionKey,

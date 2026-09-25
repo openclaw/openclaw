@@ -31,8 +31,58 @@ title: "Agent schema history"
 | 21      | Incremental canonical-session validation with transactional node, window, and main-key invalidation                                                                                                                                                    | Unreleased                                      |
 | 22      | Exact transcript FTS row ownership for session-local deletion and reconciliation ([#153834](https://github.com/openclaw/openclaw/pull/153834))                                                                                                         | Unreleased                                      |
 | 23      | Selective transcript compression, binary memory embeddings, and stable memory full-text index identities                                                                                                                                               | Unreleased                                      |
+| 24      | Persisted delegated action restrictions; older readers cannot ignore the v2 policy envelope                                                                                                                                                            | Unreleased                                      |
 
 Version 3 was an unshipped development step folded into version 4.
+
+### Delegated action restrictions
+
+Agent schema **24** fences readers that cannot enforce the v2 inherited tool
+policy stored in the existing `session_nodes.entry_json`. Native delegated
+children record `inheritedToolPolicyVersion: 2` and `inheritedToolPolicy` with
+their creation stamp in one session-owner write. The envelope preserves
+conjunctive configured restrictions and supported parameter restrictions. It
+does not turn an action restriction into a confidentiality label on returned
+information or restrict unrelated session work.
+
+Accepted cross-session input records carry the same v2 policy in their existing
+private transcript metadata. A notification consumed by a native run remains
+ephemeral text. Its action requirements survive retries in the admitted run and
+are checkpointed only when they change, on an existing generated transcript row
+before its tools can execute. Recovery reads the exact original source, bound
+steering inputs, and run-owned checkpoints from the raw transcript branch. It
+does not derive restrictions from the recent prompt window or unrelated turns.
+A missing claimed source or malformed expected policy prevents resuming that
+interrupted work; completed-delivery settlement keeps its existing path.
+
+The 23-to-24 migration advances both schema markers in the existing maintenance
+transaction without rewriting session entries or transcript bytes. Existing v1
+allow/deny snapshots retain their original interpretation; migration does not
+infer restrictions that those snapshots never recorded. Unknown policy versions,
+malformed v2 envelopes, incomplete v2 lineage, unavailable policy reads, and loss
+of an expected v2 envelope are explicit admission failures. They cannot become
+unrestricted requester-policy fallback. No tables, columns, retention periods,
+or shared-state schema versions change.
+
+The version fence applies to every migrated agent database, including databases
+that contain no v2 child. One newer registered agent database can prevent an
+older Gateway from starting. Upgrading therefore has a Gateway-wide downgrade
+consequence even when this delegation feature has not been used.
+
+Use the existing [older-updater contract](/reference/database-schemas/versioning#schema-bumps-and-older-updaters):
+the published 2026.9.2 driver rehearses candidate Doctor on private copies while
+package rollback remains possible; post-core Doctor verifies the retained
+recovery archive before live agent migration. Refused authority or backup
+coverage leaves live schema markers unchanged, and a failed migration
+transaction rolls back. Backups are consistent per database, not an atomic
+snapshot across databases.
+
+After live migration, binary-only downgrade is unsupported. Keep writers stopped
+and use the recovery owner's complete verified pre-upgrade restore set with the
+matching build, including shared task/subagent reconciliation. Restoring a child
+database alone can leave newer shared task records referring to missing child
+state. Do not lower version markers, strip policies, delete tasks to force a
+downgrade, or automatically restore an archive after a later failure.
 
 ### Compact agent payload storage
 

@@ -275,6 +275,7 @@ export async function runWorkerDescriptor(
             name !== "portal" || hello.protocolFeatures.includes(WORKER_PORTAL_PROTOCOL_FEATURE),
         ),
         execAuthority: descriptor.assignment.toolAuthority.exec,
+        inheritedToolPolicy: descriptor.assignment.toolAuthority.inheritedToolPolicy,
         ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
         ...(descriptor.assignment.computer
           ? {

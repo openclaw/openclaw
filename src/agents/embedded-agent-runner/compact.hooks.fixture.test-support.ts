@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterAll, afterEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
@@ -45,6 +46,21 @@ export function useCompactHooksSessionFixture(sessionKey: string) {
         { sessionId, updatedAt: 1 },
       );
       return { sessionId, workspaceDir, sessionFile: join(workspaceDir, "session.jsonl") };
+    },
+    async prepareTarget(
+      agentId: string,
+      targetKey: string,
+      sessionId: string,
+      lineage: Pick<SessionEntry, "spawnedBy" | "spawnDepth" | "inheritedToolPolicyVersion"> = {},
+    ) {
+      const sessionTarget = { agentId, sessionKey: targetKey, sessionId, storePath };
+      await replaceSessionEntry(sessionTarget, { sessionId, updatedAt: 1, ...lineage });
+      return {
+        sessionId,
+        sessionKey: targetKey,
+        sessionTarget,
+        config: { session: { store: storePath } },
+      };
     },
     makeTempDir(prefix: string) {
       return tempDirs.make(prefix, state.root);

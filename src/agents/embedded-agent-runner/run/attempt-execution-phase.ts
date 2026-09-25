@@ -136,6 +136,10 @@ export async function runEmbeddedAttemptExecutionPhase(
     : undefined;
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
+    getInheritedToolPolicy: toolBase.getInheritedToolPolicy,
+    getDelegatedToolParameterPolicy: toolBase.getDelegatedToolParameterPolicy,
+    getEnforcedDelegatedToolParameterPolicy: toolBase.getEnforcedDelegatedToolParameterPolicy,
+    addDelegatedInputPolicies: toolBase.addDelegatedInputPolicies,
     agentSession: sessionRuntime.agentSession,
     onModelUsage,
     applyPermissionMode: input.lifecycle.applyPermissionMode,

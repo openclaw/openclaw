@@ -5,9 +5,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createInheritedToolPolicyMatcher } from "../agents/inherited-tool-policy.js";
+import {
+  parseInheritedToolPolicyV2,
+  type InheritedToolPolicySourceCapture,
+} from "../agents/inherited-tool-policy.schema.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { registerGatewayDelegationCaptureTests } from "./tool-resolution.delegation.test-support.js";
 
 type CreateOpenClawToolsArg = {
   agentAccountId?: string;
@@ -15,8 +21,7 @@ type CreateOpenClawToolsArg = {
   clientCaps?: string[];
   pinnedWidgetAuthoring?: boolean;
   cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
-  inheritedToolAllowlist?: string[];
-  inheritedToolDenylist?: string[];
+  captureInheritedToolPolicyForDelegation?: InheritedToolPolicySourceCapture;
   pluginToolDenylist?: string[];
   questionPrompt?: { send: (payload: unknown) => unknown; messageChannel?: string };
   sandboxed?: boolean;
@@ -112,6 +117,14 @@ vi.mock("../agents/lazy-exec-tool.js", () => ({
   resolveExecToolConfig: vi.fn(() => ({})),
 }));
 
+vi.mock("../infra/exec-approvals-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/exec-approvals-store.js")>()),
+  loadExecApprovalsReadOnlyAsync: vi.fn(async () => ({
+    version: 1,
+    defaults: { security: "full", ask: "off" },
+  })),
+}));
+
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 describe("resolveGatewayScopedTools excludeToolNames", () => {
@@ -130,6 +143,25 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     }
     return args;
   }
+
+  async function readInheritedPolicy(index = 0) {
+    const capture = readCreateToolsArgs(index).captureInheritedToolPolicyForDelegation;
+    if (!capture) {
+      throw new Error("Expected configured delegation policy capture");
+    }
+    const encodedPolicy = JSON.stringify((await capture()).policy);
+    return parseInheritedToolPolicyV2(JSON.parse(encodedPolicy));
+  }
+
+  async function readInheritedMatcher(index = 0) {
+    return createInheritedToolPolicyMatcher({ policy: await readInheritedPolicy(index) });
+  }
+
+  registerGatewayDelegationCaptureTests({
+    readInheritedPolicy,
+    readInheritedMatcher,
+    createLazyExecToolMock: hoisted.createLazyExecToolMock,
+  });
 
   it.each(["loopback", "http"] as const)(
     "passes client capabilities but restricts pinned authoring on the %s surface",
@@ -204,7 +236,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(readCreateToolsArgs().sourceReplyOnly).toBeUndefined();
   });
 
-  it("filters loopback dedup exclusions without inheriting policy denies", () => {
+  it("filters loopback dedup exclusions without inheriting policy denies", async () => {
     const result = resolveGatewayScopedTools({
       cfg: {} as OpenClawConfig,
       sessionKey: "agent:main:direct:test",
@@ -220,7 +252,8 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     ]);
     const args = readCreateToolsArgs();
     expect(args.pluginToolDenylist).toEqual([]);
-    expect(args.inheritedToolDenylist).toEqual([]);
+    expect((await readInheritedMatcher())({ name: "read" })).toBe(true);
+    expect((await readInheritedMatcher())({ name: "apply_patch" })).toBe(true);
   });
 
   it("constructs exact coding tools for a server-minted mediated grant", () => {
@@ -353,7 +386,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(result.tools.map((tool) => tool.name)).toEqual(["automations"]);
   });
 
-  it("keeps owner-only core tools visible only for owner loopback callers", () => {
+  it("keeps owner-only core tools visible only for owner loopback callers", async () => {
     const availableTools = [
       "read",
       "sessions_spawn",
@@ -408,25 +441,14 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       "mobile_ui",
       "openclaw",
     ]);
-    expect(args.inheritedToolDenylist).toEqual([
-      "automations",
-      "gateway",
-      "plugins",
-      "sessions",
-      "screen",
-      "terminal",
-      "portal",
-      "conversations_list",
-      "conversations_send",
-      "conversations_turn",
-      "nodes",
-      "computer",
-      "mobile_ui",
-      "openclaw",
-    ]);
+    const inherited = await readInheritedMatcher(1);
+    for (const name of args.pluginToolDenylist ?? []) {
+      expect(inherited({ name })).toBe(false);
+    }
+    expect(inherited({ name: "read" })).toBe(true);
   });
 
-  it("keeps real gateway deny policy inheritable while excluding native dedup tools", () => {
+  it("keeps real gateway deny policy inheritable while excluding native dedup tools", async () => {
     resolveGatewayScopedTools({
       cfg: {
         gateway: { tools: { deny: ["exec"] } },
@@ -438,7 +460,8 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
 
     const args = readCreateToolsArgs();
     expect(args.pluginToolDenylist).toEqual(["exec"]);
-    expect(args.inheritedToolDenylist).toEqual(["exec"]);
+    expect((await readInheritedMatcher())({ name: "exec" })).toBe(false);
+    expect((await readInheritedMatcher())({ name: "read" })).toBe(true);
   });
 
   it.each([
@@ -950,7 +973,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
   });
 
-  it("does not inherit node-only exec as a generic child or cron capability", () => {
+  it("keeps configured exec eligible without exporting node-only availability to cron", async () => {
     const result = resolveGatewayScopedTools({
       cfg: { tools: { allow: ["exec", "sessions_spawn", "automations"] } } as OpenClawConfig,
       sessionKey: "agent:main:direct:test",
@@ -961,11 +984,11 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     });
 
     expect(result.tools.map((tool) => tool.name)).toContain("exec");
-    expect(readCreateToolsArgs().inheritedToolAllowlist).not.toContain("exec");
+    expect((await readInheritedMatcher())({ name: "exec" })).toBe(true);
     expect(readCreateToolsArgs().cronCreatorToolAllowlist).not.toContainEqual({ name: "exec" });
   });
 
-  it("passes sandbox context and inherited sandbox denies into loopback tools", () => {
+  it("passes sandbox context and inherited sandbox denies into loopback tools", async () => {
     const result = resolveGatewayScopedTools({
       cfg: {
         agents: { defaults: { sandbox: { mode: "all" } } },
@@ -979,7 +1002,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     const args = readCreateToolsArgs();
     expect(args.sandboxed).toBe(true);
     expect(args.pluginToolDenylist).toEqual(["automations"]);
-    expect(args.inheritedToolDenylist).toEqual(["automations"]);
+    expect((await readInheritedMatcher())({ name: "automations" })).toBe(false);
   });
 
   it("passes final filtered tool surface to gateway cron jobs", () => {

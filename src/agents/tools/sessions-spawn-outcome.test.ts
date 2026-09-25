@@ -18,6 +18,7 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { buildPayloads } from "../embedded-agent-runner/run/payloads.test-helpers.js";
+import { captureTestSpawnToolPolicy } from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import { isToolResultError, registerTrustedToolNoStartError } from "../tool-result-error.js";
 import { snapshotToolSearchTargetTranscriptResult } from "../tool-search-transcript.js";
 import { createToolTerminalObserver } from "../tool-terminal-outcome.js";
@@ -112,6 +113,7 @@ describe("sessions_spawn terminal effects", () => {
   ])("keeps recovered $name rejection out of heartbeat failure", async (testCase) => {
     const callGateway = vi.spyOn(inProcessGateway, "callInProcessGatewayTool");
     const tool = createSessionsSpawnTool({
+      captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
       agentSessionKey: "agent:main:main",
       config: {
         ...config,
@@ -135,7 +137,11 @@ describe("sessions_spawn terminal effects", () => {
   });
 
   it("keeps an internal argument exception out of heartbeat failure", async () => {
-    const tool = createSessionsSpawnTool({ config, countActiveRuns: () => 0 });
+    const tool = createSessionsSpawnTool({
+      captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
+      config,
+      countActiveRuns: () => 0,
+    });
     const error = await tool
       .execute("spawn", {
         task: "Prepare report",
@@ -189,6 +195,8 @@ describe("sessions_spawn terminal effects", () => {
   ])("classifies $name at its owning effect boundary", async (testCase) => {
     await withSpawnConfig(testCase.cfg, async () => {
       const tool = createSessionsSpawnTool({
+        captureInheritedToolPolicyForDelegation:
+          testCase.args.runtime === "subagent" ? captureTestSpawnToolPolicy : undefined,
         agentSessionKey: "agent:main:main",
         config: testCase.cfg,
       });
@@ -203,6 +211,7 @@ describe("sessions_spawn terminal effects", () => {
       const workspace = await realpath(dir);
       const callGateway = vi.spyOn(inProcessGateway, "callInProcessGatewayTool");
       const tool = createSessionsSpawnTool({
+        captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
         agentSessionKey: "agent:main:main",
         config: {
           agents: {
@@ -235,6 +244,7 @@ describe("sessions_spawn terminal effects", () => {
         .spyOn(inProcessGateway, "callInProcessGatewayTool")
         .mockRejectedValue(failure);
       const tool = createSessionsSpawnTool({
+        captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
         agentSessionKey: "agent:main:main",
         config,
         callGateway: inProcessGateway.callInProcessGatewayTool,
@@ -262,6 +272,7 @@ describe("sessions_spawn terminal effects", () => {
       throw new Error("registration unavailable");
     });
     const tool = createSessionsSpawnTool({
+      captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
       agentSessionKey: "agent:main:main",
       config,
       callGateway: inProcessGateway.callInProcessGatewayTool,
@@ -285,6 +296,7 @@ describe("sessions_spawn terminal effects", () => {
       runStarted: true,
     });
     const tool = createSessionsSpawnTool({
+      captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
       agentSessionKey: "agent:main:main",
       config,
       callGateway: inProcessGateway.callInProcessGatewayTool,

@@ -1,11 +1,30 @@
+import path from "node:path";
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
-import { projectConversationToolNames } from "../../agents/conversation-tool-policy-pipeline.js";
+import {
+  projectConversationToolNames,
+  resolveConversationToolPolicies,
+} from "../../agents/conversation-tool-policy-pipeline.js";
+import { prepareDelegatedToolParameterTarget } from "../../agents/delegated-tool-parameter-target.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { resolveExecDefaults } from "../../agents/exec-defaults.js";
+import {
+  applyDelegatedToolParameters,
+  captureDelegatedToolParameters,
+} from "../../agents/inherited-tool-parameters.js";
+import {
+  captureDelegatedSourceToolPolicy,
+  captureInheritedToolPolicy,
+  createInheritedToolPolicyMatcher,
+} from "../../agents/inherited-tool-policy.js";
+import type {
+  InheritedToolPolicyRef,
+  InheritedToolPolicyV2,
+} from "../../agents/inherited-tool-policy.schema.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSandboxToolPolicyForAgent } from "../../agents/sandbox/tool-policy.js";
 import { projectEffectiveExecPolicy } from "../../agents/session-permission-exec-mode.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { isAgentToolRestartSafe } from "../../agents/tool-replay-safety.js";
 import { logWarn } from "../../logger.js";
 import {
   WORKER_REQUIRED_LOCAL_TOOL_NAMES,
@@ -28,7 +47,7 @@ function resolveWorkerCapabilityProfile(params: {
     sessionKey: sandboxSessionKey,
     agentId: turn.agentId,
   });
-  return resolveConversationCapabilityProfile({
+  const capabilityProfile = resolveConversationCapabilityProfile({
     config: turn.config,
     sessionKey: sandboxSessionKey,
     runSessionKey:
@@ -79,6 +98,7 @@ function resolveWorkerCapabilityProfile(params: {
     trustedInternalHandoff: turn.trustedInternalHandoff,
     scheduledToolPolicy: turn.scheduledToolPolicy,
   });
+  return { capabilityProfile, sandbox };
 }
 
 /** Resolves the final fixed worker surface at the trusted Gateway handoff boundary. */
@@ -87,7 +107,10 @@ export function resolveWorkerToolAuthority(params: {
   turn: SessionPlacementTurnParams;
   availableOptionalToolNames?: readonly WorkerOptionalLocalToolName[];
   portalAvailable?: boolean;
-}): WorkerToolAuthority {
+}): WorkerToolAuthority & {
+  delegationToolPolicy: InheritedToolPolicyV2;
+  captureDelegationToolPolicy: NonNullable<InheritedToolPolicyRef["captureSource"]>;
+} {
   const turn = params.turn;
   const defaults = resolveExecDefaults({
     cfg: turn.config,
@@ -119,8 +142,108 @@ export function resolveWorkerToolAuthority(params: {
           ...(node ? { node } : {}),
         }
       : { host, security, ask, safeBins: [] };
+  const { capabilityProfile, sandbox } = resolveWorkerCapabilityProfile(params);
+  const permissionMode = turn.permissionMode ?? turn.execSession?.permissionMode;
+  const parameterFacts = prepareDelegatedToolParameterTarget({
+    config: turn.config ?? {},
+    agentId: capabilityProfile.policy.agentId ?? sandbox.classificationAgentId,
+    sessionPermissionPolicy: permissionMode
+      ? { mode: permissionMode, root: turn.sessionRoot ?? turn.workspaceDir }
+      : undefined,
+    sessionEntry: turn.execSession ?? null,
+    rootIsWorkspace:
+      !turn.sessionRoot || path.resolve(turn.sessionRoot) === path.resolve(turn.workspaceDir),
+    execOverrides: turn.execOverrides,
+    elevated: turn.bashElevated ?? null,
+    sandbox,
+    requireWorkspaceOnly: turn.requireWorkspaceOnly,
+    modelProvider: params.modelRef.provider,
+    modelId: params.modelRef.model,
+  });
+  parameterFacts.exec = {
+    ...parameterFacts.exec,
+    ...policy,
+    host:
+      parameterFacts.exec.host === "auto"
+        ? (turn.scheduledToolPolicy?.execTarget?.host ?? "auto")
+        : parameterFacts.exec.host,
+    mode:
+      policy.security === parameterFacts.exec.security && policy.ask === parameterFacts.exec.ask
+        ? parameterFacts.exec.mode
+        : undefined,
+  };
+  const inheritedToolPolicy = captureInheritedToolPolicy({
+    policies: Object.values(resolveConversationToolPolicies({ capabilityProfile })),
+    inherited: capabilityProfile.policy.inheritedActionPolicy,
+    runtimeAllow:
+      turn.disableTools === true || turn.modelRun === true || turn.promptMode === "none"
+        ? []
+        : turn.toolsAllow,
+    executionAllow: turn.toolExecutionAllow,
+    restartSafe: turn.forceRestartSafeTools,
+    parameters: captureDelegatedToolParameters(parameterFacts),
+  });
+  const requiredPolicy = turn.delegatedInputPolicy
+    ? captureInheritedToolPolicy({
+        policies: [],
+        inherited: capabilityProfile.policy.inheritedActionPolicy,
+        parameters: turn.delegatedInputPolicy.parameters,
+      })
+    : capabilityProfile.policy.inheritedActionPolicy;
+  if (requiredPolicy && turn.delegatedInputPolicy) {
+    requiredPolicy.clauses.push(...turn.delegatedInputPolicy.clauses);
+  }
+  const effectivePolicy = turn.delegatedInputPolicy
+    ? captureInheritedToolPolicy({
+        policies: [],
+        inherited: inheritedToolPolicy,
+        parameters: turn.delegatedInputPolicy.parameters,
+      })
+    : inheritedToolPolicy;
+  if (turn.delegatedInputPolicy) {
+    effectivePolicy.clauses.push(...turn.delegatedInputPolicy.clauses);
+  }
+  const captureDelegationToolPolicy: NonNullable<InheritedToolPolicyRef["captureSource"]> = (
+    sourcePolicy,
+    assertCurrent,
+  ) =>
+    captureDelegatedSourceToolPolicy({
+      policy: sourcePolicy,
+      exec: parameterFacts.exec,
+      sandboxed: parameterFacts.sandbox.sandboxed,
+      config: turn.config,
+      agentId: capabilityProfile.policy.agentId ?? sandbox.classificationAgentId,
+      assertCurrent,
+    });
+  // The closed worker surface has core-owned instances; availability never becomes a saved cap.
+  const matches = createInheritedToolPolicyMatcher({
+    policy: effectivePolicy,
+    restartSafe: isAgentToolRestartSafe,
+  });
+  const allows = (name: string) => matches({ name });
+  if (requiredPolicy) {
+    applyDelegatedToolParameters({
+      ...parameterFacts,
+      exec: { ...parameterFacts.exec, host: "gateway", elevated: undefined },
+      sandbox: { ...parameterFacts.sandbox, sandboxed: false },
+      policy: effectivePolicy.parameters,
+      applicability: {
+        exec: allows("exec") && !execUnavailable && host === "gateway",
+        fileTools: ["read", "write", "edit", "apply_patch"].some(allows),
+        fileWrites: ["write", "edit", "apply_patch"].some(allows),
+        applyPatch: allows("apply_patch"),
+        sandbox: ["exec", "read", "write", "edit", "apply_patch", "browser"].some(allows),
+      },
+    });
+  }
   if (turn.disableTools === true || turn.modelRun === true || turn.promptMode === "none") {
-    return { allowedToolNames: [], exec };
+    return {
+      allowedToolNames: [],
+      exec,
+      delegationToolPolicy: effectivePolicy,
+      captureDelegationToolPolicy,
+      ...(requiredPolicy ? { inheritedToolPolicy: effectivePolicy } : {}),
+    };
   }
   const runtimeCappedTools = applyEmbeddedAttemptToolsAllow(
     [
@@ -137,7 +260,7 @@ export function resolveWorkerToolAuthority(params: {
     turn.toolsAllow,
   );
   const projected: WorkerToolName[] = projectConversationToolNames({
-    capabilityProfile: resolveWorkerCapabilityProfile(params),
+    capabilityProfile,
     toolNames: runtimeCappedTools.map((tool) => tool.name),
     warn: logWarn,
   });
@@ -147,9 +270,12 @@ export function resolveWorkerToolAuthority(params: {
     );
   }
   return {
-    allowedToolNames: execUnavailable
-      ? projected.filter((name) => name !== "exec" && name !== "process")
-      : projected,
+    allowedToolNames: projected.filter(
+      (name) => allows(name) && (!execUnavailable || (name !== "exec" && name !== "process")),
+    ),
     exec,
+    delegationToolPolicy: effectivePolicy,
+    captureDelegationToolPolicy,
+    ...(requiredPolicy ? { inheritedToolPolicy: effectivePolicy } : {}),
   };
 }

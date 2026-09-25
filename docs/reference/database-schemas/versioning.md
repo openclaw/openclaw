@@ -427,6 +427,15 @@ transactional updates that fence old-process ledger access and let candidate
 code finish after migration; they also keep normal publication behavior.
 Same-schema repairs and ordinary Doctor runs remain available.
 
+Agent schema 24 uses these same upgrade and recovery owners for
+[delegated action restrictions](/reference/database-schemas/agent-schema-history#delegated-action-restrictions).
+Its older-reader fence applies even when an agent database has no v2 policy
+entries. An older Gateway can refuse startup because any registered agent
+database is newer; binary-only rollback is therefore unavailable after live
+migration. Restore the complete verified recovery set with its matching build
+and reconcile shared tasks through their owner. Per-database backups do not
+claim an atomic snapshot across all stores.
+
 ### Profile-owned skill library
 
 [Personal and team skills](/tools/skills#personal-skills-on-a-shared-gateway) use four first-use tables in the shared state database without changing its schema version: `skill_library_entries`, `skill_library_revisions`, `skill_library_events`, and `skill_library_uploads`. Ordinary workspace skills and unused-library discovery do not create these tables. Ownership, sharing, the current revision pointer, portable file manifests, and publication events are canonical SQLite data. Session selections remain in the existing per-agent session store; inherited cron selections remain in the existing private job record.

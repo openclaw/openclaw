@@ -1,4 +1,10 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import {
+  normalizeInheritedToolAllowlist,
+  normalizeInheritedToolDenylist,
+} from "../agents/inherited-tool-deny.js";
+import { parseInheritedToolPolicyV2 } from "../agents/inherited-tool-policy.schema.js";
 import { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../auto-reply/reply/session-fork.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -99,5 +105,37 @@ export function resolveSessionCreateInheritance(params: {
       inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(params.parent),
     },
     ...(ownerAssignment ? { ownerAssignment } : {}),
+  };
+}
+
+/** Prepare the declared spawn policy before the creation owner enters its mutation scope. */
+export function prepareSessionCreateSpawnPolicy(
+  policy: CreateGatewaySessionParams["spawnToolPolicy"],
+  parentSessionKey: string | undefined,
+) {
+  if (!policy || !parentSessionKey) {
+    return undefined;
+  }
+  const completionOwnerSessionKey =
+    normalizeOptionalString(policy.completionOwnerSessionKey) ??
+    (policy.version === 2 ? parentSessionKey : undefined);
+  const lineage = {
+    spawnedBy: parentSessionKey,
+    ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
+  };
+  if (policy.version === 2) {
+    return {
+      ...lineage,
+      inheritedToolPolicyVersion: 2 as const,
+      inheritedToolPolicy: parseInheritedToolPolicyV2(policy.policy),
+    };
+  }
+  const allow = normalizeInheritedToolAllowlist(policy.allow);
+  const deny = normalizeInheritedToolDenylist(policy.deny);
+  return {
+    ...lineage,
+    inheritedToolPolicyVersion: 1 as const,
+    ...(allow.length > 0 ? { inheritedToolAllow: allow } : {}),
+    ...(deny.length > 0 ? { inheritedToolDeny: deny } : {}),
   };
 }

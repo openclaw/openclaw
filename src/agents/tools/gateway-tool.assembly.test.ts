@@ -3,8 +3,20 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOpenClawCodingTools } from "../agent-tools.js";
+import { useToolPolicySessionFixture } from "../agent-tools.session-policy.test-support.js";
 import "../test-helpers/fast-coding-tools.js";
 import type { AnyAgentTool } from "./common.js";
+
+useToolPolicySessionFixture({
+  "agent:main:main": { sessionId: "gateway-parent", updatedAt: 1 },
+  "agent:main:subagent:worker": {
+    sessionId: "gateway-worker",
+    updatedAt: 1,
+    spawnedBy: "agent:main:main",
+    spawnDepth: 1,
+    inheritedToolPolicyVersion: 1,
+  },
+});
 
 vi.mock("../openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],

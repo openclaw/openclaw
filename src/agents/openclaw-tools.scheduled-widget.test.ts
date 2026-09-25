@@ -1,6 +1,7 @@
 // Scheduled show_widget registration and allowlist coverage.
 import { describe, expect, it, vi } from "vitest";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { useToolPolicySessionFixture } from "./agent-tools.session-policy.test-support.js";
 import { resolveEmbeddedAttemptToolConstructionPlan } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
@@ -27,6 +28,11 @@ function expectPinnedOnlySchema(tool: ReturnType<typeof expectWidget>): void {
 }
 
 describe("pinned show_widget registration", () => {
+  useToolPolicySessionFixture({
+    "agent:main:dashboard:recovered": { sessionId: "dashboard-recovered", updatedAt: 1 },
+    "agent:main:dashboard:scheduled": { sessionId: "dashboard-scheduled", updatedAt: 1 },
+  });
+
   it("keeps recovered Control UI dashboard authoring available without an inline client", () => {
     const tool = expectWidget(
       createOpenClawTools({

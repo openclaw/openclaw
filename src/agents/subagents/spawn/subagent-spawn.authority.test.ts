@@ -55,8 +55,11 @@ import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { registerSubagentRun } from "../registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
-import { spawnSubagentDirect } from "./subagent-spawn.js";
+import { spawnSubagentDirect as spawnSubagentWithPolicy } from "./subagent-spawn.js";
+import { withTestSpawnPolicy, captureTestSpawnToolPolicy } from "./subagent-spawn.test-helpers.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
+
+const spawnSubagentDirect = withTestSpawnPolicy(spawnSubagentWithPolicy);
 
 vi.mock("../../../browser-lifecycle-cleanup.js", { spy: true });
 
@@ -234,6 +237,7 @@ describe("pending spawn invocation authority", () => {
           },
         });
         const source = createSessionsSpawnTool({
+          captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
           config: cfg,
           agentSessionKey: key("b"),
           requesterRunId: "fresh-b",
@@ -367,6 +371,7 @@ describe("pending spawn invocation authority", () => {
         },
       });
       const source = createSessionsSpawnTool({
+        captureInheritedToolPolicyForDelegation: captureTestSpawnToolPolicy,
         config: cfg,
         agentSessionKey: parentSessionKey,
         requesterRunId: parentRunId,

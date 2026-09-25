@@ -26,6 +26,7 @@ export type SessionSharingEntry = Pick<
   | "incognito"
   | "createdActor"
   | "sandbox"
+  | "skillLibrarySelections"
 >;
 
 export type SessionEntryPlaceholder = Readonly<{ sessionId: string }>;

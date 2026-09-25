@@ -1,4 +1,8 @@
 import type { AgentTurnStartOwner } from "../../gateway/agent-turn/internal-facade.types.js";
+import {
+  bindInProcessSessionSendPolicy,
+  type SessionSendPolicyAdmission,
+} from "../../gateway/in-process-session-send-policy.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { AgentRunRequest } from "../../gateway/server-methods/agent-request-types.js";
 
@@ -34,6 +38,7 @@ export type RestartRecoveryDispatchStartOutcome =
 
 export async function dispatchRestartRecoveryUntilStarted(params: {
   agentParams: AgentRunRequest;
+  policyAdmission?: SessionSendPolicyAdmission;
   gatewayRuntime: GatewayRecoveryRuntime;
   onSettled?: () => void;
 }): Promise<RestartRecoveryDispatchStartOutcome> {
@@ -112,22 +117,25 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
     dispatchPromise = params.gatewayRuntime.dispatchAgent<RestartRecoveryDispatchResult>(
       params.agentParams,
       undefined,
-      {
-        expectFinal: true,
-        onAccepted: () => {
-          dispatchAccepted = true;
+      bindInProcessSessionSendPolicy(
+        {
+          expectFinal: true,
+          onAccepted: () => {
+            dispatchAccepted = true;
+          },
+          onStartOwner: (owner) => {
+            // The first registration owns this dispatch even if its run id is later reused.
+            startOwner ??= owner;
+            if (executionStartTimedOut) {
+              abortBeforeStart();
+            }
+          },
+          onExecutionStarted,
+          onSignalAbort: abortBeforeStart,
+          signal: executionStartAbort.signal,
         },
-        onStartOwner: (owner) => {
-          // The first registration owns this dispatch even if its run id is later reused.
-          startOwner ??= owner;
-          if (executionStartTimedOut) {
-            abortBeforeStart();
-          }
-        },
-        onExecutionStarted,
-        onSignalAbort: abortBeforeStart,
-        signal: executionStartAbort.signal,
-      },
+        params.policyAdmission,
+      ),
     );
   } catch (error) {
     clearExecutionStartTimer();

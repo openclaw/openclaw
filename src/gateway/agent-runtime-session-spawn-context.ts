@@ -1,4 +1,9 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { InheritedToolPolicyV2 } from "../agents/inherited-tool-policy.schema.js";
+
+export type AgentRuntimeInheritedToolPolicy =
+  | { version: 1; allow: string[]; deny: string[] }
+  | { version: 2; policy: InheritedToolPolicyV2 };
 
 /** Automatic intent bound to the complete request before creation resolves aliases. */
 export type AgentRuntimeSpawnModelAutoSelection = {
@@ -12,10 +17,6 @@ export type AgentRuntimeSessionSpawnContext = {
   requesterProfileId?: string;
   completionOwnerSessionKey?: string;
   resolvedModel?: ProviderModelRef;
-  inheritedToolPolicy: {
-    version: 1;
-    allow: string[];
-    deny: string[];
-  };
+  inheritedToolPolicy: AgentRuntimeInheritedToolPolicy;
   spawnModelAutoSelection?: AgentRuntimeSpawnModelAutoSelection;
 };
