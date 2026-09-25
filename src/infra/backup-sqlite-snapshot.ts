@@ -2,6 +2,7 @@
 import type { Dirent, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import {
   sealBackupResourceInventory,
   type BackupCoreDatabase,
@@ -33,7 +34,6 @@ import {
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { hasErrnoCode } from "./errno.js";
 import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
   isAppleDoubleMetadataFile,
   resolveSqliteDatabaseFilePaths,

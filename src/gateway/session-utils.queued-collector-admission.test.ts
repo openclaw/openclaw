@@ -166,7 +166,7 @@ describe("queued collector native admission", () => {
         await dispatched.promise;
         await vi.waitFor(() => expect(entry.collectorCompletion?.status).toBe("killed"));
         expect
-          .soft(respond.mock.calls[0]?.slice(0, 2))
+          .soft(respond.mock.calls[0]?.slice(0, 2), JSON.stringify(respond.mock.calls[0]?.[2]))
           .toEqual([true, { ok: true, status: "aborted", abortedRunId: entry.runId }]);
         expect.soft(context.chatRunState.hasAbortMarker(entry.runId)).toBe(true);
         expect.soft(admission.abortStopReason).toBe("rpc");

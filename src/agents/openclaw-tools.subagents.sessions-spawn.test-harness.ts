@@ -386,11 +386,6 @@ vi.mock("./subagents/announce/subagent-announce.js", async (importOriginal) => {
       hoisted.state.runSubagentAnnounceFlowOverride(params),
   };
 });
-// Some tools import callGateway via "../../gateway/call.js" (from nested folders). Mock that too.
-vi.mock("../../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
-}));
-
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => hoisted.state.configOverride,
   resolveGatewayPort: () => 18789,
@@ -428,16 +423,13 @@ vi.mock("../tasks/detached-task-runtime.js", () => ({
   createQueuedTaskRun: vi.fn(() => ({})),
   createRunningTaskRun: vi.fn(() => ({})),
   findDetachedTaskRun: vi.fn(() => ({ lookup: "available" as const })),
+  findDetachedTaskRunAsync: vi.fn<
+    typeof import("../tasks/detached-task-runtime.js").findDetachedTaskRunAsync
+  >(async () => ({ lookup: "available" })),
 }));
 
 vi.mock("../tasks/detached-task-runtime.async.js", () => ({
   completeTaskRunByRunIdAsync: vi.fn(async () => []),
   failTaskRunByRunIdAsync: vi.fn(async () => []),
   setDetachedTaskDeliveryStatusByRunIdAsync: vi.fn(async () => []),
-}));
-
-// Same module, different specifier (used by tools under src/agents/tools/*).
-vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: () => hoisted.state.configOverride,
-  resolveGatewayPort: () => 18789,
 }));

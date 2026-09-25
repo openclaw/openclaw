@@ -1,5 +1,10 @@
 import { globSync } from "node:fs";
-import { matchesVitestGlob } from "../../test/vitest/vitest.pattern-file.ts";
+import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
+import {
+  matchesVitestCliSelection,
+  matchesVitestGlob,
+  relativizeScopedPatterns,
+} from "../../test/vitest/vitest.pattern-file.ts";
 import { controlUiE2eTestGlobs, controlUiTestGlobs } from "../../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
@@ -36,6 +41,8 @@ export const BUN_UI_TEST_ENV = {
 } as const;
 
 const bunCompatibleConfigs = new Set(["test/vitest/vitest.unit-fast-fake-timers.config.ts"]);
+// Measured whole-file admission; the rest of agents-support retains Node.
+const bunCompatibleAgentSupportFiles = ["src/agents/worktrees/service.removal-recovery.test.ts"];
 // TypeScript's synchronous native API uses Node child-process pipe handles.
 // Keep these compiler assertions on Node, including those in mixed runtime suites.
 const nativeCompilerTestFiles = [
@@ -223,6 +230,12 @@ export function resolveCiTestRuntimeSelections(
     if (plans.every((plan) => bunCompatibleConfigs.has(plan.config))) {
       return completeBun();
     }
+    if (
+      plans.every((plan) => plan.config === agentVitestProjectOwners.support.config) &&
+      selection.targets.every((file) => bunCompatibleAgentSupportFiles.includes(file))
+    ) {
+      return completeBun();
+    }
     const config = plans[0]!.config;
     const partition = runtimePartitions.get(config);
     if (
@@ -245,6 +258,26 @@ export function resolveCiTestRuntimeSelections(
   const config = selection.configs[0]!;
   if (bunCompatibleConfigs.has(config)) {
     return completeBun();
+  }
+  if (config === agentVitestProjectOwners.support.config) {
+    const owner = agentVitestProjectOwners.support;
+    const includePatterns = selection.includePatterns?.length ? selection.includePatterns : null;
+    const qualifiedPatterns = relativizeScopedPatterns(bunCompatibleAgentSupportFiles, owner.dir);
+    if (
+      includePatterns &&
+      relativizeScopedPatterns(includePatterns, owner.dir).every((pattern) =>
+        qualifiedPatterns.includes(pattern),
+      )
+    ) {
+      return completeBun();
+    }
+    const bunFiles =
+      policy === "dual"
+        ? bunCompatibleAgentSupportFiles.filter((file) =>
+            matchesVitestCliSelection(file, owner.include, [], owner.dir, {}, includePatterns),
+          )
+        : [];
+    return bunFiles.length ? [...node, { runtime: "bun", includePatterns: bunFiles }] : node;
   }
   const partition = runtimePartitions.get(config);
   if (!partition || (partition.includeAfterShard && !uiPartition)) {

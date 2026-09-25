@@ -1,7 +1,7 @@
 // Covers config audit reporting for files, paths, and values.
 import fs, { promises as fsPromises } from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, expectTypeOf, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -644,10 +644,11 @@ describe("config io audit helpers", () => {
     expect(written.nextHash).toBe("next-hash");
   });
 
-  it("rewrites historical config-audit entries through redactConfigAuditArgv and preserves 0600 mode", async () => {
+  it("redacts historical config audit entries while preserving file and directory modes", async () => {
     const home = await suiteRootTracker.make("scrub-historical");
     const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
     fs.mkdirSync(path.dirname(auditPath), { recursive: true, mode: 0o700 });
+    fs.chmodSync(path.dirname(auditPath), 0o755);
     const unredactedRecord = {
       ts: "2026-05-02T00:03:48.471Z",
       source: "config-io",
@@ -689,7 +690,6 @@ describe("config io audit helpers", () => {
 
     const env = {} as NodeJS.ProcessEnv;
     const result = await scrubConfigAuditLog({
-      fs: { promises: fsPromises },
       env,
       homedir: () => home,
     });
@@ -708,11 +708,12 @@ describe("config io audit helpers", () => {
     expect(firstAfter.suspicious).toEqual([]);
     expect(secondAfter.argv).toEqual(alreadyRedactedRecord.argv);
 
-    const stat = fs.statSync(auditPath);
-    expect(stat.mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(auditPath).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(path.dirname(auditPath)).mode & 0o777).toBe(0o755);
+    }
 
     const second = await scrubConfigAuditLog({
-      fs: { promises: fsPromises },
       env,
       homedir: () => home,
     });
@@ -722,7 +723,6 @@ describe("config io audit helpers", () => {
   it("returns zero counts and does not create the audit file when none exists", async () => {
     const home = await suiteRootTracker.make("scrub-missing");
     const result = await scrubConfigAuditLog({
-      fs: { promises: fsPromises },
       env: {} as NodeJS.ProcessEnv,
       homedir: () => home,
     });
@@ -746,7 +746,6 @@ describe("config io audit helpers", () => {
     });
 
     const result = await scrubConfigAuditLog({
-      fs: { promises: fsPromises },
       env: {} as NodeJS.ProcessEnv,
       homedir: () => home,
     });
@@ -777,7 +776,6 @@ describe("config io audit helpers", () => {
     fs.writeFileSync(auditPath, original, { encoding: "utf-8", mode: 0o600 });
 
     const result = await scrubConfigAuditLog({
-      fs: { promises: fsPromises },
       env: {} as NodeJS.ProcessEnv,
       homedir: () => home,
       dryRun: true,
@@ -789,111 +787,58 @@ describe("config io audit helpers", () => {
     expect(text).toContain("xapp-1-A1B2C3");
   });
 
-  it("aborts without overwriting when the audit log was appended to mid-scrub", async () => {
-    const home = await suiteRootTracker.make("scrub-race-abort");
-    const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
-    fs.mkdirSync(path.dirname(auditPath), { recursive: true, mode: 0o700 });
-    const unredacted = {
-      ts: "2026-05-02T00:03:48.471Z",
-      argv: [
-        "node",
-        "openclaw.mjs",
-        "config",
-        "set",
-        "channels.slack.botToken",
-        "xoxb-real-bot-token-1234567890abcdef0123456789abcdef",
-      ],
-      execArgv: [],
-    };
-    const original = `${JSON.stringify(unredacted)}\n`;
-    fs.writeFileSync(auditPath, original, { encoding: "utf-8", mode: 0o600 });
-
-    // Mock fs whose .stat() reports a larger size than what readFile returns,
-    // simulating an appendConfigAuditRecord call that fired after the initial
-    // read but before the rename. The scrub should refuse to rename and leave
-    // the file untouched.
-    const raceFs = {
-      promises: {
-        readFile: fsPromises.readFile,
-        stat: async (p: string) => {
-          const realStat = await fsPromises.stat(p);
-          return { size: realStat.size + 200 };
-        },
-        writeFile: fsPromises.writeFile,
-        rename: fsPromises.rename,
-        unlink: fsPromises.unlink,
-      },
-    };
-    const result = await scrubConfigAuditLog({
-      fs: raceFs,
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => home,
-    });
-
-    expect(result.aborted).toBe(true);
-    expect(result.rewritten).toBeGreaterThan(0);
-    const after = fs.readFileSync(auditPath, "utf-8");
-    expect(after).toBe(original);
-    expect(after).toContain("xoxb-real-bot-token");
-    expect(fs.existsSync(`${auditPath}.scrub.tmp`)).toBe(false);
-  });
-
-  it("aborts without overwriting when the audit log is appended to after temp write", async () => {
-    const home = await suiteRootTracker.make("scrub-race-after-temp-write");
-    const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
-    fs.mkdirSync(path.dirname(auditPath), { recursive: true, mode: 0o700 });
-    const unredacted = {
-      ts: "2026-05-02T00:03:48.471Z",
-      argv: [
-        "node",
-        "openclaw.mjs",
-        "config",
-        "set",
-        "channels.slack.botToken",
-        "xoxb-real-bot-token-1234567890abcdef0123456789abcdef",
-      ],
-      execArgv: [],
-    };
-    const appended = {
-      ts: "2026-05-02T00:04:00.000Z",
-      argv: ["node", "openclaw.mjs", "config", "set", "theme", "dark"],
-      execArgv: [],
-    };
-    const original = `${JSON.stringify(unredacted)}\n`;
-    const appendedLine = `${JSON.stringify(appended)}\n`;
-    fs.writeFileSync(auditPath, original, { encoding: "utf-8", mode: 0o600 });
-    let renameCalled = false;
-
-    const raceFs = {
-      promises: {
-        readFile: fsPromises.readFile,
-        stat: fsPromises.stat,
-        writeFile: async (
-          p: string,
-          data: string,
-          options?: { encoding?: BufferEncoding; mode?: number },
-        ) => {
-          await fsPromises.writeFile(p, data, options);
-          await fsPromises.appendFile(auditPath, appendedLine, "utf-8");
-        },
-        rename: async () => {
-          renameCalled = true;
-        },
-        unlink: fsPromises.unlink,
-      },
-    };
-    const result = await scrubConfigAuditLog({
-      fs: raceFs,
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => home,
-    });
-
-    expect(result.aborted).toBe(true);
-    expect(result.rewritten).toBeGreaterThan(0);
-    expect(renameCalled).toBe(false);
-    const after = fs.readFileSync(auditPath, "utf-8");
-    expect(after).toBe(`${original}${appendedLine}`);
-    expect(after).toContain("xoxb-real-bot-token");
-    expect(fs.existsSync(`${auditPath}.scrub.tmp`)).toBe(false);
-  });
+  it.each(["read", "write"] as const)(
+    "preserves concurrent appends after the scrub %s and cleans up staged output",
+    async (phase) => {
+      const home = await suiteRootTracker.make("scrub-race-after-temp-write");
+      const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
+      fs.mkdirSync(path.dirname(auditPath), { recursive: true, mode: 0o700 });
+      const unredacted = {
+        ts: "2026-05-02T00:03:48.471Z",
+        argv: [
+          "node",
+          "openclaw.mjs",
+          "config",
+          "set",
+          "channels.slack.botToken",
+          "xoxb-real-bot-token-1234567890abcdef0123456789abcdef",
+        ],
+        execArgv: [],
+      };
+      const appended = {
+        ts: "2026-05-02T00:04:00.000Z",
+        argv: ["node", "openclaw.mjs", "config", "set", "theme", "dark"],
+        execArgv: [],
+      };
+      const original = `${JSON.stringify(unredacted)}\n`;
+      const appendedLine = `${JSON.stringify(appended)}\n`;
+      fs.writeFileSync(auditPath, original, { encoding: "utf-8", mode: 0o600 });
+      const readFile = fsPromises.readFile.bind(fsPromises);
+      const writeFile = fsPromises.writeFile.bind(fsPromises);
+      const hook =
+        phase === "read"
+          ? vi.spyOn(fsPromises, "readFile").mockImplementationOnce(async (file, options) => {
+              const bytes = await readFile(file, options);
+              await fsPromises.appendFile(auditPath, appendedLine, "utf-8");
+              return bytes;
+            })
+          : vi
+              .spyOn(fsPromises, "writeFile")
+              .mockImplementationOnce(async (file, bytes, options) => {
+                await writeFile(file, bytes, options);
+                await fsPromises.appendFile(auditPath, appendedLine, "utf-8");
+              });
+      try {
+        const result = await scrubConfigAuditLog({ env: {}, homedir: () => home });
+        expect(result.aborted).toBe(true);
+        expect(result.rewritten).toBeGreaterThan(0);
+      } finally {
+        hook.mockRestore();
+      }
+      const after = fs.readFileSync(auditPath, "utf-8");
+      expect(after).toBe(`${original}${appendedLine}`);
+      expect(after).toContain("xoxb-real-bot-token");
+      expect(fs.readdirSync(path.dirname(auditPath))).toEqual(["config-audit.jsonl"]);
+    },
+  );
 });

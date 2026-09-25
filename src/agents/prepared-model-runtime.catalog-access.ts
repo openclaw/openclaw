@@ -173,10 +173,9 @@ export function createFullModelCatalogAccess(
       retainedInventory.catalog.nativeProviderOutcomes,
       includesNativeProvider,
     );
-    retainedInventory.catalog.nativeHostRows = filterNativeModelCatalogScopes(
-      retainedInventory.catalog.nativeHostRows,
-      includesNativeProvider,
-    );
+    // Untagged harness rows describe the current host projection, not identified native
+    // account inventory. Reacquire them with this generation before enriching API routes.
+    retainedInventory.catalog.nativeHostRows = undefined;
   }
   const currentAuth = prepareInitialModelCatalogAuth(params, eligibleProviders);
   if (retainedInventory && previousAuth) {

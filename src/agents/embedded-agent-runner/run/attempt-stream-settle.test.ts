@@ -11,6 +11,7 @@ import {
 } from "../../../../packages/ai/src/provider-types.js";
 import { createPluginMetadataSnapshot } from "../../../config/plugin-auto-enable.test-helpers.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
@@ -19,7 +20,12 @@ import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/gener
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { prepareTaskRegistryRead } from "../../../tasks/task-registry-read.js";
+import { createTaskFixture } from "../../../tasks/task-registry.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { holdStateDatabaseCoordinator } from "../../../test-utils/state-database-contention.js";
 import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import type { StreamFn } from "../../runtime/index.js";
 import {
@@ -127,24 +133,99 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     vi.useRealTimers();
   });
 
-  it("settles past a block-reply flush that never resolves", async () => {
+  it.each([
+    { withMetadata: true, timedOut: false },
+    { withMetadata: false, timedOut: false },
+    { withMetadata: true, timedOut: true },
+  ])(
+    "settles cancellation while task persistence is held, metadata=$withMetadata timeout=$timedOut",
+    async ({ withMetadata, timedOut }) => {
+      await withOpenClawTestState({ layout: "split" }, async (state) => {
+        const sessionKey = "agent:main:cron:settle:run:private-cancel";
+        const task = createTaskFixture("subagent", {
+          runId: "private-stream-cancel",
+          task: "Private stream cancellation proof",
+          ownerKey: sessionKey,
+          requesterSessionKey: sessionKey,
+          taskKind: "image_generation",
+          childSessionKey: "agent:main:subagent:private-stream-cancel",
+          notifyPolicy: "silent",
+          deliveryStatus: "not_applicable",
+        });
+        await prepareTaskRegistryRead();
+        const context = captureOpenClawStateWorkerContext();
+        expect(context.admission.databasePath.startsWith(state.stateDir)).toBe(true);
+        const holder = holdStateDatabaseCoordinator(
+          context.admission.databasePath,
+          context.coordinatorRuntime,
+          300,
+        );
+        const controller = new AbortController();
+        const input = createSettleFixture({
+          runAbortSignal: controller.signal,
+          readLifecycleState: () => ({
+            aborted: controller.signal.aborted,
+            timedOut: timedOut && controller.signal.aborted,
+            timedOutDuringCompaction: false,
+          }),
+        });
+        input.attempt.sessionKey = sessionKey;
+        input.subscription.toolMetas = withMetadata
+          ? [{ toolName: "image_generate", asyncStarted: true, asyncTaskRunId: task.runId }]
+          : [];
+        let settlement: ReturnType<typeof settleEmbeddedAttemptStream> | undefined;
+        try {
+          await holder.ready;
+          emitAgentEvent({
+            runId: task.runId!,
+            stream: "lifecycle",
+            data: { phase: "end", endedAt: task.createdAt + 1 },
+          });
+          settlement = settleEmbeddedAttemptStream(input);
+          await setImmediate();
+          controller.abort();
+          const result = await settlement;
+          expect(result.promptError).toBeNull();
+          expect(result.sessionIdUsed).toBe("sess-settle-1");
+          expect(
+            Atomics.load(holder.released, 0),
+            "full cancellation settlement must finish before coordinator release",
+          ).toBe(0);
+          holder.release();
+          const read = await prepareTaskRegistryRead();
+          expect(read?.getTaskById(task.taskId)).toMatchObject({ status: "succeeded" });
+        } finally {
+          holder.release();
+          await holder.joined;
+          await Promise.allSettled([settlement]);
+          await closeOpenClawStateDatabaseAsync();
+        }
+      });
+    },
+  );
+
+  it("settles past a held block-reply flush", async () => {
     vi.useFakeTimers();
     // A wedged delivery lane (including the supported blockReplyTimeoutMs: 0
     // path) previously parked settlement until the 48h run budget.
-    const input = createSettleFixture({
-      onBlockReplyFlush: () => new Promise<never>(() => {}),
-    } as Partial<SettleInput>);
+    const release = createDeferredCore();
+    const input = createSettleFixture({ onBlockReplyFlush: () => release.promise });
 
-    const settle = settleEmbeddedAttemptStream(input);
     let settled = false;
-    void settle.then(() => {
+    const settle = settleEmbeddedAttemptStream(input).then((result) => {
       settled = true;
+      return result;
     });
-    await vi.advanceTimersByTimeAsync(RUN_LIVENESS_JOIN_TIMEOUT_MS - 1);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    const result = await settle;
-    expect(result.sessionIdUsed).toBe("sess-settle-1");
+    try {
+      await vi.advanceTimersByTimeAsync(RUN_LIVENESS_JOIN_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await settle;
+      expect(result.sessionIdUsed).toBe("sess-settle-1");
+    } finally {
+      release.resolve();
+      await settle;
+    }
   });
 
   it("keeps the last request observation separate from billing totals", async () => {
