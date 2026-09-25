@@ -32,7 +32,10 @@ export function modelSelectionPoliciesMatch(
   previous: OpenClawConfig,
   next: OpenClawConfig,
 ): boolean {
-  if (!isDeepStrictEqual(previous.gateway?.roles, next.gateway?.roles)) {
+  if (
+    (previous.models?.mode ?? "merge") !== (next.models?.mode ?? "merge") ||
+    !isDeepStrictEqual(previous.gateway?.roles, next.gateway?.roles)
+  ) {
     return false;
   }
   const manifestPlugins = getGatewayPluginMetadataSnapshot() ?? [];

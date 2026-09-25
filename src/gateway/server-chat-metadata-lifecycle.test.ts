@@ -158,6 +158,14 @@ it("retires model choices at its config commit before pending metadata settles",
     committedConfig = { auth: { profiles: { account: { provider: "fixture", mode: "api_key" } } } };
     publishOperatorRoleConfigChange(ownedContext);
     expect(broadcast).not.toHaveBeenCalled();
+    committedConfig = { ...committedConfig, models: { mode: "replace" } };
+    publishOperatorRoleConfigChange(ownedContext);
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+      "chat.metadata.changed",
+      { modelSelectionChanged: true },
+      { dropIfSlow: true },
+    );
+    broadcast.mockClear();
     committedConfig = {
       ...committedConfig,
       agents: { defaults: { modelPolicy: { allow: ["fixture/allowed"] } } },
