@@ -4,6 +4,17 @@ import { renderTable } from "../../../packages/terminal-core/src/table.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import type { PendingRequest } from "./types.js";
 
+// Bidirectional formatting controls (overrides, isolates, marks, the Arabic
+// letter mark) reorder the glyphs around them, so a pairing device could name
+// itself to render as a different, trusted-looking device in this approval table
+// (Trojan Source, CVE-2021-42574). Strip them from the displayed cells; the
+// terminal's own bidi algorithm still lays out strong-directional letters.
+const PAIRING_BIDI_CONTROL_RE = new RegExp("[؜‎‏‪-‮⁦-⁩]", "gu");
+
+function sanitizePairingCell(value: string): string {
+  return sanitizeTerminalText(value).replace(PAIRING_BIDI_CONTROL_RE, "");
+}
+
 /** Render pending pairing requests with sanitized labels and relative request age. */
 export function renderPendingPairingRequestsTable(params: {
   pending: PendingRequest[];
@@ -19,9 +30,9 @@ export function renderPendingPairingRequestsTable(params: {
   const rows = pending.map((r) => {
     const nodeLabel = r.displayName?.trim() ? r.displayName.trim() : r.nodeId;
     return {
-      Request: sanitizeTerminalText(r.requestId),
-      Node: sanitizeTerminalText(nodeLabel),
-      IP: sanitizeTerminalText(r.remoteIp ?? ""),
+      Request: sanitizePairingCell(r.requestId),
+      Node: sanitizePairingCell(nodeLabel),
+      IP: sanitizePairingCell(r.remoteIp ?? ""),
       Requested:
         typeof r.ts === "number" ? formatTimeAgo(Math.max(0, now - r.ts)) : theme.muted("unknown"),
     };
