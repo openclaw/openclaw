@@ -193,6 +193,7 @@ describe("native service command inspection", () => {
       failure: "timeout",
       response: { error: Object.assign(new Error("native-secret-canary"), { code: "ETIMEDOUT" }) },
       diagnostic: { kind: "timeout", timeoutMs: 731 },
+      reported: "timed out after 731 ms",
     },
     {
       failure: "spawn",
@@ -200,30 +201,35 @@ describe("native service command inspection", () => {
         error: Object.assign(new Error("native-secret-canary"), { code: "EACCES", errno: -13 }),
       },
       diagnostic: { kind: "spawn", errno: -13 },
+      reported: "errno -13",
     },
     {
       failure: "lookup access denied",
       response: { status: 1, stdout: "-2147024891", stderr: "native-secret-canary" },
       diagnostic: { kind: "native", exitCode: 1, hresult: -2147024891 },
+      reported: "HRESULT 0x80070005",
     },
     {
       failure: "connection missing file",
       response: { status: 2, stdout: "-2147024894", stderr: "native-secret-canary" },
       diagnostic: { kind: "native", exitCode: 2, hresult: -2147024894 },
+      reported: "HRESULT 0x80070002",
     },
     {
       failure: "malformed HRESULT",
       response: { status: 1, stdout: "-2147024894 native-secret-canary" },
       diagnostic: { kind: "native", exitCode: 1 },
+      reported: "Task Scheduler probe failed (exit 1)",
     },
     {
       failure: "invalid response",
       response: { status: 0, stdout: "native-secret-canary" },
       diagnostic: { kind: "invalid-response" },
+      reported: "Task Scheduler probe returned an invalid response",
     },
   ])(
     "preserves safe Windows $failure diagnostics through strict inspection",
-    async ({ response, diagnostic }) => {
+    async ({ response, diagnostic, reported }) => {
       native.scheduler.mockReturnValue(response);
       const error = await readScheduledTaskCommand(env, {
         requireEffective: true,
@@ -236,6 +242,7 @@ describe("native service command inspection", () => {
       });
       const sanitized = sanitizeServiceInspectionError(error);
       expect(sanitized.message).toContain("openclaw gateway status --deep");
+      expect(sanitized.message).toContain(reported);
       expect(sanitized.cause).toEqual(diagnostic);
       expect(inspect(sanitized)).not.toContain("native-secret-canary");
       expect(JSON.stringify(sanitized.cause)).not.toContain("native-secret-canary");

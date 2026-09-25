@@ -45,12 +45,50 @@ export function formatServiceInspectionReason(reason: ServiceInspectionReason): 
     : `${SERVICE_INSPECTION_MESSAGES[reason]} ${EXTERNAL_SERVICE_RECOVERY}`;
 }
 
+function formatServiceInspectionDiagnostic(
+  diagnostic: ServiceInspectionDiagnostic,
+): string | undefined {
+  switch (diagnostic.kind) {
+    case "timeout":
+      return Number.isSafeInteger(diagnostic.timeoutMs) && diagnostic.timeoutMs > 0
+        ? `Task Scheduler probe timed out after ${diagnostic.timeoutMs} ms.`
+        : "Task Scheduler probe timed out.";
+    case "spawn":
+      return `Task Scheduler probe could not start${Number.isSafeInteger(diagnostic.errno) ? ` (errno ${diagnostic.errno})` : ""}.`;
+    case "invalid-response":
+      return "Task Scheduler probe returned an invalid response.";
+    case "native": {
+      const facts: string[] = [];
+      if (Number.isSafeInteger(diagnostic.exitCode)) {
+        facts.push(`exit ${diagnostic.exitCode}`);
+      }
+      if (
+        typeof diagnostic.hresult === "number" &&
+        Number.isInteger(diagnostic.hresult) &&
+        diagnostic.hresult >= -0x80000000 &&
+        diagnostic.hresult <= 0x7fffffff
+      ) {
+        facts.push(`HRESULT 0x${(diagnostic.hresult >>> 0).toString(16).padStart(8, "0")}`);
+      }
+      return `Task Scheduler probe failed${facts.length ? ` (${facts.join(", ")})` : ""}.`;
+    }
+  }
+  return undefined;
+}
+
 export class ServiceInspectionError extends Error {
   constructor(
     readonly reason: ServiceInspectionReason,
     diagnostic?: ServiceInspectionDiagnostic,
   ) {
-    super(formatServiceInspectionReason(reason), diagnostic ? { cause: diagnostic } : undefined);
+    const detail =
+      reason === "windows-task-inspection-failed" && diagnostic
+        ? formatServiceInspectionDiagnostic(diagnostic)
+        : undefined;
+    super(
+      [detail, formatServiceInspectionReason(reason)].filter(Boolean).join(" "),
+      diagnostic ? { cause: diagnostic } : undefined,
+    );
     this.name = "ServiceInspectionError";
   }
 }
