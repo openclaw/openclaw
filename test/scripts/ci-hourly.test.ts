@@ -192,7 +192,7 @@ describe("hourly main CI admission", () => {
     const hourlyGroup = evaluate(ci.concurrency.group, child);
     expect(hourlyGroup).not.toBe(full);
     expect(hourlyGroup).not.toBe(push);
-    expect(evaluate(ci.concurrency.group, { ...child, runId: 999 })).toBe(hourlyGroup);
+    expect(evaluate(ci.concurrency.group, { ...child, runId: 999 })).not.toBe(hourlyGroup);
     expect(evaluate(ci.concurrency["cancel-in-progress"], child)).toBe(false);
     expect(evaluate(ci.concurrency["cancel-in-progress"], { ...common, eventName: "push" })).toBe(
       false,
@@ -215,6 +215,43 @@ describe("hourly main CI admission", () => {
           );
         expect(render("push"), name).not.toBe(render("schedule"));
         expect(render("push"), name).not.toBe(render("workflow_dispatch"));
+      }
+    }
+  });
+
+  it("serializes only scheduled iOS proof while admitting overlapping hourly runs", () => {
+    const scheduled = {
+      ...base,
+      eventName: "schedule",
+      workflow: "CI",
+      runId: 123,
+      matrix: { phase: "tests" },
+    } as const;
+    const next = { ...scheduled, runId: 124 };
+    const ios = ci.jobs["ios-build"];
+    expect(evaluate(ci.concurrency.group, scheduled)).not.toBe(
+      evaluate(ci.concurrency.group, next),
+    );
+    expect(evaluate(ios.concurrency.group, scheduled)).toBe(evaluate(ios.concurrency.group, next));
+    expect(ios.concurrency["cancel-in-progress"]).toBe(false);
+    // GitHub's default single pending slot replaces pending work, never the active proof.
+    expect(ios.concurrency.queue ?? "single").toBe("single");
+    const hourly = evaluate(ios.concurrency.group, scheduled);
+    for (const eventName of ["workflow_dispatch", "pull_request", "push"] as const) {
+      for (const releaseGate of [false, true]) {
+        const groups = [123, 124].flatMap((runId) =>
+          ["tests", "release", "smoke"].map((phase) =>
+            evaluate(ios.concurrency.group, {
+              ...scheduled,
+              eventName,
+              releaseGate,
+              runId,
+              matrix: { phase },
+            }),
+          ),
+        );
+        expect(new Set(groups).size).toBe(groups.length);
+        expect(groups).not.toContain(hourly);
       }
     }
   });
