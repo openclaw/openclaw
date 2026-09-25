@@ -173,10 +173,11 @@ export async function runAgentsApiAttempt(
       if (options?.images?.length) {
         throw new Error("Agents API MVP accepts text steering only");
       }
-      await options?.userTurnTranscriptRecorder?.persistApproved();
-      assertCurrent();
       await native.queueMessage(
         buildCurrentInboundPrompt({ context: options?.currentInboundContext, prompt: text }),
+        async () => {
+          await options?.userTurnTranscriptRecorder?.persistApproved();
+        },
       );
       options?.userTurnTranscriptRecorder?.markSentToProvider?.();
     },

@@ -35,6 +35,7 @@ export function createAgentsApiSession(options: {
   const { client, cleanupClient, sessionId, signal, assertCurrent } = options;
   let streamController = new AbortController();
   let submitted = false;
+  let inputAdmissionClosed = false;
   let stopped = false;
   let closed = false;
   let settled = false;
@@ -56,16 +57,23 @@ export function createAgentsApiSession(options: {
   let usageTurns: Promise<Turn[]> | undefined;
   let terminatedByTool = false;
 
-  const isAvailable = () => submitted && !stopped && !settled && !rootTurn && !signal.aborted;
-  const submit = (text: string) => {
+  const isAvailable = () =>
+    submitted && !inputAdmissionClosed && !stopped && !settled && !rootTurn && !signal.aborted;
+  const submit = (text: string, persistInput?: () => Promise<void>) => {
     assertCurrent();
     signal.throwIfAborted();
-    if (stopped || settled || rootTurn) {
+    if (inputAdmissionClosed || stopped || settled || rootTurn) {
       throw new Error("Agents API turn is stopped");
     }
-    submission = submission.then(() => {
+    submission = submission.then(async () => {
       assertCurrent();
       if (stopped || settled || rootTurn || signal.aborted) {
+        throw new Error("Agents API turn settled before input was submitted");
+      }
+      await persistInput?.();
+      assertCurrent();
+      signal.throwIfAborted();
+      if (stopped || settled || rootTurn) {
         throw new Error("Agents API turn settled before input was submitted");
       }
       admittedMessageCount++;
@@ -264,7 +272,7 @@ export function createAgentsApiSession(options: {
       if (baselineTurnId) {
         excludedTurnIds.add(baselineTurnId);
       }
-      const relayedCalls = new Set<string>();
+      const callAdmissions = new Map<string, { inputCount: number; relayed: boolean }>();
       const relayFunctions = async (): Promise<void> => {
         assertCurrent();
         signal.throwIfAborted();
@@ -274,9 +282,17 @@ export function createAgentsApiSession(options: {
         let submissionFence = submission;
         await submissionFence;
         assertCurrent();
+        const inputCount = admittedMessageCount;
         const calls = await client.pendingFunctionCalls(sessionId, signal);
         if (!calls.length) {
           return;
+        }
+        // Retain the input watermark for every sibling, including across re-reads.
+        for (const call of calls) {
+          const identity = `${sessionId}:${call.turn_id}:${call.call_id}`;
+          if (!callAdmissions.has(identity)) {
+            callAdmissions.set(identity, { inputCount, relayed: false });
+          }
         }
         const turns = await readAdmittedTurns(client, signal);
         assertCurrent();
@@ -318,7 +334,8 @@ export function createAgentsApiSession(options: {
             );
           }
           const identity = `${sessionId}:${call.turn_id}:${call.call_id}`;
-          if (relayedCalls.has(identity)) {
+          const admission = callAdmissions.get(identity)!;
+          if (admission.relayed) {
             continue;
           }
           // Retrieved native invocations and completed text precede this host
@@ -354,10 +371,16 @@ export function createAgentsApiSession(options: {
             return relayFunctions();
           }
           // Claim before execution so duplicate events cannot repeat a Gateway side effect.
-          relayedCalls.add(identity);
+          admission.relayed = true;
           const result = await options.executeFunction(call);
           assertCurrent();
           signal.throwIfAborted();
+          const terminate = result.terminate || result.sourceReplyDelivered;
+          if (terminate) {
+            // Fence new input before the acknowledgement can resume native work.
+            // Already reserved input remains ahead of that acknowledgement.
+            inputAdmissionClosed = true;
+          }
           submission = submission.then(() => {
             assertCurrent();
             signal.throwIfAborted();
@@ -375,7 +398,12 @@ export function createAgentsApiSession(options: {
           submissionFence = acknowledgementFence;
           await options.onFunctionResult?.(call, result);
           assertCurrent();
-          if (result.terminate || result.sourceReplyDelivered) {
+          if (terminate) {
+            if (admittedMessageCount !== admission.inputCount) {
+              // A terminal reply cannot cancel a newer accepted follow-up.
+              inputAdmissionClosed = false;
+              return relayFunctions();
+            }
             // Acknowledge the host's delivered reply before retiring native work.
             await cleanupClient.cancel(sessionId, AbortSignal.timeout(30_000));
             terminatedByTool = true;
