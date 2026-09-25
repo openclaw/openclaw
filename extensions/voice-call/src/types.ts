@@ -252,7 +252,7 @@ export type OutboundCallOptions = {
   message?: string;
   /** Call mode (overrides config default) */
   mode?: CallMode;
-  /** DTMF digits to send after the call is connected */
+  /** DTMF digits to play before conversation handling (Twilio only). */
   dtmfSequence?: string;
   /** Session that initiated the call, used for agent context/delegated message routing */
   requesterSessionKey?: string;

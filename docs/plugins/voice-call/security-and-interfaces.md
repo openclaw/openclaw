@@ -107,6 +107,6 @@ The voice-call plugin ships a matching agent skill.
 | `voicecall.end`             | `callId`                                                         |                                                                           |
 | `voicecall.status`          | `callId?`                                                        | Omit `callId` to list all active calls.                                   |
 
-`dtmfSequence` is only valid with `mode: "conversation"`; notify-mode calls
-should use `voicecall.dtmf` after the call exists if they need post-connect
-digits.
+`dtmfSequence` requires Twilio and `mode: "conversation"`. Other providers
+reject the request before creating or dialing the call. For Twilio notify-mode
+calls, use `voicecall.dtmf` after the call exists if post-connect digits are needed.

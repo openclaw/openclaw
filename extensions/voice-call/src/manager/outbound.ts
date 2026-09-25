@@ -148,6 +148,13 @@ export async function initiateCall(
   if (!ctx.provider) {
     return { callId: "", success: false, error: "Provider not initialized" };
   }
+  if (dtmfSequence && ctx.provider.name !== "twilio") {
+    return {
+      callId: "",
+      success: false,
+      error: `${ctx.provider.name} does not support pre-connect DTMF`,
+    };
+  }
   if (!ctx.webhookUrl) {
     return { callId: "", success: false, error: "Webhook URL not configured" };
   }

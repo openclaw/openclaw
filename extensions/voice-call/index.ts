@@ -52,7 +52,9 @@ const VoiceCallToolSchema = Type.Union([
     message: Type.String({ description: "Intro message" }),
     mode: Type.Optional(Type.Union([Type.Literal("notify"), Type.Literal("conversation")])),
     sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
-    dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
+    dtmfSequence: Type.Optional(
+      Type.String({ description: "Pre-connect DTMF digits (Twilio conversation mode only)" }),
+    ),
   }),
   Type.Object({
     action: Type.Literal("continue_call"),
@@ -83,7 +85,9 @@ const VoiceCallToolSchema = Type.Union([
     sid: Type.Optional(Type.String({ description: "Call SID" })),
     message: Type.Optional(Type.String({ description: "Optional intro message" })),
     sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
-    dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
+    dtmfSequence: Type.Optional(
+      Type.String({ description: "Pre-connect DTMF digits (Twilio conversation mode only)" }),
+    ),
   }),
 ]);
 

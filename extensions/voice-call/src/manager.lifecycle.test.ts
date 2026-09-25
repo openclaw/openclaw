@@ -1,6 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
@@ -34,6 +34,59 @@ async function initiateCall() {
   }
   return { call, manager, provider };
 }
+
+describe("CallManager pre-connect DTMF", () => {
+  it.each(["plivo", "telnyx"] as const)(
+    "rejects unsupported digits before persisting or dialing with %s",
+    async (providerName) => {
+      const provider = new FakeProvider(providerName);
+      const dial = vi.spyOn(provider, "initiateCall");
+      const { manager } = await createManagerHarness({ provider: providerName }, provider);
+
+      await expect(
+        manager.initiateCall("+15550000001", undefined, {
+          mode: "conversation",
+          message: "Hello",
+          dtmfSequence: "ww1234#",
+        }),
+      ).resolves.toEqual({
+        callId: "",
+        success: false,
+        error: `${providerName} does not support pre-connect DTMF`,
+      });
+      expect(dial).not.toHaveBeenCalled();
+      expect(manager.getActiveCalls()).toEqual([]);
+      await expect(manager.getCallHistory()).resolves.toEqual([]);
+
+      // A rejected operation must leave capacity available for an ordinary call.
+      await expect(
+        manager.initiateCall("+15550000001", undefined, { mode: "conversation", message: "Hello" }),
+      ).resolves.toMatchObject({ success: true });
+      expect(dial).toHaveBeenCalledOnce();
+      expect(dial.mock.calls[0]?.[0].preConnectTwiml).toBeUndefined();
+    },
+  );
+
+  it("passes pre-connect digits to Twilio before ordinary conversation handling", async () => {
+    const provider = new FakeProvider("twilio");
+    const dial = vi.spyOn(provider, "initiateCall");
+    const { manager } = await createManagerHarness({ provider: "twilio" }, provider);
+
+    const result = await manager.initiateCall("+15550000001", undefined, {
+      mode: "conversation",
+      message: "Hello",
+      dtmfSequence: "ww1234#",
+    });
+
+    expect(result.success).toBe(true);
+    expect(dial).toHaveBeenCalledOnce();
+    expect(dial.mock.calls[0]?.[0].preConnectTwiml).toContain('<Play digits="ww1234#" />');
+    expect(manager.getCall(result.callId)?.metadata).toMatchObject({
+      mode: "conversation",
+      initialMessage: "Hello",
+    });
+  });
+});
 
 describe("CallManager termination lifecycle", () => {
   it.each([
