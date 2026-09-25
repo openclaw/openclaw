@@ -178,6 +178,7 @@ extension OpenClawChatViewModel {
                       current: self.sessionKey)
             else { return }
             self.replyTarget = nil
+            self.narration = ChatNarration()
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
             let context = self.beginHistoryRequest()
@@ -707,6 +708,10 @@ extension OpenClawChatViewModel {
         }
 
         let isSelectedPendingRun = isPendingRun && self.liveUsageRunID == evt.runId
+        if evt.stream == "item", evt.data["kind"]?.value as? String == "preamble" {
+            self.handleAgentNarration(evt)
+            return
+        }
         guard isSelectedPendingRun || isLegacySessionStream else { return }
         self.invalidateRunSnapshots()
         self.logDiagnostic(

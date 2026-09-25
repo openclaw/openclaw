@@ -118,13 +118,15 @@ private final class ScriptedChatTransport: @unchecked Sendable, OpenClawChatTran
 
 private func replayHistory(
     sessionId: String = "sess-replay",
-    messages: [AnyCodable] = []) -> OpenClawChatHistoryPayload
+    messages: [AnyCodable] = [],
+    inFlightRun: OpenClawChatInFlightRun? = nil) -> OpenClawChatHistoryPayload
 {
     OpenClawChatHistoryPayload(
         sessionKey: "main",
         sessionId: sessionId,
         messages: messages,
-        thinkingLevel: "off")
+        thinkingLevel: "off",
+        inFlightRun: inFlightRun)
 }
 
 /// Raw gateway rows with current run metadata or the older idempotency-key contract.
@@ -135,6 +137,7 @@ private func replayRawMessage(
     idempotencyKey: String? = nil,
     runId: String? = nil,
     messageId: String? = nil,
+    itemId: String? = nil,
     emptyThinking: Bool = false) -> AnyCodable
 {
     var content: [[String: Any]] = []
@@ -159,6 +162,9 @@ private func replayRawMessage(
     }
     if !metadata.isEmpty {
         message["__openclaw"] = metadata
+    }
+    if let itemId {
+        message["openclawStreamFallback"] = ["source": "segment", "itemId": itemId]
     }
     return AnyCodable(message)
 }
@@ -232,6 +238,27 @@ private func replayAssistantDeltaEvent(
             stream: "assistant",
             ts: seq,
             data: ["text": AnyCodable(cumulativeText)]))
+}
+
+private func replayNarrationEvent(
+    runId: String,
+    itemId: String,
+    text: String,
+    seq: Int,
+    timestamp: Int,
+    phase: String = "end") -> OpenClawChatTransportEvent
+{
+    .agent(OpenClawAgentEventPayload(
+        runId: runId,
+        seq: seq,
+        stream: "item",
+        ts: timestamp,
+        data: [
+            "kind": AnyCodable("preamble"),
+            "itemId": AnyCodable(itemId),
+            "phase": AnyCodable(phase),
+            "progressText": AnyCodable(text),
+        ]))
 }
 
 /// Cumulative streaming prefixes, chunked on character boundaries. The gateway
@@ -370,6 +397,178 @@ Closing paragraph with unicode — dashes, émojis 🦀🚀, and a trailing line
 /// `session.message` rows, duplicate delivery, out-of-order arrival, and reconnect
 /// convergence. Tracking: #100196.
 struct ChatStreamReplayTests {
+    @Test @MainActor func `sealed narration stays ordered through tool work and canonical settlement`() async throws {
+        let harness = try await StreamReplayHarness.bootstrapped()
+        defer { harness.vm.detachTransport() }
+        let runId = try await harness.send("Review the layout")
+        let now = Int(Date().timeIntervalSince1970 * 1000)
+        let firstText = "**Reading** the layout."
+        let secondText = "The header is ready.\n\nChecking the footer."
+        let user = replayRawMessage(
+            role: "user", text: "Review the layout", timestamp: Double(now), idempotencyKey: "\(runId):user")
+        let tool = replayRawMessage(
+            role: "toolResult", text: "Read complete", timestamp: Double(now + 200),
+            runId: runId, messageId: "layout-read")
+
+        harness.transport.emit(replayNarrationEvent(
+            runId: runId, itemId: "first", text: firstText, seq: 1, timestamp: now + 100))
+        harness.transport.emit(.agent(OpenClawAgentEventPayload(
+            runId: runId, seq: 2, stream: "tool", ts: now + 200,
+            data: ["phase": AnyCodable("start"), "name": AnyCodable("read"), "toolCallId": AnyCodable("read-1")])))
+        harness.transport.emit(replayNarrationEvent(
+            runId: runId, itemId: "partial", text: "Unfinished sentence", seq: 3,
+            timestamp: now + 300, phase: "update"))
+        harness.transport.emit(replayNarrationEvent(
+            runId: "another-run", itemId: "first", text: "Foreign narration", seq: 4, timestamp: now + 400))
+        harness.transport.emit(replayNarrationEvent(
+            runId: runId, itemId: "withdrawn", text: "Retracted narration", seq: 5, timestamp: now + 500))
+        try await harness.converge("sealed narration follows the running tool") { vm in
+            vm.transcriptMessages.contains { ChatMessageVisibleText.visibleText(in: $0) == "Retracted narration" }
+        }
+        #expect(harness.vm.pendingToolCalls.map(\.toolCallId) == ["read-1"])
+        #expect(harness.vm.transcriptMessages.map { ChatMessageVisibleText.visibleText(in: $0) } == [
+            "Review the layout", firstText, "Retracted narration",
+        ])
+
+        harness.transport.emit(replayNarrationEvent(
+            runId: runId, itemId: "withdrawn", text: "", seq: 6, timestamp: now + 500))
+        harness.transport.emit(.agent(OpenClawAgentEventPayload(
+            runId: runId, seq: 7, stream: "tool", ts: now + 200,
+            data: ["phase": AnyCodable("result"), "name": AnyCodable("read"), "toolCallId": AnyCodable("read-1")])))
+        try harness.transport.emit(.sessionMessage(OpenClawSessionMessageEventPayload(
+            sessionKey: "main", message: ChatPayloadDecoding.decode(tool),
+            messageId: "layout-read", messageSeq: nil)))
+        harness.transport.emit(replayNarrationEvent(
+            runId: runId, itemId: "second", text: secondText, seq: 8, timestamp: now + 600))
+        try await harness.converge("two narration items surround canonical tool output") { vm in
+            vm.transcriptMessages.contains { ChatMessageVisibleText.visibleText(in: $0) == secondText }
+        }
+        #expect(harness.vm.pendingRunCount == 1)
+        #expect(harness.vm.transcriptMessages.map { ChatMessageVisibleText.visibleText(in: $0) } == [
+            "Review the layout", firstText, "Read complete", secondText,
+        ])
+        let activeRows = ChatTranscriptRow.build(from: harness.vm.transcriptMessages)
+        #expect(ChatTranscriptRow.collapseCompletedWork(activeRows, runWorking: harness.vm.hasBlockingRunActivity) ==
+            activeRows)
+
+        let canonicalFirstText = firstText + "\n\nThe saved text retains its Markdown."
+        let first = replayRawMessage(
+            role: "assistant", text: canonicalFirstText, timestamp: Double(now + 100),
+            runId: runId, messageId: "saved-first", itemId: "first")
+        await harness.transport.setHistory(replayHistory(
+            messages: [user, first, tool], inFlightRun: OpenClawChatInFlightRun(runId: runId, text: "")))
+        harness.vm.resumeFromForeground()
+        try await harness.converge("canonical first item replaces its live projection") { vm in
+            vm.messages.contains { $0.transcriptMessageID == "saved-first" }
+        }
+        #expect(harness.vm.transcriptMessages.map { ChatMessageVisibleText.visibleText(in: $0) } == [
+            "Review the layout", canonicalFirstText, "Read complete", secondText,
+        ])
+
+        let second = replayRawMessage(
+            role: "assistant", text: secondText, timestamp: Double(now + 600),
+            runId: runId, messageId: "saved-second", itemId: "second")
+        let finalText = "The layout is ready."
+        let final = replayRawMessage(
+            role: "assistant", text: finalText, timestamp: Double(now + 700),
+            runId: runId, messageId: "saved-final")
+        await harness.transport.setHistory(replayHistory(messages: [user, first, tool, second, final]))
+        harness.transport.emit(replayFinalEvent(runId: runId, text: finalText, timestamp: Double(now + 700)))
+        try await harness.converge("canonical final settles narration") { vm in
+            vm.pendingRunCount == 0 && vm.messages.contains { $0.transcriptMessageID == "saved-final" }
+        }
+        let settled = ChatTranscriptRow.collapseCompletedWork(
+            ChatTranscriptRow.build(from: harness.vm.transcriptMessages),
+            runWorking: harness.vm.hasBlockingRunActivity)
+        #expect(settled.count == 3)
+        guard settled.count == 3, case let .completedWork(work) = settled[1],
+              case let .message(answer) = settled[2]
+        else {
+            Issue.record("Expected settled narration and tools above one visible final answer")
+            return
+        }
+        #expect(work.messages.map { ChatMessageVisibleText.visibleText(in: $0) } == [
+            canonicalFirstText, "Read complete", secondText,
+        ])
+        #expect(ChatMessageVisibleText.visibleText(in: answer) == finalText)
+
+        let generation = harness.vm.historyMutationGeneration
+        harness.transport.emit(replayNarrationEvent(
+            runId: runId, itemId: "late", text: "Retired run narration", seq: 9, timestamp: now + 800))
+        // A canonical echo is the FIFO barrier after the rejected late event.
+        try harness.transport.emit(.sessionMessage(OpenClawSessionMessageEventPayload(
+            sessionKey: "main", message: ChatPayloadDecoding.decode(final),
+            messageId: "saved-final", messageSeq: nil)))
+        try await harness.converge("final echo consumed after the retired event") { vm in
+            vm.historyMutationGeneration > generation
+        }
+        #expect(!harness.vm.transcriptMessages.contains {
+            ChatMessageVisibleText.visibleText(in: $0) == "Retired run narration"
+        })
+    }
+
+    @Test @MainActor func `reconnect replays completed narration without duplicating saved items`() async throws {
+        let history = try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: Data(#"""
+        {
+          "sessionKey":"main","sessionId":"sess-replay","thinkingLevel":"off",
+          "messages":[
+            {"role":"user","timestamp":1000,"content":[{"type":"text","text":"Review the layout"}]},
+            {"role":"assistant","timestamp":2000,"__openclaw":{"id":"saved-first","runId":"recovered-run"},
+             "openclawStreamFallback":{"source":"segment","itemId":"first"},
+             "content":[{"type":"text","text":"**Saved** first narration.\n\nWith a paragraph."}]},
+            {"role":"toolResult","timestamp":3000,"__openclaw":{"id":"saved-tool","runId":"recovered-run"},
+             "content":[{"type":"text","text":"Read complete"}]}
+          ],
+          "inFlightRun":{"runId":"recovered-run","text":"The answer is streaming.","events":[
+            {"runId":"recovered-run","seq":1,"stream":"item","ts":2000,
+             "data":{"kind":"preamble","itemId":"first","phase":"end","progressText":"Saved first narration."}},
+            {"runId":"recovered-run","seq":2,"stream":"item","ts":4000,
+             "data":{"kind":"preamble","itemId":"second","phase":"end","progressText":"Recovered **second** narration."}},
+            {"runId":"recovered-run","seq":3,"stream":"item","ts":5000,
+             "data":{"kind":"preamble","itemId":"partial","phase":"start","progressText":"Unfinished sentence"}},
+            {"runId":"another-run","seq":4,"stream":"item","ts":6000,
+             "data":{"kind":"preamble","itemId":"foreign","phase":"end","progressText":"Foreign narration"}}
+          ]}
+        }
+        """#.utf8))
+        let harness = try await StreamReplayHarness.bootstrapped()
+        defer { harness.vm.detachTransport() }
+        await harness.transport.setHistory(history)
+        harness.transport.emit(.seqGap)
+        try await harness.converge("reconnect restores commentary and the active answer") { vm in
+            vm.pendingRunCount == 1 && vm.streamingAssistantText == "The answer is streaming." &&
+                vm.transcriptMessages.contains {
+                    ChatMessageVisibleText.visibleText(in: $0) == "Recovered **second** narration."
+                }
+        }
+        #expect(harness.vm.transcriptMessages.map { ChatMessageVisibleText.visibleText(in: $0) } == [
+            "Review the layout", "**Saved** first narration.\n\nWith a paragraph.",
+            "Read complete", "Recovered **second** narration.",
+        ])
+        #expect(harness.vm.pendingToolCalls.isEmpty)
+        let rows = ChatTranscriptRow.build(from: harness.vm.transcriptMessages)
+        #expect(ChatTranscriptRow.collapseCompletedWork(rows, runWorking: harness.vm.hasBlockingRunActivity) == rows)
+
+        // History was requested before a live retraction arrived. Its older
+        // completed item must not appear, even if it was never rendered here.
+        let request = harness.vm.beginHistoryRequest()
+        harness.vm.handleTransportEvent(replayNarrationEvent(
+            runId: "recovered-run", itemId: "withdrawn-before-reconnect", text: "", seq: 6, timestamp: 7000))
+        let older = OpenClawAgentEventPayload(
+            runId: "recovered-run", seq: 5, stream: "item", ts: 6000,
+            data: [
+                "kind": AnyCodable("preamble"), "itemId": AnyCodable("withdrawn-before-reconnect"),
+                "phase": AnyCodable("end"), "progressText": AnyCodable("Retracted before reconnect"),
+            ])
+        let stale = replayHistory(
+            messages: history.messages ?? [],
+            inFlightRun: .init(runId: "recovered-run", text: "The answer is streaming.", events: [older]))
+        #expect(harness.vm.applyHistoryPayload(stale, for: request, preservingOptimisticLocalMessages: true))
+        #expect(!harness.vm.transcriptMessages.contains {
+            ChatMessageVisibleText.visibleText(in: $0) == "Retracted before reconnect"
+        })
+    }
+
     @Test func `live session message marker produces a visible transcript row`() async throws {
         let harness = try await StreamReplayHarness.bootstrapped()
         let frame = EventFrame(

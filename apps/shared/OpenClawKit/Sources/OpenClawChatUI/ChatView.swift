@@ -821,13 +821,13 @@ public struct OpenClawChatView: View {
     }
 
     private var transcriptRows: [ChatTranscriptRow] {
+        let messages = self.viewModel.transcriptMessages
         let base: [OpenClawChatMessage]
         if self.style == .onboarding {
-            guard let first = viewModel.messages.first else { return [] }
-            base = first.role.lowercased() == "user" ? Array(self.viewModel.messages.dropFirst()) : self.viewModel
-                .messages
+            guard let first = messages.first else { return [] }
+            base = first.role.lowercased() == "user" ? Array(messages.dropFirst()) : messages
         } else {
-            base = self.viewModel.messages
+            base = messages
         }
         var rows = ChatTranscriptRow.build(from: self.mergeToolResults(in: base))
         if self.collapsesCompletedWork {

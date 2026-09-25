@@ -35,6 +35,11 @@ extension OpenClawChatViewModel {
         defer { self.isApplyingRunSnapshot = false }
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         self.adoptRunState(runId: runId, bufferedText: snapshot.text)
+        // Replay only this snapshot's narration through the live owner. Tool
+        // grouping and current assistant-text precedence keep their own paths.
+        for event in snapshot.events ?? [] where event.runId == runId {
+            self.handleAgentNarration(event)
+        }
     }
 
     func adoptRun(runId: String, bufferedText: String) {

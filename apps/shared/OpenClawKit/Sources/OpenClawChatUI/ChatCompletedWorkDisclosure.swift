@@ -30,8 +30,7 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
 
     private var label: String {
         guard let milliseconds = self.work.durationMilliseconds else { return String(localized: "Worked") }
-        let duration = Duration.seconds(max(1, (milliseconds / 1000).rounded()))
-            .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated))
+        let duration = ChatWorkingDurationFormatter.compact(milliseconds: milliseconds)
         return String(format: String(localized: "Worked for %@"), duration)
     }
 }

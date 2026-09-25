@@ -817,9 +817,11 @@ struct ChatViewModelSessionActionTests {
             fileName: "old.png",
             mimeType: "image/png",
             preview: nil)]
+        self.retainCompletedNarration(in: viewModel)
 
         await viewModel.rewindToMessage(self.userMessage(entryID: "message-42"))
 
+        #expect(viewModel.transcriptMessages.isEmpty)
         #expect(viewModel.input == "edit this turn")
         #expect(viewModel.attachments.count == 1)
         #expect(viewModel.attachments.first?.data == imageData)
@@ -1076,9 +1078,11 @@ struct ChatViewModelSessionActionTests {
         let transport = SessionActionTransport(branches: branches)
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         viewModel.sessionBranches = branches
+        self.retainCompletedNarration(in: viewModel)
 
         await viewModel.switchToBranch("leaf-new")
 
+        #expect(viewModel.transcriptMessages.isEmpty)
         #expect(await transport.switchedBranches().map { [$0.sessionKey, $0.leafEntryID] } == [
             ["main", "leaf-new"],
         ])
@@ -1476,6 +1480,22 @@ struct ChatViewModelSessionActionTests {
             await Task.yield()
         }
         return false
+    }
+
+    private func retainCompletedNarration(in viewModel: OpenClawChatViewModel) {
+        // This transport emits no sessions.changed echo. The successful local
+        // mutation must discard retained narration from the previous branch.
+        viewModel.updateActiveSessionRunIDs(["completed-run"])
+        viewModel.handleTransportEvent(.agent(OpenClawAgentEventPayload(
+            runId: "completed-run", seq: 1, stream: "item", ts: 1000,
+            data: [
+                "kind": AnyCodable("preamble"), "itemId": AnyCodable("old-narration"),
+                "phase": AnyCodable("end"), "progressText": AnyCodable("Previous branch narration"),
+            ])))
+        viewModel.retireTerminalRun("completed-run")
+        #expect(viewModel.transcriptMessages.map { ChatMessageVisibleText.visibleText(in: $0) } == [
+            "Previous branch narration",
+        ])
     }
 
     private func userMessage(entryID: String) -> OpenClawChatMessage {
