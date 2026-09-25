@@ -390,7 +390,8 @@ async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
 }
 
 function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalog>): void {
-  vi.mocked(loadManifestModelCatalog).mockReturnValueOnce(entries);
+  // Startup ranking and turn selection share the captured manifest snapshot.
+  vi.mocked(loadManifestModelCatalog).mockReturnValue(entries);
   vi.mocked(readPreparedModelCatalog).mockResolvedValueOnce(entries);
 }
 
