@@ -138,3 +138,37 @@ it.each([true, false])(
     expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
   },
 );
+
+it.each(["assistant", "custom"] as const)(
+  "hands a matching %s run diagnostic to its durable transcript row",
+  (role) => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const runError = { runId: "failed-run", summary: "Error: Request failed.\nTry again." };
+    render(renderChatComposerNotices({ messages: [], runError }), container);
+    expect(container.querySelectorAll(".chat-error")).toHaveLength(1);
+    render(
+      renderChatComposerNotices({
+        messages: [
+          {
+            ...(role === "custom"
+              ? {
+                  role,
+                  customType: "run-failed-before-reply",
+                  content: "This turn ended before a reply: ⚠️ Request failed.\nTry again.",
+                }
+              : {
+                  role,
+                  stopReason: "error",
+                  errorMessage: "Request failed.\nTry again.",
+                  content: "⚠️ Error: Request failed.\nTry again.",
+                }),
+            __openclaw: { id: "failure", seq: 2, runId: "failed-run" },
+          },
+        ],
+        runError,
+      }),
+      container,
+    );
+    expect(container.querySelectorAll(".chat-error")).toHaveLength(0);
+  },
+);

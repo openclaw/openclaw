@@ -146,6 +146,40 @@ describe("resolveMessageActionDetails full-message eligibility", () => {
   });
 });
 
+it("keeps recovered diagnostic action payloads as safe as the expanded error card", () => {
+  const diagnostic = "Error: Request failed.\npassword=synthetic-password";
+  const message = {
+    role: "assistant",
+    stopReason: "error",
+    content: diagnostic,
+    errorMessage: diagnostic,
+    __openclaw: { id: "failure", seq: 2, runId: "run-1" },
+  };
+  const details = resolveMessageActionDetails(
+    prepareChatMessageRender({
+      ...message,
+      content: "Error: Request failed…",
+      __openclaw: { ...message["__openclaw"], truncated: true },
+    }),
+    {
+      messageId: "render-error",
+      canFetchFullMessage: true,
+      onReply: vi.fn(),
+      senderLabel: "Assistant",
+      getAssistantMessageExpansion: () => ({
+        status: "loaded",
+        revision: 1,
+        message,
+        markdown: diagnostic,
+      }),
+    },
+  );
+  const safe = "Error: Request failed.\npassword=[redacted]";
+  expect(details?.markdown).toBe(safe);
+  expect(details?.copyMarkdown).toBe(safe);
+  expect(details?.replyTarget?.text).toBe(safe);
+});
+
 describe("user message disclosure", () => {
   it("batches and retains overflow measurements while observing content, fonts and lifetime", async () => {
     const fonts = Object.assign(new EventTarget(), { ready: Promise.resolve() });

@@ -40,6 +40,34 @@ describe("chat view state contention", () => {
     expect(input.value).toBe("My unsent draft");
   });
 
+  it("retains Check status when the same contention diagnostic is in history", () => {
+    const onRefresh = vi.fn();
+    const summary = "Temporarily busy. Check status before trying again.";
+    const container = renderChatView({
+      messages: [
+        {
+          role: "custom",
+          customType: "run-failed-before-reply",
+          content: summary,
+          details: { errorKind: "state_contention" },
+          __openclaw: { id: "busy-notice", seq: 1, runId: "busy-run" },
+        },
+      ],
+      runError: { kind: "state_contention", runId: "busy-run", summary },
+      onRefresh,
+    });
+    expect(container.querySelectorAll(".chat-error")).toHaveLength(1);
+    const notice = container.querySelector(".chat-error");
+    expect(notice?.getAttribute("role")).toBe("status");
+    expect(notice?.classList.contains("chat-composer-neighbor-card--warn")).toBe(true);
+    expect(container.querySelector(".chat-bubble .chat-error")).toBeNull();
+    expect(container.querySelector(".chat-bubble")?.textContent).toContain(summary);
+    const check = notice?.querySelector<HTMLButtonElement>(".chat-error__refresh");
+    expect(check?.textContent?.trim()).toBe("Check status");
+    check?.click();
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
   it("keeps Stop available during a quiet state contention wait", () => {
     const onAbort = vi.fn();
     const onSend = vi.fn();
