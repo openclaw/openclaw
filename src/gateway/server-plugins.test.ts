@@ -817,33 +817,23 @@ describe("loadGatewayPlugins", () => {
     const home = tempDirs.make("openclaw-plugin-home-");
     const userInfo = vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: home });
     try {
-      const defaultStateDir = path.join(home, ".openclaw");
-      withEnv(
-        {
-          HOME: home,
-          USERPROFILE: home,
-          OPENCLAW_HOME: undefined,
-          OPENCLAW_PROFILE: undefined,
-          OPENCLAW_STATE_DIR: defaultStateDir,
-          OPENCLAW_CONFIG_PATH: path.join(defaultStateDir, "openclaw.json"),
-        },
-        () => loadGatewayPluginsForTest(),
-      );
-      expect(getLastPluginLoadOption("allowProcessHomeSessionCatalogs")).toBe(true);
-
-      withEnv(
-        {
-          HOME: home,
-          USERPROFILE: home,
-          OPENCLAW_HOME: undefined,
-          OPENCLAW_PROFILE: "dev",
-          OPENCLAW_STATE_DIR: path.join(home, ".openclaw-dev"),
-          OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw-dev", "openclaw.json"),
-        },
-        () => loadGatewayPluginsForTest(),
-      );
-
-      expect(getLastPluginLoadOption("allowProcessHomeSessionCatalogs")).toBe(false);
+      for (const { profile, stateDirName, allowHome } of [
+        { profile: undefined, stateDirName: ".openclaw", allowHome: true },
+        { profile: "dev", stateDirName: ".openclaw-dev", allowHome: false },
+      ]) {
+        withEnv(
+          {
+            HOME: home,
+            USERPROFILE: home,
+            OPENCLAW_HOME: undefined,
+            OPENCLAW_PROFILE: profile,
+            OPENCLAW_STATE_DIR: path.join(home, stateDirName),
+            OPENCLAW_CONFIG_PATH: path.join(home, stateDirName, "openclaw.json"),
+          },
+          () => loadGatewayPluginsForTest(),
+        );
+        expect(getLastPluginLoadOption("allowProcessHomeSessionCatalogs")).toBe(allowHome);
+      }
     } finally {
       userInfo.mockRestore();
     }
