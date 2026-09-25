@@ -453,6 +453,7 @@ describe("plugin lifecycle lease", () => {
           `
           import assert from "node:assert/strict";
           import fs from "node:fs/promises";
+          import { mock } from "node:test";
           import { withPluginLifecycleLease } from ${JSON.stringify(leaseModuleUrl)};
           import {
             loadInstalledPluginIndexInstallRecords,
@@ -462,6 +463,8 @@ describe("plugin lifecycle lease", () => {
           const [pluginId, stateDir, goMarker, releaseAlphaMarker] = process.argv.slice(2);
           process.env.OPENCLAW_STATE_DIR = stateDir;
           const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+          // Exercise cache coherence with real contention, independent of host scheduling delays.
+          mock.method(performance, "now", () => 0);
           async function waitForMarker(marker) {
             while (true) {
               try {
