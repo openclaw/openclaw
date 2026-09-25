@@ -18,6 +18,7 @@ import {
   type CoalescedTaskEvent,
   isActiveTask,
   mergeTaskLists,
+  newestTaskSnapshot,
   normalizeTaskEventPayload,
   normalizeTasksCancelResult,
   normalizeTasksGetResult,
@@ -28,7 +29,6 @@ import {
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { taskMatchesSessionScope } from "./chat-background-task-scope.ts";
 import {
-  newestTaskSnapshot,
   prepareTaskSnapshot,
   type BackgroundTaskObservations,
 } from "./chat-background-tasks-shared.ts";
@@ -517,12 +517,9 @@ async function cancelBackgroundTask(
     const result = normalizeTasksCancelResult(payload);
     if (result?.task && state.tasks !== null) {
       const cancelled = prepareTaskSnapshot(state, result.task);
-      const event = normalizeTaskEventPayload({ action: "upserted", task: cancelled });
-      if (event) {
-        // A slow client may miss the best-effort task event; the successful
-        // cancel response must still survive its own in-flight list snapshot.
-        bufferBackgroundTaskEvent(state, event);
-      }
+      // A slow client may miss the best-effort task event; the successful
+      // cancel response must still survive its own in-flight list snapshot.
+      bufferBackgroundTaskEvent(state, { action: "upserted", task: cancelled });
       state.tasks = sortTasks([
         cancelled,
         ...state.tasks.filter((task) => task.id !== cancelled.id),
@@ -531,7 +528,7 @@ async function cancelBackgroundTask(
     // Refusals (already terminal, stale id, no cancellation handle) are
     // successful responses with cancelled=false; surface them like errors.
     if (!result?.cancelled) {
-      const reason = result?.reason?.trim();
+      const reason = result?.reason;
       state.error = reason ? formatUiError(reason) : t("tasksPage.cancelFailed");
     }
   } catch (error) {

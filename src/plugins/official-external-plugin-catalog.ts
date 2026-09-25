@@ -1,6 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Reads official external plugin/channel/provider catalogs into manifest-like metadata. */
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { resolvePluginInstallSources, type PluginInstallSource } from "./install-channel-specs.js";
@@ -17,6 +20,7 @@ import {
 import type {
   OfficialExternalChannelSecretContract,
   OfficialExternalPluginCatalogEntry,
+  OfficialExternalPluginCatalogManifest,
   OfficialExternalPluginCatalogInstallCandidate,
   OfficialExternalPluginCatalogSourceProfile,
   OfficialExternalPluginCatalogProfileConfig,
@@ -201,7 +205,6 @@ function normalizeNpmExpectedIntegrity(value: unknown): string | undefined {
   return integrity;
 }
 
-/** Returns manifest metadata from an official external catalog entry when present. */
 /** Returns legacy plugin ids used only for trusted update migrations. */
 export function resolveOfficialExternalPluginLegacyIds(
   entry: OfficialExternalPluginCatalogEntry,
@@ -342,35 +345,43 @@ export function isOfficialExternalPluginId(pluginId: string): boolean {
   );
 }
 
+function resolveOfficialExternalPluginOwners(
+  matches: (manifest: OfficialExternalPluginCatalogManifest) => boolean | undefined,
+): string[] {
+  const pluginIds = new Set<string>();
+  for (const entry of bundledOfficialExternalPluginCatalogEntries()) {
+    const pluginId = resolveOfficialExternalPluginId(entry);
+    const manifest = getOfficialExternalPluginCatalogManifest(entry);
+    if (pluginId && manifest && matches(manifest)) {
+      pluginIds.add(pluginId);
+    }
+  }
+  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+}
+
+function normalizedProviderIdSet(providerIds: readonly string[]): Set<string> {
+  return new Set(
+    providerIds
+      .map(normalizeOptionalLowercaseString)
+      .filter((providerId): providerId is string => Boolean(providerId)),
+  );
+}
+
 /** Resolves official external plugin owners for configured capability provider ids. */
 export function resolveOfficialExternalProviderContractPluginIds(params: {
   contract: OfficialExternalProviderContract;
   providerIds: ReadonlySet<string>;
 }): string[] {
-  const configuredProviderIds = new Set(
-    [...params.providerIds]
-      .map((providerId) => normalizeOptionalString(providerId)?.toLowerCase())
-      .filter((providerId): providerId is string => Boolean(providerId)),
-  );
+  const configuredProviderIds = normalizedProviderIdSet([...params.providerIds]);
   if (configuredProviderIds.size === 0) {
     return [];
   }
-  const pluginIds = new Set<string>();
-  for (const entry of bundledOfficialExternalPluginCatalogEntries()) {
-    const pluginId = resolveOfficialExternalPluginId(entry);
-    const providerIds =
-      getOfficialExternalPluginCatalogManifest(entry)?.contracts?.[params.contract];
-    if (
-      pluginId &&
-      providerIds?.some((providerId) => {
-        const normalized = normalizeOptionalString(providerId)?.toLowerCase();
-        return normalized ? configuredProviderIds.has(normalized) : false;
-      })
-    ) {
-      pluginIds.add(pluginId);
-    }
-  }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+  return resolveOfficialExternalPluginOwners((manifest) =>
+    manifest.contracts?.[params.contract]?.some((providerId) => {
+      const normalized = normalizeOptionalString(providerId)?.toLowerCase();
+      return normalized ? configuredProviderIds.has(normalized) : false;
+    }),
+  );
 }
 
 /** Resolves official web provider owners from matching documented environment credentials. */
@@ -378,19 +389,13 @@ export function resolveOfficialExternalWebProviderContractPluginIdsForEnv(params
   contract: OfficialExternalProviderContract;
   env: NodeJS.ProcessEnv;
 }): string[] {
-  const pluginIds = new Set<string>();
-  for (const entry of bundledOfficialExternalPluginCatalogEntries()) {
-    const pluginId = resolveOfficialExternalPluginId(entry);
-    const manifest = getOfficialExternalPluginCatalogManifest(entry);
-    const contractProviderIds = new Set(
-      (manifest?.contracts?.[params.contract] ?? [])
-        .map((providerId) => normalizeOptionalString(providerId)?.toLowerCase())
-        .filter((providerId): providerId is string => Boolean(providerId)),
+  return resolveOfficialExternalPluginOwners((manifest) => {
+    const contractProviderIds = normalizedProviderIdSet(
+      manifest.contracts?.[params.contract] ?? [],
     );
-    if (
-      pluginId &&
+    return (
       contractProviderIds.size > 0 &&
-      manifest?.webSearchProviders?.some((provider) => {
+      manifest.webSearchProviders?.some((provider) => {
         const providerId = normalizeOptionalString(provider.id)?.toLowerCase();
         return (
           providerId !== undefined &&
@@ -398,60 +403,35 @@ export function resolveOfficialExternalWebProviderContractPluginIdsForEnv(params
           provider.envVars?.some((envVar) => Boolean(params.env[envVar]?.trim()))
         );
       })
-    ) {
-      pluginIds.add(pluginId);
-    }
-  }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+    );
+  });
 }
 
 /** Resolves official external plugin owners for configured model provider ids. */
 export function resolveOfficialExternalProviderPluginIds(params: {
   providerIds: ReadonlySet<string>;
 }): string[] {
-  const configuredProviderIds = new Set(
-    [...params.providerIds]
-      .map((providerId) => normalizeOptionalString(providerId)?.toLowerCase())
-      .filter((providerId): providerId is string => Boolean(providerId)),
-  );
+  const configuredProviderIds = normalizedProviderIdSet([...params.providerIds]);
   if (configuredProviderIds.size === 0) {
     return [];
   }
-  const pluginIds = new Set<string>();
-  for (const entry of listOfficialExternalProviderCatalogEntries()) {
-    const pluginId = resolveOfficialExternalPluginId(entry);
-    const providers = getOfficialExternalPluginCatalogManifest(entry)?.providers;
-    if (
-      pluginId &&
-      providers?.some((provider) =>
-        [provider.id, ...(provider.aliases ?? [])].some((providerId) => {
-          const normalized = normalizeOptionalString(providerId)?.toLowerCase();
-          return normalized ? configuredProviderIds.has(normalized) : false;
-        }),
-      )
-    ) {
-      pluginIds.add(pluginId);
-    }
-  }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+  return resolveOfficialExternalPluginOwners((manifest) =>
+    manifest.providers?.some((provider) =>
+      [provider.id, ...(provider.aliases ?? [])].some((providerId) => {
+        const normalized = normalizeOptionalString(providerId)?.toLowerCase();
+        return normalized ? configuredProviderIds.has(normalized) : false;
+      }),
+    ),
+  );
 }
 
 /** Resolves official external provider owners with configured environment credentials. */
 export function resolveOfficialExternalProviderPluginIdsForEnv(env: NodeJS.ProcessEnv): string[] {
-  const pluginIds = new Set<string>();
-  for (const entry of listOfficialExternalProviderCatalogEntries()) {
-    const pluginId = resolveOfficialExternalPluginId(entry);
-    const providers = getOfficialExternalPluginCatalogManifest(entry)?.providers;
-    if (
-      pluginId &&
-      providers?.some((provider) =>
-        provider.envVars?.some((envVar) => Boolean(env[envVar]?.trim())),
-      )
-    ) {
-      pluginIds.add(pluginId);
-    }
-  }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+  return resolveOfficialExternalPluginOwners((manifest) =>
+    manifest.providers?.some((provider) =>
+      provider.envVars?.some((envVar) => Boolean(env[envVar]?.trim())),
+    ),
+  );
 }
 
 export function listOfficialExternalChannelCatalogEntries(): OfficialExternalPluginCatalogEntry[] {

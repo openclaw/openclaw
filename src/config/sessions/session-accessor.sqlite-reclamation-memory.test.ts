@@ -66,11 +66,10 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
                 inWriteAdmission(() => checkpoint.startForeground?.());
                 // Let foreground continuations run before authorizing the deletion commit.
                 const authorization = setImmediate().then(() => {
-                  expect(params.onCommitRequest()).toEqual([]);
+                  params.onCommitRequest();
                 });
                 checkpoint.authorizations.push(authorization);
                 void authorization.catch(() => {});
-                return [];
               },
             });
           });

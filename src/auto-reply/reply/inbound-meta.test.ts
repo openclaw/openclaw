@@ -2,8 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry, SessionGoalStatus } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnv } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
@@ -17,39 +15,9 @@ import { prepareReplyConversation } from "./prompt-session-context.js";
 
 const EMPTY_CFG = {} as OpenClawConfig;
 
-const { formattingHintCalls } = vi.hoisted(() => ({
-  formattingHintCalls: [] as Array<{ cfg: OpenClawConfig; accountId?: string | null }>,
-}));
-
-vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../channels/plugins/registry-loaded.js")>()),
-  getLoadedChannelPluginById: (channelId: string) =>
-    channelId === "slack"
-      ? {
-          agentPrompt: {
-            inboundFormattingHints: (params: {
-              cfg: OpenClawConfig;
-              accountId?: string | null;
-            }) => {
-              formattingHintCalls.push(params);
-              return {
-                text_markup: "slack_mrkdwn",
-                rules: [
-                  "Use Slack mrkdwn, not standard Markdown.",
-                  "Bold uses *single asterisks*.",
-                  "Links use <url|label>.",
-                  "Code blocks use triple backticks without a language identifier.",
-                  "Do not use markdown headings or pipe tables.",
-                ],
-              };
-            },
-          },
-        }
-      : undefined,
-}));
-
-vi.mock("../../channels/registry.js", () => ({
-  normalizeAnyChannelId: (channelId?: string) => channelId?.trim().toLowerCase(),
+// Delivery formatting has its own reply-turn coverage; keep these tests on the metadata block.
+vi.mock("../../infra/outbound/delivery-format-prompt.js", () => ({
+  buildDeliveryFormatPrompt: () => undefined,
 }));
 
 function parseInboundMetaPayload(text: string): Record<string, unknown> {
@@ -299,72 +267,7 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["sender_id"]).toBeUndefined();
   });
 
-  it("includes Slack mrkdwn response format hints for Slack chats and threads cfg", () => {
-    formattingHintCalls.length = 0;
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "slack-plugin",
-          source: "test",
-          plugin: {
-            id: "slack",
-            meta: {
-              id: "slack",
-              label: "Slack",
-              selectionLabel: "Slack",
-              docsPath: "/channels/slack",
-              blurb: "test stub",
-            },
-            capabilities: { chatTypes: ["channel"] },
-            config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-            agentPrompt: {
-              inboundFormattingHints: () => ({
-                text_markup: "slack_mrkdwn",
-                rules: [
-                  "Use Slack mrkdwn, not standard Markdown.",
-                  "Bold uses *single asterisks*.",
-                  "Links use <url|label>.",
-                  "Code blocks use triple backticks without a language identifier.",
-                  "Do not use markdown headings or pipe tables.",
-                ],
-              }),
-            },
-          },
-        },
-      ]),
-    );
-
-    const cfg = {
-      channels: { slack: { botToken: "test-token-placeholder" } },
-    } as OpenClawConfig;
-    const prompt = buildInboundMetaSystemPrompt(
-      {
-        OriginatingTo: "channel:C123",
-        OriginatingChannel: "slack",
-        Provider: "slack",
-        Surface: "slack",
-        ChatType: "channel",
-        AccountId: " work ",
-      } as TemplateContext,
-      cfg,
-    );
-
-    const payload = parseInboundMetaPayload(prompt);
-    expect(payload["response_format"]).toEqual({
-      text_markup: "slack_mrkdwn",
-      rules: [
-        "Use Slack mrkdwn, not standard Markdown.",
-        "Bold uses *single asterisks*.",
-        "Links use <url|label>.",
-        "Code blocks use triple backticks without a language identifier.",
-        "Do not use markdown headings or pipe tables.",
-      ],
-    });
-    expect(formattingHintCalls).toEqual([{ cfg, accountId: "work" }]);
-  });
-
-  it("uses one prepared conversation for system-event metadata and response formatting", () => {
+  it("uses one prepared conversation for system-event metadata", () => {
     const conversation = prepareReplyConversation({
       ctx: { InternalTurnSource: "heartbeat" },
       sessionEntry: {
@@ -386,24 +289,7 @@ describe("buildInboundMetaSystemPrompt", () => {
       surface: "slack",
       chat_type: "channel",
       account_id: "work",
-      response_format: { text_markup: "slack_mrkdwn" },
     });
-  });
-
-  it("omits response format hints when the channel plugin has no formatting hook", () => {
-    const prompt = buildInboundMetaSystemPrompt(
-      {
-        OriginatingTo: "telegram:123",
-        OriginatingChannel: "telegram",
-        Provider: "telegram",
-        Surface: "telegram",
-        ChatType: "direct",
-      } as TemplateContext,
-      EMPTY_CFG,
-    );
-
-    const payload = parseInboundMetaPayload(prompt);
-    expect(payload["response_format"]).toBeUndefined();
   });
 });
 

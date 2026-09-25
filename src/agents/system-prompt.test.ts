@@ -1619,7 +1619,7 @@ describe("buildAgentSystemPrompt", () => {
   it("adds collapsible-details guidance only for supported full prompts", () => {
     const supportedPrompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      runtimeInfo: { channel: "telegram", capabilities: ["markdownDetails"] },
+      runtimeInfo: { channel: "webchat", capabilities: ["markdownDetails"] },
     });
     const unsupportedPrompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -1627,12 +1627,12 @@ describe("buildAgentSystemPrompt", () => {
     });
     const sameChannelUnsupportedPrompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      runtimeInfo: { channel: "telegram", capabilities: [] },
+      runtimeInfo: { channel: "webchat", capabilities: [] },
     });
     const minimalPrompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       promptMode: "minimal",
-      runtimeInfo: { channel: "telegram", capabilities: ["markdownDetails"] },
+      runtimeInfo: { channel: "webchat", capabilities: ["markdownDetails"] },
     });
 
     expect(supportedPrompt).toContain("## Collapsible Details");
