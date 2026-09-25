@@ -10,16 +10,15 @@ import { updateCommand } from "./update-command.js";
 const { fixture } = installFreshUpdateFixture();
 
 it.each(
-  [false, true].flatMap((dryRun) =>
-    [
-      { kind: "unknown key", config: { unknownSetting: true }, affectedKey: "<root>" },
-      {
-        kind: "invalid core field",
-        config: { gateway: { port: "invalid" } },
-        affectedKey: "gateway.port",
-      },
-    ].map((entry) => ({ ...entry, dryRun })),
-  ),
+  [false, true].flatMap((dryRun) => [
+    { kind: "unknown key", config: { unknownSetting: true }, affectedKey: "<root>", dryRun },
+    {
+      kind: "invalid core field",
+      config: { gateway: { port: "invalid" } },
+      affectedKey: "gateway.port",
+      dryRun,
+    },
+  ]),
 )(
   "identifies $kind during installed admission (dryRun=$dryRun)",
   async ({ config, dryRun, affectedKey }) => {
