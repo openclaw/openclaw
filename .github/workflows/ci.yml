@@ -4467,6 +4467,9 @@ jobs:
         env:
           OPENCLAW_CI_CHECK_PLAN_INPUT_JSON: ${{ needs.preflight.outputs.check_plan_input_json }}
         run: node scripts/ci-check-plan.mts
+      # The failure observer reads this completed step's name from the Jobs API.
+      - name: "CI check job count v1: ${{ steps.plan.outputs.check_job_count }}"
+        run: ":"
 
   # Types, lint, and format check shards.
   check-shard:

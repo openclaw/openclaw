@@ -120,12 +120,20 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
   const extensionLint = lintPlan
     ? retainLintTemplates(input.lintExtensionMatrix, lintPlan.extensions)
     : input.lintExtensionMatrix.include;
+  const checkJobCount =
+    checkRows.length +
+    (hosted ? coreRows.length + coreLint.length : 0) +
+    (input.runnerProfile === "hybrid" ? extensionLint.length : 0);
+  if (checkJobCount > 400) {
+    throw new Error("Check planning exceeds the observer's 400-job inventory bound");
+  }
   if (typePlan) {
     console.log(
       `CI type plan ${typePlan.mode} in ${((performance.now() - started) / 1000).toFixed(1)}s: ${graphs.map(({ name }) => name).join(", ")}`,
     );
   }
   return {
+    check_job_count: checkJobCount,
     check_matrix: { include: checkRows },
     core_type_matrix: { include: coreRows },
     lint_core_matrix: { include: coreLint },
