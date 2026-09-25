@@ -17,10 +17,8 @@ export function parseClawHubPluginCapabilities(
 ): ClawHubPluginCapabilities {
   const result: ClawHubPluginCapabilities = {};
   const ui = validatePluginUiCapabilities(summary.uiCapabilities);
-  if (!ui.ok) {
-    throw new Error(`Malformed ClawHub plugin uiCapabilities: ${ui.error}`);
-  }
-  if (ui.capabilities !== undefined) {
+  // Older readers ignored this advisory field; invalid UI metadata must not hide the package.
+  if (ui.ok && ui.capabilities !== undefined) {
     result.uiCapabilities = ui.capabilities;
   }
   for (const field of ["providers", "channels"] as const) {

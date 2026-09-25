@@ -401,7 +401,15 @@ describe("ClawHub plugin catalog client", () => {
     },
   );
 
-  it("reads complete exact-version plugin detail in one request", async () => {
+  it.each([
+    { ui: ["widget", "page", "widget"], expected: ["page", "widget"] },
+    { ui: undefined, expected: undefined },
+    { ui: [], expected: [] },
+    { ui: "page", expected: undefined },
+    { ui: null, expected: undefined },
+    { ui: ["unknown"], expected: undefined },
+    { ui: ["page", 1], expected: undefined },
+  ])("reads complete exact-version detail with UI metadata $ui", async ({ ui, expected }) => {
     const requestedUrls: string[] = [];
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = new URL(requestUrl(input));
@@ -446,7 +454,7 @@ describe("ClawHub plugin catalog client", () => {
             contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
             providers: ["memory-model"],
             channels: ["memory-chat"],
-            uiCapabilities: ["widget", "page", "widget"],
+            uiCapabilities: ui,
             bundledSkills: [
               {
                 name: "Recall",
@@ -522,7 +530,6 @@ describe("ClawHub plugin catalog client", () => {
       contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
       providers: ["memory-model"],
       channels: ["memory-chat"],
-      uiCapabilities: ["page", "widget"],
       skills: [{ name: "Recall", description: "Recall saved knowledge" }],
       versions: [
         { version: "1.2.3", createdAt: 300, changelog: "Current release", tags: ["latest"] },
@@ -543,6 +550,7 @@ describe("ClawHub plugin catalog client", () => {
         summary: "Exact release passed ClawHub security review.",
       },
     });
+    expect(detail.uiCapabilities).toEqual(expected);
     const joined = joinClawHubPluginDetail({
       remote: detail,
       local: { plugins: [], diagnostics: [], mutationAllowed: true },
@@ -551,8 +559,8 @@ describe("ClawHub plugin catalog client", () => {
       contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
       providers: ["memory-model"],
       channels: ["memory-chat"],
-      uiCapabilities: ["page", "widget"],
     });
+    expect(joined.detail.uiCapabilities).toEqual(expected);
     expect(Value.Check(PluginDiscoveryDetailSchema, joined.detail)).toBe(true);
   });
 
