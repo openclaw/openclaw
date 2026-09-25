@@ -100,10 +100,23 @@ function snapshotSqliteFamily(databasePath: string) {
 
 function resolveExpectedOwnershipCoordinatorPath(databasePath: string): string {
   const canonicalDatabasePath = resolvePathViaExistingAncestorSync(databasePath);
-  const runtimeDirectory =
-    process.platform === "win32"
-      ? path.join(os.homedir(), "AppData", "Local", "OpenClaw", "locks")
-      : "/tmp";
+  let runtimeDirectory: string;
+  const override = process.env.OPENCLAW_LOCKS_DIR?.trim();
+  if (process.platform === "win32" || override) {
+    runtimeDirectory =
+      process.platform === "win32"
+        ? path.join(os.homedir(), "AppData", "Local", "OpenClaw", "locks")
+        : (override as string);
+  } else {
+    // Mirror the runtime probe in resolveStateLifecycleRuntimeDirectory():
+    // /tmp is not writable for the Termux/Android shell user.
+    try {
+      fs.accessSync("/tmp", fs.constants.W_OK);
+      runtimeDirectory = "/tmp";
+    } catch {
+      runtimeDirectory = path.join(os.homedir(), ".openclaw", "locks");
+    }
+  }
   const canonicalRuntimeDirectory = resolvePathViaExistingAncestorSync(runtimeDirectory);
   const suffix =
     typeof process.getuid === "function"
