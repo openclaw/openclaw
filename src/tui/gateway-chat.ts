@@ -547,10 +547,10 @@ export class GatewayChatClient implements TuiBackend {
   private refreshModelsForEvent(event: TuiEvent) {
     const payload = asNullableRecord(event.payload);
     const clear =
-      event.event === "config.changed" ||
-      (event.event === "chat.metadata.changed" && payload?.modelSelectionChanged === true);
+      event.event === "chat.metadata.changed" && payload?.modelSelectionChanged === true;
     const refresh =
-      event.event === "chat.metadata.changed" && payload?.modelCatalogChanged !== false;
+      event.event === "config.changed" ||
+      (event.event === "chat.metadata.changed" && payload?.modelCatalogChanged !== false);
     const scope = event.event === "models.snapshot" ? asNullableRecord(payload?.scope) : null;
     if (!clear && !refresh && !scope) {
       return;

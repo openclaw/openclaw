@@ -603,8 +603,11 @@ full 40-character head SHA:
 node scripts/watch-pr-ci.mjs <pr> <head-sha> --repo openclaw/openclaw
 ```
 
-Use hosted exact-head gates for CI workflow tuning. Do not burn local
-`pnpm test` on unrelated full-suite proof.
+Use hosted exact-head gates for CI workflow tuning. This explicitly selects
+completed-proof mode, not the default pending-GitHub handoff in the
+[maintainer landing workflow](../openclaw-pr-maintainer/references/landing.md#review-prepare-merge).
+Do not burn local `pnpm test` on unrelated full-suite proof. Never combine
+`OPENCLAW_TESTBOX=1` with `OPENCLAW_PR_GATES_REMOTE=github`.
 
 Only after the maintainer explicitly asks you to prepare or land the PR, run the
 repo-native mutating wrapper:
@@ -613,7 +616,7 @@ repo-native mutating wrapper:
 scripts/pr review-init <pr>
 scripts/pr review-artifacts-init <pr>
 scripts/pr review-validate-artifacts <pr>
-OPENCLAW_TESTBOX=1 scripts/pr prepare-run <pr>
+env -u OPENCLAW_PR_GATES_REMOTE OPENCLAW_TESTBOX=1 scripts/pr prepare-run <pr>
 ```
 
 `prepare-run` can push a prepared commit to the PR branch. Only run

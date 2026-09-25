@@ -49,6 +49,12 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   release branch. If the required main landing policy is blocked by unrelated
   main failures, report that blocker and keep independent release work moving
   instead of healing broader main.
+- Land tooling-only fixes on `main` with the `release-fast-lane` label added
+  before the push (RELEASING.md "Release tooling fast lane"): `openclaw/ci-gate`
+  then runs lint, types, guards, dependencies, docs, and the changed Node rows
+  only. Land through the native `scripts/pr` path with its completed ClawSweeper
+  review; findings are advisory for that label, so record any P1 the release
+  owner declines to fix in the PR with its follow-up before landing.
 - `OPENCLAW_RELEASE_RUNNER_GROUP` optionally routes validation parents and workers
   and the Release Publish parent plus its publish children to reserved capacity
   with unchanged labels; credentialed publish and approval jobs stay on default
@@ -531,9 +537,16 @@ and must be cleared after the release.
   the child-approval and stale-child sweep commands below instead of running
   them (it never mutates a child run), and on any refusal prints `Next:` with
   the exact recovery command.
-- npm children (`Plugin NPM Release`, `openclaw-npm-release.yml`) need their
-  own `npm-release` approval; the parent's approval does not always propagate,
-  and an unapproved core child sits `waiting` silently. Watch every child and
+- The parent's `npm-release` approval mints the attested
+  `openclaw-release-approval-v1-<parent run>-<attempt>` receipt; bot-dispatched
+  children verify it (`scripts/release-approval-receipt.mjs verify`) before
+  their gates. The ClawHub OIDC child skips its `clawhub-plugin-release` gate
+  on a verified receipt and instead waits for the parent's
+  `openclaw-clawhub-parent-authorization-v2-*` receipt before publishing. npm
+  children (`Plugin NPM Release`, `openclaw-npm-release.yml`) keep
+  `npm-release` (npm trusted publishers are bound to it, `npm trust list
+openclaw`) and the workflow token cannot approve it (`canApprove=false`), so
+  an unapproved npm child sits `waiting` silently. Watch every child and
   approve npm children only (environment id `13010111854`):
   ```bash
   gh api repos/openclaw/openclaw/actions/runs/<child>/pending_deployments
@@ -541,11 +554,13 @@ and must be cleared after the release.
     -f state=approved -f comment="<reason>" -F 'environment_ids[]=13010111854'
   ```
 - Never approve ClawHub children (`plugin-clawhub-release.yml`,
-  `plugin-clawhub-new.yml`) by hand: `Revalidate trusted tooling identity`
-  downloads `openclaw-clawhub-recovery-approval-<run>-1`, which only the
-  parent's approval path uploads, so every publish job fails
-  `Artifact not found`. If the parent died before approving them, cancel them
-  and re-dispatch the parent.
+  `plugin-clawhub-new.yml`) by hand. `plugin-clawhub-release.yml` needs no
+  approval on the bot route (receipt-verified); the `Artifact not found` line
+  for `openclaw-clawhub-recovery-approval-<run>-1` is a non-fatal probe, and a
+  late human approval fails at `Revalidate trusted tooling identity` with
+  `parent state completed/failure is not allowed by authorization route`
+  once the parent has died (2026.9.6: runs 35930335388/35930341394). If the
+  parent died, cancel the children and re-dispatch the parent.
 - Before every child dispatch the parent sweeps a failed earlier parent's
   `waiting`/`queued` children of the same release (ClawHub and core by the
   `parent=<run>/<attempt>` run title; plugin npm by the release SHA, only

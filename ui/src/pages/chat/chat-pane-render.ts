@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
@@ -44,7 +45,6 @@ import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import {
   dismissChatError,
   initialHistorySubmitState,
-  resolveAssistantAttachmentAuthToken,
   resolveChatArtifactDownload,
   resolveChatPaneFollowUpMode,
 } from "./chat-pane-state.ts";
@@ -611,11 +611,11 @@ export class ChatPane extends ChatPaneLayoutRender {
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),
       onSwitchRealtimeCamera: () => void state.switchRealtimeTalkCamera(),
       onDismissError: () => {
-        dismissChatError(state as never);
+        dismissChatError(state);
         state.requestUpdate?.();
       },
       onDismissRealtimeTalkError: () => {
-        dismissRealtimeTalkError(state as never);
+        dismissRealtimeTalkError(state);
         state.requestUpdate?.();
       },
       onDismissRealtimeTalkInputNotice: () => {
@@ -683,7 +683,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       fetchLinkFavicon,
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
       branding: this.context?.theme.branding,
-      assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
+      assistantAttachmentAuthToken: resolveControlUiAuthToken(state),
       resolveArtifactDownload: (params, signal) =>
         resolveChatArtifactDownload(state, params, signal),
       basePath: state.basePath,

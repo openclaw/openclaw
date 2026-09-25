@@ -32,6 +32,7 @@ import { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credenti
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { mergeProviderModels, type SourceModelFields } from "./models-config.merge.js";
 import {
   buildPluginCatalogConfig,
@@ -92,6 +93,7 @@ type ImplicitProviderContext = ImplicitProviderParams & {
   providerDiscoveryScope?: ProviderDiscoveryScope;
   resolveProviderApiKey: ProviderApiKeyResolver;
   resolveProviderAuth: ProviderAuthResolver;
+  normalizeProviderForScope: (provider: string) => string;
 };
 
 function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
@@ -303,6 +305,7 @@ async function resolvePluginImplicitProviders(
         } else {
           result = await runProviderCatalogWithTimeout({
             provider,
+            normalizeProviderForScope: ctx.normalizeProviderForScope,
             authStore: ctx.authStore,
             ...(providerIds !== undefined ? { providerIds } : {}),
             config: catalogConfig,
@@ -565,8 +568,17 @@ export async function resolveImplicitProviders(
     params.workspaceDir,
     discoveryAuthEnv,
   ] as const;
+  const metadata = params.pluginMetadataSnapshot;
   const context: ImplicitProviderContext = {
     ...params,
+    normalizeProviderForScope:
+      discoveryScope && metadata
+        ? createPreparedModelCatalogProviderNormalizer(
+            { ...metadata, plugins: metadata.manifestRegistry.plugins },
+            params.config ?? {},
+            env,
+          )
+        : normalizeProviderId,
     get authStore() {
       return getAuthStore();
     },

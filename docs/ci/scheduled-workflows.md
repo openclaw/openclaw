@@ -33,18 +33,30 @@ because the post-merge translation workflows own its repair. Ordinary manual
 runs, including `validation_tier=main`, retain strict locale parity.
 
 Inspect the scheduled `CI` run and its `openclaw/ci-gate` job directly.
-Scheduled runs share one non-canceling concurrency slot with a coalesced pending
-tip. Manual/release CI stays independent, and security-only pushes cannot cancel
+Each scheduled run starts independently so an older iOS simulator phase cannot
+hold the next hourly core checks. Only scheduled `ios-build` jobs share a
+non-canceling slot: the active proof finishes while GitHub replaces a pending
+iOS job when another arrives. Arrival order need not match revision order.
+Manual/release CI stays independent, and security-only pushes cannot cancel
 scheduled work. CI remains available during release validation;
 `OPENCLAW_RELEASE_PRIORITY_RUN` does not control admission.
 
-The standalone Docs, Node Runtime Conformance, Plugin Init Scaffold Validation,
-and Sandbox Common Smoke workflows also run hourly at minute 23, retaining
-their existing PR scopes. Plugin NPM Release runs its nonpublishing metadata
-and unpublished-package pack preview hourly; schedules cannot enter its
-manual-only approval or publication jobs. Vitest Cache Warm runs at minute 17
-of every hour, retaining its manual and repository-dispatch recovery paths.
-The warmer is independent; its completion before CI is not guaranteed.
+Hourly CI owns docs checks, including RunsOn routing. The standalone Docs workflow
+retains manual and opted-in push runs.
+
+Node Runtime Conformance and Plugin Init Scaffold Validation check for changed
+inputs hourly at minute 23. They reuse proof only when the required jobs passed
+on the same branch within 24 hours and the complete input diff is unchanged.
+Skipped jobs cannot advance the comparison base. Missing proof, incomplete
+diffs, or API errors request fresh validation. Each decision reports its reason.
+Both workflows retain their PR scopes and refresh proof daily for dependency drift.
+
+Sandbox Common Smoke runs daily at 05:23 UTC and retains PR and manual runs.
+Plugin NPM Release runs its nonpublishing metadata and unpublished-package pack
+preview hourly. Schedules cannot enter its manual-only approval or publication
+jobs. Vitest Cache Warm runs at minute 17 of every hour, retaining its manual
+and repository-dispatch recovery paths. The warmer is independent. Its
+completion before CI is not guaranteed.
 
 ### Restore per-push CI
 
@@ -79,14 +91,31 @@ and production dependency auditing) on its existing non-docs push scope.
 Default main pushes also run the baseline-growth, assertion-safety, and new
 protocol-method metadata guards there against the exact push `before` SHA,
 so scheduled CI's main-against-itself comparison cannot lose these checks;
-Workflow Sanity retains its existing push scope. The full CI aggregate job is
+Workflow Sanity checks tracked conflict markers on every admitted push.
+Its workflow lint and security tools run only when workflow, action, or lint
+policy inputs change. The full CI aggregate job is
 skipped on default main pushes, **not** on runnable PRs or full manual runs.
 CodeQL and Workflow Sanity also remain available during release validation.
 PR required-check names and security-review enforcement are unchanged.
 
 Publishing and its prerequisite checks stay event-driven: docs mirror and
 website installer synchronization, runner-image publication, locale-generation
-PRs, release closeout, and ClawSweeper activity forwarding are unchanged.
+PRs, and ClawSweeper activity forwarding retain their existing admission.
+Stable main closeout runs when release inputs change. The existing
+`pnpm release:stable` closeout phase waits for successful publication, verifies
+main, and dispatches closeout. With saved orchestrator state, resume it with
+`pnpm release:stable YYYY.M.PATCH --from closeout`.
+
+If you publish directly from the Actions UI after the main forward-port,
+dispatch closeout after Release Publish succeeds and main carries the shipped
+version and changelog:
+
+```bash
+gh workflow run openclaw-stable-main-closeout.yml --ref main -f tag=vYYYY.M.PATCH
+```
+
+Unrelated source pushes no longer poll for release completion. Manual recovery
+retains its existing evidence checks.
 Docs Agent now verifies the exact successful full-CI attempt before admitting
 its write job: opted-in main pushes and scheduled full-CI runs qualify, while
 security-only pushes do not. Its hourly/current-main guard remains in place.
@@ -96,12 +125,16 @@ none existed and changes no repository rulesets.
 
 GitHub cron is best-effort on the default branch, not a one-hour latency SLA:
 runs may be delayed or dropped under load, and public-repository schedules can
-be disabled after inactivity. These workflows deliberately recheck unchanged
+be disabled after inactivity. Full main CI deliberately rechecks unchanged
 SHAs rather than introducing a separate last-success ledger. A failure can be
 retried at the next hourly opportunity, and manual dispatch remains available.
-If full CI takes longer than an hour, the current run finishes while GitHub
-coalesces pending scheduled runs. No measured cost savings or strict completion
-interval is claimed.
+If iOS proof takes longer than an hour, later hourly runs can finish their other
+checks while waiting for that slot. A superseded pending iOS job leaves its run
+non-green and cannot qualify Docs Agent. Those completed checks still consume
+runner time; per-run worker limits do not bound concurrent hourly runs together.
+The slot does not cover manual/PR iOS jobs or runs admitted by an older workflow.
+This removes workflow admission blocking, not runner-capacity waits. No measured
+cost savings or strict completion interval is claimed.
 
 ## Nightly Full Release Validation
 

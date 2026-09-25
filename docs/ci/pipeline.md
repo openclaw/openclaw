@@ -105,7 +105,7 @@ the job's uploaded artifacts.
 | `check-additional-*`             | Boundary check stripes (including prompt snapshot drift), session accessor/transcript reader/SQLite transaction boundaries, extension lint groups, package boundary compile/canary, and runtime topology architecture; the pure-reporting plugin SDK API diff runs on manual and release dispatches only | Node-relevant changes                                 |
 | `checks-node-compat-node24`      | Node 24 minimum compatibility build and smoke lane                                                                                                                                                                                                                                                       | Full Release Validation and manual dispatches only    |
 | `check-docs`                     | Docs formatting, lint, and broken-link checks                                                                                                                                                                                                                                                            | Docs changed (PRs and manual dispatch)                |
-| `native-i18n`                    | Verify native source extraction and localization safety on source PRs and release gates; enforce generated parity on generated PRs, generated-scope release gates, and ordinary manual CI, with warnings for proven obsolete native IDs and Android rows                                                 | Native i18n-relevant changes                          |
+| `native-i18n`                    | Verify native source extraction and localization safety on source PRs and release gates; enforce generated parity on generated PRs, generated-scope release gates, and ordinary manual CI, with warnings for proven obsolete native IDs, Android rows, and Apple catalog rows                            | Native i18n-relevant changes                          |
 | `skills-python`                  | Ruff + pytest for Python-backed skills                                                                                                                                                                                                                                                                   | Python-skill-relevant changes                         |
 | `checks-windows`                 | Windows-specific process/path tests plus shared runtime import specifier regressions                                                                                                                                                                                                                     | Windows-relevant changes                              |
 | `macos-node`                     | Focused macOS TypeScript tests: launchd, Homebrew, runtime paths, packaging scripts, process-group wrapper                                                                                                                                                                                               | macOS-relevant changes                                |
@@ -135,14 +135,24 @@ files on Node (`chat-pane-retained-presentation.test.ts` and
 `usage-page-details.test.ts`) and runs the remaining files on Bun.
 Other families retain Node until they pass on the pinned fork within their
 existing CI resource budgets. Precise PR targets use the existing
-test-project planner to find their owners. Mixed or ambiguous selections retain
-Node, and no tests are removed from the selected inventory.
+test-project planner to find their owners. The runtime owner admits only qualified
+configs, exact files, and partitions; ambiguous selections retain Node. No tests
+are removed from the selected inventory.
 
 Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`)
 also supports Bun when it is the entire exact selection in `agents-support`.
 Mixed and broad PR selections retain their original Node invocation. Dual-runtime
 validation keeps that complete Node selection and adds only the qualified recovery
 file when the original include patterns select it.
+
+The gateway-client leaf config also supports Bun. Its existing ordered
+gateway-core/gateway-client stripes run the core portion on Node and the client
+portion on Bun, sequentially in the original worker slot. Both retain the original
+include patterns and worker limits. Explicit project-parallel overrides other
+than one retain the complete Node stripe. Dual-runtime validation keeps the
+complete original stripe on Node and adds the client portion on Bun. The shared
+Vitest config resolves `ws` to the installed package so its imports and mocks use
+the same module identity on both runtimes.
 
 Pull requests and their release-gate fallback run compatible selections on Bun.
 Ordinary manual CI, including Full Release Validation's `normal_ci` child, runs

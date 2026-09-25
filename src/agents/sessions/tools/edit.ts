@@ -14,11 +14,12 @@ import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { repairJson } from "@openclaw/ai/internal/runtime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { hasErrnoCode } from "../../../infra/errno.js";
 import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
 import { normalizeToLF } from "../../line-endings.js";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { textResult } from "../../tools/common.js";
+import { textResult } from "../../tools/tool-results.js";
 import { decodeUtf8File } from "../../utf8-file.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import {
@@ -83,12 +84,7 @@ const defaultEditOperations: EditOperations = {
         mtimeMs: stat.mtimeMs,
       } as const;
     } catch (error) {
-      if (
-        error &&
-        typeof error === "object" &&
-        "code" in error &&
-        (error as { code?: unknown }).code === "ENOENT"
-      ) {
+      if (hasErrnoCode(error, "ENOENT")) {
         return null;
       }
       throw error;
@@ -445,14 +441,9 @@ export function createEditToolDefinition(
           assertCurrent();
           const diffResult = generateDiffString(baseContent, newContent);
           const patch = generateUnifiedPatch(path, baseContent, newContent);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
-              },
-            ],
-            details: {
+          return textResult<EditToolDetails>(
+            `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
+            {
               changed: true,
               diff: diffResult.diff,
               patch,
@@ -460,7 +451,7 @@ export function createEditToolDefinition(
                 ? {}
                 : { firstChangedLine: diffResult.firstChangedLine }),
             },
-          };
+          );
         } catch (error: unknown) {
           assertCurrent();
           const normalizedError = error instanceof Error ? error : new Error(String(error));
@@ -473,15 +464,10 @@ export function createEditToolDefinition(
             (await verifyPersistedUtf8File(absolutePath, expectedContent, ops))
           ) {
             assertCurrent();
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
-                },
-              ],
-              details: { changed: true, diff: "", patch: "" },
-            };
+            return textResult<EditToolDetails>(
+              `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
+              { changed: true, diff: "", patch: "" },
+            );
           }
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
             throw appendMismatchHint(normalizedError, currentContent);

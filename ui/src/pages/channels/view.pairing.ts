@@ -15,12 +15,8 @@ import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelRefreshAction } from "./view.shared.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
-function accountName(account: ChannelsPairingAccount): string {
+function accountName(account: Pick<ChannelsPairingAccount, "accountLabel" | "accountId">): string {
   return account.accountLabel || account.accountId;
-}
-
-function requestAccountName(request: ChannelsPairingRequest): string {
-  return request.accountLabel || request.accountId;
 }
 
 function formatRequestTime(value: string): string {
@@ -98,7 +94,7 @@ function renderRequest(request: ChannelsPairingRequest, props: ChannelsProps) {
         <div class="settings-row__text">
           <span class="settings-row__title">${request.senderId}</span>
           <span class="settings-row__desc">
-            ${request.senderLabel} · ${request.channelLabel} · ${requestAccountName(request)}
+            ${request.senderLabel} · ${request.channelLabel} · ${accountName(request)}
             (${request.accountId})
           </span>
           <span class="settings-row__desc">
@@ -114,7 +110,7 @@ function renderRequest(request: ChannelsPairingRequest, props: ChannelsProps) {
             aria-label=${t("channels.pairing.approveAria", {
               sender: request.senderId,
               channel: request.channelLabel,
-              account: requestAccountName(request),
+              account: accountName(request),
             })}
             @click=${() => props.onPairingApprove(request)}
           >
@@ -127,7 +123,7 @@ function renderRequest(request: ChannelsPairingRequest, props: ChannelsProps) {
             aria-label=${t("channels.pairing.dismissAria", {
               sender: request.senderId,
               channel: request.channelLabel,
-              account: requestAccountName(request),
+              account: accountName(request),
             })}
             @click=${() => props.onPairingDismiss(request)}
           >
@@ -299,7 +295,7 @@ export function renderChannelPairingPrompt(props: ChannelsProps) {
       <div class="channels-pairing-dialog">
         <div class="settings-row__title">${dialogTitle}</div>
         <div class="settings-row__desc">
-          ${request.senderId} · ${request.channelLabel} · ${requestAccountName(request)}
+          ${request.senderId} · ${request.channelLabel} · ${accountName(request)}
           (${request.accountId})
         </div>
         <div class="callout ${approving ? "info" : "warn"}">

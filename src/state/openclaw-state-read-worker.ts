@@ -86,6 +86,9 @@ function readPool(): ReadPool {
 }
 
 function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type === "cron.jobNames") {
+    return { ...command, jobIds: [...command.jobIds] };
+  }
   if (command.type === "sessionRepositoryWorkspaces.find") {
     return {
       type: command.type,
@@ -223,6 +226,12 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   let bytes = Buffer.byteLength(command.type, "utf8");
+  if (command.type === "cron.jobNames") {
+    return command.jobIds.reduce(
+      (sum, id) => sum + Buffer.byteLength(id, "utf8"),
+      bytes + Buffer.byteLength(command.storePath ?? "", "utf8"),
+    );
+  }
   if (command.type === "sessionRepositoryWorkspaces.find") {
     return command.owners.reduce(
       (total, owner) =>

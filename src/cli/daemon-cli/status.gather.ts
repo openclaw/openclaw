@@ -28,6 +28,7 @@ import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
   readGatewaySecretInputValue,
 } from "../../gateway/secret-input-paths.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { readGatewayLastShutdown } from "../../infra/gateway-boot-lifecycle.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
@@ -98,7 +99,7 @@ async function readFastStatusConfig(configPath: string): Promise<StatusConfigRea
   try {
     raw = await fs.readFile(configPath, "utf8");
   } catch (error) {
-    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
+    if (!hasErrnoCode(error, "ENOENT")) {
       return null;
     }
     return {

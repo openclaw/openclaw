@@ -15,6 +15,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { isPrereleaseResolutionAllowed, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isNotFoundPathError, normalizeWindowsPathForComparison } from "../infra/path-guards.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { compareValidSemver } from "../infra/semver.js";
 import {
   isPluginNpmProjectDir,
@@ -40,17 +41,6 @@ import { getPluginCache } from "./plugin-cache.js";
 
 export { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
 
-function copyInstallRecords(
-  records: Record<string, PluginInstallRecord> | undefined,
-): Record<string, PluginInstallRecord> {
-  return copyPluginInstallRecordMap(records);
-}
-
-const BLOCKED_RECORD_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-
-function isSafeRecordKey(key: string): boolean {
-  return !BLOCKED_RECORD_KEYS.has(key);
-}
 function readJsonObjectFileSync(filePath: string): Record<string, unknown> | null {
   const parsed = tryReadJsonSync(filePath);
   return isRecord(parsed) ? parsed : null;
@@ -64,7 +54,7 @@ function readStringRecord(value: unknown): Record<string, string> {
   for (const [key, raw] of Object.entries(value).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    if (!isSafeRecordKey(key)) {
+    if (isBlockedObjectKey(key)) {
       continue;
     }
     if (typeof raw === "string" && raw.trim()) {
@@ -465,7 +455,7 @@ export function readPersistedInstalledPluginIndexInstallRecords(
   options: InstalledPluginIndexStoreOptions = {},
 ): Record<string, PluginInstallRecord> | null {
   const state = inspectPersistedInstalledPluginIndexInstallRecordsSync(options);
-  return state.status === "valid" ? copyInstallRecords(state.records) : null;
+  return state.status === "valid" ? copyPluginInstallRecordMap(state.records) : null;
 }
 
 function requireLoadablePluginInstallRecordState(
@@ -495,7 +485,7 @@ export async function loadInstalledPluginIndexInstallRecords(
   const cache = getPluginCache().installRecords;
   const cached = cache.get(cacheKey);
   if (cached) {
-    return copyInstallRecords(cached);
+    return copyPluginInstallRecordMap(cached);
   }
   const prepared = await preparePersistedInstalledPluginIndexCacheEntry(captured);
   prepared.assertCurrent();
@@ -507,7 +497,7 @@ export async function loadInstalledPluginIndexInstallRecords(
   );
   prepared.assertCurrent();
   cache.set(cacheKey, records);
-  return copyInstallRecords(records);
+  return copyPluginInstallRecordMap(records);
 }
 
 /** Synchronously loads installed plugin records, recovering managed npm installs and caching them. */
@@ -518,7 +508,7 @@ export function loadInstalledPluginIndexInstallRecordsSync(
   const cache = getPluginCache().installRecords;
   const cached = cache.get(cacheKey);
   if (cached) {
-    return copyInstallRecords(cached);
+    return copyPluginInstallRecordMap(cached);
   }
   const records = mergeRecoveredManagedNpmInstallRecords(
     requireLoadablePluginInstallRecordState(
@@ -527,5 +517,5 @@ export function loadInstalledPluginIndexInstallRecordsSync(
     params,
   );
   cache.set(cacheKey, records);
-  return copyInstallRecords(records);
+  return copyPluginInstallRecordMap(records);
 }

@@ -88,8 +88,8 @@ permissions:
 run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != '' && format('CI {0}', inputs.dispatch_id) || (github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI') }}
 
 concurrency:
-  # Scheduled main CI shares one non-canceling slot with a coalesced pending tip.
-  # Ordinary manual/release runs remain independent; pushes cannot displace hourly work.
+  # Admit each scheduled run independently so a prior iOS tail cannot block core CI.
+  # The iOS job owns scheduled simulator serialization; manual/release runs stay independent.
   # Canonical main uses run-number parity for two non-canceling slots. Each
   # slot keeps GitHub's single coalesced pending tip while its active run finishes.
   # Passive draft events must not replace runnable CI before job gates: pending
@@ -98,7 +98,7 @@ concurrency:
   group: >-
     ${{ github.event_name == 'pull_request' && github.event.pull_request.draft &&
         github.event.action != 'converted_to_draft' && format('{0}-draft-v1-{1}', github.workflow, github.run_id) ||
-        github.event_name == 'schedule' && format('{0}-hourly-main-v1', github.workflow) ||
+        github.event_name == 'schedule' && format('{0}-hourly-main-v2-{1}', github.workflow, github.run_id) ||
         github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && format('{0}-v8-{1}-{2}', github.workflow, github.ref, (endsWith(format('{0}', github.run_number), '0') || endsWith(format('{0}', github.run_number), '2') || endsWith(format('{0}', github.run_number), '4') || endsWith(format('{0}', github.run_number), '6') || endsWith(format('{0}', github.run_number), '8')) && 'a' || 'b') || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha)))) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -146,6 +146,7 @@ jobs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       release_scope: ${{ steps.manifest.outputs.release_scope }}
+      release_fast_lane: ${{ steps.manifest.outputs.release_fast_lane }}
       validation_tier: ${{ steps.manifest.outputs.validation_tier }}
       run_node: ${{ steps.manifest.outputs.run_node }}
       # docker-seed-e2e-contract-v1: frozen targets without this marker skip the lane.
@@ -1425,6 +1426,7 @@ jobs:
           OPENCLAW_CI_CORRECTION_BASE_SHA: ${{ steps.release_correction_base.outputs.sha }}
           OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
+          OPENCLAW_CI_RELEASE_FAST_LANE_LABEL: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'release-fast-lane') && 'true' || 'false' }}
           OPENCLAW_CI_RELEASE_SCOPE: ${{ inputs.release_scope || 'full' }}
           OPENCLAW_CI_VALIDATION_TIER: ${{ github.event_name == 'schedule' && 'main' || inputs.validation_tier || 'full' }}
           OPENCLAW_CI_PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
@@ -1666,6 +1668,17 @@ jobs:
           const runNodeFastOnly =
             runNode && !toolingOwnerChange && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
           const runNodeFull = runNode && !runNodeFastOnly;
+          // release-fast-lane: label-admitted narrow gate for release tooling PRs.
+          // Canonical PR CI only; declined runs keep every ordinary decision.
+          const releaseFastLaneLabel = parseBoolean(process.env.OPENCLAW_CI_RELEASE_FAST_LANE_LABEL);
+          const releaseFastLaneScope = !releaseFastLaneLabel
+            ? null
+            : !(eventName === "pull_request" && isCanonicalRepository && process.env.OPENCLAW_CI_HEAD_REPOSITORY === process.env.OPENCLAW_CI_REPOSITORY && runNodeFull && !frozenTarget && !compatibilityTarget && !releaseGate && !docsOnly)
+              ? { eligible: false, reason: "applies only to same-repository pull request CI with full Node routing" }
+              : typeof changedNodeTestPlan.resolveReleaseFastLaneScope !== "function"
+                ? { eligible: false, reason: "CI target lacks the release fast lane selector" }
+                : changedNodeTestPlan.resolveReleaseFastLaneScope(changedPaths);
+          const releaseFastLane = releaseFastLaneScope?.eligible === true;
           const runCheck = runNodeFull || (!docsOnly && nodeDataOnly && (
             changedPaths === null || changedPaths.some((path) => /\.[cm]?tsx?$/u.test(path))
           ));
@@ -1698,15 +1711,15 @@ jobs:
             existsSync("scripts/lib/ci-check-family-scope.mts")
               ? (await import("./scripts/lib/ci-check-family-scope.mts")).resolveCiCheckFamilyScope(changedPaths)
               : null;
-          let pluginContractShards = (runNodeFull && (!proposedCheckScope || proposedCheckScope.pluginContracts)) || runNodeFastPluginContracts
+          let pluginContractShards = (runNodeFull && !releaseFastLane && (!proposedCheckScope || proposedCheckScope.pluginContracts)) || runNodeFastPluginContracts
             ? createPluginContractTestShards() : [];
-          let channelContractShards = runNodeFull && (!proposedCheckScope || proposedCheckScope.channelContracts)
+          let channelContractShards = runNodeFull && !releaseFastLane && (!proposedCheckScope || proposedCheckScope.channelContracts)
             ? createChannelContractTestShards() : [];
           const runMacos =
-            !nativeGeneratedOnly && parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly && isCanonicalRepository;
+            !nativeGeneratedOnly && parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly && isCanonicalRepository && !releaseFastLane;
           // Older selected checkouts report only run_macos; retain their native Node coverage.
           const runMacosNode = runMacos ||
-            (!nativeGeneratedOnly && parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS_NODE) && !docsOnly && isCanonicalRepository);
+            (!nativeGeneratedOnly && parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS_NODE) && !docsOnly && isCanonicalRepository && !releaseFastLane);
           const supportsCurrentMacosSwiftCi =
             existsSync("scripts/install-swift-tools.sh") &&
             existsSync("scripts/lint-swift.sh") &&
@@ -1716,6 +1729,7 @@ jobs:
           const runIosBuild =
             !nativeGeneratedOnly &&
             parseBoolean(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
+            !releaseFastLane &&
             !npmQualification &&
             !docsOnly &&
             isCanonicalRepository &&
@@ -1724,7 +1738,7 @@ jobs:
               (releaseCandidateTarget && supportsIosBuild));
           const runAndroid =
             !nativeGeneratedOnly && parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !npmQualification &&
-            !docsOnly && isCanonicalRepository;
+            !docsOnly && isCanonicalRepository && !releaseFastLane;
           // Frozen targets may predate this class; current source must still fail
           // native validation if the required test disappears.
           const runAndroidAccessNative = runAndroid && !compatibilityTarget &&
@@ -1733,13 +1747,14 @@ jobs:
             ));
           const runWindows =
             parseBoolean(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
+            !releaseFastLane &&
             !docsOnly &&
             !runNodeFastOnly &&
             isCanonicalRepository;
-          const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
+          const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly && !releaseFastLane;
           const runControlUiI18n =
-            parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
-          const runUiTests = parseBoolean(process.env.OPENCLAW_CI_RUN_UI_TESTS) && !docsOnly && !nodeDataOnly;
+            parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly && !releaseFastLane;
+          const runUiTests = parseBoolean(process.env.OPENCLAW_CI_RUN_UI_TESTS) && !docsOnly && !nodeDataOnly && !releaseFastLane;
           // Only ordinary current PR unit entries may omit browser integration;
           // main, dispatches, frozen targets and unknown selectors retain their owners.
           const runUiE2e = runUiTests && (
@@ -1777,6 +1792,7 @@ jobs:
             hasPackageScript("apple:i18n:check");
           const runNativeI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
+            !releaseFastLane &&
             !npmQualification &&
             !docsOnly &&
             (!frozenTarget || supportsNativeI18n);
@@ -1800,7 +1816,7 @@ jobs:
           const supportsFormatCheck =
             targetWorkflow.split("pnpm format:check").length - 1 >= 2;
           const runFormatCheck = !frozenTarget || supportsFormatCheck;
-          let runBaselineRatchets = runNode && !frozenTarget;
+          let runBaselineRatchets = runNode && !frozenTarget && !releaseFastLane;
           const checksFastCoreTasks =
             runBaselineRatchets
               ? [
@@ -1816,13 +1832,13 @@ jobs:
                   },
                 ]
             : [];
-          if (runNodeFull) {
+          if (runNodeFull && !releaseFastLane) {
             checksFastCoreTasks.push(
               { check_name: "checks-fast-bundled-protocol", runtime: "node", task: "bundled-protocol" },
               { check_name: "checks-fast-bun-launcher", runtime: "bun", task: "bun-launcher" },
             );
           } else {
-            if (runNodeFastCiRouting) {
+            if (runNodeFastCiRouting && !releaseFastLane) {
               checksFastCoreTasks.push({
                 check_name: "checks-fast-ci-routing",
                 runtime: "node",
@@ -1882,6 +1898,7 @@ jobs:
                 ? "push"
                 : undefined;
           let changedNodeTestShards = null;
+          let changedNodeTestFallbackReason;
           let changedExtensionFallbackShards = [];
           if (compactPullRequest && runNodeFull) {
             // Compact core excludes plugins; a failed planner is not a complete fallback.
@@ -1902,15 +1919,21 @@ jobs:
               includeReleaseOnlyToolingShards: false,
               includeReleaseOnlyRuntimeTests,
               runnerBackend: nodeRunnerBackend,
-              onFallback: (reason) => console.log(`Node test plan broad fallback: ${reason}`),
+              releaseFastLane,
+              onFallback: (reason) => {
+                changedNodeTestFallbackReason = reason;
+                console.log(`Node test plan broad fallback: ${reason}`);
+              },
               dedicatedContractShards: [...pluginContractShards, ...channelContractShards],
               dedicatedUiE2e: runUiE2e && !compatibilityTarget,
               dedicatedMaxLinesRatchet: runBaselineRatchets &&
                 (!proposedCheckScope || proposedCheckScope.baselineRatchets),
             });
             if (changedNodeTestShards === null) {
-              pluginContractShards = createPluginContractTestShards();
-              channelContractShards = createChannelContractTestShards();
+              if (!releaseFastLane) {
+                pluginContractShards = createPluginContractTestShards();
+                channelContractShards = createChannelContractTestShards();
+              }
               changedExtensionFallbackShards =
                 changedNodeTestPlan.createChangedExtensionFallbackShards(changedPaths);
             } else {
@@ -1939,12 +1962,14 @@ jobs:
           // packaged CLI's import graph. QA gating is diff-based, so it also
           // applies when test targeting fell back to the full compact suite.
           const changedScopeHasBuildImpact =
-            changedNodeTestShards === null ||
-            changedNodeTestShards.some((shard) => shard.requiresDist) ||
-            (!narrowCheckScope && (
-              typeof changedNodeTestPlan.hasBuildArtifactAffectingChange !== "function" ||
-              changedNodeTestPlan.hasBuildArtifactAffectingChange(changedPaths)
-            ));
+            releaseFastLane && changedNodeTestShards !== null
+              ? changedNodeTestShards.some((shard) => shard.requiresDist)
+              : changedNodeTestShards === null ||
+                changedNodeTestShards.some((shard) => shard.requiresDist) ||
+                (!narrowCheckScope && (
+                  typeof changedNodeTestPlan.hasBuildArtifactAffectingChange !== "function" ||
+                  changedNodeTestPlan.hasBuildArtifactAffectingChange(changedPaths)
+                ));
           const changedScopeHasQaImpact =
             changedPaths === null ||
             eventName === "workflow_dispatch" ||
@@ -1966,13 +1991,14 @@ jobs:
             typeof changedNodeTestPlan.hasSqliteSessionLifecycleAffectingChange !== "function" ||
             changedNodeTestPlan.hasSqliteSessionLifecycleAffectingChange(changedPaths);
           const runSqliteSessionLifecycle =
+            !releaseFastLane &&
             runProofTier &&
             runNodeFull &&
             supportsSqliteSessionLifecycleProof &&
             changedScopeHasSqliteSessionLifecycleImpact;
           const runBuildArtifacts =
             runNodeFull && (changedScopeHasBuildImpact || runSqliteSessionLifecycle);
-          const runControlUiPerformance = (runNodeFull || runUiTests) && (
+          const runControlUiPerformance = !releaseFastLane && (runNodeFull || runUiTests) && (
             eventName === "workflow_dispatch" || changedPaths === null ||
             typeof changedNodeTestPlan.hasControlUiPerformanceAffectingChange !== "function" ||
             changedNodeTestPlan.hasControlUiPerformanceAffectingChange(changedPaths)
@@ -2215,6 +2241,7 @@ jobs:
 
           const manifest = {
             release_scope: releaseScope,
+            release_fast_lane: releaseFastLane,
             validation_tier: validationTier,
             docs_only: docsOnly,
             docs_changed: docsChanged,
@@ -2245,7 +2272,7 @@ jobs:
                 };
               }),
             ),
-            run_prompt_snapshots: runNodeFull && changedScopeHasPromptSnapshotImpact,
+            run_prompt_snapshots: runNodeFull && !releaseFastLane && changedScopeHasPromptSnapshotImpact,
             run_sqlite_session_lifecycle: runSqliteSessionLifecycle,
             checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
             run_plugin_contracts_shards: pluginContractShards.length > 0,
@@ -2284,8 +2311,8 @@ jobs:
             startup_corpus_node_revision: startupCorpusNodeRevision,
             startup_corpus_test_files_json: startupCorpusTestFiles ? JSON.stringify(startupCorpusTestFiles) : "",
             changed_core_test_paths_json: changedCoreTestPaths ? JSON.stringify(changedCoreTestPaths) : "",
-            run_check_additional: runNodeFull && additionalChecks.length > 0,
-            check_additional_matrix: createMatrix(runNodeFull ? additionalChecks : []),
+            run_check_additional: runNodeFull && !releaseFastLane && additionalChecks.length > 0,
+            check_additional_matrix: createMatrix(runNodeFull && !releaseFastLane ? additionalChecks : []),
             run_check_docs: docsChanged && eventName !== "push",
             run_format_check: runFormatCheck,
             run_control_ui_i18n: runControlUiI18n,
@@ -2537,6 +2564,25 @@ jobs:
             );
           }
           console.log(`CI release scope: ${releaseScope}`);
+          if (releaseFastLane) {
+            const running = `security-fast, check-shard (lint, prod/test types, guards, dependencies), check-docs when docs changed, and ${nodeTestShards.length} changed Node rows${runBuildArtifacts ? ", build-artifacts for built-CLI rows" : ""}`;
+            console.log(`::notice title=Release fast lane::Admitted by label release-fast-lane for release tooling paths. Running: ${running}.`);
+            if (process.env.GITHUB_STEP_SUMMARY) {
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+                "### Release fast lane\n\n" +
+                "- Admitted by label `release-fast-lane` for release tooling paths.\n" +
+                `- Running: ${running}.\n` +
+                "- Skipped: contracts, baseline ratchets, bundled protocol, Bun launcher, additional checks, Control UI, Windows, macOS, iOS, Android, native and Control UI i18n, skills-python.\n" +
+                (changedNodeTestShards === null ? `- Node plan: broad fallback (${changedNodeTestFallbackReason}); the complete compact Node plan still runs.\n` : "") + "\n");
+            }
+          } else if (releaseFastLaneLabel) {
+            const reason = releaseFastLaneScope.reason;
+            console.warn(`::warning title=Release fast lane declined::${reason}`);
+            if (process.env.GITHUB_STEP_SUMMARY) {
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+                `### Release fast lane\n\n- Declined: ${reason}. Ordinary CI selection applies.\n\n`);
+            }
+          }
           if (process.env.GITHUB_STEP_SUMMARY) {
             appendFileSync(process.env.GITHUB_STEP_SUMMARY,
               `### CI release qualification\n\n- Scope: \`${releaseScope}\`\n- Target: \`${checkoutRevision}\`\n` +
@@ -2707,10 +2753,8 @@ jobs:
       - name: Detect committed private keys
         run: node "$PRIVATE_KEY_SCANNER_PATH"
 
-      - name: Install security scanners
-        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.6.2 zizmor==1.30.1
-
-      - name: Audit changed GitHub workflows with zizmor
+      - name: Detect changed GitHub workflows
+        id: workflow_scope
         env:
           BASE_SHA: ${{ steps.diff_base.outputs.sha }}
         run: |
@@ -2726,13 +2770,23 @@ jobs:
             exit 0
           fi
 
-          mapfile -t workflow_files < <(
-            git diff --name-only "${BASE_SHA}" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
-          )
-          if [ "${#workflow_files[@]}" -eq 0 ]; then
+          git diff --name-only --diff-filter=ACMR "${BASE_SHA}" HEAD -- \
+            '.github/workflows/*.yml' '.github/workflows/*.yaml' > "$RUNNER_TEMP/security-workflow-files"
+          if [ ! -s "$RUNNER_TEMP/security-workflow-files" ]; then
             echo "No workflow changes detected; skipping zizmor."
             exit 0
           fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Install security scanners
+        if: steps.workflow_scope.outputs.changed == 'true'
+        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.6.2 zizmor==1.30.1
+
+      - name: Audit changed GitHub workflows with zizmor
+        if: steps.workflow_scope.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          mapfile -t workflow_files < "$RUNNER_TEMP/security-workflow-files"
 
           printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
           GIT_ALLOW_PROTOCOL=file GIT_CONFIG_COUNT=0 \
@@ -6233,6 +6287,11 @@ jobs:
     name: ${{ format('ios-build ({0})', matrix.phase) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_ios_build == 'true'
+    # Finish active hourly simulator proof and coalesce only pending iOS jobs.
+    # Other invocations and their Release/tests siblings must not displace each other.
+    concurrency:
+      group: ${{ github.event_name == 'schedule' && format('{0}-hourly-ios-v1-{1}', github.workflow, matrix.phase) || format('{0}-ios-v1-{1}-{2}', github.workflow, github.run_id, matrix.phase) }}
+      cancel-in-progress: false
     # PRs compile and lint; hourly main retains simulator tests. Full manual
     # validation also adds the independent Release device phase.
     strategy:
@@ -6532,6 +6591,19 @@ jobs:
                 process.stdout.write(path.join(TARGET_BUILD_DIR, FULL_PRODUCT_NAME));
               '
           )"
+          companion_id="$(
+            xcrun simctl list pairs --json | node --input-type=module -e '
+              const chunks = [];
+              for await (const chunk of process.stdin) chunks.push(chunk);
+              const pairs = Object.values(JSON.parse(Buffer.concat(chunks).toString("utf8")).pairs);
+              const pair = pairs.find((entry) => entry.watch.udid === process.argv[1]);
+              process.stdout.write(pair?.phone.udid ?? "");
+            ' "$simulator_id"
+          )"
+          # XCTest connects through the paired phone, which can differ from IOS_SIMULATOR_ID.
+          if [[ -n "$companion_id" ]]; then
+            xcrun simctl bootstatus "$companion_id" -b
+          fi
           xcrun simctl boot "$simulator_id" 2>/dev/null || true
           xcrun simctl bootstatus "$simulator_id" -b
           xcrun simctl install "$simulator_id" "$app_path"
@@ -7309,6 +7381,7 @@ jobs:
         if: always()
         shell: bash
         env:
+          RELEASE_FAST_LANE: ${{ needs.preflight.outputs.release_fast_lane }}
           JOB_RESULTS: |
             preflight=${{ needs.preflight.result }}|true
             security-fast=${{ needs.security-fast.result }}|true
@@ -7346,6 +7419,7 @@ jobs:
             pr-fail-fast=${{ github.run_attempt != 1 && 'skipped' || needs.pr-fail-fast.result }}|${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && github.event.pull_request.head.repo.full_name == github.repository && needs.preflight.outputs.run_checks_node_core_nondist == 'true' }}
         run: |
           set -euo pipefail
+          echo "release fast lane: ${RELEASE_FAST_LANE:-false}"
 
           # Preserve raw fields: IFS splitting can erase malformed trailing
           # delimiters and turn invalid results or selection into accepted values.

@@ -1,7 +1,5 @@
 // Config CLI command implementation for get/set/unset/patch/validate and secret refs.
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
@@ -22,7 +20,9 @@ import { getAtPath, isConfigSchemaPath, parseConfigSetPath } from "./config-cli-
 import { isConfigMachineOutput, isConfigSetJsonParseOnly } from "./config-output-mode.js";
 import type { ConfigSetOptions } from "./config-set-input.js";
 import { formatCliJsonFailure } from "./failure-output.js";
+import { formatDocsHelp } from "./help-format.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
+import { collectOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
@@ -305,21 +305,13 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
   }
 }
 
-function collectOption(value: string, previous: string[]): string[] {
-  return [...previous, value];
-}
-
 export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
     .description(
       "Non-interactive config helpers (get/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
     )
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/config", "docs.openclaw.ai/cli/config")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/config"))
     .option(
       "--section <section>",
       "Configuration sections for guided setup (repeatable). Use with no subcommand.",

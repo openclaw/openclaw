@@ -168,11 +168,18 @@ it("keeps UI fallback with its complete canonical owners beside precise core cha
     ]),
   );
   expect(new Set(preciseFiles).size).toBe(preciseFiles.length);
+  expect(preciseFiles.some(isReleaseOnlyRuntimeTestFile)).toBe(false);
   expect(precise!.length).toBeLessThan(shards!.length);
+  // Precise targets already passed deferral, so their canonical template retains runtime rows.
+  const preciseOwners = createNodeTestShardBundles({
+    compactMode: "pull-request",
+    runnerBackend: "hybrid",
+    includeReleaseOnlyRuntimeTests: true,
+  });
   for (const job of precise ?? []) {
     for (const group of job.groups ?? []) {
       const ownerJob = expectDefined(
-        full.find((candidate) =>
+        preciseOwners.find((candidate) =>
           candidate.groups.some((owner) => owner.shard_name === group.shard_name),
         ),
         `canonical UI consumer job for ${group.shard_name}`,

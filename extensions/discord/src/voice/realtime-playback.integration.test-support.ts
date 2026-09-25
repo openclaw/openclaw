@@ -5,7 +5,7 @@ import {
   type TalkEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { vi } from "vitest";
-import { createDiscordAudioTransport } from "./audio-transport.js";
+import { DiscordAudioTransport } from "./audio-transport.js";
 import { getDiscordAudioTestWorker } from "./audio-worker.test-support.js";
 import * as sdkRuntime from "./sdk-runtime.js";
 
@@ -50,7 +50,7 @@ export function createRealtimePlaybackFixture(
     joinVoiceChannel: () => connection,
     entersState: voiceSdk.entersState,
   });
-  const audio = createDiscordAudioTransport(
+  const audio = new DiscordAudioTransport(
     {
       guildId: "guild",
       channelId: "voice",

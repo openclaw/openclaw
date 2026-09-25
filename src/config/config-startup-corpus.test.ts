@@ -239,6 +239,7 @@ describe("operator config startup corpus", () => {
       const startup = await loadGatewayStartupConfigSnapshot({
         initialSnapshotRead: await io.readConfigFileSnapshotWithPluginMetadata(),
         minimalTestGateway: false,
+        ambientEnvTriggers: "suppress",
         log: console,
       });
       const config = startup.snapshot.config;

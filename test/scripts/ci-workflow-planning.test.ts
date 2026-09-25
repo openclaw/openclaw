@@ -779,6 +779,239 @@ function runControlUiI18nSourceFixture(options: {
     rmSync(root, { force: true, recursive: true });
   }
 }
+describe("release fast lane", () => {
+  const scopeEnv = {
+    OPENCLAW_CI_RELEASE_FAST_LANE_LABEL: "true",
+    OPENCLAW_CI_RUN_WINDOWS: "true",
+    OPENCLAW_CI_RUN_UI_TESTS: "true",
+    OPENCLAW_CI_RUN_MACOS_NODE: "true",
+  };
+  const fixture = {
+    bundledPlanner: true,
+    releaseFastLaneSelection: true,
+    eventName: "pull_request" as const,
+    changedPaths: ["scripts/openclaw-release-ready.mjs"],
+    scopeEnv,
+  };
+  function expectNonNodeLanesSkipped(outputs: Record<string, string>) {
+    for (const key of [
+      "run_checks_fast_core",
+      "run_baseline_ratchets",
+      "run_plugin_contracts_shards",
+      "run_channel_contracts_shards",
+      "run_check_additional",
+      "run_prompt_snapshots",
+      "run_control_ui_performance",
+      "run_ui_tests",
+      "run_ui_e2e",
+      "run_control_ui_i18n",
+      "run_native_i18n",
+      "run_windows",
+      "run_checks_windows",
+      "run_macos",
+      "run_macos_node",
+      "run_macos_swift",
+      "run_openclawkit_tests",
+      "run_ios_build",
+      "run_android",
+      "run_android_job",
+      "run_android_access_native",
+      "run_skills_python",
+      "run_skills_python_job",
+      "run_sqlite_session_lifecycle",
+      "run_qa_smoke_ci",
+      "run_docker_seed_e2e",
+    ]) {
+      expect(outputs[key], key).toBe("false");
+    }
+    for (const key of [
+      "checks_fast_core_matrix",
+      "plugin_contracts_matrix",
+      "channel_contracts_matrix",
+      "check_additional_matrix",
+      "checks_windows_matrix",
+      "macos_node_matrix",
+      "android_matrix",
+    ]) {
+      expect(JSON.parse(expectDefined(outputs[key], key)), key).toEqual({ include: [] });
+    }
+  }
+
+  it("admits tooling PRs with only changed Node rows and required checks", () => {
+    const result = runCiManifestFixture(fixture);
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs.release_fast_lane).toBe("true");
+    for (const key of [
+      "run_check",
+      "run_check_docs",
+      "run_format_check",
+      "run_protocol_event_coverage",
+      "run_checks_node_core_nondist",
+    ]) {
+      expect(result.outputs[key], key).toBe("true");
+    }
+    expectNonNodeLanesSkipped(result.outputs);
+    expect(result.outputs.run_build_artifacts).toBe("false");
+    expect(result.outputs.run_checks_node_core_dist).toBe("false");
+    expect(
+      JSON.parse(expectDefined(result.outputs.checks_node_core_nondist_matrix, "Node matrix"))
+        .include,
+    ).toEqual([
+      expect.objectContaining({
+        check_name: "changed-node-plan",
+        requires_dist: false,
+        targets: ["test/scripts/openclaw-release-ready.test.ts"],
+      }),
+    ]);
+    expect(result.output).toContain("changed-node-plan-options:");
+    expect(result.output).toContain('"releaseFastLane":true');
+    expect(result.output).toContain("::notice title=Release fast lane::Admitted");
+    expect(result.summary).toContain("### Release fast lane");
+    expect(result.summary).toContain("Admitted by label `release-fast-lane`");
+    expect(result.summary).toContain("and 1 changed Node rows.");
+    expect(result.summary).not.toContain("build-artifacts for built-CLI rows");
+  });
+
+  it("retains build artifacts when a changed Node row requires dist", () => {
+    const result = runCiManifestFixture({
+      ...fixture,
+      changedPlannerSource: `
+        export const createChangedNodeTestShards = () => [{
+          checkName: "changed-built-cli", configs: [], requiresDist: true,
+          runner: "ubuntu-24.04", shardName: "changed-built-cli",
+          targets: ["test/scripts/fixture.built-cli.test.ts"],
+        }];
+        export const createChangedExtensionFallbackShards = () => [];
+        export const hasBuildArtifactAffectingChange = () => false;
+      `,
+      scopeEnv: { ...scopeEnv, OPENCLAW_CI_DOCS_CHANGED: "false" },
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs.release_fast_lane).toBe("true");
+    expect(result.outputs.run_build_artifacts).toBe("true");
+    expect(result.outputs.run_checks_node_core_dist).toBe("true");
+    expect(result.outputs.run_checks_node_core_nondist).toBe("false");
+    expect(result.outputs.run_check_docs).toBe("false");
+    expectNonNodeLanesSkipped(result.outputs);
+    expect(result.summary).toContain(
+      "and 1 changed Node rows, build-artifacts for built-CLI rows.",
+    );
+  });
+
+  it("skips fast-core routing when a tooling owner promotes the PR to full Node", () => {
+    const result = runCiManifestFixture({
+      ...fixture,
+      changedPaths: ["scripts/ci-changed-scope.mjs"],
+      toolingOwnerSelection: true,
+      nodeFastOnly: true,
+      nodeFastCiRouting: true,
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs.release_fast_lane).toBe("true");
+    expectNonNodeLanesSkipped(result.outputs);
+  });
+
+  it.each<{
+    name: string;
+    options: Partial<Parameters<typeof runCiManifestFixture>[0]>;
+    reason?: string;
+  }>([
+    {
+      name: "out-of-scope paths",
+      options: { changedPaths: ["scripts/openclaw-release-ready.mjs", "src/focused.ts"] },
+      reason: "outside the release tooling scope: src/focused.ts",
+    },
+    {
+      name: "global execution inputs",
+      options: { changedPaths: ["scripts/run-vitest.mts"] },
+      reason: "global execution or resolution input: scripts/run-vitest.mts",
+    },
+    {
+      name: "empty changed paths",
+      options: { changedPaths: [] },
+      reason: "missing changed paths",
+    },
+    ...(["push", "workflow_dispatch"] as const).map((eventName) => ({
+      name: eventName,
+      options: {
+        eventName,
+        historicalCompatibility: false,
+        scopeEnv: { OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40) },
+      },
+    })),
+    { name: "fork repositories", options: { repository: "contributor/openclaw" } },
+    {
+      name: "fork heads on the canonical base",
+      options: { scopeEnv: { OPENCLAW_CI_HEAD_REPOSITORY: "contributor/openclaw" } },
+    },
+    {
+      name: "docs-only PRs",
+      options: { changedPaths: ["docs/ci.md"], scopeEnv: { OPENCLAW_CI_DOCS_ONLY: "true" } },
+    },
+    {
+      name: "fast-only Node PRs",
+      options: { nodeFastOnly: true, nodeFastPluginContracts: true, nodeFastCiRouting: true },
+    },
+    {
+      name: "release gates",
+      options: { eventName: "workflow_dispatch" as const, releaseGate: true },
+    },
+    {
+      name: "frozen targets",
+      options: { eventName: "workflow_dispatch" as const, historicalCompatibility: false },
+    },
+    {
+      name: "compatibility targets",
+      options: { eventName: "workflow_dispatch" as const, targetContextCompatibility: true },
+    },
+    {
+      name: "targets without the selector",
+      options: { releaseFastLaneSelection: false },
+      reason: "CI target lacks the release fast lane selector",
+    },
+  ])("declines $name without changing ordinary outputs", ({ options, reason }) => {
+    const inputs = { ...fixture, ...options, scopeEnv: { ...scopeEnv, ...options.scopeEnv } };
+    const result = runCiManifestFixture(inputs);
+    const { OPENCLAW_CI_RELEASE_FAST_LANE_LABEL: _label, ...unlabeledEnv } = inputs.scopeEnv;
+    const ordinary = runCiManifestFixture({ ...inputs, scopeEnv: unlabeledEnv });
+    expect(result.status, result.output).toBe(0);
+    expect(ordinary.status, ordinary.output).toBe(0);
+    expect(result.outputs.release_fast_lane).toBe("false");
+    expect(result.outputs).toEqual(ordinary.outputs);
+    const declinedReason =
+      reason ?? "applies only to same-repository pull request CI with full Node routing";
+    expect(result.output).toContain(
+      `::warning title=Release fast lane declined::${declinedReason}`,
+    );
+    expect(result.summary).toContain(
+      `### Release fast lane\n\n- Declined: ${declinedReason}. Ordinary CI selection applies.`,
+    );
+    expect(ordinary.summary).not.toContain("### Release fast lane");
+    expect(ordinary.output).not.toContain("Release fast lane");
+  });
+
+  it("reports broad fallback while retaining the compact Node plan", () => {
+    const result = runCiManifestFixture({
+      ...fixture,
+      changedPaths: ["scripts/lib/ci-node-test-plan.mts"],
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs.release_fast_lane).toBe("true");
+    expect(
+      JSON.parse(
+        expectDefined(result.outputs.checks_node_core_nondist_matrix, "fallback Node matrix"),
+      ).include,
+    ).toEqual([expect.objectContaining({ check_name: "bundled-node-plan" })]);
+    expectNonNodeLanesSkipped(result.outputs);
+    expect(result.outputs.run_build_artifacts).toBe("true");
+    expect(result.output).toContain("Node test plan broad fallback: stub fallback");
+    expect(result.output).toContain('"compactMode":"pull-request"');
+    expect(result.summary).toContain(
+      "Node plan: broad fallback (stub fallback); the complete compact Node plan still runs.",
+    );
+  });
+});
+
 describe("ci workflow guards", () => {
   describe("conditional check families", () => {
     it.each([false, true])(
@@ -3696,6 +3929,7 @@ describe("ci workflow guards", () => {
       expect(JSON.parse(coverage.slice("dedicated-coverage:".length))).toEqual({
         includeReleaseOnlyToolingShards: false,
         includeReleaseOnlyRuntimeTests: false,
+        releaseFastLane: false,
         runnerBackend: runnerProfile,
         dedicatedContractShards: dedicated,
         dedicatedCoreTypeChecks: true,
@@ -9566,7 +9800,7 @@ describe("ci workflow guards", () => {
     },
     {
       label: "hourly main excludes screenshots even with screenshot scope",
-      context: { preflightOutputs: { validation_tier: "main" } },
+      context: { eventName: "schedule", preflightOutputs: { validation_tier: "main" } },
       expected: { "ios-build": true, "ios-screenshot-shard": false },
     },
     {

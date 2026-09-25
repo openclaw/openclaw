@@ -207,6 +207,7 @@ export async function prepareGatewayServerBootstrap(input: {
   const startupConfigLoad = await startupTrace.measure("config.snapshot", () =>
     loadGatewayStartupConfigSnapshot({
       minimalTestGateway,
+      ambientEnvTriggers,
       log,
       measure: (name, run) => startupTrace.measure(name, run),
       initialSnapshotRead: startupConfigSnapshotRead,

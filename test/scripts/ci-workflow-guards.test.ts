@@ -521,6 +521,76 @@ function runReleaseFallbackHistoryFixture(options: {
     console.info("fallback-fixture-cleanup", JSON.stringify({ ...options, remaining: 0 }));
   }
 }
+describe("release fast lane label", () => {
+  it("reads PR labels without subscribing to label-change events", () => {
+    const workflow = readCiWorkflow();
+    const manifestStep = workflow.jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.name === "Build CI manifest",
+    );
+    expect(manifestStep.env.OPENCLAW_CI_RELEASE_FAST_LANE_LABEL).toBe(
+      "${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'release-fast-lane') && 'true' || 'false' }}",
+    );
+    expect(workflow.jobs.preflight.outputs.release_fast_lane).toBe(
+      "${{ steps.manifest.outputs.release_fast_lane }}",
+    );
+    expect(workflow.on.pull_request.types).toEqual([
+      "opened",
+      "reopened",
+      "synchronize",
+      "ready_for_review",
+      "converted_to_draft",
+    ]);
+  });
+
+  it("declines fork heads before any reduced check can reach the aggregate gate", () => {
+    const workflow = readCiWorkflow();
+    const manifestStep = workflow.jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.name === "Build CI manifest",
+    );
+    // The manifest fixture "declines fork heads on the canonical base" in
+    // ci-workflow-planning.test.ts proves the outputs; this pins the inputs it relies on.
+    expect(manifestStep.env.OPENCLAW_CI_REPOSITORY).toBe("${{ github.repository }}");
+    expect(manifestStep.env.OPENCLAW_CI_HEAD_REPOSITORY).toBe(
+      "${{ github.event.pull_request.head.repo.full_name }}",
+    );
+    const admission = manifestStep.run.match(/const releaseFastLaneScope = [^;]*;/su)?.[0];
+    expect(admission).toContain(
+      'eventName === "pull_request" && isCanonicalRepository && process.env.OPENCLAW_CI_HEAD_REPOSITORY === process.env.OPENCLAW_CI_REPOSITORY && runNodeFull',
+    );
+    // Reduced selection only ever reaches the gate through preflight outputs.
+    const gate = workflow.jobs["ci-gate"];
+    expect(gate.needs[0]).toBe("preflight");
+    const rows: string[] = gate.steps
+      .find((candidate: WorkflowStep) => candidate.name === "Verify selected CI lanes")
+      .env.JOB_RESULTS.trim()
+      .split("\n");
+    for (const row of rows) {
+      const selected = row.slice(row.lastIndexOf("|") + 1);
+      expect(selected === "true" || selected.includes("needs.preflight.outputs."), row).toBe(true);
+      expect(selected).not.toContain("release_fast_lane");
+    }
+  });
+
+  it("shows admission at the gate while preserving every lane result", () => {
+    const gate = readCiWorkflow().jobs["ci-gate"];
+    const step = gate.steps.find(
+      (candidate: WorkflowStep) => candidate.name === "Verify selected CI lanes",
+    );
+    expect(step.env.RELEASE_FAST_LANE).toBe("${{ needs.preflight.outputs.release_fast_lane }}");
+    expect(
+      step.run.startsWith(
+        'set -euo pipefail\necho "release fast lane: ${RELEASE_FAST_LANE:-false}"\n',
+      ),
+    ).toBe(true);
+    const rows: string[] = step.env.JOB_RESULTS.trim().split("\n");
+    expect(rows.map((row) => row.split("=")[0])).toEqual(gate.needs);
+    for (const row of rows) {
+      const name = row.split("=")[0];
+      expect(row.slice(0, row.lastIndexOf("|")), row).toContain(`needs.${name}.result`);
+    }
+  });
+});
+
 describe("ci workflow guards", () => {
   it("isolates mutations between workflow fixtures", () => {
     const workflow = readCiWorkflow();
@@ -1483,10 +1553,14 @@ AFTER_CD
 
     for (const [workflowPath, jobName] of workflows) {
       const workflow = readWorkflow(workflowPath);
-      expect(workflow.on.pull_request).toEqual({
-        types: ["opened", "reopened", "synchronize", "ready_for_review"],
-        paths: [".github/workflows/**"],
-      });
+      expect(workflow.on.pull_request.types).toEqual([
+        "opened",
+        "reopened",
+        "synchronize",
+        "ready_for_review",
+      ]);
+      expect(workflow.on.pull_request.paths).toContain(workflowPath);
+      expect(workflow.on.pull_request.paths).not.toContain(".github/workflows/**");
       expect(workflow.jobs[jobName].if).toBe(
         "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
       );
@@ -7776,7 +7850,7 @@ server.listen(0, "127.0.0.1", () => {
   it("uses the maintained checkout across workflow sanity jobs", () => {
     const workflow = readWorkflowSanityWorkflow();
 
-    for (const jobName of ["no-tabs", "actionlint", "generated-doc-baselines"]) {
+    for (const jobName of ["actionlint", "generated-doc-baselines"]) {
       const checkoutStep = workflow.jobs[jobName].steps.find(
         (step: WorkflowStep) => step.name === "Checkout",
       );
@@ -7866,7 +7940,9 @@ server.listen(0, "127.0.0.1", () => {
     expect(owner.with).toBeUndefined();
     expect(steps.indexOf(python)).toBeLessThan(steps.indexOf(owner));
     expect(steps.indexOf(owner)).toBeLessThan(steps.indexOf(policy));
-    expect(policy.if).toBe("github.event_name == 'pull_request'");
+    expect(policy.if).toBe(
+      "github.event_name == 'pull_request' && steps.scope.outputs.changed == 'true'",
+    );
     expect(policy.env).toEqual({
       BASE_REF: "${{ github.event.pull_request.base.ref }}",
       BASE_SHA: "${{ github.event.pull_request.base.sha }}",
@@ -11139,7 +11215,8 @@ describe("Linux App validation routing", () => {
   const workflow = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
   const linuxSteps: WorkflowStep[] = workflow.jobs.build.steps;
   const macosSteps: WorkflowStep[] = workflow.jobs["test-macos"].steps;
-  const packagingSteps = [
+  const manualSteps = [
+    "Test native Quick Chat",
     "Stage AppImage GStreamer plugins",
     "Prepare pinned AppImage tools",
     "Build Linux companion bundles",
@@ -11150,7 +11227,7 @@ describe("Linux App validation routing", () => {
   ];
 
   it.each(["pull_request", "workflow_dispatch"] as const)(
-    "keeps native tests required and selects packaging only for manual validation: %s",
+    "keeps required native tests and selects manual validation steps: %s",
     (eventName) => {
       const selected = (steps: WorkflowStep[]) =>
         steps.filter(
@@ -11164,6 +11241,10 @@ describe("Linux App validation routing", () => {
                 "inline-browser": { outputs: {}, outcome: "success" },
                 "gateway-switch": { outputs: {}, outcome: "success" },
                 "desktop-sharing": { outputs: {}, outcome: "success" },
+                "quick-chat": {
+                  outputs: {},
+                  outcome: eventName === "workflow_dispatch" ? "success" : "skipped",
+                },
               },
             }),
         );
@@ -11194,7 +11275,7 @@ describe("Linux App validation routing", () => {
       expect(linux.find((step) => step.id === "desktop-sharing")?.run).toContain(
         "--desktop-sharing",
       );
-      for (const name of packagingSteps) {
+      for (const name of manualSteps) {
         expect(
           linuxSteps.some((step) => step.name === name),
           name,
@@ -11221,6 +11302,7 @@ describe("Linux App validation routing", () => {
         ["Upload native inline browser proof", "inline-browser"],
         ["Upload native Gateway switching proof", "gateway-switch"],
         ["Upload native desktop sharing proof", "desktop-sharing"],
+        ["Upload native Quick Chat proof", "quick-chat"],
       ] as const) {
         const upload = expectDefined(
           linuxSteps.find((step) => step.name === name),

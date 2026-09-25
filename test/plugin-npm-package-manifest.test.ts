@@ -27,10 +27,16 @@ import {
   withAugmentedPluginNpmManifestForPackage,
 } from "../scripts/lib/plugin-npm-package-manifest.mts";
 import { hasChannelPackageState } from "../src/channels/plugins/package-state-probes.js";
-import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
+import type { PluginManifest } from "../src/plugins/manifest-types.js";
+import {
+  cleanupTempDirs,
+  makeTempDir as makeTempRepoRoot,
+  useAutoCleanupTempDirTracker,
+} from "./helpers/temp-dir.js";
 import { writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
+const fixtureDirs = useAutoCleanupTempDirTracker(afterEach);
 const tsxImport = import.meta.resolve("tsx");
 const execFileAsync = promisify(execFile);
 const registryDependencyArtifacts = new Map<string, { tarball: Buffer; integrity: string }>();
@@ -39,7 +45,7 @@ afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
 
-function writeGeneratedChannelMetadata(repoDir: string): void {
+function writeGeneratedChannelMetadata(repoDir: string, pluginId = "twitch"): void {
   const metadataPath = join(
     repoDir,
     "src",
@@ -51,8 +57,8 @@ function writeGeneratedChannelMetadata(repoDir: string): void {
     metadataPath,
     `export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
   {
-    pluginId: "twitch",
-    channelId: "twitch",
+    pluginId: "${pluginId}",
+    channelId: "${pluginId}",
     label: "Twitch",
     description: "Twitch chat integration",
     schema: {
@@ -150,6 +156,72 @@ function writePublishablePluginPackage(repoDir: string): string {
   writeFileText(join(packageDir, "SKILL.md"), "# Diffs Skill\n");
   writeFileText(join(packageDir, "skills", "diffs", "SKILL.md"), "# Diffs Skill\n");
   return packageDir;
+}
+
+function writeQaGatewayFixture(id: "qa-lab" | "qa-channel") {
+  const repoRoot = fixtureDirs.make("openclaw-private-qa-manifest-");
+  const packageDir = join(repoRoot, "extensions", id);
+  const packageJson = {
+    name: `@openclaw/${id}`,
+    version: "2026.9.6",
+    private: true,
+    type: "module",
+    files: ["**"],
+    exports: { ".": "./index.ts", "./api.js": "./api.ts" },
+    scripts: { prepack: "node source-only-script.js" },
+    dependencies: { "parent-tooling": "7.0.0", typebox: "1.2.3", zod: "4.5.6" },
+    devDependencies: { "@openclaw/plugin-sdk": "workspace:*" },
+    openclaw: {
+      extensions: ["./index.ts"],
+      compat: { pluginApi: ">=2026.9.6" },
+      build: { workerEntries: ["./src/inspection.worker.ts"] },
+      ...(id === "qa-channel" ? { setupEntry: "./setup-entry.ts", channel: { id } } : {}),
+    },
+  };
+  const manifest: PluginManifest = {
+    id,
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+    activation: { onStartup: false },
+    ...(id === "qa-lab"
+      ? {
+          cliCommands: [{ name: "qa", description: "Run QA scenarios", hasSubcommands: true }],
+          contracts: {
+            tools: ["qa_restart_wait", "qa_restart_unsafe_probe"],
+            webSearchProviders: ["qa-lab-search"],
+            workerProviders: ["static-ssh"],
+          },
+          toolMetadata: { qa_restart_wait: { replaySafe: true } },
+        }
+      : { channels: [id] }),
+  };
+  writeJsonFile(join(packageDir, "package.json"), packageJson);
+  writeJsonFile(join(packageDir, "openclaw.plugin.json"), manifest);
+  for (const source of [
+    "index.ts",
+    "api.ts",
+    "source-only-script.js",
+    "src/inspection.worker.ts",
+  ]) {
+    writeFileText(join(packageDir, source), 'throw new Error("source-only tooling");\n');
+  }
+  const outputs =
+    id === "qa-lab"
+      ? ["gateway-entry.js"]
+      : ["index.js", "setup-entry.js", "channel-plugin-api.js", "setup-plugin-api.js", "api.js"];
+  for (const output of [...outputs, ".setup/lazy.mjs"]) {
+    writeFileText(join(packageDir, "dist", output), "export {};\n");
+  }
+  if (id === "qa-channel") {
+    writeGeneratedChannelMetadata(repoRoot, id);
+  }
+  return {
+    repoRoot,
+    packageDir,
+    packageJson,
+    manifest,
+    outputs,
+    profile: "qa-gateway-fixture" as const,
+  };
 }
 
 function writeLocalDependencyPackage(
@@ -760,6 +832,126 @@ describe("plugin npm package manifest staging", () => {
       },
     );
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
+  });
+
+  it.each(["qa-lab", "qa-channel"] as const)(
+    "packs only the private %s Gateway surface and restores source metadata",
+    (id) => {
+      const fixture = writeQaGatewayFixture(id);
+      const { packageDir, packageJson, manifest, outputs } = fixture;
+      const sourcePackageText = readFileSync(join(packageDir, "package.json"), "utf8");
+      const sourceManifestText = readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8");
+      withAugmentedPluginNpmManifestForPackage(fixture, ({ packageDir: packedDir }) => {
+        const packed = JSON.parse(readFileSync(join(packedDir, "package.json"), "utf8"));
+        const packedManifest = JSON.parse(
+          readFileSync(join(packedDir, "openclaw.plugin.json"), "utf8"),
+        );
+        const files = listNpmPackDryRunFiles(packedDir);
+        expect(packed).toMatchObject({
+          name: packageJson.name,
+          version: packageJson.version,
+          private: true,
+        });
+        expect(packed.peerDependencies.openclaw).toBe(packageJson.openclaw.compat.pluginApi);
+        expect(packed.openclaw.extensions).toEqual([
+          id === "qa-lab" ? "./dist/gateway-entry.js" : "./dist/index.js",
+        ]);
+        expect(packed.openclaw.runtimeExtensions).toEqual(packed.openclaw.extensions);
+        for (const entry of packed.openclaw.extensions) {
+          expect(files).toContain(entry.replace(/^\.\//u, ""));
+        }
+        for (const output of outputs) {
+          expect(files).toContain(`dist/${output}`);
+        }
+        expect(files).toContain("dist/.setup/lazy.mjs");
+        expect(files).toContain("openclaw.plugin.json");
+        expect(files.some((file) => file.endsWith(".ts") || file === "source-only-script.js")).toBe(
+          false,
+        );
+        expect(packed.exports).toBeUndefined();
+        expect(packed.scripts).toBeUndefined();
+        expect(packed.devDependencies).toBeUndefined();
+        expect(packed.openclaw.build).toBeUndefined();
+        expect(packedManifest.cliCommands).toBeUndefined();
+        expect(packedManifest.configSchema).toEqual(manifest.configSchema);
+        expect(packedManifest.activation).toEqual(manifest.activation);
+        if (id === "qa-lab") {
+          expect(packed.dependencies).toEqual({});
+          expect(packed.openclaw.setupEntry).toBeUndefined();
+          expect(packedManifest.contracts).toEqual(manifest.contracts);
+          expect(packedManifest.toolMetadata).toEqual({ qa_restart_wait: { replaySafe: true } });
+        } else {
+          expect(packed.dependencies).toEqual({ typebox: "1.2.3", zod: "4.5.6" });
+          expect(packed.openclaw.setupEntry).toBe("./dist/setup-entry.js");
+          expect(packed.openclaw.runtimeSetupEntry).toBe(packed.openclaw.setupEntry);
+          expect(packedManifest.channels).toEqual(["qa-channel"]);
+          expect(packedManifest.channelConfigs["qa-channel"].schema).toEqual({
+            type: "object",
+            required: ["channelName"],
+            properties: { channelName: { type: "string" } },
+          });
+        }
+      });
+      expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(sourcePackageText);
+      expect(readFileSync(join(packageDir, "openclaw.plugin.json"), "utf8")).toBe(
+        sourceManifestText,
+      );
+
+      // Metadata selection must not reintroduce parent-tooling dependencies when bundling is requested.
+      const bundled = resolveAugmentedPluginNpmPackageJson({
+        ...fixture,
+        bundleDependencies: true,
+      });
+      expect(bundled.packageJson?.bundledDependencies).toEqual(
+        id === "qa-channel" ? ["typebox", "zod"] : [],
+      );
+    },
+  );
+
+  it.each([
+    { id: "qa-lab", missing: "gateway-entry.js" },
+    { id: "qa-channel", missing: "channel-plugin-api.js" },
+    { id: "qa-channel", missing: "api.js" },
+    { id: "qa-channel", missing: "setup-plugin-api.js" },
+  ] as const)("refuses private $id packaging without $missing", ({ id, missing }) => {
+    const fixture = writeQaGatewayFixture(id);
+    rmSync(join(fixture.packageDir, "dist", missing));
+    expect(() =>
+      withAugmentedPluginNpmManifestForPackage(fixture, () => {
+        throw new Error("incomplete fixture reached pack callback");
+      }),
+    ).toThrow(`package-local plugin runtime is missing for ${id}: ./dist/${missing}`);
+  });
+
+  it.each(["missing", "another channel"])(
+    "refuses a QA Channel fixture when generated schema metadata is %s",
+    (scenario) => {
+      const fixture = writeQaGatewayFixture("qa-channel");
+      if (scenario === "missing") {
+        rmSync(
+          join(fixture.repoRoot, "src", "config", "bundled-channel-config-metadata.generated.ts"),
+        );
+      } else {
+        writeGeneratedChannelMetadata(fixture.repoRoot);
+      }
+      expect(() =>
+        withAugmentedPluginNpmManifestForPackage(fixture, () => {
+          throw new Error("schema-less fixture reached pack callback");
+        }),
+      ).toThrow("QA Channel fixtures require the canonical generated channel config metadata");
+    },
+  );
+
+  it("refuses publication metadata for private Gateway fixtures before applying an overlay", () => {
+    const fixture = writeQaGatewayFixture("qa-lab");
+    const original = readFileSync(join(fixture.packageDir, "openclaw.plugin.json"), "utf8");
+    expect(() =>
+      resolveAugmentedPluginNpmManifest({
+        ...fixture,
+        clawhubMetadataDir: "not-a-publication-source",
+      }),
+    ).toThrow("Private QA Gateway fixtures cannot use publication metadata");
+    expect(readFileSync(join(fixture.packageDir, "openclaw.plugin.json"), "utf8")).toBe(original);
   });
 
   it.for([

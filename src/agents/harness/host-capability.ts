@@ -184,6 +184,13 @@ export function createAgentHarnessHostCapabilities(params: {
   runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
   const attempt = params.attempt;
+  // Capture authority by value before any plugin handoff can mutate the attempt.
+  const runtimePluginToolGrant = attempt.runtimePluginToolGrant
+    ? Object.freeze({
+        pluginId: attempt.runtimePluginToolGrant.pluginId,
+        toolNames: Object.freeze([...attempt.runtimePluginToolGrant.toolNames]),
+      })
+    : undefined;
   const githubPublicationAvailable = attempt.githubPublicationAvailable;
   const workSignal = getAsyncWorkSignal();
   const attemptSignal = attempt.abortSignal;
@@ -521,6 +528,7 @@ export function createAgentHarnessHostCapabilities(params: {
                 ...options,
                 // Availability belongs to this prepared host, not mutable plugin inputs.
                 githubPublicationAvailable,
+                runtimePluginToolGrant,
                 skillsSnapshot: options?.skillsSnapshot ?? skillsSnapshot,
                 skillUsagePaths: options?.skillUsagePaths ?? skillUsagePaths,
                 operationalRunInstance,

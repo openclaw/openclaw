@@ -566,12 +566,21 @@ fresh `--state-dir`, which the refusal prints.
    `npm beta floor: release-ledger token unavailable`), dispatch the sync by
    hand before the verify runs. `Finalize GitHub release` accepts an already
    public release with the expected tag target and latest state; a manual flip
-   does not fail the parent. Each npm child (`Plugin NPM Release`,
-   `openclaw-npm-release.yml`) needs its own `npm-release` approval;
+   does not fail the parent. The parent's `npm-release` approval is the one
+   release approval: the approved `publish` job writes and attests the
+   `openclaw-release-approval-v1-<run>-<attempt>` receipt (tag, target SHA,
+   tooling identity, approver) before dispatching children, and every
+   bot-dispatched child verifies it in its trusted-tooling validation job. The
+   ClawHub child then runs without its `clawhub-plugin-release` gate, waiting
+   instead for the parent's transaction-bound authorization receipt before its
+   publish jobs start. npm children keep the `npm-release` gate because their
+   npm trusted publishers are bound to that environment (`npm trust list
+openclaw`), and the workflow token cannot approve it (`canApprove=false`):
    watch `gh api repos/openclaw/openclaw/actions/runs/<child>/pending_deployments`
-   and approve npm children only. Never approve a ClawHub child by hand (its
-   publish jobs then fail `Artifact not found`); cancel it and re-dispatch the
-   parent. Before every child dispatch the parent rejects the gates of, cancels,
+   and approve the plugin npm and core npm children by hand. Direct human
+   dispatch of a child keeps its own gate and does not use the receipt. Never
+   approve a ClawHub child by hand; cancel it and re-dispatch the parent.
+   Before every child dispatch the parent rejects the gates of, cancels,
    and waits (bounded 5 minutes) for a failed earlier parent's `waiting`/`queued`
    children of the same release; a parent failure also cancels its own waiting
    npm children. Only legacy children without a parent identity in their run
@@ -746,6 +755,31 @@ Whole-parent adoption requires byte-identical manifest `validationInputs`, inclu
 a `main-qualification` nightly is never adopted wholesale by a `publish`-purpose stable candidate.
 Purpose/context-crossing adoption is a verifier policy follow-up.
 
+### Release tooling fast lane
+
+Add the `release-fast-lane` label to a pull request before the push that should
+use it; PR CI reads labels from the triggering event, and label events do not
+start CI. For an already-pushed head, `gh pr ready --undo` then `gh pr ready`
+re-triggers PR CI with the current labels. The label narrows `openclaw/ci-gate`
+only on a canonical pull request whose changed paths are all release tooling:
+`.github/workflows/**`, `scripts/**`, `test/scripts/**`,
+`.agents/skills/release-*/**`, `docs/reference/RELEASING.md`, or independently
+checked documentation. Admitted runs keep `security-fast`, `check-shard` (lint,
+prod/test types, guards, dependencies, npm lock), `check-docs` when docs
+changed, and the changed Node rows; the compact packing-policy full-plan proof
+for planner edits is relaxed to those rows. Contracts, baseline ratchets,
+bundled protocol, Bun launcher, additional checks, build artifacts (unless a
+changed row needs `dist`), Control UI, Windows, macOS, iOS, Android, i18n, and
+skills lanes are skipped and listed under "Release fast lane" in the preflight
+step summary. A declined label (out-of-scope path, global Node input, fork,
+push, dispatch, docs-only) logs a warning and leaves ordinary selection
+untouched. The gate stays complete: every selected lane must pass, and hourly
+full main CI covers the merged result. The label narrows only the CI gate: fork
+heads are declined, and the native `scripts/pr` landing path with its completed
+ClawSweeper review is unchanged. ClawSweeper findings are advisory for labelled
+PRs: a P1 that the release owner decides not to fix in the PR is recorded there
+with its follow-up before landing.
+
 ## Stable main closeout
 
 Stable publication is not complete until `main` carries the actual shipped release state.
@@ -760,9 +794,23 @@ Stable publication is not complete until `main` carries the actual shipped relea
 
 `OpenClaw Stable Main Closeout` starts from the `main` push that carries the shipped version and changelog after stable publication; apps may still be pending. Include the appcast once macOS publishes. It reads immutable postpublish evidence to bind the shipped tag to its Full Release Validation and Publish runs, then verifies the stable main state, release, and stable soak and blocking performance evidence or their recorded operator waivers (the operator fast path; see [publication modes](#publication-modes-strict-default-and-operator-fast-path)). It attaches an immutable closeout manifest and checksum to the GitHub release. The manifest records `appPlatforms` with `macos`, `windows`, and `android` each `pending` or `attached`; aggregate `apps` is `attached` only when every required platform asset has a lowercase `sha256:<64hex>` digest. At the first closeout, `appcast` is `pending` unless the full macOS zip/DMG/dSYM asset set is attached with canonical digests; a complete macOS set requires appcast verification and records `verified`. A macOS build deliberately withdrawn from the Sparkle feed records `appcast: withdrawn`, `appPlatforms.macos: withdrawn`, and `appcastWithdrawal` (the marker commit on `main` whose subject is `chore(release): withdraw the <version> macOS build from the Sparkle feed`, with its first `Refs #NNN` line as the reason) instead of the feed link checks; the newest `appcast.xml` entry must be older than the release, and any other mismatch still fails. Replay preserves the initial app snapshot and requires every recorded asset name and digest to match exactly. Later canonical app attachments are allowed, while changed or deleted recorded assets and unrelated additions remain errors. Recorded app, recovery, and asset fields remain byte-identical while authoritative release fields are recomputed. When macOS attaches after closeout, replay also checks its entry in the current main appcast; it preserves an appcast already verified at the original closeout. The automatic push trigger skips legacy releases that predate immutable postpublish evidence and never treats that skip as a completed closeout.
 
-A complete closeout requires the closeout manifest asset and its matching checksum. A partial manifest replays its recorded `main` SHA and rollback drill to regenerate identical bytes, then attaches the missing checksum; an invalid pair, or a checksum without a manifest, stays blocking. A push-triggered run without rollback drill repository variables skips without completing closeout; a missing or more-than-90-day-old drill record still blocks manual evidence-backed closeout. Private recovery commands remain in the maintainer-only runbook. Use manual dispatch only to repair or replay an evidence-backed stable closeout.
+The `pnpm release:stable` closeout phase waits for successful publication, verifies
+main, and dispatches closeout. With saved orchestrator state, resume it with
+`pnpm release:stable YYYY.M.PATCH --from closeout`.
 
-Push-triggered runs are never cancelled by later `main` pushes, and verification serializes per resolved stable tag. A manual replay needs only `tag`: waivers resolve from the sealed postpublish evidence (`stableSoakWaiver`, `laneWaiverAcknowledgement`/`laneWaiver`) and are accepted exactly as the publish gate accepted them; the version-prefix rule applies only to new operator text, and the rollback drill comes from the repository variables. A stable published with failed non-proof lanes but no sealed lane waiver has no recorded acknowledgement; pass `lane_waiver` explicitly for that replay.
+If you publish directly from Actions after the main forward-port, dispatch the
+initial closeout after Release Publish succeeds and main carries the shipped
+version and changelog:
+
+```bash
+gh workflow run openclaw-stable-main-closeout.yml --ref main -f tag=vYYYY.M.PATCH
+```
+
+Unrelated source pushes no longer poll for publication completion.
+
+A complete closeout requires the closeout manifest asset and its matching checksum. A partial manifest replays its recorded `main` SHA and rollback drill to regenerate identical bytes, then attaches the missing checksum; an invalid pair, or a checksum without a manifest, stays blocking. A push-triggered run without rollback drill repository variables skips without completing closeout; a missing or more-than-90-day-old drill record still blocks manual evidence-backed closeout. Private recovery commands remain in the maintainer-only runbook. Manual dispatch retains these evidence checks for initial closeout, repair, and replay.
+
+Push-triggered runs are never cancelled by later `main` pushes, and verification serializes per resolved stable tag. An initial manual closeout or replay needs only `tag`: waivers resolve from the sealed postpublish evidence (`stableSoakWaiver`, `laneWaiverAcknowledgement`/`laneWaiver`) and are accepted exactly as the publish gate accepted them; the version-prefix rule applies only to new operator text, and the rollback drill comes from the repository variables. A stable published with failed non-proof lanes but no sealed lane waiver has no recorded acknowledgement; pass `lane_waiver` explicitly for that replay.
 
 If the Release Publish parent failed only after immutable npm/plugin evidence was attached, repair and verify the required npm, Docker, and GitHub publication surfaces. A maintainer may then manually dispatch closeout with `allow_failed_publish_recovery=true`; that mode accepts only a completed failed parent and preserves the publication evidence checks. Pending apps do not block recovery; the closeout records their state, and a published macOS release still requires a valid appcast. Automatic push closeout never enables this recovery mode. When core npm succeeded but the original parent failed during postpublish readback, an independently successful Docker-only publisher may supply the Docker proof. The checksummed postpublish evidence must select both runs through `operatorRecovery.npmPublishRunId` and `operatorRecovery.dockerPromotionRunId`. These are selectors, not proof: closeout verifies exact Actions attempts, successful publication jobs, immutable dispatch artifacts, protected tooling, qualified source and Full Release Validation bindings. For historical publishers without complete receipts, only the unique Actions-generated input group of each named successful step supplies missing bindings. Supported legacy whole-job logs additionally require the frozen publisher shell-body hash, exact step number, and successful API step time window; arbitrary command output is never evidence. Split recovery is bound to the exact requested tag; correction tags cannot borrow another tag’s recovery proof merely because they share a commit. It independently verifies npm registry signatures, tarball hashes, and Sigstore provenance, plus Docker image and attestation descriptors against the qualified OCI manifest. Missing, expired, ambiguous, or mismatched evidence blocks recovery. The closeout records the failed original parent and both successful publication attempts; replay must independently verify the same immutable recovery record.
 

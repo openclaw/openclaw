@@ -95,6 +95,13 @@ receives a refusal and settles cleanup without waiting behind the foreground
 callback that requested close. Already admitted write-capable work retains its
 permit through native settlement; cancellation never releases it early.
 
+Reclamation commit acceptance checks the live parent authority and atomically
+accepts the pending commit before returning to the event loop. Revocation before
+acceptance refuses the commit; an accepted commit drains through its settled
+result or native worker exit before releasing writer admission, publishing facts,
+or releasing request custody. The parent does not open SQLite or synchronously
+wait for the worker's commit. This changes no schema, retention, or update behavior.
+
 Physical page reclamation releases the session writer permit between vacuum units,
 so queued foreground writers receive their FIFO turn before the next unit. Each
 connection starts with eight-page units and adjusts toward a 25 ms hold target,
