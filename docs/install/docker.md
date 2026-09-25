@@ -9,6 +9,12 @@ title: "Docker"
 
 Docker is **optional**. Use it for an isolated, throwaway Gateway environment or a host without local installs. If you already develop on your own machine, use the normal install flow instead.
 
+Container setup preserves the inherited `gateway.publicOrigin` when it creates
+`gateway.controlUi.allowedOrigins`, and adds `localhost` and `127.0.0.1` on the
+published Gateway port. An existing explicit list does not inherit the public
+origin. After setup has authored the list, update it explicitly if the public
+origin changes.
+
 The default Docker sandbox backend uses only the `docker` CLI. Set the backend to `"podman"` to select native Podman directly. Sandboxing is off by default and does not require the Gateway itself to run in a container. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
 
 Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting) for the one-cell-per-tenant model.

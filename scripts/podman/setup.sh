@@ -92,9 +92,10 @@ seed_local_control_ui_origins() {
   fi
   dir="$(dirname "$file")"
   tmp="$(mktemp "$dir/.config.tmp.XXXXXX")"
-  if ! python3 - "$file" "$port" "$tmp" <<'PY'
+  if ! python3 - "$file" "$port" "$tmp" "$OPENCLAW_IMAGE" <<'PY'
 import json
 import sys
+import subprocess
 
 path = sys.argv[1]
 port = sys.argv[2]
@@ -140,8 +141,15 @@ for origin in allowed:
         if host in managed_localhosts:
             continue
     cleaned.append(normalized)
-if not inherits_public_origin:
-    control_ui["allowedOrigins"] = cleaned + desired
+if inherits_public_origin:
+    # Preserve the effective inherited origin when authoring the container list.
+    canonical_origin = subprocess.check_output(
+        ["podman", "run", "--rm", "--network", "none", "--entrypoint", "node", sys.argv[4],
+         "-e", "process.stdout.write(new URL(process.argv[1]).origin)", public_origin.strip()],
+        text=True,
+    )
+    cleaned.append(canonical_origin)
+control_ui["allowedOrigins"] = list(dict.fromkeys(cleaned + desired))
 with open(tmp, "w", encoding="utf-8") as fh:
     json.dump(data, fh, indent=2)
     fh.write("\n")

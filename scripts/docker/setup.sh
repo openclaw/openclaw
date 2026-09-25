@@ -159,8 +159,13 @@ sync_gateway_config() {
     if [[ -z "$current_allowed_origins" ]]; then
       current_public_origin="$(run_prestart_cli config get gateway.publicOrigin 2>/dev/null || true)"
       if [[ -n "${current_public_origin//[[:space:]]/}" ]]; then
-        allowed_origin_json=""
-        echo "Control UI origins inherit gateway.publicOrigin; leaving allowedOrigins unset."
+        # Materialize the inherited public origin before adding the published
+        # loopback routes: an explicit list otherwise replaces inheritance.
+        allowed_origin_json="$(run_prestart_gateway --entrypoint node openclaw-gateway -e '
+const origins = JSON.parse(process.argv[1]);
+origins.push(new URL(process.argv[2].trim()).origin);
+process.stdout.write(JSON.stringify([...new Set(origins)]));
+' "$allowed_origin_json" "$current_public_origin")"
       fi
     fi
   fi

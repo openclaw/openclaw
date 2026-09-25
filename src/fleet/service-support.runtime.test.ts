@@ -6,6 +6,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 const { acquire } = vi.hoisted(() => ({ acquire: vi.fn() }));
 vi.mock("./registry.js", () => ({ withFleetCellOperationLease: acquire }));
 
+import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
+import { checkBrowserOrigin } from "../gateway/origin-check.js";
 import { prepareCellConfig, withFleetCellOperation } from "./service-support.runtime.js";
 
 afterEach(() => {
@@ -16,8 +18,12 @@ afterEach(() => {
 describe("fleet operation lifecycle", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it.each([{ allowedOrigins: undefined }, { allowedOrigins: [] }])(
-    "preserves public-origin inheritance only for omitted origins (%j)",
+  it.each([
+    { allowedOrigins: undefined },
+    { allowedOrigins: [] },
+    { allowedOrigins: ["https://admin.example.com"] },
+  ])(
+    "admits published container origins and inherits public origin only when omitted (%j)",
     async ({ allowedOrigins }) => {
       const dataDir = tempDirs.make("fleet-origin-");
       const configPath = path.join(dataDir, "openclaw.json");
@@ -25,7 +31,7 @@ describe("fleet operation lifecycle", () => {
         configPath,
         JSON.stringify({
           gateway: {
-            publicOrigin: "https://team.example.com",
+            publicOrigin: "https://TEAM.example.com:443/",
             controlUi: { allowedOrigins },
           },
         }),
@@ -40,12 +46,30 @@ describe("fleet operation lifecycle", () => {
         dataDir,
       });
       const config = JSON.parse(await fs.readFile(configPath, "utf8"));
-      expect(config.gateway.publicOrigin).toBe("https://team.example.com");
+      expect(config.gateway.publicOrigin).toBe("https://TEAM.example.com:443/");
       expect(config.gateway.controlUi.allowedOrigins).toEqual(
         allowedOrigins === undefined
-          ? undefined
-          : ["http://localhost:19100", "http://127.0.0.1:19100"],
+          ? ["https://team.example.com", "http://localhost:19100", "http://127.0.0.1:19100"]
+          : [...allowedOrigins, "http://localhost:19100", "http://127.0.0.1:19100"],
       );
+      for (const origin of [
+        "http://localhost:19100",
+        "http://127.0.0.1:19100",
+        "https://team.example.com",
+        "https://unrelated.example.com",
+      ]) {
+        expect(
+          checkBrowserOrigin({
+            origin,
+            requestHost: "localhost:19100",
+            isLocalClient: false,
+            allowedOrigins: resolveControlUiAllowedOrigins(config),
+          }).ok,
+        ).toBe(
+          origin.startsWith("http://") ||
+            (origin === "https://team.example.com" && allowedOrigins === undefined),
+        );
+      }
       expect(config.gateway.auth).toEqual({ mode: "token" });
     },
   );

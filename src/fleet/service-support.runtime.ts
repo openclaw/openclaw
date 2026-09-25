@@ -3,6 +3,7 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import JSON5 from "json5";
+import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isRecord } from "../utils.js";
 import {
@@ -123,10 +124,14 @@ export async function prepareCellConfig(
   const nextAuth: Record<string, unknown> = { ...auth, mode: "token" };
   delete nextAuth.token;
   const origins = new Set(readAllowedOrigins(controlUi.allowedOrigins));
-  const inheritsPublicOrigin =
-    controlUi.allowedOrigins === undefined &&
-    typeof gateway.publicOrigin === "string" &&
-    gateway.publicOrigin.trim().length > 0;
+  if (controlUi.allowedOrigins === undefined && typeof gateway.publicOrigin === "string") {
+    const publicOrigin = resolveGatewayPublicOrigin({
+      gateway: { publicOrigin: gateway.publicOrigin },
+    });
+    if (publicOrigin) {
+      origins.add(publicOrigin);
+    }
+  }
   origins.add(`http://localhost:${record.hostPort}`);
   origins.add(`http://127.0.0.1:${record.hostPort}`);
 
@@ -139,7 +144,7 @@ export async function prepareCellConfig(
       auth: nextAuth,
       controlUi: {
         ...controlUi,
-        ...(inheritsPublicOrigin ? {} : { allowedOrigins: [...origins] }),
+        allowedOrigins: [...origins],
       },
     },
   };
