@@ -429,6 +429,7 @@ async function runDoctorConfigPreflightOperation(
         }
       }
     }
+    let postConvergenceStateConfig: OpenClawConfig | undefined;
     if (
       (gatewayStartupCheckpointRequired || stateDirMigrations) &&
       stateMigrationsAllowed &&
@@ -472,9 +473,16 @@ async function runDoctorConfigPreflightOperation(
         snapshot = refreshed.snapshot;
         baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
         automaticConfigRepair = planAdmittedConfigRepair(snapshot);
+        // Keep source locators for plugin migrations while core migrations use
+        // the complete runtime config validated after package convergence.
+        postConvergenceStateConfig = automaticConfigRepair?.snapshot.config;
       }
     }
-    const stateMigrationInput = resolveStateMigrationConfigInput({ snapshot, baseConfig });
+    const stateMigrationInput = resolveStateMigrationConfigInput({
+      snapshot,
+      baseConfig,
+      postConvergenceConfig: postConvergenceStateConfig,
+    });
     if (migrationCheckpoint) {
       migrationCheckpointIdentity = checkpointIdentityForSnapshot(
         { ...configSnapshotRead, snapshot },

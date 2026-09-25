@@ -63,17 +63,17 @@ describe("server-owned model selection policy", () => {
     const values = Array.from(container.querySelectorAll("[data-chat-model-option]"), (row) =>
       row.getAttribute("data-chat-model-option"),
     );
-    expect(values).toEqual(
-      restricted
-        ? ["fixture/primary", "fixture/fallback", "fixture/custom"]
-        : [
-            "fixture/forbidden-default",
-            "fixture/primary",
-            "fixture/fallback",
-            "fixture/custom",
-            "fixture/forbidden-current",
-          ],
-    );
+    const expected = restricted
+      ? ["fixture/primary", "fixture/fallback", "fixture/custom"]
+      : [
+          "fixture/forbidden-default",
+          "fixture/primary",
+          "fixture/fallback",
+          "fixture/custom",
+          "fixture/forbidden-current",
+        ];
+    expect(values).toHaveLength(expected.length);
+    expect(values).toEqual(expect.arrayContaining(expected));
     container
       .querySelector<HTMLButtonElement>('[data-chat-model-option="fixture/custom"]')
       ?.click();

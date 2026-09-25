@@ -3,12 +3,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
 import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import * as videoPoster from "../../../lib/media/video-poster.ts";
-import { resolveAssistantAttachmentAuthToken } from "../chat-pane-state.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "../chat-pane.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import {
@@ -729,7 +729,7 @@ describe("chat transcript invalidation", () => {
         renderChatThread(
           {
             ...threadProps("pane-gateway-media-auth", state.sessionKey, messages),
-            assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
+            assistantAttachmentAuthToken: resolveControlUiAuthToken(state),
             onRequestUpdate: renderPane,
           },
           transcript,

@@ -12,17 +12,15 @@ import {
 import { isTerminalFailureChatSendAck, normalizeChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 
-type ReviewState = ChatHost;
-
 export class ChatProviderReviewController implements ReactiveController {
   private canWrite = false;
 
   private binding: {
-    state: ReviewState;
+    state: ChatHost;
     sessionKey: string;
     sessionId: string;
     agentId?: string;
-    client: ReviewState["client"];
+    client: ChatHost["client"];
     connectionEpoch: number;
     connectionGeneration: number | undefined;
     review: ChatProviderReview;
@@ -38,7 +36,7 @@ export class ChatProviderReviewController implements ReactiveController {
 
   constructor(
     private readonly host: ReactiveControllerHost,
-    private readonly readState: () => ReviewState | undefined,
+    private readonly readState: () => ChatHost | undefined,
   ) {
     host.addController(this);
   }

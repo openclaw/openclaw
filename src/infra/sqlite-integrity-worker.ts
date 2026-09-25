@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { fork } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import type { FileIdentityStat } from "./fs-safe-advanced.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { readSqliteIntegrityFileIdentity } from "./sqlite-file-generation.js";

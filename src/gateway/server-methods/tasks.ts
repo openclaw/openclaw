@@ -24,6 +24,7 @@ import {
   listTaskRecordPage,
   prepareTaskRegistryRead,
 } from "../../tasks/runtime-internal.js";
+import { withTaskCancellationContext } from "../../tasks/task-cancellation-context.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -31,6 +32,7 @@ import {
   canAccessTaskRequesterSession,
   prepareTaskSessionReadFilter,
 } from "../task-session-access.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { taskHistoryHandler } from "./task-history.js";
 import { mapTaskSummary } from "./task-summary.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
@@ -351,30 +353,63 @@ export const tasksHandlers: GatewayRequestHandlers = {
     respond(true, { task: mapTaskSummary(task, { includePrompt: true }) });
   },
   "tasks.history": taskHistoryHandler,
-  "tasks.cancel": async ({ params, respond, context, client }) => {
+  "tasks.cancel": async (options) => {
+    const { params, respond, context, client, sessionMutationAuthorization } = options;
     if (!assertValidParams(params, validateTasksCancelParams, "tasks.cancel", respond)) {
       return;
     }
+    const authority = readGatewayRequestMutationAuthority(options);
+    const assertRequestCurrent = () => {
+      authority.assertCurrent();
+      sessionMutationAuthorization?.assertCurrent();
+    };
+    assertRequestCurrent();
     const taskId = params.taskId;
     const reason = normalizeOptionalString(params.reason);
     const { cancelDetachedTaskRunByIdCore } =
       await import("../../tasks/task-executor-cancel.runtime.js");
+    assertRequestCurrent();
     const cfg = context.getRuntimeConfig();
     const task = getTaskById(taskId);
     if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
       respond(true, { found: false, cancelled: false });
       return;
     }
-    const result = await cancelDetachedTaskRunByIdCore({
-      cfg,
-      taskId,
-      ...(reason ? { reason } : {}),
-    });
+    const cancel = () =>
+      cancelDetachedTaskRunByIdCore({ cfg, taskId, ...(reason ? { reason } : {}) });
+    const result = task
+      ? await withTaskCancellationContext(
+          () => {
+            assertRequestCurrent();
+            const current = getTaskById(taskId);
+            if (
+              !current ||
+              current.requesterSessionKey !== task.requesterSessionKey ||
+              current.requesterAgentId !== task.requesterAgentId ||
+              !canAccessTaskRequesterSession({
+                access: "write",
+                cfg: context.getRuntimeConfig(),
+                client,
+                task: current,
+              })
+            ) {
+              throw new Error("Task cancellation authority changed.");
+            }
+          },
+          cancel,
+          { selectedTask: task },
+        )
+      : await cancel();
+    assertRequestCurrent();
+    const responseTask = result.task && getTaskById(result.task.taskId);
     respond(true, {
       found: result.found,
       cancelled: result.cancelled,
       ...(result.reason ? { reason: result.reason } : {}),
-      ...(result.task ? { task: mapTaskSummary(result.task) } : {}),
+      ...(responseTask &&
+      canAccessTaskRequesterSession({ cfg: context.getRuntimeConfig(), client, task: responseTask })
+        ? { task: mapTaskSummary(responseTask) }
+        : {}),
     });
   },
   "tasks.retry": createTaskRecoveryHandler("tasks.retry"),

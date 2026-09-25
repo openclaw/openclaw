@@ -193,7 +193,9 @@ export async function readSkillProposal(
         ? { agentId: stored.row.owner_agent_id }
         : {}),
   };
-  if (readOptions.reconcile === false) {
+  // Terminal generations cannot be revised or retired by proposal writers.
+  // Keep filesystem integrity checks, but do not acquire a write lease to read them.
+  if (readOptions.reconcile === false || stored.record.status !== "pending") {
     return await readSkillProposalBundle(stored.record, options);
   }
   if (await reconcileInterruptedApply(proposalId, scopedOptions)) {
@@ -226,6 +228,9 @@ export async function readSkillProposalRecord(
   let stored = await readStoredProposal(proposalId, options);
   if (!stored || !isStoredProposalVisible(stored.row, scope)) {
     return null;
+  }
+  if (stored.record.status !== "pending") {
+    return stored.record;
   }
   const scopedOptions = {
     ...options,

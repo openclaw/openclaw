@@ -590,15 +590,17 @@ export function buildOpenAIChatGPTAuthMethodRuns(): Readonly<
   };
 }
 
-export function buildOpenAICodexProviderHooks(): Pick<
-  ProviderPlugin,
-  | "resolveDynamicModel"
-  | "preferRuntimeResolvedModel"
-  | "normalizeResolvedModel"
-  | "normalizeTransport"
-  | "resolveUsageAuth"
-  | "fetchUsageSnapshot"
-  | "refreshOAuth"
+export function buildOpenAICodexProviderHooks(): Required<
+  Pick<
+    ProviderPlugin,
+    | "resolveDynamicModel"
+    | "preferRuntimeResolvedModel"
+    | "normalizeResolvedModel"
+    | "normalizeTransport"
+    | "resolveUsageAuth"
+    | "fetchUsageSnapshot"
+    | "refreshOAuth"
+  >
 > {
   return {
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),

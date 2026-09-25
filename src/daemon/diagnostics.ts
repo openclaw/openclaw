@@ -1,6 +1,6 @@
 /** Reads recent gateway service logs for actionable daemon restart diagnostics. */
 import fs, { type FileHandle } from "node:fs/promises";
-import { readFileWindowFully } from "../infra/file-read.js";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
 // Error patterns worth surfacing from gateway service logs after failed starts.

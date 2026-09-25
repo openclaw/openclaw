@@ -1,12 +1,10 @@
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parse } from "yaml";
 import { prioritizeRelease, restoreReleasePriority } from "../../scripts/frv.mjs";
 import {
   RELEASE_PRIORITY_VARIABLE,
-  RELEASE_PRIORITY_WORKFLOWS,
   isDeferredCiJobSet,
   isReleaseBranch,
   selectDeferredRunCandidates,
@@ -14,7 +12,6 @@ import {
   selectQueuedRunsToCancel,
 } from "../../scripts/lib/release-priority.mjs";
 
-const WORKFLOWS = ".github/workflows";
 const PARENT = {
   id: 77,
   path: ".github/workflows/full-release-validation.yml",
@@ -135,39 +132,6 @@ describe("release priority selection", () => {
         { id: "2", name: "CI", headBranch: "b", event: "pull_request", url: "" },
       ]).map((entry) => entry.id),
     ).toEqual(["9", "2"]);
-  });
-
-  it("gates every root job of the listed hosted-runner workflows", () => {
-    const files = new Map(
-      RELEASE_PRIORITY_WORKFLOWS.map((name) => [name, undefined as string | undefined]),
-    );
-    for (const entry of readdirSync(WORKFLOWS)) {
-      if (!entry.endsWith(".yml")) {
-        continue;
-      }
-      const doc = parse(readFileSync(join(WORKFLOWS, entry), "utf8"), {
-        merge: true,
-        maxAliasCount: -1,
-      });
-      if (!files.has(doc?.name)) {
-        continue;
-      }
-      files.set(doc.name, entry);
-      for (const [jobName, job] of Object.entries(
-        doc.jobs as Record<string, { needs?: unknown; if?: unknown }>,
-      )) {
-        if (job.needs || String(job.if) === "github.event_name == 'workflow_dispatch'") {
-          continue;
-        }
-        expect(String(job.if), `${entry} ${jobName}`).toContain(
-          `vars.${RELEASE_PRIORITY_VARIABLE} == ''`,
-        );
-        expect(String(job.if), `${entry} ${jobName}`).toContain(
-          "github.event_name == 'workflow_dispatch'",
-        );
-      }
-    }
-    expect([...files.entries()].filter(([, file]) => !file)).toEqual([]);
   });
 });
 

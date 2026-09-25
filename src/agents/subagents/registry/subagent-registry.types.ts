@@ -237,6 +237,7 @@ export type SubagentRunMaintenanceRecord = Pick<
 
 export type SubagentRegistrationScope = {
   readonly waitForClaim: () => Promise<void> | undefined;
+  readonly waitForRetirementPublication: () => Promise<void> | undefined;
   readonly canLaunch: () => boolean;
   readonly canCleanupSession: () => boolean;
   readonly canAcceptLaunch: () => boolean;

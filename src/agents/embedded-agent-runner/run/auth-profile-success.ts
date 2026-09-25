@@ -6,6 +6,7 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import type { ProviderRouteOverridePresence } from "../../../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../../../plugins/provider-model-routes.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../../../secrets/sentinel.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { markAuthProfileSuccess } from "../../auth-profiles.js";
 import { recordRuntimeAuthMaterialization } from "../../auth-profiles/runtime-materializations.js";
@@ -41,7 +42,7 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
   const successProvider =
     input.profileStore.profiles[successProfileId]?.provider.trim() || input.provider;
   const successStarted = Date.now();
-  void markAuthProfileSuccess({
+  const bookkeeping = markAuthProfileSuccess({
     store: input.profileStore,
     provider: successProvider,
     profileId: successProfileId,
@@ -70,6 +71,9 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
           `error=${formatErrorMessage(error)}`,
       );
     });
+  // Capture the entire operation before it waits in the auth writer queue.
+  // Ordinary turns remain nonblocking; a repair owner must join it before Doctor.
+  void getOpenClawDatabaseMaintenanceScope()?.track(bookkeeping);
 }
 
 export function reportEmbeddedRunSuccessfulAuthBinding(input: {

@@ -18,6 +18,7 @@ import {
   type CoalescedTaskEvent,
   isActiveTask,
   mergeTaskLists,
+  newestTaskSnapshot,
   normalizeTaskEventPayload,
   normalizeTasksCancelResult,
   normalizeTasksGetResult,
@@ -28,7 +29,6 @@ import {
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { taskMatchesSessionScope } from "./chat-background-task-scope.ts";
 import {
-  newestTaskSnapshot,
   prepareTaskSnapshot,
   type BackgroundTaskObservations,
 } from "./chat-background-tasks-shared.ts";
@@ -60,6 +60,7 @@ type BackgroundTasksState = BackgroundTaskObservations & {
   connectionClient: GatewayBrowserClient | null;
   connectionEpoch: number | undefined;
   error: string | null;
+  errorTaskId?: string;
   explicitReadRequested: boolean;
   deferredRetryAttempt?: number;
   finishedCollapsed: boolean;
@@ -244,6 +245,7 @@ function loadBackgroundTasks(
   state.pendingTaskEvents = buffer;
   state.loading = true;
   state.error = null;
+  delete state.errorTaskId;
   state.pendingReload = false;
   host.requestUpdate?.();
   void (async () => {
@@ -283,6 +285,7 @@ function loadBackgroundTasks(
           current.tasks = replayTaskEvents([], buffer.events);
         }
         current.error = formatUiError(error, t("tasksPage.loadFailed"));
+        delete current.errorTaskId;
       }
     } finally {
       const current = getBackgroundTasksState(host);
@@ -299,6 +302,7 @@ function loadBackgroundTasks(
           current.loadedClient = null;
           // The superseded read's error must not block its queued replacement on resume.
           current.error = null;
+          delete current.errorTaskId;
         }
       }
       host.requestUpdate?.();
@@ -376,6 +380,7 @@ export function handleBackgroundTasksEvent(
     state.tasks = null;
     state.loadedClient = null;
     state.error = null;
+    delete state.errorTaskId;
     host.requestUpdate?.();
     return;
   }
@@ -508,6 +513,7 @@ async function cancelBackgroundTask(
   }
   state.cancellingTaskIds = new Set([...state.cancellingTaskIds, taskId]);
   state.error = null;
+  delete state.errorTaskId;
   host.requestUpdate?.();
   try {
     const payload = await client.request("tasks.cancel", { taskId });
@@ -517,12 +523,9 @@ async function cancelBackgroundTask(
     const result = normalizeTasksCancelResult(payload);
     if (result?.task && state.tasks !== null) {
       const cancelled = prepareTaskSnapshot(state, result.task);
-      const event = normalizeTaskEventPayload({ action: "upserted", task: cancelled });
-      if (event) {
-        // A slow client may miss the best-effort task event; the successful
-        // cancel response must still survive its own in-flight list snapshot.
-        bufferBackgroundTaskEvent(state, event);
-      }
+      // A slow client may miss the best-effort task event; the successful
+      // cancel response must still survive its own in-flight list snapshot.
+      bufferBackgroundTaskEvent(state, { action: "upserted", task: cancelled });
       state.tasks = sortTasks([
         cancelled,
         ...state.tasks.filter((task) => task.id !== cancelled.id),
@@ -531,12 +534,14 @@ async function cancelBackgroundTask(
     // Refusals (already terminal, stale id, no cancellation handle) are
     // successful responses with cancelled=false; surface them like errors.
     if (!result?.cancelled) {
-      const reason = result?.reason?.trim();
+      const reason = result?.reason;
       state.error = reason ? formatUiError(reason) : t("tasksPage.cancelFailed");
+      state.errorTaskId = taskId;
     }
   } catch (error) {
     if (getBackgroundTasksState(host) === state) {
       state.error = formatUiError(error, t("tasksPage.cancelFailed"));
+      state.errorTaskId = taskId;
     }
   } finally {
     if (getBackgroundTasksState(host) === state) {
@@ -614,7 +619,10 @@ export function createBackgroundTasksProps(
     // tasks.cancel needs operator.write; read-only operators get no button.
     canCancel: host.connected && hasOperatorWriteAccess(host.hello?.auth ?? null),
     loading: state.loading,
-    error: state.error,
+    error:
+      state.errorTaskId && opts.selectedTaskId && state.errorTaskId !== opts.selectedTaskId
+        ? null
+        : state.error,
     tasks: state.tasks,
     activeCount: state.tasks?.filter(isActiveTask).length ?? 0,
     subagentActivity,

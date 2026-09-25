@@ -11,8 +11,9 @@ title: "Integrity, troubleshooting, and recovery"
 | When                                        | Check                                                                                                                                           |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | Every open                                  | Validate the `schema_meta` table and primary metadata row                                                                                       |
-| Writable agent open and Gateway readiness   | Run full integrity and foreign-key checks after an update, unclean close, file replacement, or missing verification record                      |
-| Clean same-version agent reopen             | Recheck owner, version, schema, and canonical indexes; queue a child-process `quick_check` and foreign-key check after the Gateway is listening |
+| Writable agent open and Gateway readiness   | Run full integrity and foreign-key checks when neither current runtime proof nor a clean same-version restart receipt is available              |
+| Same-process agent reopen                   | Reuse current file-bound runtime proof without another integrity or quick check; recheck owner, version, schema, and canonical indexes          |
+| Clean same-version agent restart            | Recheck owner, version, schema, and canonical indexes; queue a child-process `quick_check` and foreign-key check after the Gateway is listening |
 | Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan                                                                                 |
 | Gateway background verifier                 | Run the full scan about once daily and log results                                                                                              |
 | Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database                                                                                    |
@@ -27,8 +28,9 @@ the existing single shared-state lease owner; independent Gateways must not shar
 mutable agent databases across state directories.
 
 Within a live lifecycle, an admitted owner can still lend its revocable,
-file-bound runtime proof to another handle with a live lease in the same known
-process. This proof does not require the persisted restart receipt. Peer leases
+file-bound runtime proof to another handle when no foreign or unknown process
+holds a writer lease. This includes reopening after the last local lease closes.
+This proof does not require the persisted restart receipt. Peer leases
 with matching process ID and start time do not consume or block publication of
 that receipt; each handle retains its own lease until cleanup finishes.
 Explicit invalidation revokes shared runtime proof as well as durable metadata,
@@ -52,8 +54,9 @@ through its existing admission so later cleanup workers can reuse it without a
 host SQLite open. The host accepts it only for the admitted physical file and
 unchanged validation state; revocation during the open rejects the handoff.
 
-Cached opens, including later opens after startup, queue checks in the existing
-Gateway verifier. Background success is logged; only the full-check lease owner
+Opens borrowing a clean restart receipt queue checks in the existing Gateway
+verifier. Reopens borrowing current runtime proof do not queue another check.
+Background success is logged; only the full-check lease owner
 publishes verification metadata. Confirmed corruption uses the existing quarantine
 path and prevents the next open. Ordinary writes do not invalidate the file identity. Same-inode damage
 introduced after a clean close can therefore be detected after readiness by the
@@ -338,6 +341,21 @@ The heartbeat proves ownership, not migration progress. A live but stuck mainten
 
 `SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. Snapshot and integrity-child timeout errors include the applied budget and source file size; snapshot timeouts report an unknown size if the source stat failed. Integrity-child timeouts also retain `lastObservedPhase`. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
 
+### The state database is busy
+
+Wait for the other OpenClaw process to finish its database work, then retry the
+command. `state-lifecycle` contention normally clears after startup, a write, or
+maintenance finishes. `gateway-lifecycle` protects a running Gateway's ownership,
+and `state-handles` protects open database connections; those can remain held
+while the Gateway runs.
+
+If contention persists, run `openclaw gateway status` with the same profile and
+state-directory settings, and check for other OpenClaw processes using that state
+directory. Stop the blocking Gateway through its service manager or original
+terminal before retrying an operation that needs exclusive access. Prefer plain
+status here: `--deep` adds database preflight. Doctor also needs state coordination,
+so running it while the lock is held can fail with the same contention.
+
 ### Database paths cannot be compared
 
 `Cannot determine whether database paths alias` means OpenClaw could not safely
@@ -383,7 +401,11 @@ checkpoint clears the warning; a large WAL alone does not mean a checkpoint is
 blocked. File-size observation failures are recorded and logged separately from
 SQLite's completion result; they do not turn a completed checkpoint into a failure.
 
-Shared-state maintenance waits up to 350 ms for lifecycle coordination. A refused
+Shared-state maintenance waits up to 350 ms for lifecycle coordination. Periodic
+maintenance yields between acquisition attempts so the Gateway event loop can
+continue. It rechecks the same database owner and physical file before proceeding;
+retirement cancels and joins pending admission. Explicit synchronous checkpoint
+and close operations retain their existing contract. A refused
 periodic attempt retries once after one second, then waits for the next interval.
 Contention is recorded as blocked. Status and Doctor warn after two consecutive
 refusals; maintenance logs once per five. A completed checkpoint resets that count and clears the history
@@ -490,6 +512,18 @@ the underlying database error.
 ### A database is quarantined after integrity verification failed
 
 The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.
+
+For shared-state or per-agent index-only corruption, `openclaw doctor --fix` is
+the supported repair. Doctor requires every `integrity_check` finding to name missing,
+non-unique, or incorrectly counted index entries, verifies the table data without
+using the damaged indexes, and preserves the damaged database in an
+`openclaw-index-recovery-*` directory beside it before running `REINDEX`.
+It prints the backup path and a warning naming every rebuilt index, then requires
+clean integrity and foreign-key checks before clearing quarantine. Table rows
+are preserved. Page or b-tree damage, unreadable table data, and other integrity
+failures remain a refusal: preserve the database and its WAL, then restore a
+verified backup or use SQLite recovery. Runtime and startup never perform this
+repair automatically.
 
 <a id="downgrades-are-unsupported" />
 

@@ -54,3 +54,20 @@ export function compareModelCatalogEntries(a: ModelCatalogEntry, b: ModelCatalog
     (a.providerOrder ?? Number.MAX_SAFE_INTEGER) - (b.providerOrder ?? Number.MAX_SAFE_INTEGER);
   return orderComparison || a.id.localeCompare(b.id) || a.name.localeCompare(b.name);
 }
+
+/** Keep a session's selected row reachable without changing the provider-owned remainder. */
+export function orderModelCatalogForPicker(
+  entries: readonly ModelCatalogEntry[],
+  selected?: { provider: string; model: string },
+): ModelCatalogEntry[] {
+  const ordered = entries.toSorted(compareModelCatalogEntries);
+  if (selected) {
+    const keyOf = createModelCatalogIdentityKeyResolver();
+    const selectedKey = keyOf({ provider: selected.provider, id: selected.model });
+    const index = ordered.findIndex((entry) => keyOf(entry) === selectedKey);
+    if (index > 0) {
+      ordered.unshift(...ordered.splice(index, 1));
+    }
+  }
+  return ordered;
+}

@@ -153,11 +153,11 @@ async function findArchivedFinal(
   sessionId: string,
   runId: string,
 ): Promise<TranscriptArchiveReadResult> {
-  const { isVisibleSubagentResultEventForRun } =
-    await import("../../agents/subagents/announce/subagent-announce-result.js");
+  const { isVisibleAssistantResultEventForRun } =
+    await import("../../sessions/transcript-visible-record.js");
   const result: TranscriptArchiveReadResult = {};
   await scanArchivedTranscript(bytes, compressed, sessionId, (event) => {
-    if (isVisibleSubagentResultEventForRun(event, runId)) {
+    if (isVisibleAssistantResultEventForRun(event, runId)) {
       result.event = event;
     }
   });

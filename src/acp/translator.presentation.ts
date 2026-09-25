@@ -81,24 +81,6 @@ export type SessionSnapshot = SessionPresentation & {
   usage?: SessionUsageSnapshot;
 };
 
-function formatThinkingLevelName(level: string): string {
-  switch (level) {
-    case "xhigh":
-      return "Extra High";
-    case "adaptive":
-      return "Adaptive";
-    default:
-      return level.length > 0 ? `${level.charAt(0).toUpperCase()}${level.slice(1)}` : "Unknown";
-  }
-}
-
-function buildThinkingModeDescription(level: string): string | undefined {
-  if (level === "adaptive") {
-    return "Use the Gateway session default thought level.";
-  }
-  return undefined;
-}
-
 function formatConfigValueName(value: string): string {
   switch (value) {
     case "xhigh":
@@ -151,8 +133,9 @@ export function buildSessionPresentation(params: {
     currentModeId,
     availableModes: availableLevelIds.map((level) => ({
       id: level,
-      name: formatThinkingLevelName(level),
-      description: buildThinkingModeDescription(level),
+      name: formatConfigValueName(level),
+      description:
+        level === "adaptive" ? "Use the Gateway session default thought level." : undefined,
     })),
   };
 

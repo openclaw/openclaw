@@ -1,6 +1,5 @@
 // CLI for showing and applying exec policy presets across config and approvals.
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
@@ -41,6 +40,7 @@ import {
   type ExecPolicyShowOptions,
 } from "./exec-policy-diagnostics.js";
 import { addGatewayClientOptions, resolveGatewayRpcOptionsWithLocalPort } from "./gateway-rpc.js";
+import { formatDocsHelp } from "./help-format.js";
 
 type ExecPolicyPresetName = "yolo" | "cautious" | "deny-all";
 
@@ -468,11 +468,7 @@ export function registerExecPolicyCli(program: Command) {
   const execPolicy = program
     .command("exec-policy")
     .description("Show or synchronize requested exec policy with host approvals")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/approvals"));
 
   addGatewayClientOptions(
     execPolicy

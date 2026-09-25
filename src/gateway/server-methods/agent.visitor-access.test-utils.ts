@@ -581,7 +581,7 @@ describe("visitor access admitted caller", () => {
               "registered Visitor access missing",
             );
             const captured = expectDefined(
-              captureGatewayOperatorRunAuthority({
+              await captureGatewayOperatorRunAuthority({
                 client: {
                   ...operatorWriteCliClient([SESSION_WRITE_SCOPE]),
                   authenticatedUserProfile: {

@@ -447,3 +447,36 @@ test("search discards hits and page metadata when sharing is revoked during its 
     }
   });
 });
+
+test("search materializes archived hits and rechecks visibility after exact preparation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    try {
+      const viewer = ensureProfileForEmail("archived-search@example.test").id;
+      const key = await seed("main", "archived-hit", "foreign", "needle", { archivedAt: 1 });
+      const context = requestContext({ agents: { list: [{ id: "main", default: true }] } });
+      const client = identifiedClient(viewer);
+      const params = { query: "needle", scope: { archived: "all" } };
+      expect(await search(context, client, params)).toMatchObject({
+        ok: true,
+        payload: { results: [{ sessionKey: key }], sessions: [{ key }] },
+      });
+      const projection = expectDefined(getSessionRowProjection(context), "search projection");
+      const prepare = projection.withPreparedExactRows.bind(projection);
+      vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(
+        async (queries, consume, options) => {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: key },
+            { visibility: "draft" },
+          );
+          return prepare(queries, consume, options);
+        },
+      );
+      expect(await search(context, client, params)).toMatchObject({
+        ok: true,
+        payload: { results: [], sessions: [] },
+      });
+    } finally {
+      await disposeSessionReadContexts();
+    }
+  });
+});

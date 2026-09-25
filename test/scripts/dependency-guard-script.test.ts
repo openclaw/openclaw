@@ -32,6 +32,22 @@ const comparisonPath = `/repos/openclaw/openclaw/compare/${staleSha}...${headSha
 const { isDependencyFile, isDependencyManifest, isPackageLockfile } = loadSecurityReviewPolicy();
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function interruptedJsonResponse(error: Error) {
+  let started = false;
+  return new Response(
+    new ReadableStream({
+      pull(controller) {
+        if (!started) {
+          started = true;
+          controller.enqueue(new TextEncoder().encode('{"partial":'));
+        } else {
+          controller.error(error);
+        }
+      },
+    }),
+  );
+}
+
 const pullPath = "/repos/openclaw/openclaw/pulls/7";
 const issuePath = "/repos/openclaw/openclaw/issues/7";
 const pullRequest = {
@@ -1070,33 +1086,39 @@ describe("dependency guard script", () => {
   });
 
   it.each([
-    { method: "GET", code: "ECONNRESET" },
-    { method: "GET", code: "EAI_AGAIN" },
-    { method: "GET", code: "ENOTFOUND" },
-    { method: "HEAD", code: "UND_ERR_SOCKET" },
-  ])("recovers from $code on $method requests", async ({ method, code }) => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockRejectedValueOnce(
-        new TypeError("fetch failed", { cause: Object.assign(new Error(), { code }) }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    { method: "GET", code: "ECONNRESET", phase: "connection" },
+    { method: "GET", code: "EAI_AGAIN", phase: "connection" },
+    { method: "GET", code: "ENOTFOUND", phase: "connection" },
+    { method: "HEAD", code: "UND_ERR_SOCKET", phase: "connection" },
+    { method: "GET", code: "UND_ERR_SOCKET", phase: "body" },
+    { method: "GET", code: "ECONNRESET", phase: "body" },
+  ])("recovers from $code in the $phase of $method requests", async ({ method, code, phase }) => {
+    const error = new TypeError("terminated", { cause: Object.assign(new Error(), { code }) });
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementationOnce(async () => {
+      if (phase === "body") {
+        return interruptedJsonResponse(error);
+      }
+      throw error;
+    });
+    fetchImpl.mockResolvedValueOnce(
+      method === "HEAD" ? new Response(null, { status: 204 }) : Response.json({ complete: true }),
+    );
 
     await expect(
       githubApi("token", { fetchImpl, retryDelaysMs: [0] }).request(pullPath, { method }),
-    ).resolves.toBeNull();
+    ).resolves.toEqual(method === "HEAD" ? null : { complete: true });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it("shares the bounded retry budget between connection and HTTP failures", async () => {
-    const error = new TypeError("fetch failed", {
+  it("shares the bounded retry budget between connection, HTTP, and body failures", async () => {
+    const error = new TypeError("terminated", {
       cause: Object.assign(new Error("connection reset"), { code: "ECONNRESET" }),
     });
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockRejectedValueOnce(error)
       .mockResolvedValueOnce(new Response(null, { status: 503 }))
-      .mockRejectedValue(error);
+      .mockImplementation(async () => interruptedJsonResponse(error));
 
     await expect(
       githubApi("token", { fetchImpl, retryDelaysMs: [0, 0, 0] }).request(pullPath),
@@ -1106,6 +1128,37 @@ describe("dependency guard script", () => {
     });
     expect(fetchImpl).toHaveBeenCalledTimes(4);
   });
+
+  it("does not replay a write whose response body was interrupted", async () => {
+    const error = new TypeError("terminated", {
+      cause: Object.assign(new Error(), { code: "UND_ERR_SOCKET" }),
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => interruptedJsonResponse(error));
+    await expect(
+      githubApi("token", { fetchImpl }).request(issuePath, { method: "POST", body: "{}" }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining(`GitHub API POST ${issuePath} failed: UND_ERR_SOCKET`),
+      cause: error,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["invalid JSON", "unknown stream error"])(
+    "does not retry %s responses",
+    async (failure) => {
+      const fetchImpl = vi
+        .fn<typeof fetch>()
+        .mockImplementation(async () =>
+          failure === "invalid JSON"
+            ? new Response("invalid JSON")
+            : interruptedJsonResponse(new Error("unknown stream error")),
+        );
+      await expect(githubApi("token", { fetchImpl }).request(pullPath)).rejects.toThrow();
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each(["POST", "PATCH", "DELETE"])(
     "does not retry connection failures on %s writes",
@@ -1138,15 +1191,23 @@ describe("dependency guard script", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["GET", "POST"])(
-    "does not retry or mark an aborted %s connection error for recovery",
-    async (method) => {
+  it.each([
+    { method: "GET", phase: "connection" },
+    { method: "POST", phase: "connection" },
+    { method: "GET", phase: "body" },
+    { method: "POST", phase: "body" },
+  ])(
+    "does not retry or mark an aborted $method $phase error for recovery",
+    async ({ method, phase }) => {
       const controller = new AbortController();
       const error = new TypeError("fetch failed", {
         cause: Object.assign(new Error(), { code: "ECONNRESET" }),
       });
       const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => {
-        controller.abort();
+        controller.abort(error);
+        if (phase === "body") {
+          return interruptedJsonResponse(error);
+        }
         throw error;
       });
       const request = githubApi("token", { fetchImpl }).request(pullPath, {
@@ -1174,29 +1235,36 @@ describe("dependency guard script", () => {
     expect(GITHUB_RESPONSE_BODY_MAX_BYTES).toBeGreaterThan(64);
   });
 
-  it("keeps the original request timeout active during connection retry backoff", async () => {
-    vi.useFakeTimers();
-    let signal: AbortSignal | undefined;
-    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
-      signal = init?.signal ?? undefined;
-      throw new TypeError("fetch failed", {
-        cause: Object.assign(new Error(), { code: "ECONNRESET" }),
+  it.each(["connection", "body"])(
+    "keeps the original request timeout active during %s retry backoff",
+    async (phase) => {
+      vi.useFakeTimers();
+      let signal: AbortSignal | undefined;
+      const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+        signal = init?.signal ?? undefined;
+        const error = new TypeError("terminated", {
+          cause: Object.assign(new Error(), { code: "ECONNRESET" }),
+        });
+        if (phase === "body") {
+          return interruptedJsonResponse(error);
+        }
+        throw error;
       });
-    });
-    const request = githubApi("token", {
-      fetchImpl,
-      timeoutMs: 5,
-      retryDelaysMs: [10_000],
-    }).request(pullPath);
-    const rejection = expect(request).rejects.toThrow(
-      `GitHub API GET ${pullPath} exceeded timeout 5ms`,
-    );
+      const request = githubApi("token", {
+        fetchImpl,
+        timeoutMs: 5,
+        retryDelaysMs: [10_000],
+      }).request(pullPath);
+      const rejection = expect(request).rejects.toThrow(
+        `GitHub API GET ${pullPath} exceeded timeout 5ms`,
+      );
 
-    await vi.advanceTimersByTimeAsync(5);
-    await rejection;
-    expect(signal?.aborted).toBe(true);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
+      await vi.advanceTimersByTimeAsync(5);
+      await rejection;
+      expect(signal?.aborted).toBe(true);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("aborts stalled GitHub API fetches at the request timeout", async () => {
     let signal: AbortSignal | undefined;

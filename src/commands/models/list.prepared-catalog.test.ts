@@ -5,7 +5,7 @@ import {
   createAuthProfileStoreFixture,
 } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import * as catalog from "../../agents/prepared-model-catalog.js";
-import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import * as runtimeConfig from "../../config/config.js";
@@ -82,12 +82,11 @@ function createOwner(): PreparedModelRuntimeSnapshot {
       throw new Error("Inventory must not start model execution");
     },
   };
-  setPreparedModelRuntimeAuthStore(
-    owner,
-    createAuthProfileStoreFixture({
+  bindPreparedModelRuntimeAuth(owner, {
+    store: createAuthProfileStoreFixture({
       "catalog-provider:test": createApiKeyCredential("catalog-provider", "synthetic-catalog-key"),
     }),
-  );
+  });
   return owner;
 }
 let owner: PreparedModelRuntimeSnapshot;

@@ -17,7 +17,10 @@ const foreignKey = "agent:main:dashboard:background-conversation";
 const baseTime = 1_900_000_000_000;
 
 type MeasuredPane = HTMLElement & {
-  state: Pick<ChatPageHost, "sessionKey" | "chatMessages" | "chatAvatarStatus">;
+  state: Pick<
+    ChatPageHost,
+    "sessionKey" | "chatMessages" | "chatAvatarStatus" | "modelAuthStatusResult"
+  >;
   presencePayload?: PresencePayload;
   render: () => unknown;
   updateComplete: Promise<boolean>;
@@ -82,7 +85,7 @@ suite.define(() => {
       let selected = createControlUiSessionRow(selectedKey, "Foreground conversation", baseTime);
       let foreign = createControlUiSessionRow(foreignKey, "Background conversation", baseTime);
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["agent.identity.get"],
+        deferredMethods: ["agent.identity.get", "models.authStatus"],
         sessionKey: selectedKey,
         sessions: [selected, foreign],
         historyMessages: [
@@ -118,8 +121,24 @@ suite.define(() => {
           document.querySelector<MeasuredPane>("openclaw-chat-pane.chat-pane-cache__pane--active")
             ?.state.chatAvatarStatus === "none",
       );
+      await gateway.waitForRequest("models.authStatus", { match: { agentId: "main" } });
+      expect(
+        await page.evaluate(
+          () =>
+            document.querySelector<MeasuredPane>("openclaw-chat-pane.chat-pane-cache__pane--active")
+              ?.state.modelAuthStatusResult,
+        ),
+      ).toBeNull();
+      await gateway.resolveDeferred("models.authStatus");
+      // Identity completion does not join auth startup. Observe the accepted pane
+      // result before attributing its final render to unrelated session events.
+      await page.waitForFunction(
+        () =>
+          document.querySelector<MeasuredPane>("openclaw-chat-pane.chat-pane-cache__pane--active")
+            ?.state.modelAuthStatusResult?.providers.length === 0,
+      );
       await pauseVirtualClock(page);
-      // Finish the delayed swarm roster read and its render before measuring events.
+      // Advance delayed swarm scheduling and queued render frames before measuring events.
       await page.clock.runFor(1_000);
       const probe = await observePaneRenders(page);
       const counts = { foreign: [] as number[], presence: 0, selected: 0, viewer: 0 };

@@ -140,6 +140,6 @@
   },
   "dependencies": {
     "libphonenumber-js": "1.13.13",
-    "typebox": "1.3.32"
+    "typebox": "1.3.33"
   }
 }
