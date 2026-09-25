@@ -6,14 +6,18 @@
 // a real executable that records the exact argv it was spawned with.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
-import { makePluginLoaderTempDir, writePlugin } from "../../plugins/loader.test-fixtures.js";
+import {
+  cleanupPluginLoaderFixturesForTest,
+  makePluginLoaderTempDir,
+  writePlugin,
+} from "../../plugins/loader.test-fixtures.js";
 import {
   createTestAdmittedRunContext,
   withTestRunAdmission,
@@ -37,29 +41,29 @@ const CLI_CONFIG: OpenClawConfig = {
   },
 };
 
-function writeStubCliExecutable(params: { logFile: string }): string {
+function writeStubCliScript(params: { logFile: string }): string {
+  // Spawned through the Node executable by the backend config, so the file
+  // needs no shebang or exec bit and stays portable across platforms.
   const file = path.join(makePluginLoaderTempDir(), "stub-cli.mjs");
   fs.writeFileSync(
     file,
-    `#!/usr/bin/env node
-import { appendFileSync } from "node:fs";
+    `import { appendFileSync } from "node:fs";
 appendFileSync(${JSON.stringify(params.logFile)}, JSON.stringify({ argv: process.argv.slice(2) }) + "\\n");
 process.stdout.write("stub reply after routing");
 `,
     "utf-8",
   );
-  fs.chmodSync(file, 0o755);
   return file;
 }
 
-function writeBackendAndRouterPlugin(params: { command: string; logFile: string }) {
+function writeBackendAndRouterPlugin(params: { script: string; logFile: string }) {
   return writePlugin({
     id: "stub-cli-backend",
     registration: [
       `api.registerCliBackend({`,
       `  id: "stub-cli",`,
       `  modelProvider: "stub",`,
-      `  config: { command: ${JSON.stringify(params.command)}, args: ["exec"], output: "text", input: "arg", modelArg: "--model", sessionMode: "none", systemPromptWhen: "never" },`,
+      `  config: { command: ${JSON.stringify(process.execPath)}, args: [${JSON.stringify(params.script)}, "exec"], output: "text", input: "arg", modelArg: "--model", sessionMode: "none", systemPromptWhen: "never" },`,
       `});`,
       `api.on("before_model_resolve", (event) => {`,
       `  require("node:fs").appendFileSync(${JSON.stringify(params.logFile)}, JSON.stringify({ hook: "before_model_resolve", prompt: event.prompt }) + "\\n");`,
@@ -73,12 +77,14 @@ afterEach(() => {
   resetGlobalHookRunner();
 });
 
+afterAll(cleanupPluginLoaderFixturesForTest);
+
 describe("runCliAgent with a real loaded plugin and a real spawned CLI child", () => {
   it("routes the turn's model through before_model_resolve into the child argv", async () => {
-    const workspaceDir = fs.realpathSync(fs.mkdtempSync(path.join("/tmp", "openclaw-full-turn-")));
+    const workspaceDir = makePluginLoaderTempDir();
     const logFile = path.join(workspaceDir, "stub-cli-argv.jsonl");
-    const stubCli = writeStubCliExecutable({ logFile });
-    const plugin = writeBackendAndRouterPlugin({ command: stubCli, logFile });
+    const stubCli = writeStubCliScript({ logFile });
+    const plugin = writeBackendAndRouterPlugin({ script: stubCli, logFile });
     const registry = loadOpenClawPlugins({
       cache: false,
       workspaceDir: plugin.dir,
@@ -114,12 +120,12 @@ describe("runCliAgent with a real loaded plugin and a real spawned CLI child", (
           sessionId: "full-turn-proof",
           sessionKey: "agent:main:main",
           workspaceDir,
-          trigger: "agent-turn",
+          trigger: "manual",
           runId: "full-turn-proof-run",
           admittedRunContext,
           config: CLI_CONFIG,
           timeoutMs: 60_000,
-        } as Parameters<typeof runCliAgent>[0]),
+        }),
     );
 
     // The run completed through the real child and surfaced its reply.
@@ -134,11 +140,11 @@ describe("runCliAgent with a real loaded plugin and a real spawned CLI child", (
     expect(hookFires.length).toBeGreaterThanOrEqual(1);
     const spawns = logLines.filter((line) => Array.isArray(line.argv));
     expect(spawns.length).toBeGreaterThanOrEqual(1);
-    const lastSpawn = spawns.at(-1)!;
-    expect(lastSpawn.argv).toContain("exec");
-    const modelIndex = lastSpawn.argv.indexOf("--model");
+    const lastSpawnArgv = spawns.at(-1)?.argv ?? [];
+    expect(lastSpawnArgv).toContain("exec");
+    const modelIndex = lastSpawnArgv.indexOf("--model");
     expect(modelIndex).toBeGreaterThan(-1);
-    expect(lastSpawn.argv[modelIndex + 1]).toBe(STUB_MODEL_ROUTED);
-    expect(lastSpawn.argv).not.toContain(STUB_MODEL_BASE);
+    expect(lastSpawnArgv[modelIndex + 1]).toBe(STUB_MODEL_ROUTED);
+    expect(lastSpawnArgv).not.toContain(STUB_MODEL_BASE);
   });
 });
