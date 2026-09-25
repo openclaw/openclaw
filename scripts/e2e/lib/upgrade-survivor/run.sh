@@ -2223,6 +2223,34 @@ if [ "$SCENARIO" = "dreaming-cron-doctor" ]; then
   echo "Dreaming cron survivor passed: published updater child repaired active and inactive partitions, retained a verified backup, repeated Doctor made no cron changes, and the installed Gateway converged despite an authored tagged row."
   exit 0
 fi
+if [ "$SCENARIO" = "channel-owner-policy" ]; then
+  if [ "$baseline_spec" != "openclaw@2026.9.4" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
+    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
+    echo "$SCENARIO requires published openclaw@2026.9.4, a candidate tarball, isolated manual restart, and no live provider" >&2
+    exit 2
+  fi
+  phase policy-baseline-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs baseline "$(package_root)"
+  phase prepare-policy-database openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --fix --non-interactive
+  phase seed-channel-policy node scripts/e2e/lib/upgrade-survivor/channel-owner-policy.mjs seed
+  phase validate-policy-config validate_baseline_config
+  phase resolve-policy-candidate resolve_candidate_version
+  phase policy-candidate-package prepare_worker_cell_package
+  phase update-channel-policy update_candidate
+  phase policy-installed-package assert_worker_cell_update
+  phase assert-upgraded-policy node scripts/e2e/lib/upgrade-survivor/channel-owner-policy.mjs upgraded
+  for startup in first second; do
+    GATEWAY_LOG="$ARTIFACT_ROOT/policy-$startup-gateway.log"
+    HEALTHZ_JSON="$ARTIFACT_ROOT/policy-$startup-healthz.json"
+    READYZ_JSON="$ARTIFACT_ROOT/policy-$startup-readyz.json"
+    phase "$startup-policy-gateway-start" start_gateway
+    phase "$startup-policy-gateway-probes" check_gateway_probes
+    phase "$startup-policy-gateway-stop" stop_gateway
+    phase "assert-$startup-policy" node scripts/e2e/lib/upgrade-survivor/channel-owner-policy.mjs "$startup"
+  done
+  run_completed="1"
+  echo "Channel owner policy survived the published updater and two candidate Gateway starts."
+  exit 0
+fi
 if [ "$WORKER_CELL" = "1" ]; then
   phase worker-baseline-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs baseline "$(package_root)"
   if [ "$SCENARIO" = "projects-doctor" ]; then

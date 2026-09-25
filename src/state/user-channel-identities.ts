@@ -1,5 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Check } from "typebox/value";
 import { z } from "zod";
 import {
@@ -7,6 +9,7 @@ import {
   UserChannelIdentitySchema,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { GatewayConfig } from "../config/types.gateway.js";
+import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
@@ -49,6 +52,34 @@ import type {
 const CHANNEL_IDENTITY_PROVIDER = "channel.identity";
 const POLICY_KEY = "operator.channelPolicy";
 const referenceSchema = z.strictObject({ version: z.literal(1), id: z.uuid() });
+const configuredReferenceSchema = referenceSchema.extend({ version: z.literal(2) });
+const configuredPolicySchema = z.strictObject({
+  fingerprint: z.string().length(43),
+  id: z.uuid(),
+});
+const commandReferenceSchema = z.union([referenceSchema, configuredReferenceSchema]);
+export type CommandOwnerReference = Readonly<z.infer<typeof commandReferenceSchema>>;
+
+export function parseCommandOwnerReference(value: unknown) {
+  return commandReferenceSchema.safeParse(value).data;
+}
+
+export function configuredCommandOwnerPolicyFingerprint(owners?: readonly (string | number)[]) {
+  const entries = normalizeSortedUniqueStringEntries(owners);
+  return entries.length ? sha256Base64Url(JSON.stringify(entries)) : undefined;
+}
+
+function splitPolicy(value: unknown) {
+  const { configuredOwnerPolicy, ...policy } = isRecord(value) ? value : {};
+  return { policy, configured: configuredPolicySchema.safeParse(configuredOwnerPolicy).data };
+}
+
+export function readConfiguredCommandOwnerPolicy(value: unknown, fingerprint: string) {
+  const { configured } = splitPolicy(value);
+  return configured?.fingerprint === fingerprint
+    ? { version: 2 as const, id: configured.id }
+    : undefined;
+}
 const grantSchema = z
   .strictObject({ pluginId: z.string().min(1).max(128), grantId: z.uuid() })
   .nullable();
@@ -63,21 +94,26 @@ export function resolveUserChannelAuthorizationPolicy(
 }
 function matchesPolicy(db: DatabaseSync, policy: UserChannelAuthorizationPolicy): boolean {
   const row = readConfigMachineStateRowInDatabase(db, POLICY_KEY);
-  return row !== undefined && isDeepStrictEqual(JSON.parse(row.value_json), policy);
+  return (
+    row !== undefined && isDeepStrictEqual(splitPolicy(JSON.parse(row.value_json)).policy, policy)
+  );
 }
 
 /** Activation and rollback retire old references before their exact authorization policy is published. */
 export function publishUserChannelPolicyInDatabase(
   db: DatabaseSync,
   policy: UserChannelAuthorizationPolicy,
-): string[] {
+  configuredOwnersHash?: string,
+) {
   let profiles: string[] = [];
+  const channels: string[] = [];
   updateConfigMachineStateInDatabase(
     db,
     POLICY_KEY,
     (current: unknown) => {
+      const previous = splitPolicy(current);
       if (
-        !isDeepStrictEqual(current, policy) &&
+        !isDeepStrictEqual(previous.policy, policy) &&
         getAdmittedSqliteSchemaFacts(db)?.tables.has("user_profile_identities")
       ) {
         profiles = executeSqliteQuerySync(
@@ -90,11 +126,24 @@ export function publishUserChannelPolicyInDatabase(
         ).rows.map((row) => row.profile_id);
         publishUserProfileAuthorityChange(db, ...profiles);
       }
-      return policy;
+      const configured = configuredOwnersHash
+        ? {
+            fingerprint: configuredOwnersHash,
+            id:
+              previous.configured?.fingerprint === configuredOwnersHash
+                ? previous.configured.id
+                : generateSecureUuid(),
+          }
+        : undefined;
+      if (!isDeepStrictEqual(previous.configured, configured)) {
+        channels.push(POLICY_KEY);
+        publishUserChannelIdentityAuthorityChange(db, POLICY_KEY);
+      }
+      return { ...policy, ...(configured ? { configuredOwnerPolicy: configured } : {}) };
     },
     Date.now(),
   );
-  return profiles;
+  return { profiles, channels };
 }
 
 /** The reference names this uninterrupted channel link; it carries no permission by itself. */

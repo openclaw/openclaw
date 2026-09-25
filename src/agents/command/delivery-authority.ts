@@ -1,6 +1,10 @@
 // Authority checks at final platform handoff and restart-only transport cancellation.
-import { CommandOwnerRevokedError } from "../../auto-reply/command-owner-authority.js";
+import {
+  CommandOwnerRevokedError,
+  type CommandOwnerAssertion,
+} from "../../auto-reply/command-owner-authority.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import { SESSION_WORK_START_INVALIDATED_ERROR_CODE } from "../../config/sessions/work-start-error.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
 
@@ -28,20 +32,23 @@ export function createRestartOnlyAbortSignal(source: AbortSignal | undefined): {
   };
 }
 
-export function createAgentCommandDeliveryGuard(params: {
-  opts: { abortSignal?: AbortSignal };
-  assertDeliveryCurrent?: () => void;
-}): () => void {
+export function createAgentCommandDeliveryGuard(
+  params: { opts: { abortSignal?: AbortSignal }; assertDeliveryCurrent?: () => void },
+  completion?: { commandOwnerReference?: CommandOwnerAssertion["recoveryReference"] },
+): () => void {
   return () => {
     try {
       params.assertDeliveryCurrent?.();
     } catch (error) {
       const restart = isAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
+      const sourceInvalidated = isSessionWorkStartInvalidatedError(error);
+      const invalidated = error instanceof CommandOwnerRevokedError || sourceInvalidated;
+      // Recovery revalidates owner custody, but cannot reconstruct a changed source transcript.
       const retryable =
-        !(error instanceof CommandOwnerRevokedError) &&
-        (restart ||
-          (!params.opts.abortSignal?.aborted && !isSessionWorkStartInvalidatedError(error)));
-      // Assertions precede I/O: read failures retain custody; revocation does not.
+        (!sourceInvalidated || error.code === SESSION_WORK_START_INVALIDATED_ERROR_CODE) &&
+        (restart
+          ? !invalidated || completion?.commandOwnerReference != null
+          : !invalidated && !params.opts.abortSignal?.aborted);
       throw new PlatformMessageNotDispatchedError(
         error instanceof Error ? error.message : "Agent final delivery source check failed",
         { cause: error, retryable },

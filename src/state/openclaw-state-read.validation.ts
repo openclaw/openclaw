@@ -199,6 +199,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       input.command.type === "fleet.list" ||
       (input.command.type === "operatorApprovals.history" && isRecord(input.command.input)) ||
       input.command.type === "nodeHost.config" ||
+      input.command.type === "operator.channelPolicy" ||
       (input.command.type === "onboardingRecommendations.read" &&
         typeof input.command.configKey === "string") ||
       input.command.type === "sandboxRegistry.list" ||

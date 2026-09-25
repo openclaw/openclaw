@@ -261,7 +261,7 @@ export async function prepareGatewayServerBootstrap(input: {
     beforeSnapshotPublication: async (config) => {
       const { publishCanonicalUserChannelPolicy } =
         await import("../state/user-channel-identity-operations.js");
-      await publishCanonicalUserChannelPolicy(config?.gateway);
+      await publishCanonicalUserChannelPolicy(config?.gateway, config?.commands?.ownerAllowFrom);
     },
     ...(startupConfigLoad.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot }

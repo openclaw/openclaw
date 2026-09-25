@@ -177,6 +177,7 @@ export type OpenClawStateReadCommand =
   | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
   | { type: "fleet.get"; tenantId: string }
   | { type: "nodeHost.config" }
+  | { type: "operator.channelPolicy" }
   | {
       type: "sessionRepositoryWorkspaces.find";
       owners: readonly { agentId: string; sessionKey: string }[];
@@ -451,7 +452,7 @@ export type OpenClawStateReadReply = (
   | { ok: true; type: "fleet.get"; sourceAdmitted: true; cell: FleetCellRecord | undefined }
   | {
       ok: true;
-      type: "nodeHost.config";
+      type: "nodeHost.config" | "operator.channelPolicy";
       sourceAdmitted: true;
       row: Pick<Selectable<ConfigMachineState>, "value_json" | "updated_at_ms"> | undefined;
     }

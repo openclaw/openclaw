@@ -44,6 +44,7 @@ import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
@@ -449,12 +450,20 @@ serveOwnedWorkerTasks(
                     record: readOnboardingRecommendationsInDatabase(db, command.configKey),
                   };
                 }
-                if (command.type === "nodeHost.config") {
+                if (
+                  command.type === "nodeHost.config" ||
+                  command.type === "operator.channelPolicy"
+                ) {
                   return {
                     ok: true,
                     type: command.type,
                     sourceAdmitted,
-                    row: readConfigMachineStateRowInDatabase(db, command.type),
+                    // Activation may precede deferred publication; never issue authority before v19.
+                    row:
+                      command.type === "operator.channelPolicy" &&
+                      (getAdmittedSqliteSchemaFacts(db)?.userVersion ?? 0) < 19
+                        ? undefined
+                        : readConfigMachineStateRowInDatabase(db, command.type),
                   };
                 }
                 if (command.type === "workspace.snapshot") {

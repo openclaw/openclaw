@@ -830,9 +830,9 @@ export async function deliverAgentCommandResult(
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget && !deliveryStatus) {
       params.assertDeliveryCurrent?.();
-      const assertPlatformSendCurrent = createAgentCommandDeliveryGuard(params);
       // The outbound projection contains transport data, not private payload metadata.
-      const pendingFinalCompletion = resolvePendingFinalDeliveryCompletion(payloads);
+      const completion = resolvePendingFinalDeliveryCompletion(payloads);
+      const assertPlatformSendCurrent = createAgentCommandDeliveryGuard(params, completion);
       const restartAbort = createRestartOnlyAbortSignal(opts.abortSignal);
       let send: DurableSendResult;
       try {
@@ -842,10 +842,10 @@ export async function deliverAgentCommandResult(
           to: deliveryTarget,
           accountId: resolvedAccountId,
           payloads: deliveryPayloads,
-          ...(pendingFinalCompletion
+          ...(completion
             ? {
-                deliveryCompletion: pendingFinalCompletion,
-                deliveryIntentId: pendingFinalCompletion.deliveryId,
+                deliveryCompletion: completion,
+                deliveryIntentId: completion.deliveryId,
               }
             : {}),
           session: outboundSession,
