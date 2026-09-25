@@ -70,11 +70,8 @@ Run the approval demo.
 Expected result: the iPhone shows `Exec approval required` for a harmless
 `printf` command that prints `OpenClaw App Review approval demo complete`.
 Tap `Allow Once`, then `Dismiss` if the completed approval remains open.
-The chat then replies:
-
-```text
-The approval demo completed.
-```
+The chat then confirms that the command completed. The exact confirmation
+wording may vary.
 
 ## Talk
 
@@ -91,8 +88,8 @@ I'm testing OpenClaw on an iPhone connected to a test Gateway. Summarize that in
 ```
 
 Expected result: the assistant speaks a one-sentence summary of the setup just
-described, and its response appears in chat. Exact wording may vary. Tap the
-waveform button again to stop.
+described, and its response appears in chat. Exact wording may vary. Tap the stop
+button at the same position to stop.
 
 ## Talk + Background Audio
 
@@ -119,7 +116,7 @@ Name one animal.
 
 Expected result: the assistant names an animal aloud while OpenClaw remains in
 the background. Reopen OpenClaw and confirm that response appears in chat and
-Talk is still active, then tap the waveform button to stop.
+Talk is still active, then tap the stop button.
 
 ## Gateway Status
 
@@ -139,7 +136,7 @@ Talk is still active, then tap the waveform button to stop.
 2. Lock the iPhone while Talk is active.
 3. Confirm an `OpenClaw` Live Activity appears on the Lock Screen. On iPhones
    with Dynamic Island, the activity can also appear there.
-4. Reopen OpenClaw and tap the waveform button to stop.
+4. Reopen OpenClaw and tap the stop button.
 
 Connection status can also appear as a Live Activity. To exercise that path,
 open `Settings` → `Gateway`, tap `Reconnect`, and immediately return to the
@@ -164,7 +161,7 @@ Expected result: the iPhone Lock Screen receives a visible `OpenClaw`
 notification with this body:
 
 ```text
-OpenClaw App Review push notification demo
+OpenClaw App Review notification demo
 ```
 
 Tap the notification and unlock the iPhone if prompted. If the chat is not
@@ -226,6 +223,27 @@ Previously requested permissions show their current status. Denied permissions
 offer an action to open iOS Settings. Enabling camera access, Health summaries,
 Always location, Voice Wake, or the hosted push relay can also present an
 OpenClaw consent dialog explaining that feature's access.
+
+### Device capability demo
+
+Keep OpenClaw open. In `Home`, send:
+
+```text
+Start device capability demo.
+```
+
+The demo reads device status, captures a front-camera photo, and creates clearly
+named `OpenClaw App Review Contact`, `OpenClaw App Review Event`, and
+`OpenClaw App Review Reminder` fixtures. If it requests permission recovery, use
+`Settings` → `Permissions` to grant Camera, Contacts, Calendars (Full Access),
+and Reminders, then return to `Home` and send:
+
+```text
+Continue device capability demo.
+```
+
+Expected result: all ten required checks pass. Location can remain off and is
+reported as an optional skip. Limited Contacts access worked in validation.
 
 ### Optional Apple Health summary
 

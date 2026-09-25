@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -17,12 +18,23 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
   executeOpenClawStateWorker,
+  openOpenClawStateWorkerCleanupStore,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
 import * as sqliteWorkers from "./sqlite-worker-store.js";
 import { getSqliteWorkerActorIdentity } from "./sqlite-worker-store.js";
+
+vi.mock("node:diagnostics_channel", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:diagnostics_channel")>();
+  const pressure = actual.channel(Symbol("shared-state-worker-idle"));
+  return {
+    ...actual,
+    channel: (name: string | symbol) =>
+      name === "openclaw.memory.critical" ? pressure : actual.channel(name),
+  };
+});
 
 // Keep the shared-state owner on the fixture backend across reopenings.
 vi.mock("./runtime-worker-url.js", async (importOriginal) => {
@@ -47,26 +59,34 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 const minute = 60_000;
 
 async function fixture(mode: "healthy" | "local-reader" | "unsettled-inspection" = "healthy") {
-  const context = captureOpenClawStateWorkerContext({
-    env: { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-idle-") },
-  });
   const now = performance.now.bind(performance);
   let elapsed = 0;
   vi.spyOn(performance, "now").mockImplementation(() => now() + elapsed);
   const timers = vi.spyOn(globalThis, "setTimeout");
-  const messages = vi.spyOn(Worker.prototype, "postMessage");
-  // Exercise native idle ownership without preparing the unrelated task-flow runtime.
-  const read = () =>
-    executeOpenClawStateWorker(context, {
-      type: "deviceIdentity.read",
-      input: { identityKey: `idle-fixture:${mode}` },
-    });
-  expect(await read()).toBeNull();
-  const worker = messages.mock.contexts[0];
-  messages.mockRestore();
-  if (!(worker instanceof Worker)) {
-    throw new Error("Expected the canonical shared-state worker");
-  }
+  const open = async (context: OpenClawStateWorkerContext) => {
+    const messages = vi.spyOn(Worker.prototype, "postMessage");
+    try {
+      // Exercise native idle ownership without preparing the unrelated task-flow runtime.
+      const read = () =>
+        executeOpenClawStateWorker(context, {
+          type: "deviceIdentity.read",
+          input: { identityKey: `idle-fixture:${mode}` },
+        });
+      expect(await read()).toBeNull();
+      const worker = messages.mock.contexts[0];
+      if (!(worker instanceof Worker)) {
+        throw new Error("Expected the canonical shared-state worker");
+      }
+      return { context, worker, read };
+    } finally {
+      messages.mockRestore();
+    }
+  };
+  const first = await open(
+    captureOpenClawStateWorkerContext({
+      env: { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-idle-") },
+    }),
+  );
   const scheduled = (delay: number) => {
     const index = timers.mock.calls.findLastIndex(
       (call) => typeof call[1] === "number" && call[1] <= delay && call[1] > delay - 1_000,
@@ -84,15 +104,54 @@ async function fixture(mode: "healthy" | "local-reader" | "unsettled-inspection"
     };
   };
   return {
-    context,
-    worker,
-    read,
+    ...first,
+    open,
     scheduled,
     advance: (duration: number) => {
       elapsed += duration;
     },
   };
 }
+
+it("retains pressure retirement across path close and releases its subscription after drainage", async () => {
+  const pressure = channel("openclaw.memory.critical");
+  const env = { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-idle-pressure-") };
+  const context = captureOpenClawStateWorkerContext({ env });
+  await expect(
+    openOpenClawStateWorkerCleanupStore(
+      context.admission.databasePath,
+      context,
+      context.admission.assertCurrent,
+    ),
+  ).resolves.toBeUndefined();
+  expect(pressure.hasSubscribers).toBe(false);
+  await expect(
+    runOpenClawStateWorkerOperation(context, (scope) => scope.execute(read), {
+      existingOnly: true,
+    }),
+  ).resolves.toBeUndefined();
+  expect(pressure.hasSubscribers).toBe(false);
+
+  const first = await fixture();
+  const second = await first.open(context);
+  expect(pressure.hasSubscribers).toBe(true);
+  await closeOpenClawStateDatabaseByPathAsync(first.context.admission.databasePath);
+  expect(pressure.hasSubscribers).toBe(true);
+  expect(second.worker.threadId).not.toBe(-1);
+  const secondExited = once(second.worker, "exit");
+  pressure.publish({});
+  await secondExited;
+  await closeOpenClawStateDatabaseAsync();
+  expect(pressure.hasSubscribers).toBe(false);
+
+  const reopened = await first.open(captureOpenClawStateWorkerContext({ env }));
+  expect(pressure.hasSubscribers).toBe(true);
+  const reopenedExited = once(reopened.worker, "exit");
+  pressure.publish({});
+  await reopenedExited;
+  await closeOpenClawStateDatabaseAsync();
+  expect(pressure.hasSubscribers).toBe(false);
+});
 
 it("retains the original healthy worker after one minute and closes it after 30 minutes", async () => {
   const f = await fixture();

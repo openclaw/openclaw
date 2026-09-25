@@ -270,9 +270,8 @@ describe("workflow cost admission", () => {
     for (const backend of ["", "runson"]) {
       expect(
         runInNewContext(manifest.env.OPENCLAW_CI_DOCS_CHANGED.slice(3, -2), {
-          github: { event_name: "workflow_dispatch" },
-          inputs: { dispatch_id: "hourly-main-1-1" },
-          startsWith: (value: string, prefix: string) => value.startsWith(prefix),
+          github: { event_name: "schedule" },
+          inputs: {},
           steps: {
             runner_profile: { outputs: { node_runner_backend: backend } },
             docs_scope: { outputs: {} },

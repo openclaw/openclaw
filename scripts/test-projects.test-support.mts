@@ -184,6 +184,7 @@ type CacheAssignedSpec<T> = Omit<T, "env"> & {
 };
 type WatchableVitestSpecShape = VitestSpecShape & Pick<VitestRunSpec, "watchMode">;
 type ImportGraph = {
+  files: readonly string[];
   reverseImports: Map<string, string[]>;
   testFiles: Set<string>;
 };
@@ -2158,6 +2159,17 @@ export function hasImportGraphConsumers(
     }
     termsByFile.set(file, [...new Set([...terms, ...aliasTerms])]);
   }
+  const cached = cachedImportGraphs.get(importGraphCacheKey(cwd, options));
+  if (
+    cached?.additionalPaths === "" &&
+    cached.graph.files.length === tracked.length &&
+    cached.graph.files.every((file, index) => file === tracked[index]) &&
+    changedPaths.every((file) => fs.existsSync(path.join(cwd, file)))
+  ) {
+    return changedPaths.some((file) =>
+      cached.graph.reverseImports.get(file)?.some((importer) => importer !== file),
+    );
+  }
   const terms = [...termsByFile.values()].flat();
   const matches = listImportGraphGrepMatches(cwd, terms, options);
   return changedPaths.some((file) => {
@@ -2274,7 +2286,7 @@ function getImportGraph(
     }
   }
 
-  const graph = { reverseImports, testFiles };
+  const graph = { files, reverseImports, testFiles };
   cachedImportGraphs.set(cacheKey, { graph, additionalPaths: missingKey });
   return graph;
 }
@@ -2343,17 +2355,9 @@ export function resolveAffectedTestsFromImportGraph(
   options: ImportGraphOptions & { forceFull?: boolean } = {},
 ) {
   const paths = typeof changedPath === "string" ? [changedPath] : changedPath;
-  const cached =
-    options.forceFull === true
-      ? cachedImportGraphs.get(importGraphCacheKey(cwd, options))
-      : undefined;
-  // Reuse the same complete traversal; cold and missing tests retain their precheck.
-  const cachedTests =
-    cached?.additionalPaths === "" &&
-    paths.every((file) => cached.graph.testFiles.has(file) && fs.existsSync(path.join(cwd, file)));
   if (
     !paths.length ||
-    (!cachedTests && paths.every(isTestFileTarget) && !hasImportGraphConsumers(paths, cwd, options))
+    (paths.every(isTestFileTarget) && !hasImportGraphConsumers(paths, cwd, options))
   ) {
     return [];
   }

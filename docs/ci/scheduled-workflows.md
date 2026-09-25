@@ -8,31 +8,35 @@ read_when:
 
 ## Hourly main CI
 
-Full `main` CI runs hourly instead of on every push. `Main CI Hourly`
-(`ci-hourly.yml`) requests a full `CI` run at minute 23 of each hour. GitHub pins
-the child workflow and its checkout to the same main SHA at dispatch, even if
-main advanced after the scheduler event. It requests `validation_tier=main`,
-`release_gate=false`, `release_scope=full`, and `include_android=true`. It does
-not diff only the last commit: Node, native platforms, docs, QA Smoke, browser
-process proofs, and the published-updater survivor all run against that revision.
-Node tests use the existing compact main inventory and runtime policy.
+Full `main` CI runs directly from `ci.yml` at minute 23 of each hour.
+GitHub's scheduled event selects the canonical main revision; manual dispatch
+inputs cannot claim scheduled-run policy. The schedule selects the complete
+`main` tier, including Android, without filtering to the last commit. Node,
+native platforms, docs, QA Smoke, browser process proofs, and the published-updater
+survivor all run against that revision. Node tests use the compact main inventory.
 
 Full Release Validation and ordinary manual CI retain `validation_tier=full`
-by default. They additionally run the release-only tooling/runtime/UI tests,
+by default. They additionally run release-only tooling/runtime/UI tests,
 minimum-Node compatibility, iOS screenshots, native Release builds, Android
-packaging, and all six Docker seed scenarios. Hourly iOS keeps its full
-`ios-build (tests)` simulator phase and Swift lint; Android keeps phone/Wear
-tests and lint. The hourly Docker survivor uses the existing main smoke package, retaining runtime, assets, public
-SDK declarations, and tarball integrity checks without the release-only
-declaration build. Runner routing, timeouts, and concurrency limits are unchanged.
+packaging, and all six Docker seed scenarios. Hourly iOS retains its full
+`ios-build (tests)` simulator phase and Swift lint; Android retains phone/Wear
+tests and lint. The Docker survivor uses the existing main smoke package,
+including runtime, assets, public SDK declarations, and tarball integrity.
+The manual SDK API diff report stays manual-only: a scheduled tip has no change
+range to compare.
 
-The dispatcher summary names the child `CI hourly-main-<run>-<attempt>` run.
-**A successful dispatcher is not a passing CI result**; inspect the child CI
-run and its `openclaw/ci-gate` job. Hourly CI children share one non-canceling
-concurrency slot with a coalesced pending tip. Ordinary manual/release CI stays
-independent, and subsequent security-only pushes cannot cancel hourly work.
-The hourly dispatcher and manual CI remain available during release validation;
-`OPENCLAW_RELEASE_PRIORITY_RUN` does not control their admission.
+Scheduled CI uses automatic-main [runner placement](/ci/runners), including
+hybrid placement on the first attempt when configured. Native runner labels,
+worker limits, and retry fallbacks remain unchanged. Control UI and native
+translation source checks stay mandatory; generated locale drift is advisory
+because the post-merge translation workflows own its repair. Ordinary manual
+runs, including `validation_tier=main`, retain strict locale parity.
+
+Inspect the scheduled `CI` run and its `openclaw/ci-gate` job directly.
+Scheduled runs share one non-canceling concurrency slot with a coalesced pending
+tip. Manual/release CI stays independent, and security-only pushes cannot cancel
+scheduled work. CI remains available during release validation;
+`OPENCLAW_RELEASE_PRIORITY_RUN` does not control admission.
 
 Hourly CI owns docs checks, including RunsOn routing. The standalone Docs workflow
 retains manual and opted-in push runs.
@@ -62,11 +66,10 @@ and other values keep hourly-only full main CI. Delete the variable or set it
 to `false` to return to the default. Hourly runs remain enabled either way.
 No secret, commit, or protection-setting change is required.
 
-For an immediate complete CI run, choose **Main CI Hourly → Run workflow →
-main**, or run:
+For an immediate complete CI run, choose **CI → Run workflow → main**, select the main validation tier and Android, or run:
 
 ```bash
-gh workflow run ci-hourly.yml --ref main
+gh workflow run ci.yml --ref main -f validation_tier=main -f include_android=true
 ```
 
 The individual standalone workflows can also be run manually. Direct `CI`
@@ -84,7 +87,7 @@ CodeQL retains all seven main-push security categories. CI retains
 and production dependency auditing) on its existing non-docs push scope.
 Default main pushes also run the baseline-growth, assertion-safety, and new
 protocol-method metadata guards there against the exact push `before` SHA,
-so hourly manual CI's main-against-itself comparison cannot lose these checks;
+so scheduled CI's main-against-itself comparison cannot lose these checks;
 Workflow Sanity checks tracked conflict markers on every admitted push.
 Its workflow lint and security tools run only when workflow, action, or lint
 policy inputs change. The full CI aggregate job is
@@ -111,7 +114,7 @@ gh workflow run openclaw-stable-main-closeout.yml --ref main -f tag=vYYYY.M.PATC
 Unrelated source pushes no longer poll for release completion. Manual recovery
 retains its existing evidence checks.
 Docs Agent now verifies the exact successful full-CI attempt before admitting
-its write job: opted-in main pushes and hourly full-CI children qualify, while
+its write job: opted-in main pushes and scheduled full-CI runs qualify, while
 security-only pushes do not. Its hourly/current-main guard remains in place.
 Security Review still handles PR and manual CI completion. Release/tag and PR-only workflows
 retain their existing triggers; this change adds no merge-queue support where
@@ -119,11 +122,11 @@ none existed and changes no repository rulesets.
 
 GitHub cron is best-effort on the default branch, not a one-hour latency SLA:
 runs may be delayed or dropped under load, and public-repository schedules can
-be disabled after inactivity. These workflows deliberately recheck unchanged
+be disabled after inactivity. Full main CI deliberately rechecks unchanged
 SHAs rather than introducing a separate last-success ledger. A failure can be
 retried at the next hourly opportunity, and manual dispatch remains available.
 If full CI takes longer than an hour, the current run finishes while GitHub
-coalesces pending hourly children. No measured cost savings or strict completion
+coalesces pending scheduled runs. No measured cost savings or strict completion
 interval is claimed.
 
 ## Nightly Full Release Validation
@@ -451,7 +454,7 @@ site renderer or cross-page link validation.
 
 ### Docs Agent
 
-The `Docs Agent` workflow keeps existing docs aligned with recently landed changes. It has no pure schedule: an opted-in full main-push CI run or an hourly full-CI child can trigger it, and explicit non-bot manual dispatch retains its direct admission. A read-only job verifies the canonical CI workflow, exact completed run attempt, current main SHA, successful aggregate, and successful revision-confirmation step before the write-capable job is admitted. That producer step is absent/skipped for security-only pushes, failed full CI, and manual validation of another target or reduced scope. The hourly child may run as `github-actions[bot]`; ordinary bot pushes remain excluded.
+The `Docs Agent` workflow keeps existing docs aligned with recently landed changes. It has no pure schedule: an opted-in full main-push CI run or an scheduled full-CI run can trigger it, and explicit non-bot manual dispatch retains its direct admission. A read-only job verifies the canonical CI workflow, exact completed run attempt, current main SHA, successful aggregate, and successful revision-confirmation step before the write-capable job is admitted. That producer step is absent/skipped for security-only pushes, failed full CI, and manual validation of another target or reduced scope. The hourly child may run as `github-actions[bot]`; ordinary bot pushes remain excluded.
 
 Only the admitted write job occupies the non-canceling docs concurrency slot, so a skipped push cannot displace pending hourly/manual work. Workflow-run invocations recheck main freshness and skip when another eligible Docs Agent invocation was created in the last hour. Canceled and skipped workflow conclusions are excluded from both hourly cadence and review-base selection; active runs with no conclusion still count. When admitted, the agent reviews the commit range from the previous eligible invocation's source SHA to current `main`.
 

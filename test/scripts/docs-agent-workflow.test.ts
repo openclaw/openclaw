@@ -294,8 +294,8 @@ describe("Docs Agent full-CI admission", () => {
   const source = {
     id: 456,
     run_attempt: 2,
-    event: "workflow_dispatch",
-    display_title: "CI hourly-main-123-1",
+    event: "schedule",
+    display_title: "CI",
     path: ".github/workflows/ci.yml",
     head_branch: "main",
     head_sha: mainSha,
@@ -380,7 +380,7 @@ describe("Docs Agent full-CI admission", () => {
     return { allowed, getWorkflowRun, getBranch, paginate, listJobsForWorkflowRunAttempt };
   }
 
-  it("admits a successful exact-attempt hourly child, including its Actions bot actor", async () => {
+  it("admits a successful exact-attempt scheduled run", async () => {
     const result = await admit();
     expect(result.allowed).toBe(true);
     expect(result.paginate).toHaveBeenCalledExactlyOnceWith(result.listJobsForWorkflowRunAttempt, {
@@ -390,6 +390,14 @@ describe("Docs Agent full-CI admission", () => {
       attempt_number: 2,
       per_page: 100,
     });
+  });
+
+  it("rejects manual runs with the retired hourly dispatch marker", async () => {
+    const result = await admit({
+      event: { event: "workflow_dispatch", display_title: "CI hourly-main-123-1" },
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.getWorkflowRun).not.toHaveBeenCalled();
   });
 
   it("does not allocate verification or write concurrency for default security-only push completions", async () => {
@@ -464,7 +472,10 @@ describe("Docs Agent full-CI admission", () => {
   });
 
   it("does not admit unrelated manual CI or PR completion", async () => {
-    for (const event of [{ display_title: "CI release validation" }, { event: "pull_request" }]) {
+    for (const event of [
+      { event: "workflow_dispatch", display_title: "CI release validation" },
+      { event: "pull_request" },
+    ]) {
       const result = await admit({ event });
       expect(result.allowed).toBe(false);
       expect(result.getWorkflowRun).not.toHaveBeenCalled();
