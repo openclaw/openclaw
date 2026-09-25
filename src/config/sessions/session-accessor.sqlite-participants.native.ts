@@ -129,6 +129,7 @@ export function recordSessionParticipant(
           agentId: resolved.agentId,
           sessionKey: resolved.sessionKey,
           reason: "participants",
+          scope: "session-entry",
         }),
       );
       return existing ? "updated" : "inserted";

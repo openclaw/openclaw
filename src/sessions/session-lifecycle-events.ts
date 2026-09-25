@@ -7,8 +7,8 @@ export type SessionLifecycleEvent = {
   parentSessionKey?: string;
   label?: string;
   displayName?: string;
-  /** Internal producer classification; runtime events do not change stored session-row facts. */
-  scope?: "runtime";
+  /** Runtime events preserve stored rows; entry events preserve worker placement facts. */
+  scope?: "runtime" | "session-entry";
   /** The committed change affects model, account, or runtime catalog projection. */
   catalogChanged?: true;
 } & (

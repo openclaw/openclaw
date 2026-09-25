@@ -54,7 +54,9 @@ describe("createLifecycleEventBroadcastHandler", () => {
       reason,
       ...(["swarm", "swarm-note", "run-capacity"].includes(reason)
         ? { scope: "runtime" as const }
-        : {}),
+        : reason === "participants"
+          ? { scope: "session-entry" as const }
+          : {}),
     });
     expect(broadcastToConnIds.mock.calls[0]?.[1]).not.toHaveProperty("scope");
     expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({
