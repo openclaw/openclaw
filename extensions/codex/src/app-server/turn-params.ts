@@ -13,6 +13,7 @@ import {
   neutralizeCodexExplicitMentionSigils,
   type CodexProjectedImageGroup,
 } from "./context-engine-projection.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import type {
   CodexSandboxPolicy,
   CodexTurnEnvironmentParams,
@@ -23,7 +24,6 @@ import {
   readCodexSupportedReasoningEfforts,
   resolveCodexAppServerReasoningEffort,
 } from "./reasoning-effort.js";
-import { joinPresentSections } from "./developer-instruction-sections.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
