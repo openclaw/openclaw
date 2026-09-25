@@ -265,7 +265,7 @@ describe("createComputerTool node resolution", () => {
               await originalClose(reason);
             });
             prepared.close = close;
-            const originalBind = prepared.bind;
+            const originalBind = prepared.bind.bind(prepared);
             prepared.bind = (run) => {
               const transport = originalBind(run);
               return {
