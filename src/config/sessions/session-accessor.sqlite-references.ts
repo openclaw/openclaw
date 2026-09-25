@@ -19,6 +19,16 @@ import {
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
+/**
+ * Exactly the code points `String.prototype.trim` removes.
+ *
+ * SQL prefilters that have to agree with the normalization below pass this to
+ * SQLite's `trim(X, Y)`; a test pins the two definitions against each other over
+ * the whole code point space so they cannot drift.
+ */
+export const SESSION_STATE_ID_TRIM_CHARACTERS =
+  " \t\n\r\f\v\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
+
 /** Every transcript generation retained by one canonical logical-session record. */
 export function collectSessionStateIdsForEntry(entry: SessionEntry): string[] {
   const sessionIds: string[] = [];
@@ -48,6 +58,8 @@ export function addRetainedWindowSessionReferences(
   excludedSessionKeys: ReadonlySet<string>,
   candidateSessionIds?: readonly string[],
   diskBudget?: { preserveRecentMs?: number | null },
+  /** Reports the retained owner protecting each id, for callers batching reference analysis. */
+  onReference?: (sessionId: string, ownerSessionKey: string) => void,
 ): void {
   const db = getSessionKysely(database.db);
   // Explicit reset/delete excludes its target owner. Automatic deletion rechecks
@@ -91,6 +103,7 @@ export function addRetainedWindowSessionReferences(
       continue;
     }
     sessionIds.add(row.session_id);
+    onReference?.(row.session_id, row.session_key);
   }
 }
 

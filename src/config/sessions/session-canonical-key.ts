@@ -370,6 +370,27 @@ export function assertCanonicalSessionEntryLineageWrite(entry: SessionEntry): vo
   }
 }
 
+type CanonicalSqliteRetainedHistoryPlaceholder = {
+  current_session_id: string;
+  entry_json: string;
+  entry_valid: number;
+  retained_window_id: string | null;
+};
+
+/**
+ * Matches the canonical placeholder for retained history without a live entry.
+ * The owned-window join distinguishes it from malformed rows that doctor must repair.
+ */
+export function isCanonicalSqliteRetainedHistoryPlaceholder(
+  row: CanonicalSqliteRetainedHistoryPlaceholder,
+): boolean {
+  return (
+    row.entry_json === "{}" &&
+    row.entry_valid === -1 &&
+    row.retained_window_id === row.current_session_id
+  );
+}
+
 /** Query shape shared by complete inventories and bounded canonical validation. */
 export function canonicalSessionValidationQuery(
   database: { db: DatabaseSync },

@@ -17,8 +17,11 @@ import {
 import {
   projectSessionEntryLifecycleMutation,
   readReferencedSessionIds,
+  withBatchedSessionReferenceAnalysis,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import { readSessionMaintenanceCapCandidates } from "./session-accessor.sqlite-maintenance-candidates.js";
+import { trackMaterializedKeys } from "./session-accessor.sqlite-read-tracking.test-support.js";
+import { SESSION_STATE_ID_TRIM_CHARACTERS } from "./session-accessor.sqlite-references.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -59,26 +62,6 @@ function insertEntry(
       "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, CAST(? AS TEXT), ?)",
     )
     .run(key, id, json ?? JSON.stringify({ sessionId: id, updatedAt: 1 }), 1);
-}
-
-function trackMaterializedKeys(database: OpenClawAgentDatabase) {
-  const materializedKeys: string[] = [];
-  const prepare = database.db.prepare.bind(database.db);
-  vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
-    const statement = prepare(sql);
-    const iterate = statement.iterate.bind(statement);
-    vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
-      for (const row of iterate(...args)) {
-        if (typeof row.session_key === "string") {
-          materializedKeys.push(row.session_key);
-        }
-        yield row;
-      }
-      return undefined;
-    });
-    return statement;
-  });
-  return materializedKeys;
 }
 
 const readers = [
@@ -600,5 +583,59 @@ describe("SQLite candidate reference reads", () => {
       database.db.exec("ROLLBACK");
     }
     expect(readReferencedSessionIds(database, undefined, ["late"])).toEqual(new Set());
+  });
+});
+
+describe("SQLite whitespace-normalized candidate references", () => {
+  const paddingCodePoints = Array.from(SESSION_STATE_ID_TRIM_CHARACTERS);
+
+  it("lists exactly the code points String.prototype.trim removes", () => {
+    const trimmed = new Set<string>();
+    for (let codePoint = 0; codePoint <= 0x10ffff; codePoint += 1) {
+      if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
+        continue;
+      }
+      const character = String.fromCodePoint(codePoint);
+      if (character.trim() === "") {
+        trimmed.add(character);
+      }
+    }
+    expect(new Set(paddingCodePoints)).toEqual(trimmed);
+  });
+
+  it("protects every padded current ID through an unbatched read", () => {
+    const database = openDatabase();
+    const candidates = paddingCodePoints.map((_padding, index) => `candidate-${index}`);
+    for (const [index, padding] of paddingCodePoints.entries()) {
+      insertEntry(database, `owner-${index}`, `${padding}${candidates[index]}${padding}`);
+    }
+    // The prefilter cannot decide membership: collectSessionStateIdsForEntry trims
+    // the entry's own sessionId, so each padded row still owns its trimmed candidate.
+    expect(readReferencedSessionIds(database, undefined, candidates)).toEqual(new Set(candidates));
+    expect(
+      readReferencedSessionIds(
+        database,
+        new Set(paddingCodePoints.map((_padding, index) => `owner-${index}`)),
+        candidates,
+      ),
+    ).toEqual(new Set());
+  });
+
+  it("protects a padded current ID through a batched read", async () => {
+    const database = openDatabase();
+    insertEntry(database, "matched", "\u00a0candidate\ufeff");
+    insertEntry(database, "unrelated", "other");
+    await withBatchedSessionReferenceAnalysis(database, ["candidate"], async () => {
+      const keys = trackMaterializedKeys(database);
+      expect(readReferencedSessionIds(database, undefined, ["candidate"])).toEqual(
+        new Set(["candidate"]),
+      );
+      // The priming scan already recorded the owner, so the memo answers without
+      // materializing a node row; a fallback read would list "matched" here.
+      expect(keys).toEqual([]);
+      expect(readReferencedSessionIds(database, new Set(["matched"]), ["candidate"])).toEqual(
+        new Set(),
+      );
+    });
   });
 });
