@@ -637,6 +637,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/logging/diagnostic-session-context.test.ts",
   "src/logging/diagnostic-stuck-session-recovery.runtime.test.ts",
   "src/memory/memory-artifact-provenance.test.ts",
+  "src/plugin-sdk/agent-harness-task-runtime.persistence.test.ts",
   "src/plugin-sdk/memory-host-core.test.ts",
   "src/plugin-sdk/memory-host-event-export.test.ts",
   "src/plugin-sdk/memory-host-events.test.ts",
