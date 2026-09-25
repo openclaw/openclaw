@@ -2337,7 +2337,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
 
-    expect(bundled.length - gatewayStripes.length).toBeLessThan(base.length - 1);
+    const outputBundles = bundled.filter((shard) => shard.shardName.startsWith("bundle-"));
+    const bundledConfigs = new Set(outputBundles.flatMap((shard) => shard.configs));
+    // Required 64-file splits can offset bundling savings in the total owner count.
+    const inputChunks = base
+      .filter((shard) => shard.configs.every((config) => bundledConfigs.has(config)))
+      .reduce((count, shard) => count + Math.ceil((shard.includePatterns?.length ?? 0) / 64), 0);
+    expect(outputBundles.length).toBeLessThan(inputChunks);
     expect(new Set(bundled.map((shard) => shard.checkName)).size).toBe(bundled.length);
     expect(bundledPatterns).toEqual(basePatterns);
     expect(

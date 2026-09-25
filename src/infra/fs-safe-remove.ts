@@ -1,5 +1,4 @@
 // Safe recursive removal without coupling the file-access surface to log redaction.
-import "./fs-safe-defaults.js";
 import fsSync, { type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

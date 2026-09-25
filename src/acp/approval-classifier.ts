@@ -1,6 +1,7 @@
 /** Classifies ACP tool permission requests into auto-approved and prompt-required risk buckets. */
 import { homedir } from "node:os";
 import path from "node:path";
+import { trySafeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -8,7 +9,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { isMutatingToolCall } from "../agents/tool-mutation.js";
-import { trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { readTrimmedStringAlias } from "../utils/string-readers.js";
 

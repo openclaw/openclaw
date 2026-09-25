@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { valid as validSemver } from "semver";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "../../config/gateway-env-selection.js";
 import { GATEWAY_SERVICE_SELECTOR_ENV_KEYS } from "../../daemon/constants.js";
-import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
