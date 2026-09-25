@@ -1212,6 +1212,7 @@ extensions/whatsapp/src/security-fix.ts	2
 extensions/whatsapp/src/session-errors.ts	20
 extensions/whatsapp/src/session.ts	4
 extensions/whatsapp/src/setup-finalize.ts	2
+extensions/whatsapp/src/targets-runtime.ts	2
 extensions/workboard/browser/lib/workboard/metadata-contract-normalization.ts	1
 extensions/workboard/browser/lib/workboard/normalization.ts	5
 extensions/workboard/browser/pages/workboard/view-card-actions.ts	2

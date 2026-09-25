@@ -209,25 +209,18 @@ function resolveLidMappingDirs(params: { opts?: JidToE164Options }): string[] {
   return [...dirs];
 }
 
-function readLidMapping(params: {
-  key: string;
-  normalize: (value: string) => string | null;
-  opts?: JidToE164Options;
-}): string | null {
-  const mappingFilename = `lid-mapping-${params.key}.json`;
+function readLidReverseMapping(params: { lid: string; opts?: JidToE164Options }): string | null {
+  const mappingFilename = `lid-mapping-${params.lid}_reverse.json`;
   const mappingDirs = resolveLidMappingDirs({ opts: params.opts });
   for (const dir of mappingDirs) {
     const mappingPath = path.join(dir, mappingFilename);
     try {
       const data = fs.readFileSync(mappingPath, "utf8");
-      const value: unknown = JSON.parse(data);
-      if (value === null || value === undefined) {
+      const phone = JSON.parse(data) as string | number | null;
+      if (phone === null || phone === undefined) {
         continue;
       }
-      const normalized = params.normalize(String(value));
-      if (normalized !== null) {
-        return normalized;
-      }
+      return normalizeE164(String(phone));
     } catch {
       // next location
     }
@@ -235,12 +228,29 @@ function readLidMapping(params: {
   return null;
 }
 
-function readLidForwardMapping(params: { phoneDigits: string; opts?: JidToE164Options }) {
-  return readLidMapping({
-    key: params.phoneDigits,
-    normalize: (value) => value.replace(/\D/g, "") || null,
-    opts: params.opts,
-  });
+function readLidForwardMapping(params: {
+  phoneDigits: string;
+  opts?: JidToE164Options;
+}): string | null {
+  const mappingFilename = `lid-mapping-${params.phoneDigits}.json`;
+  const mappingDirs = resolveLidMappingDirs({ opts: params.opts });
+  for (const dir of mappingDirs) {
+    const mappingPath = path.join(dir, mappingFilename);
+    try {
+      const data = fs.readFileSync(mappingPath, "utf8");
+      const lid = JSON.parse(data) as string | number | null;
+      if (lid === null || lid === undefined) {
+        continue;
+      }
+      const digits = String(lid).replace(/\D/g, "");
+      if (digits) {
+        return digits;
+      }
+    } catch {
+      // next location
+    }
+  }
+  return null;
 }
 
 export function jidToE164(jid: string, opts?: JidToE164Options): string | null {
@@ -258,7 +268,7 @@ export function jidToE164(jid: string, opts?: JidToE164Options): string | null {
   if (!lid) {
     return null;
   }
-  const phone = readLidMapping({ key: `${lid}_reverse`, normalize: normalizeE164, opts });
+  const phone = readLidReverseMapping({ lid, opts });
   if (phone) {
     return phone;
   }
