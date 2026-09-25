@@ -13,10 +13,17 @@ import {
   type ModelApi,
   type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+  normalizeFoundryModelName,
+  resolveFoundryOpenAIModelTokenLimits,
+  requiresFoundryMaxCompletionTokens,
+  supportsFoundryReasoningEffort,
+  resolveFoundryReasoningEfforts,
+  buildFoundryThinkingLevelMap,
+} from "./model-metadata.js";
+
+export { requiresFoundryMaxCompletionTokens } from "./model-metadata.js";
 
 export const PROVIDER_ID = "microsoft-foundry";
 export const DEFAULT_API = "openai-completions";
@@ -129,11 +136,6 @@ type FoundryConfigShape = {
   };
 };
 
-function normalizeFoundryModelName(value?: string | null): string | undefined {
-  const trimmed = normalizeLowercaseStringOrEmpty(value);
-  return trimmed || undefined;
-}
-
 function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
   const normalized = normalizeFoundryModelName(modelName);
   return normalized ? normalized.startsWith("claude") : false;
@@ -211,27 +213,12 @@ function supportsFoundryManualClaudeThinking(value?: string | null): boolean {
     : false;
 }
 
-function resolveFoundryOpenAIModelTokenLimits(
-  normalized: string | undefined,
-): { contextWindow: number; maxTokens: number } | undefined {
-  if (!normalized) {
-    return undefined;
-  }
-  // Foundry publishes provider-native capacities. Keep exact families here so
-  // older GPT and continuously updated chat models retain their separate caps.
-  if (/^gpt-5\.(?:4(?:-pro)?|5|6(?:-(?:sol|terra|luna))?)$/u.test(normalized)) {
-    return { contextWindow: 1_050_000, maxTokens: 128_000 };
-  }
-  if (/^gpt-5\.4-(?:mini|nano)$/u.test(normalized)) {
-    return { contextWindow: 400_000, maxTokens: 128_000 };
-  }
-  return undefined;
-}
-
-function resolveFoundryModelTokenLimits(value?: string | null): {
-  contextWindow: number;
-  maxTokens: number;
-} {
+function resolveFoundryModelTokenLimits(value?: string | null):
+  | {
+      contextWindow: number;
+      maxTokens: number;
+    }
+  | undefined {
   const normalized = normalizeFoundryModelName(value);
   const normalizedVersion = normalized?.replace(/\./g, "-");
   const foundryOpenAILimits = resolveFoundryOpenAIModelTokenLimits(normalized);
@@ -258,81 +245,7 @@ function resolveFoundryModelTokenLimits(value?: string | null): {
   if (normalized === "mai-ds-r1") {
     return { contextWindow: 163_840, maxTokens: 163_840 };
   }
-  return { contextWindow: 128_000, maxTokens: 16_384 };
-}
-
-export function requiresFoundryMaxCompletionTokens(value?: string | null): boolean {
-  const normalized = normalizeFoundryModelName(value);
-  if (!normalized) {
-    return false;
-  }
-  return (
-    normalized.startsWith("gpt-5") ||
-    normalized.startsWith("o1") ||
-    normalized.startsWith("o3") ||
-    normalized.startsWith("o4")
-  );
-}
-
-function supportsFoundryReasoningEffort(value?: string | null): boolean {
-  const normalized = normalizeFoundryModelName(value);
-  if (
-    !normalized ||
-    /^gpt-5-chat(?:-|$)/u.test(normalized) ||
-    /^o1-mini(?:-|$)/u.test(normalized)
-  ) {
-    return false;
-  }
-  return (
-    normalized.startsWith("gpt-5") ||
-    normalized.startsWith("o1") ||
-    normalized.startsWith("o3") ||
-    normalized.startsWith("o4")
-  );
-}
-
-function resolveFoundryReasoningEfforts(value?: string | null): string[] | undefined {
-  const normalized = normalizeFoundryModelName(value);
-  if (!normalized || !supportsFoundryReasoningEffort(normalized)) {
-    return undefined;
-  }
-  if (normalized === "gpt-5.1-codex-max") {
-    return ["none", "medium", "high", "xhigh"];
-  }
-  if (normalized === "gpt-5-pro") {
-    return ["high"];
-  }
-  if (/^gpt-5\.[2-9](?:\.|-|$)/u.test(normalized)) {
-    return ["none", "low", "medium", "high"];
-  }
-  if (/^gpt-5\.1(?:-|$)/u.test(normalized)) {
-    return ["none", "low", "medium", "high"];
-  }
-  if (/^gpt-5-codex(?:-|$)/u.test(normalized)) {
-    return ["low", "medium", "high"];
-  }
-  if (/^gpt-5(?:-|$)/u.test(normalized)) {
-    return ["minimal", "low", "medium", "high"];
-  }
-  return ["low", "medium", "high"];
-}
-
-function buildFoundryThinkingLevelMap(
-  efforts: string[] | undefined,
-): Record<string, string | null> | undefined {
-  if (!efforts) {
-    return undefined;
-  }
-  const supported = new Set(efforts);
-  return {
-    off: supported.has("none") ? "none" : null,
-    minimal: supported.has("minimal") ? "minimal" : null,
-    low: supported.has("low") ? "low" : null,
-    medium: supported.has("medium") ? "medium" : null,
-    high: supported.has("high") ? "high" : null,
-    xhigh: supported.has("xhigh") ? "xhigh" : null,
-    max: null,
-  };
+  return undefined;
 }
 
 export function isFoundryProviderApi(value?: string | null): value is FoundryProviderApi {
@@ -431,7 +344,10 @@ function buildFoundryModelCompat(
   const configuredModelName = resolveConfiguredModelNameHint(modelId, modelNameHint);
   const needsMaxCompletionTokens = requiresFoundryMaxCompletionTokens(configuredModelName);
   const supportsReasoningEffort = supportsFoundryReasoningEffort(configuredModelName);
-  const supportedReasoningEfforts = resolveFoundryReasoningEfforts(configuredModelName);
+  const supportedReasoningEfforts = resolveFoundryReasoningEfforts(
+    configuredModelName,
+    resolvedApi,
+  );
   if (resolvedApi !== DEFAULT_GPT5_API) {
     return {
       supportsReasoningEffort,
@@ -455,7 +371,7 @@ export function resolveFoundryModelCapabilities(
   const modelName = resolveConfiguredModelNameHint(modelId, modelNameHint) ?? modelId;
   const api = resolveFoundryApi(modelId, modelName, configuredApi);
   const normalizedInput = normalizeModelInput(existingInput);
-  const supportedReasoningEfforts = resolveFoundryReasoningEfforts(modelName);
+  const supportedReasoningEfforts = resolveFoundryReasoningEfforts(modelName, api);
   const isAnthropic = api === ANTHROPIC_MESSAGES_API || isAnthropicFoundryDeployment(modelName);
   const supportsClaudeThinking =
     isAnthropic &&
@@ -464,7 +380,10 @@ export function resolveFoundryModelCapabilities(
       requiresFoundryMandatoryAdaptiveClaudeThinking(modelName));
   const supportsClaudeXhighThinking =
     isAnthropic && supportsClaudeNativeXhighEffort({ id: modelName });
-  const tokenLimits = resolveFoundryModelTokenLimits(modelName);
+  const tokenLimits = resolveFoundryModelTokenLimits(modelName) ?? {
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+  };
   return {
     modelName,
     api,
@@ -475,7 +394,7 @@ export function resolveFoundryModelCapabilities(
     ...(supportsClaudeXhighThinking
       ? { thinkingLevelMap: { xhigh: "xhigh", max: "max" } }
       : supportedReasoningEfforts
-        ? { thinkingLevelMap: buildFoundryThinkingLevelMap(supportedReasoningEfforts) }
+        ? { thinkingLevelMap: buildFoundryThinkingLevelMap(supportedReasoningEfforts, modelName) }
         : {}),
     input:
       normalizedInput.includes("image") || supportsFoundryImageInput(modelName)
@@ -699,6 +618,24 @@ export function buildFoundryAuthResult(params: {
   deployments?: FoundryDeploymentConfigInput[];
 }): ProviderAuthResult {
   const imageDefaultPatch = buildFoundryImageDefaultPatch(params);
+  const providerConfig = buildFoundryProviderConfig(
+    params.endpoint,
+    params.modelId,
+    params.modelNameHint,
+    { api: params.api, deployments: params.deployments },
+  );
+  const fallbackModels = providerConfig.models.filter(
+    (model) => !isFoundryMaiImageModel(model.name) && !resolveFoundryModelTokenLimits(model.name),
+  );
+  const notes = [...(params.notes ?? [])];
+  if (fallbackModels.length > 0) {
+    notes.push(
+      `Unverified model limits for Foundry deployments: ${fallbackModels.map((model) => model.id).join(", ")}. ` +
+        "Using 128,000 context and 16,384 output tokens. Verify the deployed model's limits and reasoning support, " +
+        "then set contextWindow, maxTokens, reasoning, thinkingLevelMap, and compat.supportedReasoningEfforts " +
+        "in models.providers.microsoft-foundry.models as needed.",
+    );
+  }
   const defaultModel = isSelectedMaiImageDeployment(params)
     ? undefined
     : `${PROVIDER_ID}/${params.modelId}`;
@@ -731,21 +668,13 @@ export function buildFoundryAuthResult(params: {
       ...imageDefaultPatch,
       models: {
         providers: {
-          [PROVIDER_ID]: buildFoundryProviderConfig(
-            params.endpoint,
-            params.modelId,
-            params.modelNameHint,
-            {
-              api: params.api,
-              deployments: params.deployments,
-            },
-          ),
+          [PROVIDER_ID]: providerConfig,
         },
       },
       ...buildPluginsAllowPatch(params.currentPluginsAllow),
     },
     ...(defaultModel ? { defaultModel } : {}),
-    notes: params.notes,
+    notes: notes.length > 0 ? notes : params.notes,
   };
 }
 
