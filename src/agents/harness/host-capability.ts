@@ -521,6 +521,11 @@ export function createAgentHarnessHostCapabilities(params: {
                 ...options,
                 // Availability belongs to this prepared host, not mutable plugin inputs.
                 githubPublicationAvailable,
+                // Authority boundary (ClawSweeper P1): the runtime plugin tool
+                // grant comes ONLY from the Gateway-admitted attempt held in
+                // this closure. Harness-supplied options must never forward a
+                // grant; Host overwrites unconditionally (fail-closed).
+                runtimePluginToolGrant: attempt.runtimePluginToolGrant,
                 skillsSnapshot: options?.skillsSnapshot ?? skillsSnapshot,
                 skillUsagePaths: options?.skillUsagePaths ?? skillUsagePaths,
                 operationalRunInstance,
