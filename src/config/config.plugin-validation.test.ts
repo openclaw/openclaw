@@ -1899,16 +1899,11 @@ describe("config plugin validation", () => {
   it.each([
     ["google-antigravity-auth", true],
     ["google-antigravity-auth", false],
+    ["google-gemini-cli-auth", true],
     ["webhooks", true],
     ["webhooks", false],
   ] as const)("warns for removed %s plugin with enabled=%s", (removedId, enabled) => {
     const res = validateRemovedPluginConfig(removedId, enabled);
-    expectRemovedPluginWarnings(res, removedId, removedId);
-  });
-
-  it("warns for removed google gemini auth plugin ids instead of failing validation", () => {
-    const removedId = "google-gemini-cli-auth";
-    const res = validateRemovedPluginConfig(removedId);
     expectRemovedPluginWarnings(res, removedId, removedId);
   });
 
