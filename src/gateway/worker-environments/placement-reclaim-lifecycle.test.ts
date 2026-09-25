@@ -227,7 +227,8 @@ describe("placement reclaim with provider-owned node teardown", () => {
       );
       invoke.mockClear();
       vi.mocked(harness.environments.startTunnel).mockClear();
-      vi.useFakeTimers();
+      // SQLite workers compare cross-thread monotonic deadlines; fake only the provider timer.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const request = {
         sessionId: active.sessionId,
         sessionKey: active.sessionKey,

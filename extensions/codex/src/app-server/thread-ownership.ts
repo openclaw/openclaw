@@ -8,8 +8,8 @@ import {
   isCodexAppServerLiveThreadClaimed,
   releaseCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
-  type CodexAppServerLiveThreadOwnership,
 } from "./client-runtime.js";
+import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
 import type {
   CodexAppServerBindingIdentity,
@@ -164,8 +164,10 @@ export async function retireCodexConversationThreadBinding(params: {
   expectedThreadId?: string;
   expectedStartId?: string;
   allowUntracked?: boolean;
+  assertCurrent?: () => void;
   afterClear?: () => Promise<void>;
 }): Promise<boolean> {
+  const assertCurrent = params.assertCurrent;
   const expected = params.bindingStore.read(params.identity);
   if (!expected || (params.expectedThreadId && expected.threadId !== params.expectedThreadId)) {
     return false;
@@ -182,6 +184,8 @@ export async function retireCodexConversationThreadBinding(params: {
       }
       // Keep the old row authoritative through unsubscribe; Codex has one
       // subscription per physical client, so clearing first races a new owner.
+      // Admission happens under both owner locks; release and public detach must settle together.
+      assertCurrent?.();
       await releaseCodexAppServerBindingSubscription(current, {
         allowUntracked: params.allowUntracked,
       });

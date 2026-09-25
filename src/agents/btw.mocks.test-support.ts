@@ -261,6 +261,7 @@ vi.mock("./embedded-agent-runner/runs.js", () => ({
 
 vi.mock("./agent-scope.js", () => ({
   listAgentEntries: (...args: unknown[]) => listAgentEntriesMock(...args),
+  listAgentEntriesWithSource: () => [],
   resolveAgentConfig: (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
     cfg.agents?.list?.find((entry) => entry.id === agentId),
   resolveSessionAgentIds: (...args: unknown[]) => resolveSessionAgentIdsMock(...args),

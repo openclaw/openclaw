@@ -88,6 +88,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
         skillsSnapshot: params.skillsSnapshot,
         workspaceDir: resolvedWorkspace,
         assertCurrent,
+        admittedRunContext: params.admittedRunContext,
       });
   assertCurrent?.();
   const projectedWorkspace = sandbox?.enabled && sandbox.workspaceSource === "managed-worktree";
@@ -118,7 +119,9 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
   if (sandbox?.enabled) {
     assertSandboxCwd(requestedCwd, resolvedWorkspace);
   }
+  assertCurrent?.();
   await fs.mkdir(effectiveWorkspace, { recursive: true });
+  assertCurrent?.();
   return {
     effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
     effectiveFsWorkspaceOnly:

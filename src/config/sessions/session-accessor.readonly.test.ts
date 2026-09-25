@@ -34,12 +34,12 @@ import {
   readSessionTranscriptWatermark,
   readSessionIdentityEvidenceBatch,
   readSessionStoreSummaryReadOnly,
-  recordSessionParticipant,
   replaceSessionEntrySync,
   resolveTranscriptSessionKeyBySessionId,
   upsertSessionEntryCore,
   withSessionEntryReadOnlyScope,
 } from "./session-accessor.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import * as sqliteTargets from "./session-sqlite-target.js";
 
@@ -61,6 +61,7 @@ afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
+  vi.useRealTimers();
 });
 
 describe("session accessor readonly listing", () => {
@@ -120,6 +121,7 @@ describe("session accessor readonly listing", () => {
   );
 
   it("reads a committed visibility change through the retained shared-store reader", () => {
+    vi.useFakeTimers({ toFake: ["setImmediate"] });
     const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-session-reader-freshness-") };
     const storePath = path.join(env.OPENCLAW_STATE_DIR, "shared.sqlite");
     const options = { agentId: "main", env, path: storePath };
@@ -150,6 +152,7 @@ describe("session accessor readonly listing", () => {
         expect(loadExactSessionEntryReadOnly({ ...scope, sessionKey })?.entry.visibility).toBe(
           "draft",
         );
+        vi.runOnlyPendingTimers();
         expect(listSessionEntriesReadOnly(scope)[0]?.entry.visibility).toBe("draft");
         withOpenClawAgentDatabaseReadOnly(({ db }) => expect(db).toBe(retained.value), options);
       });

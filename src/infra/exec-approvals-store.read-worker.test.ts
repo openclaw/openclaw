@@ -15,11 +15,15 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js";
 import { loadMcpToolGrants } from "./exec-approvals-mcp.js";
 import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";
 import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
-import { loadExecApprovalsReadOnlyAsync } from "./exec-approvals-store.js";
+import {
+  loadExecApprovalsReadOnlyAsync,
+  readExecApprovalsPolicyReadOnlyAsync,
+} from "./exec-approvals-store.js";
 import { testing } from "./exec-approvals-store.test-support.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
@@ -76,14 +80,8 @@ function seed(env: NodeJS.ProcessEnv, tool = grant.tool, raw?: string) {
 }
 
 function watchNativeSql() {
-  const { DatabaseSync, StatementSync } = requireNodeSqlite();
-  return [
-    vi.spyOn(DatabaseSync.prototype, "prepare"),
-    vi.spyOn(DatabaseSync.prototype, "exec"),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    ),
-  ];
+  requireNodeSqlite();
+  return observeMainThreadSql();
 }
 
 it("commits unchanged authorization without main-thread SQLite and keeps its captured policy owner", async () => {
@@ -105,7 +103,7 @@ it("commits unchanged authorization without main-thread SQLite and keeps its cap
   const foreign = fixture();
   vi.stubEnv("OPENCLAW_STATE_DIR", foreign.root);
   const assertCurrent = await authorized;
-  expect(calls.reduce((total, call) => total + call.mock.calls.length, 0)).toBe(0);
+  expect(calls.count()).toBe(0);
   vi.restoreAllMocks();
   expect(assertCurrent).not.toThrow();
   writeExecApprovalsConfigRow({
@@ -143,7 +141,7 @@ it("settles batched usage commits in order while isolating refused authorization
     commitExecAuthorizationLocked({ ...input, command: "echo last" }),
   ]);
   expect(outcomes.map((result) => result.status)).toEqual(["fulfilled", "rejected", "fulfilled"]);
-  expect(calls.reduce((total, call) => total + call.mock.calls.length, 0)).toBe(0);
+  expect(calls.count()).toBe(0);
   vi.restoreAllMocks();
   const stored = await loadExecApprovalsReadOnlyAsync({ env });
   expect(stored.agents?.main?.allowlist).toEqual([
@@ -196,7 +194,7 @@ it.each(["cached", "fresh"] as const)(
     expect(await loadMcpToolGrants("main", { env })).toEqual([grant]);
     expect(await loadMcpToolGrants("other", { env })).toEqual([]);
     expect(await loadMcpToolGrants("*", { env })).toEqual([]);
-    const callerSqlCalls = calls.reduce((total, call) => total + call.mock.calls.length, 0);
+    const callerSqlCalls = calls.count();
     console.info("exec policy read", {
       mode,
       callerSqlCalls,
@@ -226,7 +224,7 @@ it("reads current policy on the next call while inherited snapshots retain their
       const calls = watchNativeSql();
       try {
         expect(await loadMcpToolGrants("main", { env })).toEqual([grant]);
-        expect(calls.reduce((total, call) => total + call.mock.calls.length, 0)).toBe(0);
+        expect(calls.count()).toBe(0);
       } finally {
         vi.restoreAllMocks();
       }
@@ -234,6 +232,25 @@ it("reads current policy on the next call while inherited snapshots retain their
     { env },
   );
   expect(await loadMcpToolGrants("main", { env })).toEqual([{ ...grant, tool: "updated-tool" }]);
+});
+
+it("binds assessment revisions to both policy bytes and their database owner", async () => {
+  const original = fixture();
+  const foreign = fixture();
+  seed(original.env);
+  seed(foreign.env);
+  const first = await readExecApprovalsPolicyReadOnlyAsync({ env: original.env });
+  expect(first.revision).toBeTypeOf("string");
+  expect((await readExecApprovalsPolicyReadOnlyAsync({ env: original.env })).revision).toBe(
+    first.revision,
+  );
+  expect((await readExecApprovalsPolicyReadOnlyAsync({ env: foreign.env })).revision).not.toBe(
+    first.revision,
+  );
+  seed(original.env, "changed-tool");
+  expect((await readExecApprovalsPolicyReadOnlyAsync({ env: original.env })).revision).not.toBe(
+    first.revision,
+  );
 });
 
 it("joins an admitted policy read before its disposable source is released", async () => {
@@ -302,7 +319,8 @@ it("fails closed without a native retry when the worker read fails", async () =>
   const calls = watchNativeSql();
   expect(await loadMcpToolGrants("main", { env })).toEqual([]);
   expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults?.security).toBe("deny");
-  expect(calls.reduce((total, call) => total + call.mock.calls.length, 0)).toBe(0);
+  expect((await readExecApprovalsPolicyReadOnlyAsync({ env })).revision).toBeUndefined();
+  expect(calls.count()).toBe(0);
   expect(loggerWarn).toHaveBeenCalledTimes(1);
   expect(loggerWarn.mock.calls[0]?.[0]).toContain("unavailable");
 });

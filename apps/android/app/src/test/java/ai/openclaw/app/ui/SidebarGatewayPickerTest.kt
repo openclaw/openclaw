@@ -92,6 +92,8 @@ import androidx.window.layout.WindowInfoTrackerDecorator
 import androidx.window.layout.WindowLayoutInfo
 import com.google.mlkit.common.sdkinternal.MlKitContext
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeout
@@ -540,7 +542,7 @@ class SidebarGatewayPickerTest {
     try {
       composeRule.runOnIdle { model.switchToGateway(target.stableId) }
       composeRule.waitUntil {
-        ReflectionHelpers.getField<Any?>(runtime, "gatewayConnectionOperation") != null
+        composeRule.runOnIdle { model.gatewayConnectionHandoff.value.pending }
       }
       capture("queued-handoff")
       composeRule.onNodeWithText("Message OpenClaw").assertIsNotEnabled()
@@ -604,12 +606,21 @@ class SidebarGatewayPickerTest {
       model.attachRuntimeUi(lifecycleOwner, PermissionRequester(app))
     }
     showSidebarAndComposer(composerLifecycleOwner = lifecycleOwner)
+    // Compose idleness does not join the initial IO history load. Drain the real
+    // runtime state transition before publishing the terminal event for its run.
+    drainWithMainLooper {
+      combine(model.chatHistoryLoading, model.chatSelectedActiveRunPresentation) { loading, activeRun ->
+        !loading && activeRun.runId == "android-screenshot-active-run"
+      }.first { it }
+    }
     composeRule.runOnIdle {
       ReflectionHelpers.getField<ChatController>(runtime, "chat").handleGatewayEvent(
         "agent",
         """{"sessionKey":"${model.chatSessionKey.value}","runId":"android-screenshot-active-run","seq":1,"stream":"lifecycle","data":{"phase":"end"}}""",
       )
     }
+    // The composer consumes the ViewModel bridge, not the controller's immediate state.
+    drainWithMainLooper { model.pendingRunCount.first { it == 0 } }
     val owner = model.captureChatShareOwner()
     composeRule
       .onNode(SemanticsMatcher("Voice options") { it.config.getOrNull(SemanticsActions.OnLongClick)?.label == "Voice options" })

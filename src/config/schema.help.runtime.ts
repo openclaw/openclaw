@@ -23,6 +23,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Default browser profile name selected when callers do not explicitly choose a profile. Use a stable low-privilege profile as the default to reduce accidental cross-context state use.",
   "browser.profiles":
     "Named browser profile connection map used for explicit routing to CDP ports or URLs with optional metadata. Keep profile names consistent and avoid overlapping endpoint definitions.",
+  "browser.profiles.*.engine":
+    'Browser engine capability preset: "chromium" (default) or experimental "lightpanda" for semantic DOM browsing. Lightpanda requires an explicit ws/wss cdpUrl dedicated to one profile and attachOnly: true, never launches a local browser, and does not support visual screenshots or other Chromium-only features.',
   "browser.profiles.*.cdpPort":
     "Per-profile local CDP port used when connecting to browser instances by port instead of URL. Use unique ports per profile to avoid connection collisions.",
   "browser.profiles.*.cdpUrl":
@@ -134,21 +136,23 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.toolSearch.maxSearchLimit":
     "Maximum number of Tool Search results a model can request. Runtime clamps values to the supported 1..50 range.",
   "tools.codeMode":
-    "Generic OpenClaw code mode. When enabled, agent runs expose only `exec` and `wait` to the model and hide normal tools behind a QuickJS-WASI catalog bridge.",
+    'Generic OpenClaw Code Mode. When omitted globally, defaults to `"auto"`; an authored object without `enabled` remains off. Engaged agent runs expose only `exec` and `wait` to the model and access normal tools through the catalog bridge.',
   "tools.codeMode.enabled":
-    'Global OpenClaw Code Mode default. Off when omitted, including objects without `enabled`. `"auto"` engages catalog-preferred models; `true` engages tool-capable runs. Agent and model activation overrides take precedence. An engaged run fails closed if the runtime is unavailable instead of exposing the full tool list.',
-  "tools.codeMode.runtime": 'Guest JavaScript runtime. Only "quickjs-wasi" is supported.',
+    'Global OpenClaw Code Mode activation. A completely absent global setting defaults to `"auto"`; an authored object without `enabled` remains off. `"auto"` engages catalog-preferred models, while `true` engages tool-capable runs. Agent and model activation overrides take precedence. An engaged run fails closed if the runtime is unavailable instead of exposing the full tool list.',
+  "tools.codeMode.executor":
+    'JavaScript executor: "node" (default) uses Node vm for trusted code and is not a security sandbox; "quickjs" uses the bundled QuickJS WASM plugin for hardened guest execution. Tool permissions apply to both. A missing selected executor fails closed.',
   "tools.codeMode.mode":
     'Model-facing surface. Only "only" is supported: expose code-mode `exec` and `wait` and hide normal tools.',
   "tools.codeMode.timeoutMs": "Maximum milliseconds for one code-mode `exec` or `wait` call.",
-  "tools.codeMode.memoryLimitBytes": "QuickJS heap limit for one code-mode VM.",
+  "tools.codeMode.memoryLimitBytes":
+    "QuickJS guest heap limit or best-effort Node worker V8 heap budget in bytes. Node runtime overhead and minimum engine allocations affect the effective budget; external buffers and process RSS are excluded. This is not a security guarantee.",
   "tools.codeMode.maxOutputBytes": "Maximum serialized bytes returned through code-mode output.",
   "tools.codeMode.maxSnapshotBytes":
     "Maximum serialized bytes retained for one suspended QuickJS snapshot.",
   "tools.codeMode.maxPendingToolCalls":
     "Maximum concurrent nested tool calls a code-mode VM can start before it must resume later.",
   "tools.codeMode.snapshotTtlSeconds":
-    "How long suspended code-mode snapshots can be resumed with `wait` before they expire.",
+    "How long suspended Code Mode runs can be resumed with `wait` before they expire.",
   "tools.codeMode.searchDefaultLimit":
     "Default number of hidden catalog search results returned by `catalog.search` inside code mode.",
   "tools.codeMode.maxSearchLimit":
@@ -214,6 +218,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Named environment color ramp: teal, amber, purple, coral, pink, blue, green, red, or gray.",
   "gateway.controlUi.communityInvite":
     "Show the Discord community invitation in the Control UI served by this Gateway (default on). Set false to hide it for every browser using this UI deployment. Changes apply after browser refresh or reconnect; re-enabling preserves browser-local dismissals.",
+  "gateway.controlUi.newSessionModelDefaults":
+    'Choose "configured" to start fresh Control UI drafts with the selected agent’s configured model, runtime and reasoning defaults instead of remembered selections. Default: "last-used". Explicit draft and conversation choices remain editable; Fast Mode and placement preferences are unchanged. Applies after browser refresh or reconnect.',
   "gateway.controlUi.github.token":
     "SecretRef-backed service credential for Control UI project discovery and GitHub hover previews without a managed identity. Hover previews prefer the selected agent's configured GitHub identity, inheriting the system identity when there is no override. Prefer explicit configuration for clear service ownership. Omit it to retain the GH_TOKEN/GITHUB_TOKEN fallback from the shared Gateway process environment. An explicitly configured but unavailable credential fails closed.",
   "gateway.controlUi.sessionObserver":
@@ -225,7 +231,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.automaticallyFetchFavicons":
     "Fetch link favicons and browser-tab social previews through the Gateway (default on). Browser-tab cards load public page metadata and declared images without browser cookies or site credentials. All requests use strict SSRF checks and bounded HTML/image processing. Set false to disable both automatic favicon and page-preview fetches; live browser screenshots are unaffected.",
   "gateway.controlUi.allowedOrigins":
-    'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
+    'Allowed browser origins for Control UI/WebChat connections (full origins only, e.g. https://control.example.com). When omitted, defaults to gateway.publicOrigin if configured. An explicit list, including [], overrides that default; existing local/private-origin rules still apply. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
     "DANGEROUS toggle that enables Host-header based origin fallback for Control UI/WebChat websocket checks. This mode is supported when your deployment intentionally relies on Host-header origin policy; explicit gateway.controlUi.allowedOrigins remains the recommended hardened default.",
   "gateway.portals": "Portal publication and private ingress settings.",
@@ -236,7 +242,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.portals.ingress.port":
     "Dedicated loopback HTTP port receiving the private wildcard HTTPS proxy. Must differ from the Gateway port. This is the backend port, not the public HTTPS port.",
   "gateway.publicOrigin":
-    "Externally reachable HTTPS origin of the Gateway. HTTP is allowed only for localhost, 127.0.0.1, or [::1]. Per-requester MCP OAuth uses it to build the callback URL at /oauth/mcp/callback; channel session links and plugin-generated viewer links use it to reach the Control UI and Gateway routes.",
+    "Externally reachable HTTPS origin of the Gateway. Also the default browser origin when gateway.controlUi.allowedOrigins is omitted. HTTP is allowed only for localhost, 127.0.0.1, or [::1]. Per-requester MCP OAuth uses it to build the callback URL at /oauth/mcp/callback; channel session links and plugin-generated viewer links use it to reach the Control UI and Gateway routes.",
   "mcp.apps":
     "MCP Apps UI support. When enabled, configured MCP servers may provide interactive HTML views for their tool results.",
   "mcp.apps.enabled":

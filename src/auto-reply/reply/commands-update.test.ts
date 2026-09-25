@@ -201,6 +201,7 @@ describe("handleUpdateCommand", () => {
         forceSyntheticClient: true,
         operatorRoleActor: { kind: "system" },
         syntheticScopes: ["operator.admin"],
+        syntheticScopeMode: "minimum",
       },
     );
     expect(order).toEqual(["adopt", "update"]);

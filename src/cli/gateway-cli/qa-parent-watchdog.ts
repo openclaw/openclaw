@@ -1,6 +1,7 @@
 // QA watchdog for shutting down orphaned gateway children and cleaning staged temp roots.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -134,18 +135,14 @@ export function installQaParentWatchdog(
               chdir(safeCwd);
             } catch (chdirError) {
               logger.warn(
-                `QA gateway parent pid ${parentPid} exited; failed to leave runtime root ${activeCwdRoot}: ${
-                  chdirError instanceof Error ? chdirError.message : String(chdirError)
-                }`,
+                `QA gateway parent pid ${parentPid} exited; failed to leave runtime root ${activeCwdRoot}: ${coerceErrorMessage(chdirError)}`,
               );
             }
           }
           for (const cleanupRoot of qaCleanupRoots) {
             await rm(cleanupRoot).catch((cleanupError: unknown) => {
               logger.warn(
-                `QA gateway parent pid ${parentPid} exited; failed to clean runtime root ${cleanupRoot}: ${
-                  cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
-                }`,
+                `QA gateway parent pid ${parentPid} exited; failed to clean runtime root ${cleanupRoot}: ${coerceErrorMessage(cleanupError)}`,
               );
             });
           }

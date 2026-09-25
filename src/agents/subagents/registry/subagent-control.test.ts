@@ -1,5 +1,6 @@
 // Subagent control tests cover listing, killing, and admin cleanup of
 // child runs recorded in the subagent registry and session store.
+import "./subagent-control.leaf-mocks.test-support.js";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -8,6 +9,7 @@ import { stopSubagentsForRequester } from "../../../auto-reply/reply/abort-opera
 import { tryFastAbortFromMessage } from "../../../auto-reply/reply/abort.js";
 import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
+import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -16,6 +18,8 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
+import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   beginSessionWorkAdmission,
@@ -25,6 +29,7 @@ import {
 } from "../../../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   enqueueSwarmRun,
@@ -36,20 +41,19 @@ import {
   buildControlledSubagentRunsReadContext,
   killAllControlledSubagentRuns,
   killSubagentRunAdmin,
-  listControlledSubagentRuns,
 } from "./subagent-control.js";
+import { registerLateDescendantControlTests } from "./subagent-control.late-registration.test-support.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import * as registryState from "./subagent-registry-state.js";
 import {
   replaceSubagentRunAfterSteerCore,
   markSubagentRunTerminated,
   startQueuedSubagentRun,
-  registerSubagentRun,
 } from "./subagent-registry.js";
 import {
-  testing as subagentRegistryTesting,
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
@@ -167,28 +171,34 @@ async function writeSessionStoreFixture(label: string, store: Record<string, unk
   return storePath;
 }
 
+function resetRegistryLeafMocks() {
+  vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockReset();
+  vi.mocked(ensureContextEnginesInitialized).mockReset();
+  vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
+  vi.mocked(registryState.persistSubagentRunsToDisk).mockReset();
+  vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockReset();
+  vi.mocked(registryState.restoreSubagentRunsFromDisk).mockReset();
+  vi.mocked(resolveContextEngine).mockReset();
+}
+
 beforeEach(() => {
   detachedTaskRuntimeMocks.finalizeTaskRunByRunId.mockClear();
   setSubagentControlDepsForTest();
-  subagentRegistryTesting.setDepsForTest({
-    cleanupBrowserSessionsForLifecycleEnd: async () => {},
-    ensureContextEnginesInitialized: () => {},
-    loadAgentRuntimePluginRegistryHandle: () => undefined,
-    persistSubagentRunsToDisk: () => {},
-    persistSubagentRunsToDiskOrThrow: () => {},
-    restoreSubagentRunsFromDisk: () => 0,
-    resolveContextEngine: async () => ({
-      info: { id: "test", name: "Test" },
-      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-      compact: async () => ({ ok: true, compacted: false }),
-      ingest: async () => ({ ingested: false }),
-    }),
-  });
+  resetRegistryLeafMocks();
+  vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockResolvedValue(undefined);
+  vi.mocked(ensureContextEnginesInitialized).mockImplementation(() => {});
+  vi.mocked(registryState.persistSubagentRunsToDisk).mockImplementation(() => {});
+  vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {});
+  vi.mocked(registryState.restoreSubagentRunsFromDisk).mockReturnValue(0);
+  vi.mocked(resolveContextEngine).mockImplementation(async () => ({
+    info: { id: "test", name: "Test" },
+    assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+    compact: async () => ({ ok: true, compacted: false }),
+    ingest: async () => ({ ingested: false }),
+  }));
 });
 
-afterEach(() => {
-  subagentRegistryTesting.setDepsForTest();
-});
+afterEach(resetRegistryLeafMocks);
 
 describe("killSubagentRunAdmin", () => {
   afterEach(() => {
@@ -998,10 +1008,9 @@ describe("killSubagentRunAdmin", () => {
       startedAt: Date.now() - 4_000,
     });
 
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDiskOrThrow: () => {
-        throw new Error("session store unavailable");
-      },
+    resetRegistryLeafMocks();
+    vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
+      throw new Error("session store unavailable");
     });
 
     const result = await killSubagentRunAdmin({
@@ -1754,13 +1763,12 @@ describe("controlled subagent cancellation races", () => {
       }
       return patch ? { ...current, ...patch } : current;
     });
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDiskOrThrow: () => {
-        persistenceWrites += 1;
-        if (persistenceWrites === 2) {
-          throw new Error("sqlite busy");
-        }
-      },
+    resetRegistryLeafMocks();
+    vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
+      persistenceWrites += 1;
+      if (persistenceWrites === 2) {
+        throw new Error("sqlite busy");
+      }
     });
 
     await expect(
@@ -1797,175 +1805,11 @@ describe("killAllControlledSubagentRuns", () => {
     resetSubagentRegistryForTests({ persist: false });
   });
 
-  it.each([
-    ["runtime load", false],
-    ["parent persistence", false],
-    ["admission drain", false],
-    ["parent persistence", true],
-  ] as const)(
-    "captures descendants registered during %s before releasing capacity (replacement=%s)",
-    async (phase, replaceChild) => {
-      const owner = "agent:main:main";
-      const parent = createSubagentRunRecord({
-        runId: "late-parent",
-        childSessionKey: "agent:main:subagent:late-parent",
-        requesterSessionKey: owner,
-        requesterDisplayKey: owner,
-        task: "orchestrator",
-        cleanup: "keep",
-        createdAt: 1,
-        startedAt: 2,
-      });
-      const activeChild = createSubagentRunRecord({
-        ...parent,
-        runId: "live-child",
-        childSessionKey: "agent:main:subagent:live-child",
-        controllerSessionKey: parent.childSessionKey,
-      });
-      addSubagentRunForTests(parent);
-      if (phase === "admission drain") {
-        addSubagentRunForTests(activeChild);
-      }
-      const storePath = await writeSessionStoreFixture("late-descendant", {
-        [parent.childSessionKey]: { sessionId: "late-parent-session", updatedAt: 1 },
-      });
-      const reached = createDeferred();
-      const proceed = createDeferred();
-      const admission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [parent.childSessionKey, "late-parent-session"],
-        assertAllowed: () => {},
-        onInterrupt: () => {
-          reached.resolve();
-          if (phase !== "admission drain") {
-            expect(releaseSwarmRun(parent.runId)).toBe(true);
-            admission.release();
-          }
-        },
-      });
-      const start = vi.fn(async () => {});
-      const childKey = "agent:main:subagent:late-child";
-      const registerChild = () => {
-        const requester = phase === "admission drain" ? activeChild : parent;
-        expect(requester.execution.endedAt).toBeUndefined();
-        registerSubagentRun({
-          runId: "late-child",
-          childSessionKey: childKey,
-          requesterSessionKey: requester.childSessionKey,
-          requesterAgentId: "main",
-          requesterDisplayKey: requester.childSessionKey,
-          task: "registered while orchestrator is live",
-          cleanup: "keep",
-          collect: true,
-          queued: true,
-        });
-        enqueueSwarmRun({
-          groupId: "late-descendants",
-          runId: "late-child",
-          activeRunIds: [parent.runId],
-          maxConcurrent: 1,
-          start,
-          onStartFailure: () => true,
-        });
-      };
-      setSubagentControlDepsForTest({
-        isEmbeddedAgentRunActive: () => true,
-        abortEmbeddedAgentRun: () => {
-          if (phase === "admission drain") {
-            expect(releaseSwarmRun(parent.runId)).toBe(true);
-          }
-          return true;
-        },
-      });
-      const controller = {
-        controllerSessionKey: owner,
-        controllerAgentId: "main",
-        callerSessionKey: owner,
-        callerIsSubagent: false,
-        controlScope: "children" as const,
-      };
-      const cfg = cfgWithSessionStore(storePath);
-      if (replaceChild) {
-        registerChild();
-      }
-      const pending = killAllControlledSubagentRuns({
-        cfg,
-        controller,
-        runs: [parent],
-        beforeKill:
-          phase === "parent persistence"
-            ? async () => {
-                reached.resolve();
-                await proceed.promise;
-                return true;
-              }
-            : undefined,
-      });
-      try {
-        if (phase !== "runtime load") {
-          await reached.promise;
-        }
-        if (replaceChild) {
-          expect(removeQueuedSwarmRun("late-child")).toBe(true);
-        }
-        registerChild();
-        const outsideStart = vi.fn(async () => {});
-        registerSubagentRun({
-          runId: "other-turn-root",
-          childSessionKey: "agent:main:subagent:other-turn-root",
-          requesterSessionKey: owner,
-          requesterAgentId: "main",
-          requesterTurnRunId: "other-turn",
-          requesterDisplayKey: owner,
-          task: "outside the captured root set",
-          cleanup: "keep",
-          collect: true,
-          queued: true,
-        });
-        enqueueSwarmRun({
-          groupId: "other-turn",
-          runId: "other-turn-root",
-          maxConcurrent: 1,
-          activeRunIds: [],
-          start: outsideStart,
-          onStartFailure: () => true,
-        });
-        proceed.resolve();
-        if (phase === "admission drain") {
-          admission.release();
-        }
-        await pending;
-        if (replaceChild) {
-          expect(
-            start,
-            "discovery cannot adopt a selected child's replacement generation",
-          ).toHaveBeenCalledOnce();
-          expect(getSubagentRunByChildSessionKey(childKey)?.execution.endedAt).toBeUndefined();
-        } else {
-          expect(
-            start,
-            "late descendant must be held before the capacity-releasing signal",
-          ).not.toHaveBeenCalled();
-          expect(getSubagentRunByChildSessionKey(childKey)).toMatchObject({
-            endedReason: SUBAGENT_ENDED_REASON_KILLED,
-            execution: { status: "terminal" },
-          });
-        }
-        expect(
-          outsideStart,
-          "discovery cannot add another root or inhibit its lane",
-        ).toHaveBeenCalledOnce();
-        expect(
-          getSubagentRunByChildSessionKey("agent:main:subagent:other-turn-root")?.execution.endedAt,
-        ).toBeUndefined();
-      } finally {
-        proceed.resolve();
-        admission.release();
-        await pending;
-        swarmSchedulerTesting.reset();
-      }
-    },
-  );
+  registerLateDescendantControlTests({
+    cfgWithSessionStore,
+    setSubagentControlDepsForTest,
+    writeSessionStoreFixture,
+  });
 
   it.each(["bulk", "first cancellation await", "controlled tree", "admin tree", "channel stop"])(
     "does not dispatch selected queued work during %s cancellation",
@@ -2155,26 +1999,25 @@ describe("killAllControlledSubagentRuns", () => {
       });
     reserve();
     let writes = 0;
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDiskOrThrow: () => {
-        writes += 1;
-        if (
-          ["session replacement at intent", "session replacement release"].includes(failure) &&
-          writes === 1
-        ) {
-          replaceSessionEntrySync(
-            { storePath, sessionKey: entry.childSessionKey },
-            { sessionId: "new-session", updatedAt: 2 },
-          );
-        }
-        if (
-          (failure === "intent write" && writes === 1) ||
-          (["tombstone write", "claim release", "session replacement release"].includes(failure) &&
-            writes === 2)
-        ) {
-          throw new Error("sqlite busy");
-        }
-      },
+    resetRegistryLeafMocks();
+    vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
+      writes += 1;
+      if (
+        ["session replacement at intent", "session replacement release"].includes(failure) &&
+        writes === 1
+      ) {
+        replaceSessionEntrySync(
+          { storePath, sessionKey: entry.childSessionKey },
+          { sessionId: "new-session", updatedAt: 2 },
+        );
+      }
+      if (
+        (failure === "intent write" && writes === 1) ||
+        (["tombstone write", "claim release", "session replacement release"].includes(failure) &&
+          writes === 2)
+      ) {
+        throw new Error("sqlite busy");
+      }
     });
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: () => {
@@ -2411,25 +2254,12 @@ describe("killAllControlledSubagentRuns", () => {
     async (kind) => {
       let failNextPersistence = true;
       let persistedAfterFailure = false;
-      subagentRegistryTesting.setDepsForTest({
-        cleanupBrowserSessionsForLifecycleEnd: async () => {},
-        ensureContextEnginesInitialized: () => {},
-        loadAgentRuntimePluginRegistryHandle: () => undefined,
-        persistSubagentRunsToDisk: () => {},
-        persistSubagentRunsToDiskOrThrow: () => {
-          if (failNextPersistence) {
-            failNextPersistence = false;
-            throw new Error("sqlite busy");
-          }
-          persistedAfterFailure = true;
-        },
-        restoreSubagentRunsFromDisk: () => 0,
-        resolveContextEngine: async () => ({
-          info: { id: "test", name: "Test" },
-          assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-          compact: async () => ({ ok: true, compacted: false }),
-          ingest: async () => ({ ingested: false }),
-        }),
+      vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
+        if (failNextPersistence) {
+          failNextPersistence = false;
+          throw new Error("sqlite busy");
+        }
+        persistedAfterFailure = true;
       });
       const first = createSubagentRunRecord({
         runId: "run-bulk-persistence-failure-first",
@@ -2715,7 +2545,7 @@ describe("killAllControlledSubagentRuns", () => {
   });
 });
 
-describe("listControlledSubagentRuns", () => {
+describe("controlled subagent reads", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests({ persist: false });
   });
@@ -2741,7 +2571,7 @@ describe("listControlledSubagentRuns", () => {
     },
   ])(
     "applies read visibility for the $name",
-    ({ controllerSessionKey, requesterSessionKey, expectedCount }) => {
+    async ({ controllerSessionKey, requesterSessionKey, expectedCount }) => {
       const childSessionKey = "agent:main:subagent:list-visibility";
       addSubagentRunForTests({
         runId: "run-list-visibility",
@@ -2755,7 +2585,7 @@ describe("listControlledSubagentRuns", () => {
         startedAt: Date.now(),
       });
 
-      const results = listControlledSubagentRuns("agent:main:main");
+      const { runs: results } = await buildControlledSubagentRunsReadContext("agent:main:main");
       expect(results).toHaveLength(expectedCount);
       if (expectedCount === 1) {
         expect(results[0]?.childSessionKey).toBe(childSessionKey);
@@ -2763,7 +2593,7 @@ describe("listControlledSubagentRuns", () => {
     },
   );
 
-  it("uses one stable snapshot for listing and descendant counts", () => {
+  it("uses one stable snapshot for listing and descendant counts", async () => {
     const now = Date.now();
     const rootSessionKey = "agent:main:main";
     const parentSessionKey = "agent:main:subagent:status-parent";
@@ -2791,7 +2621,7 @@ describe("listControlledSubagentRuns", () => {
       startedAt: now - 1_500,
     });
 
-    const context = buildControlledSubagentRunsReadContext(rootSessionKey);
+    const context = await buildControlledSubagentRunsReadContext(rootSessionKey);
 
     addSubagentRunForTests({
       runId: "run-status-child-2",
@@ -2806,15 +2636,15 @@ describe("listControlledSubagentRuns", () => {
     });
 
     expect(context.runs.map((run) => run.runId)).toEqual(["run-status-parent"]);
-    expect(context.countPendingDescendantRuns(parentSessionKey)).toBe(1);
+    expect(context.list.pendingDescendants.get(parentSessionKey)).toBe(1);
     expect(
-      buildControlledSubagentRunsReadContext(rootSessionKey).countPendingDescendantRuns(
+      (await buildControlledSubagentRunsReadContext(rootSessionKey)).list.pendingDescendants.get(
         parentSessionKey,
       ),
     ).toBe(2);
   });
 
-  it("partitions duplicate bare controller keys by owning agent", () => {
+  it("partitions duplicate bare controller keys by owning agent", async () => {
     const now = Date.now();
     for (const agentId of ["research", "ops"]) {
       addSubagentRunForTests({
@@ -2837,9 +2667,8 @@ describe("listControlledSubagentRuns", () => {
         entries: { research: {}, ops: {} },
       },
     } as OpenClawConfig;
-    expect(listControlledSubagentRuns("global", "research", cfg).map((run) => run.runId)).toEqual([
-      "run-research",
-    ]);
+    const context = await buildControlledSubagentRunsReadContext("global", "research", cfg);
+    expect(context.runs.map((run) => run.runId)).toEqual(["run-research"]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

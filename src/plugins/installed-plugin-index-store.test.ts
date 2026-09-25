@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
-  acquireStartupMigrationLease,
+  acquireStartupMigrationLeaseWithWait,
   STARTUP_MIGRATION_LEASE_TTL_MS,
 } from "../infra/startup-migration-checkpoint.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -41,7 +41,10 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
-import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
+import {
+  createInstalledPluginIndex as createIndex,
+  seedInstalledPluginIndex,
+} from "./test-helpers/installed-plugin-index.js";
 
 const tempDirs: string[] = [];
 
@@ -54,38 +57,6 @@ afterEach(async () => {
 
 function makeTempDir() {
   return makeTrackedTempDir("openclaw-installed-plugin-index-store", tempDirs);
-}
-
-function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPluginIndex {
-  return {
-    version: 1,
-    hostContractVersion: "2026.4.25",
-    compatRegistryVersion: "compat-v1",
-    migrationVersion: 1,
-    policyHash: "policy-v1",
-    generatedAtMs: 1777118400000,
-    installRecords: {},
-    plugins: [
-      {
-        pluginId: "demo",
-        manifestPath: "/plugins/demo/openclaw.plugin.json",
-        manifestHash: "manifest-hash",
-        rootDir: "/plugins/demo",
-        origin: "global",
-        packageBuild: { bundledDist: false },
-        enabled: true,
-        syntheticAuthRefs: ["demo"],
-        startup: {
-          sidecar: false,
-          memory: false,
-          agentHarnesses: [],
-        },
-        compat: [],
-      },
-    ],
-    diagnostics: [],
-    ...overrides,
-  };
 }
 
 function createCandidate(
@@ -301,7 +272,17 @@ describe("installed plugin index persistence", () => {
   it("writes and reads the installed plugin index atomically", async () => {
     const stateDir = makeTempDir();
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
-    const index = createIndex({ workspaceDir: "/agents/gadget/workspace" });
+    const index = createIndex({
+      workspaceDir: "/agents/gadget/workspace",
+      diagnostics: [
+        {
+          level: "info",
+          code: "explicit-config-plugin-selection",
+          pluginId: "demo",
+          message: "explicit override",
+        },
+      ],
+    });
 
     await expect(writePersistedInstalledPluginIndex(index, { stateDir })).resolves.toBe(filePath);
 
@@ -313,6 +294,7 @@ describe("installed plugin index persistence", () => {
     expect(persisted.warning).toContain("DO NOT EDIT.");
     expect(persisted.policyHash).toBe(index.policyHash);
     expect(persisted.workspaceDir).toBe("/agents/gadget/workspace");
+    expect(persisted.diagnostics).toEqual(index.diagnostics);
     expectPluginIds(persisted, ["demo"]);
     expectPluginFields(persisted, "demo", { packageBuild: { bundledDist: false } });
   });
@@ -425,11 +407,17 @@ describe("installed plugin index persistence", () => {
     const stateDir = makeTempDir();
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const nowMs = Date.now();
-    const staleLease = acquireStartupMigrationLease({ env, nowMs, owner: "stale" });
-    const successorLease = acquireStartupMigrationLease({
+    const staleLease = await acquireStartupMigrationLeaseWithWait({
       env,
-      nowMs: nowMs + STARTUP_MIGRATION_LEASE_TTL_MS + 1,
+      now: () => nowMs,
+      owner: "stale",
+      timeoutMs: 0,
+    });
+    const successorLease = await acquireStartupMigrationLeaseWithWait({
+      env,
+      now: () => nowMs + STARTUP_MIGRATION_LEASE_TTL_MS + 1,
       owner: "successor",
+      timeoutMs: 0,
     });
     const successorIndex = createIndex({ policyHash: "successor" });
 

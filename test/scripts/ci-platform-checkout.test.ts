@@ -48,7 +48,15 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
     "/scripts/ios-screenshot-evidence.mjs",
     "/scripts/lib/direct-run.mjs",
     ...(linux
-      ? ["/scripts/lib/release-upgrade-baseline.mjs", "/scripts/lib/release-version.mjs"]
+      ? [
+          "/scripts/lib/release-upgrade-baseline.mjs",
+          "/scripts/lib/release-version.mjs",
+          "/scripts/ci-npm-lock-admission.mjs",
+          "/scripts/generate-npm-package-lock.mjs",
+          "/scripts/generate-npm-package-lock.mts",
+          "/scripts/changed-lanes.mts",
+          "/scripts/lib/merge-head-diff-base.mjs",
+        ]
       : ["/scripts/lib/swift-toolchain.sh"]),
   ];
 }
@@ -104,8 +112,8 @@ it.concurrent.each([
       policyScenario,
       (root) => {
         const workspace = path.join(root, "workspace");
-        if (scenario.startsWith("cancel-")) {
-          // Inject slow startup before fetch, beyond the former cancellation readiness deadline.
+        if (scenario === "cancel-SIGTERM") {
+          // One slow-start proof per policy; all signals share the same readiness path.
           writeFileSync(
             path.join(root, "fixture-config.json"),
             JSON.stringify({ initDelayMs: 4_100 }),

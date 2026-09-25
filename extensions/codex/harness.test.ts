@@ -19,7 +19,10 @@ vi.mock("./src/app-server/run-attempt.js", () => ({
   runCodexAppServerAttempt,
 }));
 
-import { createCodexAppServerAgentHarness } from "./harness.js";
+import {
+  createCodexAppServerAgentHarness,
+  createCodexAppServerNativeCompaction,
+} from "./harness.js";
 import codexPluginPackage from "./package.json" with { type: "json" };
 import { buildCodexRuntimeModelParams } from "./src/app-server/model-runtime.js";
 import {
@@ -70,6 +73,27 @@ describe("Codex agent harness supports()", () => {
   const harness = createCodexAppServerAgentHarness({
     bindingStore: testCodexAppServerBindingStore,
   });
+
+  it.each(["manual", "native-preflight"] as const)(
+    "rejects legacy %s compaction input without inventing System authority",
+    async (entry) => {
+      const params = {
+        sessionId: "legacy-compact",
+        sessionFile: "/tmp/legacy-compact.jsonl",
+        workspaceDir: "/tmp/workspace",
+        trigger: "manual" as const,
+      };
+      const operation =
+        entry === "manual"
+          ? harness.compact?.(params)
+          : createCodexAppServerNativeCompaction({
+              bindingStore: testCodexAppServerBindingStore,
+            })({ ...params, nativeCompactionRequest: "required_preflight" });
+      await expect(operation).rejects.toThrow(
+        "This host did not provide compaction source authority",
+      );
+    },
+  );
 
   it("runs isolated completion through the prepared zero-tool transport", async () => {
     const assistant = {
@@ -465,6 +489,31 @@ describe("Codex agent harness supports()", () => {
         fingerprint: "0".repeat(64),
       }),
     ).resolves.toBe(false);
+  });
+
+  it("revalidates remote inference against the harness's current configured endpoint", async () => {
+    const { resolveCodexAppServerRuntimeOptions } = await import("./src/app-server/config.js");
+    const { captureCodexConfiguredConnection, finalizeCodexConfiguredConnection } =
+      await import("./src/app-server/runtime-artifact-connection.js");
+    let pluginConfig = {
+      appServer: { transport: "websocket" as const, url: "ws://127.0.0.1:1234" },
+    };
+    const remoteHarness = createCodexAppServerAgentHarness({
+      bindingStore: testCodexAppServerBindingStore,
+      resolvePluginConfig: () => pluginConfig,
+    });
+    const startOptions = resolveCodexAppServerRuntimeOptions({ pluginConfig }).start;
+    const binding = finalizeCodexConfiguredConnection({
+      before: captureCodexConfiguredConnection(startOptions),
+      startOptions,
+      runtimeIdentity: { serverVersion: "0.153.4", userAgent: "codex-test" },
+    });
+    if (!remoteHarness.runtimeArtifact) {
+      throw new Error("expected Codex runtime artifact capability");
+    }
+    await expect(remoteHarness.runtimeArtifact.validate(binding)).resolves.toBe(true);
+    pluginConfig = { appServer: { transport: "websocket", url: "ws://127.0.0.1:5678" } };
+    await expect(remoteHarness.runtimeArtifact.validate(binding)).resolves.toBe(false);
   });
 });
 

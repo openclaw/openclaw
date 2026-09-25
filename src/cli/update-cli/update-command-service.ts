@@ -7,7 +7,7 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
@@ -22,7 +22,6 @@ import {
   waitForGatewayHealthyRestart,
   type GatewayRestartSnapshot,
 } from "../daemon-cli/restart-health.js";
-import { runRestartScript } from "./restart-helper.js";
 import { tryWriteCompletionCache, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import type { PluginUpdateWarning } from "./update-command-plugins-internals.js";
@@ -45,8 +44,8 @@ import type {
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import {
-  assertGatewayServiceManagementAllowedForUpdate,
   gatewayServiceCommandUsesRoot,
+  readGatewayServiceStateForUpdate,
   resolveGatewayServiceManagementBlockMessageForUpdate,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
@@ -122,26 +121,17 @@ export async function tryInstallShellCompletion(opts: {
 
   try {
     const status = await checkShellCompletionStatus(CLI_NAME);
-    const generationOptions = { generationMode: "core-only" } as const;
-
     if (status.usesSlowPattern) {
       defaultRuntime.log(theme.muted("Upgrading shell completion to cached version..."));
-      if (!(await ensureCompletionCacheExists(CLI_NAME, generationOptions))) {
-        throw new Error("completion cache generation failed");
+    } else if (status.profileInstalled) {
+      if (status.cacheExists) {
+        return;
       }
-      await installCompletion(status.shell, true, CLI_NAME);
-      return;
-    }
-
-    if (status.profileInstalled && !status.cacheExists) {
       defaultRuntime.log(theme.muted("Regenerating shell completion cache..."));
-      if (!(await ensureCompletionCacheExists(CLI_NAME, generationOptions))) {
-        throw new Error("completion cache generation failed");
+    } else {
+      if (opts.skipPrompt) {
+        return;
       }
-      return;
-    }
-
-    if (!status.profileInstalled && !opts.skipPrompt) {
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Shell completion"));
 
@@ -158,11 +148,12 @@ export async function tryInstallShellCompletion(opts: {
         );
         return;
       }
-
-      if (!(await ensureCompletionCacheExists(CLI_NAME, generationOptions))) {
-        throw new Error("completion cache generation failed");
-      }
-      await installCompletion(status.shell, false, CLI_NAME);
+    }
+    if (!(await ensureCompletionCacheExists(CLI_NAME, { generationMode: "core-only" }))) {
+      throw new Error("completion cache generation failed");
+    }
+    if (status.usesSlowPattern || !status.profileInstalled) {
+      await installCompletion(status.shell, status.usesSlowPattern, CLI_NAME);
     }
   } catch (err) {
     const message = formatErrorMessage(err);
@@ -186,7 +177,6 @@ export async function maybeRestartService(params: {
   serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
   serviceManagerUid?: number;
   gatewayPort: number;
-  restartScriptPath?: string | null;
   invocationCwd?: string;
   nodeRunner?: string;
   skipLegacyServiceRestart?: boolean;
@@ -404,9 +394,7 @@ export async function maybeRestartService(params: {
         expectedGatewayVersion !== undefined &&
         expectedGatewayVersion !== normalizeOptionalString(activation.result.before?.version);
       let restarted = false;
-      let restartInitiated = false;
       let refreshedGatewayHealth: GatewayRestartSnapshot | undefined;
-      let restartScriptPath = preserveDefinition ? null : activation.restartScriptPath;
       if (activation.refreshServiceEnv && activation.serviceInstallEnv !== null) {
         try {
           recordPhase("restarting");
@@ -476,13 +464,11 @@ export async function maybeRestartService(params: {
             if (verdict?.kind !== "owned") {
               throw err;
             }
-            const state = await readGatewayServiceState(resolveGatewayService(), {
-              env: activation.serviceEnv,
-              requireEffective: true,
-              requireLoadedCommand: true,
-              validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-              timeoutMs: activation.timeoutMs,
-            });
+            const state = await readGatewayServiceStateForUpdate(
+              resolveGatewayService(),
+              activation.serviceEnv,
+              activation.timeoutMs,
+            );
             assertCurrent();
             await revalidateManagedGatewayServiceAfterUpdate({
               state,
@@ -504,10 +490,8 @@ export async function maybeRestartService(params: {
             };
             assertCurrent();
             expectedGatewayVersion = normalizeOptionalString(activation.result.after?.version);
-            restartScriptPath = null;
           }
           if (isPackageUpdate) {
-            restartScriptPath = null;
             updatedInstallRestartNeedsServiceRootProof = !canVerifyUpdatedGatewayByVersion;
           }
         }
@@ -539,15 +523,7 @@ export async function maybeRestartService(params: {
         );
         return healthy ?? (await failed("restart-health-failed"));
       }
-      if (restartScriptPath) {
-        if (!preserveDefinition) {
-          await createUpdateConfigSnapshot();
-        }
-        recordPhase("restarting");
-        activationAccepted = await runRestartScript(restartScriptPath, activation.timeoutMs);
-        assertCurrent();
-        restartInitiated = true;
-      } else if (
+      if (
         canRestartUpdatedInstall() ||
         (!isPackageUpdate && !activation.skipLegacyServiceRestart)
       ) {
@@ -588,13 +564,7 @@ export async function maybeRestartService(params: {
         defaultRuntime.log(theme.muted("Gateway: restart skipped (no installed service found)."));
       }
 
-      const shouldVerifyRestart =
-        restartInitiated ||
-        (restarted &&
-          (preserveDefinition ||
-            expectedGatewayVersion !== undefined ||
-            activation.result.mode === "git")) ||
-        activation.requireRunningServiceAfterRestart;
+      const shouldVerifyRestart = restarted || activation.requireRunningServiceAfterRestart;
       if (shouldVerifyRestart) {
         const requireRunningService =
           updatedInstallRestartNeedsServiceRootProof ||
@@ -612,10 +582,6 @@ export async function maybeRestartService(params: {
         }
         if (restartHealthy === "readiness-pending") {
           return restartHealthy;
-        }
-        if (!activation.opts.json && restartInitiated) {
-          defaultRuntime.log(theme.success("Daemon restart completed."));
-          defaultRuntime.log("");
         }
       }
 

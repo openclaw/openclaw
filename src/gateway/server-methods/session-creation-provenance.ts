@@ -1,4 +1,5 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { SessionPermissionMode } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type {
   SessionCreatedActor,
   SessionCreatedVia,
@@ -14,10 +15,14 @@ export type TrustedSessionCreation = {
   sandbox?: "required";
   /** Exact spawning session retained separately from the stable actor identity. */
   requesterSessionKey?: string;
+  /** Host-verified human requester; never accepted from model-authored parameters. */
+  requesterProfileId?: string;
   /** Immutable completion recipient for a spawn-owned visible session. */
   completionOwnerSessionKey?: string;
   /** Prepared parent selection; never accepted from public creation parameters. */
   resolvedModel?: ProviderModelRef;
+  /** Effective host-prepared permission mode, not a public permission-change request. */
+  inheritedPermissionMode?: SessionPermissionMode;
   /** Effective caller tool-policy snapshot for an in-process visible spawn. */
   inheritedToolPolicy?: {
     version: 1;
@@ -54,6 +59,9 @@ export function resolveOperatorSessionCreation(
       via: "spawn",
       actor: { type: "agent", id: agentRuntimeIdentity.agentId },
       requesterSessionKey: agentRuntimeIdentity.sessionKey,
+      ...(agentRuntimeIdentity.sessionSpawnContext.requesterProfileId
+        ? { requesterProfileId: agentRuntimeIdentity.sessionSpawnContext.requesterProfileId }
+        : {}),
       ...(agentRuntimeIdentity.sessionSpawnContext.completionOwnerSessionKey
         ? {
             completionOwnerSessionKey:
@@ -61,6 +69,12 @@ export function resolveOperatorSessionCreation(
           }
         : {}),
       inheritedToolPolicy: agentRuntimeIdentity.sessionSpawnContext.inheritedToolPolicy,
+      ...(agentRuntimeIdentity.sessionSpawnContext.inheritedPermissionMode
+        ? {
+            inheritedPermissionMode:
+              agentRuntimeIdentity.sessionSpawnContext.inheritedPermissionMode,
+          }
+        : {}),
       ...(agentRuntimeIdentity.sessionSpawnContext.resolvedModel
         ? { resolvedModel: agentRuntimeIdentity.sessionSpawnContext.resolvedModel }
         : {}),

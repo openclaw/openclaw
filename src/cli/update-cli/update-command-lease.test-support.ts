@@ -13,6 +13,7 @@ export type LeaseScenario = {
   preDoctorChannel?: string;
   invalidConfig?: boolean;
   failDoctor?: "pre" | "post";
+  doctorWarnings?: string[];
   readinessFailure?: "finding" | "execution";
   hostVersion?: string;
   writerConfig?: OpenClawConfig;
@@ -20,6 +21,8 @@ export type LeaseScenario = {
   runtimeRoot?: string;
   verifyRepairOwner?: boolean;
   verifyServiceCustody?: boolean;
+  runDoctorConfigFlow?: boolean;
+  doctorWarningsByInvocation?: string[][];
 };
 
 // A narrow child substitutes for the CLI, not for its cross-process lease.
@@ -197,6 +200,63 @@ export async function runUpdateLeaseChild(): Promise<void> {
     process.stderr.write("doctor fixture diagnostic\n");
     if (scenario.failDoctor === phase) {
       throw new Error("doctor fixture failure");
+    }
+    if (scenario.runDoctorConfigFlow) {
+      const { loadAndMaybeMigrateDoctorConfig } =
+        await import("../../commands/doctor-config-flow.js");
+      const { createDoctorPrompter } = await import("../../commands/doctor-prompter.js");
+      const { runInitialConfigWriteHealth } =
+        await import("../../flows/doctor-health-contribution-runners.config.js");
+      const { defaultRuntime: runtime } = await import("../../runtime.js");
+      const options = { repair: true, nonInteractive: true, workspaceSuggestions: false };
+      const prompter = createDoctorPrompter({ runtime, options });
+      const configResult = await loadAndMaybeMigrateDoctorConfig({
+        options,
+        prompter,
+        runtime,
+        confirm: (params) => prompter.confirm(params),
+      });
+      await runInitialConfigWriteHealth({
+        runtime,
+        options,
+        prompter,
+        configResult,
+        cfg: configResult.cfg,
+        cfgForPersistence: structuredClone(configResult.cfg),
+        sourceConfigValid: configResult.sourceConfigValid ?? true,
+        configPath,
+        stateDirExistedAtStart: true,
+        runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot,
+        invalidatePluginMetadataSnapshot: configResult.invalidatePluginMetadataSnapshot,
+      });
+    }
+    if (scenario.doctorWarningsByInvocation) {
+      const attempts = (await fs.readFile(path.join(stateDir, "events.jsonl"), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { event: string })
+        .filter(({ event }) => event === "pre-attempt" || event === "post-attempt");
+      const resultPath = process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+      assert.ok(resultPath);
+      const { writeUpdatePostInstallDoctorResult } =
+        await import("../../infra/update-doctor-result.js");
+      await writeUpdatePostInstallDoctorResult({
+        resultPath,
+        result: {
+          status: "ok",
+          warnings: scenario.doctorWarningsByInvocation[attempts.length - 1] ?? [],
+        },
+      });
+    }
+    if (scenario.doctorWarnings?.length) {
+      const { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, writeUpdatePostInstallDoctorResult } =
+        await import("../../infra/update-doctor-result.js");
+      const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+      assert.ok(resultPath);
+      await writeUpdatePostInstallDoctorResult({
+        resultPath,
+        result: { status: "ok", warnings: scenario.doctorWarnings },
+      });
     }
     return;
   }

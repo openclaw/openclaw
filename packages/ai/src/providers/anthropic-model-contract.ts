@@ -1,11 +1,13 @@
 // Model-bound thinking cannot be exposed or replayed after a model switch.
 import {
   CLAUDE_FABLE_5_THINKING_PROFILE,
+  CLAUDE_OPUS_55_THINKING_PROFILE,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus55ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaudeNativeMaxEffort,
@@ -30,6 +32,7 @@ export {
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus55ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
@@ -38,8 +41,8 @@ export {
 } from "@openclaw/llm-core";
 
 // Anthropic gates OAuth models with claude_code_version_too_old. Keep this floor
-// at the published Claude Code release (2.1.278); older or absent CLIs must not downgrade it.
-export const ANTHROPIC_CLAUDE_CODE_VERSION = "2.1.278";
+// at the published Claude Code release (2.1.280); older or absent CLIs must not downgrade it.
+export const ANTHROPIC_CLAUDE_CODE_VERSION = "2.1.280";
 
 /** Build OAuth headers and the matching billing identity from one request snapshot. */
 export function buildAnthropicClaudeCodeIdentity(
@@ -166,9 +169,11 @@ export function resolveAnthropicThinkingEffort(
 ): AnthropicEffort {
   const requestedLevel: ModelThinkingLevel | undefined =
     level ??
-    (resolveClaudeFable5ModelIdentity(model)
-      ? CLAUDE_FABLE_5_THINKING_PROFILE.defaultLevel
-      : undefined);
+    (resolveClaudeOpus55ModelIdentity(model)
+      ? CLAUDE_OPUS_55_THINKING_PROFILE.defaultLevel
+      : resolveClaudeFable5ModelIdentity(model)
+        ? CLAUDE_FABLE_5_THINKING_PROFILE.defaultLevel
+        : undefined);
   const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
   const clampModel = {
     ...model,

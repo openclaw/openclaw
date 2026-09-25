@@ -8,11 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import type { DiscordConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeAtHashSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
-
-function normalizeDiscordSlug(value?: string | null) {
-  return normalizeAtHashSlug(value);
-}
+import { normalizeAtHashSlug as normalizeDiscordSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 // Length-prefixed segments keep arbitrary config keys, including slashes, collision-free.
 const guildScopeKey = (guildKey: string) => scopeKey(["guild", guildKey]);

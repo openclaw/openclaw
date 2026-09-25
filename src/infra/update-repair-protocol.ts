@@ -37,8 +37,40 @@ const event = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("stopped"), status, reason: text.optional() }),
 ]);
+const repairTarget = z.object({
+  stateDir: z.string(),
+  configPath: z.string(),
+  workspaceDir: z.string(),
+  installRoot: z.string(),
+  environment: z.record(z.string(), z.string().optional()).optional(),
+});
+const requester = z
+  .object({
+    channel: text.optional(),
+    accountId: text.optional(),
+    senderId: text.optional(),
+    authorizationSource: text.optional(),
+  })
+  .optional();
+const turnResult = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("completed"),
+    model: text,
+    provider: text,
+    toolCalls: z.number().int().nonnegative(),
+    summary: text,
+    timedOut: z.boolean(),
+  }),
+  z.object({ status: z.enum(["unavailable", "aborted"]), reason: text }),
+]);
 const updateRepairWorkerMessageSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("ready"), candidateRehearsal: z.literal(true).optional() }),
+  z.object({
+    type: z.literal("ready"),
+    candidateRehearsal: z.literal(true).optional(),
+    repairTurns: z.literal(true).optional(),
+    executorDelegation: z.literal("pid-start-v1").optional(),
+  }),
+  z.object({ type: z.literal("turn-result"), result: turnResult }),
   z.object({ type: z.literal("validate"), id: turn }),
   z.object({ type: z.literal("cancel-validation"), id: turn }),
   z.object({ type: z.literal("event"), event }),
@@ -56,16 +88,8 @@ export const updateRepairParentMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("start"),
     runId: text.optional(),
-    requester: z
-      .object({ channel: text.optional(), accountId: text.optional(), senderId: text.optional() })
-      .optional(),
-    target: z.object({
-      stateDir: z.string(),
-      configPath: z.string(),
-      workspaceDir: z.string(),
-      installRoot: z.string(),
-      environment: z.record(z.string(), z.string().optional()).optional(),
-    }),
+    requester,
+    target: repairTarget,
     failure: updateFailureSchema,
     context: z.object({
       phase: z.enum(["validating", "verifying"]).optional(),
@@ -74,6 +98,17 @@ export const updateRepairParentMessageSchema = z.discriminatedUnion("type", [
       symptoms: z.array(text).max(20).optional(),
     }),
     budget: updateRepairBudgetSchema,
+  }),
+  z.object({
+    type: z.literal("turn"),
+    runId: text.min(1),
+    requester,
+    target: repairTarget,
+    executor: z.record(z.string(), z.unknown()),
+    prompt: z.string().max(8 * 1024),
+    wallClockMs: updateRepairBudgetSchema.shape.wallClockMs,
+    timeoutMs: updateRepairBudgetSchema.shape.perTurnMs,
+    maxToolCalls: updateRepairBudgetSchema.shape.maxToolCalls,
   }),
   z.object({
     type: z.literal("validation-result"),
@@ -107,3 +142,6 @@ export type UpdateRepairParams = {
   /** The caller still owns this repair slot. */
   isCurrent?: () => boolean;
 };
+
+export type UpdateRepairTurnResult = z.infer<typeof turnResult>;
+export type UpdateRepairTurnMessage = Extract<UpdateRepairParentMessage, { type: "turn" }>;

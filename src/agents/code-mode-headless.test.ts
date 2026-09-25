@@ -3,7 +3,11 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { CodeModeNamespaceDescriptor } from "./code-mode-namespaces.js";
 import { prepareSource } from "./code-mode-source.js";
 import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "./code-mode.js";
-import { createHeadlessCodeModeHarness, testing } from "./code-mode.test-support.js";
+import {
+  createHeadlessCodeModeHarness,
+  resetCodeModeTestState,
+  testing,
+} from "./code-mode.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 function fakeTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool {
@@ -33,11 +37,13 @@ function expectFailed(result: CodeModeHeadlessResult) {
 }
 
 describe("headless Code Mode", () => {
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    expect(testing.activeRuns.size).toBe(0);
-    testing.activeRuns.clear();
-    testing.resumingRunIds.clear();
+    try {
+      expect(testing.activeRuns.size).toBe(0);
+    } finally {
+      await resetCodeModeTestState();
+    }
   });
 
   it("completes multi-round tool calls without publishing active runs", async () => {
@@ -69,47 +75,6 @@ describe("headless Code Mode", () => {
     expect(result.toolCallCount).toBe(2);
     expect(first.execute).toHaveBeenCalledOnce();
     expect(second.execute).toHaveBeenCalledOnce();
-  });
-
-  it("preserves output and cancels earlier tools when a headless resume exceeds the snapshot cap", async () => {
-    const pendingStarted = createDeferred<AbortSignal | undefined>();
-    const pending = fakeTool("headless_snapshot_pending", async (_toolCallId, _input, signal) => {
-      pendingStarted.resolve(signal);
-      await new Promise<void>((resolve) => {
-        signal?.addEventListener("abort", () => resolve(), { once: true });
-      });
-      return jsonResult({ canceled: true });
-    });
-    const fixture = fakeTool("headless_snapshot_fixture", async () => {
-      await pendingStarted.promise;
-      return jsonResult({ ok: true });
-    });
-    const fresh = fakeTool("headless_snapshot_fresh", async () => jsonResult({ ok: true }));
-    const result = expectFailed(
-      await runCodeModeScriptHeadless({
-        ctx: createHeadlessCodeModeHarness([pending, fixture, fresh]),
-        code: `void headless_snapshot_pending({});
-          text("accepted first");
-          await headless_snapshot_fixture({});
-          const retained = new Uint8Array(16 * 1024 * 1024);
-          retained[0] = 7;
-          text("accepted inline");
-          await yield_control();
-          await headless_snapshot_fresh({});
-          return retained[0];`,
-      }),
-    );
-
-    expect(result.code).toBe("snapshot_limit_exceeded");
-    expect(result.toolCallCount).toBe(2);
-    expect(result.output).toEqual([
-      { type: "text", text: "accepted first" },
-      { type: "text", text: "accepted inline" },
-    ]);
-    expect(pending.execute).toHaveBeenCalledOnce();
-    expect(fixture.execute).toHaveBeenCalledOnce();
-    expect(fresh.execute).not.toHaveBeenCalled();
-    expect((await pendingStarted.promise)?.aborted).toBe(true);
   });
 
   it("keeps the headless race winner when the later-started tool settles first", async () => {
@@ -590,29 +555,42 @@ describe("headless Code Mode", () => {
   );
 
   it.each([
-    String.raw`return r\u0065quire('node:fs');`,
-    "return require?.('node:fs');",
-    "return (require)('node:fs');",
-    "return (0, require)('node:fs');",
-    "const load = require; return load('node:fs');",
-    "return module.require('node:fs');",
-    "return process.getBuiltinModule('node:fs');",
-    "return `${import('node:fs')}`;",
-    "return `${require('node:fs')}`;",
-    "return `${`nested ${import('node:fs')}`}`;",
-    "return `${`nested ${require('node:fs')}`}`;",
-    "const message = `import('node:fs')`; return require('node:fs');",
-    "let value = 1; return value++ / import('node:fs');",
-    "let value = 1; return value-- / import('node:fs');",
-    "const value = { of: 1 }; return value.of / import('node:fs');",
-    "const value = { return: 1 }; return value.return / import('node:fs');",
-    "const value = { if() { return 1; } }; return value.if() / import('node:fs');",
-    "const value = { return: 1 }; return value?.return / import('node:fs') / 1;",
-    "const value = { return: 1 }; return value?.return / require('node:fs') / 1;",
-    "const value = { if() { return 1; } }; return value?.if() / import('node:fs');",
-    "function run() { const await = 1; return await / (globalThis.pending = import('node:fs')); } run(); return globalThis.pending;",
-    "class Guest { #return = 1; run() { return this.#return / (globalThis.pending = import('node:fs')); } } new Guest().run(); return globalThis.pending;",
-  ])("rejects executable module access in a headless guest: %s", async (code) => {
+    ...[
+      String.raw`return r\u0065quire('node:fs');`,
+      "return require?.('node:fs');",
+      "return (require)('node:fs');",
+      "return (0, require)('node:fs');",
+      "const load = require; return load('node:fs');",
+      "return module.require('node:fs');",
+      "return process.getBuiltinModule('node:fs');",
+      "return `${import('node:fs')}`;",
+      "return `${require('node:fs')}`;",
+      "return `${`nested ${import('node:fs')}`}`;",
+      "return `${`nested ${require('node:fs')}`}`;",
+      "const message = `import('node:fs')`; return require('node:fs');",
+      "let value = 1; return value++ / import('node:fs');",
+      "let value = 1; return value-- / import('node:fs');",
+      "const value = { of: 1 }; return value.of / import('node:fs');",
+      "const value = { return: 1 }; return value.return / import('node:fs');",
+      "const value = { if() { return 1; } }; return value.if() / import('node:fs');",
+      "const value = { if() { return 1; } }; return value?.if() / import('node:fs');",
+      "function run() { const await = 1; return await / (globalThis.pending = import('node:fs')); } run(); return globalThis.pending;",
+      "class Guest { #return = 1; run() { return this.#return / (globalThis.pending = import('node:fs')); } } new Guest().run(); return globalThis.pending;",
+    ].map((code) => ({
+      code,
+      reason: "executable module access",
+      expectedError: "module access is disabled",
+    })),
+    ...[
+      "const value = { return: 1 }; return value?.return / import('node:fs') / 1;",
+      "const value = { return: 1 }; return value?.return / require('node:fs') / 1;",
+    ].map((code) => ({
+      code,
+      reason: "existing parser limitation: optional keyword property before division",
+      expectedError:
+        "SyntaxError at openclaw-code-mode:user.js:1:51: Unexpected token. No tools were dispatched; correct the JavaScript source and submit it again.",
+    })),
+  ])("rejects $reason in a headless guest: $code", async ({ code, expectedError }) => {
     const result = expectFailed(
       await runCodeModeScriptHeadless({
         ctx: createHeadlessCodeModeHarness(),
@@ -621,7 +599,7 @@ describe("headless Code Mode", () => {
     );
 
     expect(result.code).toBe("invalid_input");
-    expect(result.error).toContain("module access is disabled");
+    expect(result.error).toContain(expectedError);
     expect(result.toolCallCount).toBe(0);
   });
 

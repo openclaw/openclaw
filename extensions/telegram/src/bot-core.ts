@@ -5,9 +5,12 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  registerSessionBindingAdapter,
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
+  unregisterSessionBindingAdapter,
+  type SessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage, formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeGroupActivation } from "openclaw/plugin-sdk/group-activation";
@@ -81,9 +84,9 @@ const DEFAULT_TELEGRAM_BOT_RUNTIME: TelegramBotRuntime = {
   sequentialize,
   apiThrottler,
 };
-export function createTelegramBotCore(
+export async function createTelegramBotCore(
   opts: TelegramBotOptions & { telegramDeps: TelegramBotDeps },
-): TelegramBotInstance {
+): Promise<TelegramBotInstance> {
   const botRuntime = DEFAULT_TELEGRAM_BOT_RUNTIME;
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
   const telegramDeps = opts.telegramDeps;
@@ -102,22 +105,6 @@ export function createTelegramBotCore(
     accountId: account.accountId,
     kind: "subagent",
   });
-  const threadBindingManager = threadBindingPolicy.enabled
-    ? createTelegramThreadBindingManager({
-        cfg,
-        accountId: account.accountId,
-        idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
-          cfg,
-          channel: "telegram",
-          accountId: account.accountId,
-        }),
-        maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
-          cfg,
-          channel: "telegram",
-          accountId: account.accountId,
-        }),
-      })
-    : null;
   const telegramCfg = account.config;
 
   const telegramTransport =
@@ -435,10 +422,49 @@ export function createTelegramBotCore(
   handlers.register(nativeCommandCallbackDispatcher);
 
   const originalStop = bot.stop.bind(bot);
-  bot.stop = ((...args: Parameters<typeof originalStop>) => {
-    threadBindingManager?.stop();
-    return originalStop(...args);
+  // Acquire the account owner only after bot setup has succeeded.
+  const threadBindingManager = threadBindingPolicy.enabled
+    ? await createTelegramThreadBindingManager({
+        cfg,
+        accountId: account.accountId,
+        idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
+          cfg,
+          channel: "telegram",
+          accountId: account.accountId,
+        }),
+        maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
+          cfg,
+          channel: "telegram",
+          accountId: account.accountId,
+        }),
+      })
+    : null;
+  const disabledBindingAdapter: SessionBindingAdapter | undefined = threadBindingManager
+    ? undefined
+    : {
+        channel: "telegram",
+        accountId: account.accountId,
+        capabilities: { bindSupported: false, unbindSupported: false, placements: [] },
+        listBySession: () => [],
+        resolveByConversation: () => null,
+      };
+  bot.stop = (async (...args: Parameters<typeof originalStop>) => {
+    if (disabledBindingAdapter) {
+      unregisterSessionBindingAdapter({
+        channel: "telegram",
+        accountId: account.accountId,
+        adapter: disabledBindingAdapter,
+      });
+    }
+    try {
+      return await originalStop(...args);
+    } finally {
+      await threadBindingManager?.stop();
+    }
   }) as typeof bot.stop;
+  if (disabledBindingAdapter) {
+    registerSessionBindingAdapter(disabledBindingAdapter);
+  }
 
   return bot;
 }

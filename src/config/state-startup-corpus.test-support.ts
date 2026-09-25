@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { createFixtureDiagnostics } from "../../test/helpers/fixture-diagnostics.js";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { stateStartupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
@@ -14,7 +15,7 @@ import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/s
 import { loadGatewayStartupConfigSnapshot } from "../gateway/server-startup-config-helpers.js";
 import { runStartupSessionMigration } from "../gateway/server-startup-session-migration.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
+import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { resolveBundledDirFromPackageRoot } from "../plugins/bundled-dir.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -22,7 +23,7 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { getUserPreferences } from "../state/user-preferences.js";
 import {
@@ -82,17 +83,6 @@ function prepareState(home: string, release: string, configName: string) {
   const fixture: StateFixture = JSON.parse(
     fs.readFileSync(path.join(corpusDir, release, "manifest.json"), "utf8"),
   );
-  for (const [key, value] of Object.entries({
-    HOME: home,
-    USERPROFILE: home,
-    OPENCLAW_TEST_HOME: home,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
-  })) {
-    vi.stubEnv(key, value);
-  }
   const pluginDir = path.join(home, "external-plugin");
   fs.mkdirSync(pluginDir);
   fs.writeFileSync(
@@ -116,7 +106,21 @@ function prepareState(home: string, release: string, configName: string) {
       : value,
   );
   fs.writeFileSync(configPath, JSON.stringify(config));
-  return { home, stateDir, configPath, fixture };
+  return {
+    home,
+    stateDir,
+    configPath,
+    fixture,
+    env: {
+      HOME: home,
+      USERPROFILE: home,
+      OPENCLAW_TEST_HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+    },
+  };
 }
 
 function assertDatabaseIntegrity(stateDir: string, fixture: StateFixture) {
@@ -129,61 +133,67 @@ function assertDatabaseIntegrity(stateDir: string, fixture: StateFixture) {
     })),
   ];
   for (const target of databases) {
-    const database = openNodeSqliteDatabase(target.path, { readOnly: true });
+    const label = path.relative(stateDir, target.path).split(path.sep).join("/");
     try {
-      expect(database.prepare("PRAGMA integrity_check").all(), target.path).toEqual([
-        { integrity_check: "ok" },
-      ]);
-      expect(database.prepare("PRAGMA user_version").get(), target.path).toEqual({
-        user_version: target.version,
-      });
-    } finally {
-      database.close();
+      const database = openNodeSqliteDatabase(target.path, { readOnly: true });
+      try {
+        expect(database.prepare("PRAGMA integrity_check").all(), label).toEqual([
+          { integrity_check: "ok" },
+        ]);
+        expect(database.prepare("PRAGMA user_version").get(), label).toEqual({
+          user_version: target.version,
+        });
+      } finally {
+        database.close();
+      }
+    } catch (error) {
+      throw new Error("Corpus database integrity failed: " + label, { cause: error });
     }
   }
 }
 
-export function defineStateStartupCorpusTests(fileUrl: string) {
-  const file = path
-    .relative(fileURLToPath(new URL("../../", import.meta.url)), fileURLToPath(fileUrl))
-    .split(path.sep)
-    .join("/");
-  const partition = stateStartupCorpusTestFiles.indexOf(file);
-  if (partition < 0) {
-    throw new Error(`Unregistered startup corpus file: ${file}`);
-  }
-  const cases = allCases.filter(
-    (_entry, index) => index % stateStartupCorpusTestFiles.length === partition,
-  );
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  afterEach(() => vi.unstubAllEnvs());
-
-  describe("prior-release state startup corpus", () => {
-    if (partition === 0) {
-      it("retains the previous stable and frozen fleet releases", () => {
-        expect(releases).toEqual(expect.arrayContaining(["2026.9.2", "2026.9.3-95f3ed9"]));
-      });
-    }
-
-    // These released snapshots retain POSIX cron partition keys, not Windows-native paths.
-    it.skipIf(process.platform === "win32").each(cases)(
-      "%s × %s preserves state through Doctor and Gateway startup",
-      async (release, configName) => {
-        const { home, stateDir, configPath, fixture } = prepareState(
-          tempDirs.make("openclaw-state-corpus-"),
-          release,
-          configName,
-        );
-        // Reuse inspection processes, never migrated bytes: each request reacquires source admission.
-        await withSqliteReadOnlyWorkerScope(async () => {
-          const io = createConfigIO({
-            configPath,
-            env: process.env,
-            homedir: () => home,
-            observe: false,
-          });
-          try {
+export function createStateStartupCorpusFixture() {
+  const lifetime = createFixtureLifetime();
+  const originalEnv = new Map<string, string | undefined>();
+  let cleanupReceipt: Promise<void> | undefined;
+  const corpusFixture = {
+    runCase(release: string, configName: string, signal: AbortSignal): Promise<void> {
+      if (cleanupReceipt) {
+        return cleanupReceipt.then(() => corpusFixture.runCase(release, configName, signal));
+      }
+      return lifetime.run(async () => {
+        signal.throwIfAborted();
+        const home = lifetime.createTempDir("openclaw-state-corpus-");
+        const stateDir = path.join(home, ".openclaw");
+        const scope = createSqliteReadOnlyWorkerScope({ signal, deadlineOwnedByCaller: false });
+        const diagnostics = createFixtureDiagnostics("state-startup-corpus");
+        const onAbort = () => diagnostics.report("abort");
+        signal.addEventListener("abort", onAbort, { once: true });
+        const phase = (name: string) => {
+          signal.throwIfAborted();
+          diagnostics.stage(name);
+        };
+        const errors: unknown[] = [];
+        try {
+          await scope.run(async () => {
+            const { configPath, fixture, env } = prepareState(home, release, configName);
+            // Vitest may start teardown before this timed-out body settles. The fixture
+            // owns these values until database and worker cleanup have both joined.
+            for (const [key, value] of Object.entries(env)) {
+              if (!originalEnv.has(key)) {
+                originalEnv.set(key, process.env[key]);
+              }
+              process.env[key] = value;
+            }
+            const io = createConfigIO({
+              configPath,
+              env: process.env,
+              homedir: () => home,
+              observe: false,
+            });
+            phase("config-read");
             const snapshot = await io.readConfigFileSnapshot();
+            phase("config-migration");
             const migrated = applyLegacyCompatibilityStep({
               snapshot,
               state: {
@@ -202,24 +212,28 @@ export function defineStateStartupCorpusTests(fileUrl: string) {
             fs.writeFileSync(configPath, JSON.stringify(normalized.config));
             // Repeat the real repair path: a second run must preserve the same records.
             for (let pass = 0; pass < 2; pass += 1) {
+              phase("doctor-repair");
               await runDoctorConfigPreflight({
                 observe: false,
                 repairPrefixedConfig: true,
                 doctorOnlyStateMigrations: true,
                 preparePluginMetadataSnapshot: true,
               });
-              await runDoctorConfigPreflight({
-                observe: false,
-                requireStartupMigrationCheckpoint: true,
-              });
+              phase("startup-config-read");
+              const initialSnapshotRead = await io.readConfigFileSnapshotWithPluginMetadata();
+              phase("startup-config");
               const startup = await loadGatewayStartupConfigSnapshot({
-                initialSnapshotRead: await io.readConfigFileSnapshotWithPluginMetadata(),
+                initialSnapshotRead,
                 minimalTestGateway: false,
+                ambientEnvTriggers: "suppress",
                 log: console,
               });
               const config = startup.snapshot.config;
+              phase("startup-session-migration");
               await runStartupSessionMigration({ cfg: config, log: console });
+              phase("state-assertions");
               for (const session of fixture.sessions) {
+                signal.throwIfAborted();
                 const target = {
                   agentId: session.agentId,
                   sessionKey: session.sessionKey,
@@ -233,6 +247,7 @@ export function defineStateStartupCorpusTests(fileUrl: string) {
                   session.sessionKey,
                 ).toContainEqual(expect.objectContaining({ text: session.transcriptText }));
               }
+              signal.throwIfAborted();
               const auth = loadAuthProfileStoreWithoutExternalProfiles(
                 path.join(stateDir, "agents", "main", "agent"),
               );
@@ -242,13 +257,16 @@ export function defineStateStartupCorpusTests(fileUrl: string) {
               const cronPath = resolveCronJobsStorePathFromConfig(config);
               expect(cronPath).toBe(fixture.cronStorePath);
               const cron = await loadCronJobsStore(cronPath);
+              signal.throwIfAborted();
               expect(cron.jobs.find((job) => job.id === fixture.cronJob.id)).toMatchObject(
                 fixture.cronJob,
               );
               expect(getUserPreferences(fixture.controlUi.userId)).toMatchObject(
                 fixture.controlUi.settings,
               );
+              phase("model-inspection");
               for (const agentId of listAgentIds(config)) {
+                signal.throwIfAborted();
                 const lease = await acquireReadOnlyPreparedModelRuntime(
                   {
                     config,
@@ -264,27 +282,108 @@ export function defineStateStartupCorpusTests(fileUrl: string) {
                     pluginMetadataSnapshot: startup.pluginMetadataSnapshot,
                   },
                 );
+                const leaseErrors: unknown[] = [];
                 try {
+                  signal.throwIfAborted();
                   if (configName === "generic-github-token.json") {
                     expect(lease.snapshot.modelCatalog.entries).toEqual([]);
                   } else {
                     expect(lease.snapshot.modelCatalog.entries.length).toBeGreaterThan(0);
                   }
-                } finally {
-                  await lease[Symbol.asyncDispose]();
+                } catch (error) {
+                  leaseErrors.push(error);
+                }
+                try {
+                  await lifetime.verifyCleanup(() => lease[Symbol.asyncDispose]());
+                } catch (error) {
+                  leaseErrors.push(error);
+                }
+                if (leaseErrors.length === 1) {
+                  throw leaseErrors[0];
+                }
+                if (leaseErrors.length > 1) {
+                  throw new AggregateError(leaseErrors, "Model inspection and cleanup failed");
                 }
               }
-              await closeOpenClawAgentDatabasesAsync(stateDir);
-              closeOpenClawStateDatabase();
+              phase("database-close");
+              await lifetime.verifyCleanup(() => closeOpenClawAgentDatabasesAsync(stateDir));
+              await lifetime.verifyCleanup(() => closeOpenClawStateDatabaseAsync());
+              phase("database-integrity");
               assertDatabaseIntegrity(stateDir, fixture);
             }
-          } finally {
-            await closeOpenClawAgentDatabasesAsync(stateDir);
-            closeOpenClawStateDatabase();
+          });
+        } catch (error) {
+          diagnostics.report(signal.aborted ? "abort" : "failure");
+          errors.push(error);
+        }
+        for (const [stage, close] of [
+          ["agent-database-close", () => closeOpenClawAgentDatabasesAsync(stateDir)],
+          ["state-database-close", () => closeOpenClawStateDatabaseAsync()],
+          ["sqlite-worker-scope-close", () => scope.close()],
+        ] as const) {
+          diagnostics.stage(stage);
+          try {
+            await lifetime.verifyCleanup(close);
+          } catch (error) {
+            diagnostics.report(signal.aborted ? "abort" : "failure");
+            errors.push(error);
           }
-        });
-      },
-      120_000,
+        }
+        signal.removeEventListener("abort", onAbort);
+        if (errors.length === 1) {
+          throw errors[0];
+        }
+        if (errors.length > 1) {
+          throw new AggregateError(errors, "Startup corpus fixture and cleanup failed");
+        }
+      });
+    },
+    cleanup(): Promise<void> {
+      // A rejected drain abandons its local handles, not its ownership evidence.
+      // Retain that receipt so another hook or case cannot certify the lost join.
+      return (cleanupReceipt ??= lifetime.cleanup().then(() => {
+        for (const [key, value] of originalEnv) {
+          if (value === undefined) {
+            delete process.env[key];
+          } else {
+            process.env[key] = value;
+          }
+        }
+        originalEnv.clear();
+        cleanupReceipt = undefined;
+      }));
+    },
+  };
+  return corpusFixture;
+}
+
+export function defineStateStartupCorpusTests(fileUrl: string) {
+  const file = path
+    .relative(fileURLToPath(new URL("../../", import.meta.url)), fileURLToPath(fileUrl))
+    .split(path.sep)
+    .join("/");
+  const partition = stateStartupCorpusTestFiles.indexOf(file);
+  if (partition < 0) {
+    throw new Error(`Unregistered startup corpus file: ${file}`);
+  }
+  const cases = allCases.filter(
+    (_entry, index) => index % stateStartupCorpusTestFiles.length === partition,
+  );
+  const fixture = createStateStartupCorpusFixture();
+  afterEach(() => fixture.cleanup());
+
+  describe("prior-release state startup corpus", () => {
+    if (partition === 0) {
+      it("retains the previous stable and frozen fleet releases", () => {
+        expect(releases).toEqual(expect.arrayContaining(["2026.9.2", "2026.9.3-95f3ed9"]));
+      });
+    }
+
+    // These released snapshots retain POSIX cron partition keys, not Windows-native paths.
+    it.skipIf(process.platform === "win32").for(cases)(
+      "%s × %s preserves state through Doctor and Gateway startup",
+      { timeout: 120_000 },
+      ([release, configName], { signal }) => fixture.runCase(release, configName, signal),
     );
   });
 }

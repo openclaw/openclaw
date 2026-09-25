@@ -20,7 +20,7 @@ import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   resolveAgentDir,
-  resolveAgentEffectiveModelPrimary,
+  resolveNativeModelPrimary,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "./agent-scope.js";
@@ -36,6 +36,7 @@ import {
   createAgentRuntimeMetadataPluginIdScope,
   type AgentHarnessPluginSelection,
 } from "./harness/runtime-plugin-load-plan.js";
+import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
 import {
   applySecretRefHeaderSentinels,
   applyLocalNoAuthHeaderOverride,
@@ -55,7 +56,6 @@ import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
-import { resolveProviderModelRouteAuthRequirement } from "./provider-model-route-auth.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "./provider-runtime-auth-protection.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
@@ -124,7 +124,7 @@ function resolveSimpleCompletionSelectionRequest(
             : {}),
         })
       : undefined) ||
-    resolveAgentEffectiveModelPrimary(params.cfg, params.agentId);
+    resolveNativeModelPrimary(params.cfg, params.agentId);
   const split = modelRef ? splitTrailingAuthProfile(modelRef) : null;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
@@ -289,6 +289,10 @@ async function prepareSimpleCompletionModelCore(
         })
       : undefined;
     const resolveProfileAuthMode = (profileId: string) => authStore?.profiles[profileId]?.type;
+    const resolveProfileAuthFlow = (profileId: string) => {
+      const credential = authStore?.profiles[profileId];
+      return credential?.type === "oauth" ? credential.authFlow : undefined;
+    };
     const routeIntent = params.agentRuntimeId
       ? { runtimeId: params.agentRuntimeId, source: "explicit" as const }
       : resolveModelRouteIntent({
@@ -298,6 +302,7 @@ async function prepareSimpleCompletionModelCore(
           agentId: params.agentId,
           primaryModel,
           resolveProfileAuthMode,
+          resolveProfileAuthFlow,
         });
     const routeResolution = resolveOpenAIModelRoutes({
       provider: initialModel.provider,
@@ -308,9 +313,14 @@ async function prepareSimpleCompletionModelCore(
       agentId: params.agentId,
       routeIntent,
       resolveProfileAuthMode,
-      pinnedAuthRequirement: resolveProviderModelRouteAuthRequirement(
-        params.profileId ? authStore?.profiles[params.profileId]?.type : undefined,
-      ),
+      resolveProfileAuthFlow,
+      pinnedAuthRequirement: params.profileId
+        ? (resolveProviderModelAuthPolicy({
+            provider: initialModel.provider,
+            mode: resolveProfileAuthMode(params.profileId),
+            authFlow: resolveProfileAuthFlow(params.profileId),
+          }).authRequirement ?? undefined)
+        : undefined,
       env: process.env,
     });
     const preparedAuth =
@@ -459,6 +469,7 @@ async function prepareSimpleCompletionModelCore(
       apiRegistry: modelRuntime.apiRegistry,
       model: preparedModel,
       cfg: params.cfg,
+      auth: { mode: resolvedAuth.mode, authFlow: resolvedAuth.authFlow },
     }),
     providerRuntimeHandle,
   );

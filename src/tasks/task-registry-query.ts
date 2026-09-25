@@ -3,10 +3,12 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { filterCurrentTaskRunBackings } from "./task-backing-records.js";
-import { getTaskMirroredFlowIds } from "./task-flow-runtime-internal.js";
+import {
+  getTaskMirroredFlowIds,
+  prepareTaskFlowRegistryRead,
+} from "./task-flow-runtime-internal.js";
 import { clearTaskActivity } from "./task-registry-activity.js";
 import { isActiveTaskStatus } from "./task-registry-common.js";
-import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-flow-link.js";
 import { clearTaskFlowSyncRetries } from "./task-registry-flow-sync.js";
 import { resetTaskRegistryListenerState } from "./task-registry-listener-state.js";
@@ -14,6 +16,7 @@ import {
   createTaskRegistryReadPreparation,
   prepareTaskRegistryRead,
   prepareTaskRegistryReadOwner,
+  type TaskRegistryRead,
 } from "./task-registry-read.js";
 import {
   cloneTaskRecord,
@@ -24,14 +27,7 @@ import {
   pickPreferredRunIdTask,
   selectTaskRecordsForOwnerTree,
 } from "./task-registry-records.js";
-import {
-  TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY,
-  TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY,
-  controlRuntimeLoader,
-  deliveryRuntimeLoader,
-  type TaskRegistryDeliveryRuntime,
-  type TaskRegistryGlobalWithRuntimeOverrides,
-} from "./task-registry-runtime-loaders.js";
+import { controlRuntimeLoader, deliveryRuntimeLoader } from "./task-registry-runtime-loaders.js";
 import {
   withTaskRegistryMutation,
   bumpTaskRegistryRevision,
@@ -388,6 +384,31 @@ export function findTaskByRunId(runId: string): TaskRecord | undefined {
   return task ? cloneTaskRecord(task) : undefined;
 }
 
+/** Accepted task events and ACP backing facts are prepared before selecting a run. */
+export async function findTaskByRunIdAsync(
+  runId: string,
+  prepared?: TaskRegistryRead,
+): Promise<TaskRecord | undefined> {
+  const read = prepared ?? (await prepareTaskRegistryRead());
+  if (!read) {
+    throw new Error("Task lookup did not stabilize. Retry the status lookup.");
+  }
+  let matches = read.getTasksByRunId(runId);
+  const needsFlows = matches.some((task) => task.runtime === "acp" && task.childSessionKey?.trim());
+  const flows = needsFlows ? await prepareTaskFlowRegistryRead() : undefined;
+  if (needsFlows && !flows) {
+    throw new Error("Task backing lookup did not stabilize. Retry the status lookup.");
+  }
+  // Flow preparation can publish or replace task rows. Consume current admitted facts.
+  matches = read.getTasksByRunId(runId);
+  return pickPreferredRunIdTask(
+    filterCurrentTaskRunBackings(
+      matches,
+      (flowId) => flows?.getTaskFlowById(flowId)?.syncMode === "task_mirrored",
+    ),
+  );
+}
+
 export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
   ensureTaskRegistryReady();
   const key = normalizeOptionalString(ownerKey);
@@ -558,32 +579,4 @@ export function resetTaskRegistryForTests() {
   controlRuntimeLoader.clear();
   // Close the default SQLite handle too, even when a custom store was configured.
   getTaskRegistryStore().close?.();
-}
-
-export function resetTaskRegistryDeliveryRuntimeForTests() {
-  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
-    TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
-  ] = null;
-  deliveryRuntimeLoader.clear();
-}
-
-export function setTaskRegistryDeliveryRuntimeForTests(runtime: TaskRegistryDeliveryRuntime): void {
-  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
-    TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
-  ] = runtime;
-  deliveryRuntimeLoader.clear();
-}
-
-export function resetTaskRegistryControlRuntimeForTests() {
-  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
-    TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
-  ] = null;
-  controlRuntimeLoader.clear();
-}
-
-export function setTaskRegistryControlRuntimeForTests(runtime: TaskRegistryControlRuntime): void {
-  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
-    TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
-  ] = runtime;
-  controlRuntimeLoader.clear();
 }

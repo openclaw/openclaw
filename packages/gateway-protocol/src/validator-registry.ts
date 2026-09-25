@@ -91,7 +91,9 @@ export const validateWorkerLiveEventParams = compile(
   checkWorkerProtocolJson,
 );
 export const validateGatewaySuspendPrepareParams = compile(S.GatewaySuspendPrepareParamsSchema);
+export const validateGatewaySuspendPrepareResult = compile(S.GatewaySuspendPrepareResultSchema);
 export const validateGatewaySuspendStatusParams = compile(S.GatewaySuspendStatusParamsSchema);
+export const validateGatewaySuspendStatusResult = compile(S.GatewaySuspendStatusResultSchema);
 export const validateGatewaySuspendResumeParams = compile(S.GatewaySuspendResumeParamsSchema);
 export const validateGatewaySuspendHandoffParams = compile(S.GatewaySuspendHandoffParamsSchema);
 export const validateRequestFrame = compile(S.RequestFrameSchema);
@@ -119,6 +121,8 @@ export const validateMentionsListResult = compile(S.MentionsListResultSchema);
 export const validateMentionsChangedEvent = compile(S.MentionsChangedEventSchema);
 export const validateUsersPrefsGetParams = compile(S.UsersPrefsGetParamsSchema);
 export const validateUsersPrefsSetParams = compile(S.UsersPrefsSetParamsSchema);
+export const validateUsersPersonalFileGetParams = compile(S.UsersPersonalFileGetParamsSchema);
+export const validateUsersPersonalFileSetParams = compile(S.UsersPersonalFileSetParamsSchema);
 export const validateUsersSelfParams = compile(S.UsersSelfParamsSchema);
 export const validateUsersGitHubStatusParams = compile(S.UsersGitHubStatusParamsSchema);
 export const validateUsersGitHubAuthorizeStartParams = compile(
@@ -134,6 +138,24 @@ export const validateUsersGitHubDisconnectParams = compile(S.UsersGitHubDisconne
 export const validateUsersSelfResult = compile(S.UsersSelfResultSchema);
 export const validateUsersLinkEmailParams = compile(S.UsersLinkEmailParamsSchema);
 export const validateUsersLinkEmailResult = compile(S.UsersLinkEmailResultSchema);
+export const validateUsersLinkChannelIdentityParams = compile(
+  S.UsersLinkChannelIdentityParamsSchema,
+);
+export const validateUsersLinkChannelIdentityResult = compile(
+  S.UsersLinkChannelIdentityResultSchema,
+);
+export const validateUsersUnlinkChannelIdentityParams = compile(
+  S.UsersUnlinkChannelIdentityParamsSchema,
+);
+export const validateUsersUnlinkChannelIdentityResult = compile(
+  S.UsersUnlinkChannelIdentityResultSchema,
+);
+export const validateUsersListChannelIdentitiesParams = compile(
+  S.UsersListChannelIdentitiesParamsSchema,
+);
+export const validateUsersListChannelIdentitiesResult = compile(
+  S.UsersListChannelIdentitiesResultSchema,
+);
 export const validateUsersSetDisplayNameParams = compile(S.UsersSetDisplayNameParamsSchema);
 export const validateUsersSetDisplayNameResult = compile(S.UsersSetDisplayNameResultSchema);
 export const validateUsersSetRoleParams = compile(S.UsersSetRoleParamsSchema);
@@ -218,6 +240,9 @@ export const validateEnvironmentsStatusParams = compile(S.EnvironmentsStatusPara
 export const validatePortalListParams = compile(S.PortalListParamsSchema);
 export const validatePortalOpenParams = compile(S.PortalOpenParamsSchema);
 export const validatePortalCloseParams = compile(S.PortalCloseParamsSchema);
+export const validateSessionPortalListParams = compile(S.SessionPortalListParamsSchema);
+export const validateSessionPortalOpenParams = compile(S.SessionPortalOpenParamsSchema);
+export const validateSessionPortalCloseParams = compile(S.SessionPortalCloseParamsSchema);
 export const validateWorkerDesktopObserveParams = compile(S.WorkerDesktopObserveParamsSchema);
 export const validateWorkerDesktopObserveResult = compile(S.WorkerDesktopObserveResultSchema);
 export const validateWorkerDesktopLaunchParams = compile(S.WorkerDesktopLaunchParamsSchema);
@@ -323,6 +348,9 @@ export const validateSessionsAbortParams = compile(S.SessionsAbortParamsSchema);
 export const validateSessionsPatchParams = compile(S.SessionsPatchParamsSchema);
 export const validateSessionsGoalUpdateParams = compile(S.SessionsGoalUpdateParamsSchema);
 export const validateSessionsGoalClearParams = compile(S.SessionsGoalClearParamsSchema);
+export const validateSessionsProviderReviewContinueParams = compile(
+  S.SessionsProviderReviewContinueParamsSchema,
+);
 export const validateSessionsPatchManyParams = compile(S.SessionsPatchManyParamsSchema);
 export const validateSessionsPluginPatchParams = compile(S.SessionsPluginPatchParamsSchema);
 export const validateSessionsResetParams = compile(S.SessionsResetParamsSchema);

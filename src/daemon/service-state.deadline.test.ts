@@ -4,8 +4,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
-import { readGatewayServiceState } from "./service-state.js";
 import type { GatewayServiceCommandConfig } from "./service-types.js";
+import { readGatewayServiceState } from "./service.js";
 import { createMockGatewayService } from "./service.test-helpers.js";
 
 const command: GatewayServiceCommandConfig = {

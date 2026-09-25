@@ -1,7 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-/**
- * Tests for talk gateway methods that coordinate speech and audio providers.
- */
+/** Tests for talk gateway methods that coordinate speech and audio providers. */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -33,13 +31,14 @@ import type {
   RespondFn,
 } from "../../server-methods/types.js";
 import { bindSessionRowProjection } from "../../session-row-projection-access.js";
-import type { SessionRowProjection } from "../../session-row-projection.js";
 import { resolveSessionMutationAuthorization } from "../../session-sharing.js";
 import { prepareTalkAgentConsultTranscript } from "../agent-consult-transcript.js";
 import { buildTalkRealtimeConfig } from "../session-config.js";
+import { preparedTalkSessionProjection as projection } from "../test-helpers.js";
 import { forgetLegacyVoiceBinding } from "./client-legacy-voice-bindings.js";
 import { talkConfigAccentCases } from "./config-accent.test-support.js";
 import {
+  createTalkConfig,
   defineRealtimeConfigProjectionTests,
   type TalkConfigProjectionResponse,
 } from "./config-realtime.test-support.js";
@@ -111,7 +110,7 @@ const mocks = vi.hoisted(() => ({
     async (): Promise<string | undefined> => undefined,
   ),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-agent-workspace"),
-  readSessionPreviewItemsFromTranscript: vi.fn(() => [
+  readSessionPreviewItemsFromTranscriptAsync: vi.fn(() => [
     { role: "user", text: "Earlier question" },
     { role: "assistant", text: "Earlier answer" },
     { role: "tool", text: "internal tool output" },
@@ -216,7 +215,7 @@ vi.mock("../../../agents/agent-scope.js", async (importOriginal) => {
 });
 
 vi.mock("../../session-transcript-preview.js", () => ({
-  readSessionPreviewItemsFromTranscript: mocks.readSessionPreviewItemsFromTranscript,
+  readSessionPreviewItemsFromTranscriptAsync: mocks.readSessionPreviewItemsFromTranscriptAsync,
 }));
 
 vi.mock("../../../talk/client-voice-session.js", async (importOriginal) => {
@@ -239,7 +238,10 @@ vi.mock("../../server-methods/chat-send-handler.js", () => ({
 }));
 
 vi.mock("../../sessions-resolve.js", () => ({
-  resolveSessionKeyFromResolveParams: mocks.resolveSessionKeyFromResolveParams,
+  withPreparedSessionResolve: async (
+    { isCurrent: _isCurrent, ...params }: Record<string, unknown>,
+    consume: (result: unknown) => unknown,
+  ) => consume(mocks.resolveSessionKeyFromResolveParams(params)),
 }));
 
 vi.mock("../relay/index.js", async (importOriginal) => {
@@ -277,20 +279,6 @@ vi.mock("../transcription-relay.js", async (importOriginal) => {
     stopTalkTranscriptionRelaySession: mocks.stopTalkTranscriptionRelaySession,
   };
 });
-
-function createTalkConfig(apiKey: unknown): OpenClawConfig {
-  return {
-    talk: {
-      provider: "acme",
-      providers: {
-        acme: {
-          apiKey,
-          voiceId: "stub-default-voice",
-        },
-      },
-    },
-  } as OpenClawConfig;
-}
 
 type TalkHandlerCallOptions = {
   params: Record<string, unknown>;
@@ -2768,7 +2756,7 @@ describe("talk.session unified handlers", () => {
       respond: createRespond,
       context: {
         getRuntimeConfig: () => config,
-        ...bindSessionRowProjection({}, () => ({}) as SessionRowProjection),
+        ...bindSessionRowProjection({}, () => projection),
       },
     });
 
@@ -2777,7 +2765,7 @@ describe("talk.session unified handlers", () => {
       brain: "agent-consult",
     });
     expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
-      projection: {},
+      projection,
       client: { connId: "conn-1", connect: { scopes: ["operator.write"] } },
       p: {
         key: "agent:worker:subagent:child",
@@ -2809,7 +2797,7 @@ describe("talk.session unified handlers", () => {
       respond: createRespond,
       context: {
         getRuntimeConfig: () => config,
-        ...bindSessionRowProjection({}, () => ({}) as SessionRowProjection),
+        ...bindSessionRowProjection({}, () => projection),
       },
     });
 
@@ -2877,7 +2865,7 @@ describe("talk.session unified handlers", () => {
       respond: createRespond,
       context: {
         getRuntimeConfig: () => ({}) as OpenClawConfig,
-        ...bindSessionRowProjection({}, () => ({}) as SessionRowProjection),
+        ...bindSessionRowProjection({}, () => projection),
       },
     });
 
@@ -3529,7 +3517,7 @@ describe("talk.client.create handler", () => {
 
   it("uses talk.realtime provider, model, voice, and instructions without reading speech provider config", async () => {
     mocks.resolveRealtimeBootstrapContextInstructions.mockResolvedValue("Bounded profile context.");
-    mocks.readSessionPreviewItemsFromTranscript.mockReturnValueOnce([
+    mocks.readSessionPreviewItemsFromTranscriptAsync.mockReturnValueOnce([
       { role: "user", text: "0:old small item" },
       { role: "assistant", text: `1:${"🙂".repeat(799)}` },
       { role: "tool", text: "internal tool output" },
@@ -3648,7 +3636,7 @@ describe("talk.client.create handler", () => {
         assertCommitAllowed: expect.any(Function),
       }),
     );
-    expect(mocks.readSessionPreviewItemsFromTranscript).toHaveBeenCalledWith(
+    expect(mocks.readSessionPreviewItemsFromTranscriptAsync).toHaveBeenCalledWith(
       {
         agentId: "main",
         sessionId: "session-main",

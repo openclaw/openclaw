@@ -78,8 +78,6 @@ export {
 } from "./src/group-policy.js";
 export {
   allowListMatches,
-  normalizeAllowList,
-  normalizeAllowListLower,
   normalizeSlackAllowOwnerEntry,
   normalizeSlackSlug,
   resolveSlackAllowListMatch,
@@ -103,4 +101,9 @@ export {
   type SlackTargetParseOptions,
 } from "./src/targets.js";
 export { buildSlackThreadingToolContext } from "./src/threading-tool-context.js";
-export { resolveSlackRuntimeGroupPolicy } from "./src/monitor/provider.js";
+export { resolveOpenProviderRuntimeGroupPolicy as resolveSlackRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+
+export {
+  normalizeStringEntries as normalizeAllowList,
+  normalizeStringEntriesLower as normalizeAllowListLower,
+} from "openclaw/plugin-sdk/string-normalization-runtime";

@@ -142,7 +142,7 @@ suite.define(() => {
         await waitForControlUiSettingsTakeover(page);
         await gateway.waitForRequest("config.get");
 
-        const row = settingsRow(page, "Collapse task progress by default");
+        const row = settingsRow(page, "Collapse task progress by default on desktop");
         const toggle = row.locator("wa-switch");
         await row.scrollIntoViewIfNeeded();
         await expect

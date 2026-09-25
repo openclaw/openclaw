@@ -234,7 +234,12 @@ Manifest capability credentials use `configContracts.secretInputs` and authored
 SecretRefs. `getPreparedPluginSecretInput(pluginId, path)` from
 `openclaw/plugin-sdk/secret-input-runtime` reads only a prepared, available snapshot;
 it never resolves a cold reference or consults ambient environment credentials.
-Refresh with `secrets.reload`; capability failure does not retain an old key.
+Call it only from the plugin instance's active invocation. The helper is not a
+durable credential capability: quiescing or retiring that exact instance removes
+read authority immediately, even while already-admitted work is finishing. A
+provider must treat a missing value as unavailable and must not retain or reuse a
+previous value across reload. Refresh with `secrets.reload`; capability failure
+does not retain an old key.
 
 `plugins.inspect` reports configuration, credential readiness, current callability,
 last success, usage, latency, and bounded unavailable counts. Counts are
@@ -246,3 +251,10 @@ with `provider`, `id`, and `name`. Each provider must be owned by
 through a separate `models.list.decisionModels` projection; no provider runtime
 or credential probe runs to populate the picker. These entries never enter the
 chat, primary, fallback, or utility model catalogs.
+
+Optional model `capabilities` describe supported question types, input limits and
+their accounting scope, Boolean criteria requirements, and confidence semantics.
+The core `decision_evaluate` tool uses these same manifest facts for guidance;
+provider readiness does not change its definition. See the
+[manifest reference](/plugins/manifest/capabilities#decision-models-reference)
+for the bounded descriptor fields.

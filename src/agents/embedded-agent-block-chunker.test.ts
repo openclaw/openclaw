@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import * as fences from "../../packages/markdown-core/src/fences.js";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import { agentProcessTestEntrypoints } from "./process-runtime.test-support.js";
 
 function createFlushOnParagraphChunker(params: { minChars: number; maxChars: number }) {
   return new EmbeddedBlockChunker({
@@ -218,16 +221,16 @@ describe("EmbeddedBlockChunker", () => {
     "completes Unicode code followed by a long whitespace run (force: %s)",
     async (force) => {
       // A synchronous stalled drain needs an external deadline, not Vitest's in-process timer.
+      const chunkerUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.blockChunker);
       const result = await runNodeScript(
         [
-          "--import",
-          new URL("../../scripts/tsx.mjs", import.meta.url).href,
+          ...resolveRuntimeWorkerArgv(chunkerUrl, resolveTestNodeExecPath()).slice(0, -1),
           "--input-type=module",
           "--eval",
           `
             import assert from "node:assert/strict";
-            import { EmbeddedBlockChunker } from ${JSON.stringify(new URL("./embedded-agent-block-chunker.ts", import.meta.url).href)};
-            import { markdownToIR } from ${JSON.stringify(new URL("../../packages/markdown-core/src/ir.ts", import.meta.url).href)};
+            import { EmbeddedBlockChunker } from ${JSON.stringify(chunkerUrl.href)};
+            import { markdownToIR } from ${JSON.stringify(resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.markdownIr).href)};
             const body = "A".repeat(52) + "\\u{1f600}" + " ".repeat(60) + "B";
             const source = "    " + body;
             const chunker = new EmbeddedBlockChunker({ minChars: 10, maxChars: 60 });

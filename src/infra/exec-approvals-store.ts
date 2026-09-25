@@ -158,6 +158,13 @@ export function loadExecApprovalsReadOnly(): ExecApprovalsFile {
 export async function loadExecApprovalsReadOnlyAsync(
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
 ): Promise<ExecApprovalsFile> {
+  return (await readExecApprovalsPolicyReadOnlyAsync(options)).file;
+}
+
+/** The revision includes the physical policy owner; unavailable reads cannot seed caches. */
+export async function readExecApprovalsPolicyReadOnlyAsync(
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+): Promise<{ file: ExecApprovalsFile; revision?: string }> {
   const stateDbPath = resolveDatabasePath(options);
   const owner = {
     path: stateDbPath,
@@ -169,18 +176,19 @@ export async function loadExecApprovalsReadOnlyAsync(
     if (reply && (!reply.ok || reply.type !== "exec-approvals.read")) {
       throw new Error("Unexpected exec approvals read result");
     }
-    return snapshotFromExecApprovalsRow({
+    const snapshot = snapshotFromExecApprovalsRow({
       path: resolveExecApprovalsDisplayPath(owner.env),
       row: reply?.row,
       onMalformed: () =>
         warnFailClosed("exec approvals SQLite row is malformed; denying host execution"),
-    }).file;
+    });
+    return { file: snapshot.file, revision: JSON.stringify([stateDbPath, snapshot.hash]) };
   } catch (error) {
     if (error instanceof ExecApprovalsMigrationRequiredError) {
       throw error;
     }
     warnFailClosed("exec approvals SQLite state is unavailable; denying host execution", error);
-    return createFailClosedExecApprovalsFallback();
+    return { file: createFailClosedExecApprovalsFallback() };
   }
 }
 

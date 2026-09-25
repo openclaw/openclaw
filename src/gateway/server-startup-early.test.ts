@@ -292,6 +292,24 @@ describe("startGatewayEarlyRuntime", () => {
     expect(mocks.refreshRemoteBinsForConnectedNodes).not.toHaveBeenCalled();
   });
 
+  it("does not probe remote bins or broadcast for restored watch coverage", async () => {
+    const broadcast = vi.fn();
+    const setSkillsRefreshTimer = vi.fn();
+    const earlyRuntime = await startGatewayEarlyRuntime(
+      earlyRuntimeInput({ minimalTestGateway: false, broadcast, setSkillsRefreshTimer }),
+    );
+    try {
+      const listener = mocks.registerSkillsChangeListener.mock.calls.at(-1)?.[0];
+      expect(listener).toEqual(expect.any(Function));
+      listener({ reason: "watch-available" });
+      expect(setSkillsRefreshTimer).not.toHaveBeenCalled();
+      expect(mocks.refreshRemoteBinsForConnectedNodes).not.toHaveBeenCalled();
+      expect(broadcast).not.toHaveBeenCalled();
+    } finally {
+      await earlyRuntime.skillsChangeUnsub();
+    }
+  });
+
   it("broadcasts local skill changes after the coalesced remote-bin refresh", async () => {
     vi.useFakeTimers();
     const broadcast = vi.fn();
@@ -423,7 +441,7 @@ describe("early startup task maintenance", () => {
     await maintenance.stopTaskRegistryMaintenance();
     vi.useRealTimers();
     resetDetachedTaskLifecycleRuntimeForTests();
-    maintenance.resetTaskRegistryMaintenanceRuntimeForTests();
+    maintenance.configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     await drainGlobalSingletonLifecycleState("close");

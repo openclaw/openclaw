@@ -31,7 +31,7 @@ function resolveChannelStatus(
   key: ChannelKey,
   props: ChannelsProps,
 ): Record<string, unknown> | undefined {
-  const channels = props.snapshot?.channels;
+  const channels = props.channels.channelsSnapshot?.channels;
   return channels && Object.hasOwn(channels, key)
     ? (asNullableRecord(channels[key]) ?? undefined)
     : undefined;
@@ -41,8 +41,8 @@ function resolveDefaultChannelAccount(
   key: ChannelKey,
   props: ChannelsProps,
 ): ChannelAccountSnapshot | null {
-  const accounts = resolveChannelAccounts(props.snapshot?.channelAccounts, key);
-  const defaultAccountIds = props.snapshot?.channelDefaultAccountId;
+  const accounts = resolveChannelAccounts(props.channels.channelsSnapshot?.channelAccounts, key);
+  const defaultAccountIds = props.channels.channelsSnapshot?.channelDefaultAccountId;
   const defaultAccountId =
     defaultAccountIds && Object.hasOwn(defaultAccountIds, key) ? defaultAccountIds[key] : undefined;
   return (
@@ -79,7 +79,7 @@ export function resolveChannelDisplayState(
 }
 
 export function channelEnabled(key: ChannelKey, props: ChannelsProps) {
-  return channelSnapshotEntryIsActive(props.snapshot, key);
+  return channelSnapshotEntryIsActive(props.channels.channelsSnapshot, key);
 }
 
 export function resolveChannelConfigured(key: ChannelKey, props: ChannelsProps): boolean | null {

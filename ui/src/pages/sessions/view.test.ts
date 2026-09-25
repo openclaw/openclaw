@@ -3,87 +3,8 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
-import type { SessionsListResult } from "../../api/types.ts";
-import { renderSessions, type SessionsProps } from "./view.ts";
-
-function buildResult(
-  session: SessionsListResult["sessions"][number],
-  defaults?: Partial<SessionsListResult["defaults"]>,
-): SessionsListResult {
-  return {
-    ts: Date.now(),
-    path: "(multiple)",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null, ...defaults },
-    sessions: [session],
-  };
-}
-
-function buildMultiResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
-  return {
-    ts: Date.now(),
-    path: "(multiple)",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
-}
-
-function buildProps(result: SessionsListResult): SessionsProps {
-  return {
-    loading: false,
-    refreshing: false,
-    agentId: "main",
-    mainKey: "main",
-    result,
-    error: null,
-    activeMinutes: "",
-    limit: "120",
-    includeGlobal: false,
-    includeUnknown: false,
-    statusFilter: "active",
-    basePath: "",
-    searchQuery: "",
-    transcriptSearchAvailable: true,
-    transcriptSearchQuery: "",
-    transcriptSearch: { status: "idle" },
-    agentIdentityById: {},
-    sortColumn: "updated",
-    sortDir: "desc",
-    groupBy: "none",
-    personGroupingAvailable: true,
-    knownCategories: [],
-    page: 0,
-    pageSize: 10,
-    selectedKeys: new Set<string>(),
-    sessionMenu: null,
-    expandedSessionKey: null,
-    onFiltersChange: () => undefined,
-    onClearFilters: () => undefined,
-    onSearchChange: () => undefined,
-    onTranscriptSearchChange: () => undefined,
-    onTranscriptSearch: () => undefined,
-    onClearTranscriptSearch: () => undefined,
-    onSortChange: () => undefined,
-    onGroupByChange: () => undefined,
-    onAssignCategory: () => undefined,
-    onRequestNewCategory: () => undefined,
-    onLoadMore: () => undefined,
-    onPageChange: () => undefined,
-    onPageSizeChange: () => undefined,
-    onRefresh: () => undefined,
-    onStatusFilterChange: () => undefined,
-    onDeleteAllArchived: () => undefined,
-    onPatch: () => undefined,
-    onToggleSelect: () => undefined,
-    onSelectPage: () => undefined,
-    onDeselectPage: () => undefined,
-    onDeselectAll: () => undefined,
-    onDeleteSelected: () => undefined,
-    onOpenSessionMenu: () => undefined,
-    onToggleDetails: () => undefined,
-  };
-}
+import { buildMultiResult, buildProps, buildResult } from "./view.test-support.ts";
+import { renderSessions } from "./view.ts";
 
 function readSessionDetailStats(container: ParentNode): Map<string, string> {
   return new Map(
@@ -318,121 +239,6 @@ describe("sessions view", () => {
     );
   });
 
-  it("keeps transcript search distinct from the loaded-roster filter", async () => {
-    const container = document.createElement("div");
-    const onTranscriptSearchChange = vi.fn();
-    const onTranscriptSearch = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(buildMultiResult([])),
-        searchQuery: "agent label",
-        transcriptSearchQuery: "  exact phrase  ",
-        onTranscriptSearchChange,
-        onTranscriptSearch,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const rosterFilter = container.querySelector<HTMLInputElement>(
-      '.sessions-filter-bar input[type="text"]',
-    );
-    const transcriptInput = container.querySelector<HTMLInputElement>(
-      '.sessions-transcript-search input[type="search"]',
-    );
-    expect(rosterFilter?.value).toBe("agent label");
-    expect(transcriptInput?.value).toBe("  exact phrase  ");
-
-    transcriptInput!.value = "different words";
-    transcriptInput!.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onTranscriptSearchChange).toHaveBeenCalledWith("different words");
-    expect(onTranscriptSearch).not.toHaveBeenCalled();
-
-    container
-      .querySelector(".sessions-transcript-search__form")
-      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    expect(onTranscriptSearch).toHaveBeenCalledOnce();
-  });
-
-  it("renders transcript provenance and opens the matching session", async () => {
-    const container = document.createElement("div");
-    const onNavigateToChat = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            {
-              key: "agent:main:launch",
-              kind: "direct",
-              label: "Launch planning",
-              updatedAt: Date.parse("2026-07-12T12:00:00.000Z"),
-            },
-          ]),
-        ),
-        transcriptSearchQuery: "launch code",
-        transcriptSearch: {
-          status: "results",
-          sessions: [{ key: "agent:main:launch", kind: "direct", label: "Launch planning" }],
-          results: [
-            {
-              sessionKey: "agent:main:launch",
-              sessionId: "session-launch",
-              messageId: "message-1",
-              role: "assistant",
-              timestamp: Date.parse("2026-07-12T12:00:00.000Z"),
-              snippet: "The <launch code> is ready.",
-              score: 1,
-            },
-          ],
-          indexing: true,
-          truncated: true,
-          archivedTranscriptsExcluded: 0,
-        },
-        onNavigateToChat,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const result = container.querySelector<HTMLButtonElement>(
-      ".sessions-transcript-search__result",
-    );
-    expect(result?.textContent).toContain("Launch planning");
-    expect(result?.textContent).toContain("Assistant");
-    expect(result?.textContent).toContain("The <launch code> is ready.");
-    expect(result?.querySelector("launch")).toBeNull();
-    expect(container.textContent).toContain("The transcript index is still updating");
-    expect(container.textContent).toContain("Showing the first 25 matches.");
-
-    result?.click();
-    expect(onNavigateToChat).toHaveBeenCalledWith("agent:main:launch");
-  });
-
-  it("disables transcript search when the Gateway does not advertise it", async () => {
-    const container = document.createElement("div");
-    const onTranscriptSearch = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(buildMultiResult([])),
-        transcriptSearchAvailable: false,
-        transcriptSearchQuery: "hidden",
-        onTranscriptSearch,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    expect(
-      container.querySelector<HTMLInputElement>('.sessions-transcript-search input[type="search"]')
-        ?.disabled,
-    ).toBe(true);
-    expect(container.textContent).toContain("Transcript search requires a newer Gateway.");
-    container
-      .querySelector(".sessions-transcript-search__form")
-      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    expect(onTranscriptSearch).not.toHaveBeenCalled();
-  });
-
   it("renders Active, Archived, and All status segments", async () => {
     const container = document.createElement("div");
     const onStatusFilterChange = vi.fn();
@@ -644,106 +450,6 @@ describe("sessions view", () => {
     expect(container.querySelector(".session-group-row")).toBeNull();
   });
 
-  it("assigns custom groups from the group cell and header drop targets", async () => {
-    const container = document.createElement("div");
-    const onAssignCategory = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            { key: "agent:main:discord:channel:1", kind: "group", updatedAt: 2 },
-            { key: "agent:main:main", kind: "direct", updatedAt: 1, category: "Research" },
-          ]),
-        ),
-        groupBy: "category",
-        knownCategories: ["Research"],
-        onAssignCategory,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const headers = Array.from(container.querySelectorAll(".session-group-row__label")).map((el) =>
-      el.textContent?.trim(),
-    );
-    expect(headers).toEqual(["Research", "Ungrouped"]);
-
-    // Rows render in group order: Research (agent:main:main) first, then Ungrouped (discord).
-    const select = container.querySelectorAll<HTMLSelectElement>(
-      'select[aria-label="Move session to a group"]',
-    )[1];
-    if (!select) {
-      throw new Error("Expected group select");
-    }
-    select.value = "Research";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onAssignCategory).toHaveBeenCalledWith("agent:main:discord:channel:1", "Research");
-
-    const headerRow = container.querySelector(".session-group-row");
-    if (!headerRow) {
-      throw new Error("Expected group header row");
-    }
-    const dropWithPayload = (types: string[], data: Record<string, string>) => {
-      const drop = new Event("drop", { bubbles: true, cancelable: true });
-      Object.defineProperty(drop, "dataTransfer", {
-        value: { types, getData: (type: string) => data[type] ?? "" },
-      });
-      headerRow.dispatchEvent(drop);
-    };
-
-    // Generic text drags (e.g. selected page text) must not trigger patches.
-    dropWithPayload(["text/plain"], { "text/plain": "not-a-session" });
-    expect(onAssignCategory).toHaveBeenCalledTimes(1);
-
-    dropWithPayload(["application/x-openclaw-session-key"], {
-      "application/x-openclaw-session-key": "agent:main:main",
-    });
-    expect(onAssignCategory).toHaveBeenCalledWith("agent:main:main", "Research");
-  });
-
-  it("disables category assignment controls without group write access", async () => {
-    const container = document.createElement("div");
-    const onAssignCategory = vi.fn();
-    const reason = "Operator write access is required.";
-    render(
-      renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            { key: "agent:main:main", kind: "direct", updatedAt: 1, category: "Research" },
-          ]),
-        ),
-        groupBy: "category",
-        knownCategories: ["Research"],
-        groupWriteDisabledReason: reason,
-        onAssignCategory,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const select = container.querySelector<HTMLSelectElement>(
-      'select[aria-label="Move session to a group"]',
-    );
-    expect(select?.disabled).toBe(true);
-    expect(select?.title).toBe(reason);
-    if (select) {
-      select.value = "";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-
-    const headerRow = container.querySelector(".session-group-row");
-    const drop = new Event("drop", { bubbles: true, cancelable: true });
-    Object.defineProperty(drop, "dataTransfer", {
-      value: {
-        types: ["application/x-openclaw-session-key"],
-        getData: () => "agent:main:main",
-      },
-    });
-    headerRow?.dispatchEvent(drop);
-
-    expect(onAssignCategory).not.toHaveBeenCalled();
-  });
-
   it("opens the session menu from the kebab and row context-menu shortcuts", async () => {
     const container = document.createElement("div");
     const onOpenSessionMenu = vi.fn();
@@ -874,6 +580,8 @@ describe("sessions view", () => {
     const trigger = toolbar?.querySelector<HTMLButtonElement>(".sessions-filter-popover__trigger");
     const popover = toolbar?.querySelector("wa-popover");
     const panel = popover?.querySelector(".sessions-filter-popover__panel");
+    expect(toolbar?.getAttribute("role")).toBe("group");
+    expect(toolbar?.getAttribute("aria-label")).toBe("Session filters");
     expect(toolbar?.querySelector(".sessions-view-segment")).not.toBeNull();
     expect(trigger?.textContent?.trim()).toBe("");
     expect(trigger?.getAttribute("aria-label")).toBe("Filters");
@@ -1224,51 +932,6 @@ describe("sessions view", () => {
         (badge) => (badge.parentElement as (HTMLElement & { content: string }) | null)?.content,
       ),
     ).toEqual(["Status: Queued", "Status: Live", "Status: Idle", "Status: Failed", "Status: Done"]);
-  });
-
-  it("renders session goals in the status cell", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:goal",
-            kind: "direct",
-            updatedAt: 20,
-            hasActiveRun: true,
-            status: "running",
-            goal: {
-              schemaVersion: 1,
-              id: "goal-1",
-              objective: "Ship the web goal indicator",
-              status: "active",
-              createdAt: 1,
-              updatedAt: 2,
-              tokenStart: 100,
-              tokensUsed: 12_400,
-              tokenBudget: 50_000,
-              continuationTurns: 0,
-            },
-          }),
-        ),
-        searchQuery: "web goal",
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const statuses = container.querySelectorAll(".session-status-stack .settings-status");
-    const goal = statuses[1];
-    expect(goal?.textContent?.replace(/\s+/g, " ").trim()).toBe("Pursuing goal (12k/50k)");
-    // The wrapper span exposes the objective to keyboard/screen-reader users.
-    const wrapper = goal?.parentElement;
-    expect(wrapper?.getAttribute("tabindex")).toBe("0");
-    expect(wrapper?.getAttribute("aria-label")).toBe(
-      "Pursuing goal (12k/50k): Ship the web goal indicator",
-    );
-    const tooltip = wrapper?.parentElement as (HTMLElement & { content: string }) | null;
-    expect(tooltip?.content).toBe("Pursuing goal (12k/50k): Ship the web goal indicator");
-    expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
   });
 
   it("renders the effective runtime including fallback in the details drawer", async () => {

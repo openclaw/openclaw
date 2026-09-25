@@ -44,14 +44,13 @@ import type { ToolResultPromptProjectionState } from "../session-prompt-state.js
 import {
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStream,
+  selectEmbeddedAgentStream,
 } from "../stream-resolution.js";
 import type { ProviderThinkLevel } from "../utils.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
 import {
   shouldWaitForCompletionRequiredAsyncTasks,
   waitForCompletionRequiredAsyncTasks,
-  type CompletionRequiredAsyncTaskWaitResult,
 } from "./attempt-async-tasks.js";
 import {
   buildContextEnginePromptCacheInfo,
@@ -75,6 +74,7 @@ import {
 import { selectCompactionTimeoutSnapshot } from "./compaction-timeout.js";
 import { materializeProviderContext } from "./images.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
+import { wrapStreamFnWithProviderReviewContinuation } from "./provider-review-continuation.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /**
@@ -138,67 +138,61 @@ export async function settleEmbeddedAttemptStream(input: {
   const { attempt, activeSession, sessionManager, subscription, state } = input;
   let { promptError, promptErrorSource, sessionIdUsed } = state;
 
-  if (
-    shouldWaitForCompletionRequiredAsyncTasks({
-      sessionKey: attempt.sessionKey,
-      toolMetas: subscription.toolMetas,
-      yieldDetected: state.yieldAborted,
-    })
-  ) {
-    const getAsyncStartedToolMetas = () =>
-      subscription.toolMetas
-        .filter(
-          (
-            entry,
-          ): entry is {
-            toolName: string;
-            asyncStarted?: boolean;
-            asyncTaskRunId?: string;
-            asyncTaskId?: string;
-          } => typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
-        )
-        .map((entry) => ({
-          toolName: entry.toolName,
-          asyncStarted: entry.asyncStarted,
-          asyncTaskRunId: entry.asyncTaskRunId,
-          asyncTaskId: entry.asyncTaskId,
-        }));
-    const getAsyncTaskDeadlineAtMs = () => {
-      const deadlineAtMs = input.getRunAbortDeadlineAtMs();
-      return deadlineAtMs === undefined ? undefined : Math.max(Date.now(), deadlineAtMs - 500);
-    };
-    let asyncTaskWait: CompletionRequiredAsyncTaskWaitResult;
-    try {
-      asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
+  try {
+    if (
+      await shouldWaitForCompletionRequiredAsyncTasks({
+        sessionKey: attempt.sessionKey,
+        toolMetas: subscription.toolMetas,
+        yieldDetected: state.yieldAborted,
+        abortSignal: input.runAbortSignal,
+      })
+    ) {
+      const getAsyncStartedToolMetas = () =>
+        subscription.toolMetas
+          .filter(
+            (
+              entry,
+            ): entry is {
+              toolName: string;
+              asyncStarted?: boolean;
+              asyncTaskRunId?: string;
+              asyncTaskId?: string;
+            } => typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
+          )
+          .map((entry) => ({
+            toolName: entry.toolName,
+            asyncStarted: entry.asyncStarted,
+            asyncTaskRunId: entry.asyncTaskRunId,
+            asyncTaskId: entry.asyncTaskId,
+          }));
+      const getAsyncTaskDeadlineAtMs = () => {
+        const deadlineAtMs = input.getRunAbortDeadlineAtMs();
+        return deadlineAtMs === undefined ? undefined : Math.max(Date.now(), deadlineAtMs - 500);
+      };
+      const asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
         getToolMetas: getAsyncStartedToolMetas,
         sessionKey: attempt.sessionKey,
         getDeadlineAtMs: getAsyncTaskDeadlineAtMs,
         abortSignal: input.runAbortSignal,
       });
-    } catch (err) {
-      // Timeouts AND user aborts must still settle so the attempt reaches
-      // after-turn (transcript flush, agent-end side effects). Rethrowing here
-      // unwinds the whole lane task and silently starves every agent_end
-      // consumer for aborted runs.
-      const lifecycle = input.readLifecycleState();
-      if ((!lifecycle.timedOut && !lifecycle.aborted) || !isRunnerAbortError(err)) {
-        throw err;
+      // An aborted run legitimately leaves async tasks unfinished; stamping a
+      // timeout failure here would reclassify the abort as an errored completion.
+      if (asyncTaskWait.timedOutRunIds.length > 0 && !input.readLifecycleState().aborted) {
+        promptError = new Error(
+          `Timed out waiting for async task completion: ${asyncTaskWait.timedOutRunIds.join(", ")}`,
+        );
+        promptErrorSource = "prompt";
+        state.promptError = promptError;
+        state.promptErrorSource = promptErrorSource;
       }
-      asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
-        getToolMetas: getAsyncStartedToolMetas,
-        sessionKey: attempt.sessionKey,
-        getDeadlineAtMs: Date.now,
-      });
     }
-    // An aborted run legitimately leaves async tasks unfinished; stamping a
-    // timeout failure here would reclassify the abort as an errored completion.
-    if (asyncTaskWait.timedOutRunIds.length > 0 && !input.readLifecycleState().aborted) {
-      promptError = new Error(
-        `Timed out waiting for async task completion: ${asyncTaskWait.timedOutRunIds.join(", ")}`,
-      );
-      promptErrorSource = "prompt";
-      state.promptError = promptError;
-      state.promptErrorSource = promptErrorSource;
+  } catch (err) {
+    // Cancelled task observation must still reach after-turn settlement. The
+    // lifecycle owner already records timeout versus user abort; another read
+    // here could wait indefinitely behind the same database coordinator.
+    const lifecycle = input.readLifecycleState();
+    if ((!lifecycle.timedOut && !lifecycle.aborted) || !isRunnerAbortError(err)) {
+      throw err;
     }
   }
 
@@ -479,6 +473,10 @@ export async function prepareEmbeddedAttemptTransport(input: {
     ...attempt.streamParams,
     fastMode: attempt.fastMode,
   };
+  const selectedAuth = attempt.runtimePlan?.auth;
+  const auth = selectedAuth?.selectedAuthMode
+    ? { mode: selectedAuth.selectedAuthMode, authFlow: selectedAuth.selectedAuthFlow }
+    : undefined;
   const preparedRuntimeExtraParams = attempt.runtimePlan?.transport.resolveExtraParams({
     extraParamsOverride: streamExtraParamsOverride,
     thinkingLevel: input.providerThinkingLevel,
@@ -501,12 +499,14 @@ export async function prepareEmbeddedAttemptTransport(input: {
       workspaceDir: input.workspaceDir,
       model: attempt.model,
       resolvedTransport,
+      auth,
     });
   const providerStreamFn = registerProviderStreamForModel({
     model: attempt.model,
     cfg: attempt.config,
     agentDir: input.agentDir,
     workspaceDir: input.workspaceDir,
+    auth,
   });
   const directProviderStreamFn = providerStreamFn
     ? wrapStreamFnWithMessageTransform(
@@ -539,7 +539,11 @@ export async function prepareEmbeddedAttemptTransport(input: {
     resolvedApiKey: attempt.resolvedApiKey,
     authStorage: attempt.authStorage,
   });
-  const { streamFn, strategy: streamStrategy } = resolveEmbeddedAgentStream({
+  const {
+    streamFn,
+    strategy: streamStrategy,
+    wrapApiKey,
+  } = selectEmbeddedAgentStream({
     currentStreamFn: defaultSessionStreamFn,
     providerStreamFn: directProviderStreamFn,
     sessionId: attempt.sessionId,
@@ -558,6 +562,15 @@ export async function prepareEmbeddedAttemptTransport(input: {
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({
     streamFn: session.agent.streamFn,
     ...input.providerPromptState,
+  });
+  session.agent.streamFn = wrapStreamFnWithProviderReviewContinuation({
+    streamFn: session.agent.streamFn,
+    acknowledgment: attempt.providerReviewAcknowledgment,
+    runId: attempt.runId,
+    assertCurrent: () => {
+      input.abortSignal.throwIfAborted();
+      assertRunCurrent?.();
+    },
   });
   const providerTextTransforms = resolveProviderTextTransforms({
     provider: attempt.provider,
@@ -609,6 +622,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     resolvedTransport,
     {
       preparedExtraParams: effectiveExtraParams,
+      auth,
       nativeWebSearchPolicyContext,
     },
   );
@@ -654,6 +668,9 @@ export async function prepareEmbeddedAttemptTransport(input: {
       return baseStreamFn(model, context, requestOptions);
     };
   }
+  // Agent turns carry no credential, and provider wrappers classify auth from
+  // options.apiKey (for example Anthropic OAuth identity), so attach it outermost.
+  session.agent.streamFn = wrapApiKey(session.agent.streamFn);
   return {
     serverToolClearingEnabled,
     compactionReplayEnabled: resolveCompactionReplayEligibility(attempt.model, {

@@ -116,8 +116,13 @@ vi.mock("./clack-navigation-prompts.js", () => ({
   textWithNavigationFooter: navigationPromptMocks.textWithNavigationFooter,
 }));
 
+import {
+  stylePromptHint,
+  stylePromptMessage,
+} from "../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { createClackPrompter, tokenizedOptionFilter } from "./clack-prompter.js";
+import type { WizardSelectOption } from "./prompts.js";
 import { WizardCancelledError, WizardNavigationError } from "./prompts.js";
 
 afterEach(() => {
@@ -424,6 +429,76 @@ describe("createClackPrompter", () => {
         navigation: { canGoBack: true, canGoForward: false },
       }),
     );
+  });
+
+  describe.each(["select", "multiselect"] as const)("%s request routing", (method) => {
+    it.each([
+      { searchable: false, withNavigation: false },
+      { searchable: true, withNavigation: false },
+      { searchable: false, withNavigation: true },
+      { searchable: true, withNavigation: true },
+    ])("preserves request values for %j", async ({ searchable, withNavigation }) => {
+      const value = Symbol("clack:cancel");
+      const objectValue = { id: "object-option" };
+      const options: WizardSelectOption<symbol | typeof objectValue>[] = [
+        { value, label: "Symbol option" },
+        { value: objectValue, label: "Object option", hint: "object hint" },
+      ];
+      const initialValues = [value, objectValue];
+      const navigation = withNavigation ? { canGoBack: false, canGoForward: false } : undefined;
+      const backend = withNavigation
+        ? method === "select"
+          ? searchable
+            ? navigationPromptMocks.autocompleteWithNavigationFooter
+            : navigationPromptMocks.selectWithNavigationFooter
+          : searchable
+            ? navigationPromptMocks.autocompleteMultiselectWithNavigationFooter
+            : navigationPromptMocks.multiselectWithNavigationFooter
+        : method === "select"
+          ? searchable
+            ? clackMocks.autocomplete
+            : clackMocks.select
+          : searchable
+            ? clackMocks.autocompleteMultiselect
+            : clackMocks.multiselect;
+      const params = { message: "Pick options", options, searchable, navigation };
+      const owner = new AbortController();
+      const prompter = createClackPrompter(process.stderr, owner.signal);
+      const run = () =>
+        method === "select"
+          ? prompter.select({ ...params, initialValue: value })
+          : prompter.multiselect({ ...params, initialValues });
+      const selected = method === "select" ? value : initialValues;
+      backend.mockResolvedValueOnce(selected);
+
+      await expect(run()).resolves.toBe(selected);
+      expect(backend).toHaveBeenCalledOnce();
+      const request = backend.mock.calls[0]?.[0];
+      expect(request).toEqual({
+        message: stylePromptMessage(params.message),
+        options: [options[0], { ...options[1], hint: stylePromptHint("object hint") }],
+        ...(method === "select" ? { initialValue: value } : { initialValues }),
+        ...(searchable ? { filter: tokenizedOptionFilter } : {}),
+        signal: expect.any(AbortSignal),
+        ...(navigation ? { navigation } : {}),
+        output: process.stderr,
+      });
+      expect(request.options[0]).toBe(options[0]);
+      expect(request.options[1].value).toBe(objectValue);
+      expect(options[1]?.hint).toBe("object hint");
+      if (method === "multiselect") {
+        expect(request.initialValues).toBe(initialValues);
+      }
+      expect(request.signal.aborted).toBe(false);
+      expect(clackMocks.settings.actions).toEqual(new Set(["left", "right"]));
+      owner.abort();
+      expect(request.signal.aborted).toBe(true);
+      expect(clackMocks.cancel).not.toHaveBeenCalled();
+
+      backend.mockResolvedValueOnce(CANCEL_SYMBOL);
+      await expect(run()).rejects.toBeInstanceOf(WizardCancelledError);
+      expect(clackMocks.cancel).not.toHaveBeenCalled();
+    });
   });
 
   it("passes abort signals to navigation-aware confirms", async () => {

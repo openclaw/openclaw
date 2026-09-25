@@ -99,7 +99,7 @@ describe("requester MCP connect runtime", () => {
 
   afterEach(async () => {
     await manager.disposeAll();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   it("materializes connect before authorization and real tools on the next message", async () => {

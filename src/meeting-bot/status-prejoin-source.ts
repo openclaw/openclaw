@@ -35,21 +35,17 @@ export function createMeetingStatusPreludeSource(
   params: MeetingStatusPreludeParams,
   options: MeetingStatusPreludeSourceOptions,
 ): string {
-  const selectors = params.selectors;
-  const expectedIdentity = params.expectedIdentity;
-  const toggleStateFunction = params.toggleStateFunction;
-  const pageIdentityFunctionSource = () => params.pageIdentitySource;
   const audioOutputsGlobal = JSON.stringify(options.platform.globals.audioOutputs);
   const captionArchiveGlobal = JSON.stringify(options.platform.globals.captionArchive);
   const captionsGlobal = JSON.stringify(options.platform.globals.captions);
   const meetingGlobal = JSON.stringify(options.platform.globals.meeting);
   const transcriptMaxLines = options.transcriptMaxLines ?? 500;
   return `async () => {
-  ${pageIdentityFunctionSource()}
+  ${params.pageIdentitySource}
   ${options.setupSource ?? ""}
-  const parseToggleState = ${toggleStateFunction};
-  const selectors = ${selectors};
-  const expectedIdentity = ${JSON.stringify(expectedIdentity)};
+  const parseToggleState = ${params.toggleStateFunction};
+  const selectors = ${params.selectors};
+  const expectedIdentity = ${JSON.stringify(params.expectedIdentity)};
   const allowMicrophone = ${JSON.stringify(params.allowMicrophone)};
   const allowSessionAdoption = ${JSON.stringify(params.allowSessionAdoption)};
   const autoJoin = ${JSON.stringify(params.autoJoin)};

@@ -18,26 +18,43 @@ type UncaughtExceptionHandler = (error: unknown) => boolean;
 // state shared across instances, anchor the handlers Set on globalThis.
 const HANDLERS_GLOBAL_KEY = Symbol.for("openclaw.unhandledRejection.handlers");
 const EXCEPTION_HANDLERS_GLOBAL_KEY = Symbol.for("openclaw.uncaughtException.handlers");
-const handlers: Set<UnhandledRejectionHandler> = (() => {
+function createErrorHandlerRegistry(globalKey: symbol, failureMessage: string) {
   const g = globalThis as unknown as Record<symbol, Set<UnhandledRejectionHandler>>;
-  const existing = g[HANDLERS_GLOBAL_KEY];
-  if (existing instanceof Set) {
-    return existing;
+  let handlers = g[globalKey];
+  if (!(handlers instanceof Set)) {
+    handlers = new Set<UnhandledRejectionHandler>();
+    g[globalKey] = handlers;
   }
-  const created = new Set<UnhandledRejectionHandler>();
-  g[HANDLERS_GLOBAL_KEY] = created;
-  return created;
-})();
-const exceptionHandlers: Set<UncaughtExceptionHandler> = (() => {
-  const g = globalThis as unknown as Record<symbol, Set<UncaughtExceptionHandler>>;
-  const existing = g[EXCEPTION_HANDLERS_GLOBAL_KEY];
-  if (existing instanceof Set) {
-    return existing;
-  }
-  const created = new Set<UncaughtExceptionHandler>();
-  g[EXCEPTION_HANDLERS_GLOBAL_KEY] = created;
-  return created;
-})();
+  return {
+    register(handler: UnhandledRejectionHandler): () => void {
+      handlers.add(handler);
+      return () => {
+        handlers.delete(handler);
+      };
+    },
+    isHandled(error: unknown): boolean {
+      for (const handler of handlers) {
+        try {
+          if (handler(error)) {
+            return true;
+          }
+        } catch (err) {
+          console.error(failureMessage, err instanceof Error ? (err.stack ?? err.message) : err);
+        }
+      }
+      return false;
+    },
+  };
+}
+
+const rejectionRegistry = createErrorHandlerRegistry(
+  HANDLERS_GLOBAL_KEY,
+  "[openclaw] Unhandled rejection handler failed:",
+);
+const exceptionRegistry = createErrorHandlerRegistry(
+  EXCEPTION_HANDLERS_GLOBAL_KEY,
+  "[openclaw] Uncaught exception handler failed:",
+);
 
 const FATAL_ERROR_CODES = new Set([
   "ERR_OUT_OF_MEMORY",
@@ -117,11 +134,7 @@ function hasSqliteSignal(err: unknown): boolean {
     "message" in err && typeof err.message === "string"
       ? normalizeLowercaseStringOrEmpty(err.message)
       : "";
-  if (message.includes("sqlite")) {
-    return true;
-  }
-
-  return false;
+  return message.includes("sqlite");
 }
 
 function isBenignUncaughtNetworkMessage(message: string): boolean {
@@ -150,11 +163,7 @@ function extractNumericErrorCode(err: unknown, key: "errno" | "errcode"): number
 }
 
 function extractErrorCodeWithCause(err: unknown): string | undefined {
-  const direct = extractErrorCode(err);
-  if (direct) {
-    return direct;
-  }
-  return extractErrorCode(readErrorCause(err));
+  return extractErrorCode(err) || extractErrorCode(readErrorCause(err));
 }
 
 function isFatalError(err: unknown): boolean {
@@ -212,16 +221,7 @@ export function isTransientSqliteError(err: unknown): boolean {
   return false;
 }
 
-/**
- * Checks if an error is a transient file watcher error that shouldn't crash the gateway.
- * These are typically resource exhaustion issues (e.g., inotify watches exhausted) that
- * can be recovered from by degrading to manual sync mode.
- *
- * Note: ENOSPC is a general POSIX error code (disk full, write failures, etc.).
- * To avoid misclassifying unrelated storage failures, we require both the ENOSPC code
- * AND a watch/inotify-related message indicator, similar to how hasSqliteSignal gates
- * SQLite errors.
- */
+/** Requires watcher evidence so ordinary ENOSPC storage failures remain fatal. */
 export function isTransientFileWatchError(err: unknown): boolean {
   if (!err) {
     return false;
@@ -241,7 +241,6 @@ export function isTransientFileWatchError(err: unknown): boolean {
     message.includes("max watches");
 
   for (const candidate of collectNestedErrorCandidates(err)) {
-    // Skip non-object candidates early
     if (!candidate || typeof candidate !== "object") {
       continue;
     }
@@ -257,7 +256,6 @@ export function isTransientFileWatchError(err: unknown): boolean {
       if (hasFileWatchSignal(message)) {
         return true;
       }
-      // ENOSPC without watch indicator is not classified here
       continue;
     }
 
@@ -323,49 +321,15 @@ export function isBenignUncaughtExceptionError(err: unknown): boolean {
 }
 
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
-  handlers.add(handler);
-  return () => {
-    handlers.delete(handler);
-  };
-}
-
-function isUnhandledRejectionHandled(reason: unknown): boolean {
-  for (const handler of handlers) {
-    try {
-      if (handler(reason)) {
-        return true;
-      }
-    } catch (err) {
-      console.error(
-        "[openclaw] Unhandled rejection handler failed:",
-        err instanceof Error ? (err.stack ?? err.message) : err,
-      );
-    }
-  }
-  return false;
+  return rejectionRegistry.register(handler);
 }
 
 export function registerUncaughtExceptionHandler(handler: UncaughtExceptionHandler): () => void {
-  exceptionHandlers.add(handler);
-  return () => {
-    exceptionHandlers.delete(handler);
-  };
+  return exceptionRegistry.register(handler);
 }
 
 export function isUncaughtExceptionHandled(error: unknown): boolean {
-  for (const handler of exceptionHandlers) {
-    try {
-      if (handler(error)) {
-        return true;
-      }
-    } catch (err) {
-      console.error(
-        "[openclaw] Uncaught exception handler failed:",
-        err instanceof Error ? (err.stack ?? err.message) : err,
-      );
-    }
-  }
-  return false;
+  return exceptionRegistry.isHandled(error);
 }
 
 export function installUnhandledRejectionHandler(): void {
@@ -383,12 +347,11 @@ export function installUnhandledRejectionHandler(): void {
   };
 
   process.on("unhandledRejection", (reason, _promise) => {
-    if (isUnhandledRejectionHandled(reason)) {
+    if (rejectionRegistry.isHandled(reason)) {
       return;
     }
 
-    // AbortError is typically an intentional cancellation (e.g., during shutdown)
-    // Log it but don't crash - these are expected during graceful shutdown
+    // Cancellation during shutdown is expected.
     if (isAbortError(reason)) {
       console.warn("[openclaw] Suppressed AbortError:", formatUncaughtError(reason));
       return;

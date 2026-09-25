@@ -377,6 +377,25 @@ describe("native plugin generation interop", () => {
     expect((await current.load()).read()).toEqual(["first", "first"]);
   });
 
+  it.each(["static", "dynamic"])(
+    "preserves native TypeScript JSON import attributes (%s)",
+    async (mode) => {
+      const url = JSON.stringify(
+        `data:application/json,${encodeURIComponent(JSON.stringify({ value: 42, mode }))}`,
+      );
+      const root = fixture({
+        "package.json": '{"type":"module"}',
+        "entry.mjs": 'export { read } from "./value.mts";',
+        "value.mts":
+          mode === "static"
+            ? `import data from ${url} with { type: "json" }; export const read = async () => data.value;`
+            : `export const read = async () => (await import(${url}, { with: { type: "json" } })).default.value;`,
+      });
+      const plugin = host(root, true).load("entry.mjs") as { read(): Promise<number> };
+      await expect(plugin.read()).resolves.toBe(42);
+    },
+  );
+
   it.each(["sync", "async", "native"])(
     "keeps %s TypeScript metadata and assets with captured source",
     async (mode) => {
@@ -811,6 +830,54 @@ describe("native plugin generation interop", () => {
       }
     },
   );
+
+  it("exposes named exports from native CommonJS TypeScript with transformed imports", () => {
+    const root = fixture({
+      "package.json": '{"type":"commonjs"}',
+      "entry.mjs": 'export { value } from "./peer.ts";',
+      "peer.ts":
+        'import path from "node:path"; export const value = path.basename("/probe/answer");',
+    });
+    expect(host(root).load("entry.mjs")).toMatchObject({ value: "answer" });
+  });
+
+  it("preserves native TypeScript value scopes and erased declarations", () => {
+    const root = fixture({
+      "package.json": '{"type":"module"}',
+      "entry.mjs": `export { value as enumeration } from "./enum.ts";
+        export { value as namespace } from "./namespace.ts";
+        export { value as merged } from "./merged.ts";
+        export { value as erased } from "./erased.ts";`,
+      "enum.ts": `enum __filename { Answer = 42 }
+        enum Values { __dirname = 42, Answer = __dirname }
+        export const value = [__filename.Answer, Values.Answer];`,
+      "namespace.ts": `namespace __dirname { export const Answer = 42 }
+        export const value = __dirname.Answer;`,
+      "merged.ts": `namespace Values {
+          export const __filename = 40;
+          export namespace Nested { export const __dirname = 41 }
+        }
+        namespace Values {
+          export const answer = __filename + 2;
+          export namespace Nested { export const answer = __dirname + 1 }
+        }
+        export const value = [Values.answer, Values.Nested.answer];`,
+      "erased.ts": `import type require = require("missing-type-only-package");
+        interface __filename {}
+        type __dirname = unknown;
+        export const value = [
+          require("node:path").basename(__filename),
+          require("node:path").basename(import.meta.filename),
+          typeof __dirname,
+        ];`,
+    });
+    expect(host(root).load("entry.mjs")).toMatchObject({
+      enumeration: [42, 42],
+      namespace: 42,
+      merged: [42, 42],
+      erased: ["erased.ts", "erased.ts", "string"],
+    });
+  });
 
   it.each([
     ["explicit", "dep.mjs", "commonjs"],

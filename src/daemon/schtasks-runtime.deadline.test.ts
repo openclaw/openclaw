@@ -1,8 +1,9 @@
 import type { SpawnSyncOptions } from "node:child_process";
+import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import { resolveFallbackRuntime } from "./schtasks-runtime.js";
+import { readScheduledTaskRuntime, resolveFallbackRuntime } from "./schtasks-runtime.js";
 import type { GatewayServiceCommandConfig } from "./service-types.js";
 
 type NativeResult = {
@@ -23,10 +24,17 @@ vi.mock("node:child_process", async () => ({
   spawnSync: native,
 }));
 
+vi.mock("./schtasks-layout.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./schtasks-layout.js")>()),
+  readScheduledTaskCommand: vi.fn(async () => command("gateway")),
+}));
+
 let now = 0;
 let processOutput = "";
 let portOutput = "";
 let processElapsed = 0;
+let schedulerElapsed = 0;
+let schedulerMissing = true;
 let portElapsed = 0;
 let portExit = 0;
 let portError: Error | undefined;
@@ -56,7 +64,8 @@ const portCalls = () =>
 beforeEach(() => {
   mockProcessPlatform("win32");
   vi.spyOn(performance, "now").mockImplementation(() => now);
-  now = processElapsed = portElapsed = portExit = 0;
+  now = processElapsed = portElapsed = portExit = schedulerElapsed = 0;
+  schedulerMissing = true;
   portError = portThrow = undefined;
   processOutput = JSON.stringify([
     { ProcessId: 111, CommandLine: "powershell.exe Get-CimInstance" },
@@ -65,6 +74,10 @@ beforeEach(() => {
   native.mockReset();
   native.mockImplementation((_executable, args) => {
     const script = args?.join(" ") ?? "";
+    if (args?.includes("-EncodedCommand")) {
+      now += schedulerElapsed;
+      return schedulerMissing ? result("-2147024894", 1) : result('{"state":4}');
+    }
     if (script.includes("Get-CimInstance Win32_Process")) {
       now += processElapsed;
       return result(processOutput);
@@ -93,6 +106,24 @@ describe("bounded Startup runtime observations", () => {
       );
       expect(runtime.status).toBe("stopped");
       expect(runtime.missingUnit).not.toBe(true);
+      expect(portCalls()).toHaveLength(kind === "gateway" ? 1 : 0);
+    },
+  );
+
+  it.each(["gateway", "node"] as const)(
+    "ignores the System Idle Process when proving stopped %s runtime",
+    async (kind) => {
+      processOutput = JSON.stringify([
+        { ProcessId: 0, CommandLine: null },
+        { ProcessId: 111, CommandLine: "powershell.exe Get-CimInstance" },
+      ]);
+      const runtime = await resolveFallbackRuntime(
+        { OPENCLAW_SERVICE_KIND: kind },
+        command(kind),
+        "observe",
+        100,
+      );
+      expect(runtime.status).toBe("stopped");
       expect(portCalls()).toHaveLength(kind === "gateway" ? 1 : 0);
     },
   );
@@ -218,5 +249,31 @@ describe("bounded Startup runtime observations", () => {
     await expect(resolveFallbackRuntime({}, command("gateway"), "observe", 100)).rejects.toBe(
       error,
     );
+  });
+});
+
+describe("Scheduled Task runtime inspection budget", () => {
+  it("charges the native query before Startup process and listener inspection", async () => {
+    vi.spyOn(fs, "access").mockResolvedValue(undefined);
+    schedulerElapsed = 40;
+    processElapsed = 30;
+
+    const runtime = await readScheduledTaskRuntime(
+      { APPDATA: "C:\\fixture", OPENCLAW_SERVICE_KIND: "gateway" },
+      { timeoutMs: 100 },
+    );
+
+    expect(runtime.status).toBe("stopped");
+    expect(native.mock.calls.map((call) => call[2]?.timeout)).toEqual([100, 60, 30]);
+  });
+
+  it("does not inspect processes after the native query exhausts its allowance", async () => {
+    schedulerMissing = false;
+    schedulerElapsed = 100;
+
+    await expect(readScheduledTaskRuntime({}, { timeoutMs: 100 })).rejects.toThrow(
+      "Scheduled Task inspection deadline expired",
+    );
+    expect(native).toHaveBeenCalledTimes(1);
   });
 });

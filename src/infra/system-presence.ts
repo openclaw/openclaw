@@ -4,8 +4,8 @@ import os from "node:os";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-  normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { PresenceEntry } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -72,17 +72,9 @@ function setPresence(key: string | symbol, presence: SystemPresence) {
   entries.set(key, { presence, freshness: freshnessNow() });
 }
 
-function normalizePresenceKey(key: string | undefined): string | undefined {
-  return normalizeOptionalLowercaseString(key);
-}
-
-function resolvePrimaryIPv4(): string | undefined {
-  return pickBestEffortPrimaryLanIPv4() ?? os.hostname();
-}
-
 function initSelfPresence() {
   const host = os.hostname();
-  const ip = resolvePrimaryIPv4() ?? undefined;
+  const ip = pickBestEffortPrimaryLanIPv4() ?? os.hostname();
   const version = resolveRuntimeServiceVersion(process.env);
   const modelIdentifier = resolveMachineModelIdentifier();
   const platform = (() => {
@@ -189,28 +181,19 @@ type SystemPresencePayload = {
 };
 
 function mergeStringList(...values: Array<string[] | undefined>): string[] | undefined {
-  const out = new Set<string>();
-  for (const list of values) {
-    if (!Array.isArray(list)) {
-      continue;
-    }
-    for (const item of list) {
-      const trimmed = normalizeOptionalString(item) ?? "";
-      if (trimmed) {
-        out.add(trimmed);
-      }
-    }
-  }
-  return out.size > 0 ? [...out] : undefined;
+  const merged = normalizeUniqueTrimmedStringList(
+    values.flatMap((list) => (Array.isArray(list) ? list : [])),
+  );
+  return merged.length > 0 ? merged : undefined;
 }
 
 export function updateSystemPresence(payload: SystemPresencePayload) {
   const parsed = parsePresence(payload.text);
   const key =
-    normalizePresenceKey(payload.deviceId) ||
-    normalizePresenceKey(payload.instanceId) ||
-    normalizePresenceKey(parsed.instanceId) ||
-    normalizePresenceKey(parsed.host) ||
+    normalizeOptionalLowercaseString(payload.deviceId) ||
+    normalizeOptionalLowercaseString(payload.instanceId) ||
+    normalizeOptionalLowercaseString(parsed.instanceId) ||
+    normalizeOptionalLowercaseString(parsed.host) ||
     parsed.ip ||
     truncateUtf16Safe(parsed.text, 64) ||
     normalizeLowercaseStringOrEmpty(os.hostname());
@@ -248,7 +231,8 @@ export function updateSystemPresence(payload: SystemPresencePayload) {
 }
 
 export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
-  const normalizedKey = normalizePresenceKey(key) ?? normalizeLowercaseStringOrEmpty(os.hostname());
+  const normalizedKey =
+    normalizeOptionalLowercaseString(key) ?? normalizeLowercaseStringOrEmpty(os.hostname());
   const existing = entries.get(normalizedKey)?.presence ?? ({} as SystemPresence);
   const roles = mergeStringList(existing.roles, presence.roles);
   const scopes = mergeStringList(existing.scopes, presence.scopes);
@@ -270,7 +254,7 @@ export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
 
 /** Renews an existing connection-owned presence row without recreating expired metadata. */
 export function touchPresence(key: string): boolean {
-  const normalizedKey = normalizePresenceKey(key);
+  const normalizedKey = normalizeOptionalLowercaseString(key);
   if (!normalizedKey) {
     return false;
   }

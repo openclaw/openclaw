@@ -27,6 +27,12 @@ export type VitestRuntimeTestSelection = {
 // while unrelated workers may still be importing its public plugin facades.
 const runtimeConsumers = [
   {
+    file: "src/process/exec.windows.integration.test.ts",
+    configs: ["test/vitest/vitest.process.config.ts"],
+    mode: "runtime",
+    dir: "src",
+  },
+  {
     file: "src/gateway/server-methods/agent.visitor-access.test.ts",
     configs: [
       "test/vitest/vitest.gateway-methods-isolated.config.ts",
@@ -123,6 +129,8 @@ const runtimeConsumers = [
     "src/agents/simple-completion-runtime.plugin-scope.test.ts",
     "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.integration.test.ts",
+    // Compiled catalog workers load the fixture's public SDK through built host artifacts.
+    "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
     "src/agents/runtime-plugins.context-engine.integration.test.ts",
     "src/agents/tool-surface-plan.provider-catalog.integration.test.ts",
   ].map((file) => ({
@@ -206,6 +214,12 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "extensions",
   })),
+  {
+    file: "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts",
+    configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
+    mode: "runtime",
+    dir: "extensions",
+  },
   ...[
     "src/cli/acp-cli-exit.process.test.ts",
     "src/cli/update-dry-run-state.process.test.ts",
@@ -278,6 +292,7 @@ const runtimeConsumers = [
     dir: "",
   })),
   ...[
+    "src/gateway/server.acp-native-model.product.test.ts",
     "src/gateway/server-sidecar-retention.test.ts",
     "src/gateway/server.config-patch.test.ts",
   ].map((file) => ({
@@ -303,6 +318,8 @@ const runtimeConsumers = [
     "src/gateway/gateway-cron-process-identity.windows.test.ts",
     "src/gateway/gateway-route-model-reuse.test.ts",
     "src/gateway/gateway-ssh-upload-signal.test.ts",
+    "src/gateway/github-publication-requester-aliases.test.ts",
+    "src/gateway/github-publication-requester.test.ts",
   ].map((file) => ({
     file,
     configs: [
@@ -402,7 +419,7 @@ export async function prepareVitestRuntime(
   });
 }
 
-export function isE2eBuildSkipped(env: NodeJS.ProcessEnv) {
+function isE2eBuildSkipped(env: NodeJS.ProcessEnv) {
   return env.OPENCLAW_E2E_SKIP_BUILD === "1" || env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1";
 }
 

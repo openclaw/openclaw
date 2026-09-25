@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { hasErrnoCode } from "../infra/errno.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
@@ -15,7 +15,6 @@ import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { decodeLaunchdPlistMetadata } from "./launchd-plist.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import { execSchtasks } from "./schtasks-exec.js";
-import { ServiceDefinitionInspectionError } from "./service-inspection-error.js";
 import { parseSystemdExecStart, splitSystemdLogicalLines } from "./systemd-unit.js";
 
 export type ExtraGatewayService = {
@@ -32,10 +31,6 @@ export type FindExtraGatewayServicesOptions = {
 };
 
 const EXTRA_MARKERS = ["openclaw", "clawdbot"] as const;
-
-function quotePosixCleanupArgument(value: string): string {
-  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
-}
 
 export function renderGatewayServiceCleanupHints(
   services: readonly ExtraGatewayService[] = [],
@@ -55,18 +50,16 @@ export function renderGatewayServiceCleanupHints(
             ? "system"
             : "gui/$UID";
         const launchctlCommand = domain === "system" ? "sudo launchctl" : "launchctl";
-        hints.push(
-          `${launchctlCommand} bootout ${domain}/${quotePosixCleanupArgument(service.label)}`,
-        );
+        hints.push(`${launchctlCommand} bootout ${domain}/${quoteCliArg(service.label)}`);
         if (plistPath) {
           const removeCommand = service.scope === "system" ? "sudo rm" : "rm";
-          hints.push(`${removeCommand} ${quotePosixCleanupArgument(plistPath)}`);
+          hints.push(`${removeCommand} ${quoteCliArg(plistPath)}`);
         }
         break;
       }
       case "linux": {
         const systemctlCommand = `systemctl --${service.scope}`;
-        const unit = quotePosixCleanupArgument(service.label);
+        const unit = quoteCliArg(service.label);
         // A discovered unit may be the only running Gateway; inspect before removal.
         hints.push(`${systemctlCommand} status -- ${unit}`, `${systemctlCommand} cat -- ${unit}`);
         break;
@@ -125,16 +118,10 @@ export function detectMarkerLineWithGateway(contents: string): Marker | null {
 
 function hasGatewayServiceMarker(content: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(content);
-  const markerKeys = ["openclaw_service_marker"];
-  const kindKeys = ["openclaw_service_kind"];
-  const markerValues = [normalizeLowercaseStringOrEmpty(GATEWAY_SERVICE_MARKER)];
-  const hasMarkerKey = markerKeys.some((key) => lower.includes(key));
-  const hasKindKey = kindKeys.some((key) => lower.includes(key));
-  const hasMarkerValue = markerValues.some((value) => lower.includes(value));
   return (
-    hasMarkerKey &&
-    hasKindKey &&
-    hasMarkerValue &&
+    lower.includes("openclaw_service_marker") &&
+    lower.includes("openclaw_service_kind") &&
+    lower.includes(normalizeLowercaseStringOrEmpty(GATEWAY_SERVICE_MARKER)) &&
     lower.includes(normalizeLowercaseStringOrEmpty(GATEWAY_SERVICE_KIND))
   );
 }
@@ -191,36 +178,12 @@ function isLegacyLabel(label: string): boolean {
   return lower.includes("clawdbot");
 }
 
-async function readDirEntries(dir: string, requireComplete = false): Promise<string[]> {
-  try {
-    return await fs.readdir(dir);
-  } catch (error) {
-    if (requireComplete) {
-      // ENOENT can also mean a dangling directory link, not an absent scan root.
-      const absent =
-        hasErrnoCode(error, "ENOENT") &&
-        (await fs.lstat(dir).then(
-          () => false,
-          (statError: unknown) => hasErrnoCode(statError, "ENOENT"),
-        ));
-      if (!absent) {
-        throw new ServiceDefinitionInspectionError(dir);
-      }
-    }
-    return [];
-  }
+async function readDirEntries(dir: string): Promise<string[]> {
+  return fs.readdir(dir).catch(() => []);
 }
 
-async function readServiceFile(filePath: string, requireComplete = false): Promise<Buffer | null> {
-  try {
-    return await fs.readFile(filePath);
-  } catch {
-    // A listed definition that disappears or cannot be read cannot prove absence.
-    if (requireComplete) {
-      throw new ServiceDefinitionInspectionError(filePath);
-    }
-    return null;
-  }
+async function readServiceFile(filePath: string): Promise<Buffer | null> {
+  return fs.readFile(filePath).catch(() => null);
 }
 
 type ServiceFileEntry = {
@@ -234,10 +197,9 @@ async function collectServiceFiles(params: {
   dir: string;
   extension: string;
   isIgnoredName: (name: string) => boolean;
-  requireComplete?: boolean;
 }): Promise<ServiceFileEntry[]> {
   const out: ServiceFileEntry[] = [];
-  const entries = await readDirEntries(params.dir, params.requireComplete);
+  const entries = await readDirEntries(params.dir);
   for (const entry of entries) {
     if (!entry.endsWith(params.extension)) {
       continue;
@@ -247,7 +209,7 @@ async function collectServiceFiles(params: {
       continue;
     }
     const fullPath = path.join(params.dir, entry);
-    const contents = await readServiceFile(fullPath, params.requireComplete);
+    const contents = await readServiceFile(fullPath);
     if (contents === null) {
       continue;
     }
@@ -314,14 +276,12 @@ async function scanSystemdDir(params: {
   dir: string;
   scope: "user" | "system";
   includeManagedOpenClaw?: boolean;
-  requireComplete?: boolean;
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
   const candidates = await collectServiceFiles({
     dir: params.dir,
     extension: ".service",
     isIgnoredName: params.includeManagedOpenClaw ? () => false : isIgnoredSystemdName,
-    requireComplete: params.requireComplete,
   });
 
   for (const { entry, name, fullPath, contents: bytes } of candidates) {
@@ -352,9 +312,7 @@ async function scanSystemdDir(params: {
   return results;
 }
 
-export async function findSystemGatewayServices(
-  options: { requireComplete?: boolean } = {},
-): Promise<ExtraGatewayService[]> {
+export async function findSystemGatewayServices(): Promise<ExtraGatewayService[]> {
   if (process.platform !== "linux") {
     return [];
   }
@@ -367,14 +325,10 @@ export async function findSystemGatewayServices(
           dir,
           scope: "system",
           includeManagedOpenClaw: true,
-          requireComplete: options.requireComplete,
         })),
       );
     }
-  } catch (error) {
-    if (options.requireComplete) {
-      throw error;
-    }
+  } catch {
     return [];
   }
 
@@ -545,13 +499,9 @@ export async function findExtraGatewayServices(
       }
       const lowerName = normalizeLowercaseStringOrEmpty(name);
       const lowerCommand = normalizeLowercaseStringOrEmpty(task.taskToRun ?? "");
-      let marker: Marker | null = null;
-      for (const candidate of EXTRA_MARKERS) {
-        if (lowerName.includes(candidate) || lowerCommand.includes(candidate)) {
-          marker = candidate;
-          break;
-        }
-      }
+      const marker = EXTRA_MARKERS.find(
+        (candidate) => lowerName.includes(candidate) || lowerCommand.includes(candidate),
+      );
       if (!marker) {
         continue;
       }

@@ -26,23 +26,23 @@ import {
 const log = createSubsystemLogger("gateway/update-run");
 
 /** Prepare routing before an update can replace lazily loaded channel modules. */
-export function createUpdateRunNotifier(
+export async function createUpdateRunNotifier(
   initial: UpdateRunRecord,
   getConfig: () => OpenClawConfig = getRuntimeConfig,
   deps: CliDeps = createDefaultDeps(),
-  target?: ReturnType<typeof resolveUpdateRunNoticeTarget>,
+  target?: Awaited<ReturnType<typeof resolveUpdateRunNoticeTarget>>,
   context: DeliveryQueueStateContext = captureDeliveryQueueStateContext(),
 ) {
   const env = context.workerContext.environment;
   const noticeTarget =
     target ??
-    resolveUpdateRunNoticeTarget({
+    (await resolveUpdateRunNoticeTarget({
       cfg: getConfig(),
       sessionKey: initial.origin.sessionKey,
       explicitDeliveryContext: initial.origin.deliveryContext,
       threadId: initial.origin.deliveryContext?.threadId,
       env,
-    });
+    }));
   const { sessionKey } = initial.origin;
   // Update delivery belongs to the host and can outlive the requesting attempt.
   return (run: UpdateRunRecord, kind: UpdateRunNoticeKind) =>
@@ -135,6 +135,7 @@ export function createUpdateRunNotifier(
 
 export async function notifyUpdateRunPhase(run: UpdateRunRecord): Promise<void> {
   if (run.phase === "activating" || run.phase === "finished") {
-    await createUpdateRunNotifier(run)(run, run.phase);
+    const notify = await createUpdateRunNotifier(run);
+    await notify(run, run.phase);
   }
 }

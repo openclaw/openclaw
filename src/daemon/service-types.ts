@@ -12,7 +12,9 @@ export type GatewayService = {
   label: string;
   loadedText: string;
   notLoadedText: string;
-  stage: (args: GatewayServiceStageArgs) => Promise<void>;
+  /** Diagnostic guidance only; this does not establish service absence. */
+  unsupportedReason?: string;
+  stage: (args: GatewayServiceInstallArgs) => Promise<void>;
   install: (args: GatewayServiceInstallArgs) => Promise<void>;
   uninstall: (args: GatewayServiceManageArgs) => Promise<void>;
   start: (args: GatewayServiceControlArgs) => Promise<void>;
@@ -63,15 +65,13 @@ export type GatewayServiceInstallArgs = {
   definitionTransaction?: GatewayServiceDefinitionTransactionHooks;
 };
 
-type GatewayServiceStageArgs = GatewayServiceInstallArgs;
-
 export type GatewayServiceManageArgs = {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
 };
 
 export type GatewayServiceControlArgs = {
-  /** Update stop identity only; the native owner must revalidate the live handoff lease. */
+  /** Correlation only: native stop needs live update authority and transferred helpers also revalidate their lease. */
   updateHandoff?: { root: string; runId: string };
   /** Revalidate captured binding after native lock and config admission, before effects. */
   beforeMutation?: () => Promise<void>;
@@ -145,6 +145,10 @@ export type GatewayServiceEnvArgs = {
   timeoutMs?: number;
   /** Strict observation must retain unavailable definition evidence as unknown. */
   requireEffective?: boolean;
+};
+
+export type GatewayServiceLoadStateReader = {
+  isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
 };
 
 /** Live recovery custody, never reconstructed from a saved record alone. Loading
@@ -285,7 +289,7 @@ export type GatewayServiceManagedOverrides = {
   environment?: true | { keys?: string[]; resetInline?: true; resetFiles?: true };
 };
 
-/** Effective platform service command and, when externally owned, its managed base definition. */
+/** Effective platform command with its authored base and inspected override metadata. */
 export type GatewayServiceCommandConfig = GatewayServiceCommandSnapshot & {
   sourcePath?: string;
   definitionPaths?: string[];
@@ -298,6 +302,15 @@ export function resolveManagedGatewayServiceCommand(
   command: GatewayServiceCommandConfig | null | undefined,
 ): GatewayServiceCommandSnapshot | null {
   return command?.managedDefinition ?? command ?? null;
+}
+
+/** Empty inspected overrides are ordinary metadata; a base without inspection is unknown. */
+export function hasGatewayServiceDefinitionOverrides(
+  command: GatewayServiceCommandConfig | null | undefined,
+): boolean {
+  return command?.managedOverrides
+    ? Object.keys(command.managedOverrides).length > 0
+    : Boolean(command?.managedDefinition);
 }
 
 /** Operator-owned launcher overrides cannot be repaired by rewriting the managed base. */

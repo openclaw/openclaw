@@ -515,37 +515,36 @@ async function executeSendWithResult(params: {
 }
 
 describe("message tool gateway timeout", () => {
-  it("reports model-authored send normalization without inviting a retry", async () => {
-    const notice =
-      "Content sent; location omitted because locations must be sent separately. Do not retry this send. Send a standalone location only if the user explicitly requested it.";
-    mocks.runMessageAction.mockResolvedValue({
-      kind: "send",
-      action: "send",
-      channel: "telegram",
-      to: "telegram:123",
-      handledBy: "plugin",
-      payload: { ok: true },
-      normalization: { locationOmitted: true, notice },
-      toolResult: {
-        content: [{ type: "text", text: "sent" }],
-        details: { ok: true },
-      },
-      dryRun: false,
-    } satisfies MessageActionResult);
+  it.each([false, true])(
+    "reports normalization guidance only after an actual send (dryRun=%s)",
+    async (dryRun) => {
+      const notice = "The normalized message was delivered; do not retry.";
+      const receipt = dryRun ? "Prepared reply" : "Sent reply";
+      mocks.runMessageAction.mockResolvedValue({
+        kind: "send",
+        action: "send",
+        channel: "telegram",
+        to: "telegram:123",
+        handledBy: "plugin",
+        payload: { ok: true },
+        normalization: { locationOmitted: true, notice },
+        toolResult: {
+          content: [{ type: "text", text: receipt }],
+          details: { dryRun },
+        },
+        dryRun,
+      } satisfies MessageActionResult);
 
-    const { call, result } = await executeSendWithResult({
-      action: { channel: "telegram", target: "telegram:123", message: "hello" },
-    });
+      const { result } = await executeSendWithResult({
+        action: { channel: "telegram", target: "telegram:123", message: "hello", dryRun },
+      });
 
-    expect(call?.actionOrigin).toBe("message-tool");
-    expect(result).toEqual({
-      content: [
-        { type: "text", text: "sent" },
-        { type: "text", text: notice },
-      ],
-      details: { ok: true },
-    });
-  });
+      expect(result.content).toEqual([
+        { type: "text", text: receipt },
+        ...(dryRun ? [] : [{ type: "text", text: notice }]),
+      ]);
+    },
+  );
 
   it("carries core send settlement in private result details", async () => {
     const sendResult = {
@@ -735,7 +734,7 @@ describe("message tool gateway timeout", () => {
   it("advertises scoped source-reply finality without exposing idempotency controls", () => {
     expect(getToolProperties(createMessageTool()).final).toMatchObject({
       type: "boolean",
-      description: expect.stringContaining("Ignored for other sends"),
+      description: expect.stringContaining("user explicitly requested the reaction"),
     });
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("idempotencyKey");
   });

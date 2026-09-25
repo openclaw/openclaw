@@ -9,7 +9,6 @@ import {
   requesterMcpOAuthStoreKeyPrefix,
   type McpOAuthIdentity,
 } from "./mcp-oauth-identity.js";
-import { createMcpOAuthClientProvider } from "./mcp-oauth-provider.js";
 import { listMcpOAuthStoreKeysByPrefix } from "./mcp-oauth-store.js";
 import {
   clearMcpOAuthServer,
@@ -18,6 +17,7 @@ import {
   resolveMcpOAuthAccessToken,
 } from "./mcp-oauth.js";
 import { requesterIdentity, withTempHome } from "./mcp-oauth.test-harness.js";
+import { withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
 
 const authMock = vi.hoisted(() => vi.fn());
 const REMOTE_IDENTITY = operatorMcpOAuthIdentity("Remote Docs", "https://mcp.example.com/mcp");
@@ -27,11 +27,12 @@ vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
 }));
 
 async function saveAccessToken(identity: McpOAuthIdentity, accessToken: string): Promise<void> {
-  const provider = await createMcpOAuthClientProvider({ identity });
-  await provider.saveTokens({
-    access_token: accessToken,
-    token_type: "Bearer",
-    expires_in: 3600,
+  await withMcpOAuthProviderForTest({ identity }, async (provider) => {
+    await provider.saveTokens({
+      access_token: accessToken,
+      token_type: "Bearer",
+      expires_in: 3600,
+    });
   });
 }
 
@@ -55,17 +56,18 @@ describe("MCP OAuth requester credentials", () => {
           REMOTE_IDENTITY.serverUrl,
           "alice",
         );
-        const provider = await createMcpOAuthClientProvider({ identity });
-        await provider.saveTokens({ access_token: "access", token_type: "Bearer" });
-        const storeKey = identity.storeKey;
-        openOpenClawStateDatabase()
-          .db.prepare("UPDATE mcp_oauth_stores SET store_json = ? WHERE store_key = ?")
-          .run("{", storeKey);
+        await withMcpOAuthProviderForTest({ identity }, async (provider) => {
+          await provider.saveTokens({ access_token: "access", token_type: "Bearer" });
+          const storeKey = identity.storeKey;
+          openOpenClawStateDatabase()
+            .db.prepare("UPDATE mcp_oauth_stores SET store_json = ? WHERE store_key = ?")
+            .run("{", storeKey);
 
-        await expect(provider.tokens()).rejects.toThrow("store_json is not valid JSON");
-        await expect(countMcpOAuthPrincipals(REMOTE_IDENTITY)).rejects.toThrow(
-          `MCP OAuth store ${storeKey} is invalid: store_json is not valid JSON`,
-        );
+          await expect(provider.tokens()).rejects.toThrow("store_json is not valid JSON");
+          await expect(countMcpOAuthPrincipals(REMOTE_IDENTITY)).rejects.toThrow(
+            `MCP OAuth store ${storeKey} is invalid: store_json is not valid JSON`,
+          );
+        });
       },
       {
         prefix: "openclaw-mcp-oauth-corrupt-row-",

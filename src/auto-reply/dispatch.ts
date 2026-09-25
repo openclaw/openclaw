@@ -20,6 +20,7 @@ import {
   resolveCommandTurnContext,
   resolveCommandTurnTargetSessionKey,
 } from "./command-turn-context.js";
+import { isActiveRunSafeCommandTurn } from "./commands-registry.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
 import { dispatchGroupThread } from "./group-thread-dispatch.js";
 import type { CommandSessionMetadataChange } from "./reply/command-session-metadata.js";
@@ -104,7 +105,21 @@ function resolveForegroundReplyOrderKey(finalized: FinalizedMsgContext): string 
   ]);
 }
 
-function reserveForegroundReplyLease(finalized: FinalizedMsgContext): KeyedFifoLease | undefined {
+function reserveForegroundReplyLease(
+  finalized: FinalizedMsgContext,
+  cfg: OpenClawConfig,
+): KeyedFifoLease | undefined {
+  // Inspection/control commands are allowed beside an active run. They must
+  // not take a FIFO slot behind that run or /status stays silent until it ends.
+  if (
+    isActiveRunSafeCommandTurn({
+      commandTurn: resolveCommandTurnContext(finalized),
+      cfg,
+      provider: finalized.Provider ?? finalized.Surface,
+    })
+  ) {
+    return undefined;
+  }
   const key = resolveForegroundReplyOrderKey(finalized);
   return key ? foregroundReplyLeases.reserve([key]) : undefined;
 }
@@ -277,15 +292,11 @@ export async function dispatchInboundMessage(params: {
   return settledReceipt ? { ...result, settledReceipt } : result;
 }
 
-type BufferedInboundDispatcherParams = {
-  ctx: MsgContext | FinalizedMsgContext;
-  cfg: OpenClawConfig;
+type BufferedInboundDispatcherParams = Omit<
+  Parameters<typeof dispatchInboundMessage>[0],
+  "dispatcher" | "replyPayloadRunState" | "outboundHooks" | "onSettled"
+> & {
   dispatcherOptions: ReplyDispatcherWithTypingOptions;
-  toolsAllow?: string[];
-  replyOptions?: InternalDispatchReplyOptions;
-  replyResolver?: InternalGetReplyFromConfig;
-  dispatchReplyFromConfig?: DispatchReplyFromConfig;
-  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
 };
 
 async function dispatchInboundMessageWithBufferedDispatcherCore(
@@ -297,7 +308,7 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
   },
 ): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
-  const foregroundReplyLease = reserveForegroundReplyLease(finalized);
+  const foregroundReplyLease = reserveForegroundReplyLease(finalized, params.cfg);
   const replyOperationRunState: ReplyOperationRunState =
     resolveReplyOperationRunState(params.replyOptions) ?? {};
   const silentReplyContext = resolveDispatcherSilentReplyContext(finalized, params.cfg);
@@ -414,14 +425,11 @@ export async function dispatchInboundMessageWithRoutedChannelDispatcher(
   });
 }
 
-type PlainInboundDispatcherParams = {
-  ctx: MsgContext | FinalizedMsgContext;
-  cfg: OpenClawConfig;
+type PlainInboundDispatcherParams = Omit<
+  BufferedInboundDispatcherParams,
+  "dispatcherOptions" | "dispatchReplyFromConfig"
+> & {
   dispatcherOptions: ReplyDispatcherOptions;
-  toolsAllow?: string[];
-  replyOptions?: InternalDispatchReplyOptions;
-  replyResolver?: InternalGetReplyFromConfig;
-  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
 };
 
 async function dispatchInboundMessageWithPlainDispatcherCore(
@@ -472,28 +480,19 @@ async function dispatchInboundMessageWithPlainDispatcherCore(
 }
 
 /** Creates a plain dispatcher, installs global send hooks, and dispatches the inbound message. */
-export async function dispatchInboundMessageWithDispatcher(params: {
-  ctx: MsgContext | FinalizedMsgContext;
-  cfg: OpenClawConfig;
-  dispatcherOptions: ReplyDispatcherOptions;
-  toolsAllow?: string[];
-  replyOptions?: InternalDispatchReplyOptions;
-  replyResolver?: InternalGetReplyFromConfig;
-}): Promise<DispatchInboundResult> {
+export async function dispatchInboundMessageWithDispatcher(
+  params: Omit<PlainInboundDispatcherParams, "onSessionMetadataChanges">,
+): Promise<DispatchInboundResult> {
   return await dispatchInboundMessageWithPlainDispatcherCore(params, "legacy");
 }
 
 type ProjectedOptions = Omit<ReplyDispatcherOptions, "beforeDeliver" | "beforeDeliverOptions">;
 
 /** Creates a core-owned dispatcher whose modifiers fence projected output capture. */
-export async function dispatchInboundMessageWithProjectedDispatcher(params: {
-  ctx: MsgContext | FinalizedMsgContext;
-  cfg: OpenClawConfig;
-  dispatcherOptions: ProjectedOptions;
-  toolsAllow?: string[];
-  replyOptions?: InternalDispatchReplyOptions;
-  replyResolver?: InternalGetReplyFromConfig;
-  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
-}): Promise<DispatchInboundResult> {
+export async function dispatchInboundMessageWithProjectedDispatcher(
+  params: Omit<PlainInboundDispatcherParams, "dispatcherOptions"> & {
+    dispatcherOptions: ProjectedOptions;
+  },
+): Promise<DispatchInboundResult> {
   return await dispatchInboundMessageWithPlainDispatcherCore(params, "projected");
 }

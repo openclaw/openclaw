@@ -5,8 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   appendTranscriptMessage,
-  bindSessionPendingInputSources,
-  stageSessionPendingInput,
   patchSessionEntryCore,
   updateSessionEntry,
   upsertSessionEntryCore,
@@ -395,125 +393,6 @@ describe("chat history delta publication", () => {
 });
 
 describe("chat history consumption receipts", () => {
-  it.each(["chat.history", "chat.startup"] as const)(
-    "%s returns only requested current-session receipts in pages and empty deltas",
-    async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const scope = {
-          agentId: "main",
-          sessionKey: "agent:main:collected",
-          sessionId: "collected",
-        };
-        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-        const context = await createHistoryReadContext();
-        const handler = expectDefined(chatHistoryHandlers[method], "history handler");
-        const call = async (params: Record<string, unknown> = {}) => {
-          let result: unknown;
-          await handler({
-            params: { sessionKey: scope.sessionKey, ...params },
-            context,
-            req: { type: "req", id: "history", method },
-            client: null,
-            isWebchatConnect: () => false,
-            respond: (ok, payload, error) => {
-              expect(error).toBeUndefined();
-              expect(ok).toBe(true);
-              result = payload;
-            },
-          });
-          return expectDefined(asOptionalRecord(result), "history response");
-        };
-        const sources = [];
-        for (const runId of ["source-a", "source-b"]) {
-          sources.push(
-            expectDefined(
-              await stageSessionPendingInput(scope, {
-                runId,
-                assertCurrent: () => {},
-                message: {
-                  role: "user",
-                  content: runId,
-                  timestamp: 1,
-                  idempotencyKey: `${runId}:user`,
-                },
-              }),
-              "source receipt",
-            ),
-          );
-        }
-        const aggregate = expectDefined(
-          bindSessionPendingInputSources(sources, {
-            role: "user",
-            content: "Collected inputs",
-            timestamp: 2,
-            idempotencyKey: "collect:batch",
-          }),
-          "aggregate receipt",
-        );
-        const retained = [];
-        try {
-          await aggregate.run(() => appendTranscriptMessage(scope, { message: aggregate.message }));
-          await appendTranscriptMessage(scope, {
-            message: { role: "assistant", content: "Later reply" },
-          });
-          const inputRunIds = ["source-a", "missing"];
-          const page = await call({ inputRunIds, limit: 1 });
-          const expected = [
-            { runId: "source-a", state: "consumed", consumedByEventId: aggregate.inputId },
-          ];
-          expect(page.inputReceipts).toEqual(expected);
-          expect(page.inputConsumptions).toEqual([
-            { runId: "source-a", consumedByEventId: aggregate.inputId },
-          ]);
-          expect(page.pendingInputs).toEqual({ items: [], total: 0 });
-          expect(JSON.stringify(page.messages)).not.toContain("Collected inputs");
-          const delta = await call({ inputRunIds, cursor: page.deltaCursor });
-          expect(delta).toMatchObject({ kind: "delta", messages: [], inputReceipts: expected });
-          for (let index = 0; index < 21; index += 1) {
-            retained.push(
-              expectDefined(
-                await stageSessionPendingInput(scope, {
-                  runId: `retained-${index}`,
-                  assertCurrent: () => {},
-                  message: {
-                    role: "user",
-                    content: `retained-${index}`,
-                    timestamp: index + 3,
-                    idempotencyKey: `retained-${index}:user`,
-                  },
-                }),
-                "retained receipt",
-              ),
-            );
-          }
-          const retainedPage = await call({ inputRunIds: ["retained-0"], limit: 1 });
-          expect(retainedPage.inputReceipts).toEqual([{ runId: "retained-0", state: "pending" }]);
-          expect(retainedPage.inputConsumptions).toEqual([]);
-          expect(retainedPage.pendingInputs).toMatchObject({
-            total: 21,
-            items: [{ runId: "retained-20" }],
-          });
-          const anchor = await call({
-            inputRunIds,
-            messageId: aggregate.inputId,
-            sessionId: scope.sessionId,
-          });
-          expect(anchor.inputReceipts).toEqual([]);
-          await upsertSessionEntryCore(scope, { sessionId: "replacement", updatedAt: 2 });
-          expect((await call({ inputRunIds })).inputReceipts).toEqual([]);
-        } finally {
-          aggregate.finish("interrupted");
-          for (const source of sources) {
-            source.finish("interrupted");
-          }
-          for (const receipt of retained) {
-            receipt.finish("interrupted");
-          }
-        }
-      });
-    },
-  );
-
   it.each([
     { inputRunIds: Array.from({ length: 51 }, (_, index) => `run-${index}`) },
     { inputRunIds: ["r".repeat(257)] },
@@ -671,7 +550,12 @@ describe("chat history recovery byte budget", () => {
             const result = stringify(...args);
             if (
               Array.isArray(args[0]) &&
-              args[0].some((value) => asOptionalRecord(value)?.role === "user") &&
+              args[0].some((value) => {
+                const record = asOptionalRecord(value);
+                return (
+                  record?.role === "user" || asOptionalRecord(record?.message)?.role === "user"
+                );
+              }) &&
               typeof result === "string" &&
               result.includes(marker)
             ) {
@@ -720,6 +604,7 @@ describe("chat history recovery byte budget", () => {
         };
         const exactBytes =
           Buffer.byteLength(historyJson) + Buffer.byteLength(JSON.stringify(expected));
+        const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
         try {
           const bounded = await call({ maxBytes: exactBytes - 1 });
           expect(bounded.messages).toEqual(inactive.messages);
@@ -733,13 +618,61 @@ describe("chat history recovery byte budget", () => {
           ).toBe(exactBytes);
           const delta = await call({ cursor: exact.deltaCursor, maxBytes: exactBytes });
           expect(delta).toMatchObject({ kind: "delta", messages: [], inFlightRun: expected });
+          await appendTranscriptMessage(scope, {
+            eventId: "delta-user",
+            message: {
+              role: "user",
+              content: `${marker}: ${'漢字\n"\\🤖'.repeat(100)}`,
+              timestamp: 13,
+            },
+          });
+          await appendTranscriptMessage(scope, {
+            eventId: "delta-tool",
+            message: {
+              role: "assistant",
+              content: [{ type: "toolCall", id: "read-delta", name: "read", arguments: {} }],
+              timestamp: 14,
+            },
+          });
+          const appended = await call({ cursor: exact.deltaCursor });
+          expect(appended).toMatchObject({
+            kind: "delta",
+            messages: [{ messageId: "delta-user" }, { messageId: "delta-tool" }],
+            activity: [{ messageId: "delta-tool" }],
+            inFlightRun: expected,
+          });
+          const deltaBytes =
+            Buffer.byteLength(JSON.stringify(appended.messages)) +
+            Buffer.byteLength(JSON.stringify({ activity: appended.activity })) -
+            1 +
+            Buffer.byteLength(JSON.stringify(expected));
+          for (const extraBytes of [0, -1]) {
+            const page = await call({
+              cursor: exact.deltaCursor,
+              maxBytes: deltaBytes + extraBytes,
+            });
+            expect(page.messages).toEqual(appended.messages);
+            expect(page.activity).toEqual(appended.activity);
+            expect(page.inFlightRun).toEqual(
+              extraBytes === 0 ? expected : { ...expected, text: "" },
+            );
+            expect(page).not.toHaveProperty("messagesBytes");
+            expect(page).not.toHaveProperty("activityBytes");
+          }
+          expect(delta).not.toHaveProperty("messagesBytes");
+          expect(delta).not.toHaveProperty("activityBytes");
           expect(JSON.stringify(inactive.messages)).toBe(historyJson);
         } finally {
+          clock.mockRestore();
           registration.cleanup();
           context.chatRunState.clearRun("run-history-bytes");
         }
         const completed = await call();
-        expect(completed.messages).toEqual(inactive.messages);
+        expect(completed.messages).toHaveLength(14);
+        if (!Array.isArray(completed.messages)) {
+          throw new Error("Expected completed history messages");
+        }
+        expect(completed.messages.slice(0, 12)).toEqual(inactive.messages);
         expect(completed.inFlightRun).toBeUndefined();
       });
     },
@@ -760,6 +693,8 @@ describe("chat metadata ownership", () => {
       expect(readChatMetadata).toHaveBeenCalledWith({
         agentId: "main",
         requesterProfileId: owner.id,
+        isCurrent: expect.any(Function),
+        assertCurrent: expect.any(Function),
         draftAccountSelection: expect.objectContaining({
           owner: owner.id,
           authProfileId,
@@ -815,24 +750,6 @@ describe("chat metadata ownership", () => {
       });
     },
   );
-
-  it("rejects combining a personal draft preview with a persisted session selector", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async () => {
-      const { authProfileId, readChatMetadata, request } = createPersonalMetadataFixture();
-      const respond = await request({
-        agentId: "main",
-        sessionKey: "agent:main:existing",
-        authProfileId,
-      });
-
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
-      expect(readChatMetadata).not.toHaveBeenCalled();
-    });
-  });
 
   it.each(["disconnect", "role loss", "abort"] as const)(
     "rejects a personal draft preview after %s during the metadata read",
@@ -915,8 +832,18 @@ describe("chat metadata ownership", () => {
             }),
           }),
         ],
-        [{ agentId: "main" }],
+        [
+          {
+            agentId: "main",
+            requesterProfileId: undefined,
+            isCurrent: expect.any(Function),
+            assertCurrent: expect.any(Function),
+          },
+        ],
       ]);
+      const neutral = expectDefined(readChatMetadata.mock.calls[1]?.[0], "neutral metadata read");
+      expect(neutral.isCurrent?.()).toBe(true);
+      expectDefined(neutral.assertCurrent, "neutral metadata authority check")();
       expect(respond).toHaveBeenCalledTimes(2);
       readChatMetadata.mockClear();
       await handler({

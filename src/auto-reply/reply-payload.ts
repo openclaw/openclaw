@@ -12,6 +12,7 @@ import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ReplyPayload, ReplyPayloadTtsSupplement } from "../shared/reply-payload.types.js";
+import type { CommandOwnerAssertion } from "./command-owner-authority.js";
 import type { BlockReplySource } from "./reply/block-reply-source.types.js";
 
 export type {
@@ -237,6 +238,8 @@ export type ReplyPayloadMetadata = {
   precedingInputAnswer?: true;
   /** Visible source represented by this block, excluding synthetic chunk wrappers. */
   blockSourceText?: string;
+  /** UTF-16 source range represented by this block within one assistant message. */
+  blockSourceRange?: readonly [start: number, end: number];
   /** Live source receipts retained until final text recovery settles. */
   blockReplySources?: readonly BlockReplySource[];
   /** Persisted assistant speech facts; never serialized into channel payloads. */
@@ -277,6 +280,8 @@ export type ReplyPayloadMetadata = {
   progressContinuation?: ProgressContinuationCapability;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */
   pendingFinalDeliveryCompletion?: {
+    commandOwnerReference?: CommandOwnerAssertion["recoveryReference"];
+    agentId?: string;
     deliveryId: string;
     intentId: string;
     recoveryRunId?: string;
@@ -353,6 +358,48 @@ export function setReplyPayloadMetadata<T extends object>(
 /** Reads internal metadata attached to a reply payload object. */
 export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
   return replyPayloadMetadata.get(payload);
+}
+
+/** Exact source occurrence represented by one emitted block reply. */
+export type ReplyPayloadSourceOccurrence = {
+  assistantMessageIndex: number;
+  sourceText: string;
+  sourceRange: readonly [start: number, end: number];
+};
+
+/** Reads a complete, internally consistent source occurrence from reply metadata. */
+export function readReplyPayloadSourceOccurrence(
+  payload: object,
+): ReplyPayloadSourceOccurrence | undefined {
+  const metadata = getReplyPayloadMetadata(payload);
+  const assistantMessageIndex = metadata?.assistantMessageIndex;
+  const sourceText = metadata?.blockSourceText;
+  const sourceRange = metadata?.blockSourceRange;
+  if (
+    typeof assistantMessageIndex !== "number" ||
+    !Number.isSafeInteger(assistantMessageIndex) ||
+    assistantMessageIndex < 0 ||
+    typeof sourceText !== "string" ||
+    !Array.isArray(sourceRange) ||
+    sourceRange.length !== 2
+  ) {
+    return undefined;
+  }
+  const [start, end] = sourceRange;
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    start < 0 ||
+    end <= start ||
+    end - start !== sourceText.length
+  ) {
+    return undefined;
+  }
+  return {
+    assistantMessageIndex,
+    sourceText,
+    sourceRange: [start, end],
+  };
 }
 
 /** Explicit speech remains content while the payload waits for TTS admission. */

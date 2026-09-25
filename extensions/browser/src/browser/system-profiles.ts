@@ -2,10 +2,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import type { OpenClawConfig } from "../config/config.js";
-import { getRuntimeConfig } from "../config/config.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolvePreferredOpenClawTmpDir, tempWorkspaceSync } from "openclaw/plugin-sdk/temp-path";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { usesOpenClawMockKeychain } from "./chrome.profile-decoration.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
@@ -166,25 +166,14 @@ export function listSystemProfiles(
 }
 
 /** Create a transactionally coherent snapshot while Chrome may be writing its WAL. */
-function snapshotCookieDatabase(source: string): { databasePath: string; cleanup: () => void } {
-  const tmpRoot = resolvePreferredOpenClawTmpDir();
-  fs.mkdirSync(tmpRoot, { recursive: true });
-  const tempDir = fs.mkdtempSync(path.join(tmpRoot, "openclaw-system-cookies-"));
-  const databasePath = path.join(tempDir, "Cookies");
+function snapshotCookieDatabase(source: string, databasePath: string): void {
   const sourceDatabase = openNodeSqliteDatabase(source, { readOnly: true });
   try {
     sourceDatabase.exec("PRAGMA busy_timeout = 5000");
     sourceDatabase.prepare("VACUUM INTO ?").run(databasePath);
-  } catch (error) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-    throw error;
   } finally {
     sourceDatabase.close();
   }
-  return {
-    databasePath,
-    cleanup: () => fs.rmSync(tempDir, { recursive: true, force: true }),
-  };
 }
 
 /** Snapshot and decrypt cookies from one local macOS Chrome-family profile. */
@@ -205,19 +194,20 @@ export async function readSystemProfileCookies(
 }> {
   assertSystemCookiePlatform(deps.platform);
   const source = resolveSystemCookieSource(params, deps);
-  const snapshot = snapshotCookieDatabase(source.cookiesFile);
-  try {
-    const decrypted = await readChromeCookiesDatabase({
-      browser: source.browser,
-      databasePath: snapshot.databasePath,
-      domains: params.domains,
-      readSecret: deps.readSecret,
-      signal: params.signal,
-    });
-    return { browser: source.browser, systemProfile: source.systemProfile, ...decrypted };
-  } finally {
-    snapshot.cleanup();
-  }
+  using snapshot = tempWorkspaceSync({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-system-cookies-",
+  });
+  const databasePath = snapshot.path("Cookies");
+  snapshotCookieDatabase(source.cookiesFile, databasePath);
+  const decrypted = await readChromeCookiesDatabase({
+    browser: source.browser,
+    databasePath,
+    domains: params.domains,
+    readSecret: deps.readSecret,
+    signal: params.signal,
+  });
+  return { browser: source.browser, systemProfile: source.systemProfile, ...decrypted };
 }
 
 /** Import decrypted system-profile cookies into one managed OpenClaw profile. */

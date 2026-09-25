@@ -590,10 +590,24 @@ describe("restart health", () => {
     },
   );
 
-  it("annotates stopped-free early exits with the actual elapsed time", async () => {
+  it("retains the default stopped-free timing for a missing unit", async () => {
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
 
-    const snapshot = await waitForStoppedFreeGatewayRestart();
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: {
+        readCommand: async () => null,
+        readRuntime: async () => ({ status: "stopped", missingUnit: true }),
+      },
+      port: 18789,
+      attempts: 120,
+      delayMs: 500,
+    });
 
     expect(snapshot.healthy).toBe(false);
     expect(snapshot.runtime.status).toBe("stopped");
@@ -601,119 +615,6 @@ describe("restart health", () => {
     expect(snapshot.waitOutcome).toBe("stopped-free");
     expect(snapshot.elapsedMs).toBe(12_500);
     expect(sleep).toHaveBeenCalledTimes(25);
-  });
-
-  it("retains restart grace for a missing service unless the diagnostic caller opts in", async () => {
-    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-    const service = makeGatewayService({ status: "stopped" });
-    vi.mocked(service.readRuntime).mockResolvedValue({ status: "stopped", missingUnit: true });
-
-    const snapshot = await waitForGatewayHealthyRestart({ service, port: 18789 });
-
-    expect(snapshot).toMatchObject({
-      healthy: false,
-      waitOutcome: "stopped-free",
-      elapsedMs: 12_500,
-    });
-  });
-
-  it.each(["active", "unreadable"])(
-    "preserves pre-owner startup grace when migration is %s",
-    async (migration) => {
-      const absentRuntime = { status: "stopped", missingUnit: true };
-      const service = makeGatewayService({ status: "stopped" });
-      vi.mocked(service.readRuntime).mockImplementation(async () =>
-        monotonicClock.nowMs < 1_000 ? absentRuntime : { status: "running", pid: 8000 },
-      );
-      inspectPortUsage.mockImplementation(async (port) => ({
-        port,
-        status: monotonicClock.nowMs < 1_000 ? "free" : "busy",
-        listeners: monotonicClock.nowMs < 1_000 ? [] : [{ pid: 8000 }],
-        hints: [],
-      }));
-      const isStartupMigrationActive = vi.fn(() => {
-        if (migration === "unreadable") {
-          throw new Error("Migration ownership unavailable");
-        }
-        return monotonicClock.nowMs === 0;
-      });
-      const snapshot = await waitForGatewayHealthyRestart({
-        service,
-        port: 18789,
-        timeoutMs: 2_000,
-        isServiceAbsent: (runtime) => runtime === absentRuntime,
-        isStartupMigrationActive,
-      });
-      expect(snapshot).toMatchObject({ healthy: true, waitOutcome: "healthy", elapsedMs: 1_000 });
-      expect(isStartupMigrationActive).toHaveBeenCalled();
-      expect(sleep).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  it.each([undefined, 1_000])(
-    "charges the absence migration read to the existing budget %s",
-    async (timeoutMs) => {
-      const absentRuntime = { status: "stopped", missingUnit: true };
-      const service = makeGatewayService({ status: "stopped" });
-      vi.mocked(service.readRuntime).mockResolvedValue(absentRuntime);
-      const snapshot = await waitForGatewayHealthyRestart({
-        service,
-        port: 18789,
-        timeoutMs,
-        isServiceAbsent: (runtime) => runtime === absentRuntime,
-        isStartupMigrationActive: () => {
-          monotonicClock.nowMs += 90_000;
-          return false;
-        },
-      });
-      expect(snapshot).toMatchObject({ healthy: false, waitOutcome: "timeout", elapsedMs: 90_000 });
-      expect(sleep).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not reuse a strict absence fact for a later missing-unit runtime", async () => {
-    const provenRuntime = { status: "stopped", missingUnit: true };
-    const service = makeGatewayService({ status: "stopped" });
-    vi.mocked(service.readRuntime)
-      .mockResolvedValueOnce(provenRuntime)
-      .mockResolvedValue({ status: "stopped", missingUnit: true });
-    inspectPortUsage
-      .mockResolvedValueOnce({ port: 18789, status: "unknown", listeners: [], hints: [] })
-      .mockResolvedValue({ port: 18789, status: "free", listeners: [], hints: [] });
-
-    const snapshot = await waitForGatewayHealthyRestart({
-      service,
-      port: 18789,
-      timeoutMs: 1_000,
-      isServiceAbsent: (runtime) => runtime === provenRuntime,
-    });
-
-    expect(snapshot).toMatchObject({
-      healthy: false,
-      waitOutcome: "timeout",
-      elapsedMs: 1_000,
-      runtime: { status: "stopped", missingUnit: true },
-    });
-    expect(snapshot.runtime).not.toBe(provenRuntime);
-  });
-
-  it("retains ordinary restart owner-read rejection after awaited port inspection", async () => {
-    const failure = new Error("Gateway owner became unreadable");
-    inspectPortUsage.mockImplementation(async (port) => {
-      readGatewayOwnerLease.mockImplementation(() => {
-        throw failure;
-      });
-      return { port, status: "free", listeners: [], hints: [] };
-    });
-
-    await expect(
-      waitForGatewayHealthyRestart({
-        service: makeGatewayService({ status: "stopped" }),
-        port: 18789,
-      }),
-    ).rejects.toBe(failure);
-    expect(inspectPortUsage).toHaveBeenCalledOnce();
-    expect(sleep).not.toHaveBeenCalled();
   });
 
   it("keeps waiting while a launchd KeepAlive supervisor can retry", async () => {

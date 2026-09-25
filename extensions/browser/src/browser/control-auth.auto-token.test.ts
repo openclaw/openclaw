@@ -1,7 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Browser tests cover control auth.auto token plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectGeneratedTokenPersistedToGatewayAuth } from "../../test-support.js";
-import type { OpenClawConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
@@ -71,17 +71,19 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../config/config.js", () => ({
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
   getRuntimeConfig: mocks.getRuntimeConfig,
+}));
+
+vi.mock("openclaw/plugin-sdk/config-mutation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/config-mutation")>()),
   replaceConfigFile: mocks.replaceConfigFile,
   mutateConfigFile: mocks.mutateConfigFile,
 }));
 
-vi.mock("../gateway/startup-auth.js", () => ({
+vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
   ensureGatewayStartupAuth: mocks.ensureGatewayStartupAuth,
-}));
-
-vi.mock("../gateway/auth.js", () => ({
   resolveGatewayAuth: mocks.resolveGatewayAuth,
 }));
 

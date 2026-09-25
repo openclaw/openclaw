@@ -78,8 +78,11 @@
   overscroll-behavior: auto;
 }
 
-:root[data-theme-mode="light"]
-  :is(.session-progress-card--composer, .chat-queue, .agent-chat__goal--active) {
+:root[data-theme-mode="light"] .session-progress-card--composer {
+  border-color: var(--chat-composer-light-outline);
+}
+
+:root[data-theme-mode="light"] :is(.chat-queue, .agent-chat__goal--active) {
   border-color: transparent;
   box-shadow: inset 0 0 0 1px var(--chat-composer-light-outline);
 }
@@ -342,6 +345,10 @@
   font-size: var(--chat-composer-editor-size);
   line-height: var(--chat-composer-editor-line);
   outline: none;
+}
+
+.agent-chat__composer-combobox > textarea {
+  field-sizing: content;
 }
 
 .agent-chat__composer-combobox > textarea:is([data-scroll-fade-top], [data-scroll-fade-bottom]) {
@@ -1226,6 +1233,11 @@
   .agent-chat__input--mobile-toolbar .agent-chat__composer-footer svg {
     width: var(--chat-mobile-row-icon-size);
     height: var(--chat-mobile-row-icon-size);
+  }
+
+  /* Keep the muted default below action-specific foregrounds regardless of
+     lazy stylesheet order. */
+  .agent-chat__input--mobile-toolbar :where(.agent-chat__composer-footer) svg {
     color: var(--muted);
   }
 

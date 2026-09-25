@@ -21,13 +21,13 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { retryableGatewayDelayMs } from "./chat-outbox-retry.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import {
   clearPendingQueueItemsForRun,
   confirmQueuedMessageCustody,
   removeDeliveredQueuedChatSendForRun,
-  syncVisibleChatQueueProjection,
   updateQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -225,6 +225,12 @@ export async function readCurrentStoredChatHistory(
       if (!isCurrent() || !(err instanceof GatewayRequestError)) {
         return "blocked";
       }
+      const current = readStoredChatOutbox(host, outbox)?.queue.find(
+        (entry) => entry.id === item.id,
+      );
+      if (!current || !sameQueuedDeliveryVersion(current, item)) {
+        return "blocked";
+      }
       const attempted =
         (item.sendAttempts ?? 0) > 0 ||
         item.sendRequestStartedAtMs !== undefined ||
@@ -257,7 +263,7 @@ export async function readCurrentStoredChatHistory(
     if (!currentOutbox || !currentItem || !sameQueuedDeliveryVersion(currentItem, item)) {
       return "continue";
     }
-    syncVisibleChatQueueProjection(host);
+    chatOutboxOwner(host).syncHost(host);
     const pendingInput = reconcilePendingChatOutboxInput(
       host,
       outbox,

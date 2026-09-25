@@ -5,7 +5,7 @@ import {
   readSessionTranscriptMessageEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import {
   addSessionSuggestion,
   listSessionSuggestions,
@@ -324,8 +324,11 @@ describe("session suggestion handlers", () => {
               client: { internal?: { senderAttribution?: { id?: string; name?: string } } };
               respond: RespondFn;
             }) => {
-              SessionManager.appendMessageToTranscript(
-                { ...transcriptScope, sessionKey, storePath: target.storePath },
+              SessionManager.open({
+                ...transcriptScope,
+                sessionKey,
+                storePath: target.storePath,
+              }).appendMessage(
                 buildPersistedUserTurnMessage({
                   text: params.message,
                   idempotencyKey: params.idempotencyKey,

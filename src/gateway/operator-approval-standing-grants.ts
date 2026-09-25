@@ -6,7 +6,11 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { stableStringify } from "@openclaw/normalization-core";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
-import { loadedCronStoreFromRows } from "../cron/store/row-codec.js";
+import {
+  loadedCronStoreFromRows,
+  resolveCronJobGrantDefinitionGenerationFloor,
+  resolveCronJobGrantDefinitionRevision,
+} from "../cron/store/row-codec.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -23,6 +27,7 @@ import {
 import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.types.js";
 
 const STANDING_GRANT_TABLE = "operator_approval_standing_grants";
+const STANDING_GRANT_GENERATION_TABLE = "operator_approval_standing_grant_generations";
 
 // Mirrors the canonical declaration in openclaw-state-schema.sql; the table is
 // a first-use lazy additive surface (FIRST_USE_STATE_TABLES) so older readers
@@ -46,11 +51,20 @@ CREATE TABLE IF NOT EXISTS operator_approval_standing_grants (
 
 CREATE INDEX IF NOT EXISTS idx_operator_approval_standing_grants_binding
   ON operator_approval_standing_grants(agent_id, cron_job_id, operation_binding, created_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS operator_approval_standing_grant_generations (
+  grant_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES operator_approval_standing_grants(grant_id) ON DELETE CASCADE,
+  job_definition_generation INTEGER NOT NULL CHECK (job_definition_generation >= 1)
+) STRICT;
 `;
 
 type StandingGrantDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "operator_approval_standing_grants" | "operator_approvals" | "cron_jobs"
+  | "operator_approval_standing_grants"
+  | "operator_approval_standing_grant_generations"
+  | "operator_approvals"
+  | "cron_jobs"
 >;
 
 type CronStandingGrantRecord = CronStandingGrantMintSpec & {
@@ -134,6 +148,10 @@ function ensureStandingGrantSchema(db: DatabaseSync): void {
   db.exec(STANDING_GRANT_SCHEMA_SQL);
 }
 
+function decodeDefinitionGeneration(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : null;
+}
+
 /**
  * Mints one standing grant inside the caller's open write transaction — the
  * same transaction that resolves the minting approval to allow-always. A
@@ -160,6 +178,48 @@ export function mintCronStandingGrantLocked(
       .where("expires_at_ms", "is not", null)
       .where("expires_at_ms", "<=", params.nowMs),
   );
+  const jobRows = executeSqliteQuerySync(
+    database.db,
+    stateDb.selectFrom("cron_jobs").selectAll().where("job_id", "=", params.cronJobId).limit(2),
+  ).rows;
+  if (jobRows.length !== 1) {
+    return;
+  }
+  const jobRow = jobRows[0]!;
+  const loaded = loadedCronStoreFromRows(jobRows);
+  const job = loaded.store.jobs.find((entry) => entry.id === params.cronJobId);
+  if (!job || resolveCronJobConfigRevision(job) !== params.jobConfigRevision) {
+    return;
+  }
+  const grantDefinitionRevision = resolveCronJobGrantDefinitionRevision(job);
+  let jobDefinitionGeneration = decodeDefinitionGeneration(jobRow.grant_definition_generation);
+  const projectionStale =
+    jobRow.grant_definition_revision !== grantDefinitionRevision ||
+    jobRow.grant_definition_updated_at !== jobRow.updated_at;
+  if (projectionStale || jobDefinitionGeneration === null) {
+    const retainedGenerationFloor = resolveCronJobGrantDefinitionGenerationFloor(
+      database.db,
+      params.cronJobId,
+    );
+    jobDefinitionGeneration = decodeDefinitionGeneration(
+      Math.max((jobDefinitionGeneration ?? 0) + 1, retainedGenerationFloor),
+    );
+    if (jobDefinitionGeneration === null) {
+      return;
+    }
+    executeSqliteQuerySync(
+      database.db,
+      stateDb
+        .updateTable("cron_jobs")
+        .set({
+          grant_definition_revision: grantDefinitionRevision,
+          grant_definition_generation: jobDefinitionGeneration,
+          grant_definition_updated_at: jobRow.updated_at,
+        })
+        .where("store_key", "=", jobRow.store_key)
+        .where("job_id", "=", jobRow.job_id),
+    );
+  }
   executeSqliteQuerySync(
     database.db,
     stateDb
@@ -168,10 +228,11 @@ export function mintCronStandingGrantLocked(
       .where("cron_job_id", "=", params.cronJobId)
       .where("operation_binding", "=", params.operationBinding),
   );
+  const grantId = randomUUID();
   executeSqliteQuerySync(
     database.db,
     stateDb.insertInto(STANDING_GRANT_TABLE).values({
-      grant_id: randomUUID(),
+      grant_id: grantId,
       minted_by_approval_id: params.approvalId,
       agent_id: params.agentId,
       cron_job_id: params.cronJobId,
@@ -183,6 +244,13 @@ export function mintCronStandingGrantLocked(
       revoked_by: null,
       last_used_at_ms: null,
       use_count: 0,
+    }),
+  );
+  executeSqliteQuerySync(
+    database.db,
+    stateDb.insertInto(STANDING_GRANT_GENERATION_TABLE).values({
+      grant_id: grantId,
+      job_definition_generation: jobDefinitionGeneration,
     }),
   );
 }
@@ -271,6 +339,29 @@ function lookupCronStandingGrant(
       return { outcome: "job-missing" };
     }
     if (resolveCronJobConfigRevision(job) !== grant.job_config_revision) {
+      return { outcome: "job-revision-changed" };
+    }
+    const jobRow = jobRows[0]!;
+    if (jobRow.grant_definition_revision !== resolveCronJobGrantDefinitionRevision(job)) {
+      return { outcome: "job-revision-changed" };
+    }
+    if (jobRow.grant_definition_updated_at !== jobRow.updated_at) {
+      return { outcome: "job-revision-changed" };
+    }
+    const grantGenerationRow = tableExists(database.db, STANDING_GRANT_GENERATION_TABLE)
+      ? executeSqliteQueryTakeFirstSync(
+          database.db,
+          stateDb
+            .selectFrom(STANDING_GRANT_GENERATION_TABLE)
+            .select("job_definition_generation")
+            .where("grant_id", "=", grant.grant_id),
+        )
+      : undefined;
+    const grantGeneration = decodeDefinitionGeneration(
+      grantGenerationRow?.job_definition_generation,
+    );
+    const jobGeneration = decodeDefinitionGeneration(jobRow.grant_definition_generation);
+    if (grantGeneration === null || jobGeneration === null || grantGeneration !== jobGeneration) {
       return { outcome: "job-revision-changed" };
     }
     // Parent reversal fails closed: the approval row is the sole authorization

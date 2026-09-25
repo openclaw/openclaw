@@ -1,9 +1,11 @@
-import { vi } from "vitest";
+import { expect, test, vi } from "vitest";
+import { getRuntimeConfig as getCurrentRuntimeConfig } from "../config/io.js";
 import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { ChatRunRegistration, ChatRunState } from "./server-chat-state.js";
-import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
 import { agentDiscoveryMock } from "./test-helpers.runtime-state.js";
 
 type AgentEventHandler = (event: AgentEventPayload) => void;
@@ -93,8 +95,7 @@ export function createChatVisionModelCatalogSnapshot(): Awaited<
 export function createDirectChatContext(
   overrides: Partial<GatewayRequestContext> = {},
 ): GatewayRequestContext {
-  const config = {};
-  const getRuntimeConfig = overrides.getRuntimeConfig ?? (() => config);
+  const getRuntimeConfig = overrides.getRuntimeConfig ?? getCurrentRuntimeConfig;
   const loadGatewayModelCatalog =
     overrides.loadGatewayModelCatalog ??
     vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(async () =>
@@ -166,4 +167,103 @@ export function createTextTranscriptEvent(
       ...message,
     },
   };
+}
+
+type ChatConnectionIdentityInput = {
+  authenticatedUserId?: string;
+  authenticatedUserProfile?: {
+    profileId: string;
+    displayName: string | null;
+    hasAvatar: boolean;
+  };
+  idempotencyKey: string;
+  message: string;
+};
+
+export function registerChatConnectionIdentityTest(harness: {
+  withDirectChatSession: (run: () => Promise<void>) => Promise<void>;
+  prepareSession: () => Promise<void>;
+  waitForSessionWork: () => Promise<void> | undefined;
+  sendControlUiChat: (
+    params: ChatConnectionIdentityInput & { context: GatewayRequestContext; respond: RespondFn },
+  ) => Promise<void>;
+  readTranscript: () => unknown[];
+}) {
+  test("chat.send persists optional connection identity per turn", async () => {
+    await harness.withDirectChatSession(async () => {
+      await harness.prepareSession();
+      const context = createDirectChatContext();
+      const send = async (params: ChatConnectionIdentityInput) => {
+        const removeCount = (context.removeChatRun as ReturnType<typeof vi.fn>).mock.calls.length;
+        await harness.sendControlUiChat({
+          context,
+          ...params,
+          respond: vi.fn() as RespondFn,
+        });
+        await harness.waitForSessionWork();
+        expect(context.removeChatRun).toHaveBeenCalledTimes(removeCount + 1);
+      };
+
+      await send({
+        authenticatedUserId: "alice@example.com",
+        authenticatedUserProfile: {
+          profileId: ensureProfileForEmail("alice@example.com").id,
+          displayName: "Alice",
+          hasAvatar: false,
+        },
+        idempotencyKey: "idem-attributed-alice",
+        message: "prompt from alice",
+      });
+      await send({
+        authenticatedUserId: "bob@example.com",
+        authenticatedUserProfile: {
+          profileId: ensureProfileForEmail("bob@example.com").id,
+          displayName: "Bob",
+          hasAvatar: true,
+        },
+        idempotencyKey: "idem-attributed-bob",
+        message: "prompt from bob",
+      });
+      await send({
+        idempotencyKey: "idem-unattributed",
+        message: "prompt without identity",
+      });
+
+      const transcriptEvents = harness.readTranscript();
+      expect(transcriptEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              role: "user",
+              content: "prompt from alice",
+              __openclaw: expect.objectContaining({
+                senderId: ensureProfileForEmail("alice@example.com").id,
+                senderName: "Alice",
+              }),
+            }),
+          }),
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              role: "user",
+              content: "prompt from bob",
+              __openclaw: expect.objectContaining({
+                senderId: ensureProfileForEmail("bob@example.com").id,
+                senderName: "Bob",
+              }),
+            }),
+          }),
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              role: "user",
+              content: "prompt without identity",
+              __openclaw: expect.not.objectContaining({ senderId: expect.anything() }),
+            }),
+          }),
+        ]),
+      );
+    });
+  });
 }

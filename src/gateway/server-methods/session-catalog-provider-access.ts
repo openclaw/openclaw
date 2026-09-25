@@ -4,6 +4,7 @@ import {
   type SessionCatalogShareRoute,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { allowsProcessHomeSessionScan } from "../../config/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { PluginInstanceUnavailableError } from "../../plugins/plugin-instance-error.js";
 import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "../../plugins/plugin-instance.types.js";
@@ -12,13 +13,15 @@ import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type {
+  SessionCatalogCreateTarget,
   SessionCatalogListProviderParams,
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
 import { SessionCatalogListAdmission } from "./session-catalog-list-admission.js";
 import { startSessionCatalogListDiagnostics } from "./session-catalog-list-diagnostics.js";
+import { catalogError } from "./session-catalog-result.js";
 
-const MAX_CONCURRENT_SESSION_CATALOG_LISTS = 4;
+const MAX_CONCURRENT_SESSION_CATALOG_LISTS = 16;
 const MAX_QUEUED_SESSION_CATALOG_LISTS = 32;
 const PROCESS_HOME_CATALOG_SKIP_MESSAGE =
   "external session catalog HOME fallback skipped: isolated state; configure an explicit root to enable";
@@ -37,8 +40,8 @@ export function allowProcessHomeFallback(logGateway?: {
 }
 
 // Catalog adapters may scan local databases or invoke external CLIs. Bound the
-// executing work globally and admit one step per provider so a slow source
-// cannot occupy every slot with overlapping requests.
+// executing work globally with headroom for independent providers. Each provider
+// owns one active step and its own bounded queue of waiting callers.
 const sessionCatalogListAdmission = new SessionCatalogListAdmission(
   MAX_CONCURRENT_SESSION_CATALOG_LISTS,
   MAX_QUEUED_SESSION_CATALOG_LISTS,
@@ -252,4 +255,60 @@ export function createSessionCatalogRequestNodeSnapshot(): NonNullable<
       Promise.reject(new Error("Plugin node runtime is only available inside the Gateway."));
     return request;
   };
+}
+
+type ProviderCreateTargetResolution =
+  | { ok: true; target: SessionCatalogCreateTarget }
+  | { ok: false; message: string };
+
+const providerCreateTargetsByConfig = new WeakMap<
+  OpenClawConfig,
+  WeakMap<SessionCatalogProvider, Map<string, ProviderCreateTargetResolution>>
+>();
+
+function providerCreateTargetCache(
+  config: OpenClawConfig,
+  provider: SessionCatalogProvider,
+): Map<string, ProviderCreateTargetResolution> {
+  let byProvider = providerCreateTargetsByConfig.get(config);
+  if (!byProvider) {
+    byProvider = new WeakMap();
+    providerCreateTargetsByConfig.set(config, byProvider);
+  }
+  let byAgent = byProvider.get(provider);
+  if (!byAgent) {
+    byAgent = new Map();
+    byProvider.set(provider, byAgent);
+  }
+  return byAgent;
+}
+
+export function resolveProviderCreateTarget(
+  provider: SessionCatalogProvider,
+  agentId: string,
+  config: OpenClawConfig,
+): ProviderCreateTargetResolution {
+  const cache = providerCreateTargetCache(config, provider);
+  const cached = cache.get(agentId);
+  if (cached) {
+    // The provider contract makes create targets config-derived. A reload changes config identity;
+    // retaining the old target would advertise a model no longer allowed.
+    return cached;
+  }
+  let resolution: ProviderCreateTargetResolution;
+  try {
+    const target = provider.resolveCreateSession?.({ agentId });
+    const model = target?.model.trim();
+    const agentRuntime = target?.agentRuntime.trim();
+    resolution =
+      model && agentRuntime
+        ? { ok: true, target: { model, agentRuntime } }
+        : { ok: false, message: `session catalog ${provider.id} cannot create sessions` };
+  } catch (error) {
+    // Resolver exceptions are not config state. Retry them on the next request so a transient
+    // provider initialization failure cannot suppress session creation until config reload.
+    return { ok: false, message: catalogError(error).message };
+  }
+  cache.set(agentId, resolution);
+  return resolution;
 }

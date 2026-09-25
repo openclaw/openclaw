@@ -3,6 +3,12 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { joinClawHubPluginCatalog } from "./catalog-discovery.js";
 import {
   emptyMetadataSnapshot,
@@ -64,7 +70,10 @@ function mockHostedOfficialCatalog(entries: unknown[]) {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("managed plugin catalog", () => {
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    clearRuntimeConfigSnapshot();
+  });
 
   beforeEach(() => {
     clearManagedPluginCatalogCache();
@@ -95,6 +104,7 @@ describe("managed plugin catalog", () => {
         version: "2.0.0",
         featured: true,
         order: 40,
+        clawhubPackage: "@openclaw/diffs",
         install: { source: "clawhub", packageName: "@openclaw/diffs" },
       }),
     ]);
@@ -112,6 +122,7 @@ describe("managed plugin catalog", () => {
         installed: false,
         featured: true,
         order: 40,
+        clawhubPackage: "@openclaw/diffs",
         install: { source: "official", pluginId: "diffs" },
       }),
     ]);
@@ -154,6 +165,95 @@ describe("managed plugin catalog", () => {
       id: "needs-config",
       enabled: false,
       state: "disabled",
+    });
+  });
+
+  describe("authored credential validation", () => {
+    const secretRef = { source: "store", provider: "default", id: "TEST_PLUGIN_KEY" };
+    const configured = (config?: Record<string, unknown>, enabled = true): OpenClawConfig => ({
+      plugins: { entries: { "ref-plugin": { enabled, ...(config ? { config } : {}) } } },
+    });
+
+    beforeEach(() => {
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({
+          enabled: true,
+          id: "ref-plugin",
+          configSchema: {
+            type: "object",
+            required: ["apiKey"],
+            properties: {
+              apiKey: {
+                type: "object",
+                required: ["source", "provider", "id"],
+                properties: {
+                  source: { const: "store" },
+                  provider: { type: "string" },
+                  id: { type: "string" },
+                },
+              },
+            },
+          },
+        }),
+      );
+    });
+
+    it.each(["active", "captured"])(
+      "validates the %s runtime's authored refs across a catalog await",
+      async (mode) => {
+        const source = configured({ apiKey: secretRef });
+        const runtime = configured({ apiKey: "synthetic-resolved-value" });
+        setRuntimeConfigSnapshot(runtime, source);
+        const config = mode === "captured" ? captureRuntimeConfig(runtime) : runtime;
+        // Captured requests can already predate the current publication on entry.
+        if (mode === "captured") {
+          setRuntimeConfigSnapshot(configured(), configured());
+        }
+        mocks.officialCatalog.mockImplementationOnce(async () => {
+          setRuntimeConfigSnapshot(configured(), configured({ apiKey: 42 }));
+          return { source: "hosted", entries: [] };
+        });
+
+        const catalog = await listManagedPlugins({ config, env: {} });
+
+        expect(catalog.plugins[0]).toMatchObject({ id: "ref-plugin", state: "enabled" });
+        expect(catalog.plugins[0]).not.toHaveProperty("error");
+        expect(runtime.plugins?.entries?.["ref-plugin"]?.config?.apiKey).toBe(
+          "synthetic-resolved-value",
+        );
+        expect(source.plugins?.entries?.["ref-plugin"]?.config?.apiKey).toEqual(secretRef);
+      },
+    );
+
+    it.each([
+      ["invalid authored config", { apiKey: "synthetic-invalid-plaintext" }, "error"],
+      ["missing authored config", undefined, "needs-setup"],
+    ] as const)("preserves %s", async (_name, authoredConfig, state) => {
+      const source = configured(authoredConfig, false);
+      const runtime = configured({ apiKey: secretRef }, false);
+      setRuntimeConfigSnapshot(runtime, source);
+
+      const catalog = await listManagedPlugins({ config: runtime, env: {} });
+
+      expect(catalog.plugins[0]).toMatchObject({ state });
+      if (state === "error") {
+        expect(catalog.plugins[0]?.error).toBe("apiKey: must be object");
+      }
+    });
+
+    it("does not replace an explicit candidate with the active source", async () => {
+      setRuntimeConfigSnapshot(
+        configured({ apiKey: "synthetic-resolved-value" }),
+        configured({ apiKey: secretRef }),
+      );
+      const candidate = configured({ apiKey: "synthetic-invalid-candidate" });
+
+      const catalog = await listManagedPlugins({ config: candidate, env: {} });
+
+      expect(catalog.plugins[0]).toMatchObject({
+        state: "error",
+        error: "apiKey: must be object",
+      });
     });
   });
 

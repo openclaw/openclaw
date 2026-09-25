@@ -25,7 +25,7 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
     status: unknown,
     position: unknown,
     scope?: WorkboardMutationScope,
-    options: { expectedUpdatedAt?: number } = {},
+    options: { expectedUpdatedAt?: number; assertOwnerCurrent?: () => void } = {},
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
       const result = await this.updateLatestCard(
@@ -43,7 +43,7 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
         },
       );
       return result.card;
-    });
+    }, options.assertOwnerCurrent);
   }
 
   async promote(
@@ -52,10 +52,7 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
     scope?: WorkboardMutationScope | null,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
       const reason = normalizeBoundedString(input.reason, undefined, 1000, "promote reason");
       const comments = reason

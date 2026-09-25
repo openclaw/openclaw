@@ -418,8 +418,7 @@ it.each([
 ])("handles Scheduled Task probe failures before update: %j", (scenario) =>
   withServiceHome(async (home) => {
     mockProcessPlatform("win32");
-    // Native read/spawn mocks consume no time; preserve exact shared-deadline assertions.
-    vi.spyOn(performance, "now").mockReturnValue(1_000);
+    vi.spyOn(performance, "now").mockReturnValue(1_000); // Native mocks consume no time.
     mocks.taskState = 4;
     vi.mocked(spawnSync).mockReset();
     for (let attempt = 0; attempt < scenario.failures; attempt++) {

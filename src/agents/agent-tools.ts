@@ -14,7 +14,6 @@ import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
-import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -24,13 +23,13 @@ import {
 } from "./agent-tool-metadata.js";
 import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
+import { projectMemoryFlushTools } from "./agent-tools.memory-flush.js";
 import {
   filterToolsByMessageProvider,
   messageProviderExcludesTool,
 } from "./agent-tools.message-provider-policy.js";
 import { applyModelProviderToolPolicy } from "./agent-tools.model-provider-policy.js";
 import type { OpenClawCodingToolsOptions } from "./agent-tools.options.js";
-import { wrapToolMemoryFlushAppendOnlyWrite } from "./agent-tools.read.js";
 import {
   getActiveAgentRingZeroTools,
   mergeAgentRingZeroTools,
@@ -71,6 +70,7 @@ import { subagentAttachmentRootForRun } from "./subagents/subagent-attachment-pa
 import { resolveToolFsConfig } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
+import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
 import {
   expandToolGroups,
   hasRestrictiveAllowPolicy,
@@ -85,10 +85,8 @@ import {
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
-import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
-
-const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
+import { prepareSessionPortalToolAccess } from "./tools/session-portal-target.js";
 
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 
@@ -96,6 +94,7 @@ export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js"
 export function createOpenClawCodingToolsInternal(
   options?: OpenClawCodingToolsOptions,
   skillReadResources?: SkillSnapshot["resolvedSkills"],
+  onPolicyFilter?: (event: ToolPolicyFilterEvent) => void,
 ): AnyAgentTool[] {
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const isMemoryFlushRun = options?.trigger === "memory";
@@ -150,6 +149,7 @@ export function createOpenClawCodingToolsInternal(
       skillsSnapshot: options?.skillsSnapshot,
       sandboxToolPolicy: sandbox?.tools,
       runtimeToolAllowlist: options?.runtimeToolAllowlist,
+      runtimePluginToolGrant: options?.runtimePluginToolGrant,
       inheritRuntimeToolAllowlist: options?.inheritRuntimeToolAllowlist,
       inputProvenance: options?.inputProvenance,
       trustedInternalHandoff: options?.trustedInternalHandoff,
@@ -388,18 +388,15 @@ export function createOpenClawCodingToolsInternal(
   });
   const cronCreatorAuthorityResolver = bindActiveCronCreatorAuthorityResolver(options?.runId);
   const cronManagementGrant = bindCronManagementGrant(options?.runId);
-  // Exact-run capabilities authorize only their automation operations. Keep every
-  // other owner-only control-plane tool denied for senderless operator turns.
-  const ownerOnlyCoreToolDenylist =
-    options?.senderIsOwner === false
-      ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
-          (toolName) =>
-            toolName !== AUTOMATIONS_TOOL_NAME ||
-            !(cronCreatorAuthorityResolver || cronManagementGrant),
-        )
-      : [];
-  const ownerOnlyCoreToolPolicy =
-    ownerOnlyCoreToolDenylist.length > 0 ? { deny: ownerOnlyCoreToolDenylist } : undefined;
+  const { sessionPortalTarget, ownerOnlyCoreToolDenylist, ownerOnlyCoreToolPolicy } =
+    prepareSessionPortalToolAccess({
+      sessionKey: executionSessionKey,
+      agentId: executionAgentId,
+      sessionId: options?.sessionId,
+      senderIsOwner: options?.senderIsOwner,
+      sandboxed: Boolean(sandbox),
+      hasAutomationGrant: Boolean(cronCreatorAuthorityResolver || cronManagementGrant),
+    });
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
     capabilityProfile.policy.explicitToolAllowlist,
     runtimePluginToolGrant,
@@ -527,6 +524,7 @@ export function createOpenClawCodingToolsInternal(
       ? mergeAgentRingZeroTools(
           ringZeroTools,
           createOpenClawTools({
+            sessionPortalTarget,
             ...(options?.systemAgentTool ? { systemAgentTool: options.systemAgentTool } : {}),
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
@@ -662,30 +660,21 @@ export function createOpenClawCodingToolsInternal(
     options?.swarmCollector && options.swarmOutputSchema
       ? tools.find((tool) => tool.name === "structured_output")
       : undefined;
-  const toolsForMemoryFlush: AnyAgentTool[] = isMemoryFlushRun && memoryFlushWritePath ? [] : tools;
-  if (isMemoryFlushRun && memoryFlushWritePath) {
-    for (const tool of tools) {
-      if (!MEMORY_FLUSH_ALLOWED_TOOL_NAMES.has(tool.name)) {
-        continue;
-      }
-      if (tool.name === "write") {
-        toolsForMemoryFlush.push(
-          wrapToolMemoryFlushAppendOnlyWrite(tool, {
-            root: memoryFlushWriteRoot,
-            relativePath: memoryFlushWritePath,
-            memoryWriteProvenance,
-            containerWorkdir: sandbox?.containerWorkdir,
-            sandbox:
-              sandboxRoot && sandboxFsBridge
-                ? { root: sandboxRoot, bridge: sandboxFsBridge }
-                : undefined,
-          }),
-        );
-        continue;
-      }
-      toolsForMemoryFlush.push(tool);
-    }
-  }
+  const toolsForMemoryFlush = projectMemoryFlushTools(
+    tools,
+    isMemoryFlushRun && memoryFlushWritePath
+      ? {
+          root: memoryFlushWriteRoot,
+          relativePath: memoryFlushWritePath,
+          memoryWriteProvenance,
+          containerWorkdir: sandbox?.containerWorkdir,
+          sandbox:
+            sandboxRoot && sandboxFsBridge
+              ? { root: sandboxRoot, bridge: sandboxFsBridge }
+              : undefined,
+        }
+      : undefined,
+  );
   const unavailableCoreToolReason =
     isMemoryFlushRun && memoryFlushWritePath
       ? "memory-triggered compaction runs expose only read and append-only write"
@@ -709,7 +698,7 @@ export function createOpenClawCodingToolsInternal(
   });
   // Sender identity is primarily command/action auth, with one Gateway parity exception:
   // explicit non-owner callers never receive owner-only control-plane core tools.
-  const subagentFiltered = messageInvocationPolicy.filter();
+  const subagentFiltered = messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter);
   // Host-bound ring-zero tools carry their own authority checks. Agent policy
   // must not deadlock setup, but the tools still receive schema/hook wrappers.
   const authorizedTools = applySwarmCollectorToolContract(

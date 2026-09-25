@@ -148,8 +148,12 @@ async function createGatewayKernelWithSdkHost(
   const bootId = suppliedBootId ?? randomUUID();
   // Capture before bootstrap yields or creates workers; concurrent downloads need a restart.
   captureRemoteModelCatalogStartupSnapshot();
+  // Retain cancellation before bootstrap owns resources or an update replaces its chunk.
+  const { cancelPreparedModelRuntimeRefresh } = await import("../agents/prepared-model-runtime.js");
   ensureOpenClawCliOnPath();
-  const pluginMetadata = retainGatewayPluginMetadata();
+  const pluginMetadata = retainGatewayPluginMetadata(async () => {
+    cancelPreparedModelRuntimeRefresh();
+  });
   let pluginRegistryOwner: ReturnType<typeof createPluginRegistryOwner> | undefined;
   let lifecycleRuntime: Awaited<ReturnType<typeof prepareGatewayLifecycle>> | undefined;
   let kernelState: Awaited<ReturnType<typeof prepareGatewayKernelState>> | undefined;
@@ -254,7 +258,7 @@ async function createGatewayKernelWithSdkHost(
     startupError = error;
   }
   return await rethrowGatewayStartupError(startupError, async () => {
-    pluginMetadata.beginClose();
+    await pluginMetadata.beginClose();
     if (lifecycleRuntime) {
       // The lifecycle releases metadata only after its required joins succeed.
       await lifecycleRuntime.closeOnStartupFailure();

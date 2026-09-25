@@ -189,7 +189,6 @@ export function loadOpenClawPluginsCore(
                 subagent: options.runtimeOptions?.subagent ?? borrowedSubagent,
                 nodes: options.runtimeOptions?.nodes ?? borrowedNodes,
               },
-              loadPluginModule,
             });
     const capabilityCatalogContext =
       options.capabilityCatalogContext ??
@@ -477,7 +476,13 @@ export function loadOpenClawPluginsCore(
         ),
       });
     }
-    maybeThrowOnPluginLoadError(registry, options.throwOnLoadError, retained);
+    maybeThrowOnPluginLoadError(
+      registry,
+      options.throwOnLoadError,
+      retained,
+      options.previousRegistry,
+      replacedIds,
+    );
     if (context.shouldActivate && options.mode !== "validate") {
       const failedPlugins = registry.plugins.filter((plugin) => plugin.failedAt != null);
       if (failedPlugins.length > 0) {

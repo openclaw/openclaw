@@ -2,11 +2,11 @@
 // Optional deep fields are included only when their upstream probes actually ran.
 
 import type { BestEffortConfigSnapshot } from "../config/io.js";
-import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
 import {
-  buildStatusGatewayJsonPayloadFromSurface,
-  type StatusOverviewSurface,
-} from "./status-overview-surface.ts";
+  buildGatewayStatusJsonPayload,
+  resolveStatusUpdateChannelInfo,
+} from "./status-all/format.js";
+import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 
 /** Combines scan summary, overview surface, services, agents, diagnostics, and optional deep probes. */
 export function buildStatusJsonPayload(params: {
@@ -36,7 +36,7 @@ export function buildStatusJsonPayload(params: {
     updateChannelSource: channelInfo.source,
     memory: params.memory,
     memoryPlugin: params.memoryPlugin,
-    gateway: buildStatusGatewayJsonPayloadFromSurface({ surface: params.surface }),
+    gateway: buildGatewayStatusJsonPayload(params.surface),
     gatewayService: params.surface.gatewayService,
     nodeService: params.surface.nodeService,
     agents: params.agents,

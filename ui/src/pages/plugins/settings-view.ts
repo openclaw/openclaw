@@ -55,6 +55,7 @@ type SharedProps = Omit<
   busy: Readonly<Record<string, PluginMutationAction>>;
   messages: Readonly<Record<string, PluginRowMessage>>;
   iconUrls: Readonly<Record<string, string>>;
+  iconLoading?: (pluginId: string) => boolean;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   onIconError: (pluginId: string) => void;
@@ -90,6 +91,7 @@ export type DetailProps = SharedProps &
     catalog?: PluginDiscoveryDetailResult;
     catalogLoading?: boolean;
     catalogIconUrls?: Readonly<Record<string, string>>;
+    catalogIconLoading?: (url: string) => boolean;
     hostControlsSchema: JsonSchema | null;
     backLabel: string;
     tab: InstalledPluginDetailTab;
@@ -174,9 +176,11 @@ function renderInstalledInventory(props: InventoryProps): TemplateResult {
             }
           }}
         >
-          ${renderArtTile(plugin.id, plugin.name, props.iconUrls[plugin.id], () =>
-            props.onIconError(plugin.id),
-          )}
+          ${renderArtTile(plugin.id, plugin.name, {
+            iconUrl: props.iconUrls[plugin.id],
+            onIconError: () => props.onIconError(plugin.id),
+            loading: props.iconLoading?.(plugin.id),
+          })}
           <a
             class="settings-row__text plugins-settings-row__link oc-settings-row-content"
             href=${props.pluginHref(plugin.id)}
@@ -272,7 +276,7 @@ export function renderPluginSettingsInventory(props: InventoryProps): TemplateRe
   return renderSettingsPage(
     html`
       ${renderSettingsPageHeader({
-        title: html`<h1 class="plugins-settings-title">${t("tabs.plugins")}</h1>`,
+        title: t("tabs.plugins"),
         subtitle: t("pluginsPage.settingsDescription"),
       })}
       <div class="plugins-settings-content">
@@ -401,19 +405,25 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
       backHref: props.backHref,
       backLabel: props.backLabel,
       onBack: props.onBack,
-      icon: renderArtTile(
-        plugin.id,
-        plugin.name,
-        props.iconUrls[plugin.id] ??
+      icon: renderArtTile(plugin.id, plugin.name, {
+        iconUrl:
+          props.iconUrls[plugin.id] ??
           (catalog?.plugin.catalog.imageUrl
             ? props.catalogIconUrls?.[catalog.plugin.catalog.imageUrl]
             : undefined),
-        () => props.onIconError(plugin.id),
-        "plugins-tile",
-        catalog?.detail.author?.imageUrl
+        onIconError: () => props.onIconError(plugin.id),
+        authorIconUrl: catalog?.detail.author?.imageUrl
           ? props.catalogIconUrls?.[catalog.detail.author.imageUrl]
           : undefined,
-      ),
+        loading: Boolean(
+          props.iconLoading?.(plugin.id) ||
+          props.catalogLoading ||
+          (catalog?.plugin.catalog.imageUrl &&
+            props.catalogIconLoading?.(catalog.plugin.catalog.imageUrl)) ||
+          (catalog?.detail.author?.imageUrl &&
+            props.catalogIconLoading?.(catalog.detail.author.imageUrl)),
+        ),
+      }),
       identity: renderPluginPublisher(catalog, props.inspection?.overview?.publisherName),
       titleAction: props.installProgress
         ? html`<openclaw-plugin-install-action
@@ -422,14 +432,14 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
               .progress=${props.installProgress}
             ></openclaw-plugin-install-action
             >${renderPluginAskAction(props.onAskPlugin, false)}`
-        : html`${renderPluginAskAction(props.onAskPlugin)}${renderPluginLifecycle(
+        : renderPluginLifecycle(
             {
               ...props,
               settingsHref: props.settingsHref ?? "#configuration",
               onSettings: () => props.onTabChange("configuration"),
             },
             plugin,
-          )}`,
+          ),
       sidebar:
         catalog || plugin.version || props.inspection?.overview || props.catalogLoading
           ? renderPluginMetadata(

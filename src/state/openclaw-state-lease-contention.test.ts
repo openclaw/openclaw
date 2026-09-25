@@ -7,6 +7,7 @@ import {
 } from "../infra/state-database-coordinator.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { releaseOpenClawStateLeaseBestEffort } from "./openclaw-state-lease-storage.js";
 import { withOpenClawStateLease } from "./openclaw-state-lease.js";
 
 describe.each([undefined, "existing"] as const)(
@@ -91,3 +92,22 @@ describe.each([undefined, "existing"] as const)(
     );
   },
 );
+
+it("preserves a failed async release for its retained cleanup owner", async () => {
+  const failure = new Error("Synthetic cleanup worker failed before release");
+  await expect(
+    releaseOpenClawStateLeaseBestEffort(
+      {
+        scope: "core:test",
+        key: "retained-release",
+        owner: "synthetic-owner",
+        leaseLabel: "state lease",
+        operationLabel: "test.release",
+        database: { scope: "shared" },
+      },
+      async () => {
+        throw failure;
+      },
+    ),
+  ).rejects.toBe(failure);
+});

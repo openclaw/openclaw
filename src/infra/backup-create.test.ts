@@ -5,9 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import * as tar from "tar";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
-import type { BackupResourceInventory } from "../commands/backup-resource-inventory.js";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { formatBackupCreateSummary } from "../commands/backup-summary.js";
 import { backupVerifyCommand, verifyBackupArchive } from "../commands/backup-verify.js";
@@ -36,7 +35,12 @@ import {
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createBackupArchive, type BackupCreateResult } from "./backup-create.js";
-import { listArchiveEntries, listArchiveEntryDetails } from "./backup-create.test-support.js";
+import {
+  createBackupClassificationInventory,
+  listArchiveEntries,
+  listArchiveEntryDetails,
+  makeBackupResult,
+} from "./backup-create.test-support.js";
 import { classifyBackupSqliteSource } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
@@ -46,36 +50,13 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 
 const APPLE_DOUBLE_MAGIC = Buffer.from([0x00, 0x05, 0x16, 0x07]);
 
-function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
-  return {
-    createdAt: "2026-01-01T00:00:00.000Z",
-    archiveRoot: "openclaw-backup-2026-01-01",
-    archivePath: "/tmp/openclaw-backup.tar.gz",
-    dryRun: false,
-    includeWorkspace: true,
-    onlyConfig: false,
-    verified: false,
-    assets: [],
-    skipped: [],
-    skippedVolatileCount: 0,
-    ...overrides,
-  };
-}
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+});
 
-function createBackupClassificationInventory(stateDir: string): BackupResourceInventory {
-  return {
-    stateDir,
-    agentRoots: [],
-    coreDatabases: [],
-    coreDatabaseSourcePaths: [],
-    resolveSqliteSource: () => ({ role: "plugin" }),
-    regenerableRoots: [],
-    isIncluded: () => true,
-    isTraversable: () => true,
-    isPackageContent: () => false,
-    isVolatile: () => false,
-  };
-}
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 async function withBackupClassificationDir(run: (dir: string) => Promise<void>): Promise<void> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-classify-"));
@@ -199,7 +180,7 @@ describe("formatBackupCreateSummary", () => {
   it.each([
     {
       name: "formats created archives with included and skipped paths",
-      result: makeResult({
+      result: makeBackupResult({
         verified: true,
         assets: [
           {
@@ -231,7 +212,7 @@ describe("formatBackupCreateSummary", () => {
     },
     {
       name: "formats dry runs and pluralized counts",
-      result: makeResult({
+      result: makeBackupResult({
         dryRun: true,
         assets: [
           {
@@ -263,7 +244,7 @@ describe("formatBackupCreateSummary", () => {
   it("surfaces the volatile skip count in the summary", () => {
     expect(
       formatBackupCreateSummary(
-        makeResult({
+        makeBackupResult({
           assets: [
             {
               kind: "state",
@@ -348,24 +329,6 @@ describe("sanitizeOpenClawGlobalStateSnapshot", () => {
 });
 
 describe("writeTarArchiveWithRetry", () => {
-  it("retries a truncated source with the walker's EOF code", async () => {
-    const error = Object.assign(new Error("encountered unexpected EOF"), { code: "EOF" });
-    const runTar = vi
-      .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(error)
-      .mockResolvedValueOnce();
-    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
-
-    await writeTarArchiveWithRetry({
-      tempArchivePath: "/tmp/backup.tar.gz.tmp",
-      runTar,
-      sleepMs: sleep,
-    });
-
-    expect(runTar).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledOnce();
-  });
-
   it.each([
     new Error("TAR_BAD_ARCHIVE: Unrecognized archive format"),
     new Error("EOF occurred in violation of protocol"),
@@ -426,7 +389,6 @@ describe("writeTarArchiveWithRetry", () => {
   it("retries on EOF-class errors and eventually succeeds", async () => {
     const eofErr = Object.assign(new Error("encountered unexpected EOF"), {
       code: "EOF",
-      path: "/state/sessions/s-abc/transcript.jsonl",
     });
     const runTar = vi
       .fn<() => Promise<void>>()
@@ -471,9 +433,11 @@ describe("writeTarArchiveWithRetry", () => {
         sleepMs: sleep,
       });
 
+      expect(runTar).toHaveBeenCalledTimes(2);
       expect(runTar).toHaveBeenNthCalledWith(1, tempArchivePath);
       expect(runTar).toHaveBeenNthCalledWith(2, `${tempArchivePath}.retry-2`);
       expect(result).toBe("complete");
+      expect(sleep).toHaveBeenCalledOnce();
       expect(rmSpy).not.toHaveBeenCalled();
       expect(log).toHaveBeenCalledOnce();
     } finally {
@@ -1575,6 +1539,7 @@ describe("createBackupArchive", () => {
   });
 
   it("keeps ACPX codex-home scratch symlinks out of the archive via the real acpx manifest", async () => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -2278,6 +2243,11 @@ describe("createBackupArchive", () => {
         scenario: "minimal",
       },
       async (state) => {
+        // Keep concurrent backups out of this fixture's warning inventory.
+        const scratchRoot = state.path("scratch");
+        await fs.mkdir(scratchRoot);
+        Object.assign(state.envVars, { TMPDIR: scratchRoot, TMP: scratchRoot, TEMP: scratchRoot });
+        state.applyEnv();
         const databasePaths = [
           state.statePath("browser", "foreign-browser.sqlite"),
           state.statePath("plugins", "dedicated", "foreign-plugin.sqlite"),
@@ -2318,7 +2288,7 @@ describe("createBackupArchive", () => {
           output: state.path("foreign.tar.gz"),
           includeWorkspace: false,
         });
-        expect(archive.warnings).toHaveLength(opaqueFiles.size);
+        expect(archive.warnings, JSON.stringify(archive.warnings)).toHaveLength(opaqueFiles.size);
         for (const databasePath of opaqueFiles.keys()) {
           expect(
             archive.warnings?.filter(

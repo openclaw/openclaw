@@ -2,7 +2,6 @@ import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import type { APIChannel } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Discord plugin module implements send.shared behavior.
 import {
   buildOutboundMediaLoadOptions,
   extensionForMime,
@@ -463,15 +462,10 @@ function buildReactionIdentifier(emoji: { id?: string | null; name?: string | nu
   return emoji.name ?? "";
 }
 
-function formatReactionEmoji(emoji: { id?: string | null; name?: string | null }) {
-  return buildReactionIdentifier(emoji);
-}
-
 export {
   buildDiscordSendError,
   buildReactionIdentifier,
   createDiscordClient,
-  formatReactionEmoji,
   normalizeDiscordPollInput,
   normalizeEmojiName,
   normalizeReactionEmoji,

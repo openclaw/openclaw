@@ -1,10 +1,6 @@
 // Telegram helper module supports helpers behavior.
 import type { Chat, Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  resolveCommandAuthorization,
-  type CommandAuthorization,
-} from "openclaw/plugin-sdk/command-auth-native";
 import type {
   OpenClawConfig,
   DmPolicy,
@@ -28,7 +24,6 @@ import {
   type NormalizedAllowFrom,
 } from "../bot-access.js";
 import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
-import { resolveTelegramPreviewStreamMode } from "../preview-streaming.js";
 import type { TelegramThreadSpec } from "../thread-spec.js";
 import { buildTelegramConversationId } from "../topic-conversation.js";
 import {
@@ -47,7 +42,9 @@ import {
   type TelegramMediaKind,
   type TelegramTextEntity,
 } from "./body-helpers.js";
-import type { TelegramGetChat, TelegramStreamMode } from "./types.js";
+import type { TelegramGetChat } from "./types.js";
+
+export { resolveTelegramPreviewStreamMode as resolveTelegramStreamMode } from "../preview-streaming.js";
 
 export type {
   TelegramForwardedContext,
@@ -396,15 +393,7 @@ export function resolveTelegramForumThreadId(params: {
   isForum?: boolean;
   messageThreadId?: number | null;
 }) {
-  // Non-forum groups: ignore message_thread_id (reply threads are not real topics)
-  if (!params.isForum) {
-    return undefined;
-  }
-  // Forum groups: use the topic ID, defaulting to General topic
-  if (params.messageThreadId == null) {
-    return TELEGRAM_GENERAL_TOPIC_ID;
-  }
-  return params.messageThreadId;
+  return params.isForum ? (params.messageThreadId ?? TELEGRAM_GENERAL_TOPIC_ID) : undefined;
 }
 
 export function resolveTelegramThreadSpec(params: {
@@ -543,12 +532,6 @@ export function buildTypingThreadParams(messageThreadId?: number) {
   return { message_thread_id: Math.trunc(messageThreadId) };
 }
 
-export function resolveTelegramStreamMode(telegramCfg?: {
-  streaming?: unknown;
-}): TelegramStreamMode {
-  return resolveTelegramPreviewStreamMode(telegramCfg);
-}
-
 export function buildTelegramGroupPeerId(
   chatId: number | string,
   thread?: number | TelegramThreadSpec,
@@ -571,34 +554,6 @@ export function isTelegramCommandsAllowFromConfigured(cfg: OpenClawConfig): bool
     typeof commandsAllowFrom === "object" &&
     (Array.isArray(commandsAllowFrom.telegram) || Array.isArray(commandsAllowFrom["*"]))
   );
-}
-
-export function resolveTelegramCommandAuthorization(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  chatId: number;
-  isGroup: boolean;
-  threadSpec: TelegramThreadSpec;
-  senderId?: string;
-  senderUsername?: string;
-  commandAuthorized?: boolean;
-}): CommandAuthorization {
-  return resolveCommandAuthorization({
-    ctx: {
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      AccountId: params.accountId,
-      ChatType: params.isGroup ? "group" : "direct",
-      From: params.isGroup
-        ? buildTelegramGroupFrom(params.chatId, params.threadSpec)
-        : `telegram:${params.chatId}`,
-      SenderId: params.senderId || undefined,
-      SenderUsername: params.senderUsername || undefined,
-    },
-    cfg: params.cfg,
-    commandAuthorized: params.commandAuthorized ?? false,
-  });
 }
 
 /**

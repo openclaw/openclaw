@@ -41,7 +41,7 @@ export function consumeChannelRunAdmission(evidence: ChannelAdmissionEvidence | 
     onAdmitted: (context) => {
       const token = context.executionIdentityToken;
       if (token && admission.decisionCoverage && admission.identifierAuthentication) {
-        recordChannelAdmissionDecision({
+        recordChannelAdmissionDecision(evidence, {
           contextId: token.contextId,
           executionId: token.executionId,
           runId: token.runId,
@@ -62,6 +62,7 @@ export function prepareChannelRunAdmission(params: {
   ingressKind: ExecutionIdentityAdmissionFacts["ingress"]["kind"];
   boundary: string;
   evidence?: ChannelAdmissionEvidence;
+  assertSourceCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   onAdmitted?: (context: AdmittedRunContext) => void;
 }): PreparedAgentRunAdmission {
@@ -73,6 +74,7 @@ export function prepareChannelRunAdmission(params: {
       prepared.assertSourceCurrent();
       return;
     }
+    params.assertSourceCurrent?.();
     params.operatorAuthority?.assertCurrent();
   };
   return Object.freeze({
@@ -93,6 +95,7 @@ export function prepareChannelRunAdmission(params: {
         const channelAdmission = consumeChannelRunAdmission(params.evidence);
         prepared = prepareAgentRunAdmission({
           cfg: params.cfg,
+          assertSourceCurrent: params.assertSourceCurrent,
           operationalRunInstance,
           operatorAuthority: params.operatorAuthority,
           facts: {

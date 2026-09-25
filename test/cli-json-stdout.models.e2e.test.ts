@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { readConfigMachineState } from "../src/state/config-machine-state.js";
+import { readRemoteModelCatalog } from "../src/model-catalog/remote-store.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../src/state/openclaw-state-schema.js";
 import { runBuiltCli } from "./cli-json-stdout.test-support.js";
 
@@ -159,11 +159,7 @@ describe("cli json stdout contract", () => {
             },
             { execArgv: [`--import=data:text/javascript;base64,${preloadFor(response)}`] },
           );
-        const readCatalogRow = () =>
-          readConfigMachineState<{ generated_at: number; bundle_json: string }>(
-            "modelCatalog.remote",
-            { path: databasePath },
-          );
+        const readCatalogRow = () => readRemoteModelCatalog({ path: databasePath });
 
         // Reuse the first refresh process to prove migration diagnostics remain
         // on stderr instead of paying for a separate command matrix.

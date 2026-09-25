@@ -60,12 +60,19 @@ function baseline(sessionId: string): SessionDiffBaseline {
 async function seedEntry(params: {
   entry: InternalSessionEntry;
   sessionKey?: string;
-}): Promise<{ entry: InternalSessionEntry; sessionKey: string; storePath: string }> {
+  agentId?: string;
+}): Promise<{
+  agentId: string;
+  entry: InternalSessionEntry;
+  sessionKey: string;
+  storePath: string;
+}> {
   const dir = tempDirs.make("openclaw-session-diff-owner-");
   const storePath = path.join(dir, "sessions.json");
+  const agentId = params.agentId ?? "main";
   const sessionKey = params.sessionKey ?? "agent:main:diff-owner";
-  await replaceSessionEntry({ sessionKey, storePath }, params.entry);
-  return { entry: params.entry, sessionKey, storePath };
+  await replaceSessionEntry({ agentId, sessionKey, storePath }, params.entry);
+  return { agentId, entry: params.entry, sessionKey, storePath };
 }
 
 function loadInternal(sessionKey: string, storePath: string): InternalSessionEntry | undefined {
@@ -126,6 +133,40 @@ describe("ensureSessionDiffBaseline", () => {
       sessionDiffBaseline: baseline(sessionId),
     });
   });
+
+  it.each([false, true])(
+    "keeps a global session baseline in its selected agent's custom store (new=%s)",
+    async (isNewSession) => {
+      const entry: InternalSessionEntry = {
+        createdVia: "operator",
+        sessionId: "work-global-session",
+        sessionDiffBaselineCapture: isNewSession
+          ? undefined
+          : createSessionDiffBaselineCaptureClaim(),
+        updatedAt: 2,
+      };
+      const target = await seedEntry({ agentId: "work", sessionKey: "global", entry });
+      const mainScope = { agentId: "main", sessionKey: "global", storePath: target.storePath };
+      await replaceSessionEntry(mainScope, { sessionId: "main-global-session", updatedAt: 1 });
+      const mainBefore = loadSessionEntry(mainScope);
+      captureMocks.capture.mockResolvedValue(baseline(entry.sessionId));
+
+      const settled = await ensureSessionDiffBaseline({
+        ...target,
+        cwd: "/workspace",
+        isNewSession,
+      });
+
+      expect(settled.sessionDiffBaseline).toEqual(baseline(entry.sessionId));
+      const persisted = loadSessionEntry(target);
+      expect(persisted).toMatchObject({
+        sessionId: entry.sessionId,
+        sessionDiffBaseline: baseline(entry.sessionId),
+      });
+      expect(persisted?.sessionDiffBaselineCapture).toBeUndefined();
+      expect(loadSessionEntry(mainScope)).toEqual(mainBefore);
+    },
+  );
 
   it("shares one capture across concurrent first-turn ensures", async () => {
     const sessionId = "concurrent-session";
@@ -452,6 +493,7 @@ describe("ensureSessionDiffBaseline", () => {
 
     const result = await Promise.allSettled([
       ensureSessionDiffBaseline({
+        agentId: "main",
         cwd: "/workspace",
         entry,
         isNewSession: true,

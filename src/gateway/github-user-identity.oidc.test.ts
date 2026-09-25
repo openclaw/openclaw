@@ -1,7 +1,9 @@
 import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -62,6 +64,7 @@ const githubCfg: OpenClawConfig = {
 };
 
 function accessRequest(principal = "ada@example.test", config = cfg, issuer = accessOrigin) {
+  setRuntimeConfigSnapshot(config);
   const req = new IncomingMessage(new Socket());
   req.headers = {
     "cf-access-authenticated-user-email": principal,
@@ -71,8 +74,8 @@ function accessRequest(principal = "ada@example.test", config = cfg, issuer = ac
   return { req, authResult, cfg: config };
 }
 
-function resolveWsProfileAdmission(request: ReturnType<typeof accessRequest>) {
-  return resolveGatewayConnectProfileAdmission({
+async function resolveWsProfileAdmission(request: ReturnType<typeof accessRequest>) {
+  const admission = await resolveGatewayConnectProfileAdmission({
     context: {
       configSnapshot: request.cfg,
       handler: {
@@ -97,6 +100,10 @@ function resolveWsProfileAdmission(request: ReturnType<typeof accessRequest>) {
       requestHeaders: request.req.headers,
     }),
   });
+  if (!admission.ok) {
+    throw new Error("Expected admitted WebSocket profile");
+  }
+  return admission.prepared?.profile;
 }
 
 function identityResponse(payload: unknown, status = 200) {
@@ -137,12 +144,12 @@ describe("Cloudflare Access OIDC profile resolution", () => {
           emails: ["ada@example.test"],
           githubIdentity: { login: "canonical-ada" },
         });
-        expect(resolveUserProfileGitHubAttribution([profileId]).get(profileId)).toEqual({
+        expect((await resolveUserProfileGitHubAttribution([profileId])).get(profileId)).toEqual({
           accountId: 101,
           login: "canonical-ada",
         });
         const connected = await resolveWsProfileAdmission(request);
-        expect(connected).toEqual({ ok: true, profile: http.authenticatedUserProfile });
+        expect(connected).toEqual(http.authenticatedUserProfile);
         expect(transport).toHaveBeenCalledTimes(3);
       } finally {
         request.req.destroy();
@@ -175,7 +182,9 @@ describe("Cloudflare Access OIDC profile resolution", () => {
           expect(getUserPreferences(profile.id, [GIT_COAUTHOR_PREFERENCE_KEY])).toEqual({
             [GIT_COAUTHOR_PREFERENCE_KEY]: false,
           });
-          expect(resolveUserProfileGitHubAttribution([profile.id]).get(profile.id)).toBeNull();
+          expect(
+            (await resolveUserProfileGitHubAttribution([profile.id])).get(profile.id),
+          ).toBeNull();
         } finally {
           request.req.destroy();
         }
@@ -288,7 +297,9 @@ describe("Cloudflare Access OIDC profile resolution", () => {
         const result = await resolveAuthenticatedHttpUserProfile(request);
         expect(result.authenticatedUserProfile?.profileId).toBe(primary.id);
         expect(getUserProfileListItem(primary.id).githubIdentity?.login).toBe("primary");
-        expect(resolveUserProfileGitHubAttribution([primary.id]).get(primary.id)).toBeNull();
+        expect(
+          (await resolveUserProfileGitHubAttribution([primary.id])).get(primary.id),
+        ).toBeNull();
       } finally {
         request.req.destroy();
       }
@@ -329,7 +340,9 @@ describe("Cloudflare Access OIDC profile resolution", () => {
         const linked = await resolveAuthenticatedHttpUserProfile(request);
         expect(linked.authenticatedUserProfile?.profileId).toBe(maintainer.id);
         expect(linked.operatorRolePolicy?.scopes).toEqual(["operator.admin"]);
-        expect(resolveUserProfileGitHubAttribution([maintainer.id]).get(maintainer.id)).toBeNull();
+        expect(
+          (await resolveUserProfileGitHubAttribution([maintainer.id])).get(maintainer.id),
+        ).toBeNull();
 
         setUserProfileRole(maintainer.id, null);
         invalidateOperatorRolePolicy(maintainer.id);
@@ -369,15 +382,15 @@ describe("Cloudflare Access OIDC profile resolution", () => {
           }),
         );
         const request = accessRequest();
+        const queries = vi.spyOn(DatabaseSync.prototype, "prepare");
         try {
           const httpProfile = await resolveAuthenticatedHttpUserProfile(request);
           expect(httpProfile.authenticatedUserProfile?.profileId).toBe(profile.id);
           expect(httpProfile.operatorRolePolicy?.scopes).toEqual(["operator.admin"]);
           const connectedProfile = await resolveWsProfileAdmission(request);
-          expect(connectedProfile).toEqual({
-            ok: true,
-            profile: httpProfile.authenticatedUserProfile,
-          });
+          expect(connectedProfile).toEqual(httpProfile.authenticatedUserProfile);
+          expect(queries).not.toHaveBeenCalled();
+          queries.mockRestore();
           expect(getUserProfileListItem(profile.id)).toEqual(before);
           expect(transport).toHaveBeenCalledTimes(2);
           expect(
@@ -386,6 +399,7 @@ describe("Cloudflare Access OIDC profile resolution", () => {
             ),
           ).toBe(true);
         } finally {
+          queries.mockRestore();
           request.req.destroy();
         }
       });

@@ -52,6 +52,7 @@ const pwMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../pw-ai-module.js", () => ({
+  getPwAiModule: vi.fn(async () => null),
   getLoadedPwAiModule: () => pwMocks,
 }));
 
@@ -85,14 +86,14 @@ vi.mock("../screenshot.js", () => ({
   })),
 }));
 
-vi.mock("../../media/store.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   ensureMediaDir: vi.fn(async () => {}),
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
 }));
 
 vi.mock("./agent.shared.js", () => ({
   browserNavigationPolicyForProfile: vi.fn(() => ({})),
-  getPwAiModule: vi.fn(async () => null),
   handleRouteError: vi.fn((_ctx, _res, err) => {
     throw err;
   }),

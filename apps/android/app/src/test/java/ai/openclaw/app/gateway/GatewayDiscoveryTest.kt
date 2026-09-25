@@ -382,13 +382,13 @@ private data class LegacyDiscoveryHarness(
   fun resolvers(service: NsdServiceInfo): List<NsdManager.ResolveListener> = nsd.getResolveListeners(service).orEmpty()
 }
 
-/** The pinned shadow lacks API 34 callbacks; keep its discovery/legacy bookkeeping intact. */
+/** Controls API 34 callback scheduling while retaining the platform shadow's legacy bookkeeping. */
 @Implements(NsdManager::class)
 class ServiceInfoNsdShadow : ShadowNsdManager() {
   val registrations = mutableListOf<ServiceInfoRegistration>()
 
   @Implementation(minSdk = 34)
-  fun registerServiceInfoCallback(
+  override fun registerServiceInfoCallback(
     serviceInfo: NsdServiceInfo,
     executor: Executor,
     callback: NsdManager.ServiceInfoCallback,
@@ -397,7 +397,7 @@ class ServiceInfoNsdShadow : ShadowNsdManager() {
   }
 
   @Implementation(minSdk = 34)
-  fun unregisterServiceInfoCallback(callback: NsdManager.ServiceInfoCallback) {
+  override fun unregisterServiceInfoCallback(callback: NsdManager.ServiceInfoCallback) {
     // Like NsdManager, unregister does not cancel listener lambdas already captured for delivery.
   }
 }

@@ -14,14 +14,16 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
 import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import { installTestApprovalClock } from "./exec-approval-manager.test-support.js";
 import { getOperatorApprovalDetailed } from "./operator-approval-store.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
+import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
+import { bindWorkerTurnOwner } from "./worker-environments/placement-turn-claim-events.js";
 
 type GatewayAux = ReturnType<typeof createGatewayAuxHandlers>;
 type GatewayAuxParams = Parameters<typeof createGatewayAuxHandlers>[0];
@@ -41,7 +43,10 @@ function createAuthorityHarness(
     log: {},
     getNativeApprovalRouteCoordinator: () => undefined,
     activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
-    sharedGatewaySessionGenerationState: { current: undefined, required: null },
+    sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+      current: undefined,
+      required: null,
+    }),
     resolveSharedGatewaySessionGenerationForConfig: () => undefined,
     clients: [],
     channelManager: {
@@ -123,34 +128,47 @@ describe("gateway auxiliary authority lifecycle", () => {
       onAgentRunAuthorityClosed,
       validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
     });
-    const operationalRunInstance = Object.freeze({
-      instanceId: "egress-proxy-instance",
-      runId: "egress-proxy-run",
-    });
-    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-    const generation = new AbortController();
-    const scoped = claimAgentRunApprovalAuthority(authority, [generation.signal]);
-    const record = gatewayAux.execApprovalManager.create({ command: "echo old" }, 2_000);
-    record.agentRuntimeDelegatedAuthority = { ...scoped, kind: "local" };
-    const pending = (await gatewayAux.execApprovalManager.register(record, 2_000)).decision;
+    vi.useFakeTimers();
+    const restoreClock = installTestApprovalClock();
+    try {
+      const operationalRunInstance = Object.freeze({
+        instanceId: "egress-proxy-instance",
+        runId: "egress-proxy-run",
+      });
+      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      const generation = new AbortController();
+      const scoped = claimAgentRunApprovalAuthority(authority, [generation.signal]);
+      const record = gatewayAux.execApprovalManager.create({ command: "echo old" }, 2_000);
+      record.agentRuntimeDelegatedAuthority = { ...scoped, kind: "local" };
+      const pending = (await gatewayAux.execApprovalManager.register(record, 2_000)).decision;
 
-    generation.abort();
+      generation.abort();
 
-    await expect(pending).resolves.toBeNull();
-    expect((await gatewayAux.execApprovalManager.getSnapshot(record.id))?.status).toBe("cancelled");
-    expect(onAgentRunAuthorityClosed).toHaveBeenCalledExactlyOnceWith(
-      scoped,
-      "approval-scope-closed",
-    );
-    expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
+      await expect(pending).resolves.toBeNull();
+      expect((await gatewayAux.execApprovalManager.getSnapshot(record.id))?.status).toBe(
+        "cancelled",
+      );
+      expect(onAgentRunAuthorityClosed).toHaveBeenCalledExactlyOnceWith(
+        scoped,
+        "approval-scope-closed",
+      );
+      expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
 
-    releaseAgentRunDelegatedAuthority(authority);
+      releaseAgentRunDelegatedAuthority(authority);
 
-    expect(onAgentRunAuthorityClosed).toHaveBeenCalledTimes(2);
-    expect(onAgentRunAuthorityClosed).toHaveBeenLastCalledWith(
-      expect.objectContaining({ operationalRunInstance }),
-      undefined,
-    );
+      expect(onAgentRunAuthorityClosed).toHaveBeenCalledTimes(2);
+      expect(onAgentRunAuthorityClosed).toHaveBeenLastCalledWith(
+        expect.objectContaining({ operationalRunInstance }),
+        undefined,
+      );
+    } finally {
+      try {
+        await gatewayAux.stopOperatorInteractions();
+      } finally {
+        restoreClock?.();
+        vi.useRealTimers();
+      }
+    }
   });
 
   it("retires one request approval while its sibling and admitted run remain live", async () => {
@@ -270,10 +288,17 @@ describe("gateway auxiliary authority lifecycle", () => {
           rotateAgentRunRegistryLifecycleGeneration();
         }
         // get/list also check liveness, so assert push delivery before either read.
-        expect(onResolved).toHaveBeenCalledExactlyOnceWith({
-          id: question.id,
-          status: "cancelled",
-        });
+        expect(onResolved).toHaveBeenCalledExactlyOnceWith(
+          { id: question.id, status: "cancelled" },
+          {
+            record: { ...question, status: "cancelled", resolvedBy: "requester-inactive" },
+            ordinary: false,
+            sessionAccess: undefined,
+            isCurrent: expect.any(Function),
+            refreshRequester: expect.any(Function),
+          },
+        );
+        expect(onResolved.mock.calls[0]?.[1].isCurrent()).toBe(true);
         await expect(answer).resolves.toEqual({ status: "cancelled" });
         expect(onAgentRunAuthorityClosed).toHaveBeenCalledOnce();
         expect(onAgentRunAuthorityClosed).toHaveBeenCalledWith(
@@ -378,6 +403,9 @@ describe("gateway auxiliary authority lifecycle", () => {
   });
 
   it("settles and publishes both approval kinds from the production worker-claim observer", async () => {
+    if (!fixture) {
+      throw new Error("expected Gateway authority fixture");
+    }
     const database = openOpenClawStateDatabase();
     const placements = createWorkerSessionPlacementStore({ database });
     const identity = {
@@ -440,7 +468,19 @@ describe("gateway auxiliary authority lifecycle", () => {
         ownerEpoch: placement.activeOwnerEpoch,
       },
     });
-    const authority = { kind: "worker" as const, ...runAuthority, turnClaim };
+    const { capability } = await bindWorkerTurnOwner(
+      placements,
+      turnClaim,
+      undefined,
+      operationalRunInstance,
+      { ...identity, storePath: fixture.statePath("agents", "main", "sessions", "sessions.json") },
+      () => {},
+    );
+    const authority = await capability.run((owner) => ({
+      kind: "worker" as const,
+      ...owner.delegatedAuthority,
+      turnClaim: owner.turnClaim,
+    }));
     const validateAuthority = createAgentRuntimeApprovalAuthorityValidator(placements);
     const lifecycle = vi.fn();
     const gatewayAux = createAuthorityHarness({
@@ -481,7 +521,7 @@ describe("gateway auxiliary authority lifecycle", () => {
     const pluginDecision = (await gatewayAux.pluginApprovalManager.register(pluginRecord, 60_000))
       .decision;
     const questionResolved = vi.fn();
-    gatewayAux.questionManager.request({
+    const question = gatewayAux.questionManager.request({
       questions: [
         {
           questionId: "key",
@@ -504,11 +544,28 @@ describe("gateway auxiliary authority lifecycle", () => {
       onResolved: questionResolved,
     });
 
+    for (const record of [execRecord, pluginRecord]) {
+      expect(await getOperatorApprovalDetailed({ id: record.id })).toMatchObject({
+        outcome: "found",
+        record: { status: "pending" },
+      });
+    }
+    expect(questionResolved).not.toHaveBeenCalled();
+    expect(publishResolved).not.toHaveBeenCalled();
+
     placements.releaseTurn(turnClaim);
 
     expect(questionResolved).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ status: "cancelled" }),
+      { id: question.id, status: "cancelled" },
+      {
+        record: { ...question, status: "cancelled", resolvedBy: "requester-inactive" },
+        ordinary: false,
+        sessionAccess: undefined,
+        isCurrent: expect.any(Function),
+        refreshRequester: expect.any(Function),
+      },
     );
+    expect(questionResolved.mock.calls[0]?.[1].isCurrent()).toBe(true);
     await expect(execDecision).resolves.toBeNull();
     await expect(pluginDecision).resolves.toBeNull();
     await vi.waitFor(() => expect(publishResolved).toHaveBeenCalledTimes(2));

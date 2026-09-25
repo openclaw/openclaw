@@ -33,11 +33,10 @@ import {
   scheduleChatOutboxRetry,
   settleChatOutboxRetry,
 } from "./chat-outbox-retry.ts";
+import { chatProviderReviewRow, holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import {
   anyChatOutboxPaneMatches,
   readQueuedMessageById,
-  removeQueuedMessageWithoutReleasing,
-  syncVisibleChatQueueProjection,
   updateQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -252,6 +251,10 @@ async function drainStoredChatOutbox(
 ): Promise<"blocked" | "empty"> {
   while (true) {
     const host = lane.host;
+    if (chatProviderReviewRow(host, scope.sessionKey, scope.agentId)?.providerReview) {
+      holdProviderReviewQueuedInputs(host, scope.sessionKey, scope.agentId);
+      return "blocked";
+    }
     if (!host.connected || !host.client || chatSendHoldReason(host, scope.sessionKey)) {
       return "blocked";
     }
@@ -288,6 +291,7 @@ async function drainStoredChatOutbox(
       // Browser input still belongs to the foreground submitter. Only its fresh
       // admission may deliver this version; passive wakes must not drop its fence.
       (!freshItem && chatOutboxOwner(host).hasPendingSubmission(outbox, storedItem)) ||
+      item.sendState === "held" ||
       (item.sendState === "unconfirmed" && (!item.sendRunId || item.localCommandName)) ||
       (item.sendState === "waiting-model" && !lane.pendingOptions.has(item.id)) ||
       // An open edit owns this row: sending the superseded text would deliver a
@@ -295,7 +299,7 @@ async function drainStoredChatOutbox(
       // which is the same contract the row's held position promises.
       isQueuedMessageBeingEdited(host, item.id)
     ) {
-      syncVisibleChatQueueProjection(host);
+      chatOutboxOwner(host).syncHost(host);
       return "blocked";
     }
     const visible = visibleSessionMatches(host, outbox.sessionKey, outbox.agentId);
@@ -312,7 +316,7 @@ async function drainStoredChatOutbox(
         lane.pendingOptions.delete(item.id);
         return "blocked";
       }
-      syncVisibleChatQueueProjection(host);
+      chatOutboxOwner(host).syncHost(host);
       if (item.localCommandName === "reset") {
         if ((item.sendAttempts ?? 0) > 0 || item.sendRequestStartedAtMs !== undefined) {
           setCommandState("unconfirmed", UNCONFIRMED_CHAT_SEND_ERROR);
@@ -338,7 +342,7 @@ async function drainStoredChatOutbox(
           return "blocked";
         }
         if (confirmation === "cancelled") {
-          if (!removeQueuedMessageWithoutReleasing(host, item.id)) {
+          if (!chatOutboxOwner(host).remove(host, item.id)) {
             return "blocked";
           }
           continue;
@@ -450,7 +454,7 @@ async function drainStoredChatOutbox(
             return "blocked";
           }
         }
-        if (!removeQueuedMessageWithoutReleasing(host, item.id)) {
+        if (!chatOutboxOwner(host).remove(host, item.id)) {
           surfaceChatDeliveryFailure(
             host,
             outbox.sessionKey,
@@ -504,7 +508,7 @@ async function drainStoredChatOutbox(
       lane.pendingOptions.delete(item.id);
       continue;
     }
-    syncVisibleChatQueueProjection(host);
+    chatOutboxOwner(host).syncHost(host);
     const result = await dependencies.sendQueuedChatMessage(
       host,
       item.id,
@@ -623,7 +627,7 @@ export async function resumeStoredChatOutboxes(
     return;
   }
   // Refresh credential ownership; callers own frame-coalesced rendering.
-  syncVisibleChatQueueProjection(host, { requestUpdate: false });
+  chatOutboxOwner(host).syncHost(host, { requestUpdate: false });
   const eventScope = event ? readSessionChangedEvent(event.payload) : undefined;
   if (event && !eventScope) {
     return;

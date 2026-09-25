@@ -1,4 +1,3 @@
-// Slack plugin module owns durable Events API admission and replay.
 import type { App, Receiver, ReceiverEvent } from "@slack/bolt";
 import {
   createChannelIngressError,
@@ -25,22 +24,7 @@ const SLACK_BOLT_AUTHORIZATION_ERROR = "slack_bolt_authorization_error";
 
 const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
 
-type SlackIngressPayload = {
-  version: number;
-  receivedAt: number;
-} & (
-  | {
-      kind: "events-api";
-      body: PluginJsonValue;
-      retryNum?: number;
-      retryReason?: string;
-    }
-  // Relay frames carry a bare message event (no Events API envelope), so the
-  // durable key is the logical message identity — the retired guard's exact
-  // key space — instead of a router delivery id whose redelivery stability
-  // is not a documented contract.
-  | { kind: "relay"; message: PluginJsonValue }
-);
+type SlackIngressPayload = SlackIngressBody & { version: number };
 
 type SlackRelayIngressEvent = {
   deliveryId: string;
@@ -76,7 +60,8 @@ type SlackRelayIngressDispatch = (
   lifecycle: SlackIngressTurnLifecycle,
 ) => Promise<void>;
 
-/** Logical message identity: mirrors the retired guard key (team:channel:ts). */
+// Relay frames have no Events API envelope. Keep the shipped logical identity
+// (team:channel:ts); router delivery IDs have no documented redelivery stability.
 function resolveSlackRelayIngressEventId(event: SlackRelayIngressEvent): string {
   const ts = event.message.ts?.trim();
   if (!event.message.channel?.trim() || !ts) {

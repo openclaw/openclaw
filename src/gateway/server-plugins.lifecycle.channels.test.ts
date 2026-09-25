@@ -6,6 +6,10 @@ import chokidar from "chokidar";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../config/runtime-write-application.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -36,6 +40,25 @@ vi.doUnmock("../plugins/loader.js");
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 installInstanceBindingConfigIo();
+
+async function useGatewayGraphPluginRuntime(): Promise<void> {
+  // Keep the real lazy runtime on this server fixture's mocked Vitest graph.
+  const runtimeModule = await import("../plugins/runtime/index.js");
+  const nativeModule = await import("../plugins/native-module-require.js");
+  const nativeLoad = nativeModule.tryNativeRequireModule;
+  const runtimePaths = new Set([
+    path.resolve("src/plugins/runtime/index.ts"),
+    path.resolve("dist/plugins/runtime/index.js"),
+  ]);
+  const runtimeLoader = vi
+    .spyOn(nativeModule, "tryNativeRequireModule")
+    .mockImplementation((modulePath, options) =>
+      runtimePaths.has(modulePath)
+        ? { ok: true, moduleExport: runtimeModule }
+        : nativeLoad(modulePath, options),
+    );
+  onTestFinished(() => runtimeLoader.mockRestore());
+}
 
 // A real plugin registry replacement must own accounts before their first route exists.
 describe("Gateway plugin replacement channel ownership", () => {
@@ -163,15 +186,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       config.channels = { "sibling-chat": { enabled: true, label: "retained" } };
       await fs.writeFile(configPath, JSON.stringify(config));
       const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
-      const runtimeModule = await import("../plugins/runtime/index.js");
-      const loaderModule = await import("../plugins/loader-module-runtime.js");
-      const createLazyRuntime = loaderModule.createLazyPluginRuntime;
-      const runtimeLoader = vi
-        .spyOn(loaderModule, "createLazyPluginRuntime")
-        .mockImplementation((params) =>
-          createLazyRuntime({ ...params, loadPluginModule: () => runtimeModule }),
-        );
-      onTestFinished(() => runtimeLoader.mockRestore());
+      await useGatewayGraphPluginRuntime();
       const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
       const port = portClaim.port;
       const watch = chokidar.watch;
@@ -254,7 +269,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         }),
       );
       const persisted = JSON.parse(await fs.readFile(configPath, "utf8"));
+      const application = createRuntimeConfigWriteApplication();
       const committed = await commitConfigWithPendingPluginInstalls({
+        writeOptions: attachRuntimeConfigWriteApplication({}, application),
         nextConfig: {
           ...persisted,
           channels: {
@@ -274,9 +291,10 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         },
       });
       expect(committed.afterWrite.mode).toBe("auto");
-      await expect
-        .poll(async () => (await settledProbe("cold-chat")).captured?.label)
-        .toBe("installed setup");
+      expect(application.claimed).toBe(true);
+      // Persistence schedules application; await its owner before probing the replacement.
+      await expect(application.result).resolves.toBe("applied");
+      expect((await settledProbe("cold-chat")).captured?.label).toBe("installed setup");
       expect(await settledProbe("cold-chat")).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
       expect(await settledProbe("sibling-chat")).toEqual(sibling);
       assert.ok(configWatcher);
@@ -309,7 +327,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
 
   it.each([
     {
-      name: "hands off live and pending webhook accounts while preserving a manual stop",
+      name: "hands off live and pending webhook accounts without requiring a restart while preserving a manual stop",
       teardownFails: false,
     },
     {
@@ -403,16 +421,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     const hotReloadRecovery = vi.fn(() => ({
       status: "emitted" as const,
     }));
-    // Use the real runtime in Vitest's graph; native loading evaluates its mocked graph again.
-    const runtimeModule = await import("../plugins/runtime/index.js");
-    const loaderModule = await import("../plugins/loader-module-runtime.js");
-    const createLazyRuntime = loaderModule.createLazyPluginRuntime;
-    const runtimeLoader = vi
-      .spyOn(loaderModule, "createLazyPluginRuntime")
-      .mockImplementation((params) =>
-        createLazyRuntime({ ...params, loadPluginModule: () => runtimeModule }),
-      );
-    onTestFinished(() => runtimeLoader.mockRestore());
+    await useGatewayGraphPluginRuntime();
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     const port = portClaim.port;
     server = await startTestGatewayServer(portClaim, {

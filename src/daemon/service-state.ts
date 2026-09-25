@@ -1,11 +1,13 @@
 /** Shared native service-state inspection with one caller-owned deadline and binding. */
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { resolveGatewayProfileSuffix } from "./constants.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import {
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
   findServiceOwnershipRefusal,
 } from "./service-inspection-error.js";
+import { readGatewayServiceLoadState } from "./service-load-state.js";
 import { withSystemdServiceReadBinding } from "./service-operation-lock.js";
 import { createServiceRuntimeInspectionFailure } from "./service-runtime.js";
 import type {
@@ -59,39 +61,26 @@ function deadlineDiagnosticState(
   };
 }
 
-export async function readGatewayServiceLoadState(
-  service: GatewayService,
-  args: GatewayServiceEnvArgs = {},
-): Promise<GatewayServiceLoadState> {
-  try {
-    return { status: (await service.isLoaded(args)) ? "loaded" : "not-loaded" };
-  } catch (error) {
-    if (hasCommandProcessCleanupError(error)) {
-      throw error;
-    }
-    const refusal = findServiceOwnershipRefusal(error);
-    if (refusal) {
-      throw refusal;
-    }
-    return {
-      status: "unknown",
-      detail: String(error),
-      ...(error instanceof ServiceInspectionError ? { inspectionReason: error.reason } : {}),
-    };
-  }
-}
-
 export async function readGatewayServiceState(
   service: GatewayService,
   input: ReadGatewayServiceStateArgs = {},
 ): Promise<GatewayServiceState> {
-  const inspectionDeadline =
-    input.timeoutMs === undefined ? undefined : performance.now() + input.timeoutMs;
-  let args = input;
+  const timeoutMs =
+    input.timeoutMs ?? (service.readCommand === readSystemdServiceExecStart ? 5000 : undefined);
+  const inspectionDeadline = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
+  let args = { ...input, timeoutMs };
   const baseEnv = args.env ?? process.env;
   try {
     if (service.readCommand === readSystemdServiceExecStart && !args.systemdReadTarget) {
-      const installation = await findSystemdGatewayInstallation(baseEnv);
+      if (inspectionDeadline !== undefined && performance.now() >= inspectionDeadline) {
+        throw new ServiceInspectionDeadlineError();
+      }
+      const installation = await findSystemdGatewayInstallation(baseEnv, {
+        requireLoaded: args.requireLoadedCommand,
+        loadForInspection: args.loadForInspection,
+        timeoutMs:
+          inspectionDeadline === undefined ? undefined : inspectionDeadline - performance.now(),
+      });
       if (installation.kind === "dueling" && args.requireEffective && args.requireLoadedCommand) {
         throw new ServiceOwnershipRefusalError("systemd-competing-managers");
       }
@@ -116,7 +105,7 @@ export async function readGatewayServiceState(
       const deadline = inspectionDeadline ?? performance.now() + 5000;
       return await withSystemdServiceReadBinding(
         baseEnv,
-        () => admitSystemdServiceReadBinding(baseEnv, deadline),
+        () => admitSystemdServiceReadBinding(baseEnv, deadline, args.systemdReadTarget?.unitName),
         (binding) => {
           const remaining = deadline - performance.now();
           if (remaining <= 0) {
@@ -181,18 +170,20 @@ async function readGatewayServiceStateWithBinding(
     }
   };
   systemdReadBinding?.verify();
-  let absent = await service
-    .isAbsent?.({ env: baseEnv, timeoutMs: remainingTimeoutMs() })
-    .catch((error: unknown) => {
-      if (hasCommandProcessCleanupError(error)) {
-        throw error;
-      }
-      const refusal = findServiceOwnershipRefusal(error);
-      if (refusal) {
-        throw refusal;
-      }
-      return false;
-    });
+  let absent = systemdReadTarget
+    ? false
+    : await service
+        .isAbsent?.({ env: baseEnv, timeoutMs: remainingTimeoutMs() })
+        .catch((error: unknown) => {
+          if (hasCommandProcessCleanupError(error)) {
+            throw error;
+          }
+          const refusal = findServiceOwnershipRefusal(error);
+          if (refusal) {
+            throw refusal;
+          }
+          return false;
+        });
   // Initial systemd absence proves no manager; strict absence below only proves no unit.
   const managerAbsent = absent && service.readCommand === readSystemdServiceExecStart;
   systemdReadBinding?.verify();
@@ -233,7 +224,12 @@ async function readGatewayServiceStateWithBinding(
             }
             return null;
           });
-  const env = mergeGatewayServiceEnv(baseEnv, command);
+  const env = mergeGatewayServiceEnv(
+    systemdReadTarget?.scope === "system" && !resolveGatewayProfileSuffix(baseEnv.OPENCLAW_PROFILE)
+      ? { ...baseEnv, OPENCLAW_SYSTEMD_UNIT: systemdReadTarget.unitName }
+      : baseEnv,
+    command,
+  );
   // Reject persisted selector drift before invoking the native service manager.
   args.validateEnvBeforeStatusRead?.(env);
   // Strict user-unit absence still needs the platform owner's system-scope proof.
@@ -279,11 +275,16 @@ async function readGatewayServiceStateWithBinding(
       runtime: { status: "stopped", missingUnit: true, inspectionReason },
     };
   }
+  const statusBaseEnv = systemdReadBinding ? baseEnv : env;
+  // Reuse the selected unit for native status without changing the installation's selectors.
+  const statusEnv = systemdReadTarget
+    ? { ...statusBaseEnv, OPENCLAW_SYSTEMD_UNIT: systemdReadTarget.unitName }
+    : statusBaseEnv;
   const readInstalled = async () =>
     command !== null
       ? true
       : (service
-          .hasInstalledDefinition?.({ env, timeoutMs: remainingTimeoutMs() })
+          .hasInstalledDefinition?.({ env: statusEnv, timeoutMs: remainingTimeoutMs() })
           .catch((error: unknown) => {
             // Strict command absence cannot erase a failed installed-definition read.
             if (args.requireEffective || hasCommandProcessCleanupError(error)) {
@@ -297,7 +298,7 @@ async function readGatewayServiceStateWithBinding(
           }) ?? false);
   const readLoadState = async () =>
     readGatewayServiceLoadState(service, {
-      env: systemdReadBinding ? baseEnv : env,
+      env: statusEnv,
       timeoutMs: remainingTimeoutMs(),
       ...(args.requireEffective ? { requireEffective: true } : {}),
     });

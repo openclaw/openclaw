@@ -18,9 +18,11 @@ export function getSnapshotProcessId(entry: WindowsProcessSnapshotEntry): number
 export function isCompleteWindowsProcessSnapshot(
   entries: readonly WindowsProcessSnapshotEntry[],
 ): boolean {
+  // CIM includes the System Idle Process at PID 0, which cannot own this service.
+  const candidates = entries.filter((entry) => entry.ProcessId !== 0);
   return (
-    entries.length > 0 &&
-    entries.every(
+    candidates.length > 0 &&
+    candidates.every(
       (entry) =>
         getSnapshotProcessId(entry) !== null &&
         typeof entry.CommandLine === "string" &&

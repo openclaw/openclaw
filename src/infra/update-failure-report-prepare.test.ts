@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { createUpdateFailureFact } from "./update-failure-facts.js";
 import { preparePublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 
 // Prepare the real catalog/worker prerequisites before individual test deadlines.
 await preparePublicUpdateFailureIdentifiers();
@@ -19,6 +21,73 @@ function prepareDiagnosticReport(reason: string) {
 }
 
 describe("update report diagnostic command boundary", () => {
+  it("preserves classified destination ownership and recovery without exposing usernames", async () => {
+    const redaction = { env: { HOME: "/Users/Fixture Owner" }, stateDir: "/report-test-state" };
+    const fact = createUpdateFailureFact(
+      {
+        check: "package-install",
+        code: "global-install-foreign-destination",
+        message: "Private arbitrary diagnostic text /Users/Fixture Owner/private",
+        destination: {
+          ownership: "foreign",
+          cause: "package-mismatch",
+          destinationKind: "npm-global",
+          prefix: "/home/Other Owner/.npm-global",
+          packageRoot: "/home/Other Owner/.npm-global/lib/node_modules/openclaw",
+          runningRoot: "/Users/Fixture Owner/.npm-global/lib/node_modules/openclaw",
+          runningPrefix: "/Users/Fixture Owner/.npm-global",
+          launcher: "/home/Other Owner/.npm-global/bin/openclaw",
+          launcherTarget: "/home/Other Owner/openclaw.mjs\nprivate-second-line",
+        },
+      },
+      redaction.env,
+    );
+    const step = {
+      name: "package-install",
+      command: "",
+      cwd: "",
+      durationMs: 0,
+      exitCode: 1,
+      failureFacts: [fact],
+    };
+    for (const recorded of [false, true]) {
+      const report = await prepareUpdateFailureReport(
+        {
+          attemptId: "destination-refusal",
+          result: {
+            mode: "npm",
+            status: "error",
+            reason: "global-install-foreign-destination",
+            durationMs: 0,
+            steps: recorded ? [] : [step],
+          },
+          ...(recorded
+            ? {
+                recordedRun: {
+                  runId: "destination-refusal",
+                  steps: updateRunStepsFromResultStep(step),
+                },
+              }
+            : {}),
+        },
+        redaction,
+      );
+      expect(report.body).toContain("ownership foreign; cause package-mismatch; kind npm-global");
+      expect(report.body).toContain("~/.npm-global/lib/node_modules/openclaw");
+      expect(report.body).toContain("/home/[redacted-user]/.npm-global");
+      expect(report.body).toContain("Next step:");
+      expect(report.body).toContain(
+        "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",
+      );
+      expect(report.body).not.toContain("[redacted-diagnostic]");
+      for (const privateText of ["Fixture Owner", "Other Owner", "private-second-line"]) {
+        expect(report.body).not.toContain(privateText);
+        expect(JSON.stringify(fact)).not.toContain(privateText);
+      }
+      expect(report.body).not.toContain("Private arbitrary diagnostic");
+    }
+  });
+
   it.each([
     "Package rollback launcher backup changed",
     "Package rollback verification timed out",
@@ -255,6 +324,11 @@ describe("update report diagnostic command boundary", () => {
               status: "failed",
               detail: `${message} private-customer-text\nprivate second line`,
             },
+            {
+              step: "warning:post-plugin-doctor",
+              status: "completed",
+              detail: "EACCES: permission denied at /private/customer/plugin",
+            },
             { step: "finalize:package-rollback-not-needed", status: "skipped" },
           ],
         },
@@ -265,9 +339,81 @@ describe("update report diagnostic command boundary", () => {
     expect(report.body).toContain(`Update mode: ${matches ? "package" : "unknown"}`);
     expect(report.body.includes(message)).toBe(matches);
     expect(report.body.includes("package rollback not needed: no package mutation")).toBe(matches);
+    expect(report.body.includes("## Warnings\n\n- EACCES; Permission denied")).toBe(matches);
     expect(report.body).not.toContain("private-customer-text");
     expect(report.body).not.toContain("private second line");
+    expect(report.body).not.toContain("/private/customer");
   });
+
+  it.each(["step", "plugin-summary"])(
+    "reports private-safe warnings from %s without changing the failed phase",
+    async (source) => {
+      const message = "EACCES: permission denied at /private/customer/plugin token=synthetic-token";
+      const result: UpdateRunResult = {
+        status: "error",
+        mode: "npm",
+        durationMs: 1,
+        steps: [
+          ...(source === "step"
+            ? [
+                {
+                  name: "post-plugin-doctor",
+                  command: "doctor --fix",
+                  cwd: "/candidate",
+                  durationMs: 1,
+                  exitCode: 1,
+                  advisory: { kind: "recoverable-maintenance" as const, message },
+                },
+              ]
+            : []),
+          { name: "verifying", command: "", cwd: "", durationMs: 1, exitCode: 1 },
+        ],
+        ...(source === "plugin-summary"
+          ? {
+              postUpdate: {
+                plugins: {
+                  status: "warning" as const,
+                  changed: true,
+                  warnings: ["discord", "private-customer-plugin"].map((pluginId) => ({
+                    pluginId,
+                    reason: "post-plugin-doctor-execution-failed",
+                    message,
+                    guidance: ["custom-tool private-customer-command"],
+                  })),
+                  sync: {
+                    changed: false,
+                    switchedToBundled: [],
+                    switchedToNpm: [],
+                    warnings: [],
+                    errors: [],
+                  },
+                  npm: { changed: false, outcomes: [] },
+                  integrityDrifts: [],
+                },
+              },
+            }
+          : {}),
+      };
+      const request = { attemptId: "plugin-warning-report", result };
+      const report = await prepareUpdateFailureReport(request, context);
+      expect(report.body).toContain("## Warnings");
+      expect(report.body).toContain("EACCES; Permission denied");
+      expect(report.body).toContain("- Failed phase: verifying\n");
+      expect(report.body).not.toContain("Failed phase post-plugin-doctor");
+      expect(report.body).not.toContain("private-customer");
+      expect(report.body).not.toContain("/private/customer");
+      expect(report.body).not.toContain("synthetic-token");
+      if (source === "plugin-summary") {
+        expect(report.body).toContain(
+          "Plugin convergence (post-plugin-doctor-execution-failed); plugin discord",
+        );
+        expect(report.body).toContain("plugin [redacted-plugin]");
+      }
+      await expect(
+        prepareUpdateFailureReport({ ...request, result: { ...result, status: "ok" } }, context),
+      ).rejects.toThrow("Only a final failed update can be reported.");
+    },
+  );
 
   it.each(
     (["check", "code", "pluginId", "affectedKey", "errorName"] as const).flatMap((field) =>

@@ -7,6 +7,7 @@ export function buildAssistantMediaUrl(
   resourceBasePath = "",
   mediaTicket?: string | null,
   context?: AssistantMediaContext,
+  filename?: string,
 ): string {
   const params = new URLSearchParams({ source });
   const normalizedMediaTicket = mediaTicket?.trim();
@@ -18,6 +19,9 @@ export function buildAssistantMediaUrl(
   }
   if (context?.agentId) {
     params.set("agentId", context.agentId);
+  }
+  if (filename) {
+    params.set("filename", filename);
   }
   return `${normalizeRouteBasePath(resourceBasePath)}/__openclaw__/assistant-media?${params.toString()}`;
 }

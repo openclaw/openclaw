@@ -697,63 +697,16 @@ describe("config observe recovery", () => {
     });
   });
 
-  it.each(["list", "entries"] as const)(
-    "persists explicit ownership when recovering a markerless multi-agent %s roster",
-    async (shape) => {
-      await withSuiteHome(async (home) => {
-        const { io, configPath, warn } = createTestConfigIO(home);
-        const entries = {
-          alpha: { workspace: path.join(home, "workspace-alpha") },
-          beta: { workspace: path.join(home, "workspace-beta") },
-          gamma: { workspace: path.join(home, "workspace-gamma") },
-        };
-        const historical = await makeSnapshot(configPath, {
-          gateway: { mode: "local" },
-          agents:
-            shape === "entries"
-              ? { entries }
-              : {
-                  list: Object.entries(entries).map(([id, config]) =>
-                    Object.assign({ id }, config),
-                  ),
-                },
-          bindings: [{ agentId: "beta", match: { channel: "discord" } }],
-        });
-        await expect(io.promoteConfigSnapshotToLastKnownGood(historical)).resolves.toBe(true);
-        await seedConfig(configPath, { gateway: { mode: "invalid" } });
-
-        const restored = await io.recoverConfigFromLastKnownGood({
-          snapshot: await io.readConfigFileSnapshot(),
-          reason: "doctor-invalid-config",
-        });
-
-        expect(restored, warnMessages(warn).join("\n")).toBe(true);
-        const saved = JSON5.parse(await fsp.readFile(configPath, "utf-8"));
-        expect(saved.agents).toEqual({ ownership: "explicit", entries });
-        expect(saved.bindings).toEqual([{ agentId: "beta", match: { channel: "discord" } }]);
-        const reread = await io.readConfigFileSnapshot();
-        expect(reread.valid).toBe(true);
-        expect(reread.config.agents?.ownership).toBe("explicit");
-      });
-    },
-  );
-
-  it.each([
-    ["localhost", "loopback"],
-    ["0.0.0.0", "lan"],
-  ] as const)(
-    "migrates backup gateway bind %s to %s before recovery",
-    async (bind, canonicalBind) => {
+  it.each(["localhost", "0.0.0.0"])(
+    "leaves backup gateway bind %s for Doctor instead of restoring rewritten config",
+    async (bind) => {
       await withSuiteHome(async (home) => {
         const { io, configPath, warn } = createTestConfigIO(home);
         await seedConfigBackup(configPath, {
           gateway: { mode: "local", bind },
         });
-        await fsp.writeFile(
-          `${configPath}.bak`,
-          `{\n  // historical bind alias\n  gateway: { mode: "local", bind: "${bind}" }\n}\n`,
-          "utf-8",
-        );
+        const backupRaw = `{\n  // historical bind alias\n  gateway: { mode: "local", bind: "${bind}" }\n}\n`;
+        await fsp.writeFile(`${configPath}.bak`, backupRaw, "utf-8");
         const clobbered = await writeConfigRaw(configPath, {
           meta: { lastTouchedVersion: "2026.5.28" },
         });
@@ -761,14 +714,11 @@ describe("config observe recovery", () => {
         const snapshot = await io.readConfigFileSnapshot({ recoverSuspicious: true });
 
         expect(snapshot.valid).toBe(true);
-        expect(snapshot.config.gateway?.mode).toBe("local");
-        expect(snapshot.config.gateway?.bind).toBe(canonicalBind);
-        expect(JSON5.parse(await fsp.readFile(configPath, "utf-8"))).toMatchObject({
-          gateway: { mode: "local", bind: canonicalBind },
-        });
-        await expect(fsp.readFile(configPath, "utf-8")).resolves.not.toBe(clobbered.raw);
-        await expect(listClobberFiles(configPath)).resolves.toHaveLength(1);
-        expectWarnContaining(warn, `Config write will strip JSON5 comments from ${configPath}.`);
+        expect(snapshot.config.gateway?.mode).toBeUndefined();
+        await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
+        await expect(fsp.readFile(`${configPath}.bak`, "utf-8")).resolves.toBe(backupRaw);
+        await expect(listClobberFiles(configPath)).resolves.toHaveLength(0);
+        expectWarnNotContaining(warn, "Config auto-restored");
       });
     },
   );
@@ -804,23 +754,35 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("migrates directly authored OTel grpc config before backup recovery", async () => {
-    await withSuiteHome(async (home) => {
-      const { io, configPath } = createTestConfigIO(home);
-      await seedConfigBackup(configPath, {
-        gateway: { mode: "local" },
-        diagnostics: { otel: { enabled: true, protocol: "grpc", traces: true } },
-      });
-      await writeConfigRaw(configPath, {
-        meta: { lastTouchedVersion: "2026.5.28" },
-      });
+  it.each(["snapshot", "load", "load-async"] as const)(
+    "%s leaves directly authored OTel grpc backup repair to Doctor",
+    async (entrypoint) => {
+      await withSuiteHome(async (home) => {
+        const { io, configPath } = createTestConfigIO(home);
+        await seedConfigBackup(configPath, {
+          gateway: { mode: "local" },
+          diagnostics: { otel: { enabled: true, protocol: "grpc", traces: true } },
+        });
+        const backupRaw = await fsp.readFile(`${configPath}.bak`, "utf-8");
+        const clobbered = await writeConfigRaw(configPath, {
+          meta: { lastTouchedVersion: "2026.5.28" },
+        });
 
-      const snapshot = await io.readConfigFileSnapshot({ recoverSuspicious: true });
+        const config =
+          entrypoint === "load"
+            ? io.loadConfig()
+            : entrypoint === "load-async"
+              ? await io.loadConfigAsync()
+              : (await io.readConfigFileSnapshot({ recoverSuspicious: true })).config;
 
-      expect(snapshot.config.diagnostics?.otel?.protocol).toBeUndefined();
-      expect(snapshot.config.diagnostics?.otel?.enabled).toBe(false);
-    });
-  });
+        expect(config.gateway?.mode).toBeUndefined();
+        expect(config.diagnostics?.otel).toBeUndefined();
+        await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
+        await expect(fsp.readFile(`${configPath}.bak`, "utf-8")).resolves.toBe(backupRaw);
+        await expect(listClobberFiles(configPath)).resolves.toHaveLength(0);
+      });
+    },
+  );
 
   it("does not persist env-resolved OTel grpc config during backup recovery", async () => {
     await withSuiteHome(async (home) => {

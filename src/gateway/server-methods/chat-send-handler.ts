@@ -17,6 +17,10 @@ import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.j
 import { formatErrorMessage } from "../../infra/errors.js";
 // chat.send owns admission, ACK timing, and detached dispatch handoff.
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
+import {
+  retireProviderReviewAcknowledgment,
+  type ProviderReviewAcknowledgment,
+} from "../../sessions/provider-review.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
@@ -62,6 +66,7 @@ import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
 import type { GatewayRequestHandlerOptions, SessionMutationAuthorization } from "./types.js";
 
 type ChatSendInternalOptions = {
+  providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalResume?: SessionGoalOperation & { action: "resume" };
   trustedSystemInput?: boolean;
   transcript?: Parameters<typeof createGatewayChatUserTurnController>[0]["transcript"];
@@ -226,6 +231,7 @@ async function handleChatSendWithOptions(
   try {
     const assertInputAdmissionCurrent = () => {
       admitted.value.assertWorkAdmissionCurrent();
+      admitted.value.assertSessionTargetCurrent();
       sessionMutationCommitGuard?.();
     };
     assertInputAdmissionCurrent();
@@ -238,8 +244,7 @@ async function handleChatSendWithOptions(
       startedAt: admissionStartedAt,
       warn: (message) => context.logGateway.warn(message),
       mentionInbox: context.mentionInbox,
-      assertOriginalInputCommit:
-        req.expectedProfileId === undefined ? undefined : assertInputAdmissionCurrent,
+      assertOriginalInputCommit: assertInputAdmissionCurrent,
       assertGoalCurrent: () => {
         sessionMutationCommitGuard?.();
         sessionMutationAuthorization?.assertCurrent();
@@ -326,6 +331,7 @@ async function handleChatSendWithOptions(
       pendingStageAttempted = true;
       const assertCustodyCurrent = () => {
         admitted.value.assertWorkAdmissionCurrent();
+        admitted.value.assertSessionTargetCurrent();
         if (sessionMutationAuthorization?.assertAdmittedInputCurrent) {
           sessionMutationAuthorization.assertAdmittedInputCurrent();
         } else {
@@ -595,6 +601,7 @@ async function handleChatSendWithOptions(
     // After the ACK, dispatch owns the turn: its error lifecycle persists the
     // user transcript (which references the media) on every path, so a
     // post-ACK cleanupAdmittedRun must not race that persist with a discard.
+    admitted.value.assertSessionTargetCurrent();
     admitted.value.setDiscardAbandonedPreparedMedia(undefined);
     respond(true, ackPayload, undefined, { runId: clientRunId });
     context.recordClientActivity?.(client);
@@ -649,6 +656,29 @@ export async function handleChatSend(
   externalAuthorityAdmission?: ChatSendExternalAuthorityAdmission,
 ): Promise<void> {
   await handleChatSendWithOptions(options, onAdmissionOwned, externalAuthorityAdmission);
+}
+
+/** The ordinary chat owner retains the exact human-reviewed continuation through settlement. */
+export async function handleProviderReviewContinuationChat(
+  options: GatewayRequestHandlerOptions,
+  acknowledgment: ProviderReviewAcknowledgment,
+): Promise<void> {
+  let admissionOwned = false;
+  try {
+    await handleChatSendWithOptions(
+      options,
+      async () => {
+        admissionOwned = true;
+        return true;
+      },
+      undefined,
+      { providerReviewAcknowledgment: acknowledgment },
+    );
+  } finally {
+    if (!admissionOwned) {
+      retireProviderReviewAcknowledgment(acknowledgment);
+    }
+  }
 }
 
 /** Operator Resume admits one hidden internal continuation with the Goal transition. */

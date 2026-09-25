@@ -20,11 +20,11 @@ export type CodexPluginsConfigBlock = {
 
 /** Config IO shared by command handlers and their scoped runtime. */
 export type CodexPluginsManagementIO = {
-  readConfig: () => Promise<{
-    enabled?: boolean;
-    plugins?: Record<string, CodexPluginConfigEntry>;
-  }>;
-  mutate: (update: (block: CodexPluginsConfigBlock) => void) => Promise<void>;
+  readConfig: () => Promise<CodexPluginsConfigBlock>;
+  mutate: (
+    update: (block: CodexPluginsConfigBlock) => void,
+    assertCurrent?: () => void,
+  ) => Promise<void>;
 };
 
 type ConfiguredPluginKeyResolution =

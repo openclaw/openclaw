@@ -286,6 +286,7 @@ export function collectRuntimeMetadata(
 export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
   return {
     prompt: source.prompt,
+    admissionSessionId: source.admissionSessionId,
     operatorAuthority: source.operatorAuthority,
     personalBootstrapEligible: source.personalBootstrapEligible,
     queueAbortSignal: source.queueAbortSignal,

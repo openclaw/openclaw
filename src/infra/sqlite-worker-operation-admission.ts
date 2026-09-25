@@ -55,8 +55,19 @@ export type SqliteWorkerAdmissionFactory = (operation: RetainedWorkerTransaction
 /** The caller retains real source custody before invoking the synchronous grant. */
 export function createSqliteWorkerOperationAdmission(
   admit: (request: SqliteWorkerAdmissionRequest, grant: () => boolean) => void,
+  attachment?: unknown,
 ): SqliteWorkerOperationAdmission {
   const { port1, port2 } = new MessageChannel();
+  if (attachment !== undefined) {
+    try {
+      // This message moves with port2; command payloads retain their v8 encoding.
+      port1.postMessage({ kind: "sqlite-operation-attachment", value: attachment }, []);
+    } catch (error) {
+      port1.close();
+      port2.close();
+      throw error;
+    }
+  }
   const inOwnerContext = AsyncLocalStorage.snapshot();
   const decisions = new Set<Int32Array>();
   const cleanupFailures: unknown[] = [];
@@ -213,6 +224,7 @@ export function createSqliteWorkerOperationAdmission(
 
 export type SqliteWorkerOperationContext = {
   port: MessagePort;
+  refusal?: SqliteWorkerError;
   committed?: { facts: unknown };
   settled?: true;
 };
@@ -302,6 +314,21 @@ export function requestSqliteWorkerOperationAdmission(
     Atomics.wait(decision, 0, REQUESTED);
   }
   if (Atomics.load(decision, 0) !== GRANTED) {
-    throw new SqliteWorkerError("SQLite transaction admission was refused", "closed");
+    const refusal = new SqliteWorkerError("SQLite transaction admission was refused", "closed");
+    scope.owner.refusal = refusal;
+    throw refusal;
   }
+}
+
+/** Consume owner-prepared data from this executing operation's private port. */
+export function takeSqliteWorkerOperationAdmissionAttachment(): unknown {
+  const scope = currentAdmission.getStore();
+  if (!scope?.active) {
+    throw new SqliteWorkerError("SQLite operation requires its retained admission", "unavailable");
+  }
+  const message: unknown = receiveMessageOnPort(scope.port)?.message;
+  if (!isRecord(message) || message.kind !== "sqlite-operation-attachment") {
+    throw new SqliteWorkerError("SQLite operation attachment is unavailable", "unavailable");
+  }
+  return message.value;
 }
