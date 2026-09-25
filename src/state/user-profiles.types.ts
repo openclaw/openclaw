@@ -1,12 +1,8 @@
 import type { SqlBool } from "kysely";
+import type { GatewayConfig } from "../config/types.gateway.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import type { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
 import type { DB } from "./openclaw-state-db.generated.js";
-import type {
-  UserChannelAuthorization,
-  UserChannelAuthorizationPolicy,
-  UserChannelAuthorizationReference,
-} from "./user-channel-identities.js";
 
 export const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
 
@@ -30,6 +26,17 @@ export type UserProfileGitHubAttribution = Map<string, StoredGitHubIdentity | nu
 export type UserProfileGitHubAttributionRead = {
   identities: UserProfileGitHubAttribution;
   canonicalProfileIds: string[];
+};
+
+export type UserChannelAuthorizationReference = Readonly<{ version: 1; id: string }>;
+export type UserChannelAuthorization = {
+  reference: UserChannelAuthorizationReference;
+  subject: string;
+  grant: GatewayAccessGrantRef | null;
+};
+export type UserChannelAuthorizationPolicy = {
+  roles: NonNullable<GatewayConfig["roles"]> | null;
+  identityScopes: NonNullable<NonNullable<GatewayConfig["auth"]>["identityScopes"]> | null;
 };
 
 export type UserChannelIdentity = { channelId: string; accountId: string; senderId: string };

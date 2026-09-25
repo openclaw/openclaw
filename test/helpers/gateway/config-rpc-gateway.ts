@@ -2,22 +2,22 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import chokidar from "chokidar";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
-import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { prepareHostConfigSnapshot } from "../config/io.snapshot-preparation.js";
-import { resetGatewayRestartStateForInProcessRestart } from "../infra/restart.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { deleteTestEnvValue } from "../test-utils/env.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { getFreePort } from "../test-utils/ports.js";
-import { GatewayClient, GatewayClientRequestError } from "./client.js";
-import { invalidateConfigGetResponseCache } from "./config-get-response.js";
-import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
-import { configRawPayload } from "./server.config-patch.test-support.js";
-import { startGatewayServer } from "./server.js";
+import { resolveDefaultAgentDir } from "../../../src/agents/agent-scope.js";
+import { prepareHostConfigSnapshot } from "../../../src/config/io.snapshot-preparation.js";
+import { GatewayClient, GatewayClientRequestError } from "../../../src/gateway/client.js";
+import { invalidateConfigGetResponseCache } from "../../../src/gateway/config-get-response.js";
+import { pruneStaleControlPlaneBuckets } from "../../../src/gateway/control-plane-rate-limit.js";
+import { configRawPayload } from "../../../src/gateway/server.config-patch.test-support.js";
+import { startGatewayServer } from "../../../src/gateway/server.js";
+import { resetGatewayRestartStateForInProcessRestart } from "../../../src/infra/restart.js";
+import { resetLogger, setLoggerOverride } from "../../../src/logging/logger.js";
+import { clearPluginMetadataLifecycleCaches } from "../../../src/plugins/plugin-metadata-lifecycle.js";
+import { createDeferredCore } from "../../../src/shared/deferred.js";
+import { deleteTestEnvValue } from "../../../src/test-utils/env.js";
+import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
+import { getFreePort } from "../../../src/test-utils/ports.js";
+import { withTestTimeout } from "../promise.js";
+import { runQaGatewayFixture } from "../qa-gateway-cleanup.js";
 
 const GATEWAY_TOKEN = "config-rpc-synthetic-token";
 
@@ -89,7 +89,7 @@ async function startConfigRpcGateway({
       // Config RPCs use real model discovery, without an unrelated native marketplace sync.
       OPENCLAW_CODEX_APP_SERVER_ARGS: "app-server --listen stdio:// -c features.plugins=false",
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve(import.meta.dirname, "../../dist/extensions"),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve(import.meta.dirname, "../../../dist/extensions"),
     },
   });
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
