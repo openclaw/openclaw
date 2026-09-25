@@ -32,6 +32,9 @@ listing does not imply a ChatGPT transport or endpoint. Picker readiness is
 valid only while that native owner and its account/config observation remain
 current. A missing account, failed refresh, account/config mutation, or retired
 client leaves native models unavailable until discovery succeeds again.
+If the first model list is empty or its account/config observation changes while
+the response is being read, discovery repeats the paired reads once on the same
+current client. A second empty or stale observation remains unavailable.
 
 Use the Models page **Refresh** action (`models.list` with `view: "all"` and
 `refresh: true`) to publish the full catalog for the selected agent. Prepared-only

@@ -133,30 +133,40 @@ export function createCodexAppServerModelCatalog(runtime: string) {
           ...(authProfileStore ? { authProfileStore, authProfileId } : {}),
         },
         async (request, client) => {
-          const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
-          const listed = await listAllCodexAppServerModels({
-            request,
-            limit: 100,
-            includeHidden: true,
-          });
-          const models = listed.models.filter(
-            (model) =>
-              !model.hidden ||
-              params.configuredModelRefs?.some(
-                (ref) => ref.provider === "openai" && ref.model === model.id,
-              ),
-          );
-          const account = await request<CodexGetAccountResponse>({
-            method: "account/read",
-            requestParams: { refreshToken: false },
-          });
-          const observedType = account.account?.type;
-          const accountType = account.requiresOpenaiAuth
-            ? observedType === "apiKey" || observedType === "chatgpt"
-              ? observedType
-              : undefined
-            : undefined;
-          return { models, isCurrent, accountType } as const;
+          const discover = async () => {
+            const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
+            const listed = await listAllCodexAppServerModels({
+              request,
+              limit: 100,
+              includeHidden: true,
+            });
+            const models = listed.models.filter(
+              (model) =>
+                !model.hidden ||
+                params.configuredModelRefs?.some(
+                  (ref) => ref.provider === "openai" && ref.model === model.id,
+                ),
+            );
+            const account = await request<CodexGetAccountResponse>({
+              method: "account/read",
+              requestParams: { refreshToken: false },
+            });
+            const observedType = account.account?.type;
+            const accountType = account.requiresOpenaiAuth
+              ? observedType === "apiKey" || observedType === "chatgpt"
+                ? observedType
+                : undefined
+              : undefined;
+            return { models, rawModelCount: listed.models.length, isCurrent, accountType } as const;
+          };
+          const first = await discover();
+          if (first.rawModelCount > 0 && first.isCurrent()) {
+            return first;
+          }
+          // A genuinely empty cold response or account/config churn can race native startup.
+          // Re-read model/list and account/read together once, on the same scoped client.
+          const retryIsCurrent = captureSharedCodexAppServerCatalogLifetime(client);
+          return retryIsCurrent() ? discover() : first;
         },
       );
       // Publish only after the bounded operation settles; a late timed-out callback cannot publish.
