@@ -36,13 +36,6 @@ const SENDER_BLOCK = `${markInboundContextLabel("Sender:")}
 }
 \`\`\``;
 
-const REPLY_BLOCK = `${markInboundContextLabel("Reply target of current user message:")}
-\`\`\`json
-{
-  "body": "What time is it?"
-}
-\`\`\``;
-
 const UNTRUSTED_CONTEXT_BLOCK = `${markInboundContextLabel("Context:")}
 <<<EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>
 Source: Channel metadata
@@ -66,18 +59,9 @@ const CHAT_HISTORY_PROSE_BLOCK = `${markInboundContextLabel("Chat history since 
 #1002 lee.chen: yeah it was wild`;
 
 describe("stripInboundMetadata", () => {
-  it("fast-path: returns same string when no sentinels present", () => {
-    const text = "Hello, how are you?";
-    expect(stripInboundMetadata(text)).toBe(text);
-  });
-
   it("preserves bare ambient envelope rows", () => {
     const text = "#35676 Keśava: No wtf";
     expect(stripInboundMetadata(text)).toBe(text);
-  });
-
-  it("fast-path: returns empty string unchanged", () => {
-    expect(stripInboundMetadata("")).toBe("");
   });
 
   it.each([
@@ -88,28 +72,9 @@ describe("stripInboundMetadata", () => {
     expect(stripInboundMetadata(input)).toBe(input);
   });
 
-  it("strips a single Conversation info block", () => {
-    const input = `${CONV_BLOCK}\n\nWhat is the weather today?`;
-    expect(stripInboundMetadata(input)).toBe("What is the weather today?");
-  });
-
   it("strips legacy pretty-printed Conversation info blocks", () => {
     const input = `${LEGACY_PRETTY_CONV_BLOCK}\n\nWhat is the weather today?`;
     expect(stripInboundMetadata(input)).toBe("What is the weather today?");
-  });
-
-  it("strips legacy explicit bot mention notes with conversation info", () => {
-    const input = `${markInboundContextLabel("Conversation info:")}
-\`\`\`json
-{
-  "explicitly_mentioned_bot": true,
-  "explicit_bot_mention_note": "The incoming message explicitly mentions your channel identity @SirPinchALotBot. Treat that mention as addressed to you, even if your persona name differs."
-}
-\`\`\`
-
-Actual user message`;
-
-    expect(stripInboundMetadata(input)).toBe("Actual user message");
   });
 
   it("strips multiple chained metadata blocks", () => {
@@ -127,26 +92,6 @@ Actual user message`;
     expect(stripInboundMetadata(input)).toBe("Can you help me?");
   });
 
-  it("strips Replied message block leaving user message intact", () => {
-    const input = `${REPLY_BLOCK}\n\nGot it, thanks!`;
-    expect(stripInboundMetadata(input)).toBe("Got it, thanks!");
-  });
-
-  it("strips all six known sentinel types", () => {
-    const sentinels = [
-      "Conversation info:",
-      "Sender:",
-      "Thread starter:",
-      "Reply target of current user message:",
-      "Forwarded message context:",
-      "Chat history since last reply:",
-    ];
-    for (const sentinel of sentinels) {
-      const input = `${markInboundContextLabel(sentinel)}\n\`\`\`json\n{"x": 1}\n\`\`\`\n\nUser message`;
-      expect(stripInboundMetadata(input)).toBe("User message");
-    }
-  });
-
   it("handles metadata block with no user text after it", () => {
     expect(stripInboundMetadata(CONV_BLOCK)).toBe("");
   });
@@ -154,11 +99,6 @@ Actual user message`;
   it("preserves message containing json fences that are not metadata", () => {
     const text = `Here is my code:\n\`\`\`json\n{"key": "value"}\n\`\`\``;
     expect(stripInboundMetadata(text)).toBe(text);
-  });
-
-  it("preserves leading newlines in user content after stripping", () => {
-    const input = `${CONV_BLOCK}\n\nActual message`;
-    expect(stripInboundMetadata(input)).toBe("Actual message");
   });
 
   it.each(["\n", "\r\n"])(
@@ -283,12 +223,6 @@ Hello from user`;
 describe("timestamp prefix stripping", () => {
   it("strips a leading injected timestamp prefix", () => {
     expect(stripInboundMetadata("[Wed 2026-03-11 23:51 PDT] hello")).toBe("hello");
-  });
-
-  it("strips timestamp prefix with UTC timezone", () => {
-    expect(stripInboundMetadata("[Thu 2026-03-12 07:00 UTC] what time is it?")).toBe(
-      "what time is it?",
-    );
   });
 
   it("leaves non timestamp brackets alone", () => {

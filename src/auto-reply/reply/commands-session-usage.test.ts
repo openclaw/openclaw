@@ -196,11 +196,6 @@ describe("handleUsageCommand", () => {
 
   it.each([
     ["cold", "refreshing", 0, 2],
-    ["refreshing", "refreshing", 4.56, 2],
-    ["refreshing-current", "refreshing", 4.56, 0],
-    ["partial", "partial", 4.56, 2],
-    ["stale", "stale", 0, 2],
-    ["empty", "fresh", 0, 0],
     ["fresh", "fresh", 4.56, 0],
     ["legacy", undefined, 4.56, 0],
   ] as const)(

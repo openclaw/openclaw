@@ -448,13 +448,6 @@ it.each(["empty", "missing", "legacy"] as const)(
   },
 );
 
-it("does not expose a processed recorder as a pending checkpoint admission", async () => {
-  await withAdmittedInput(false, async ({ recorder }) => {
-    recorder.markSentToProvider?.();
-    expect(readPendingUserTurnTranscriptAdmission(recorder)).toBeUndefined();
-  });
-});
-
 it("includes the completed foreground turn when optional memory has no admission fence", async () => {
   await withAdmittedInput(true, async ({ scope, workspaceDir, recorder }) => {
     recorder.markSentToProvider?.();

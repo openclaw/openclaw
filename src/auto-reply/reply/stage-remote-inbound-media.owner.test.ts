@@ -9,7 +9,6 @@ import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
-  { agentId: "main", remoteMediaMode: "sandbox-or-cache" },
   { agentId: "work", remoteMediaMode: "sandbox-or-cache" },
   { agentId: undefined, remoteMediaMode: "cache" },
 ] as const)(

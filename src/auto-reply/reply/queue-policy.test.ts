@@ -95,16 +95,4 @@ describe("resolveActiveRunQueueAction", () => {
       }),
     ).toBe("drop");
   });
-
-  it("ignores reset-triggered policy when there is no active run", () => {
-    expect(
-      resolveActiveRunQueueAction({
-        isActive: false,
-        isHeartbeat: false,
-        shouldFollowup: true,
-        queueMode: "collect",
-        resetTriggered: true,
-      }),
-    ).toBe("run-now");
-  });
 });

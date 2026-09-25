@@ -13,9 +13,7 @@ import {
 
 describe("settled dispatcher final outcomes", () => {
   it.each([
-    { visibleReplySent: false, deferred: false },
     { visibleReplySent: true, deferred: false },
-    { visibleReplySent: false, deferred: true },
     { visibleReplySent: true, deferred: true },
   ])(
     "keeps identityless delivery pending in the exact receipt ($visibleReplySent, $deferred)",

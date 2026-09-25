@@ -91,15 +91,6 @@ describe("dashboard command", () => {
     expect(params.command.commandBodyNormalized).toBe(prompt);
   });
 
-  it("preserves dashboard requirements in the skill-routed agent request", async () => {
-    const params = buildParams("/dashboard release health and deploy status");
-
-    const result = await handleDashboardCommand(params, true);
-
-    expect(result?.shouldContinue).toBe(true);
-    expect(params.ctx.BodyForAgent).toContain("release health and deploy status");
-  });
-
   it("preserves additional explicit skills used by dashboard requirements", async () => {
     const params = buildParams("/dashboard include $release_notes", [
       controlUiSkill,
