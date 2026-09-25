@@ -429,7 +429,7 @@ export class GatewayPlugin extends Plugin {
       this.isConnected = true;
     }
     this.voiceStateCache.apply(payload);
-    dispatchVoiceGatewayEvent(this.client, payload.t, payload.d);
+    dispatchVoiceGatewayEvent(this.client, payload);
     // MESSAGE_CREATE is the durable-ingress raw-envelope boundary. Its listener
     // maps structures only after the queue claim; other events retain eager mapping.
     const data =

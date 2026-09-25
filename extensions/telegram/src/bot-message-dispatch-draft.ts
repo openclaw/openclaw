@@ -2,6 +2,7 @@ import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { BlockReplyContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { TelegramBotDeps } from "./bot-deps.js";
 import type {
   TelegramDispatchTurn as Turn,
   TelegramDispatchTurnConfig as TurnConfig,
@@ -23,6 +24,12 @@ import { recordSentMessage } from "./sent-message-cache.js";
 
 const draftLogger = createSubsystemLogger("telegram/draft-stream");
 const DRAFT_MIN_INITIAL_CHARS = 30;
+
+type Cancel = NonNullable<
+  Parameters<
+    TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
+  >[0]["dispatcherOptions"]["onBeforeDeliverCancelled"]
+>;
 
 function resolveDraftPartialText(
   previous: string,
@@ -555,6 +562,18 @@ export function dropQueuedAnswerBlockRotation(
     turn.pendingAnswerBlockAssistantMessageIndex = matched.assistantMessageIndex;
   }
   recomputeTelegramQueuedAnswerBlockRotations(turn);
+}
+
+export function handleBeforeDeliverCancelled(
+  turn: Turn,
+  payload: Parameters<Cancel>[0],
+  info: Parameters<Cancel>[1],
+): ReturnType<Cancel> {
+  return info.kind === "block"
+    ? enqueueDraftEvent(turn, async () => {
+        dropQueuedAnswerBlockRotation(turn, payload, info.assistantMessageIndex);
+      })
+    : undefined;
 }
 
 export function isQueuedAnswerBlock(

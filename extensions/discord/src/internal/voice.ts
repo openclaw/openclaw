@@ -14,7 +14,7 @@ export class VoicePlugin extends Plugin {
 
   override registerClient(client: Client): void {
     this.client = client;
-    this.gatewayPlugin = client.getPlugin<GatewayPlugin>("gateway");
+    this.gatewayPlugin = client.getPlugin("gateway");
     if (!this.gatewayPlugin) {
       throw new Error("Discord voice cannot be used without a gateway connection.");
     }

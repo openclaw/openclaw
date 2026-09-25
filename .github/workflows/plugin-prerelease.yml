@@ -472,7 +472,7 @@ jobs:
       packages_json: ${{ steps.plan.outputs.packages_json }}
     steps:
       - name: Checkout trusted scanner tooling
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -481,7 +481,7 @@ jobs:
           submodules: false
 
       - name: Setup trusted scanner TypeScript runtime
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.x"
 
@@ -495,7 +495,7 @@ jobs:
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Checkout candidate as inert data
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_target.outputs.checkout_revision }}
           path: .release-candidate
@@ -521,7 +521,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout trusted scanner tooling
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -530,7 +530,7 @@ jobs:
           submodules: false
 
       - name: Setup trusted scanner TypeScript runtime
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.x"
 
@@ -544,7 +544,7 @@ jobs:
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Checkout candidate as inert package input
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_target.outputs.checkout_revision }}
           path: .release-candidate

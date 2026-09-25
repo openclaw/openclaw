@@ -7,7 +7,6 @@ import {
   isUnknownDiscordVoiceStateError,
   type Client,
 } from "../internal/discord.js";
-import type { VoicePlugin } from "../internal/voice.js";
 import { DECRYPT_FAILURE_WINDOW_MS } from "./receive-recovery.js";
 import { logVoiceVerbose, type VoiceOperationResult, type VoiceSessionEntry } from "./session.js";
 
@@ -598,7 +597,7 @@ export class DiscordVoiceFollowing {
     if (!botChannelId) {
       return;
     }
-    const voicePlugin = this.params.client.getPlugin<VoicePlugin>("voice");
+    const voicePlugin = this.params.client.getPlugin("voice");
     const gateway = voicePlugin?.getGateway(guildId);
     if (!gateway) {
       logger.warn(

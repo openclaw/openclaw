@@ -5,7 +5,7 @@
   "description": "QuickJS executor for OpenClaw Code Mode",
   "type": "module",
   "dependencies": {
-    "quickjs-wasi": "3.6.0"
+    "quickjs-wasi": "3.6.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

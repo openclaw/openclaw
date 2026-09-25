@@ -93,7 +93,7 @@
     "prepack": "pnpm run build && node --import tsx ../../scripts/protocol-gen.ts --out ./protocol.schema.json"
   },
   "dependencies": {
-    "typebox": "1.3.33"
+    "typebox": "1.3.34"
   },
   "devDependencies": {
     "@openclaw/normalization-core": "workspace:*"
