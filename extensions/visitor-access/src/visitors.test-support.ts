@@ -69,6 +69,7 @@ export function visitorFixture(
     grants?: VisitorGrant[];
     emails?: string[];
     githubEmail?: string | null;
+    githubResponse?: Response;
     gatewayConfig?: OpenClawConfig;
     profiles?: Array<{ id: string; emails: string[]; role?: string }>;
   } = {},
@@ -163,7 +164,7 @@ export function visitorFixture(
       if (!/^\/users\/[a-z0-9-]+$/.test(url.pathname) || method !== "GET") {
         throw new Error("Unexpected GitHub request");
       }
-      return Response.json({ email: options.githubEmail ?? null });
+      return options.githubResponse ?? Response.json({ email: options.githubEmail ?? null });
     }
     if (url.origin !== "https://api.cloudflare.com" || !url.pathname.startsWith(policiesPath)) {
       throw new Error("Unexpected Cloudflare endpoint");

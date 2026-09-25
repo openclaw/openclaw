@@ -13,6 +13,51 @@ import {
   type GatewayRoles,
 } from "./visitors.test-support.js";
 
+function oversizedGithubResponse() {
+  const prefix = new TextEncoder().encode('{"email":"Visitor@Example.com","padding":"');
+  const suffix = new TextEncoder().encode('"}');
+  const chunk = new Uint8Array(1024 * 1024).fill(120);
+  const totalPaddingBytes = 32 * 1024 * 1024;
+  let phase = 0;
+  let remaining = totalPaddingBytes;
+  let enqueuedBytes = 0;
+  let canceled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (phase === 0) {
+        phase = 1;
+        enqueuedBytes += prefix.byteLength;
+        controller.enqueue(prefix);
+        return;
+      }
+      if (remaining > 0) {
+        const next = Math.min(remaining, chunk.byteLength);
+        remaining -= next;
+        enqueuedBytes += next;
+        controller.enqueue(chunk.subarray(0, next));
+        return;
+      }
+      controller.enqueue(suffix);
+      controller.close();
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(body, { headers: { "content-type": "application/json" } }),
+    state: {
+      get canceled() {
+        return canceled;
+      },
+      get enqueuedBytes() {
+        return enqueuedBytes;
+      },
+      totalPaddingBytes,
+    },
+  };
+}
+
 describe("VisitorAccessService", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
@@ -54,6 +99,27 @@ describe("VisitorAccessService", () => {
       {},
       { scopes: ["operator.read"] },
     );
+  });
+
+  it("bounds GitHub email responses while accepting a legitimate large body", async () => {
+    const legitimate = visitorFixture({
+      githubResponse: Response.json({
+        email: "Visitor@Example.com",
+        padding: "x".repeat(1024 * 1024),
+      }),
+    });
+    await expect(
+      legitimate.service.invite({ github: "Visitor" }, legitimate.authority),
+    ).resolves.toContain("visitor@example.com");
+
+    const oversized = oversizedGithubResponse();
+    const fixture = visitorFixture({ githubResponse: oversized.response });
+    await expect(fixture.service.invite({ github: "Visitor" }, fixture.authority)).rejects.toThrow(
+      "GitHub email lookup failed",
+    );
+    expect(oversized.state.canceled).toBe(true);
+    expect(oversized.state.enqueuedBytes).toBeLessThan(oversized.state.totalPaddingBytes);
+    expect(fixture.emails()).toEqual([]);
   });
 
   it("asks for an explicit account email when GitHub has no public email, without granting access", async () => {
