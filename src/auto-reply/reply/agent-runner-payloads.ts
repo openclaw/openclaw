@@ -169,6 +169,7 @@ export async function buildReplyPayloads(params: {
   applyReplyToMode?: (payload: ReplyPayload) => ReplyPayload;
   messageProvider?: string;
   messagingToolSentTexts?: string[];
+  messagingToolSourceReplyTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
   onDeliveredTerminalDuplicate?: () => void;
@@ -179,7 +180,12 @@ export async function buildReplyPayloads(params: {
   accountId?: string;
   extractMarkdownImages?: boolean;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
-}): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
+}): Promise<{
+  replyPayloads: ReplyPayload[];
+  didLogHeartbeatStrip: boolean;
+  /** Answer texts confirmed delivered before final-payload drops. */
+  deliveredTexts: string[];
+}> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
   const sanitizedPayloads: ReplyPayload[] = [];
   if (params.isHeartbeat) {
@@ -265,6 +271,20 @@ export async function buildReplyPayloads(params: {
   const threadedPayloads = params.applyReplyToMode
     ? silentFilteredPayloads.map(params.applyReplyToMode)
     : silentFilteredPayloads;
+  // Confirmed-delivered answer texts (block stream, direct receipts, messaging
+  // tool duplicates) recorded before final-payload drops discard the payloads.
+  const deliveredTexts: string[] = [];
+  const collectDeliveredTerminalText = (payload: ReplyPayload): void => {
+    if (
+      isReplyPayloadTerminalContent(payload) &&
+      payload.isReasoning !== true &&
+      payload.isCommentary !== true &&
+      typeof payload.text === "string" &&
+      payload.text.trim()
+    ) {
+      deliveredTexts.push(payload.text);
+    }
+  };
 
   // Drop final payloads only when block streaming succeeded end-to-end.
   // If streaming aborted (e.g., timeout), fall back to final payloads.
@@ -301,7 +321,9 @@ export async function buildReplyPayloads(params: {
           accountId,
           sentMediaUrls: params.messagingToolSentMediaUrls,
           sentTexts: messagingToolSentTexts,
-          onDeliveredTerminalDuplicate: params.onDeliveredTerminalDuplicate,
+          onDeliveredTerminalDuplicate: () => {
+            params.onDeliveredTerminalDuplicate?.();
+          },
           normalizeSentMediaUrls: (sentMediaUrls) =>
             normalizeSentMediaUrlsForDedupe({
               sentMediaUrls,
@@ -311,9 +333,22 @@ export async function buildReplyPayloads(params: {
       );
     }
   }
-  const retryBlockedDirectPayloads = (params.directBlockDeliveries ?? [])
+  const directBlockDeliveries = params.directBlockDeliveries ?? [];
+  const retryBlockedDirectPayloads = directBlockDeliveries
     .filter((delivery) => delivery.pending || !shouldRetryReplyDispatch(delivery.outcome))
     .map((delivery) => delivery.payload);
+  const deliveredDirectPayloads = directBlockDeliveries
+    .filter((delivery) => delivery.outcome === "delivered" && !delivery.pending)
+    .map((delivery) => delivery.payload);
+  // Confirmed source-route message-tool receipts are delivery evidence in their
+  // own right: capture them independently of duplicate-candidate matching, so
+  // substring dedupe cannot over-report unsent candidate text and NO_REPLY
+  // turns cannot under-report delivered replies.
+  for (const receiptText of params.messagingToolSourceReplyTexts ?? []) {
+    if (receiptText.trim()) {
+      deliveredTexts.push(receiptText);
+    }
+  }
   for (const payload of dedupedPayloads) {
     const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
     const direct = (params.directBlockDeliveries ?? []).filter(
@@ -402,6 +437,7 @@ export async function buildReplyPayloads(params: {
         ? params.blockReplyPipeline?.hasSentExactPayload?.(payload)
         : params.blockReplyPipeline?.hasSentPayload(payload) || isDirectTextRetryBlocked(payload);
       if (wasSent) {
+        collectStreamDeliveredText(payload);
         return null;
       }
       return payload;
@@ -425,26 +461,90 @@ export async function buildReplyPayloads(params: {
     if (!textShouldBeOmitted) {
       return payload;
     }
+    collectStreamDeliveredText(textOnlyPayload);
     return copyReplyPayloadMetadata(payload, {
       ...payload,
       text: undefined,
       audioAsVoice: payload.audioAsVoice || undefined,
     });
   };
+  const isPipelineDeliveredText = (payload: ReplyPayload): boolean => {
+    const pipeline = params.blockReplyPipeline;
+    const textOnlyPayload = copyReplyPayloadMetadata(payload, {
+      ...payload,
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+    return Boolean(
+      pipeline?.hasSentPayload(payload) ||
+      pipeline?.hasSentExactPayload?.(payload) ||
+      pipeline?.hasSentPayload(textOnlyPayload),
+    );
+  };
+  const hasDeliveredDirectText = (payload: ReplyPayload): boolean => {
+    const text = resolveSendableOutboundReplyParts(payload).trimmedText;
+    if (!text) {
+      return false;
+    }
+    const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+    const receipts = deliveredDirectPayloads.filter(
+      (delivery) =>
+        isReplyPayloadTerminalContent(delivery) &&
+        (assistantMessageIndex === undefined ||
+          getReplyPayloadMetadata(delivery)?.assistantMessageIndex === assistantMessageIndex),
+    );
+    // Exact single-receipt match first: aggregate concatenation cannot recover
+    // individually delivered answers sharing one assistant message index.
+    if (
+      receipts.some(
+        (delivery) =>
+          (delivery.text ?? resolveSendableOutboundReplyParts(delivery).trimmedText).trim() ===
+          text.trim(),
+      )
+    ) {
+      return true;
+    }
+    return (
+      receipts
+        .map((delivery) => delivery.text ?? resolveSendableOutboundReplyParts(delivery).trimmedText)
+        .join("")
+        .trim() === text.trim()
+    );
+  };
+  const collectStreamDeliveredText = (payload: ReplyPayload): void => {
+    if (!isPipelineDeliveredText(payload) && !hasDeliveredDirectText(payload)) {
+      return;
+    }
+    collectDeliveredTerminalText(payload);
+  };
   const contentSuppressedPayloads = shouldDropFinalPayloads
-    ? dedupedPayloads.flatMap((payload) => preserveUnsentMediaAfterBlockSend(payload) ?? [])
+    ? dedupedPayloads.flatMap((payload) => {
+        if (!isPipelineDeliveredText(payload)) {
+          collectStreamDeliveredText(payload);
+        }
+        return preserveUnsentMediaAfterBlockSend(payload) ?? [];
+      })
     : params.blockStreamingEnabled
-      ? dedupedPayloads.flatMap((payload) =>
-          params.blockReplyPipeline?.hasSentPayload(payload) || isDirectBlockRetryBlocked(payload)
-            ? []
-            : (preserveUnsentMediaAfterBlockSend(payload) ?? []),
-        )
+      ? dedupedPayloads.flatMap((payload) => {
+          const sent = Boolean(
+            params.blockReplyPipeline?.hasSentPayload(payload) ||
+            isDirectBlockRetryBlocked(payload),
+          );
+          if (sent) {
+            collectStreamDeliveredText(payload);
+            return [];
+          }
+          return preserveUnsentMediaAfterBlockSend(payload) ?? [];
+        })
       : retryBlockedDirectPayloads.length > 0
-        ? dedupedPayloads.flatMap((payload) =>
-            isDirectBlockRetryBlocked(payload)
-              ? []
-              : (preserveUnsentMediaAfterBlockSend(payload) ?? []),
-          )
+        ? dedupedPayloads.flatMap((payload) => {
+            const sent = isDirectBlockRetryBlocked(payload);
+            if (sent) {
+              collectStreamDeliveredText(payload);
+              return [];
+            }
+            return preserveUnsentMediaAfterBlockSend(payload) ?? [];
+          })
         : dedupedPayloads;
   const blockMediaUrlsToOmit = await normalizeSentMediaUrlsForDedupe({
     sentMediaUrls: [
@@ -468,5 +568,6 @@ export async function buildReplyPayloads(params: {
   return {
     replyPayloads: filteredPayloads.filter(isRenderablePayload),
     didLogHeartbeatStrip,
+    deliveredTexts,
   };
 }

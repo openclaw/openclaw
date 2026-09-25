@@ -54,6 +54,7 @@ import {
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
+import { captureDiagnosticResponseTexts } from "./diagnostic-response-capture.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { attachMcpAppChannelAction, attachMcpConnectChannelAction } from "./mcp-channel-actions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -146,6 +147,12 @@ export async function prepareReplyAgentPayloads(state: {
   const committedMessagingToolSourceReplyDelivery =
     hasCommittedSourceReplyDeliveryEvidence(runResult);
   const completedSourceReplyDelivery = hasCompletedSourceReplyDeliveryEvidence(runResult);
+  const messagingToolSourceReplyTexts = (runResult.messagingToolSourceReplyPayloads ?? []).flatMap(
+    (receipt) =>
+      receipt.sourceReplyFinal !== false && typeof receipt.text === "string" && receipt.text.trim()
+        ? [receipt.text]
+        : [],
+  );
   const hasLegacyMessagingToolEvidence =
     runResult.sourceReplyDeliveryState === undefined &&
     resolveExplicitFinalSourceReplyDeliveryEvidence(runResult) === undefined;
@@ -289,6 +296,7 @@ export async function prepareReplyAgentPayloads(state: {
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
+      messagingToolSourceReplyTexts,
       onDeliveredTerminalDuplicate,
       originatingChannel: sessionCtx.OriginatingChannel,
       originatingChatType: sessionCtx.ChatType,
@@ -523,9 +531,17 @@ export async function prepareReplyAgentPayloads(state: {
       (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
-  const hasDeliveredBlockStream = Boolean(blockReplyPipeline?.didStream());
   const canDeliverStandaloneFallbackNotice =
-    hasDeliveredBlockStream || successfulSideEffectDelivery;
+    Boolean(blockReplyPipeline?.didStream()) || successfulSideEffectDelivery;
+  if (opts?.onDiagnosticResponse && replyPayloads.length === 0) {
+    // Streaming or side-effect delivery can consume every final payload; the
+    // delivery-confirmed texts still reached the user, so capture them before
+    // returning.
+    const streamedResponse = captureDiagnosticResponseTexts(payloadResult.deliveredTexts);
+    if (streamedResponse !== undefined) {
+      opts.onDiagnosticResponse(streamedResponse);
+    }
+  }
   if (
     replyPayloads.length === 0 ||
     (!hasVisibleReplyPayload && !canDeliverStandaloneFallbackNotice)
@@ -633,6 +649,16 @@ export async function prepareReplyAgentPayloads(state: {
     }
   }
   await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
+
+  if (opts?.onDiagnosticResponse) {
+    // Only delivery-confirmed texts (streamed/direct/messaging-tool receipts)
+    // are captured here; remaining final payloads are candidates until dispatch
+    // confirms their delivery, and finalization captures those in its fallback.
+    const diagnosticResponse = captureDiagnosticResponseTexts(payloadResult.deliveredTexts);
+    if (diagnosticResponse !== undefined) {
+      opts.onDiagnosticResponse(diagnosticResponse);
+    }
+  }
 
   const diagnosticUsage = runResult.meta?.agentMeta?.diagnosticUsage ?? usage;
   if (isDiagnosticsEnabled(cfg) && hasBillableUsage(diagnosticUsage)) {

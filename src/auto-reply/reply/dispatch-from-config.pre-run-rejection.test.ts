@@ -18,6 +18,7 @@ import {
   setDiscordTestRegistry,
   threadInfoMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -32,7 +33,10 @@ let resetReplyRunRegistry: () => void;
 const REJECTED_MODEL = "openai/REJECTED_PRIVATE_TOKEN";
 const SESSION_KEY = "agent:main:session";
 const cfg: OpenClawConfig = {
-  diagnostics: { enabled: true },
+  diagnostics: {
+    enabled: true,
+    otel: { enabled: true, traces: true, captureContent: true },
+  },
   messages: { visibleReplies: "automatic" },
 };
 
@@ -184,6 +188,92 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     expect(processedEvents[0]?.agentId).toBe("main");
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "main" }),
+    );
+  });
+
+  it.each([
+    { label: "streamed", reply: undefined },
+    { label: "non-streamed", reply: { text: "diagnostic response" } },
+  ])("records producer-captured output for a $label reply", async ({ reply }) => {
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver: async (_ctx, opts) => {
+        // Under the capture contract, the producer publishes only
+        // delivery-confirmed (streamed) content; a non-streamed final is
+        // captured by finalization after its delivery is confirmed.
+        if (reply === undefined) {
+          (opts as InternalGetReplyOptions | undefined)?.onDiagnosticResponse?.(
+            "diagnostic response",
+          );
+        }
+        return reply;
+      },
+    });
+
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        finalResponse:
+          reply === undefined
+            ? // The empty-turn simulation also delivers the no-visible-reply
+              // fallback, which settled-facts capture now records; the
+              // producer-captured content still leads the joined response.
+              expect.stringContaining("diagnostic response")
+            : "diagnostic response",
+      }),
+    );
+  });
+
+  it("records the delivered fallback notice as the response for an empty turn", async () => {
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver: async () => undefined,
+    });
+
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        finalResponse: expect.stringContaining("couldn't produce or deliver a reply"),
+      }),
+    );
+  });
+
+  it("joins producer-captured streamed content with a delivered final reply", async () => {
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver: async (_ctx, opts) => {
+        (opts as InternalGetReplyOptions | undefined)?.onDiagnosticResponse?.("streamed part");
+        return { text: "final part" };
+      },
+    });
+
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ finalResponse: "streamed part\nfinal part" }),
+    );
+  });
+
+  it("excludes reasoning and commentary lanes from the fallback captured response", async () => {
+    // When no producer-captured diagnostic response exists, the fallback joins
+    // delivered reply texts; reasoning/commentary lanes are not the final answer
+    // and must never reach message.processed output.value via this path.
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver: async () =>
+        [
+          { text: "internal reasoning trace", isReasoning: true },
+          { text: "Agent reply." },
+          { text: "status notice", isCommentary: true },
+        ] satisfies ReplyPayload[],
+    });
+
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ finalResponse: "Agent reply." }),
     );
   });
 

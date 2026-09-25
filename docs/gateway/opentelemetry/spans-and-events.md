@@ -41,6 +41,7 @@ OpenTelemetry metrics or change Prometheus metric labels.
   - On completion: `openclaw.harness.result_classification`, `openclaw.harness.yield_detected`, `openclaw.harness.items.started`, `openclaw.harness.items.completed`, `openclaw.harness.items.active`
   - On error: `openclaw.harness.phase`, `openclaw.errorCategory`, optional `openclaw.harness.cleanup_failed`
   - Span event `openclaw.agent.commentary` for completed preambles from supported harnesses, including the built-in runtime, Codex, and Claude CLI. Attributes include `openclaw.commentary.sequence`, `openclaw.commentary.text_length`, and `openclaw.commentary.content_truncated`. The existing `diagnostics.otel.captureContent` setting controls bounded, redacted output-message content.
+  - With `captureContent: true`: bounded, redacted `input.value` (turn prompt) on start and `output.value` (final assistant text) on completion
 - `openclaw.tool.execution`
   - `gen_ai.tool.name`, `gen_ai.operation.name` (`execute_tool`), `openclaw.toolName`, `openclaw.tool.source`, optional `gen_ai.tool.call.id`, `openclaw.tool.owner`, `openclaw.tool.params.*`, optional `openclaw.agent`
   - Optional `openclaw.errorCategory`/`openclaw.errorCode` on errors, `openclaw.deniedReason` and `openclaw.outcome=blocked` when denied by policy or sandbox
@@ -52,6 +53,7 @@ OpenTelemetry metrics or change Prometheus metric labels.
   - `openclaw.channel`, `openclaw.webhook`, `openclaw.error`
 - `openclaw.message.processed`
   - `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`, optional `openclaw.agent` (the agent that initially ingested the prompt)
+  - With `captureContent: true`: bounded, redacted `input.value` (inbound message text) and `output.value` (final reply text)
 - `openclaw.message.delivery`
   - `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`, `openclaw.errorCategory`, `openclaw.delivery.result_count`
 - `openclaw.session.stuck`
@@ -66,6 +68,20 @@ OpenTelemetry metrics or change Prometheus metric labels.
 When content capture is explicitly enabled, model and tool spans can also
 include bounded, redacted `openclaw.content.*` attributes for the specific
 content classes you opted into.
+
+`openclaw.message.processed` and `openclaw.harness.run` spans follow the same
+existing `captureContent` setting. When it is `true`, `input.value` and
+`output.value` carry the inbound message or turn prompt and the final reply
+or assistant text, bounded to 128 KiB (131072 UTF-16 code units) per field and
+redacted through the same sensitive-text filter as other exported content.
+The captured content is routed as private listener-only payload data to
+trusted diagnostics exporters only; it never appears on public event
+payloads.
+
+**Upgrade note:** if you already run with `diagnostics.otel.captureContent:
+true`, these message and run span attributes are new — your existing setting
+now also exports this prompt and reply content with no further configuration
+change. Nothing new is exported while `captureContent` is unset or `false`.
 
 ## Diagnostic event catalog
 
@@ -199,7 +215,9 @@ for usage methods and request options.
   `durationMs`, `outcome`, optional `resultClassification`, `yieldDetected`,
   and `itemLifecycle` counts. Errors add `phase`
   (`prepare`/`start`/`send`/`resolve`/`cleanup`), `errorCategory`, and
-  optional `cleanupFailed`.
+  optional `cleanupFailed`. With `captureContent: true`, started and completed
+  events also carry bounded, redacted turn prompt and final assistant text
+  as private listener-only data exported on spans, never on public payloads.
 
 **Exec**
 

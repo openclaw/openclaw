@@ -2,6 +2,7 @@ import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { logVerbose } from "../../globals.js";
+import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
@@ -26,6 +27,7 @@ import {
   clearPendingFinalDeliveryAfterSuccess,
   suppressPendingFinalDelivery,
 } from "./dispatch-from-config.pending-final.js";
+import { collectLedgerDeliveredResponseTexts } from "./dispatch-from-config.turn-ledger.js";
 
 type ExecuteDispatchReadyState = Extract<
   Awaited<ReturnType<typeof executeDispatch>>,
@@ -42,6 +44,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     ctx,
     deferFinalTtsText,
     deliveryChannel,
+    diagnosticResponse,
     dispatcher,
     getDispatchAbortSignal,
     getObservedReplyDelivery,
@@ -90,6 +93,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const finalDeliveries: Array<Awaited<ReturnType<typeof state.sendFinalPayload>>> = [];
   const sentFinalPayloadDedupeKeys = new Set<string>();
   let deferredTtsTextPending = state.progressState.accumulatedBlockTtsText;
+  const replyTextParts: string[] = [];
   let continuationSettlementAttempted = false;
   let continuationSettlementRegistered = false;
   const settleContinuation = async (statusDelivered: boolean) => {
@@ -492,6 +496,15 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       );
     }
   }
+  // Response capture consumes only delivery facts the turn ledger has already
+  // confirmed: the fallback gate's bounded, abort-aware settle for empty turns,
+  // routed settlement at call sites, and queued deliveries that settled during
+  // finalization. Completion ordering is never delayed for capture, so
+  // deliveries that legitimately outlive the turn (queued same-session
+  // mirroring) are omitted rather than stalling the reply operation.
+  if (resolveDiagnosticModelContentCapturePolicy(cfg).outputMessages) {
+    replyTextParts.push(...collectLedgerDeliveredResponseTexts(turnLedger));
+  }
   counts.final += routedFinalCount;
   const agentRunTerminalOutcome = state.getAgentRunTerminalOutcome();
   state.commitInboundDedupeIfClaimed();
@@ -528,7 +541,16 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     dispatchOutcome,
     dispatchReason ? { reason: dispatchReason } : undefined,
   );
-  state.recordProcessed(dispatchOutcome, dispatchReason ? { reason: dispatchReason } : undefined);
+  state.recordProcessed(dispatchOutcome, {
+    reason: dispatchReason,
+    ...(diagnosticResponse !== undefined && replyTextParts.length > 0
+      ? { finalResponse: [diagnosticResponse, replyTextParts.join("\n")].join("\n") }
+      : diagnosticResponse !== undefined
+        ? { finalResponse: diagnosticResponse }
+        : replyTextParts.length > 0
+          ? { finalResponse: replyTextParts.join("\n") }
+          : {}),
+  });
   state.markIdle(
     dispatchOutcome === "error"
       ? "message_error"

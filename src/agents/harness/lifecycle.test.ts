@@ -1,6 +1,7 @@
 // Verifies harness lifecycle capability checks, diagnostics, and trace scoping.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
@@ -160,6 +161,7 @@ function captureDiagnosticEvents(
 describe("AgentHarness lifecycle runner", () => {
   afterEach(() => {
     resetAgentEventsForTest();
+    clearRuntimeConfigSnapshot();
     resetDiagnosticEventsForTest();
   });
 
@@ -405,6 +407,76 @@ describe("AgentHarness lifecycle runner", () => {
     ]);
   });
 
+  it("captures the finalization assistant answer under captureContent", async () => {
+    setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
+    const params = createFinalizationParams();
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      pluginId: "codex-plugin",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => createAttemptResult(),
+    };
+    const diagnostics = captureDiagnosticEvents();
+    try {
+      await runAgentHarnessLifecycleFinalization(harness, params, async () => ({
+        assistant: createFinalAssistant(),
+      }));
+      await flushDiagnosticEvents();
+    } finally {
+      diagnostics.unsubscribe();
+      clearRuntimeConfigSnapshot();
+    }
+
+    const completed = diagnostics.events.find(
+      ({ event }) => event.type === "harness.run.completed",
+    );
+    expect(completed?.privateData.harnessContent).toMatchObject({ finalResponse: "done" });
+  });
+
+  it("excludes commentary-phase text from the captured finalization answer", async () => {
+    setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
+    const params = createFinalizationParams();
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      pluginId: "codex-plugin",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => createAttemptResult(),
+    };
+    const diagnostics = captureDiagnosticEvents();
+    try {
+      await runAgentHarnessLifecycleFinalization(harness, params, async () => ({
+        assistant: {
+          ...createFinalAssistant(),
+          content: [
+            {
+              type: "text",
+              text: "Checking intermediate details.",
+              textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+            },
+            {
+              type: "text",
+              text: "Task complete.",
+              textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+            },
+          ],
+        },
+      }));
+      await flushDiagnosticEvents();
+    } finally {
+      diagnostics.unsubscribe();
+      clearRuntimeConfigSnapshot();
+    }
+
+    const completed = diagnostics.events.find(
+      ({ event }) => event.type === "harness.run.completed",
+    );
+    expect(completed?.privateData.harnessContent).toMatchObject({
+      finalResponse: "Task complete.",
+    });
+  });
+
   it("records a normally completed empty finalization without emitting an error", async () => {
     const params = createFinalizationParams();
     const harness: AgentHarness = {
@@ -586,6 +658,100 @@ describe("AgentHarness lifecycle runner", () => {
       activeCount: 1,
     });
     expect(typeof completedEvent?.durationMs).toBe("number");
+  });
+
+  it("captures only the canonical final answer, not pre-tool commentary", async () => {
+    setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
+    const finalAssistant = {
+      ...createFinalAssistant(),
+      content: [{ type: "text", text: "final answer" }],
+    };
+    const result = {
+      ...createAttemptResult(),
+      assistantTexts: ["I will use a tool first.", "final answer"],
+      currentAttemptAssistant: finalAssistant,
+      currentAttemptCompletedAssistant: finalAssistant,
+    };
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => result,
+    };
+    const diagnostics = captureDiagnosticEvents();
+    try {
+      await runAgentHarnessLifecycleAttempt(harness, createAttemptParams());
+      await flushDiagnosticEvents();
+    } finally {
+      diagnostics.unsubscribe();
+      clearRuntimeConfigSnapshot();
+    }
+
+    expect(diagnostics.events[1]?.privateData.harnessContent).toEqual({
+      finalResponse: "final answer",
+    });
+  });
+
+  it("does not capture pre-tool commentary as a final answer", async () => {
+    setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
+    const result = {
+      ...createAttemptResult(),
+      assistantTexts: ["I will use a tool first."],
+      currentAttemptAssistant: undefined,
+    };
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => result,
+    };
+    const diagnostics = captureDiagnosticEvents();
+    try {
+      await runAgentHarnessLifecycleAttempt(harness, createAttemptParams());
+      await flushDiagnosticEvents();
+    } finally {
+      diagnostics.unsubscribe();
+      clearRuntimeConfigSnapshot();
+    }
+
+    expect(diagnostics.events[1]?.privateData.harnessContent).toBeUndefined();
+  });
+
+  it("bounds captured harness prompts and responses before diagnostic dispatch", async () => {
+    setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
+    // Mirrors the private per-field budget in src/infra/diagnostic-content.ts; the
+    // production constant stays unexported because only tests would consume it.
+    const MAX_DIAGNOSTIC_CONTENT_CHARS = 128 * 1024;
+    const oversizedContent = `${"x".repeat(MAX_DIAGNOSTIC_CONTENT_CHARS - 1)}🚀tail`;
+    const params = { ...createAttemptParams(), prompt: oversizedContent };
+    const result = {
+      ...createAttemptResult(),
+      assistantTexts: [oversizedContent],
+      currentAttemptAssistant: {
+        ...createFinalAssistant(),
+        content: [{ type: "text", text: oversizedContent }],
+      },
+    };
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => result,
+    };
+    const diagnostics = captureDiagnosticEvents();
+    try {
+      await runAgentHarnessLifecycleAttempt(harness, params);
+      await flushDiagnosticEvents();
+    } finally {
+      diagnostics.unsubscribe();
+    }
+
+    const startedPrompt = diagnostics.events[0]?.privateData.harnessContent?.userPrompt;
+    const completedResponse = diagnostics.events[1]?.privateData.harnessContent?.finalResponse;
+    expect(startedPrompt?.length).toBeLessThanOrEqual(MAX_DIAGNOSTIC_CONTENT_CHARS);
+    expect(completedResponse?.length).toBeLessThanOrEqual(MAX_DIAGNOSTIC_CONTENT_CHARS);
+    expect(startedPrompt?.charCodeAt((startedPrompt?.length ?? 0) - 1)).not.toBe(0xd83d);
+    expect(completedResponse?.charCodeAt((completedResponse?.length ?? 0) - 1)).not.toBe(0xd83d);
   });
 
   it("reports canonical timeout attempts as timed out harness diagnostics", async () => {

@@ -1,5 +1,6 @@
 // Verifies Claude CLI synthetic harness/run hierarchy and terminal events.
 import { afterEach, describe, expect, it } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
@@ -394,5 +395,171 @@ describe("Claude CLI run diagnostics", () => {
       outcome: harnessOutcome,
     });
     expect(diagnostics.events.some(({ event }) => event.type === "harness.run.error")).toBe(false);
+  });
+
+  it("keeps the captured prompt on terminal events when the turn fails", async () => {
+    setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
+    const runId = "run-claude-failure-content";
+    const diagnostics = captureLifecycle(runId);
+    try {
+      await expect(
+        runClaudeCliAgentTurnWithDiagnostics(
+          {
+            runId,
+            sessionId: "session-failure-content",
+            modelProvider: "anthropic",
+            model: "claude-opus-4-7",
+          },
+          async (lifecycle) => {
+            lifecycle.publishCapturedContent({ userPrompt: "prepare the release" });
+            lifecycle.setPhase("send");
+            throw new Error("CLI crashed mid-turn");
+          },
+        ),
+      ).rejects.toThrow("CLI crashed mid-turn");
+      await flushDiagnosticEvents();
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+
+    const runCompleted = diagnostics.events.find(({ event }) => event.type === "run.completed");
+    expect(runCompleted?.privateData.messageContent).toMatchObject({
+      userPrompt: "prepare the release",
+    });
+
+    const harnessError = diagnostics.events.find(({ event }) => event.type === "harness.run.error");
+    expect(harnessError?.privateData.harnessContent).toMatchObject({
+      userPrompt: "prepare the release",
+    });
+  });
+
+  it("attaches published turn content to run and harness completed events", async () => {
+    setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
+    const runId = "run-claude-content-capture";
+    const diagnostics = captureLifecycle(runId);
+    try {
+      await runClaudeCliAgentTurnWithDiagnostics(
+        {
+          runId,
+          sessionId: "session-content",
+          modelProvider: "anthropic",
+          model: "claude-opus-4-7",
+          trigger: "user",
+          messageChannel: "webchat",
+        },
+        async (lifecycle) => {
+          lifecycle.publishCapturedContent({
+            userPrompt: "prepare the release",
+            finalResponse: "release prepared",
+          });
+          return {
+            payloads: [{ text: "release prepared" }],
+            meta: {},
+          };
+        },
+      );
+      await flushDiagnosticEvents();
+
+      const runCompleted = diagnostics.events.find(({ event }) => event.type === "run.completed");
+      expect(runCompleted?.privateData.messageContent).toMatchObject({
+        userPrompt: "prepare the release",
+        finalResponse: "release prepared",
+      });
+
+      const harnessCompleted = diagnostics.events.find(
+        ({ event }) => event.type === "harness.run.completed",
+      );
+      expect(harnessCompleted?.privateData.harnessContent).toMatchObject({
+        userPrompt: "prepare the release",
+        finalResponse: "release prepared",
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it("merges separately published prompt and response into the completed events", async () => {
+    // The real caller publishes { userPrompt } after preparation and
+    // { finalResponse } after settlement; the second publication must not
+    // discard the first's captured prompt.
+    setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
+    const runId = "run-claude-content-merge";
+    const diagnostics = captureLifecycle(runId);
+    try {
+      await runClaudeCliAgentTurnWithDiagnostics(
+        {
+          runId,
+          sessionId: "session-content-merge",
+          modelProvider: "anthropic",
+          model: "claude-opus-4-7",
+          trigger: "user",
+          messageChannel: "webchat",
+        },
+        async (lifecycle) => {
+          lifecycle.publishCapturedContent({ userPrompt: "prepare the release" });
+          lifecycle.publishCapturedContent({ finalResponse: "release prepared" });
+          return {
+            payloads: [{ text: "release prepared" }],
+            meta: {},
+          };
+        },
+      );
+      await flushDiagnosticEvents();
+
+      const runCompleted = diagnostics.events.find(({ event }) => event.type === "run.completed");
+      expect(runCompleted?.privateData.messageContent).toMatchObject({
+        userPrompt: "prepare the release",
+        finalResponse: "release prepared",
+      });
+
+      const harnessCompleted = diagnostics.events.find(
+        ({ event }) => event.type === "harness.run.completed",
+      );
+      expect(harnessCompleted?.privateData.harnessContent).toMatchObject({
+        userPrompt: "prepare the release",
+        finalResponse: "release prepared",
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it("keeps published turn content off events without captureContent", async () => {
+    setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: false } } });
+    const runId = "run-claude-content-disabled";
+    const diagnostics = captureLifecycle(runId);
+    try {
+      await runClaudeCliAgentTurnWithDiagnostics(
+        {
+          runId,
+          sessionId: "session-content-off",
+          modelProvider: "anthropic",
+          model: "claude-opus-4-7",
+          trigger: "user",
+          messageChannel: "webchat",
+        },
+        async (lifecycle) => {
+          lifecycle.publishCapturedContent({
+            userPrompt: "prepare the release",
+            finalResponse: "release prepared",
+          });
+          return {
+            payloads: [{ text: "release prepared" }],
+            meta: {},
+          };
+        },
+      );
+      await flushDiagnosticEvents();
+
+      const runCompleted = diagnostics.events.find(({ event }) => event.type === "run.completed");
+      expect(runCompleted?.privateData.messageContent).toBeUndefined();
+
+      const harnessCompleted = diagnostics.events.find(
+        ({ event }) => event.type === "harness.run.completed",
+      );
+      expect(harnessCompleted?.privateData.harnessContent).toBeUndefined();
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 });

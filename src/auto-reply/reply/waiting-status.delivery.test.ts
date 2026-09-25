@@ -4,11 +4,13 @@ import type * as SubagentRegistry from "../../agents/subagents/registry/subagent
 import type { ProgressContinuationReceipt } from "../../channels/progress-continuation.js";
 import type * as ProgressRequester from "../../tasks/task-progress-requester.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import { prepareReplyAgentPayloads } from "./agent-runner-result-payloads.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
+import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
@@ -154,6 +156,77 @@ beforeEach(() => {
       },
     };
   });
+});
+
+it("does not capture a suppressed final reply", async () => {
+  const context = createContext();
+  const onDiagnosticResponse = vi.fn();
+  context.opts = { onDiagnosticResponse };
+  context.followupRun.run.terminalReplyExpectation = "optional";
+  context.execution.result.acceptedSessionSpawns = undefined;
+  context.execution.result.meta = { durationMs: 0 };
+  context.execution.result.payloads = [{ text: SILENT_REPLY_TOKEN }];
+
+  expect(await prepare("ordinary", context)).toEqual([]);
+  expect(onDiagnosticResponse).not.toHaveBeenCalled();
+});
+
+it("captures a fully streamed final reply even though no final payload remains", async () => {
+  const context = createContext();
+  const onDiagnosticResponse = vi.fn();
+  context.opts = { onDiagnosticResponse };
+  context.blockStreamingEnabled = true;
+  context.blockReplyPipeline = {
+    enqueue: () => undefined,
+    flush: async () => undefined,
+    stop: () => undefined,
+    hasBuffered: () => false,
+    didStream: () => true,
+    isAborted: () => false,
+    hasSentPayload: () => true,
+    hasSentExactPayload: () => true,
+    isFinalPayloadRetryBlocked: () => false,
+    getSentMediaUrls: () => [],
+    getRetryBlockedMediaUrls: () => [],
+    hasRetryBlockedDelivery: () => false,
+    getSourceRecovery: () => undefined,
+  } as unknown as BlockReplyPipeline;
+  context.execution.result.acceptedSessionSpawns = undefined;
+  context.execution.result.meta = { durationMs: 0 };
+  context.execution.result.didDeliverSourceReplyViaMessageTool = true;
+  context.execution.result.payloads = [{ text: "streamed final answer" }];
+
+  await prepare("ordinary", context);
+  expect(onDiagnosticResponse).toHaveBeenCalledWith("streamed final answer");
+});
+
+it("captures streamed text alongside remaining final payloads", async () => {
+  const context = createContext();
+  const onDiagnosticResponse = vi.fn();
+  context.opts = { onDiagnosticResponse };
+  context.blockStreamingEnabled = true;
+  context.blockReplyPipeline = {
+    enqueue: () => undefined,
+    flush: async () => undefined,
+    stop: () => undefined,
+    hasBuffered: () => false,
+    didStream: () => true,
+    isAborted: () => false,
+    hasSentPayload: (payload) => payload.text === "streamed part",
+    hasSentExactPayload: () => false,
+    isFinalPayloadRetryBlocked: () => false,
+    getSentMediaUrls: () => [],
+    getRetryBlockedMediaUrls: () => [],
+    hasRetryBlockedDelivery: () => false,
+    getSourceRecovery: () => undefined,
+  } as unknown as BlockReplyPipeline;
+  context.execution.result.acceptedSessionSpawns = undefined;
+  context.execution.result.meta = { durationMs: 0 };
+  context.execution.result.didDeliverSourceReplyViaMessageTool = true;
+  context.execution.result.payloads = [{ text: "streamed part" }, { text: "final part" }];
+
+  await prepare("ordinary", context);
+  expect(onDiagnosticResponse).toHaveBeenCalledWith("streamed part");
 });
 
 describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (lane) => {

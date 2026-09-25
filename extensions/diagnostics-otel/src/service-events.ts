@@ -123,7 +123,7 @@ export function createDiagnosticsEventHandler(params: {
           recordMessageDispatchCompleted(evt);
           return;
         case "message.processed":
-          recordMessageProcessed(evt, metadata);
+          recordMessageProcessed(evt, metadata, privateData);
           return;
         case "message.delivery.started":
           recordMessageDeliveryStarted(evt);
@@ -184,7 +184,7 @@ export function createDiagnosticsEventHandler(params: {
           recordRunCompleted(evt, metadata, privateData);
           return;
         case "harness.run.started":
-          recordHarnessRunStarted(evt, metadata);
+          recordHarnessRunStarted(evt, metadata, privateData);
           return;
         case "agent.commentary":
           recordAgentCommentary(evt, metadata, privateData);

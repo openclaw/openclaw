@@ -55,6 +55,10 @@ type ReplyTurnLedger = {
   canAttemptFallback: () => boolean;
   hasPendingDelivery: () => boolean;
   resolveTerminalDelivery: () => ReplyDeliveryState;
+  /** Terminal payloads with confirmed, non-pending visible delivery, in
+   * settlement order. Post-transform payloads where the dispatcher tracker
+   * provides one; routed payloads as sent. */
+  getDeliveredTerminalPayloads: () => readonly ReplyPayload[];
 };
 
 export async function requireQueuedReplyDelivery(params: {
@@ -87,6 +91,19 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
   let pendingDelivery = false;
   let terminalDelivery: ReplyDeliveryState = "missing";
   const mayHaveDelivered = () => outcomes.has("delivered") || outcomes.has("failed-deliver");
+  const deliveredTerminalPayloads: ReplyPayload[] = [];
+  const recordDeliveredPayload = (kind: ReplyDispatchKind, payload: ReplyPayload): void => {
+    // Only final-kind deliveries are capture-eligible: block-streamed and tool
+    // lanes are captured by their own owners (pipeline receipts, producer side).
+    if (
+      kind !== "final" ||
+      !hasOutboundReplyContent(payload, { trimText: true }) ||
+      !isReplyPayloadTerminalContent(payload)
+    ) {
+      return;
+    }
+    deliveredTerminalPayloads.push(payload);
+  };
   const recordDelivery = (
     kind: ReplyDispatchKind,
     payload: ReplyPayload,
@@ -143,6 +160,9 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
     }
     const outcome = capture.promise.then((settled) => {
       recordDelivery(kind, payload, settled, capture.hasPendingDelivery());
+      if (settled === "delivered" && !capture.hasPendingDelivery()) {
+        recordDeliveredPayload(kind, capture.getDeliveredPayload() ?? payload);
+      }
       return settled;
     });
     return { queued: true, outcome, hasPendingDelivery: capture.hasPendingDelivery };
@@ -152,12 +172,12 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
     sendPreparedQueued: (kind, plan) => sendOperation(kind, { kind: "prepared", plan }),
     recordRoutedDelivery(kind, payload, result) {
       const outcome = resolveRoutedReplyDeliveryOutcome(result);
-      recordDelivery(
-        kind,
-        payload,
-        outcome,
-        result.queueCustody === "held" || result.ambiguous === true || outcome === "recovery-owned",
-      );
+      const pending =
+        result.queueCustody === "held" || result.ambiguous === true || outcome === "recovery-owned";
+      recordDelivery(kind, payload, outcome, pending);
+      if (outcome === "delivered" && !pending) {
+        recordDeliveredPayload(kind, payload);
+      }
     },
     async settleQueued(abortSignal) {
       if (abortSignal?.aborted) {
@@ -217,5 +237,22 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
       !mayHaveDelivered() && !pendingDelivery && !outcomes.has("recovery-owned"),
     hasPendingDelivery: () => pendingDelivery,
     resolveTerminalDelivery: () => terminalDelivery,
+    getDeliveredTerminalPayloads: () => deliveredTerminalPayloads,
   };
+}
+
+/** Visible final-answer texts from the ledger's confirmed delivered payloads. */
+export function collectLedgerDeliveredResponseTexts(
+  ledger: Pick<ReplyTurnLedger, "getDeliveredTerminalPayloads">,
+): string[] {
+  return ledger
+    .getDeliveredTerminalPayloads()
+    .flatMap((payload) =>
+      payload.isReasoning !== true &&
+      payload.isCommentary !== true &&
+      typeof payload.text === "string" &&
+      payload.text.trim()
+        ? [payload.text]
+        : [],
+    );
 }
