@@ -2,6 +2,10 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import {
   loadWorkspaceSkills,
@@ -20,11 +24,14 @@ import {
 } from "./refresh.watcher.test-support.js";
 import { serveWorkspaceSkills } from "./workspace-worker.js";
 
-const { createdWatchers, watchMock, nativeWatchMock, watchForSkillRoot } =
+const { createdWatchers, watchMock, nativeWatchMock, nativeContentWatchMock, watchForSkillRoot } =
   createSkillsWatcherMock();
 vi.mock("chokidar", () => ({ default: { watch: watchMock } }));
 vi.mock("./refresh-ancestor-native.js", () => ({
   createNativeSkillsAncestorWatcher: nativeWatchMock,
+}));
+vi.mock("./refresh-content-native.js", () => ({
+  createNativeSkillsContentWatcher: nativeContentWatchMock,
 }));
 const fixture = useSkillsWatcherFixture();
 let resolveReusableWorkspaceSkillSnapshot: typeof import("./session-snapshot.js").resolveReusableWorkspaceSkillSnapshot;
@@ -35,9 +42,41 @@ beforeAll(async () => {
   ({ resolveReusableWorkspaceSkillSnapshot } = await import("./session-snapshot.js"));
 });
 afterEach(() => {
+  resetGatewayWorkAdmission();
   releases.splice(0).forEach((release) => release());
   watchMock.mockClear();
   createdWatchers.length = 0;
+});
+
+it("retires remote subscriptions during Gateway drain and reacquires after runtime reset", async () => {
+  const { params, subscriptions, access, gateway } = await remoteFixture();
+  await resolveReusableWorkspaceSkillSnapshot(params);
+  const original = subscriptions[0]!;
+  const version = getSkillsSnapshotVersion(gateway);
+
+  markGatewayRestartDraining("stop (SIGTERM)");
+  expect(original.signal.aborted).toBe(true);
+  original.emit("change");
+  expect(getSkillsSnapshotVersion(gateway)).toBe(version);
+  refresh.ensureSkillsWatcher(params);
+  expect(access.watchSkills).toHaveBeenCalledTimes(1);
+  await access.watchSkills.mock.results[0]!.value;
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  expect(getSkillsSnapshotVersion(gateway)).toBe(version);
+
+  // Teardown joins the retired transport; the next runtime gets a fresh signal.
+  await refresh.closeSkillsWatchers(true);
+  resetGatewayWorkAdmission();
+  refresh.ensureSkillsWatcher(params);
+  expect(access.watchSkills).toHaveBeenCalledTimes(2);
+  expect(subscriptions[1]!.signal.aborted).toBe(false);
+  const restartedVersion = getSkillsSnapshotVersion(gateway);
+  original.emit("unavailable");
+  expect(getSkillsSnapshotVersion(gateway)).toBe(restartedVersion);
+  subscriptions[1]!.emit("change");
+  expect(getSkillsSnapshotVersion(gateway)).toBeGreaterThan(restartedVersion);
 });
 afterEach(() => vi.unstubAllEnvs());
 

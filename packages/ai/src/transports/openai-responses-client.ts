@@ -98,7 +98,6 @@ import {
   createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
-  mergeTransportMetadata,
   notifyProviderStreamOpened,
   transportAbortError,
   withProviderResponseHook,
@@ -252,9 +251,6 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           const nextParams = await options?.onPayload?.(params, model);
           if (nextParams !== undefined) {
             params = nextParams as typeof params;
-          }
-          if (!isOpenAICodexResponsesModel(model)) {
-            params = mergeTransportMetadata(params, turnState?.metadata);
           }
           params = sanitizeOpenAICodexResponsesParams(
             model,

@@ -41,6 +41,7 @@ import {
   createAttachmentSidebarHarness,
   getAttachmentMenuOption,
   renderAttachmentHarness,
+  renderSettledPastedTextAttachment,
   requireAttachmentInput,
   selectAttachmentMenuOption,
   selectFile,
@@ -166,7 +167,6 @@ const buildChatItemsMock = vi.fn(
           key: "divider:compaction:test",
           icon: "foldVertical",
           label: "Compacted history",
-          description: "Earlier messages were summarized to make room in the context window.",
           timestamp: 1,
         },
       ] as ReturnType<typeof chatThread.buildCachedChatItems>;
@@ -1016,15 +1016,13 @@ describe("chat run error", () => {
 });
 
 describe("chat compaction divider", () => {
-  it("renders compaction copy without a checkpoint action", () => {
+  it("renders a compact divider without a subtitle or checkpoint action", () => {
     const container = renderChatView({
       messages: [{ testDividerMarker: "compaction" }],
     });
 
     expect(container.querySelector(".chat-divider__title")?.textContent).toBe("Compacted history");
-    expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
-      "Earlier messages were summarized to make room in the context window.",
-    );
+    expect(container.querySelector(".chat-divider__description")).toBeNull();
     expect(container.querySelector(".chat-divider__icon svg")).not.toBeNull();
     expect(container.querySelector(".chat-divider__action")).toBeNull();
   });
@@ -1366,6 +1364,41 @@ describe("chat history pagination", () => {
 });
 
 describe("retained input navigation", () => {
+  it.each([
+    {
+      type: "attachment",
+      attachment: { kind: "document", label: "installation.pdf", url: "/media/installation.pdf" },
+    },
+    {
+      type: "attachment",
+      attachment: { kind: "audio", label: "voice-note.ogg", url: "/media/voice-note.ogg" },
+    },
+    {
+      type: "attachment_error",
+      attachment: { kind: "video", label: "walkthrough.mp4", code: "file-not-found" },
+    },
+  ])("names a queued $attachment.kind attachment without message text", (content) => {
+    const historyState = makeChatHost({ currentSessionId: "attachment-session" });
+    applyChatPendingInputs(historyState, {
+      total: 1,
+      items: [
+        {
+          id: "attachment-input",
+          runId: "attachment-run",
+          acceptedAt: 1,
+          state: "queued",
+          queued: true,
+          message: { role: "user", content: [content] },
+        },
+      ],
+    });
+    const container = renderChatView({ historyState });
+    expect(container.querySelector(".chat-queue__text")?.textContent).toBe(
+      content.attachment.label,
+    );
+    expect(container.querySelector(".chat-group.user")).toBeNull();
+  });
+
   it("keeps an empty filtered page navigable without blocking an independent send", async () => {
     const sessionKey = "agent:main:hidden-page";
     const sessionId = "hidden-page-session";
@@ -4999,7 +5032,7 @@ describe("chat attachment picker", () => {
     const onAttachmentsChange = vi.fn();
     const onDraftChange = vi.fn();
     const sidebar = createAttachmentSidebarHarness();
-    const remounted = renderChatView({
+    const remounted = await renderSettledPastedTextAttachment({
       onOpenSidebar: sidebar.open,
       attachments,
       getAttachments: () => attachments,
@@ -5008,12 +5041,9 @@ describe("chat attachment picker", () => {
       onAttachmentsChange,
       onDraftChange,
     });
-    document.body.append(remounted);
-    await waitForFast(() => {
-      expect(remounted.querySelector(".chat-attachment-file__open")?.textContent).toContain(
-        "First words from a remounted p…",
-      );
-    });
+    expect(remounted.querySelector(".chat-attachment-file__open")?.textContent).toContain(
+      "First words from a remounted p…",
+    );
     expect(attachments[0]?.origin).toBe("paste");
     requireElement(remounted, ".chat-attachment-file__open", "pasted text excerpt").dispatchEvent(
       new MouseEvent("click", { bubbles: true }),
@@ -5584,6 +5614,33 @@ describe("chat model controls", () => {
     },
   );
 
+  it.each([1, 2])("identifies the selected sign-in method and email with %i accounts", (count) => {
+    const { state } = createChatHeaderState({
+      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+    });
+    const profiles = subscriptionProfiles.slice(0, count).map((profile, index) =>
+      Object.assign({}, profile, {
+        displayName: index === 0 ? "Sign in with ChatGPT" : "Codex sign-in",
+      }),
+    );
+    const container = renderModelControls(state, {
+      accountSelection: {
+        kind: "shared",
+        label: "Sign in with ChatGPT",
+        authProfileId: "openai:work",
+      },
+      modelAuthStatusResult: {
+        ts: 1,
+        providers: [{ ...authStatus.providers[0]!, profiles }],
+      },
+    });
+    expect(
+      container
+        .querySelector('[data-chat-model-provider="openai"] .chat-controls__auth-meta')
+        ?.textContent?.trim(),
+    ).toBe("Sign in with ChatGPT · work@example.com");
+  });
+
   it.each([
     ["personal", "openai:work", ["openai:personal"], "Subscription · work@example.com"],
     ["shared", "openai:personal", ["openai:work"], "Subscription · peter@steipete.me"],
@@ -5735,13 +5792,17 @@ describe("chat model controls", () => {
   });
 
   it.each([1, 2])(
-    "shows account emails only for multiple subscription profiles (%i)",
+    "identifies the selected account even before expanding %i subscription profiles",
     async (count) => {
-      const profiles = subscriptionProfiles.slice(0, count);
+      const profiles = subscriptionProfiles.slice(0, count).map((profile, index) =>
+        Object.assign({}, profile, {
+          displayName: index === 0 ? "Sign in with ChatGPT" : "Codex sign-in",
+        }),
+      );
       const accounts = profiles.map((profile) => ({
         authProfileId: profile.profileId,
         provider: "openai",
-        label: "Workspace",
+        label: profile.displayName,
         authType: profile.type,
         selected: false,
       }));
@@ -5781,6 +5842,9 @@ describe("chat model controls", () => {
           container,
         );
       draw();
+      expect(container.querySelector(".chat-controls__account-selection")?.textContent).toBe(
+        "work@example.com · Sign in with ChatGPT",
+      );
       container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
       await vi.waitFor(() =>
@@ -5790,10 +5854,10 @@ describe("chat model controls", () => {
         ...container.querySelectorAll("[data-chat-account-option]"),
       ].entries()) {
         expect(row.querySelector(".chat-controls__model-option-name")?.textContent?.trim()).toBe(
-          "Workspace",
+          profiles[index]!.displayName,
         );
         expect(row.querySelector(".chat-controls__auth-meta")?.textContent?.trim() ?? "").toBe(
-          count > 1 ? profiles[index]!.email : "",
+          profiles[index]!.email,
         );
         expect(row.textContent).not.toContain(profiles[index]!.profileId);
       }

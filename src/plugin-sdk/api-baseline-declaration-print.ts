@@ -261,7 +261,8 @@ export function printPluginSdkExportDeclaration(
             signature,
             ts.SyntaxKind.FunctionDeclaration,
             declaration,
-            DECLARATION_TYPE_FORMAT_FLAGS,
+            // Empty tuple defaults are valid public generic signatures.
+            DECLARATION_TYPE_FORMAT_FLAGS | NodeBuilderFlags.AllowEmptyTuple,
           );
           if (!rendered || !ts.isFunctionDeclaration(rendered)) {
             throw new Error(`Unable to print Plugin SDK function ${exportName}`);

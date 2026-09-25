@@ -73,22 +73,16 @@ process.on('message', async (request) => {
       .filter(Boolean)
       .map((line: string) => JSON.parse(line));
   const waitFor = (match: (event: FixtureEvent) => boolean): Promise<FixtureEvent> =>
-    new Promise((resolve, reject) => {
-      const watcher = fs.watch(dir, check);
-      const timer = setTimeout(() => {
-        watcher.close();
-        reject(new Error("Fixture did not reach the requested IPC boundary"));
-      }, 10_000);
-      function check() {
+    vi.waitFor(
+      () => {
         const found = events().find(match);
-        if (found) {
-          clearTimeout(timer);
-          watcher.close();
-          resolve(found);
+        if (!found) {
+          throw new Error("Fixture did not reach the requested IPC boundary");
         }
-      }
-      check();
-    });
+        return found;
+      },
+      { timeout: 10_000 },
+    );
   return {
     client,
     events,

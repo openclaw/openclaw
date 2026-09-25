@@ -35,6 +35,7 @@ export function canonicalSessionKeyMigrationRequiredError(
 /** One validator serves full Doctor scans, pending rows, and final writer certification. */
 export function validateCanonicalSessionRow(
   row: CanonicalSessionValidationRow,
+  mode: "admission" | "read" = "admission",
 ): SessionEntry | undefined {
   if (
     row.entry_json === "{}" &&
@@ -43,8 +44,9 @@ export function validateCanonicalSessionRow(
   ) {
     return undefined;
   }
+  // Raw writes clear writer proof; selected reads still validate their current source bytes.
   const record =
-    row.entry_valid === 1
+    row.entry_valid === 1 || (mode === "read" && row.entry_valid === 0)
       ? parseSqliteSessionEntryRecord({
           entry_json: row.entry_json,
           current_session_id: row.current_session_id,

@@ -98,6 +98,9 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
   if (command.type === "userProfiles.channelIdentity.resolve") {
     return { type: command.type, identity: { ...command.identity } };
   }
+  if (command.type === "userProfiles.githubAttribution.resolve") {
+    return { type: command.type, profileIds: [...command.profileIds] };
+  }
   if (command.type === "subagents.runs") {
     return {
       ...command,
@@ -299,6 +302,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       16
     );
   }
+  if (command.type === "deliveryQueue.outbound") {
+    return bytes + Buffer.byteLength(command.id ?? "", "utf8");
+  }
   if (command.type === "tasks.mutationSnapshot") {
     const scope = command.input;
     const scopes = scope === undefined ? [] : "taskId" in scope ? [scope] : scope;
@@ -386,6 +392,12 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (command.type === "userProfiles.githubIdentity.cached") {
     return bytes + Buffer.byteLength(command.email, "utf8") + 8;
+  }
+  if (command.type === "userProfiles.githubAttribution.resolve") {
+    return command.profileIds.reduce(
+      (total, profileId) => total + Buffer.byteLength(profileId, "utf8"),
+      bytes,
+    );
   }
   if (command.type === "userProfiles.channelIdentity.resolve") {
     return (

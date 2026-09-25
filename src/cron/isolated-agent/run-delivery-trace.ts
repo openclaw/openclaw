@@ -292,7 +292,10 @@ export async function resolveCronDeliveryContext(params: {
   agentId: string;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
-  if (deliveryPlan.mode === "webhook") {
+  if (
+    deliveryPlan.mode === "webhook" ||
+    (deliveryPlan.mode === "none" && !hasExplicitCronDeliveryTarget(deliveryPlan))
+  ) {
     const resolvedDelivery = {
       ok: false as const,
       channel: undefined,
@@ -300,28 +303,15 @@ export async function resolveCronDeliveryContext(params: {
       accountId: undefined,
       threadId: undefined,
       mode: "implicit" as const,
-      error: new Error("webhook delivery has no chat target"),
+      error: new Error(
+        deliveryPlan.mode === "webhook"
+          ? "webhook delivery has no chat target"
+          : "delivery is disabled",
+      ),
     };
     return {
       deliveryPlan,
-      deliveryRequested: deliveryPlan.requested,
-      resolvedDelivery,
-      sourceDelivery: resolveCronSourceDeliveryPlan({ deliveryPlan, resolvedDelivery }),
-    };
-  }
-  if (deliveryPlan.mode === "none" && !hasExplicitCronDeliveryTarget(deliveryPlan)) {
-    const resolvedDelivery = {
-      ok: false as const,
-      channel: undefined,
-      to: undefined,
-      accountId: undefined,
-      threadId: undefined,
-      mode: "implicit" as const,
-      error: new Error("delivery is disabled"),
-    };
-    return {
-      deliveryPlan,
-      deliveryRequested: false,
+      deliveryRequested: deliveryPlan.mode === "webhook" ? deliveryPlan.requested : false,
       resolvedDelivery,
       sourceDelivery: resolveCronSourceDeliveryPlan({ deliveryPlan, resolvedDelivery }),
     };

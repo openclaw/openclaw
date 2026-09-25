@@ -11,6 +11,10 @@ prepare_diagnostics_capture() {
       "$ARTIFACT_DIR/missing-load-path/baseline-gateway.log" \
       "$ARTIFACT_DIR/missing-load-path/baseline-gateway-convergence-refusal.log" \
       "$ARTIFACT_DIR/sibling-registrations.jsonl" "$ARTIFACT_DIR/sibling-source.json" "$ARTIFACT_DIR/sibling-canary.json" \
+      "$ARTIFACT_DIR/sibling-refusal.armed" "$ARTIFACT_DIR/sibling-refusal-preload.mjs" \
+      "$ARTIFACT_DIR"/sibling-refusal-{update,status}.{json,err} \
+      "$ARTIFACT_DIR"/sibling-refusal-{baseline,worker,child,cleanup}.json \
+      "$ARTIFACT_DIR/sibling-refusal-registrations.jsonl" \
       "$ARTIFACT_DIR"/diagnostics/doctor-*.json; then
     echo "Upgrade survivor diagnostics missing: private capture setup failed." >&2
     return 0

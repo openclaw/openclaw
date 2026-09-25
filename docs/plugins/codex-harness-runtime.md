@@ -65,7 +65,10 @@ app-server using standard OpenAI endpoints, skill catalogs, persona files, and t
 are appended to the parent model request instructions by a private inference
 relay. Native base and catalog instructions remain unchanged; this new context
 is not written to native conversation history or automatically inherited by
-native subagents. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
+native subagents. Connections without that relay carry the eligible skill catalog
+in thread developer instructions instead, preserving delivery when the model
+owns collaboration-mode instructions. See [workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files)
+for fallback refresh and inheritance semantics. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
 bounded `MEMORY.md` content travel as plain turn input references. They are
 introduced on a new native thread, after a cold resume or native compaction,
 and when their rendered content changes. Consecutive warm turns omit unchanged

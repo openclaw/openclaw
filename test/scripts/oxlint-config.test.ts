@@ -132,6 +132,33 @@ function readJson(filePath: string): unknown {
   return JSON5.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+function writeSessionCompatibilityFixture(root: string) {
+  const directory = path.join(root, "src/config/sessions");
+  fs.mkdirSync(directory, { recursive: true });
+  // Real editor configs explicitly root this augmentation. Keep its real contents,
+  // with fixture-owned base modules rather than importing the whole session graph.
+  fs.copyFileSync(
+    "src/config/sessions/session-entry.test-compat.d.ts",
+    path.join(directory, "session-entry.test-compat.d.ts"),
+  );
+  for (const [file, interfaces] of [
+    ["types.ts", ["SessionEntry", "InternalSessionEntry"]],
+    [
+      "session-accessor.types.ts",
+      [
+        "SessionTranscriptRuntimeTarget",
+        "SessionTranscriptTurnPersistResult",
+        "SessionTranscriptReadTarget",
+      ],
+    ],
+  ] as const) {
+    fs.writeFileSync(
+      path.join(directory, file),
+      interfaces.map((name) => "export interface " + name + " { id: string; }").join("\n"),
+    );
+  }
+}
+
 describe("oxlint config", () => {
   it("enforces namespace, evaluation, and unused-binding policies with the installed binary", () => {
     const tempRoot = fs.realpathSync(createTempDir("openclaw-oxlint-policy-"));
@@ -262,6 +289,7 @@ describe("oxlint config", () => {
         fs.copyFileSync(file, target);
       }
     }
+    writeSessionCompatibilityFixture(tempRoot);
     fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
     const fixtures = {
       "src/imported.ts": "export function work(): Promise<void> { return Promise.resolve(); }",
@@ -376,6 +404,7 @@ describe("oxlint config", () => {
         fs.copyFileSync(file, target);
       }
     }
+    writeSessionCompatibilityFixture(tempRoot);
     fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
     const source = [
       'import { work } from "../packages/imported.js";',
@@ -464,6 +493,7 @@ describe("oxlint config", () => {
         fs.copyFileSync(file, target);
       }
     }
+    writeSessionCompatibilityFixture(tempRoot);
     fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
     const supportFiles = [
       "src/cli/diagnostics.test-support.ts",

@@ -24,11 +24,11 @@ import {
   UpdateCandidateStateSnapshotSchema,
 } from "./update-candidate-state.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
 import {
   UpdateSnapshotCapacityError,
   type UpdateSnapshotCapacity,
 } from "./update-snapshot-capacity.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 type SnapshotSize = { bytes: number; largest: number; pluginBytes: number | null };
 

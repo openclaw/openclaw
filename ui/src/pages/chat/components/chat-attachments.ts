@@ -36,6 +36,7 @@ const CHAT_ATTACHMENT_ACCEPT =
 const LARGE_PASTE_TEXT_THRESHOLD = 1000;
 const LARGE_PASTE_TEXT_MIME_TYPE = "text/plain";
 const LARGE_PASTE_TEXT_FILE_PREFIX = "pasted-text-";
+const CHAT_ATTACHMENT_READ_TIMEOUT_MS = 15_000;
 
 function isFileDrag(dataTransfer: DataTransfer | null): boolean {
   return Array.from(dataTransfer?.types ?? []).includes("Files");
@@ -181,11 +182,28 @@ function readAttachmentFile(
   }
   const reader = new FileReader();
   let settled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutMs = CHAT_ATTACHMENT_READ_TIMEOUT_MS;
+  const clearTimer = () => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+  const onTimeout = () => {
+    finish("error");
+    try {
+      reader.abort();
+    } catch {
+      // Ignore reader abort errors on stalled handles.
+    }
+  };
   const finish = (outcome: "ready" | "error" | "aborted") => {
     if (settled) {
       return;
     }
     settled = true;
+    clearTimer();
     signal.removeEventListener("abort", abort);
     entry.cancel = undefined;
     if (outcome === "ready" && typeof reader.result === "string" && !signal.aborted) {
@@ -213,7 +231,11 @@ function readAttachmentFile(
   };
   const abort = () => {
     finish("aborted");
-    reader.abort();
+    try {
+      reader.abort();
+    } catch {
+      // Ignore reader abort errors on stalled handles.
+    }
   };
   entry.cancel = abort;
   signal.addEventListener("abort", abort, { once: true });
@@ -223,9 +245,16 @@ function readAttachmentFile(
   reader.addEventListener("progress", (event) => {
     if (!settled && event.lengthComputable && event.total > 0) {
       reads.updateProgress(entry, Math.min(1, Math.max(0, event.loaded / event.total)));
+      if (timeoutMs > 0 && timer !== undefined) {
+        clearTimer();
+        timer = setTimeout(onTimeout, timeoutMs);
+      }
     }
   });
   entry.destination.onPendingReadsChange?.(1);
+  if (timeoutMs > 0) {
+    timer = setTimeout(onTimeout, timeoutMs);
+  }
   try {
     reader.readAsDataURL(file);
   } catch {

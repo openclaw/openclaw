@@ -161,6 +161,22 @@ const configuredPluginInstallSteps = [
 
 const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   [
+    "base",
+    [
+      {
+        id: "logging-file",
+        intent: "logging",
+        // Raw debug output stays in the isolated home, outside uploaded artifact roots.
+        argv: ["config", "set", "logging.file", "~/openclaw-upgrade-survivor/gateway.jsonl"],
+      },
+      {
+        id: "logging-level",
+        intent: "logging",
+        argv: ["config", "set", "logging.level", "debug"],
+      },
+    ],
+  ],
+  [
     "acpx-openclaw-tools-bridge",
     [
       {
@@ -260,9 +276,6 @@ export function resolveUpgradeSurvivorConfigSteps(
         !connectionOnlyScenarios.has(scenario) || connectionOnlySharedIntents.has(step.intent),
     )
     .map((step) => {
-      if (scenario === "msteams-polls" && step.id === "plugins") {
-        return Object.assign({}, step, { prepublishPluginPackages: ["@openclaw/msteams"] });
-      }
       if (scenario === "mobile-pairing-reconnect" && step.id === "gateway") {
         return configSetJsonFile("gateway", "gateway", "gateway", "gateway-password.json");
       }

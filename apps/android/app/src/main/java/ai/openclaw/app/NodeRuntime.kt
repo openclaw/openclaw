@@ -1212,6 +1212,8 @@ class NodeRuntime private constructor(
     var operatorConnectAdmitted: Boolean = false,
   ) {
     val bootstrapHandoff = initialAuth.bootstrapHandoff
+
+    @Volatile var refreshAfterBootstrap = false
     val auth: GatewayConnectAuth
       get() = if (bootstrapHandoff?.completed == true) initialAuth.copy(bootstrapToken = null) else initialAuth
   }
@@ -2132,7 +2134,10 @@ class NodeRuntime private constructor(
         startNodeHostStatsReporting()
         refreshNodesDevices()
         val endpoint = connectedEndpoint
-        if (!operatorConnected && endpoint != null && connection != null) {
+        if (connection?.refreshAfterBootstrap == true) {
+          // Leave this session's callback lock before replacing both role sockets.
+          scope.launch { refreshAcceptedGatewayConnection(connection) }
+        } else if (!operatorConnected && endpoint != null && connection != null) {
           maybeStartOperatorSessionAfterNodeConnect(endpoint, connection)
         }
       },
@@ -4828,8 +4833,8 @@ class NodeRuntime private constructor(
     }
   }
 
-  private fun refreshAcceptedGatewayConnection() {
-    val connection = activeGatewayConnection ?: return
+  private fun refreshAcceptedGatewayConnection(connection: GatewayConnectionContext? = activeGatewayConnection) {
+    if (connection == null) return
     val endpoint = connectedEndpoint ?: return
     launchGatewayLifecycle({
       val accepted = acceptedConnectAttempt.value
@@ -4839,6 +4844,15 @@ class NodeRuntime private constructor(
         connectedEndpoint?.stableId == endpoint.stableId
     }) {
       if (preferredGatewayReconnectSuppressed) return@launchGatewayLifecycle
+      if (connection.bootstrapHandoff?.completed == false) {
+        // Onboarding permissions may change after the Gateway consumes its setup token but
+        // before hello delivers durable role grants. Keep that handoff alive; reconnect with
+        // the latest capability surface as soon as its node hello has been accepted.
+        connection.refreshAfterBootstrap = true
+        // Publish before checking readiness so a concurrent hello either observes the request
+        // in onConnected or leaves this caller responsible for refreshing the ready session.
+        if (!nodeSession.isReady()) return@launchGatewayLifecycle
+      }
       connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint))
     }
   }

@@ -15,12 +15,42 @@ suite.define(() => {
     "opens provider groups and searches across collapsed models at $width pixels",
     async ({ width, height, minimumTarget }) => {
       await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
+        const models = [
+          { id: "shared-alpha", name: "Shared Alpha", provider: "openai" },
+          { id: "shared-beta", name: "Shared Beta", provider: "anthropic" },
+        ];
         const gateway = await installMockGateway(page, {
           agentModel: "openai/shared-alpha",
-          models: [
-            { id: "shared-alpha", name: "Shared Alpha", provider: "openai" },
-            { id: "shared-beta", name: "Shared Beta", provider: "anthropic" },
-          ],
+          models,
+          methodResponses: {
+            "models.list": {
+              models,
+              accountSelection: {
+                kind: "shared",
+                authProfileId: "openai:siwc",
+                label: "Sign in with ChatGPT",
+              },
+            },
+            "models.authStatus": {
+              ts: 1,
+              providers: [
+                {
+                  provider: "openai",
+                  displayName: "OpenAI",
+                  status: "ok",
+                  profiles: [
+                    {
+                      profileId: "openai:siwc",
+                      type: "oauth",
+                      status: "ok",
+                      displayName: "Sign in with ChatGPT",
+                      email: "long-account-name+siwc@example.test",
+                    },
+                  ],
+                },
+              ],
+            },
+          },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         const picker = page.locator(".agent-chat__input .chat-controls__model-picker").first();
@@ -34,7 +64,20 @@ suite.define(() => {
           .poll(() => picker.locator("[data-chat-model-provider-toggle]").count())
           .toBe(2);
         await trigger.click();
+        const auth = picker.locator(
+          '[data-chat-model-provider="openai"] .chat-controls__auth-meta',
+        );
+        await expect
+          .poll(() => auth.textContent())
+          .toContain("long-account-name+siwc@example.test");
+        await auth.waitFor({ state: "visible" });
+        const toggleContentsRight = await openai.evaluate((button) =>
+          Math.max(...Array.from(button.children, (child) => child.getBoundingClientRect().right)),
+        );
+        const authBox = await auth.boundingBox();
+        expect(toggleContentsRight).toBeLessThanOrEqual(authBox!.x);
         await openai.click({ trial: true });
+        await captureUiProof(suite, page, "model-account-identity", `${width}.png`);
         await expect.poll(() => alpha.isVisible()).toBe(false);
         expect(await beta.isVisible()).toBe(false);
         expect(await openai.getAttribute("aria-expanded")).toBe("false");

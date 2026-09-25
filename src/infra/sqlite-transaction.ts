@@ -399,11 +399,22 @@ function discardUnsafeConnection(db: TransactionDatabase, error: unknown): void 
   }
 }
 
-function abortImmediateTransaction(db: TransactionDatabase, error: unknown): void {
+function abortImmediateTransaction(
+  db: TransactionDatabase,
+  error: unknown,
+  commitStarted: boolean,
+): void {
   if (db[abortedTransactionSymbol]) {
     return;
   }
   try {
+    // SQLITE_IOERR/FULL can roll back an operation before commit starts. Once
+    // the commit owner runs, no transaction may instead mean a durable COMMIT
+    // followed by a guard failure or rejected Promise: retain conservative fencing.
+    if (!commitStarted && db.isOpen && !db.isTransaction) {
+      discardSqliteTransactionState(db, error);
+      return;
+    }
     db.exec("ROLLBACK");
   } catch {
     // An abandoned transaction must not leak into later writes on this handle.
@@ -447,10 +458,12 @@ function runSqliteTransactionSync<T>(
 
   beginTransaction(db, options, mode);
   const transactionStartedAt = Date.now();
+  let commitStarted = false;
   try {
     const result = operation();
     assertSyncTransactionResult(result);
     assertTransactionUsable(db);
+    commitStarted = true;
     if (options?.withCommit) {
       assertSyncTransactionResult(
         options.withCommit(() => commitImmediateTransaction(db, options)),
@@ -460,7 +473,7 @@ function runSqliteTransactionSync<T>(
     }
     return result;
   } catch (error) {
-    abortImmediateTransaction(db, error);
+    abortImmediateTransaction(db, error, commitStarted);
     assertTransactionUsable(db);
     throw error;
   } finally {

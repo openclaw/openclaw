@@ -32,7 +32,7 @@ import { prepareSessionCreateFilesystemRoot } from "./server-methods/session-cre
 import type {
   PrepareGatewaySessionLifecycle,
   PreparedGatewaySessionLifecycle,
-} from "./session-lifecycle-preparation.js";
+} from "./session-create-service.types.js";
 import { resolveExplicitSessionName } from "./session-title-state.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 

@@ -103,6 +103,42 @@ describe("release publication state", () => {
     },
   );
 
+  it.each(["plan", "already-published", "superseded"] as const)(
+    "consumes the sealed %s decision without repeating registry planning",
+    async (decision) => {
+      const fetch = vi.fn(() => {
+        throw new Error("unexpected registry read");
+      });
+      vi.stubGlobal("fetch", fetch);
+      const result = await observeReleaseNpmState({
+        version,
+        npmDistTag: "latest",
+        plugins: [],
+        npmDecisions: [
+          {
+            packageName: "openclaw",
+            packageVersion: version,
+            plan: { channel: "stable", publishTag: "latest", mirrorDistTags: ["beta"] },
+            decision,
+            route: decision === "plan" ? null : "npm-readback",
+            supersededBy: decision === "superseded" ? "2026.9.7" : null,
+            bootstrap: false,
+          },
+        ],
+      });
+      expect(fetch).not.toHaveBeenCalled();
+      expect(result.corePublished).toBe(decision !== "plan");
+      expect(result.gates.some((gate) => gate.status === "FAIL")).toBe(false);
+      expect(result.gates.find((gate) => gate.id === "npm.package.openclaw")?.message).toContain(
+        decision === "plan"
+          ? "publication planned"
+          : decision === "superseded"
+            ? "superseded"
+            : "already published",
+      );
+    },
+  );
+
   it("reads plugin and opted-in core packages from the exact source commit, ignoring checkout changes", () => {
     const rootDir = temps.make("release-publish-state-");
     const git = (...args: string[]) =>

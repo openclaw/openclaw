@@ -75,17 +75,17 @@ async function createCompletion(context: GatewayRequestContext) {
   });
   const revoked = new AbortController();
   const client = createOperatorClient({
-    profileId: "native-completion",
+    profileName: "native-completion",
     scopes: ["operator.write"],
   });
-  const source = captureGatewayOperatorRunAuthority({
+  const source = (await captureGatewayOperatorRunAuthority({
     client,
     context,
     sourceAuthority: {
       signal: revoked.signal,
       assertCurrent: () => revoked.signal.throwIfAborted(),
     },
-  })!;
+  }))!;
   client.internal = { operatorRunAuthority: source.authority };
   const root = tryBeginGatewayRootWorkAdmission("test:native-completion")!;
   let custody: AgentHarnessCompletionCustody | undefined;
@@ -95,16 +95,19 @@ async function createCompletion(context: GatewayRequestContext) {
     root.release();
   };
   try {
-    const retainedCustody = await root.run(async () =>
-      withPluginRuntimeGatewayRequestScope(
-        {
-          client,
-          context,
-          resolveGatewayContext: context.resolveGatewayContext,
-          isWebchatConnect: () => false,
-        },
-        () => captureAgentHarnessCompletionCustody(scope)!,
+    const retainedCustody = expectDefined(
+      await root.run(async () =>
+        withPluginRuntimeGatewayRequestScope(
+          {
+            client,
+            context,
+            resolveGatewayContext: context.resolveGatewayContext,
+            isWebchatConnect: () => false,
+          },
+          () => captureAgentHarnessCompletionCustody(scope),
+        ),
       ),
+      "Expected native completion custody",
     );
     custody = retainedCustody;
     const runtime = createAgentHarnessTaskRuntime({
