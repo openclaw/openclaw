@@ -34,7 +34,7 @@ describe("configured catalog registry composition", () => {
         models,
       };
       const config: OpenClawConfig = configured
-        ? { models: { providers: { fixture: { ...provider, models: [...models].reverse() } } } }
+        ? { models: { providers: { fixture: { ...provider, models: models.toReversed() } } } }
         : {};
       const metadataSnapshot = createPluginMetadataSnapshotFixture({
         plugins: manifest
