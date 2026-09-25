@@ -261,20 +261,46 @@ describe("openai completions params", () => {
     expect(params.max_completion_tokens).toBe(4_096 - 2 - 1);
   });
 
-  it.each([0, 1, 15])("rejects a proxy request with only %i output tokens left", (remaining) => {
+  it.each([0, 1, 15])(
+    "rejects a reasoning proxy request with only %i output tokens left",
+    (remaining) => {
+      const model = makeCompletionsModel({
+        baseUrl: "http://localhost:8000/v1",
+        reasoning: true,
+        contextWindow: 1000,
+        maxTokens: 1000,
+      });
+      // 3,200 ASCII characters estimate to 1,000 input tokens.
+      expect(() =>
+        buildOpenAICompletionsParams(
+          { ...model, contextTokens: 1001 + remaining },
+          emptyContext("x".repeat(3200)),
+          undefined,
+        ),
+      ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
+    },
+  );
+
+  it("rejects an exhausted non-reasoning budget without changing positive short budgets", () => {
     const model = makeCompletionsModel({
       baseUrl: "http://localhost:8000/v1",
-      contextWindow: 1000,
+      reasoning: false,
+      contextWindow: 1016,
       maxTokens: 1000,
     });
-    // 3,200 ASCII characters estimate to 1,000 input tokens.
+    const context = emptyContext("x".repeat(3200));
     expect(() =>
-      buildOpenAICompletionsParams(
-        { ...model, contextTokens: 1001 + remaining },
-        emptyContext("x".repeat(3200)),
-        undefined,
-      ),
+      buildOpenAICompletionsParams({ ...model, contextTokens: 1001 }, context, undefined),
     ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
+    for (const remaining of [1, 15]) {
+      expect(
+        buildOpenAICompletionsParams(
+          { ...model, contextTokens: 1001 + remaining },
+          context,
+          undefined,
+        ).max_completion_tokens,
+      ).toBe(remaining);
+    }
   });
 
   it("preserves useful clamping and intentionally short completions", () => {

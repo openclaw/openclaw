@@ -510,7 +510,10 @@ export function buildOpenAICompletionsRequest(
             `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
             `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
         );
-        if (remainingBudget < MIN_USEFUL_OUTPUT_TOKENS) {
+        if (
+          remainingBudget <= 0 ||
+          (model.reasoning && remainingBudget < MIN_USEFUL_OUTPUT_TOKENS)
+        ) {
           throw Object.assign(
             new Error(
               `Context window exceeded: estimated input ${estimatedInputTokens} leaves only ` +
