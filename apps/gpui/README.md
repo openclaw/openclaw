@@ -387,6 +387,16 @@ visible scroll anchor.
 
 ## Isolated proof
 
+Set `OPENCLAW_GPUI_BACKGROUND=1` to open or reuse windows without activating
+the app. Use an isolated `HOME` and `OPENCLAW_GPUI_STATE_DIR`, and an explicit
+synthetic endpoint such as `--url ws://127.0.0.1:9 --token synthetic`.
+This controls app activation; it does not change macOS accessibility semantics.
+
+The `steipete/gpui-bgtest` branch patches `gpui-component` and `gpui-base` to
+the local `~/Projects/oss/gpui-kit` checkout for accessibility validation.
+These absolute Cargo paths are local proof wiring and must be replaced with
+released dependencies before shipping the app.
+
 Sidebar proof uses the durable directory
 `/Users/steipete/Projects/openclaw-campaign-backup/gpui-proof`, with launchers and
 logs in `sidebar-rig/`, screenshots in `shots-sidebar/`, the source inventory in
