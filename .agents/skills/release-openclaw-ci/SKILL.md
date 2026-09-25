@@ -546,6 +546,8 @@ receipt and resolves per-package npm plans against the registry. The manifest's
 need the operator's acknowledgement; sealed evidence does not grant authority.
 Mutation owners recheck live publication authority, selectors, and immutable bytes.
 
+### Publication requirements
+
 Publish with `release_profile=from-validation` to consume the sealed profile.
 Stable publication requires stable/full evidence, soak, and blocking performance.
 Every selected validation lane must succeed, including first-hop compatibility,

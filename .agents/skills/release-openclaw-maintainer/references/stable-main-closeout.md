@@ -4,10 +4,10 @@ This gate starts only after stable publication. It is a narrow shipped-state
 closeout, not permission to heal broader `main`. Stable publication is not
 complete until `main` carries the actual shipped release state.
 
-Closeout applies the current publication gates, including any approved waiver
-recorded for the exact release. Keep the operator's reason with the release
-evidence. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
-replay the recorded closeout to regenerate identical bytes; do not manufacture
+Closeout requires the original strict stable/full publication evidence with
+soak, blocking performance, and successful selected validation lanes. Historical
+waiver-bearing receipt replay and repair are unsupported. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
+replay an eligible strict-evidence closeout to regenerate identical bytes; do not manufacture
 new evidence. Invalid or mismatched assets remain blocking.
 
 1. Start from fresh latest `main`. Use a same-repository PR targeting `main`,
@@ -72,9 +72,14 @@ new evidence. Invalid or mismatched assets remain blocking.
    using the saved orchestrator state, or dispatch
    `gh workflow run openclaw-stable-main-closeout.yml --ref main -f tag=vYYYY.M.PATCH`
    after a direct Actions publication. Unrelated source pushes do not poll for
-   publication completion. Manual initial closeout or replay needs only `tag`: it reuses publish-accepted sealed waiver text
-   (only new operator text needs the version prefix) and repository drill variables;
-   failed non-proof lanes without a sealed lane waiver still need `lane_waiver`.
+   publication completion. Manual initial closeout or replay needs only `tag`
+   when repository drill variables are configured. Replay requires successful
+   stable/full evidence with soak and blocking performance. Complete
+   manifest/checksum pairs remain recorded without rewriting. Historical
+   waiver-bearing receipt replay and repair are unsupported: the original
+   postpublish evidence binds its validation run, which a fresh run cannot
+   replace. Preserve those artifacts and stop instead of overwriting them or
+   publishing again to repair a receipt.
    Push runs are never cancelled by later `main` pushes; verification serializes
    per resolved stable tag.
 7. A macOS build pulled from Sparkle on purpose (for example a crashing

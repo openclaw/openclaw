@@ -59,20 +59,17 @@ checks apply.
 
 ## Release validation
 
-Stable publication normally requires stable or full validation, longer-running
-soak tests, and blocking performance checks. These requirements also apply to a
-final version first published on the beta channel.
+Stable publication requires stable or full validation, longer-running soak tests,
+and blocking performance checks. These requirements also apply to a final version
+first published on the beta channel. Beta-profile evidence cannot qualify stable.
 
-Maintainers can approve exceptions for a specific version. A soak exception can
-allow beta-profile results and nonblocking performance, but the performance run
-must still succeed. Failed advisory checks require a separate acknowledgement
-before stable publication. Required package and install proofs remain blocking.
-
-Validation covers source CI, packages, plugins, Gateway installs and upgrades,
-and selected app, UI, Telegram, QA, and live-provider checks. Coverage varies by
-profile and selected operating systems. A passing validation summary does **not**
-mean every test passed: check the recorded failures, skipped checks, and approved
-exceptions for that release. Skipped checks are not passes.
+Every selected validation lane must pass; publication waivers cannot bypass
+failures or required coverage. Validation covers source CI, packages, plugins,
+Gateway installs and upgrades, and selected app, UI, Telegram, QA, and
+live-provider checks. All-group qualification includes all nine Gateway
+install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwise
+varies by profile and selected operating systems. Check the release's recorded
+coverage: skipped or deferred checks are not passes.
 
 See [Full release validation](/reference/full-release-validation) for coverage
 by profile and how to interpret the results.
@@ -241,7 +238,9 @@ runbook. Former section links below lead to their corresponding procedures.
 <a id="publication-modes%3A-strict-default-and-operator-fast-path" />
 <a id="publication-modes-strict-default-and-operator-fast-path" />
 
-[Publication waivers](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#publication-waivers).
+<a id="publication-requirements" />
+
+[Publication requirements](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#publication-requirements).
 
 <a id="public-references" />
 <a id="related" />
