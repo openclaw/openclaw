@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { GatewaySuspendPrepareResult } from "../../../packages/gateway-protocol/src/index.js";
 import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
@@ -77,7 +78,7 @@ export async function withGatewayMaintenanceDrain<T>(
     });
     return { config, controlAuth, port, target };
   })().catch((error: unknown) => {
-    observationError = String(error);
+    observationError = coerceErrorMessage(error);
     return undefined;
   });
   assertResidentCurrent();
@@ -127,7 +128,7 @@ export async function withGatewayMaintenanceDrain<T>(
       verifiedResident = true;
     }
   } catch (error) {
-    observationError = String(error);
+    observationError = coerceErrorMessage(error);
   }
   assertResidentCurrent();
   // A resident whose installation was replaced underneath it refuses every
@@ -190,7 +191,7 @@ export async function withGatewayMaintenanceDrain<T>(
         observationError = undefined;
       } catch (error) {
         assertResidentCurrent();
-        observationError = String(error);
+        observationError = coerceErrorMessage(error);
       }
       assertResidentCurrent();
       if (!observationError && lastObservation?.status === "ready") {

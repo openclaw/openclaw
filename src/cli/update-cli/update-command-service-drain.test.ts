@@ -9,6 +9,7 @@ import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-e
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import type { CallGatewayCliOptions } from "../../gateway/call.js";
 import { GATEWAY_STALE_INSTALL_CLOSE_REASON } from "../../gateway/stale-install.js";
+import { createGatewayCloseTransportError } from "../../gateway/transport-error.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 
 const mocks = vi.hoisted(() => ({
@@ -378,13 +379,28 @@ it("rejects a replacement boot before sending suspension or stopping", async () 
 const juneStaleConnection = "gateway closed (1011): gateway message handler unavailable";
 const legacyResident = { pid: 42, state: "alive", path: "/tmp/openclaw-fixture/gateway.lock" };
 
+function staleConnectionError(message: string) {
+  return message === juneStaleConnection
+    ? createGatewayCloseTransportError({
+        code: 1011,
+        reason: "gateway message handler unavailable",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "Gateway target: ws://127.0.0.1:18789",
+        },
+        requestDispatched: false,
+      })
+    : new Error(message);
+}
+
 it.each([GATEWAY_STALE_INSTALL_CLOSE_REASON, juneStaleConnection])(
   "stops an identified replaced resident without draining: %s",
   async (reason) => {
     const f = fixture();
     mocks.legacyLock.mockResolvedValue(legacyResident);
     mocks.call.mockImplementation(async () => {
-      throw new Error(reason);
+      throw staleConnectionError(reason);
     });
     const { timeoutMs: _timeoutMs, ...params } = f.params;
     const running = withGatewayMaintenanceDrain(params, f.stop);
@@ -410,7 +426,7 @@ it.each([GATEWAY_STALE_INSTALL_CLOSE_REASON, juneStaleConnection])(
     const base = mocks.call.getMockImplementation();
     mocks.call.mockImplementation(async (request) => {
       if (request.method === "gateway.suspend.prepare" && ++calls > 1) {
-        throw new Error(reason);
+        throw staleConnectionError(reason);
       }
       return base?.(request);
     });
@@ -432,7 +448,7 @@ it.each([
 ])("keeps the normal deadline with a %s legacy lock", async (_label, legacy) => {
   const f = fixture();
   mocks.legacyLock.mockResolvedValue(legacy);
-  mocks.call.mockRejectedValue(new Error(juneStaleConnection));
+  mocks.call.mockRejectedValue(staleConnectionError(juneStaleConnection));
   const running = withGatewayMaintenanceDrain(f.params, f.stop);
   await vi.advanceTimersByTimeAsync(0);
   expect(f.stop).not.toHaveBeenCalled();
@@ -463,7 +479,7 @@ it.each(["lock", "native PID", "authority"])(
   "does not stop when %s changes during legacy revalidation",
   async (change) => {
     const f = fixture();
-    mocks.call.mockRejectedValue(new Error(juneStaleConnection));
+    mocks.call.mockRejectedValue(staleConnectionError(juneStaleConnection));
     mocks.legacyLock.mockResolvedValueOnce(legacyResident).mockImplementationOnce(async () => {
       if (change === "lock") {
         return undefined;
