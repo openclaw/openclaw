@@ -137,27 +137,13 @@ export async function assertPageNavigationCompletedSafely(
   }
 }
 
-async function continueRouteSafely(route: Route): Promise<void> {
+async function resumeRouteSafely(route: Route, method: "continue" | "fallback"): Promise<void> {
   try {
-    await route.continue();
+    await route[method]();
   } catch (err) {
-    const message = err instanceof Error ? err.message : "";
-    if (message.includes("Route is already handled")) {
-      return;
+    if (!(err instanceof Error && err.message.includes("Route is already handled"))) {
+      throw err;
     }
-    throw err;
-  }
-}
-
-async function fallbackRouteSafely(route: Route): Promise<void> {
-  try {
-    await route.fallback();
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "";
-    if (message.includes("Route is already handled")) {
-      return;
-    }
-    throw err;
   }
 }
 
@@ -306,7 +292,7 @@ export async function withPageNavigationRequestGuard<T>(
   const handleRoute = async (route: Route, request: Request) => {
     if (!classifyBrowserDocumentNavigationRequest(opts.page, request)) {
       try {
-        await fallbackRouteSafely(route);
+        await resumeRouteSafely(route, "fallback");
       } catch (err) {
         recordGuardError(err);
         await stopGuardedRoute(route, false, err);
@@ -331,7 +317,7 @@ export async function withPageNavigationRequestGuard<T>(
       return;
     }
     try {
-      await fallbackRouteSafely(route);
+      await resumeRouteSafely(route, "fallback");
     } catch (err) {
       recordGuardError(err);
       await stopGuardedRoute(route, true, err);
@@ -442,7 +428,7 @@ export async function gotoPageWithNavigationGuard(
     }
     const requestKind = classifyBrowserDocumentNavigationRequest(opts.page, request);
     if (!requestKind) {
-      await continueRouteSafely(route);
+      await resumeRouteSafely(route, "continue");
       return;
     }
     try {
@@ -460,7 +446,7 @@ export async function gotoPageWithNavigationGuard(
       }
       throw err;
     }
-    await continueRouteSafely(route);
+    await resumeRouteSafely(route, "continue");
   };
 
   try {
@@ -505,5 +491,3 @@ export async function gotoPageWithNavigationGuard(
   }
   return response;
 }
-
-/** Resolve a browser snapshot ref into a Playwright locator. */

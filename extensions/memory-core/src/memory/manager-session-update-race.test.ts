@@ -30,6 +30,7 @@ import {
   createManagerIndexFixture,
   readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
+import type { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -308,7 +309,7 @@ describe("memory session update sync", () => {
       "cli",
     );
     const owner = manager as unknown as {
-      queuedSessionSync: Promise<void> | null;
+      sessionSyncQueue: MemoryTargetedSessionSyncQueue;
       sessionPendingTargets: Map<string, MemorySessionSyncTarget>;
       sessionsDirty: boolean;
       sessionsReconcileDirty: boolean;
@@ -352,7 +353,7 @@ describe("memory session update sync", () => {
       });
       owner.sessionPendingTargets.set(sessionKey, { agentId: "main", sessionId, sessionKey });
       await owner.processSessionUpdateBatch();
-      const queuedSessionSync = owner.queuedSessionSync;
+      const queuedSessionSync = owner.sessionSyncQueue.pending;
       expect(queuedSessionSync).not.toBeNull();
 
       releaseActiveSync();
