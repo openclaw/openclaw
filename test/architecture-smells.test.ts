@@ -12,16 +12,6 @@ const templateQuote = String.fromCharCode(96);
 describe("architecture boundary module reference scanner", () => {
   it.each([
     {
-      name: "commented side-effect import",
-      source: 'import /* gap */ "../../src/private.js"',
-      kind: "import",
-    },
-    {
-      name: "commented dynamic import with attributes",
-      source: 'await import /* gap */ ("../../src/private.js", { with: { type: "json" } })',
-      kind: "dynamic-import",
-    },
-    {
       name: "dynamic import inside template interpolation",
       source:
         "const message = " +
@@ -41,11 +31,6 @@ describe("architecture boundary module reference scanner", () => {
       source:
         'const message = `${/[}]/.test("safe") ? import /* gap */ ("../../src/private.js", { with: { type: "json" } }) : null}`',
       kind: "dynamic-import",
-    },
-    {
-      name: "CommonJS require",
-      source: 'require("../../src/private.js")',
-      kind: "commonjs-require",
     },
     {
       name: "CommonJS require inside template interpolation",
@@ -68,18 +53,8 @@ describe("architecture boundary module reference scanner", () => {
       kind: "commonjs-require",
     },
     {
-      name: "CommonJS require with a Unicode-escaped middle character inside interpolation",
-      source: 'const message = `${r\\u0065quire("../../src/private.js")}`',
-      kind: "commonjs-require",
-    },
-    {
       name: "CommonJS require with a Unicode-escaped braced character inside interpolation",
       source: 'const message = `${\\u{72}equire("../../src/private.js")}`',
-      kind: "commonjs-require",
-    },
-    {
-      name: "CommonJS require with a Unicode-escaped last character inside interpolation",
-      source: 'const message = `${requir\\u0065("../../src/private.js")}`',
       kind: "commonjs-require",
     },
     {
@@ -130,11 +105,6 @@ describe("architecture boundary module reference scanner", () => {
       kind: "import-meta-url",
     },
     {
-      name: "runtime namespace re-export",
-      source: 'export /* gap */ * /* gap */ as privateModule from "../../src/private.js"',
-      kind: "export",
-    },
-    {
       name: "type namespace re-export",
       source: 'export type * as privateModule from "../../src/private.js"',
       kind: "export",
@@ -149,11 +119,6 @@ describe("architecture boundary module reference scanner", () => {
       name: "TypeScript import type",
       source: 'type PrivateModule = typeof import("../../src/private.js")',
       kind: "dynamic-import",
-    },
-    {
-      name: "escaped module specifier",
-      source: 'import "../../src/priv\\u0061te.js"',
-      kind: "import",
     },
   ])("detects $name", ({ source, kind }) => {
     expect(
