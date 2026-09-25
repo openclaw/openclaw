@@ -20,12 +20,7 @@ import {
 } from "./gateway-health-auth-diagnostic.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
-import {
-  formatConfigReloadHealthLine,
-  formatContextEngineHealthLine,
-  healthCommand,
-  healthCommandNonExiting,
-} from "./health.js";
+import { healthCommand, healthCommandNonExiting } from "./health.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const runtime = createTestRuntime();
@@ -998,51 +993,6 @@ describe("healthCommand", () => {
       [GATEWAY_HEALTH_REACHABLE_LINE],
       [GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE],
     ]);
-  });
-});
-
-describe("formatContextEngineHealthLine", () => {
-  it("summarizes quarantined context engines", () => {
-    const summary = createHealthSummary();
-    summary.contextEngines = {
-      quarantined: [
-        {
-          engineId: "lossless-claw",
-          owner: "plugin:lossless-claw",
-          operation: "assemble",
-          reason: "db corrupt",
-          failedAt: 123,
-        },
-      ],
-    };
-
-    expect(formatContextEngineHealthLine(summary)).toBe(
-      "Context engine: warning (1 quarantined; downgraded to legacy: lossless-claw)",
-    );
-  });
-});
-
-describe("formatConfigReloadHealthLine", () => {
-  it("reports a disabled config hot-reload watcher", () => {
-    const summary = createHealthSummary();
-    summary.configReload = { hotReloadStatus: "disabled" };
-
-    expect(formatConfigReloadHealthLine(summary)).toBe(
-      "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)",
-    );
-  });
-
-  it("stays silent while the config hot-reload watcher is active", () => {
-    const summary = createHealthSummary();
-    summary.configReload = { hotReloadStatus: "active" };
-
-    expect(formatConfigReloadHealthLine(summary)).toBeNull();
-  });
-
-  it("stays silent when no config reloader is running", () => {
-    const summary = createHealthSummary();
-
-    expect(formatConfigReloadHealthLine(summary)).toBeNull();
   });
 });
 

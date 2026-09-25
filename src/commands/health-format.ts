@@ -272,6 +272,24 @@ export const formatHealthChannelLines = (
   return lines;
 };
 
+/** Formats context engine quarantine state for text health output. */
+export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
+  const quarantined = summary.contextEngines?.quarantined ?? [];
+  if (quarantined.length === 0) {
+    return null;
+  }
+  const engines = quarantined.map((entry) => entry.engineId).join(", ");
+  return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
+}
+
+/** Formats config hot-reload watcher degradation for text health output. */
+export function formatConfigReloadHealthLine(summary: HealthSummary): string | null {
+  if (summary.configReload?.hotReloadStatus !== "disabled") {
+    return null;
+  }
+  return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
+}
+
 /** Formats dead-lettered and pressured delivery queue entries for text health output. */
 export function formatDeliveryQueueHealthLine(
   summary: HealthSummary,

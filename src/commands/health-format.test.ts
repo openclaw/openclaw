@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
 import {
+  formatConfigReloadHealthLine,
+  formatContextEngineHealthLine,
   formatDeliveryQueueHealthLine,
   formatGatewayClosedDiagnostic,
   formatHealthChannelLines,
@@ -487,6 +489,51 @@ describe("formatHealthChannelLines", () => {
     expect(formatHealthChannelLines(summary)).toContain(
       "iMessage: failed (unknown) - imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
     );
+  });
+});
+
+describe("formatContextEngineHealthLine", () => {
+  it("summarizes quarantined context engines", () => {
+    const summary = createHealthSummary();
+    summary.contextEngines = {
+      quarantined: [
+        {
+          engineId: "lossless-claw",
+          owner: "plugin:lossless-claw",
+          operation: "assemble",
+          reason: "db corrupt",
+          failedAt: 123,
+        },
+      ],
+    };
+
+    expect(formatContextEngineHealthLine(summary)).toBe(
+      "Context engine: warning (1 quarantined; downgraded to legacy: lossless-claw)",
+    );
+  });
+});
+
+describe("formatConfigReloadHealthLine", () => {
+  it("reports a disabled config hot-reload watcher", () => {
+    const summary = createHealthSummary();
+    summary.configReload = { hotReloadStatus: "disabled" };
+
+    expect(formatConfigReloadHealthLine(summary)).toBe(
+      "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)",
+    );
+  });
+
+  it("stays silent while the config hot-reload watcher is active", () => {
+    const summary = createHealthSummary();
+    summary.configReload = { hotReloadStatus: "active" };
+
+    expect(formatConfigReloadHealthLine(summary)).toBeNull();
+  });
+
+  it("stays silent when no config reloader is running", () => {
+    const summary = createHealthSummary();
+
+    expect(formatConfigReloadHealthLine(summary)).toBeNull();
   });
 });
 

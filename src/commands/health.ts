@@ -37,7 +37,12 @@ import {
   gatewayProbeResultSawGateway,
   gatewayProbeResultWasRateLimited,
 } from "./gateway-health-auth-diagnostic.js";
-import { formatDeliveryQueueHealthLine, formatHealthChannelLines } from "./health-format.js";
+import {
+  formatConfigReloadHealthLine,
+  formatContextEngineHealthLine,
+  formatDeliveryQueueHealthLine,
+  formatHealthChannelLines,
+} from "./health-format.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
 export type { HealthSummary } from "../gateway/health/types.js";
@@ -136,24 +141,6 @@ function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   )}ms p99=${Math.round(eventLoop.delayP99Ms)}ms util=${eventLoop.utilization} cpu=${
     eventLoop.cpuCoreRatio
   }`;
-}
-
-/** Formats context engine quarantine state for text health output. */
-export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
-  const quarantined = summary.contextEngines?.quarantined ?? [];
-  if (quarantined.length === 0) {
-    return null;
-  }
-  const engines = quarantined.map((entry) => entry.engineId).join(", ");
-  return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
-}
-
-/** Formats config hot-reload watcher degradation for text health output. */
-export function formatConfigReloadHealthLine(summary: HealthSummary): string | null {
-  if (summary.configReload?.hotReloadStatus !== "disabled") {
-    return null;
-  }
-  return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
 }
 
 /** Runs the `openclaw health` command against the gateway and renders JSON or text. */

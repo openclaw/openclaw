@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { HealthSummary } from "../gateway/health/types.js";
 import type { SqliteWalHealth } from "../infra/sqlite-wal.js";
 import * as backupRunRecords from "../state/backup-run-records.js";
 import { createSqliteWalHealth } from "./sqlite-wal-health.test-support.js";
@@ -147,6 +148,105 @@ describe("buildStatusCommandReportData", () => {
     });
     expect(result.footerLines.at(-1)).toBe("  Need to test channels? openclaw status --deep");
   });
+
+  it.each(["context", "reload", "combined"])(
+    "surfaces %s degradation in the real deep-status report",
+    async (degradation) => {
+      const now = 7_290_000;
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const params = createStatusCommandReportDataParams({ opts: { deep: true } });
+      const health: HealthSummary = {
+        ...expectDefined(params.health, "health fixture"),
+        channels: { quietchat: { accountId: "default", enabled: false, configured: true } },
+        channelOrder: ["quietchat"],
+        channelLabels: { quietchat: "QuietChat" },
+      };
+      const expected = [
+        { Item: "Gateway", Status: "reachable", Detail: "42ms" },
+        { Item: "QuietChat", Status: "OFF", Detail: "disabled" },
+      ];
+      if (degradation !== "reload") {
+        health.contextEngines = {
+          quarantined: [
+            {
+              engineId: "lossless-claw",
+              owner: "plugin:lossless-claw",
+              operation: "assemble",
+              reason: "database corrupt",
+              failedAt: now,
+            },
+          ],
+        };
+        expected.push({
+          Item: "Context engine",
+          Status: "WARN",
+          Detail: "warning (1 quarantined; downgraded to legacy: lossless-claw)",
+        });
+      }
+      if (degradation === "combined") {
+        health.deliveryQueues = {
+          failed: [{ queueName: "outbound", count: 2, oldestFailedAt: 90_000 }],
+          ingressFailed: [{ channelId: "telegram", accountId: "ops", count: 1 }],
+          ingressPressure: [
+            {
+              channelId: "telegram",
+              accountId: "ops",
+              laneCount: 1,
+              pendingCount: 3,
+              claimedCount: 1,
+              blockedCount: 2,
+              oldestReceivedAt: 3_690_000,
+            },
+          ],
+        };
+        expected.push({
+          Item: "Delivery queue",
+          Status: "WARN",
+          Detail:
+            "warning (dead-lettered entries — outbound: 2, inbound telegram/ops: 1; oldest 2h ago; ingress pressure — inbound telegram/ops: 1 pressured lane, 3 pending, 1 claimed, 2 blocked; oldest 1h ago)",
+        });
+      }
+      if (degradation !== "context") {
+        health.configReload = { hotReloadStatus: "disabled" };
+        expected.push({
+          Item: "Config hot reload",
+          Status: "WARN",
+          Detail: "disabled (watcher retries exhausted; restart the gateway to restore it)",
+        });
+      }
+      const report = await buildStatusCommandReportData({ ...params, health });
+
+      expect(
+        report.healthRows?.map(({ Item, Status, Detail }) => ({
+          Item,
+          Status: stripAnsi(Status),
+          Detail,
+        })),
+      ).toEqual(expected);
+    },
+  );
+
+  it.each([false, true])(
+    "omits healthy auxiliary diagnostics when recorded=%s",
+    async (recorded) => {
+      const params = createStatusCommandReportDataParams({ opts: { deep: true } });
+      const health = expectDefined(params.health, "health fixture");
+      if (recorded) {
+        health.contextEngines = { quarantined: [] };
+        health.deliveryQueues = { failed: [], ingressFailed: [], ingressPressure: [] };
+        health.configReload = { hotReloadStatus: "active" };
+      }
+      const report = await buildStatusCommandReportData({ ...params, health });
+
+      expect(
+        report.healthRows?.map(({ Item, Status, Detail }) => ({
+          Item,
+          Status: stripAnsi(Status),
+          Detail,
+        })),
+      ).toEqual([{ Item: "Gateway", Status: "reachable", Detail: "42ms" }]);
+    },
+  );
 
   it("shows skipped audit text when fast status omits the security audit", async () => {
     const result = await buildStatusCommandReportData(

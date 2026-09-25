@@ -14,7 +14,11 @@ import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
 import type { MemoryPluginStatus } from "../status/memory-plugin.js";
 import type { StatusSummary } from "../status/summary.js";
-import { formatDeliveryQueueHealthLine } from "./health-format.js";
+import {
+  formatConfigReloadHealthLine,
+  formatContextEngineHealthLine,
+  formatDeliveryQueueHealthLine,
+} from "./health-format.js";
 import type { HealthSummary } from "./health.js";
 import { formatSqliteWalHealthWarning } from "./sqlite-wal-health.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
@@ -276,7 +280,7 @@ export function buildStatusSecurityAuditLines(params: {
   return lines;
 }
 
-/** Builds gateway, channel, and delivery queue health table rows. */
+/** Builds gateway, channel, and operational warning health table rows. */
 export function buildStatusHealthRows(params: {
   health: HealthSummary;
   sqliteWal?: StatusSummary["sqliteWal"];
@@ -304,10 +308,6 @@ export function buildStatusHealthRows(params: {
     });
   }
   const healthLines = params.formatHealthChannelLines(params.health, { accountMode: "all" });
-  const deliveryQueueLine = formatDeliveryQueueHealthLine(params.health);
-  if (deliveryQueueLine) {
-    healthLines.push(deliveryQueueLine);
-  }
   for (const line of healthLines) {
     const colon = line.indexOf(":");
     if (colon === -1) {
@@ -328,6 +328,22 @@ export function buildStatusHealthRows(params: {
               ? params.warn("UNLINKED")
               : params.warn("WARN");
     rows.push({ Item: item, Status: status, Detail: detail });
+  }
+  // These are failures, including a disabled watcher, not intentionally disabled channels.
+  for (const line of [
+    formatContextEngineHealthLine(params.health),
+    formatDeliveryQueueHealthLine(params.health),
+    formatConfigReloadHealthLine(params.health),
+  ]) {
+    if (!line) {
+      continue;
+    }
+    const colon = line.indexOf(":");
+    rows.push({
+      Item: line.slice(0, colon),
+      Status: params.warn("WARN"),
+      Detail: line.slice(colon + 1).trim(),
+    });
   }
   return rows;
 }

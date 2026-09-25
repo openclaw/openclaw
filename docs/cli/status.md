@@ -47,6 +47,10 @@ Channels without a probe, such as WhatsApp, report lifecycle health instead.
 In the Health table, `healthy` is `OK`; degraded lifecycle states and failed
 probes remain `WARN`. A lifecycle `OK` does not mean a live probe ran.
 
+`--deep` also shows `WARN` rows for quarantined context engines and a config
+hot-reload watcher disabled after exhausting its retries. These are operational
+failures, unlike intentionally disabled channels marked `OFF`.
+
 `--deep` and `--all` also show delivery queue warnings for dead-lettered messages
 and pressured inbound lanes. These warnings include pending, claimed, and blocked
 message counts even when a channel connection is healthy. See
