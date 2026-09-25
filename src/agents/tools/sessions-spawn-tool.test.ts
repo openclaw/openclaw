@@ -291,6 +291,15 @@ describe("sessions_spawn tool", () => {
     expect(streamTo.description).toContain("ACP only");
     expect(streamTo.description).toContain('"parent" streams turn to requester');
     expect(streamTo.description).toContain("Ignored by subagent");
+    // Finding 1: ACP available must not replace the native agentId guidance.
+    // The default runtime is subagent, so the native policy hint (requester's
+    // own id for the no-allowlist case) must remain, with the ACP harness-id
+    // note appended rather than swapped in.
+    const agentIdProp = (schema.properties as { agentId?: { description?: string } }).agentId;
+    expect(agentIdProp?.description).toBeDefined();
+    expect(agentIdProp?.description).toContain("requester's own id");
+    expect(agentIdProp?.description).toContain("ACP harness id");
+    expect(agentIdProp?.description).toContain('runtime="acp"');
   });
 
   it("hides ACP runtime affordances when the ACP backend is unhealthy", () => {
@@ -1133,6 +1142,58 @@ describe("sessions_spawn tool", () => {
     expect(details.error).toContain(testCase.expected);
     expect(details.error).not.toContain("agents_list");
     expect(callGateway).not.toHaveBeenCalled();
+
+    // The agentId description must match the requester's requireAgentId policy:
+    // when required, never advise omission; when optional, offer the omission path.
+    // With no allowAgents list configured, the required-id hint names the
+    // requester's own id (the default-allowed explicit target).
+    const agentIdProp = (tool.parameters as { properties?: { agentId?: { description?: string } } })
+      .properties?.agentId;
+    expect(agentIdProp?.description).toBeDefined();
+    // No allowAgents list and no ACP backend: the description must not direct the
+    // model to agents_list (there is no allowlist to enumerate) or to ACP ids.
+    expect(agentIdProp?.description).not.toContain("agents_list");
+    expect(agentIdProp?.description).not.toContain("ACP harness");
+    if (testCase.requireAgentId) {
+      expect(agentIdProp?.description).not.toContain("omit");
+      expect(agentIdProp?.description).toContain("requester's own id");
+      expect(agentIdProp?.description).not.toContain("allowAgents set");
+    } else {
+      // Optional id, no allowAgents configured: the only accepted explicit
+      // target is the requester's own id (resolveSubagentAllowedTargetIds
+      // returns [requesterAgentId] when no allowlist is set), so the explicit
+      // hint must name the requester's own id, not an allowAgents set.
+      expect(agentIdProp?.description).toContain("omit to use the requester's agent");
+      expect(agentIdProp?.description).toContain("requester's own id");
+      expect(agentIdProp?.description).not.toContain("allowAgents set");
+    }
+  });
+
+  it("directs the required-id hint to the allowAgents set when an allowlist excludes the requester", () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {
+        agents: {
+          defaults: { subagents: { requireAgentId: true, allowAgents: ["planner"] } },
+          list: [{ id: "main" }, { id: "planner" }],
+        },
+      },
+      callGateway: (() => {}) as never,
+      countActiveRuns: () => 0,
+    });
+
+    // With an explicit allowAgents list that excludes the requester, an explicit
+    // self-target is rejected by resolveSubagentTargetPolicy, so the hint must
+    // not recommend the requester's own id; it points to the allowAgents set and
+    // directs the model to agents_list for the actual allowed ids.
+    const agentIdProp = (tool.parameters as { properties?: { agentId?: { description?: string } } })
+      .properties?.agentId;
+    expect(agentIdProp?.description).toBeDefined();
+    expect(agentIdProp?.description).not.toContain("omit");
+    expect(agentIdProp?.description).not.toContain("requester's own id");
+    expect(agentIdProp?.description).toContain("allowAgents set");
+    expect(agentIdProp?.description).toContain("agents_list");
+    expect(agentIdProp?.description).not.toContain("ACP harness");
   });
 
   it("rejects cwd escape for sandboxed visible sessions", async () => {

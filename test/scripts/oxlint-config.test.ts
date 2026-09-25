@@ -716,6 +716,12 @@ describe("oxlint config", () => {
         },
       },
       {
+        files: ["src/agents/tools/sessions-spawn-tool.ts"],
+        rules: {
+          "max-lines": ["error", { max: 800, skipBlankLines: true, skipComments: true }],
+        },
+      },
+      {
         files: ["extensions/copilot/src/attempt-transcript-journal.test.ts"],
         rules: {
           "max-lines": ["error", { max: 1200, skipBlankLines: true, skipComments: true }],

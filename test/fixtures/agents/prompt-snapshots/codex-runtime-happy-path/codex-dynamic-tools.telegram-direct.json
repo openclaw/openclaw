@@ -159,6 +159,7 @@
     "inputSchema": {
       "properties": {
         "agentId": {
+          "description": "Configured agent id; omit to use the requester's agent, or pass the requester's own id.",
           "type": "string"
         },
         "attachAs": {

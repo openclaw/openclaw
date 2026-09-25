@@ -16,6 +16,7 @@ import {
   mergeAcceptedSessionSpawnsForRun,
   normalizeAcceptedSessionSpawnResult,
 } from "../accepted-session-spawn.js";
+import { resolveAgentConfig } from "../agent-scope.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
@@ -151,11 +152,42 @@ function resolveSessionsSpawnThreadAvailability(opts?: {
   };
 }
 
+/**
+ * Build the model-facing agentId description for sessions_spawn.
+ *
+ * The default runtime is the native subagent path, whose target policy
+ * (resolveSubagentAllowedTargetIds) admits only the requester by default and
+ * intersects an explicit allowAgents list with configured agent ids. The
+ * description must therefore always state the native guidance for the
+ * requester's requireAgentId/allowAgents configuration, and only append the
+ * ACP harness-id note when ACP is available (runtime="acp" is opt-in).
+ */
+function buildSessionsSpawnAgentIdDescription(params: {
+  acpAvailable: boolean;
+  requireAgentId: boolean;
+  allowAgentsConfigured: boolean;
+}): string {
+  // Native guidance for the default subagent runtime.
+  const native = params.requireAgentId
+    ? params.allowAgentsConfigured
+      ? "Configured agent id; pass an id from the requester's allowAgents set (see agents_list for the allowed ids)."
+      : "Configured agent id; pass the requester's own id."
+    : params.allowAgentsConfigured
+      ? "Configured agent id; omit to use the requester's agent, or pass an id from the requester's allowAgents set (see agents_list for the allowed ids)."
+      : "Configured agent id; omit to use the requester's agent, or pass the requester's own id.";
+  // ACP is opt-in via runtime="acp"; the id is a harness id, not a native agent id.
+  return params.acpAvailable
+    ? `${native} For runtime="acp", pass an ACP harness id (codex, claude, gemini, opencode).`
+    : native;
+}
+
 function createSessionsSpawnToolSchema(params: {
   acpAvailable: boolean;
   threadAvailable: boolean;
   subagentThreadAvailable: boolean;
   swarmEnabled: boolean;
+  requireAgentId: boolean;
+  allowAgentsConfigured: boolean;
 }) {
   const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
   const schema = {
@@ -175,7 +207,11 @@ function createSessionsSpawnToolSchema(params: {
       params.acpAvailable ? SESSIONS_SPAWN_RUNTIMES : (["subagent"] as const),
       { description: 'Runtime; visible=true requires "subagent".' },
     ),
-    agentId: Type.Optional(Type.String()),
+    agentId: Type.Optional(
+      Type.String({
+        description: buildSessionsSpawnAgentIdDescription(params),
+      }),
+    ),
     model: Type.Optional(Type.String()),
     runTimeoutSeconds: Type.Optional(
       Type.Integer({
@@ -358,11 +394,21 @@ export function createSessionsSpawnTool(
     requesterAgentId,
     sandboxed: opts?.sandboxed,
   });
+  const requesterAgentSubagents = requesterAgentId
+    ? resolveAgentConfig(effectiveConfig, requesterAgentId)?.subagents
+    : undefined;
+  const defaultSubagents = effectiveConfig.agents?.defaults?.subagents;
+  const requireAgentId =
+    requesterAgentSubagents?.requireAgentId ?? defaultSubagents?.requireAgentId ?? false;
+  const allowAgentsConfigured =
+    (requesterAgentSubagents?.allowAgents ?? defaultSubagents?.allowAgents) !== undefined;
   const parameters = createSessionsSpawnToolSchema({
     acpAvailable,
     threadAvailable,
     subagentThreadAvailable: threadAvailability.subagent,
     swarmEnabled: swarmConfig.enabled,
+    requireAgentId,
+    allowAgentsConfigured,
   });
   const tool: AnyAgentTool = {
     label: "Sessions",
