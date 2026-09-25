@@ -336,14 +336,21 @@ it.each(["maintenance.autoDetach", "gc.autoDetach"])(
   "overrides %s only for an explicitly owned Git command",
   async (key) => {
     await withTestDir({ prefix: "openclaw-git-exec-maintenance-" }, async (root) => {
-      await requireGitCommand(root, ["init"]);
-      await requireGitCommand(root, ["config", key, "true"]);
+      const env = {
+        GIT_CONFIG_COUNT: "0",
+        GIT_CONFIG_PARAMETERS: undefined,
+      };
+      await requireGitCommand(root, ["init"], { env });
+      await requireGitCommand(root, ["config", key, "true"], { env });
       const owned = await executeGitCommand(root, ["config", "--get", key], {
+        env,
         killProcessTree: true,
       });
       expect(owned.code).toBe(0);
       expect(owned.stdout.trim()).toBe("false");
-      await expect(requireGitCommand(root, ["config", "--get", key])).resolves.toBe("true");
+      await expect(requireGitCommand(root, ["config", "--get", key], { env })).resolves.toBe(
+        "true",
+      );
     });
   },
 );

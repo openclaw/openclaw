@@ -571,6 +571,15 @@ export function settleSqliteWorkerJob(
   job.operationAdmission?.releaseService();
   job.lifecyclePreparation?.finish();
   let failure = error;
+  const retainCleanupFailure = (cleanupError: unknown) => {
+    failure =
+      failure === undefined
+        ? cleanupError
+        : withSqliteWorkerCleanupFailure(
+            toErrorObject(failure, "SQLite worker failed"),
+            cleanupError,
+          );
+  };
   const admissionCleanupFailures = job.operationAdmission?.admission.cleanupFailures ?? [];
   if (admissionCleanupFailures.length > 0) {
     const cleanupError = new AggregateError(
@@ -580,13 +589,7 @@ export function settleSqliteWorkerJob(
     if (error === undefined && job.request.type === "execute") {
       process.emitWarning(cleanupError);
     } else {
-      failure =
-        error === undefined
-          ? cleanupError
-          : withSqliteWorkerCleanupFailure(
-              toErrorObject(error, "SQLite worker failed"),
-              cleanupError,
-            );
+      retainCleanupFailure(cleanupError);
     }
   }
   try {
@@ -600,13 +603,7 @@ export function settleSqliteWorkerJob(
         ),
       );
     } else {
-      failure =
-        failure === undefined
-          ? cleanupError
-          : withSqliteWorkerCleanupFailure(
-              toErrorObject(failure, "SQLite worker failed"),
-              cleanupError,
-            );
+      retainCleanupFailure(cleanupError);
     }
   }
   job.inputTransfer?.producer.cancel();

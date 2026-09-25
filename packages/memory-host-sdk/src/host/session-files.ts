@@ -41,6 +41,7 @@ import {
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
+import { collectRawSessionText, projectSessionEntryRecord } from "./session-entry-projection.js";
 import { classifySessionMessageOrigin } from "./session-provenance.js";
 import { resolveSessionResetRecallCutoff } from "./session-reset-recall.js";
 import {
@@ -445,26 +446,6 @@ function normalizeSessionText(value: string): string {
     .trim();
 }
 
-function collectRawSessionText(content: unknown): string | null {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return null;
-  }
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const record = block as { type?: unknown; text?: unknown };
-    if (record.type === "text" && typeof record.text === "string") {
-      parts.push(record.text);
-    }
-  }
-  return parts.length > 0 ? parts.join("\n") : null;
-}
-
 function isHighSurrogate(code: number): boolean {
   return code >= 0xd800 && code <= 0xdbff;
 }
@@ -711,7 +692,10 @@ export async function buildSessionEntryInProcess(
   const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
   try {
     const snapshot = sqliteIdentity
-      ? readTranscriptExportSnapshotReadOnlySync(sqliteIdentity)
+      ? readTranscriptExportSnapshotReadOnlySync(sqliteIdentity, {
+          // Observers require original messages and run only after the snapshot closes.
+          projectEvent: opts.onTranscriptMessage ? undefined : projectSessionEntryRecord,
+        })
       : null;
     const sqliteSource =
       snapshot && sqliteIdentity

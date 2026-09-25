@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
@@ -92,6 +92,7 @@ import {
 import { loadExactSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "./session-accessor.sqlite-import.test-support.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { findTranscriptEventInDatabase } from "./session-accessor.sqlite-read.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import {
   appendTranscriptEventSync,
@@ -147,8 +148,6 @@ describe("session accessor seam", () => {
   let tempDir: string;
   let storePath: string;
   let transcriptPath: string;
-  let cleanupProbeDatabasePath = "";
-  let cleanupProbeRoot = "";
 
   function loadMainInitializationSnapshot(sessionKey: string) {
     return loadReplySessionInitializationSnapshot({ agentId: "main", sessionKey, storePath });
@@ -161,33 +160,32 @@ describe("session accessor seam", () => {
     transcriptPath = path.join(tempDir, "session.jsonl");
   });
 
-  afterEach(() => {
+  function cleanupSessionDatabasesAndTempDirs() {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     cleanupTempDirs(tempDirs);
-  });
+  }
 
-  describe("session database teardown boundary", { concurrent: false }, () => {
-    it("opens cached agent and shared-state handles", async () => {
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey: "agent:main:cleanup-probe", storePath },
-        { sessionId: "cleanup-probe", updatedAt: 1 },
-      );
-      cleanupProbeDatabasePath = expectDefined(
-        resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
-        "cleanup probe database path",
-      );
-      cleanupProbeRoot = tempDir;
+  afterEach(cleanupSessionDatabasesAndTempDirs);
 
-      expect(isOpenClawAgentDatabaseOpen(cleanupProbeDatabasePath)).toBe(true);
-      expect(isOpenClawStateDatabaseOpen()).toBe(true);
-    });
+  it("releases cached agent and shared-state handles before removing test data", async () => {
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:cleanup-probe", storePath },
+      { sessionId: "cleanup-probe", updatedAt: 1 },
+    );
+    const databasePath = expectDefined(
+      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+      "cleanup probe database path",
+    );
+    expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(true);
+    expect(isOpenClawStateDatabaseOpen()).toBe(true);
+    expect(fs.existsSync(tempDir)).toBe(true);
 
-    it("releases both cache owners before the next test", () => {
-      expect(isOpenClawAgentDatabaseOpen(cleanupProbeDatabasePath)).toBe(false);
-      expect(isOpenClawStateDatabaseOpen()).toBe(false);
-      expect(fs.existsSync(cleanupProbeRoot)).toBe(false);
-    });
+    cleanupSessionDatabasesAndTempDirs();
+
+    expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
+    expect(isOpenClawStateDatabaseOpen()).toBe(false);
+    expect(fs.existsSync(tempDir)).toBe(false);
   });
 
   it("returns typed sync append outcomes for missing, rebound, and duplicate rows", async () => {
@@ -715,13 +713,14 @@ describe("session accessor seam", () => {
       });
     });
     const seen: unknown[] = [];
-    const found = await findTranscriptEvent(
-      { sessionId: "session-find", sessionKey: "agent:main:main", storePath },
-      (event) => {
-        seen.push(event);
-        return (event as { type?: string }).type === "message";
-      },
-    ).finally(() => prepareSpy.mockRestore());
+    const found = await Promise.resolve()
+      .then(() =>
+        findTranscriptEventInDatabase(database, "session-find", (event) => {
+          seen.push(event);
+          return (event as { type?: string }).type === "message";
+        }),
+      )
+      .finally(() => prepareSpy.mockRestore());
     // Newest-first with early exit: the older message is never visited.
     expect(found).toEqual({ event: newer });
     expect(seen).toEqual([newer]);
@@ -733,13 +732,13 @@ describe("session accessor seam", () => {
     );
     const falsy = await findTranscriptEvent(
       { sessionId: "session-falsy", sessionKey: "agent:main:falsy", storePath },
-      () => true,
+      { kind: "latest" },
     );
     expect(falsy).toEqual({ event: false });
 
     const missing = await findTranscriptEvent(
       { sessionId: "session-absent", sessionKey: "agent:main:main", storePath },
-      () => true,
+      { kind: "latest" },
     );
     expect(missing).toBeUndefined();
   });
@@ -1030,7 +1029,7 @@ describe("session accessor seam", () => {
       { sessionId: "legacy-session", updatedAt: 20 },
     );
     const notify = vi.fn();
-    const unsubscribe = onSessionIdentityMutation(notify);
+    onTestFinished(onSessionIdentityMutation(notify));
     await expect(
       patchSessionEntryTarget(
         {
@@ -1085,7 +1084,6 @@ describe("session accessor seam", () => {
       target,
     });
     await deleteSessionEntryLifecycle({ archiveTranscript: false, storePath, target });
-    unsubscribe();
 
     expect(notify.mock.calls.map(([event]) => event.kind)).toEqual([
       "delete",
@@ -2703,7 +2701,7 @@ describe("session accessor seam", () => {
       )
       .run(previousKey, "member-1", "test", 1);
     const identityListener = vi.fn();
-    const unsubscribe = onSessionIdentityMutation(identityListener);
+    onTestFinished(onSessionIdentityMutation(identityListener));
     await applySessionEntryCanonicalReplacements({
       sessionKeys: [canonicalKey, previousKey],
       storePath,
@@ -2721,7 +2719,6 @@ describe("session accessor seam", () => {
         result: undefined,
       }),
     });
-    unsubscribe();
     expect(loadSessionEntry({ sessionKey: previousKey, storePath })).toBeUndefined();
     expect(loadSessionEntry({ sessionKey: canonicalKey, storePath })).toMatchObject({
       label: "Moved",
@@ -3250,12 +3247,11 @@ describe("session accessor seam", () => {
     ]);
 
     const notify = vi.fn();
-    const unsubscribe = onSessionIdentityMutation(notify);
+    onTestFinished(onSessionIdentityMutation(notify));
     const result = await applySessionEntryLifecycleMutation({
       storePath,
       removals: [{ expectedSessionId: scope.sessionId, sessionKey: scope.sessionKey }],
     });
-    unsubscribe();
 
     expect(result.removedEntries).toBe(1);
     expect(notify).toHaveBeenCalledWith({
@@ -3456,6 +3452,7 @@ describe("session accessor seam", () => {
     );
     const updates: unknown[] = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+    onTestFinished(unsubscribe);
 
     const result = await trimSessionTranscriptForManualCompact(scope, {
       maxLines: 3,
@@ -3712,6 +3709,7 @@ describe("session accessor seam", () => {
         updatedAt: loadSessionEntry(scope)?.updatedAt,
       });
     });
+    onTestFinished(unsubscribe);
 
     const result = await persistSessionTranscriptTurn(scope, {
       cwd: tempDir,

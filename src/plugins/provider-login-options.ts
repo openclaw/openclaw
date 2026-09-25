@@ -12,6 +12,7 @@ export type ProviderLoginOption = {
   groupLabel?: string;
   icon?: string;
   website?: string;
+  docsUrl?: string;
   kind: "oauth" | "device-code" | "secret";
   featured: boolean;
 };
@@ -87,6 +88,7 @@ export function listProviderLoginOptions(
           groupLabel: choice.groupLabel,
           icon: choice.icon,
           website: choice.website,
+          docsUrl: choice.docsUrl,
           kind,
           featured: choice.onboardingFeatured === true,
         },

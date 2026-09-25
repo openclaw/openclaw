@@ -9,6 +9,7 @@ import {
   comparableSnapshotRaw,
   rebaseConfigDraft,
   resetConfigPendingChanges,
+  resetStaleAutoSaveStatus,
   serializeFormForSubmit,
 } from "./config-draft-model.ts";
 import { teardownFlushConfigDraft, type ConfigSubmission } from "./config-gateway-operations.ts";
@@ -194,8 +195,17 @@ export function createConfigWriteReconciliation({
         state.configSnapshot
       ) {
         applyConfigSnapshot(state, state.configSnapshot);
+        // A reverted, definitively rejected save has no remaining failure to recover.
+        if (flight.submission.operation === "save") {
+          resetStaleAutoSaveStatus(state);
+          publish();
+        }
       } else if (flight.submission?.rejected && hasUnacknowledgedDraftWrite()) {
         // The rejected successor may have raced our own earlier commit. Read once; retry stays explicit.
+        if (state.configAutoSaveStatus === "rejected") {
+          state.configAutoSaveStatus = "error";
+          state.lastError = t("configView.writeUnconfirmed");
+        }
         void refreshSnapshot();
       }
     },

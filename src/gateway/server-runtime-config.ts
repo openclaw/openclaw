@@ -1,5 +1,6 @@
 // Gateway startup runtime-config resolver.
 // Normalizes bind/auth/HTTP/Tailscale/hook settings before server construction.
+import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import type {
   GatewayAuthConfig,
   GatewayBindMode,
@@ -80,7 +81,7 @@ export function assertGatewayRuntimeSecurityConfig(
   const hasSharedSecret =
     (authMode === "token" && Boolean(resolvedAuth.token?.trim())) ||
     (authMode === "password" && Boolean(resolvedAuth.password?.trim()));
-  const controlUiAllowedOrigins = (cfg.gateway?.controlUi?.allowedOrigins ?? [])
+  const controlUiAllowedOrigins = resolveControlUiAllowedOrigins(cfg)
     .map((value) => value.trim())
     .filter(Boolean);
   const dangerouslyAllowHostHeaderOriginFallback =
@@ -116,7 +117,7 @@ export function assertGatewayRuntimeSecurityConfig(
     // Remote Control UI must use explicit origins unless the operator deliberately accepts
     // Host-header fallback; otherwise any reachable host name can become a browser origin.
     throw new GatewayEffectiveConfigConflictError(
-      "non-loopback Control UI requires gateway.controlUi.allowedOrigins (set explicit origins), or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to use Host-header origin fallback mode",
+      "non-loopback Control UI requires gateway.controlUi.allowedOrigins or gateway.publicOrigin when the allowlist is omitted, or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to use Host-header origin fallback mode",
     );
   }
   if (authMode === "trusted-proxy" && !cfg.gateway?.trustedProxies?.length) {

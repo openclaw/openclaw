@@ -169,11 +169,60 @@ describe("cua-computer provider", () => {
     expect(createDriver).toHaveBeenCalledOnce();
 
     const stop = provider.watchAvailability?.({ config: {} as never, env: {} }, vi.fn());
-    stop?.();
-    await Promise.resolve();
+    await stop?.();
     expect(clearInterval).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "joins availability disposal through concurrent and later stops when it will %s",
+    async (outcome) => {
+      const { session, dispose } = driver();
+      const retiring = createDeferred<void>();
+      const entered = createDeferred<void>();
+      const failure = new Error("availability driver retirement failed");
+      dispose.mockImplementation(() => {
+        entered.resolve();
+        return retiring.promise;
+      });
+      const provider = createCuaComputerProvider({
+        platform: "linux",
+        createDriver: () => session,
+      });
+      const stop = provider.watchAvailability?.({ config: {}, env: {} }, vi.fn());
+      const first = Promise.resolve(stop?.());
+      const second = Promise.resolve(stop?.());
+      let settled = false;
+      const results = Promise.allSettled([first, second]).then((values) => {
+        settled = true;
+        return values;
+      });
+      try {
+        await entered.promise;
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        if (outcome === "reject") {
+          retiring.reject(failure);
+          expect(await results).toEqual([
+            { status: "rejected", reason: failure },
+            { status: "rejected", reason: failure },
+          ]);
+          await expect(Promise.resolve(stop?.())).rejects.toBe(failure);
+        } else {
+          retiring.resolve();
+          expect(await results).toEqual([
+            { status: "fulfilled", value: undefined },
+            { status: "fulfilled", value: undefined },
+          ]);
+          await stop?.();
+        }
+        expect(dispose).toHaveBeenCalledOnce();
+      } finally {
+        retiring.resolve();
+        await results;
+      }
+    },
+  );
 
   it("passes node invocation cancellation to the direct SDK", async () => {
     const { session, getDesktopState } = driver();

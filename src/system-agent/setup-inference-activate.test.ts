@@ -279,6 +279,48 @@ describe("setup activation credentials and configuration", () => {
     },
   );
 
+  it("offers matching saved registrations for interactive setup", async () => {
+    const setup = await fixture();
+    vi.mocked(setup.prompter.confirm).mockImplementation(
+      async ({ message }) => message === "Connection verified. Activate this saved sign-in?",
+    );
+    const savedCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: "synthetic-expired-access",
+      refresh: "synthetic-saved-refresh",
+      expires: 1,
+      clientId: "saved-registration",
+      authorizationScope: "openid profile resource.invoke offline_access",
+    } as const;
+    await upsertAuthProfileWithLock({
+      profileId: "openai:saved",
+      credential: savedCredential,
+      agentDir: setup.agentDir,
+    });
+    await upsertAuthProfileWithLock({
+      profileId: "other:saved",
+      credential: { ...savedCredential, provider: "other" },
+      agentDir: setup.agentDir,
+    });
+
+    const result = await setup.activate();
+
+    expect(result).toMatchObject({ ok: true });
+    expect(setup.prompter.confirm).toHaveBeenCalledWith({
+      message: "Connection verified. Activate this saved sign-in?",
+      initialValue: true,
+    });
+    expect(setup.login).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingProfiles: [{ profileId: "openai:saved", credential: savedCredential }],
+      }),
+    );
+    expect(
+      loadAuthProfileStoreWithoutExternalProfiles(setup.agentDir).profiles["openai:saved"],
+    ).toEqual(savedCredential);
+  });
+
   it.each([false, true])(
     "preserves first-team provisioning across provider activation (rejected: %s)",
     async (rejected) => {

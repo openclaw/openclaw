@@ -1,5 +1,6 @@
+import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { STARTUP_INTERRUPTED_ERROR, type InterruptedStartupRun } from "./startup-run-repair.js";
+import { STARTUP_INTERRUPTED_ERROR } from "./startup-run-repair.js";
 import { emit, type CronServiceState } from "./state.js";
 import { tryFinishCronTaskRun } from "./task-runs.js";
 

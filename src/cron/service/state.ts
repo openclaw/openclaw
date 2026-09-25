@@ -14,8 +14,8 @@ import type { CronAgentAvailability } from "../agent-availability.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
-import type { QuarantinedCronConfigJob } from "../store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
+import type { QuarantinedCronConfigJob } from "../store/types.js";
 import type {
   CronCompletionStatus,
   CronTriggerEvaluationResult,
@@ -139,7 +139,7 @@ export type CronServiceDeps = {
   legacyDefaultAgentId?: string;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
   resolveSessionStoreAgentIds?: () => string[];
-  /** Revalidate ownership through the supplied transaction when a receipt holds it. */
+  /** Revalidate resident policy using the supplied transaction or worker deletion facts. */
   isAgentAvailable?: CronAgentAvailability;
   /** Resolve session store path for a given agent id. */
   resolveSessionStorePath?: (agentId?: string) => string;

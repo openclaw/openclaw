@@ -71,6 +71,8 @@ const EMPTY_SCOPE = {
   runUiTests: false,
 };
 
+// Skills native subscriptions need real filesystem proof on both desktop OSes.
+const SKILLS_WATCH_SCOPE_RE = /^src\/skills\/runtime\/refresh(?:[.-][^/]+)?\.ts$/;
 const SKILLS_PYTHON_SCOPE_RE = /^(skills\/|skills\/pyproject\.toml$)/;
 const INSTALL_SMOKE_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/install-smoke\.yml$/;
 const NATIVE_PROTOCOL_GEN_RE = /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//;
@@ -117,7 +119,7 @@ const WINDOWS_SCOPE_RE =
 const WINDOWS_LAN_ADVERTISEMENT_SCOPE_RE =
   /^src\/infra\/advertised-lan-host(?:\.windows)?(?:\.test)?\.ts$/;
 const WINDOWS_SECRETREF_SCOPE_RE =
-  /^(?:src\/commands\/doctor-gateway-auth-token(?:\.windows\.test)?\.ts|src\/flows\/(?:doctor-core-checks|doctor-health-contributions)\.ts|src\/gateway\/(?:auth-token-resolution|resolve-configured-secret-input-string)\.ts|src\/infra\/(?:fs-safe|fs-safe-defaults|permissions)\.ts|src\/secrets\/(?:resolve|resolve-errors)\.ts|src\/security\/audit-fs\.ts)$/;
+  /^(?:src\/commands\/doctor-gateway-auth-token(?:\.windows\.test)?\.ts|src\/flows\/(?:doctor-core-checks|doctor-health-contributions)\.ts|src\/gateway\/(?:auth-token-resolution|resolve-configured-secret-input-string)\.ts|src\/infra\/(?:boundary-file-read|fs-safe)\.ts|src\/secrets\/(?:resolve|resolve-errors)\.ts|src\/security\/audit-fs\.ts)$/;
 const WINDOWS_DAEMON_SCOPE_RE =
   /^src\/daemon\/(?:schtasks(?:[-.][^/]+)?|runtime-hints\.windows-paths(?:\.test)?|test-helpers\/schtasks-(?:base-mocks|fixtures))\.ts$/;
 const WINDOWS_USAGE_TEMPLATE_SCOPE_RE =
@@ -227,6 +229,7 @@ export function detectChangedScope(changedPaths) {
   let runNode = false;
   let runMacos = false;
   let hasGitOwnerChanges = false;
+  let hasSkillsWatchChanges = false;
   let hasMacosNodeTestSupportChanges = false;
   let runIosBuild = false;
   let runAndroid = false;
@@ -253,6 +256,7 @@ export function detectChangedScope(changedPaths) {
 
     hasNonDocs = true;
     hasGitOwnerChanges ||= GIT_OWNER_SCOPE_RE.test(path);
+    hasSkillsWatchChanges ||= SKILLS_WATCH_SCOPE_RE.test(path);
     // Native shell fixture support needs Darwin proof, not Swift or Windows builds.
     hasMacosNodeTestSupportChanges ||= path === "test/scripts/mac-script-fixture.test-support.ts";
 
@@ -349,10 +353,11 @@ export function detectChangedScope(changedPaths) {
   return {
     runNode,
     runMacos,
-    runMacosNode: runMacos || hasGitOwnerChanges || hasMacosNodeTestSupportChanges,
+    runMacosNode:
+      runMacos || hasGitOwnerChanges || hasMacosNodeTestSupportChanges || hasSkillsWatchChanges,
     runIosBuild,
     runAndroid,
-    runWindows: runWindows || hasGitOwnerChanges,
+    runWindows: runWindows || hasGitOwnerChanges || hasSkillsWatchChanges,
     runSkillsPython,
     runChangedSmoke,
     runControlUiI18n,

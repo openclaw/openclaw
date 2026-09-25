@@ -30,6 +30,14 @@ complete until `main` carries the actual shipped release state.
    generated index consistent.
    `OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1` remains an explicit override
    for release automation outside this convention.
+   Refresh hosted full-release costs from the exact completed normal-CI child in
+   the verified validation evidence:
+   `node --import ./scripts/tsx.mjs scripts/ci-shard-timings-refresh.mts --run <ci-child-run-id>`.
+   Review and commit the generated `config/ci-test-timings.json` in this closeout.
+   Successful hosted jobs from failed children remain usable timing samples.
+   Keep measured values generator-owned; never adjust them by hand. Native job
+   walls include setup; full-release planning targets 12 minutes per measured
+   shard to leave headroom for the 20-minute objective.
 4. Do not add `YYYY.M.PATCH+1`, a beta version, or an empty future changelog
    section to `main` until the operator explicitly starts that release train.
 5. Run `pnpm release:generated:check`, `pnpm deps:npm-lock:check`, and
@@ -54,6 +62,11 @@ complete until `main` carries the actual shipped release state.
    closeout manifest to the GitHub release. The drill must be within 90 days;
    manual dispatch is only for repair/replay, and private rollback commands
    remain in the maintainer-only runbook.
+   Manual replay needs only `tag`: it reuses publish-accepted sealed waiver text
+   (only new operator text needs the version prefix) and repository drill variables;
+   failed non-proof lanes without a sealed lane waiver still need `lane_waiver`.
+   Push runs are never cancelled by later `main` pushes; verification serializes
+   per resolved stable tag.
 7. A macOS build pulled from Sparkle on purpose (for example a crashing
    in-app update) is a third appcast state, not a contract failure. Withdraw
    it with a `main` commit whose subject is exactly

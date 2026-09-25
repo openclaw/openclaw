@@ -10,6 +10,7 @@ import {
 } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerLocalHomeDir } from "./auth-start-options.js";
 import { hasCodexAppServerSiblingThreadWork } from "./client-runtime.js";
+import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
 import {
   CodexAppServerRpcError,
   isCodexAppServerOverloadError,
@@ -176,6 +177,7 @@ export async function resumeExistingCodexThread(
         appServer: params.appServer,
         dynamicTools: params.dynamicTools,
         developerInstructions: params.developerInstructions,
+        skillsInstructions: params.skillsInstructions,
         config: resumeConfig,
         nativeCodeModeEnabled: params.nativeCodeModeEnabled,
         nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
@@ -184,6 +186,7 @@ export async function resumeExistingCodexThread(
         hostSystemAgentActive,
         restrictedToolSurfaceInheritedMcpServerNames,
         shellEnvironment: params.shellEnvironment,
+        shellPathPrepend: params.shellPathPrepend,
         disableLoginShell: params.disableLoginShell,
       }),
     );
@@ -514,6 +517,7 @@ export async function startFreshCodexThread(
       dynamicTools: params.dynamicTools,
       appServer: params.appServer,
       developerInstructions: params.developerInstructions,
+      skillsInstructions: params.skillsInstructions,
       config,
       nativeCodeModeEnabled: params.nativeCodeModeEnabled,
       nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
@@ -525,6 +529,7 @@ export async function startFreshCodexThread(
       hostSystemAgentActive,
       restrictedToolSurfaceInheritedMcpServerNames,
       shellEnvironment: params.shellEnvironment,
+      shellPathPrepend: params.shellPathPrepend,
       disableLoginShell: params.disableLoginShell,
     }),
   );
@@ -705,9 +710,9 @@ export async function startFreshCodexThread(
     modelProvider:
       response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
     // Restricted ephemeral threads also need creation policy for fenced warm reuse.
-    ...(startParams.ephemeral
-      ? { liveThreadEphemeralPolicy: startParams.developerInstructions }
-      : {}),
+    liveThreadEphemeralPolicy: startParams.ephemeral
+      ? createCodexEphemeralThreadPolicy(params)
+      : undefined,
     // Transient starts do not own the persisted binding, so their native
     // subscriptions must be released instead of entering the warm cache.
     ...(!preserveExistingBinding
@@ -727,6 +732,7 @@ export async function startFreshCodexThread(
       : {}),
     lifecycle: {
       action: "started",
+      ...(preserveExistingBinding ? { preserveExistingBinding: true as const } : {}),
       ...(rotatedContextEngineBinding ? { rotatedContextEngineBinding: true } : {}),
     },
   };

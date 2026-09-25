@@ -3,6 +3,130 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  configForm: {
+    sections: {
+      env: {
+        label: "Environment Variables",
+        description: "Environment variables passed to the gateway process",
+      },
+      update: {
+        label: "Updates",
+        description: "Auto-update settings and release channel",
+      },
+      agents: {
+        label: "Agents",
+        description: "Agent configurations, models, and identities",
+      },
+      auth: {
+        label: "Authentication",
+        description: "API keys and authentication profiles",
+      },
+      channels: {
+        label: "Channels",
+        description: "Messaging channels (Telegram, Discord, Slack, etc.)",
+      },
+      messages: {
+        label: "Messages",
+        description: "Message handling and routing settings",
+      },
+      commands: {
+        label: "Commands",
+        description: "Custom slash commands",
+      },
+      hooks: {
+        label: "Hooks",
+        description: "Webhooks and event hooks",
+      },
+      skills: {
+        label: "Skills",
+        description: "Skill packs and capabilities",
+      },
+      tools: {
+        label: "Tools",
+        description: "Tool configurations (browser, search, etc.)",
+      },
+      gateway: {
+        label: "Gateway",
+        description: "Gateway server settings (port, auth, binding)",
+      },
+      wizard: {
+        label: "Setup",
+        description: "Discovery preferences for setup and read-only setup history.",
+      },
+      meta: {
+        label: "Metadata",
+        description: "Gateway metadata and version information",
+      },
+      logging: {
+        label: "Logging",
+        description: "Log levels and output configuration",
+      },
+      browser: {
+        label: "Browser",
+        description: "Browser automation settings",
+      },
+      ui: {
+        label: "UI",
+        description: "User interface preferences",
+      },
+      models: {
+        label: "Models",
+        description: "AI model configurations and providers",
+      },
+      bindings: {
+        label: "Bindings",
+        description: "Key bindings and shortcuts",
+      },
+      broadcast: {
+        label: "Broadcast",
+        description: "Broadcast and notification settings",
+      },
+      tts: {
+        label: "Voice",
+        description: "Text-to-speech output, voices, and personas",
+      },
+      session: {
+        label: "Session",
+        description: "Session management and persistence",
+      },
+      cron: {
+        label: "Automations",
+        description: "Scheduled tasks and automation",
+      },
+      discovery: {
+        label: "Discovery",
+        description: "Service discovery and networking",
+      },
+      talk: {
+        label: "Talk",
+        description: "Voice and speech settings",
+      },
+      plugins: {
+        label: "Plugins",
+        description: "Plugin management and extensions",
+      },
+      diagnostics: {
+        label: "Diagnostics",
+        description: "Instrumentation, OpenTelemetry, and cache-trace settings",
+      },
+      cli: {
+        label: "CLI",
+        description: "CLI banner and startup behavior",
+      },
+      secrets: {
+        label: "Secrets",
+        description: "Secret provider configuration",
+      },
+      acp: {
+        label: "ACP",
+        description: "Agent Communication Protocol runtime and streaming settings",
+      },
+      mcp: {
+        label: "MCP",
+        description: "Model Context Protocol server definitions",
+      },
+    },
+  },
   agentTools: {
     pluginSource: "Plugin",
     channelSource: "Channel: {id}",
@@ -227,6 +351,38 @@ const enSettings = {
     },
   },
   cloudWorkersPage: {
+    pool: {
+      tab: "Pool",
+      title: "Ready pool",
+      description:
+        "Workers preparing for upcoming sessions and spares already running. Refreshes every 10 seconds while this view is visible.",
+      ready: "Ready",
+      preparing: "Preparing",
+      releasing: "Releasing",
+      attention: "Needs attention",
+      expired: "Expired",
+      unavailable: "Unavailable",
+      unknownProject: "Unknown project",
+      reserve: "Automatic reserve",
+      build: "On-demand build",
+      age: "Age: {age}",
+      expiresAt: "Expires {time}",
+      expiredAt: "Expired {time}",
+      offline: "Connect to the Gateway to view the ready pool.",
+      adminRequired: "Administrator access is required to view the ready pool.",
+      refreshFailed: "Could not refresh the pool: {error}.",
+      lastUpdated: "Showing the last update from {time}.",
+      capacity: "{used} of {limit} reserve slots in use",
+      disabledCapacity: "Unused workers awaiting release: {count}",
+      capacityHelp:
+        "Preparing workers and pending cleanup count toward the limit. Unused running workers incur machine charges.",
+      disabled:
+        "The pool is disabled. Unused workers are being released; active sessions continue.",
+      inventoryUnavailable: "Pool inventory unavailable",
+      target: "Ready workers per eligible project: {count}",
+      empty:
+        "No unassigned prepared workers. Eligible sessions prepare a reserve after activation; Profiles controls the target and pool limit.",
+    },
     snapshots: {
       title: "Snapshots",
       viewLabel: "Cloud worker view",
@@ -473,7 +629,11 @@ const enSettings = {
       action: "Connect provider",
       title: "Connect a provider",
       noOptions: "No account connection methods are available.",
-      method: "Connection method",
+      accounts: "Accounts available to this agent",
+      noAccounts: "No connected accounts for this provider.",
+      connectAccount: "Connect an account",
+      apiKeyHint: "Connect with a key from your provider account.",
+      compareMethods: "Compare connection methods",
       searchProviders: "Search providers…",
       noMatches: "No providers match your search.",
       noProviders: "No providers are available to connect.",
@@ -745,6 +905,7 @@ const enSettings = {
       failedStep: "Failure details",
       viewDetails: "View details",
       recoveryActions: "Recovery",
+      diagnoseFailure: "Diagnose update",
       checkStatus: "Check status",
       retryUpdate: "Retry update",
       reportFailure: "Report update failure",
@@ -1564,6 +1725,7 @@ const enSettings = {
 export const registerSettingsEnglish = Object.assign(
   () => {
     Object.assign(en.agentTools, enSettings.agentTools);
+    Object.assign(en.configForm.sections, enSettings.configForm.sections);
     en.memoryPage = enSettings.memoryPage;
     en.modelProviders = enSettings.modelProviders;
     en.searchPage = enSettings.searchPage;

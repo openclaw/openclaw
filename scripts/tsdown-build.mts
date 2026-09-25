@@ -1202,12 +1202,15 @@ export async function runTsdownBuildInvocation(
     relayParentSignal("SIGHUP");
   }
 
-  const processTreeAlive = () =>
-    inspectManagedProcessGroup(child, {
+  let observedProcessState: ReturnType<typeof inspectManagedProcessGroup> | undefined;
+  const processTreeAlive = () => {
+    observedProcessState = inspectManagedProcessGroup(child, {
       errorPolicy: "alive-on-eperm",
       inspectLeaderWhenNoGroup: true,
       platform,
-    }) === "live";
+    });
+    return observedProcessState === "live";
+  };
   const waitForProcessTreeExit = (timeoutMsToWait: number) =>
     waitForManagedProcessGroupExit(child, timeoutMsToWait, {
       errorPolicy: "alive-on-eperm",
@@ -1290,13 +1293,34 @@ export async function runTsdownBuildInvocation(
     });
     child.once("close", (status, signal) => {
       let exitStatus = status;
+      let cleanup = parentSignal ? "parent-signal" : timedOut ? "timeout" : "none";
+      const reportFailure = (finalStatus: number | null) => {
+        // Cleanup can reject a successful compiler. Preserve both outcomes so a
+        // failed build does not look like a compiler error with missing output.
+        stderr.write(
+          `[tsdown-build] child result${pidText}: ${JSON.stringify({
+            status,
+            signal,
+            parentSignal: parentSignal ?? null,
+            timedOut,
+            cleanup,
+            observedProcessState: observedProcessState ?? "not-observed",
+            observationScope: useProcessGroup ? "process-group" : "leader",
+            finalStatus,
+          })}\n`,
+        );
+      };
       function finish() {
         settled = true;
         cleanupParentSignalHandlers();
         clearInterval(heartbeat ?? undefined);
         clearTimeout(timeout ?? undefined);
+        const finalStatus = parentSignal ? signalExitCode(parentSignal) : exitStatus;
+        if (finalStatus !== 0 || timedOut) {
+          reportFailure(finalStatus);
+        }
         resolve({
-          status: parentSignal ? signalExitCode(parentSignal) : exitStatus,
+          status: finalStatus,
           signal: parentSignal ?? signal,
           timedOut,
           error: null,
@@ -1308,6 +1332,7 @@ export async function runTsdownBuildInvocation(
         if (timedOut || parentSignal) {
           await finishTimedOutProcessTree();
         } else if (processTreeAlive()) {
+          cleanup = "remaining-descendants";
           signalChild("SIGKILL");
           await waitForProcessTreeExit(POST_FORCE_KILL_WAIT_MS);
           exitStatus = 1;
@@ -1325,6 +1350,7 @@ export async function runTsdownBuildInvocation(
         cleanupParentSignalHandlers();
         clearInterval(heartbeat ?? undefined);
         clearTimeout(timeout ?? undefined);
+        reportFailure(1);
         resolve({
           status: 1,
           signal,

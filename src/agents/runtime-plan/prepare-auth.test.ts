@@ -121,6 +121,54 @@ function allCooldownOpenAIStore(): AuthProfileStore {
 }
 
 describe("prepareAgentRuntimeAuthPlan", () => {
+  it("does not defer identity-only ChatGPT login to native Codex credentials", () => {
+    expect(() =>
+      prepareAgentRuntimeAuth({
+        ...openAIPlatformAuthFixture(),
+        env: {},
+        harnessId: "codex",
+        harnessRuntime: "codex",
+        harnessAuthBootstrap: "harness",
+        authProfileStore: authStore({
+          "openai:identity": {
+            ...openAIOAuthProfile("access-token", "refresh-token", Date.now() + 60_000),
+            authFlow: "chatgpt-identity",
+          },
+        }),
+      }),
+    ).toThrow(/No route-compatible authentication source/);
+  });
+
+  it.each(["openclaw", "codex"])(
+    "prepares token-sharing OAuth on public Responses for %s",
+    (runtime) => {
+      const plan = prepareAgentRuntimeAuthPlan({
+        ...openAIPlatformAuthFixture(),
+        env: {},
+        harnessId: runtime,
+        harnessRuntime: runtime,
+        sessionAuthProfileId: "openai:shared",
+        sessionAuthProfileSource: "user",
+        authProfileStore: authStore({
+          "openai:shared": {
+            ...openAIOAuthProfile("access-token", "refresh-token", Date.now() + 60_000),
+            authFlow: "chatgpt-token-sharing",
+          },
+        }),
+      });
+      expect(plan).toMatchObject({
+        forwardedAuthProfileId: "openai:shared",
+        selectedAuthMode: "oauth",
+        selectedAuthFlow: "chatgpt-token-sharing",
+        modelRoute: {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authRequirement: "api-key",
+        },
+      });
+    },
+  );
+
   it.each([
     {
       pinnedProfile: "openai:platform",

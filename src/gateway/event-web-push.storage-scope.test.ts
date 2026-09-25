@@ -16,7 +16,7 @@ import {
 import type { upsertNativeWebPushSubscription } from "../infra/push-web-store.native.js";
 import type { WebPushWorkerOperations } from "../infra/push-web-store.worker-contract.js";
 import type { prepareWebPushNotificationSender } from "../infra/push-web.js";
-import { SQLITE_WORKER_MAX_REQUESTS } from "../infra/sqlite-worker-broker.js";
+import { SQLITE_WORKER_MAX_REQUESTS_PER_WORKER } from "../infra/sqlite-worker-broker.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   closeOpenClawStateDatabaseByPathAsync,
@@ -299,10 +299,10 @@ it("rejects excess waiting work before entering storage and admits new work afte
   await upsertBinding(stateDir, "profile-a", 1);
   const read = withBoundWebPushSubscriptions(stateDir, () => ({ start: () => undefined }));
   await selected.promise;
-  const queued = Array.from({ length: SQLITE_WORKER_MAX_REQUESTS - 1 }, (_, index) =>
+  const queued = Array.from({ length: SQLITE_WORKER_MAX_REQUESTS_PER_WORKER - 1 }, (_, index) =>
     upsertBinding(stateDir, "profile-b", index + 2),
   );
-  const overflow = upsertBinding(stateDir, "excess", SQLITE_WORKER_MAX_REQUESTS + 1);
+  const overflow = upsertBinding(stateDir, "excess", SQLITE_WORKER_MAX_REQUESTS_PER_WORKER + 1);
   try {
     await expect(overflow).rejects.toMatchObject({ code: "overloaded" });
     expect(mocks.executeWorker).toHaveBeenCalledOnce();
@@ -312,11 +312,39 @@ it("rejects excess waiting work before entering storage and admits new work afte
     await Promise.allSettled([read, ...queued, overflow]);
   }
   await expect(
-    upsertBinding(stateDir, "profile-c", SQLITE_WORKER_MAX_REQUESTS + 2),
+    upsertBinding(stateDir, "profile-c", SQLITE_WORKER_MAX_REQUESTS_PER_WORKER + 2),
   ).resolves.toMatchObject({
     subscriptionId: "scope-subscription",
   });
-  expect(mocks.nativeUpsert).toHaveBeenCalledTimes(SQLITE_WORKER_MAX_REQUESTS + 1);
+  expect(mocks.nativeUpsert).toHaveBeenCalledTimes(SQLITE_WORKER_MAX_REQUESTS_PER_WORKER + 1);
+  expect(mocks.nativeDatabaseOpen).not.toHaveBeenCalled();
+});
+
+it("keeps the Web Push input budget bounded independently of the database broker", async () => {
+  const { stateDir, selected, releaseReply } = prepareQueuedRead();
+  await upsertBinding(stateDir, "profile-a", 1);
+  const read = withBoundWebPushSubscriptions(stateDir, () => ({ start: () => undefined }));
+  await selected.promise;
+  const profileId = "x".repeat(20 * 1024 * 1024);
+  const queued = Array.from({ length: 3 }, (_, index) =>
+    upsertBinding(stateDir, profileId, index + 2),
+  );
+  const overflow = upsertBinding(stateDir, profileId, 5);
+  const refusal = overflow.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  try {
+    expect(await Promise.race([refusal, nextTurn()])).toMatchObject({ code: "overloaded" });
+    expect(mocks.nativeUpsert).toHaveBeenCalledOnce();
+  } finally {
+    releaseReply.resolve();
+    await Promise.allSettled([read, ...queued, overflow]);
+  }
+  await expect(upsertBinding(stateDir, profileId, 6)).resolves.toMatchObject({
+    subscriptionId: "scope-subscription",
+  });
+  expect(mocks.nativeUpsert).toHaveBeenCalledTimes(5);
   expect(mocks.nativeDatabaseOpen).not.toHaveBeenCalled();
 });
 

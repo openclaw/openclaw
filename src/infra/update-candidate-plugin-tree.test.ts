@@ -4,6 +4,7 @@ import path from "node:path";
 import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import * as fsSafe from "./fs-safe.js";
 import {
   copyUpdateCandidatePluginTrees,
@@ -13,7 +14,7 @@ import {
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-async function fixture(hardlink = false) {
+async function fixture(hardlink = false, beforePlan?: (source: string) => Promise<void>) {
   const root = await fs.realpath(dirs.make("candidate-plugin-copy-"));
   const source = path.join(root, "source");
   const targetStateDir = path.join(root, "snapshot");
@@ -27,6 +28,7 @@ async function fixture(hardlink = false) {
   if (hardlink) {
     await fs.link(file, `${file}.linked`);
   }
+  await beforePlan?.(source);
   const plan = await prepareUpdateCandidatePluginTrees({
     roots: new Map([[source, destination]]),
     project: (entry) => path.join(destination, path.relative(source, entry)),
@@ -157,3 +159,85 @@ it.each(["mode", "same-size content with changed mtime", "identity"] as const)(
     expect(await fs.readdir(f.destination)).toEqual([]);
   },
 );
+
+it("drains concurrent file copies before reporting a failure or publishing links", async () => {
+  const f = await fixture(false, async (source) => {
+    for (let index = 0; index < 7; index++) {
+      await fs.writeFile(path.join(source, `extra-${index}.txt`), `plugin bytes ${index}`);
+    }
+    await fs.symlink("payload.txt", path.join(source, "payload-link"), "file");
+  });
+  const peerEntered = createDeferredCore();
+  const releasePeers = createDeferredCore();
+  const firstFailure = createDeferredCore<unknown>();
+  const started: string[] = [];
+  const settled = new Set<string>();
+  const inFlight: Promise<void>[] = [];
+  let settledAtRejection: string[] = [];
+  const openRoot = fsSafe.root;
+  vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+    const root = await openRoot(...args);
+    const copyIn = root.copyIn.bind(root);
+    vi.spyOn(root, "copyIn").mockImplementation((relative, source, options) => {
+      const first = started.length === 0;
+      started.push(relative);
+      if (started.length === 2) {
+        peerEntered.resolve();
+      }
+      const copying = (async () => {
+        try {
+          await peerEntered.promise;
+          if (first) {
+            await fs.writeFile(
+              path.join(f.destination, path.basename(relative)),
+              "existing bytes",
+              {
+                flag: "wx",
+              },
+            );
+          } else {
+            await releasePeers.promise;
+          }
+          await copyIn(relative, source, options);
+          if (first) {
+            throw new Error("Expected the real copy to reject its occupied destination");
+          }
+        } catch (error) {
+          if (first) {
+            firstFailure.resolve(error);
+          }
+          throw error;
+        } finally {
+          settled.add(relative);
+        }
+      })();
+      inFlight.push(copying);
+      return copying;
+    });
+    return root;
+  });
+  const copying = f.copy().catch((error: unknown) => {
+    settledAtRejection = [...settled];
+    return error;
+  });
+  try {
+    const failure = await Promise.race([firstFailure.promise, copying]);
+    releasePeers.resolve();
+    expect(await copying).toBe(failure);
+    expect(failure).toMatchObject({ code: "already-exists" });
+    expect(started.length).toBeGreaterThan(1);
+    expect(started.length).toBeLessThanOrEqual(4);
+    expect(settledAtRejection.toSorted()).toEqual(started.toSorted());
+    expect((await fs.readdir(f.destination)).toSorted()).toEqual(
+      started.map((file) => path.basename(file)).toSorted(),
+    );
+    expect(await fs.readFile(path.join(f.destination, path.basename(started[0]!)), "utf8")).toBe(
+      "existing bytes",
+    );
+  } finally {
+    peerEntered.resolve();
+    releasePeers.resolve();
+    await Promise.allSettled(inFlight);
+    await copying;
+  }
+});

@@ -3,9 +3,22 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WorktreesGcResultSchema } from "../../../packages/gateway-protocol/src/schema/worktrees.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { WorktreeSnapshotError } from "../../agents/worktrees/service.js";
+import { requireGit } from "../../agents/worktrees/git.js";
+import { updateRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { resolveRepository } from "../../agents/worktrees/service-preparation.js";
+import {
+  IDLE_GC_MS,
+  ManagedWorktreeService,
+  WorktreeSnapshotError,
+} from "../../agents/worktrees/service.js";
+import {
+  materializeManagedWorktreeFixture,
+  useManagedWorktreeTestRepository,
+} from "../../agents/worktrees/service.test-support.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { registerProjectRegistry, removeProjectRegistry } from "../../projects/project-registry.js";
 import {
@@ -63,6 +76,7 @@ const writeClient = { connect: { scopes: ["operator.write"] } };
 const emptyConfigContext = { getRuntimeConfig: () => ({}) };
 
 describe("worktrees gateway methods", () => {
+  const initializeGcRepository = useManagedWorktreeTestRepository();
   it("routes every operation through the managed worktree service", async () => {
     const service = {
       list: vi.fn(async () => [record]),
@@ -77,6 +91,9 @@ describe("worktrees gateway methods", () => {
         issues: [],
         issueCount: 0,
         protectedCount: 0,
+        protectionReasons: {},
+        orphansRetired: 0,
+        retiredCheckoutPaths: [],
         limitsSatisfied: true,
       })),
     };
@@ -109,11 +126,13 @@ describe("worktrees gateway methods", () => {
       "worktree restore response",
     );
     expect(expectDefined(restoreResult[0], "worktree restore success flag")).toBe(true);
-    expect(await call(handlers, "worktrees.gc", {}, { context: emptyConfigContext })).toEqual([
+    const gcResponse = await call(handlers, "worktrees.gc", {}, { context: emptyConfigContext });
+    expect(gcResponse).toEqual([
       true,
       { removed: [record.id], orphansDeleted: 1, snapshotsPruned: 2 },
       undefined,
     ]);
+    expect(Value.Check(WorktreesGcResultSchema, gcResponse?.[1])).toBe(true);
     expect(service.gc).toHaveBeenCalledWith({
       limits: { maxCount: 100 },
       shouldProtectOwner: expect.any(Function),
@@ -267,6 +286,9 @@ describe("worktrees gateway methods", () => {
         issues: [],
         issueCount: 0,
         protectedCount: 0,
+        protectionReasons: {},
+        orphansRetired: 0,
+        retiredCheckoutPaths: [],
         limitsSatisfied: true,
       })),
     };
@@ -298,6 +320,9 @@ describe("worktrees gateway methods", () => {
         ],
         issueCount: 1,
         protectedCount: 0,
+        protectionReasons: {},
+        orphansRetired: 0,
+        retiredCheckoutPaths: [],
         limitsSatisfied: false,
       })),
     };
@@ -313,6 +338,38 @@ describe("worktrees gateway methods", () => {
       },
       retryable: false,
     });
+  });
+
+  it("reports an orphan-only retirement through deferred recovery details", async () => {
+    const root = tempDirs.make("openclaw-gc-gateway-orphan-");
+    const repoRoot = await initializeGcRepository(root);
+    const stateDir = path.join(root, "state");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const now = 1_700_000_000_000;
+    const orphan = await materializeManagedWorktreeFixture({
+      env,
+      repoRoot,
+      stateDir,
+      now: now - IDLE_GC_MS - 1,
+      name: "orphan",
+      ownerKind: "workboard",
+    });
+    const identity = await resolveRepository(repoRoot);
+    updateRegistryWorktree(env, orphan.id, {
+      repositoryIdentity: { repoRoot: identity.repoRoot, repoFingerprint: identity.fingerprint },
+    });
+    await fs.rm(await requireGit(orphan.path, ["rev-parse", "--absolute-git-dir"]), {
+      recursive: true,
+    });
+    const handlers = createWorktreesHandlers(new ManagedWorktreeService({ env, now: () => now }));
+    const response = await call(handlers, "worktrees.gc", {}, { context: emptyConfigContext });
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]).toMatchObject({
+      code: "UNAVAILABLE",
+      retryable: false,
+      details: { outcome: "deferred", orphansRetired: 1, retiredCheckoutPaths: [orphan.path] },
+    });
+    expect(await fs.readFile(path.join(orphan.path, "README.md"), "utf8")).toBe("base\n");
   });
 
   it("maps snapshot failures onto a structured removed=false result", async () => {

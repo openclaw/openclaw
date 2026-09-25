@@ -366,6 +366,34 @@ describe("native app i18n inventory", () => {
     ).toBe(false);
   });
 
+  it("preserves Kotlin return order, locations, and complete literal values", () => {
+    const repoPath = "apps/android/Fixture.kt";
+    const source = [
+      "fun statusText(mode: Int, detail: String): String {",
+      '  if (mode == 0) { return "Gateway " + "ready" }',
+      '  if (mode == 1) return "Gateway " + detail',
+      '  if (mode == 2) return "Gateway waiting"',
+      '  if (mode == 3) return "Gateway ready"',
+      '  return "Gateway closed"',
+      "}",
+    ].join("\n");
+
+    expect(extractNativeI18nCandidates("android", repoPath, source)).toEqual(
+      [
+        { value: "Gateway ready", line: 5 },
+        { value: "Gateway waiting", line: 4 },
+        { value: "Gateway closed", line: 6 },
+      ].map(({ value, line }) => ({
+        kind: "conditional-branch",
+        line,
+        path: repoPath,
+        source: value,
+        sourceContext: source,
+        surface: "android",
+      })),
+    );
+  });
+
   it("ignores generated Android resource entries", () => {
     const entries = extractNativeI18nCandidates(
       "android",
@@ -1309,6 +1337,13 @@ describe("native app i18n inventory", () => {
         }),
       },
       {
+        expected: "translation must be a string for native.apple.unknown",
+        mutate: (artifact) => ({
+          ...artifact,
+          translations: { ...artifact.translations, "native.apple.unknown": 12 },
+        }),
+      },
+      {
         expected: `translation must be nonempty for ${other.id}`,
         mutate: (artifact) => ({
           ...artifact,
@@ -1332,10 +1367,28 @@ describe("native app i18n inventory", () => {
     ];
 
     expect(validateNativeLocaleArtifact("sv", inventory, createArtifact())).toEqual([]);
+    const obsolete = {
+      ...createArtifact(),
+      translations: { ...createArtifact().translations, "native.apple.unknown": "Okänd" },
+    };
+    const warnings: string[] = [];
+    expect(
+      validateNativeLocaleArtifact("sv", inventory, obsolete, [], (message) =>
+        warnings.push(message),
+      ),
+    ).toEqual([]);
+    expect(warnings).toEqual(['native locale sv: unknown translation id "native.apple.unknown"']);
     for (const testCase of cases) {
       expect(() =>
         validateNativeLocaleArtifact("sv", inventory, testCase.mutate(createArtifact())),
       ).toThrow(testCase.expected);
+      if (testCase.expected !== 'unknown translation id "native.apple.unknown"') {
+        expect(() =>
+          validateNativeLocaleArtifact("sv", inventory, testCase.mutate(obsolete), [], (message) =>
+            warnings.push(message),
+          ),
+        ).toThrow(testCase.expected);
+      }
     }
   });
 

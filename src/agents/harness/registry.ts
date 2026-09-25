@@ -3,7 +3,12 @@
  */
 import { retainCliRegistryHarnesses } from "../../cli/runtime-cleanup-scope.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
+import { runPluginCleanup } from "../../plugins/plugin-instance-scope.js";
+import { getPluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
+import {
+  getPluginRegistryLifetime,
+  isPluginRegistryRetired,
+} from "../../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   assertDirectPluginRegistrationReplacement,
@@ -30,8 +35,12 @@ function getAgentHarnesses() {
   if (!registry || isPluginRegistryRetired(registry)) {
     return [];
   }
-  retainCliRegistryHarnesses(registry, (harness) =>
-    withPluginRuntimeRegistryScope(registry, () => disposeAgentHarness(harness)),
+  retainCliRegistryHarnesses(
+    registry,
+    (harness) => withPluginRuntimeRegistryScope(registry, () => disposeAgentHarness(harness)),
+    () =>
+      getPluginRegistryInspectionResources(registry)?.retain().release ??
+      getPluginRegistryLifetime(registry)?.retain(),
   );
   return registry.agentHarnesses;
 }
@@ -160,7 +169,7 @@ export async function resetRegisteredAgentHarnessSessions(
 
 async function disposeAgentHarness(harness: AgentHarness): Promise<void> {
   try {
-    await harness.dispose?.();
+    await runPluginCleanup(harness, () => harness.dispose?.());
   } catch (error) {
     log.warn(`${harness.label} dispose hook failed`, { harnessId: harness.id, error });
   }

@@ -3,7 +3,10 @@ import { WorkspaceAliasRepointedError } from "../agents/workspace-state-identity
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
-import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
+import {
+  isStartupMaintenanceKind,
+  StartupMaintenanceRequiredError,
+} from "../infra/startup-maintenance-required.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
 import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
@@ -154,19 +157,6 @@ export function identifyError(error: Error): ErrorIdentity {
   return { type: error instanceof AggregateError ? "aggregate" : "error" };
 }
 
-function isMaintenanceKind(kind: unknown): kind is MaintenanceKind {
-  return (
-    kind === "newer-schema" ||
-    kind === "agent-media" ||
-    kind === "agent-databases-composite-primary-key" ||
-    kind === "audit-events-v2" ||
-    kind === "legacy-cron-run-logs" ||
-    kind === "legacy-workshop-review-index" ||
-    kind === "legacy-workspace" ||
-    kind === "legacy-session-store"
-  );
-}
-
 function isBlobCode(value: unknown): value is PluginBlobStoreError["code"] {
   return (
     value === "PLUGIN_BLOB_OPEN_FAILED" ||
@@ -255,7 +245,7 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
         ? { type: node.type, leaseCode: node.leaseCode }
         : undefined;
     case "maintenance":
-      return isMaintenanceKind(node.kind) ? { type: node.type, kind: node.kind } : undefined;
+      return isStartupMaintenanceKind(node.kind) ? { type: node.type, kind: node.kind } : undefined;
     case "state-migration":
       return (node.kind === "agent-databases-composite-primary-key" ||
         node.kind === "audit-events-v2" ||

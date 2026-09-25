@@ -108,7 +108,7 @@ describe("prepared worker expiry during admitted work", () => {
         registerPreparedWorkspace,
         credentialBroker: createWorkerCredentialBroker({
           ...shared,
-          cancelInferenceEnvironment: () => {},
+          cancelInferenceEnvironment: async () => {},
         }),
         callProvider: async (_environmentId, run) => await run(),
         callBootstrap: async (_installation, run) => await run(fixture.abort.signal),

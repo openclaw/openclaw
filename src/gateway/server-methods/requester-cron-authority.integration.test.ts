@@ -80,14 +80,13 @@ import {
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "../mcp-http.loopback-runtime.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import { createRequestGatewayMethodRegistry } from "../server-methods.js";
+import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "../server-methods.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import {
   resolveGatewayCronCreatorAuthorityAdmission,
   resolveGatewayChatCronCreatorAuthorityAdmission,
   type GatewayCronCreatorAuthorityAdmission,
 } from "./cron-creator-authority-admission.js";
-import { cronHandlers } from "./cron.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
 // Attached-node inventory is unrelated to these original-caller and Cron commit boundaries.
@@ -374,38 +373,39 @@ async function createStoredJob(
     read,
     runtimeAuthority,
     readRuntimeAuthority: async () => (await read())[0]!.runtimeAuthority,
-    update: async (identity: AgentRuntimeIdentity) => {
-      const management = bindCronManagementGrant(identity.operationalRunInstance.runId);
-      const client = createSyntheticPluginRuntimeClient();
-      client.internal!.agentRuntimeIdentity = {
-        ...identity,
-        cronManagementGrant: management?.mint("cron.update"),
-      };
-      const respond = vi.fn<RespondFn>();
-      const params = {
-        id: job.id,
-        patch: {
-          name: "Reviewed maintenance",
-          enabled: true,
-          schedule: { kind: "every", everyMs: 3_600_000 },
-          payload: { kind: "agentTurn", message: "Reviewed health check" },
-          delivery: { mode: "none" },
-        },
-      };
-      await expectDefined(
-        cronHandlers["cron.update"],
-        "cron.update",
-      )({
-        req: { type: "req", id: "update", method: "cron.update", params },
-        params,
-        client,
-        context,
-        respond,
-        isWebchatConnect: () => false,
-      });
-      return expectDefined(respond.mock.calls[0], "cron update response");
-    },
+    update: (identity: AgentRuntimeIdentity) => updateWithGrantFor("cron.update", identity),
+    updateWithGrantFor,
   };
+
+  async function updateWithGrantFor(grantMethod: string, identity: AgentRuntimeIdentity) {
+    const management = bindCronManagementGrant(identity.operationalRunInstance.runId);
+    // A configured channel owner's turn reaches the Gateway without operator.admin.
+    const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
+    client.internal!.agentRuntimeIdentity = {
+      ...identity,
+      cronManagementGrant: management?.mint(grantMethod),
+    };
+    const respond = vi.fn<RespondFn>();
+    const params = {
+      id: job.id,
+      patch: {
+        name: "Reviewed maintenance",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 3_600_000 },
+        payload: { kind: "agentTurn", message: "Reviewed health check" },
+        delivery: { mode: "none" },
+      },
+    };
+    // The router applies the method-scope fence before the cron handler redeems the grant.
+    await handleGatewayRequest({
+      req: { type: "req", id: "update", method: "cron.update", params },
+      client,
+      context,
+      respond,
+      isWebchatConnect: () => false,
+    });
+    return expectDefined(respond.mock.calls[0], "cron update response");
+  }
 }
 
 type CreatorTransportTools = {
@@ -960,14 +960,22 @@ describe("requester continuation persisted automation management", () => {
         ]);
         expect(await fixture.readRuntimeAuthority()).toEqual(fixture.runtimeAuthority);
       } else {
-        expect(error).toMatchObject({
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining("Automation not found"),
-        });
+        // Without a management grant the write-scoped turn stops at the method-scope fence.
+        expect(error).toMatchObject({ message: "missing scope: operator.admin" });
         expect(await fixture.read()).toEqual(fixture.before);
       }
     },
   );
+
+  it("does not admit an update with a grant bound to another management method", async () => {
+    const fixture = await createStoredJob();
+    const [ok, , error] = await withSuccessor("channel-owner", (identity) =>
+      fixture.updateWithGrantFor("cron.remove", identity),
+    );
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({ message: "missing scope: operator.admin" });
+    expect(await fixture.read()).toEqual(fixture.before);
+  });
 
   it.each(["fresh user turn", "session reset", "global owner removal"])(
     "rejects %s revocation while the real update awaits validation",

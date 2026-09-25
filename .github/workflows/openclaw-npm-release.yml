@@ -29,6 +29,16 @@ on:
         description: Exact successful Full Release Validation run attempt for this tag/SHA
         required: false
         type: string
+      stable_soak_waiver:
+        description: Operator reason for publishing a stable tag from Full Release Validation evidence recorded without soak; leave empty to require soak.
+        required: false
+        default: ""
+        type: string
+      lane_waiver:
+        description: Operator acknowledgement (reason) for publishing from Full Release Validation evidence sealed under an operator lane waiver; required when the manifest carries one.
+        required: false
+        default: ""
+        type: string
       release_evidence_mode:
         description: Publication evidence contract
         required: true
@@ -99,7 +109,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
 
 jobs:
   # PLEASE DON'T ADD LONG-RUNNING OR FLAKY CHECKS TO THE npm RELEASE PATH.
@@ -314,6 +324,8 @@ jobs:
           printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
 
   publish_openclaw_npm:
+    outputs:
+      stable_soak_waiver: ${{ steps.full_manifest.outputs.stable_soak_waiver }}
     # KEEP THE REAL RELEASE/PUBLISH PATH ON A GITHUB-HOSTED RUNNER.
     # npm trusted publishing + provenance requires this to stay on ubuntu-latest.
     needs: [validate_publish_request]
@@ -875,6 +887,10 @@ jobs:
         id: full_manifest
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
         env:
+          STABLE_SOAK_WAIVER: ${{ inputs.stable_soak_waiver }}
+          # A sealed waiver stays authoritative only while the variable still holds it.
+          OPENCLAW_RELEASE_STABLE_SOAK_WAIVER: ${{ vars.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER }}
+          LANE_WAIVER: ${{ inputs.lane_waiver }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |

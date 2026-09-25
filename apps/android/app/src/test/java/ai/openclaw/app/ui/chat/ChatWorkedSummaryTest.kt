@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatAgentActivity
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatMessageProvenance
@@ -41,6 +42,71 @@ class ChatWorkedSummaryTest {
       val timeline = prepareChatHistory(messages, session, mainKey).buildTimeline(0, emptyList(), null)
       assertEquals(listOf("message:final", "worked:final", "message:user"), timeline.items.map(::chatTimelineItemKey))
     }
+  }
+
+  @Test fun foldedOutcomesUseCurrentPreparedFactsInsteadOfStickyRawErrors() {
+    val activity = ChatAgentActivity("tool:c", "tool", "end", "Check draft", toolCallId = "c", status = "failed")
+    val cases =
+      listOf(
+        null to mapOf(WorkedToolOutcome.Failed to 1),
+        emptyList<ChatAgentActivity>() to emptyMap(),
+        listOf(activity) to mapOf(WorkedToolOutcome.Failed to 1),
+        listOf(activity.copy(status = "blocked")) to mapOf(WorkedToolOutcome.Blocked to 1),
+        listOf(activity.copy(status = null)) to mapOf(WorkedToolOutcome.Unknown to 1),
+        listOf(activity.copy(status = "completed")) to emptyMap(),
+        listOf(activity.copy(hideFromChannelProgress = true)) to emptyMap(),
+        listOf(activity.copy(suppressChannelProgress = true)) to emptyMap(),
+      )
+    for ((prepared, expected) in cases) {
+      val call = messages[2].copy(activity = prepared?.let { listOf(activity) })
+      val result =
+        ChatMessage(
+          "result",
+          "toolresult",
+          listOf(ChatMessageContent(type = "toolResult", toolActivity = ChatToolActivity("c", "bash", null, "Earlier error", true))),
+          4000,
+          activity = prepared,
+        )
+      val history = prepareChatHistory(messages.take(2) + call + result + messages.last(), "main", "main")
+      for (expanded in listOf(emptySet(), setOf("final"))) {
+        val timeline = history.buildTimeline(0, emptyList(), null, expandedWorkKeys = expanded)
+        assertEquals(
+          "prepared=$prepared expanded=$expanded",
+          expected,
+          timeline.items
+            .filterIsInstance<ChatTimelineItem.WorkedSummary>()
+            .single()
+            .outcomes,
+        )
+        assertTrue(timeline.items.any { it is ChatTimelineItem.Message && it.message.id == "final" })
+      }
+    }
+  }
+
+  @Test fun foldedMixedToolsKeepRunScopedCountsAndExcludeOtherTurns() {
+    fun mixed(
+      run: String,
+      status: String,
+    ) = message("mixed-$run", "assistant", 3000).copy(
+      runId = run,
+      content = listOf(ChatMessageContent(text = "Checking draft")) + messages[2].content,
+      activity = listOf(ChatAgentActivity("tool:c", "tool", "end", "Check draft", toolCallId = "c", status = status)),
+    )
+    val history =
+      listOf(
+        messages.first(),
+        mixed("first", "failed"),
+        mixed("second", "failed"),
+        message("first-answer", "assistant", 5000).copy(runId = "first", phase = "final_answer"),
+        messages.last().copy(runId = "second"),
+        message("next-user", "user", 150000),
+        mixed("third", "blocked").copy(timestampMs = 160000),
+        message("next-answer", "assistant", 170000).copy(runId = "third"),
+      )
+    val timeline = prepareChatHistory(history, "main", "main").buildTimeline(0, emptyList(), null)
+    val summaries = timeline.items.filterIsInstance<ChatTimelineItem.WorkedSummary>().associateBy { it.key }
+    assertEquals(mapOf(WorkedToolOutcome.Failed to 2), summaries.getValue("final").outcomes)
+    assertEquals(mapOf(WorkedToolOutcome.Blocked to 1), summaries.getValue("next-answer").outcomes)
   }
 
   @Test fun expandingRestoresOriginalOrderWithoutHidingFinalAnswer() {

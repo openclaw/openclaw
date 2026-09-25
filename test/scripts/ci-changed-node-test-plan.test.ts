@@ -65,11 +65,14 @@ import { boundaryTestFiles } from "../vitest/vitest.unit-paths.mjs";
 const CODEX_TEST_PROCESS_FILE_LIMIT = 24;
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const taskBoundaryTest = "src/tasks/task-boundaries.test.ts";
+const gatewayCallsitesGuard = "src/gateway/client-callsites.guard.test.ts";
 
-function materializeTaskBoundaryFixture(cwd: string) {
-  const file = path.join(cwd, taskBoundaryTest);
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, "export {};\n");
+function materializeSourcePolicyFixtures(cwd: string) {
+  for (const target of [gatewayCallsitesGuard, taskBoundaryTest]) {
+    const file = path.join(cwd, target);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, "export {};\n");
+  }
 }
 
 function createErasedCoreSourceFixture() {
@@ -98,7 +101,7 @@ function createErasedCoreSourceFixture() {
     mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
     writeFileSync(path.join(cwd, file), source);
   }
-  materializeTaskBoundaryFixture(cwd);
+  materializeSourcePolicyFixtures(cwd);
   const git = (...args: string[]) =>
     execFileSync(
       "git",
@@ -391,7 +394,7 @@ describe("CI changed Node test plan", () => {
       mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
       writeFileSync(path.join(cwd, file), content);
     }
-    materializeTaskBoundaryFixture(cwd);
+    materializeSourcePolicyFixtures(cwd);
     const options = { cwd, includeReleaseOnlyRuntimeTests: false };
     const helperPlan = createChangedNodeTestShards([helper], options);
     expect(helperPlan).toEqual([
@@ -405,6 +408,7 @@ describe("CI changed Node test plan", () => {
     expect(sourcePlan).not.toBeNull();
     expect(sourcePlan?.flatMap((shard) => shard.targets ?? [])).toEqual([
       ordinary,
+      gatewayCallsitesGuard,
       taskBoundaryTest,
     ]);
     for (const companion of [unknown, "src/infra/deleted.ts"]) {
@@ -416,6 +420,8 @@ describe("CI changed Node test plan", () => {
     "retains directly changed runtime proofs and ordinary dependents with canonical policies (%s)",
     (runnerBackend) => {
       const targets = [
+        "src/agents/agent-bundle-mcp-retention.test.ts",
+        "src/agents/mcp-stdio-client.cleanup.real.test.ts",
         "src/cli/gateway-cli/pre-bootstrap.process.test.ts",
         "src/commands/doctor-config-preflight.refusal.process.test.ts",
         "src/flows/doctor-health.test.ts",
@@ -504,9 +510,11 @@ describe("CI changed Node test plan", () => {
         const selectedEntry = selectedGroup
           ? { kind: "group" as const, name: selectedGroup.shard_name, plan: selectedGroup }
           : { kind: "target" as const, name: target, target };
-        expect(buildChildEnv(selectedEntry, selectedJob.env ?? {}, envScratch, 0)).toEqual(
-          buildChildEnv(ownerEntry, ownerJob.env ?? {}, envScratch, 0),
-        );
+        expect(buildChildEnv(selectedEntry, selectedJob.env ?? {}, envScratch, 0)).toEqual({
+          ...buildChildEnv(ownerEntry, ownerJob.env ?? {}, envScratch, 0),
+          // Repacking changes the label, but every execution policy stays fixed.
+          ...(selectedGroup ? { OPENCLAW_VITEST_SHARD_NAME: selectedGroup.shard_name } : {}),
+        });
         expect(selectedJob.runner).toBe(ownerJob.runner);
         expect(selectedJob.requiresDist).toBe(ownerJob.requiresDist);
         expect(selectedJob.planConcurrency).toBe(ownerJob.planConcurrency);
@@ -1218,33 +1226,39 @@ describe("CI changed Node test plan", () => {
 
   it("routes cron alert sanitization changes through alert policy suites", () => {
     const shards = createChangedNodeTestShards(["src/cron/failure-notification-text.ts"]);
-    const targets = shards?.flatMap((shard) => shard.targets ?? []) ?? [];
+    const targets = selectedFiles(shards);
 
-    expect(targets).toEqual([
-      "src/cron/service.stream-trigger.test.ts",
-      "src/cron/service.stream-validation.test.ts",
-      "src/cron/service/timer.timeout-watchdog.test.ts",
-      taskBoundaryTest,
-    ]);
+    expect(targets.toSorted()).toEqual(
+      [
+        "src/cron/service.stream-trigger.test.ts",
+        "src/cron/service.stream-validation.test.ts",
+        "src/cron/service/timer.timeout-watchdog.test.ts",
+        gatewayCallsitesGuard,
+        taskBoundaryTest,
+      ].toSorted(),
+    );
   });
 
-  it("routes a focused source change into one targeted job", () => {
-    expect(createChangedNodeTestShards(["src/agents/live-provider-owner.ts"])).toEqual([
-      {
-        checkName: "checks-node-changed",
-        configs: [],
-        requiresDist: false,
-        runner: "blacksmith-8vcpu-ubuntu-2404",
-        shardName: "changed",
-        targets: [
-          "src/agents/live-model-dynamic-candidates.test.ts",
-          "src/agents/live-model-filter.test.ts",
-          "src/agents/live-target-matcher.test.ts",
-          "src/agents/model-compat.test.ts",
-          taskBoundaryTest,
-        ],
-      },
-    ]);
+  it("keeps a focused source job beside its canonical source scanner", () => {
+    const shards = createChangedNodeTestShards(["src/agents/live-provider-owner.ts"]);
+    const sourceTargets = [
+      "src/agents/live-model-dynamic-candidates.test.ts",
+      "src/agents/live-model-filter.test.ts",
+      "src/agents/live-target-matcher.test.ts",
+      "src/agents/model-compat.test.ts",
+      taskBoundaryTest,
+    ];
+    expect(selectedFiles(shards).toSorted()).toEqual(
+      [...sourceTargets, gatewayCallsitesGuard].toSorted(),
+    );
+    expect(shards).toContainEqual({
+      checkName: "checks-node-changed",
+      configs: [],
+      requiresDist: false,
+      runner: "blacksmith-8vcpu-ubuntu-2404",
+      shardName: "changed",
+      targets: sourceTargets,
+    });
   });
 
   it.each([
@@ -1337,7 +1351,7 @@ describe("CI changed Node test plan", () => {
           file === target ? 'import "../../fixture.js";\nexport {};\n' : "export {};\n",
         );
       }
-      materializeTaskBoundaryFixture(cwd);
+      materializeSourcePolicyFixtures(cwd);
       for (const file of unrelated) {
         const before = createChangedNodeTestShards([file], { cwd });
         // General E2E and unknown channel patterns keep their exact owner;
@@ -1356,9 +1370,12 @@ describe("CI changed Node test plan", () => {
       const dedicatedContractShards = [{ task: "contracts-plugins", includePatterns: [target] }];
       expect(
         createChangedNodeTestShards([source], { cwd })?.flatMap((shard) => shard.targets ?? []),
-      ).toEqual([target, taskBoundaryTest]);
+      ).toEqual([target, gatewayCallsitesGuard, taskBoundaryTest]);
       expect(createChangedNodeTestShards([source], { cwd, dedicatedContractShards })).toEqual([
-        expect.objectContaining({ targets: [taskBoundaryTest], requiresDist: false }),
+        expect.objectContaining({
+          targets: [gatewayCallsitesGuard, taskBoundaryTest],
+          requiresDist: false,
+        }),
       ]);
     } finally {
       rmSync(cwd, { force: true, recursive: true });
@@ -1609,7 +1626,7 @@ describe("CI changed Node test plan", () => {
     ["ui/src/pages/chat/chat-gateway.test.ts", false],
     ["packages/gateway-client/src/index.ts", true],
     ["pnpm-lock.yaml", true],
-    ["patches/@awesome.me__webawesome@3.12.0.patch", true],
+    ["patches/@awesome.me__webawesome@3.13.0.patch", true],
     [".npmrc", true],
     ["scripts/check-control-ui-performance-base.mts", true],
     ["scripts/lib/control-ui-i18n-config.ts", true],
@@ -1900,10 +1917,12 @@ describe("CI changed Node test plan", () => {
       return cwd;
     };
     const cwd = createFixture();
-    materializeTaskBoundaryFixture(cwd);
+    materializeSourcePolicyFixtures(cwd);
     const shards = createChangedNodeTestShards([source], { cwd });
     expect(shards).not.toBeNull();
-    expect(selectedFiles(shards).toSorted()).toEqual([consumer, taskBoundaryTest].toSorted());
+    expect(selectedFiles(shards).toSorted()).toEqual(
+      [consumer, gatewayCallsitesGuard, taskBoundaryTest].toSorted(),
+    );
     expect(createChangedNodeTestShards([unowned], { cwd })).toBeNull();
     expect(createChangedNodeTestShards([source, unowned], { cwd })).toBeNull();
     expect(createChangedNodeTestShards([source], { cwd: createFixture() })).toBeNull();
@@ -1939,7 +1958,7 @@ describe("CI changed Node test plan", () => {
     for (const source of ["src/example/entry.ts", "src/example/new-entry.ts"]) {
       const shards = createChangedNodeTestShards([source], options);
       expect(shards, source).not.toBeNull();
-      expect(selectedFiles(shards), source).toEqual([taskBoundaryTest]);
+      expect(selectedFiles(shards), source).toEqual([gatewayCallsitesGuard, taskBoundaryTest]);
     }
     const shards = createChangedNodeTestShards(
       [
@@ -1958,6 +1977,7 @@ describe("CI changed Node test plan", () => {
         "src/example/import-consumer.test.ts",
         "src/example/runtime-consumer.test.ts",
         "src/example/source-reader.test.ts",
+        gatewayCallsitesGuard,
         taskBoundaryTest,
       ].toSorted(),
     );
@@ -2009,7 +2029,7 @@ describe("CI changed Node test plan", () => {
         mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
         writeFileSync(path.join(cwd, file), source);
       }
-      materializeTaskBoundaryFixture(cwd);
+      materializeSourcePolicyFixtures(cwd);
       const reasons: string[] = [];
       const shards = createChangedNodeTestShards(
         [".github/actionlint.yaml", "src/example/runtime.ts"],
@@ -2019,6 +2039,7 @@ describe("CI changed Node test plan", () => {
       expect(selectedFiles(shards).toSorted()).toEqual(
         [
           "src/example/runtime-consumer.test.ts",
+          gatewayCallsitesGuard,
           taskBoundaryTest,
           ...(withConfigConsumer ? ["src/example/actionlint-reader.test.ts"] : []),
         ].toSorted(),
@@ -2053,7 +2074,7 @@ describe("CI changed Node test plan", () => {
         mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
         writeFileSync(path.join(cwd, file), source);
       }
-      materializeTaskBoundaryFixture(cwd);
+      materializeSourcePolicyFixtures(cwd);
       const dedicatedNativeChecks = { macos: true, ios: true, android: true };
       const reasons: string[] = [];
       const options = {
@@ -2063,6 +2084,7 @@ describe("CI changed Node test plan", () => {
       };
       const expected = [
         runtimeConsumer,
+        gatewayCallsitesGuard,
         taskBoundaryTest,
         ...(withSourceReader ? [sourceReader] : []),
       ].toSorted();
@@ -2133,12 +2155,79 @@ describe("CI changed Node test plan", () => {
     ).toBeNull();
   });
 
-  it("keeps product-only policy watches out of deferred tooling", () => {
-    const shards = createChangedNodeTestShards(["src/auto-reply/reply/abort.test.ts"], {
-      includeReleaseOnlyToolingShards: false,
-    });
+  it.each([
+    {
+      changedPath: "src/auto-reply/reply/abort.test.ts",
+      expected: ["test/scripts/tsgo-core-test-shards.test.ts"],
+    },
+    {
+      changedPath: "src/plugins/plugin-instance.ts",
+      expected: [
+        "test/scripts/eager-import-closure.test.ts",
+        "test/scripts/pr-worktree-provision.test.ts",
+      ],
+    },
+    {
+      changedPath: "scripts/e2e/lib/upgrade-survivor/run.sh",
+      expected: [
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/upgrade-survivor-missing-load-path.test.ts",
+      ],
+    },
+  ])(
+    "retains explicit policy guards for $changedPath in automatic CI",
+    ({ changedPath, expected }) => {
+      const importer = "src/agents/live-model-filter.test.ts";
+      const deferred = "src/state/openclaw-database-preflight.lifecycle.test.ts";
+      const consumers = [importer, deferred];
+      // Bound graph discovery while retaining the real watch inventory and execution owners.
+      vi.spyOn(testProjects, "resolveAffectedTestsFromImportGraph").mockImplementation((paths) =>
+        paths.length ? consumers : [],
+      );
+      vi.spyOn(testProjects, "resolveChangedTestTargetPlan").mockReturnValue({
+        mode: "targets",
+        targets: consumers,
+      });
+      vi.spyOn(testProjects, "hasImportGraphImpactOnTargets").mockReturnValue(false);
+      vi.spyOn(testProjects, "hasImportGraphConsumers").mockReturnValue(false);
+      try {
+        const reasons: string[] = [];
+        const shards = createChangedNodeTestShards([changedPath], {
+          runnerBackend: "github",
+          includeReleaseOnlyToolingShards: false,
+          includeReleaseOnlyRuntimeTests: false,
+          onFallback: (reason) => reasons.push(reason),
+        });
+        expect(shards, reasons.join("\n")).not.toBeNull();
+        const files = selectedFiles(shards);
+        for (const guard of expected) {
+          expect(files.filter((file) => file === guard)).toHaveLength(1);
+        }
+        expect(files).toContain(importer);
+        expect(files).not.toContain(deferred);
+        expect(files).not.toContain("test/scripts/mobile-release-authority.test.ts");
+        expect(files.some(isCiProofTestFile)).toBe(false);
+      } finally {
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
+  it("keeps the Gateway callsite scanner beside extension source importers", () => {
+    const cwd = argvTempDirs.make("changed-extension-scanner-");
+    const source = "extensions/example/src/runtime.ts";
+    const importer = "src/infra/extension-consumer.test.ts";
+    for (const [file, content] of [
+      [source, "export {};\n"],
+      [importer, `import "../../${source}";\n`],
+      [gatewayCallsitesGuard, "export {};\n"],
+    ] as const) {
+      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+      writeFileSync(path.join(cwd, file), content);
+    }
+    const shards = createChangedNodeTestShards([source], { cwd });
     expect(shards).not.toBeNull();
-    expect(selectedFiles(shards)).not.toContain("test/scripts/tsgo-core-test-shards.test.ts");
+    expect(selectedFiles(shards).toSorted()).toEqual([gatewayCallsitesGuard, importer].toSorted());
   });
 
   it.each([
@@ -2168,11 +2257,13 @@ describe("CI changed Node test plan", () => {
       mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
       writeFileSync(path.join(cwd, file), source);
     }
-    materializeTaskBoundaryFixture(cwd);
+    materializeSourcePolicyFixtures(cwd);
     const shards = createChangedNodeTestShards([fixture.source], { cwd });
     expect(shards).not.toBeNull();
     expect(selectedFiles(shards)).toEqual(
-      fixture.source.startsWith("src/") ? [target, taskBoundaryTest] : [target],
+      fixture.source.startsWith("src/")
+        ? [target, gatewayCallsitesGuard, taskBoundaryTest]
+        : [target],
     );
   });
 
@@ -2845,6 +2936,34 @@ describe("CI changed Node test plan", () => {
     });
   });
 
+  it.each([1, 13])("prepares generic E2E targets across %s files", (fileCount) => {
+    const cwd = argvTempDirs.make("changed-e2e-preparation-");
+    const targets = Array.from(
+      { length: fileCount },
+      (_, index) => `src/example/case-${String(index).padStart(2, "0")}.e2e.test.ts`,
+    );
+    for (const target of targets) {
+      mkdirSync(path.dirname(path.join(cwd, target)), { recursive: true });
+      writeFileSync(path.join(cwd, target), "export {};\n");
+    }
+    const gitOptions = { cwd, env: createNestedGitEnv() };
+    execFileSync("git", ["init", "-q"], gitOptions);
+    execFileSync("git", ["add", "--", ...targets], gitOptions);
+    const shards = createChangedNodeTestShards(targets, { cwd })?.filter((shard) => shard.targets);
+    expect(shards).toHaveLength(Math.ceil(fileCount / 12));
+    expect(shards?.flatMap((shard) => shard.targets ?? [])).toEqual(targets);
+    for (const shard of shards ?? []) {
+      expect(shard).toMatchObject({
+        configs: [],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        pretestBuildMode: "private-qa",
+      });
+      expect(shard.targets!.length).toBeLessThanOrEqual(12);
+      expect(shard.planConcurrency).toBeUndefined();
+    }
+  });
+
   it("retains delivery-cache coverage and private QA preparation", () => {
     const target = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
     expect(resolveChangedTestTargetPlan([target]).targets).toEqual([
@@ -2981,7 +3100,7 @@ describe("CI changed Node test plan", () => {
       mkdirSync(path.join(cwd, "src"));
       writeFileSync(path.join(cwd, "src/value.ts"), "export const value = 1;\n");
       writeFileSync(path.join(cwd, "src/unrelated.test.ts"), "export const unrelated = true;\n");
-      materializeTaskBoundaryFixture(cwd);
+      materializeSourcePolicyFixtures(cwd);
       expect(createChangedNodeTestShards(["src/value.ts"], { cwd })).toBeNull();
       writeFileSync(path.join(cwd, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
       const dependencies = vi
