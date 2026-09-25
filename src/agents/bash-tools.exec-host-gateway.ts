@@ -671,9 +671,9 @@ export async function processGatewayAllowlist(
   const requiresSecurityAuditSuppressionApproval =
     commandRequiresSecurityAuditSuppressionApproval({
       command: params.command,
-      cwd: params.workdir,
+      trustedSafeBinDirs: params.trustedSafeBinDirs,
       env: params.env,
-      segments: allowlistEval.segments,
+      ...allowlistEval,
     }) && !(hostSecurity === "full" && hostAsk === "off");
   const policyRequiresAsk =
     requiresExecApproval({

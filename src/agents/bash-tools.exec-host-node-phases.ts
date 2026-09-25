@@ -549,7 +549,8 @@ export async function analyzeNodeApprovalRequirement(params: {
         command: entry.command,
         cwd: entry.cwd,
         env: analysisEnv,
-        segments: entry.allowlistEval.segments,
+        ...entry.allowlistEval,
+        deferReaderTrustToNode: true,
       }),
     ) && !(params.hostSecurity === "full" && params.hostAsk === "off");
   if (

@@ -388,3 +388,51 @@ export function detectCarriedShellBuiltinArgv(argv: string[]): CarriedShellBuilt
   }
   return null;
 }
+
+export function hasUnquotedShellExpansionSource(value: string): boolean {
+  let quote: "single" | "double" | null = null;
+  let escaped = false;
+  let atWordStart = true;
+  for (const char of value) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quote !== "single" && char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote === "single") {
+      if (char === "'") {
+        quote = null;
+      }
+      continue;
+    }
+    if (quote === "double") {
+      if (char === '"') {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "'") {
+      quote = "single";
+      continue;
+    }
+    if (char === '"') {
+      quote = "double";
+      continue;
+    }
+    if (/\s/u.test(char)) {
+      atWordStart = true;
+      continue;
+    }
+    if (char === "~" && atWordStart) {
+      return true;
+    }
+    if (char === "{" || char === "*" || char === "?" || char === "[") {
+      return true;
+    }
+    atWordStart = false;
+  }
+  return false;
+}

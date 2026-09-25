@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 /** Resolves system.run allowlist matches, argv plans, and truncated command output. */
 import {
   analyzeArgvCommand,
+  commandRequiresSecurityAuditSuppressionApproval,
   evaluateExecAllowlist,
   evaluateShellAllowlistWithAuthorization,
   resolvePlannedSegmentArgv,
@@ -12,10 +13,15 @@ import {
   type ExecSecurity,
   type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
-import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
+import {
+  planExecAuthorization,
+  type ExecAuthorizationPlan,
+} from "../infra/exec-authorization-plan.js";
 import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
+import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
+  hasPosixShellStartupBeforeInlineCommand,
   normalizeExecutableToken,
   POSIX_PARSEABLE_SHELL_WRAPPERS,
   POSIX_SHELL_WRAPPERS,
@@ -25,6 +31,7 @@ import {
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
 } from "../infra/shell-inline-command.js";
+import { formatExecCommand } from "../infra/system-run-command.js";
 import type { RunResult } from "./invoke-types.js";
 
 /**
@@ -100,6 +107,13 @@ export async function evaluateSystemRunAllowlist(params: {
     autoAllowSkills: params.autoAllowSkills,
   });
   return {
+    authorizationPlan: await planExecAuthorization({
+      analysis,
+      command: formatExecCommand(params.argv),
+      cwd: params.cwd,
+      env: params.env,
+      platform: process.platform,
+    }),
     analysisOk: analysis.ok,
     allowlistMatches: allowlistEval.allowlistMatches,
     allowlistSatisfied:
@@ -109,6 +123,31 @@ export async function evaluateSystemRunAllowlist(params: {
     segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
     segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
   };
+}
+
+/** The node owns actual reader and shell-transport identity, not Gateway preflight. */
+export function requiresSystemRunSuppressionApproval(params: {
+  argv: string[];
+  commandText: string;
+  commandPreview: string | null;
+  cwd?: string;
+  env?: Record<string, string>;
+  trustedSafeBinDirs: ReadonlySet<string>;
+  analysis: SystemRunAllowlistAnalysis;
+}): boolean {
+  return commandRequiresSecurityAuditSuppressionApproval({
+    ...params.analysis,
+    command: hasPosixShellStartupBeforeInlineCommand(params.argv)
+      ? params.commandText
+      : (params.commandPreview ?? params.commandText),
+    env: params.env,
+    trustedSafeBinDirs: params.trustedSafeBinDirs,
+    originalArgv: params.argv,
+    transportExecutable:
+      params.commandPreview === null
+        ? undefined
+        : resolveCommandResolutionFromArgv(params.argv, params.cwd, params.env)?.execution,
+  });
 }
 
 /** Resolve the single planned argv that can replace the caller argv after allowlist approval. */

@@ -111,7 +111,7 @@ Accept intentional standing findings with `security.audit.suppressions`. Each su
 
 Suppressed findings are removed from the active `summary` and `findings` list. JSON output keeps them under `suppressedFindings` for auditability. When suppressions are configured, active output also keeps an unsuppressible `security.audit.suppressions.active` info finding so readers can tell the audit was filtered. Dangerous config flags are emitted one flag per finding, so accepting one dangerous flag does not hide other enabled flags that share the same `config.insecure_or_dangerous_flags` checkId.
 
-Because suppressions can hide standing risk, adding or removing them through agent-run shell commands requires exec approval unless exec is already running with `security="full"` and `ask="off"` for trusted local automation.
+Because suppressions can hide standing risk, adding or removing them through agent-run shell commands requires exec approval unless exec is already running with `security="full"` and `ask="off"` for trusted local automation. Recognized read-only file inspections, such as `rg 'security.audit.suppressions' src`, are exempt only when their executable paths satisfy the existing `tools.exec.safeBinTrustedDirs` policy. Unknown file-reader executables stay approval-gated. Direct `openclaw config get/schema/validate` commands retain their existing exemption. Ordinary exec and node policies still apply; mixed writes, redirections, executable-bearing options, shell startup, and uncertain analysis keep the extra gate. A read-only payload inside a login or interactive shell is not enough: startup files can write before the payload, so those transports still require approval.
 
 ## JSON output
 

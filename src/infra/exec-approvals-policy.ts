@@ -1,3 +1,4 @@
+import { hasUnquotedShellExpansionSource } from "./command-analysis/risks.js";
 import type { AllowAlwaysPersistenceDecision } from "./exec-approvals-contracts.js";
 // Resolves exec approval requirements and approval-decision availability.
 import {
@@ -7,6 +8,11 @@ import {
   type ExecAsk,
   type ExecSecurity,
 } from "./exec-approvals-core.js";
+import type { ExecAuthorizationPlan } from "./exec-authorization-plan.js";
+import { parseExecArgvToken, type ExecutableResolution } from "./exec-command-resolution.js";
+import { getTrustedSafeBinDirs, isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
+import { resolveEnvironmentValue } from "./process-env.js";
+import { tokenizeWindowsSegment } from "./windows-shell-command.js";
 
 export function requiresExecApproval(params: {
   ask: ExecAsk;
@@ -74,19 +80,89 @@ function isReadOnlySecurityAuditSuppressionInspection(argv: string[]): boolean {
   );
 }
 
-function removeParsedSegmentText(
-  command: string,
-  segments: Array<{ argv?: string[]; raw?: string }>,
-): string {
-  let remaining = command;
-  for (const segment of segments) {
-    const raw = (segment.raw ?? segment.argv?.join(" "))?.trim();
-    if (!raw) {
+// These are inspection semantics, not an exec allowlist. Unknown options stay
+// approval-gated; in particular rg can launch programs via --pre/--hostname-bin
+// or decompression. Do not infer read-only behavior from an executable grant.
+const RIPGREP_INSPECTION_OPTIONS = {
+  boolean:
+    "-n -N -l -L -i -s -S -F -w -x -v -c -q -o -H -I -a -U -u -uu -uuu --hidden --files --no-ignore --no-ignore-vcs --fixed-strings --line-number --files-with-matches --files-without-match --count --only-matching --no-heading --heading --json --no-config --no-messages --follow",
+  value:
+    "-e -f -g -t -T -m -A -B -C --regexp --file --glob --iglob --type --type-not --max-count --after-context --before-context --context --max-depth --encoding --color --sort --sortr",
+};
+
+function isInspectionArgv(argv: string[], env?: NodeJS.ProcessEnv): boolean {
+  if (isReadOnlySecurityAuditSuppressionInspection(argv)) {
+    return true;
+  }
+  const command = normalizeCommandName(argv[0]);
+  if (command === "sed") {
+    // Only a print-only script followed by filenames, never -e/-f/-i or scripts
+    // that can write files or launch commands.
+    return (
+      argv[1] === "-n" &&
+      /^(\d+|\$)(,(\d+|\$))?p$/.test(argv[2] ?? "") &&
+      argv.slice(3).every((arg) => !arg.startsWith("-"))
+    );
+  }
+  if (["cat", "grep", "head", "tail", "wc"].includes(command)) {
+    return true;
+  }
+  if (command !== "rg") {
+    return false;
+  }
+  const booleanFlags = new Set(RIPGREP_INSPECTION_OPTIONS.boolean.split(" "));
+  const valueFlags = new Set(RIPGREP_INSPECTION_OPTIONS.value.split(" "));
+  let noRipgrepConfig = false;
+  for (let i = 1; i < argv.length; i += 1) {
+    const token = parseExecArgvToken(argv[i] ?? "");
+    if (token.kind === "terminator") {
+      break;
+    }
+    if (token.kind !== "option") {
       continue;
     }
-    remaining = remaining.replace(raw, " ");
+    if (token.style === "long") {
+      if (valueFlags.has(token.flag)) {
+        if (token.inlineValue === undefined && ++i >= argv.length) {
+          return false;
+        }
+      } else if (!booleanFlags.has(token.flag) || token.inlineValue !== undefined) {
+        return false;
+      } else if (token.flag === "--no-config") {
+        noRipgrepConfig = true;
+      }
+      continue;
+    }
+    for (const [index, flag] of token.flags.entries()) {
+      if (valueFlags.has(flag)) {
+        if (index === token.flags.length - 1 && ++i >= argv.length) {
+          return false;
+        }
+        break;
+      }
+      if (!booleanFlags.has(flag)) {
+        return false;
+      }
+    }
   }
-  return remaining;
+  return (
+    noRipgrepConfig ||
+    !(
+      resolveEnvironmentValue(env, "RIPGREP_CONFIG_PATH") ??
+      resolveEnvironmentValue(process.env, "RIPGREP_CONFIG_PATH")
+    )
+  );
+}
+
+function isTrustedInspectionExecutable(
+  executable: ExecutableResolution | undefined,
+  trustedDirs?: ReadonlySet<string>,
+): boolean {
+  const dirs =
+    trustedDirs ?? getTrustedSafeBinDirs({ safeBins: [executable?.executableName ?? ""] });
+  return [executable?.resolvedPath, executable?.resolvedRealPath].every(
+    (resolvedPath) => resolvedPath && isTrustedSafeBinPath({ resolvedPath, trustedDirs: dirs }),
+  );
 }
 
 export function commandRequiresSecurityAuditSuppressionApproval(params: {
@@ -94,26 +170,73 @@ export function commandRequiresSecurityAuditSuppressionApproval(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   segments: Array<{ argv: string[]; raw?: string }>;
+  originalArgv?: string[];
+  analysisOk?: boolean;
+  authorizationPlan?: ExecAuthorizationPlan;
+  trustedSafeBinDirs?: ReadonlySet<string>;
+  transportExecutable?: ExecutableResolution;
+  /** Remote preflight cannot resolve node executables; the node checks trust at dispatch. */
+  deferReaderTrustToNode?: boolean;
 }): boolean {
-  let sawSegmentMention = false;
-  for (const segment of params.segments) {
-    const segmentText = `${segment.raw ?? ""} ${segment.argv.join(" ")}`;
-    if (!textMentionsSecurityAuditSuppressions(segmentText)) {
-      continue;
-    }
-    sawSegmentMention = true;
-    if (!isReadOnlySecurityAuditSuppressionInspection(segment.argv)) {
-      return true;
-    }
-  }
-  if (sawSegmentMention) {
-    const unparsedText = removeParsedSegmentText(params.command, params.segments);
-    if (textMentionsSecurityAuditSuppressions(unparsedText)) {
-      return true;
-    }
+  if (
+    !textMentionsSecurityAuditSuppressions(params.command) &&
+    !textMentionsSecurityAuditSuppressions(params.originalArgv?.join(" ") ?? "") &&
+    !params.segments.some((segment) =>
+      textMentionsSecurityAuditSuppressions(segment.argv.join(" ")),
+    )
+  ) {
     return false;
   }
-  return textMentionsSecurityAuditSuppressions(params.command);
+  if (
+    params.transportExecutable &&
+    !params.deferReaderTrustToNode &&
+    !isTrustedInspectionExecutable(params.transportExecutable, params.trustedSafeBinDirs)
+  ) {
+    return true;
+  }
+  const plan = params.authorizationPlan;
+  if (plan === undefined) {
+    // Windows supplies complete shell analysis, not a POSIX authorization plan.
+    // Preserve direct config reads only: a stripped PowerShell wrapper may have
+    // -File or other flags that execute something other than the parsed payload.
+    const [segment] = params.segments;
+    return !(
+      params.analysisOk === true &&
+      params.segments.length === 1 &&
+      segment?.raw === params.command &&
+      isReadOnlySecurityAuditSuppressionInspection(tokenizeWindowsSegment(params.command) ?? [])
+    );
+  }
+  if (!plan.ok || plan.originalCommand !== params.command || plan.groups.length === 0) {
+    return true;
+  }
+  // A parsed prefix or a reader feeding a writer cannot exempt the whole command.
+  return !plan.groups.every(
+    (group) =>
+      group.candidates.length > 0 &&
+      group.candidates.every((candidate) => {
+        const argv = candidate.sourceSegment.sourceArgv ?? candidate.sourceSegment.argv;
+        const execution = candidate.sourceSegment.resolution?.execution;
+        const transport =
+          candidate.transport.kind === "shell-wrapper"
+            ? candidate.transport.wrapperSegment.resolution?.execution
+            : undefined;
+        return (
+          candidate.trustMode === "executable" &&
+          candidate.reasons.every((reason) => reason === "inline-eval") &&
+          ((plan.dialect === "argv" && candidate.transport.kind === "direct") ||
+            !hasUnquotedShellExpansionSource(candidate.sourceStep.text)) &&
+          isInspectionArgv(argv, params.env) &&
+          (params.deferReaderTrustToNode ||
+            !transport ||
+            isTrustedInspectionExecutable(transport, params.trustedSafeBinDirs)) &&
+          (isReadOnlySecurityAuditSuppressionInspection(argv) ||
+            params.deferReaderTrustToNode ||
+            (isTrustedInspectionExecutable(execution, params.trustedSafeBinDirs) &&
+              normalizeCommandName(argv[0]) === normalizeCommandName(execution?.resolvedRealPath)))
+        );
+      }),
+  );
 }
 
 export function minSecurity(a: ExecSecurity, b: ExecSecurity): ExecSecurity {

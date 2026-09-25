@@ -29,6 +29,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../infra/diagnostic-events.js";
+import { evaluateShellAllowlistWithAuthorization as evaluateRealShellAllowlist } from "../infra/exec-approvals-allowlist.js";
 import type {
   ExecAllowlistEntry,
   ExecApprovalDecision,
@@ -2531,62 +2532,53 @@ Command: ${command}`;
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
   });
 
-  it("does not require suppression edit approval for read-only suppression inspection", async () => {
-    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
-      allowlistMatches: [],
-      analysisOk: true,
-      allowlistSatisfied: true,
-      segments: [
-        { resolution: null, argv: ["openclaw", "config", "get", "security.audit.suppressions"] },
-      ],
-      segmentAllowlistEntries: [],
-      segmentSatisfiedBy: [null],
-    });
-    resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "full",
-      hostAsk: "on-miss",
-      askFallback: "deny",
-    });
-
-    await runGatewayAllowlist({
-      command: "openclaw config get security.audit.suppressions",
-      security: "full",
-      ask: "on-miss",
-    });
-
-    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
-  });
-
-  it("does not require suppression edit approval for profile-scoped read-only inspection", async () => {
-    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
-      allowlistMatches: [],
-      analysisOk: true,
-      allowlistSatisfied: true,
-      segments: [
-        {
-          resolution: null,
-          argv: ["openclaw", "--profile", "rescue", "config", "get", "security.audit.suppressions"],
-        },
-      ],
-      segmentAllowlistEntries: [],
-      segmentSatisfiedBy: [null],
-    });
-    resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "full",
-      hostAsk: "on-miss",
-      askFallback: "deny",
-    });
-
-    await runGatewayAllowlist({
-      command: "openclaw --profile rescue config get security.audit.suppressions",
-      security: "full",
-      ask: "on-miss",
-    });
-
-    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["openclaw config get security.audit.suppressions", false, process.platform],
+    ["openclaw --profile rescue config get security.audit.suppressions", false, process.platform],
+    ["openclaw config get security.audit.suppressions", false, "win32"],
+    ["pnpm openclaw --profile rescue config schema security.audit.suppressions", false, "win32"],
+    ["openclaw config set security.audit.suppressions []", true, "win32"],
+    ["openclaw config get security.audit.suppressions > openclaw.json", true, "win32"],
+    ["openclaw config get security.audit.suppressions; whoami", true, "win32"],
+    ...(process.platform === "win32"
+      ? []
+      : ([
+          ["grep security.audit.suppressions src | head -n 10", false, process.platform],
+          ["grep security.audit.suppressions src | tee openclaw.json", true, process.platform],
+          ["grep security.audit.suppressions src > openclaw.json", true, process.platform],
+        ] as const)),
+  ] as const)(
+    "handles suppression inspection through Gateway policy: %s (blocked=%s, platform=%s)",
+    async (command, blocked, platform) => {
+      evaluateShellAllowlistWithAuthorizationMock.mockReturnValue(
+        await evaluateRealShellAllowlist({
+          command,
+          allowlist: [],
+          safeBins: new Set(),
+          platform,
+        }),
+      );
+      resolveExecHostApprovalContextMock.mockReturnValue({
+        approvals: { allowlist: [], file: { version: 1, agents: {} } },
+        hostSecurity: "full",
+        hostAsk: "on-miss",
+        askFallback: "deny",
+      });
+      const result = await runGatewayAllowlist({
+        command,
+        security: "full",
+        ask: "on-miss",
+        autoReview: true,
+      });
+      expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+      expect(result.deniedResult?.details.status, JSON.stringify(result.deniedResult)).toBe(
+        blocked ? "failed" : undefined,
+      );
+      if (!blocked) {
+        expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("requires suppression edit approval when a mutating segment follows read-only inspection", async () => {
     evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
