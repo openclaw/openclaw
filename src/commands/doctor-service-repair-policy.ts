@@ -3,7 +3,11 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
+import {
+  formatExternalSupervisorActionRequired,
+  isGatewayExternallySupervised,
+} from "../infra/gateway-supervision.js";
+import type { SupervisorDisplayGuidance } from "../plugins/supervisor-guidance.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   UPDATE_IN_PROGRESS_ENV,
@@ -100,10 +104,13 @@ export function isServiceRepairDeferred(
 
 export function formatServiceRepairDeferredNote(
   policy: ServiceRepairPolicy = resolveServiceRepairPolicy(),
+  guidance?: SupervisorDisplayGuidance,
 ): string {
   return policy === "update"
     ? "Gateway service repair deferred to update finalization; Doctor left its definition and activation unchanged."
-    : EXTERNAL_SERVICE_REPAIR_NOTE;
+    : guidance
+      ? `${EXTERNAL_SERVICE_REPAIR_NOTE} ${formatExternalSupervisorActionRequired("repair the gateway service", guidance)}`
+      : EXTERNAL_SERVICE_REPAIR_NOTE;
 }
 
 /** Confirms a service repair only when Doctor owns publication and activation. */

@@ -193,3 +193,17 @@
     grid-template-columns: 1fr;
   }
 }
+
+.external-supervisor-guidance .exec-approval-command {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  white-space: normal;
+}
+
+.external-supervisor-guidance code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}

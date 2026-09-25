@@ -1,6 +1,7 @@
 // Defines gateway lifecycle ownership shared by service, restart, and update paths.
 import { isDefaultInstallIdentity, resolveNativeServiceProfileConflict } from "../config/paths.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
+import type { SupervisorDisplayGuidance } from "../plugins/supervisor-guidance.js";
 
 const GATEWAY_SUPERVISOR_MODE_ENV = "OPENCLAW_SUPERVISOR_MODE";
 export const EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON = "external-supervisor-update-required";
@@ -11,14 +12,31 @@ export function isGatewayExternallySupervised(env: NodeJS.ProcessEnv = process.e
   return env[GATEWAY_SUPERVISOR_MODE_ENV]?.trim().toLowerCase() === "external";
 }
 
-export function formatExternalSupervisorActionRequired(action: string): string {
+export function formatExternalSupervisorActionRequired(
+  action: string,
+  guidance?: SupervisorDisplayGuidance,
+): string {
+  if (guidance) {
+    return [
+      `OpenClaw gateway lifecycle is managed by ${guidance.name} (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
+      formatSupervisorCommand(guidance),
+    ].join("\n");
+  }
   return [
     `OpenClaw gateway lifecycle is managed by an external supervisor (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
     `Use that supervisor to ${action}.`,
   ].join(" ");
 }
 
-export function formatExternalSupervisorUpdateRequired(): string {
+export function formatExternalSupervisorUpdateRequired(
+  guidance?: SupervisorDisplayGuidance,
+): string {
+  if (guidance) {
+    return [
+      `OpenClaw self-update is disabled while gateway lifecycle is managed by ${guidance.name} (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
+      formatSupervisorCommand(guidance),
+    ].join("\n");
+  }
   return [
     `OpenClaw self-update is disabled while gateway lifecycle is managed by an external supervisor (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,
     "Use the external supervisor's update workflow so it can stop the gateway, update and finalize the runtime, then restart it safely.",
@@ -28,9 +46,10 @@ export function formatExternalSupervisorUpdateRequired(): string {
 export function assertGatewayServiceMutationAllowed(
   action: string,
   env: NodeJS.ProcessEnv = process.env,
+  guidance?: SupervisorDisplayGuidance,
 ): void {
   if (isGatewayExternallySupervised(env)) {
-    throw new Error(formatExternalSupervisorActionRequired(action));
+    throw new Error(formatExternalSupervisorActionRequired(action, guidance));
   }
   const conflictingProfile = resolveNativeServiceProfileConflict(env);
   if (conflictingProfile) {
@@ -62,11 +81,18 @@ export function assertGatewayServiceMutationAllowed(
 export function resolveGatewayServiceMutationError(
   action: string,
   env: NodeJS.ProcessEnv = process.env,
+  guidance?: SupervisorDisplayGuidance,
 ): Error | null {
   try {
-    assertGatewayServiceMutationAllowed(action, env);
+    assertGatewayServiceMutationAllowed(action, env, guidance);
     return null;
   } catch (error) {
     return error instanceof Error ? error : new Error(String(error));
   }
+}
+
+function formatSupervisorCommand(guidance: SupervisorDisplayGuidance): string {
+  const action = guidance.action.charAt(0).toUpperCase() + guidance.action.slice(1);
+  const location = guidance.runFrom ? ` (${guidance.runFrom})` : "";
+  return `${action}${location}: ${guidance.command}`;
 }

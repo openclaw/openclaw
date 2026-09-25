@@ -58,6 +58,7 @@ import {
 } from "../../infra/host-env-security.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
+import { resolveExternalSupervisorGuidance } from "../../plugins/supervisor-guidance-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
@@ -173,7 +174,11 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   let definitionBackup: GatewayServiceDefinitionBackupReceipt | undefined;
   const { json, stdout, warnings, warn, emit, emitMessage, fail } =
     createDaemonInstallActionContext(opts.json, () => definitionBackup);
-  const installBlock = resolveDaemonInstallBlockMessage("gateway");
+  const installBlock = resolveDaemonInstallBlockMessage(
+    "gateway",
+    process.env,
+    await resolveExternalSupervisorGuidance("install"),
+  );
   if (installBlock) {
     fail(installBlock);
     return;

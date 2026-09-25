@@ -1115,6 +1115,7 @@ src/plugins/sdk-alias.ts
 src/plugins/setup-descriptors.ts
 src/plugins/setup-presentation-url.ts
 src/plugins/slots.ts
+src/plugins/supervisor-guidance.ts
 src/plugins/status-dependencies-core.ts
 src/plugins/toggle-config.ts
 src/plugins/web-search-install-catalog.ts

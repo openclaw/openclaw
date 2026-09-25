@@ -8,11 +8,13 @@ import {
 } from "../../daemon/constants.js";
 import { resolveDaemonContainerContext } from "../../daemon/container-context.js";
 import { buildPlatformServiceStartHints } from "../../daemon/runtime-hints.js";
+import "../../daemon/runtime-format.js";
 import type { GatewayServiceInstallationDrift } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-user-transport.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
+import type { SupervisorDisplayGuidance } from "../../plugins/supervisor-guidance.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { createDaemonActionContext } from "./response.js";
@@ -42,6 +44,7 @@ export function createDaemonInstallActionContext(
 export function resolveDaemonInstallBlockMessage(
   service: "gateway" | "node",
   env: NodeJS.ProcessEnv = process.env,
+  guidance?: SupervisorDisplayGuidance,
 ): string | undefined {
   if (resolveIsNixMode(env)) {
     return "Nix mode detected; service install is disabled.";
@@ -53,6 +56,7 @@ export function resolveDaemonInstallBlockMessage(
   const mutationError = resolveGatewayServiceMutationError(
     "install or rewrite the gateway service",
     env,
+    guidance,
   );
   if (mutationError) {
     return `Gateway install blocked: ${String(mutationError)}`;

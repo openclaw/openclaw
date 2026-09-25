@@ -383,3 +383,12 @@ export type SystemAgentSetupVerifyResult =
 export type WizardNextResult =
   import("../../../packages/gateway-protocol/src/schema.js").WizardNextResult;
 export type WizardStep = import("../../../packages/gateway-protocol/src/schema.js").WizardStep;
+
+/** Current deployment guidance supplied by the authenticated Gateway. */
+export type ExternalSupervisorGuidance = {
+  version: 1;
+  action: "update";
+  name: string;
+  runFrom?: string;
+  command: string;
+};

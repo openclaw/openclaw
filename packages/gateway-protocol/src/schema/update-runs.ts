@@ -277,6 +277,15 @@ export const UpdateRunChangedEventSchema = closedObject({
   updatedAtMs: timestamp,
 });
 
+/** Transient display guidance; never persisted in update history. */
+export const ExternalSupervisorGuidanceSchema = closedObject({
+  version: Type.Literal(1),
+  action: Type.Literal("update"),
+  name: Type.String({ minLength: 1, maxLength: 128 }),
+  runFrom: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  command: Type.String({ minLength: 1, maxLength: 1024 }),
+});
+
 /** Existing update.run response fields remain available alongside the durable run identity. */
 export const UpdateRunResultSchema = closedObject({
   runId,
@@ -285,6 +294,7 @@ export const UpdateRunResultSchema = closedObject({
   ackDelivered: Type.Optional(Type.Boolean()),
   ackQueued: Type.Optional(Type.Boolean()),
   acknowledgement: Type.Optional(Type.String()),
+  externalSupervisorGuidance: Type.Optional(ExternalSupervisorGuidanceSchema),
   code: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   handoff: Type.Optional(Type.Unknown()),

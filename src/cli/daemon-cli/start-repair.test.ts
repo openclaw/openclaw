@@ -99,7 +99,8 @@ vi.mock("../../daemon/service.js", () => ({
   formatGatewayServiceStartRepairIssues: formatGatewayServiceStartRepairIssuesMock,
 }));
 
-vi.mock("../../infra/gateway-supervision.js", () => ({
+vi.mock("../../infra/gateway-supervision.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/gateway-supervision.js")>()),
   assertGatewayServiceMutationAllowed: assertGatewayServiceMutationAllowedMock,
 }));
 

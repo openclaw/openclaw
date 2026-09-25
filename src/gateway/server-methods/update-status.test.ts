@@ -1,19 +1,23 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as snapshots from "../../infra/sqlite-readonly-location.js";
 import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
+import { refreshGatewayUpdateStatus } from "../../infra/update-status-schedule.js";
 import {
   getUpdateSchedule,
   resetUpdateStatusState,
   setUpdateScheduleCache,
 } from "../../infra/update-status-state.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveExternalSupervisorGuidance } from "../../plugins/supervisor-guidance-runtime.js";
 import {
   beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
@@ -33,13 +37,17 @@ import { createLazyCoreHandlers } from "./lazy-core-handlers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 import { updateStatusHandlers } from "./update-status.js";
 
+vi.mock("../../plugins/supervisor-guidance-runtime.js", () => ({
+  resolveExternalSupervisorGuidance: vi.fn(async () => undefined),
+}));
+
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateEffectiveChannel: async () => "stable",
 }));
 
 vi.mock("../../infra/update-status-schedule.js", () => ({
   getGatewayUpdateSchedule: () => getUpdateSchedule(),
-  refreshGatewayUpdateStatus: async () => {},
+  refreshGatewayUpdateStatus: vi.fn(async () => {}),
 }));
 
 vi.mock("../server-restart-sentinel.js", () => ({
@@ -55,7 +63,13 @@ const logGateway: GatewayRequestContext["logGateway"] = {
   warn,
 };
 
-async function requestUpdateRead(method: UpdateReadMethod, params: Record<string, unknown> = {}) {
+async function requestUpdateRead(
+  method: UpdateReadMethod,
+  params: Record<string, unknown> = {},
+  getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
+    update: { channel: "stable" },
+  }),
+) {
   const respond = vi.fn<RespondFn>();
   await expectDefined(
     updateStatusHandlers[method],
@@ -67,7 +81,7 @@ async function requestUpdateRead(method: UpdateReadMethod, params: Record<string
     isWebchatConnect: () => false,
     respond,
     context: {
-      getRuntimeConfig: () => ({ update: { channel: "stable" } }),
+      getRuntimeConfig,
       logGateway,
     } as GatewayRequestContext,
   });
@@ -85,6 +99,7 @@ afterEach(async () => {
   warn.mockClear();
   gatewayUpdateCampaign.clear();
   resetUpdateStatusState();
+  vi.mocked(resolveExternalSupervisorGuidance).mockReset();
   await home.restore();
 });
 
@@ -248,6 +263,94 @@ describe("update history RPCs", () => {
         schedule: { channel: "stable", autoEnabled: true, campaign: replacement },
       }),
     );
+  });
+
+  it("projects current supervisor guidance without retaining commands in update history", async () => {
+    const guidance = {
+      version: 1 as const,
+      action: "update" as const,
+      name: "Deployment manager",
+      runFrom: "Host",
+      command: "deploy update gateway",
+    };
+    const run = createUpdateRun({ trigger: "api" });
+    vi.mocked(resolveExternalSupervisorGuidance).mockResolvedValue(guidance);
+    const first = await requestUpdateRead("update.status");
+    expect(first).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        externalSupervisorGuidance: guidance,
+      }),
+    );
+    expect(getUpdateRun(run.runId)).not.toHaveProperty("externalSupervisorGuidance");
+    const history = await requestUpdateRead("update.runs.get", { runId: run.runId });
+    expect(JSON.stringify(history.mock.calls)).not.toContain(guidance.command);
+    vi.mocked(resolveExternalSupervisorGuidance).mockResolvedValue(undefined);
+    const refreshed = await requestUpdateRead("update.status");
+    expect(refreshed.mock.calls[0]?.[1]).not.toHaveProperty("externalSupervisorGuidance");
+  });
+  it("drops package guidance when its plugin is disabled during an update-status refresh", async () => {
+    vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
+    const pluginDir = path.join(home.home, "deployment");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "index.js"),
+      "throw new Error('must not load runtime');",
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "deployment",
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.js"] },
+      }),
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "deployment",
+        configSchema: { type: "object" },
+        supervisorGuidance: {
+          version: 1,
+          name: "Deployment manager",
+          actions: { update: "deploy update gateway" },
+        },
+      }),
+    );
+    const actual = await vi.importActual<
+      typeof import("../../plugins/supervisor-guidance-runtime.js")
+    >("../../plugins/supervisor-guidance-runtime.js");
+    vi.mocked(resolveExternalSupervisorGuidance).mockImplementation(
+      actual.resolveExternalSupervisorGuidance,
+    );
+    let config: OpenClawConfig = {
+      update: { channel: "stable" },
+      plugins: {
+        load: { paths: [pluginDir] },
+        allow: ["deployment"],
+        entries: { deployment: { enabled: true } },
+      },
+    };
+    const initial = await requestUpdateRead("update.status", {}, () => config);
+    expect(initial.mock.calls[0]?.[1]).toMatchObject({
+      externalSupervisorGuidance: { command: "deploy update gateway" },
+    });
+    const refreshing = createDeferredCore();
+    const refreshed = createDeferredCore();
+    vi.mocked(refreshGatewayUpdateStatus).mockImplementationOnce(async () => {
+      refreshing.resolve();
+      await refreshed.promise;
+    });
+    const pending = requestUpdateRead("update.status", { refreshCheckout: true }, () => config);
+    await refreshing.promise;
+    config = {
+      ...config,
+      plugins: { ...config.plugins, entries: { deployment: { enabled: false } } },
+    };
+    refreshed.resolve();
+    const response = await pending;
+    expect(response).toHaveBeenCalledWith(true, expect.any(Object));
+    expect(response.mock.calls[0]?.[1]).not.toHaveProperty("externalSupervisorGuidance");
   });
 
   it("keeps private recovery receipts durable while status and history stay public", async () => {

@@ -643,3 +643,76 @@ Use `preferOver` when your plugin is the preferred owner for a channel id that a
 When `channels.chat` is configured, OpenClaw considers both the channel id and the preferred plugin id. If the lower-priority plugin was only selected because it is bundled or enabled by default, OpenClaw disables it in the effective runtime config so one plugin owns the channel and its tools. Explicit user selection still wins: if the user explicitly enables both plugins (via `plugins.allow` or a material `plugins.entries` config), OpenClaw preserves that choice and reports duplicate channel/tool diagnostics instead of silently changing the requested plugin set.
 
 Keep `preferOver` scoped to plugin ids that can really provide the same channel. It is not a general priority field and it does not rename user config keys.
+
+## Supervisor guidance
+
+A deployment plugin can supply the instructions OpenClaw displays when an external
+supervisor owns service management. Put the static guidance directly in
+`openclaw.plugin.json`:
+
+```json
+{
+  "id": "compose-deployment",
+  "supervisorGuidance": {
+    "version": 1,
+    "name": "Docker Compose",
+    "runFrom": "Docker host",
+    "actions": {
+      "restart": "docker compose restart gateway",
+      "update": "docker compose pull gateway && docker compose up -d gateway"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}
+```
+
+Install and enable the plugin, then set `OPENCLAW_SUPERVISOR_MODE=external` in the
+Gateway and CLI process environment. The plugin supplies display copy; this
+environment variable remains the authority for external supervisor ownership.
+Existing enablement, allowlist, and denylist policy still applies; add the plugin
+to `plugins.allow` if your deployment uses an allowlist. Exactly one enabled plugin
+must provide valid guidance. If multiple enabled plugins do, OpenClaw keeps its
+built-in instructions rather than choosing between deployment owners, even if
+only one provides the requested action.
+
+The host reads the guidance through plugin metadata without importing plugin
+runtime code. The instructions belong to the plugin package; there is no guidance
+setting in `openclaw.json` or runtime registration callback.
+
+The guidance object accepts only:
+
+| Field     | Required | Meaning                                                                                                                                      |
+| --------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version` | Yes      | `1`.                                                                                                                                         |
+| `name`    | Yes      | Supervisor display name, at most 128 UTF-8 bytes.                                                                                            |
+| `runFrom` | No       | Where to run commands, at most 256 UTF-8 bytes.                                                                                              |
+| `actions` | Yes      | Nonempty map of `start`, `stop`, `restart`, `install`, `uninstall`, `repair`, or `update` to command strings, each at most 1024 UTF-8 bytes. |
+
+The serialized guidance is limited to 8192 UTF-8 bytes. Strings must be nonempty,
+without surrounding whitespace, control or format characters, Unicode line or
+paragraph separators, or unpaired surrogates. Unknown fields or invalid values
+reject the entire guidance object. Commands retain their exact bytes and are
+shown as literal text; OpenClaw never executes them or adds them to the system
+prompt. Keep secrets out of these user-visible values.
+
+Without a valid provider, or when the sole provider omits the requested
+action, OpenClaw preserves its existing built-in instructions. Unavailable or
+disabled plugins and invalid guidance do not contribute. Guidance does not enable
+self-update or native service management under external supervision. Package
+commands appropriate for the deployment the plugin supports; changing the copy
+requires updating the plugin manifest.
+
+Older hosts ignore the unfamiliar `supervisorGuidance` manifest field and retain
+their built-in supervisor instructions. No guidance configuration migration or
+removal is required when downgrading. The installed plugin must still support the
+target host; its [package compatibility requirements](/plugins/manifest/package-json)
+continue to apply.
+
+Plugin authors can import `SupervisorAction`, `SupervisorGuidanceV1`,
+`SupervisorDisplayGuidance`, and `parseSupervisorGuidance` from
+`openclaw/plugin-sdk/plugin-entry`. The manifest field uses `SupervisorGuidanceV1`.
+The parser returns validated guidance or `undefined`; it neither executes commands
+nor resolves configuration. See [Gateway supervision](/cli/gateway/restart-and-supervision).
