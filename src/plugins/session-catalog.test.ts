@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { publishAgentRunNativeSession } from "../infra/agent-run-native-session.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { importSessionCatalogHistory } from "./session-catalog-history-import.js";
 import { listSessionCatalogEntries } from "./session-catalog.js";
@@ -117,14 +123,14 @@ describe("listSessionCatalogEntries", () => {
     ]);
   });
 
-  it("requires and scopes an owner under explicit multi-agent ownership", () => {
+  it("requires an explicit adoption owner but discovers bindings across agents", () => {
     const config = {
       agents: {
         ownership: "explicit",
         list: [{ id: "alpha" }, { id: "beta" }],
       },
     } as OpenClawConfig;
-    const listSessionEntries = vi.fn(() => []);
+    const listSessionEntries = vi.fn((_params: { agentId: string }) => []);
     const runtime = {
       agent: { session: { listSessionEntries } },
     } as unknown as PluginRuntime;
@@ -133,8 +139,81 @@ describe("listSessionCatalogEntries", () => {
       "session agent resolution has no explicit owner",
     );
     expect(listSessionCatalogEntries({ agentId: "beta", config, runtime })).toEqual([]);
-    expect(listSessionEntries).toHaveBeenCalledOnce();
-    expect(listSessionEntries).toHaveBeenCalledWith({ agentId: "beta", readOnly: true });
+    expect(listSessionEntries.mock.calls.map(([params]) => params.agentId)).toEqual(["beta"]);
+    listSessionEntries.mockClear();
+    expect(
+      listSessionCatalogEntries({ agentId: "beta", config, runtime, includeOtherAgents: true }),
+    ).toEqual([]);
+    expect(listSessionEntries.mock.calls.map(([params]) => params.agentId)).toEqual([
+      "beta",
+      "alpha",
+    ]);
+  });
+});
+
+describe("catalog owner snapshot", () => {
+  it("retains a foreign binding so authorization and continuation see its real owner", () => {
+    const foreign = {
+      agentId: "apw",
+      sessionKey: "agent:apw:main",
+      entry: { sessionId: "original", updatedAt: 1 },
+    };
+    const rows = listSessionCatalogEntries({
+      agentId: "personal",
+      includeOtherAgents: true,
+      config: {
+        agents: { ownership: "explicit", list: [{ id: "apw" }, { id: "personal" }] },
+      } as OpenClawConfig,
+      runtime: {} as PluginRuntime,
+      sessionEntries: { entriesForAgent: () => [], entriesForCatalog: () => [foreign] },
+    });
+    expect(rows).toEqual([foreign]);
+  });
+});
+
+describe("active native catalog ownership", () => {
+  it("projects only the current session instance while its admitted run is live", () => {
+    const authority = claimAgentRunDelegatedAuthority(
+      createOperationalRunInstanceRef("catalog-active"),
+    );
+    const source = {
+      sessionKey: "agent:apw:main",
+      sessionId: "current",
+      backendId: "claude-cli",
+      hostId: "gateway:local",
+      threadId: "native-first-turn",
+    };
+    const stored = {
+      agentId: "apw",
+      sessionKey: source.sessionKey,
+      entry: { sessionId: "current", updatedAt: 1 },
+    };
+    const params = {
+      agentId: "personal",
+      includeOtherAgents: true,
+      config: {
+        agents: { ownership: "explicit", list: [{ id: "apw" }, { id: "personal" }] },
+      } as OpenClawConfig,
+      runtime: {} as PluginRuntime,
+      sessionEntries: { entriesForAgent: () => [], entriesForCatalog: () => [stored] },
+    };
+    try {
+      publishAgentRunNativeSession(authority, source);
+      expect(listSessionCatalogEntries(params)[0]?.activeNativeSession).toMatchObject(source);
+      expect(stored.entry).not.toHaveProperty("cliSessionBindings");
+      source.threadId = "mutated-caller-input";
+      expect(listSessionCatalogEntries(params)[0]?.activeNativeSession?.threadId).toBe(
+        "native-first-turn",
+      );
+      expect(Object.isFrozen(listSessionCatalogEntries(params)[0]?.activeNativeSession)).toBe(true);
+      stored.entry.sessionId = "replacement";
+      expect(listSessionCatalogEntries(params)[0]?.activeNativeSession).toBeUndefined();
+      stored.entry.sessionId = "current";
+    } finally {
+      releaseAgentRunDelegatedAuthority(authority);
+    }
+    expect(listSessionCatalogEntries(params)[0]?.activeNativeSession).toBeUndefined();
+    expect(() => publishAgentRunNativeSession(authority, source)).toThrow("no longer owns");
   });
 });
 

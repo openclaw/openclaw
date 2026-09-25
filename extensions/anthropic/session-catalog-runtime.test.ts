@@ -104,4 +104,42 @@ describe("Claude bound session resolution", () => {
       ]),
     );
   });
+  it("keeps an adopted session adopted while its turn is in flight", () => {
+    const threadId = "adopted-running-thread";
+    const catalogEntry = (agentId: string, sessionKey: string, entry: Record<string, unknown>) => ({
+      agentId,
+      sessionKey,
+      entry,
+    });
+    const api = {
+      id: "anthropic",
+      config: {},
+      runtime: { config: { current: () => ({}) } },
+    } as unknown as OpenClawPluginApi;
+    const sessionEntries = {
+      entriesForAgent: () => [],
+      entriesForCatalog: () => [
+        {
+          ...catalogEntry("main", "plugin:anthropic:catalog-adopt:claude:running", {
+            pluginOwnerId: "anthropic",
+            modelSelectionLocked: true,
+            cliSessionBindings: { "claude-cli": { sessionId: threadId } },
+          }),
+          activeNativeSession: { backendId: "claude-cli", hostId: "gateway:local", threadId },
+        },
+        catalogEntry("other", "agent:other:routed", {
+          cliSessionBindings: { "claude-cli": { sessionId: threadId } },
+        }),
+      ],
+    };
+
+    expect(listBoundClaudeSessions(api, undefined, sessionEntries as never)).toEqual(
+      new Map([
+        [
+          adoptedSourceKey("gateway:local", threadId),
+          { adopted: true, sessionKey: "plugin:anthropic:catalog-adopt:claude:running" },
+        ],
+      ]),
+    );
+  });
 });

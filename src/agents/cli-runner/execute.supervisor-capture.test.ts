@@ -11,6 +11,7 @@ import {
   resolveMcpLoopbackYieldContext,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { listAgentRunNativeSessions } from "../../infra/agent-run-native-session.js";
 import {
   areDiagnosticsEnabledForProcess,
   onTrustedToolExecutionEvent,
@@ -230,6 +231,34 @@ function holdSupervisorRun() {
 }
 
 describe("executePreparedCliRun supervisor output capture", () => {
+  it("publishes first-turn Claude ownership before process completion and retires it with admission", async () => {
+    const held = holdSupervisorRun();
+    const context = buildPreparedCliRunContext({ output: "json", provider: "claude-cli" });
+    context.preparedBackend.backend.sessionMode = "always";
+    context.preparedBackend.backend.sessionArgs = ["--session-id", "{sessionId}"];
+    const running = executePreparedCliRun(context);
+    await held.entered;
+    try {
+      expect(
+        listAgentRunNativeSessions({ sessionKey: "agent:main:main", sessionId: "session-1" }),
+      ).toEqual([
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          sessionId: "session-1",
+          backendId: "claude-cli",
+          hostId: "gateway:local",
+          threadId: expect.any(String),
+        }),
+      ]);
+    } finally {
+      held.release();
+      await running;
+    }
+    expect(
+      listAgentRunNativeSessions({ sessionKey: "agent:main:main", sessionId: "session-1" }),
+    ).toEqual([]);
+  });
+
   it("binds Claude image prompts to the persisted local transcript turn", async () => {
     const entryId = "persisted-image-turn";
     const recorder = createUserTurnTranscriptRecorder({

@@ -13,7 +13,13 @@ export function currentClaudeSessionCatalogConfig(api: OpenClawPluginApi): OpenC
   return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
 }
 
-type BoundClaudeSource = { adopted: boolean; hostId: string; threadId: string };
+type BoundClaudeSource = {
+  adopted: boolean;
+  /** A catalog fork that still points at its source thread: it has not run yet. */
+  pendingFork: boolean;
+  hostId: string;
+  threadId: string;
+};
 
 /** An OpenClaw session that drives a Claude thread. `adopted` marks the ones
     this catalog owns; the rest merely route their turns through the Claude CLI. */
@@ -46,14 +52,26 @@ function boundClaudeSource(
   const bindings = isRecord(entry.cliSessionBindings) ? entry.cliSessionBindings : undefined;
   const binding = bindings?.[CLAUDE_CLI_BACKEND_ID];
   if (isRecord(binding) && typeof binding.sessionId === "string" && binding.sessionId) {
-    return { adopted, hostId, threadId: binding.sessionId };
+    const pendingFork =
+      adopted &&
+      entry.modelSelectionLocked === true &&
+      isRecord(marker) &&
+      marker.sourceThreadId === binding.sessionId;
+    return { adopted, pendingFork, hostId, threadId: binding.sessionId };
   }
   if (!adopted || entry.modelSelectionLocked !== true) {
     return undefined;
   }
   return isRecord(marker) && typeof marker.sourceThreadId === "string"
-    ? { adopted, hostId, threadId: marker.sourceThreadId }
+    ? { adopted, pendingFork: true, hostId, threadId: marker.sourceThreadId }
     : undefined;
+}
+
+// Lower wins a shared source key. An established catalog session holds its key
+// against a sibling's plain CLI binding; a pending fork never displaces the
+// thread's original owner, including a fork left by a failed adoption.
+function sourceRank(source: BoundClaudeSource): number {
+  return source.pendingFork ? 2 : source.adopted ? 0 : 1;
 }
 
 export function listBoundClaudeSessions(
@@ -62,28 +80,51 @@ export function listBoundClaudeSessions(
   sessionEntries?: SessionCatalogEntrySnapshot,
 ): Map<string, BoundClaudeSession> {
   const config = currentClaudeSessionCatalogConfig(api);
-  const bound = new Map<string, BoundClaudeSession>();
-  for (const { sessionKey, entry } of listSessionCatalogEntries({
+  const explicitOwnership = config.agents?.ownership === "explicit";
+  // Ownership resolves across agents: hiding another agent's binding makes its
+  // Claude thread look unowned, and continuing it creates a wrong-agent copy.
+  const winners = new Map<string, { sessionKey: string; source: BoundClaudeSource }>();
+  for (const {
+    agentId: ownerAgentId,
+    sessionKey,
+    entry,
+    activeNativeSession,
+  } of listSessionCatalogEntries({
     agentId,
+    includeOtherAgents: true,
     config,
     runtime: api.runtime,
     sessionEntries,
   })) {
-    const source = boundClaudeSource(api.id, entry);
-    if (!source) {
+    // A first turn publishes its thread before the binding persists at settlement.
+    const source: BoundClaudeSource | undefined =
+      activeNativeSession?.backendId === CLAUDE_CLI_BACKEND_ID
+        ? { adopted: entry.pluginOwnerId === api.id, pendingFork: false, ...activeNativeSession }
+        : boundClaudeSource(api.id, entry);
+    // Explicit agents keep independent catalog forks of the same source.
+    if (!source || (source.pendingFork && explicitOwnership && ownerAgentId !== agentId)) {
       continue;
     }
-    const sourceKey = adoptedSourceKey(source.hostId, source.threadId);
-    // Sessions from several agents can hold a binding to one Claude thread, and
-    // this key does not carry the agent. Adoption is the fact the catalog reads
-    // here, so an adopted entry holds the key: a sibling agent's plain CLI
-    // binding must never decide that an adopted row is unowned.
-    if (bound.get(sourceKey)?.adopted && !source.adopted) {
-      continue;
+    const key = adoptedSourceKey(source.hostId, source.threadId);
+    const current = winners.get(key);
+    if (current && current.sessionKey !== sessionKey) {
+      const rank = sourceRank(source);
+      const currentRank = sourceRank(current.source);
+      if (rank === currentRank) {
+        throw new Error("multiple OpenClaw sessions bind Claude thread from the same host");
+      }
+      if (rank > currentRank) {
+        continue;
+      }
     }
-    bound.set(sourceKey, { adopted: source.adopted, sessionKey });
+    winners.set(key, { sessionKey, source });
   }
-  return bound;
+  return new Map(
+    [...winners].map(([key, { sessionKey, source }]) => [
+      key,
+      { adopted: source.adopted, sessionKey },
+    ]),
+  );
 }
 
 /**

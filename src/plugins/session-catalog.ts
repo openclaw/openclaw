@@ -11,6 +11,7 @@ import type { TerminalUploadPathStyle } from "../../packages/gateway-protocol/sr
 import { listAgentIds, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listAgentRunNativeSessions } from "../infra/agent-run-native-session.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export type SessionCatalogListProviderParams = {
@@ -115,7 +116,11 @@ export type SessionCatalogEntrySnapshot = {
   entriesForCatalog?: () => SessionCatalogAgentEntry[];
 };
 
-type SessionCatalogAgentEntry = SessionCatalogEntrySummary & { agentId: string };
+type SessionCatalogAgentEntry = SessionCatalogEntrySummary & {
+  agentId: string;
+  /** Ephemeral discovery identity; must never be persisted as a reusable CLI binding. */
+  activeNativeSession?: { backendId: string; hostId: string; threadId: string };
+};
 
 export type SessionUpstreamJsonValue =
   | null
@@ -238,6 +243,8 @@ type SessionCatalogEntry = SessionCatalogEntrySummary["entry"];
 
 export function listSessionCatalogEntries(params: {
   agentId?: string;
+  /** Resolve native ownership across agents; independent catalog forks remain agent-scoped. */
+  includeOtherAgents?: boolean;
   config: OpenClawConfig;
   runtime: PluginRuntime;
   sessionEntries?: SessionCatalogEntrySnapshot;
@@ -250,28 +257,42 @@ export function listSessionCatalogEntries(params: {
           agentId: params.agentId,
         }).sessionAgentId
       : undefined;
+  const withActiveNativeSessions = (entries: SessionCatalogAgentEntry[]) => {
+    return entries.map((item) => {
+      const source = listAgentRunNativeSessions({
+        sessionKey: item.sessionKey,
+        sessionId: item.entry.sessionId,
+      })[0];
+      return source ? { ...item, activeNativeSession: source } : item;
+    });
+  };
   const requestEntries = params.sessionEntries?.entriesForCatalog?.();
   if (requestEntries) {
-    // Keep the shipped SDK helper as the compatibility entry point while the
-    // Gateway snapshot owns the one request-wide flatten.
-    return requiresExplicitOwner && requestedAgentId
-      ? requestEntries.filter((entry) => entry.agentId === requestedAgentId)
-      : requestEntries;
+    // Discovery must retain existing owners. Hiding foreign bindings makes owned
+    // Claude history appear unclaimed; gateway visibility still authorizes that owner.
+    return withActiveNativeSessions(
+      requiresExplicitOwner && !params.includeOtherAgents
+        ? requestEntries.filter((entry) => entry.agentId === requestedAgentId)
+        : requestEntries,
+    );
   }
   const defaultAgentId =
     requestedAgentId ?? resolveSessionAgentIds({ config: params.config }).defaultAgentId;
-  const agentIds = requiresExplicitOwner
-    ? [defaultAgentId]
-    : [
-        defaultAgentId,
-        ...listAgentIds(params.config).filter((agentId) => agentId !== defaultAgentId),
-      ];
-  return agentIds.flatMap((agentId) => {
-    const entries = params.sessionEntries
-      ? params.sessionEntries.entriesForAgent(agentId)
-      : params.runtime.agent.session.listSessionEntries({ agentId, readOnly: true });
-    return entries.map((entry) => Object.assign({}, entry, { agentId }));
-  });
+  const agentIds =
+    requiresExplicitOwner && !params.includeOtherAgents
+      ? [defaultAgentId]
+      : [
+          defaultAgentId,
+          ...listAgentIds(params.config).filter((agentId) => agentId !== defaultAgentId),
+        ];
+  return withActiveNativeSessions(
+    agentIds.flatMap((agentId) => {
+      const entries = params.sessionEntries
+        ? params.sessionEntries.entriesForAgent(agentId)
+        : params.runtime.agent.session.listSessionEntries({ agentId, readOnly: true });
+      return entries.map((entry) => Object.assign({}, entry, { agentId }));
+    }),
+  );
 }
 
 export function sessionCatalogAdoptedSourceKey(hostId: string, threadId: string): string {
