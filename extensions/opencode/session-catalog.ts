@@ -1,4 +1,8 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import process from "node:process";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import type {
   SessionCatalogSession,
@@ -67,6 +71,28 @@ const openCodeConfigIdentities = new WeakMap<object, number>();
 // The bounded map prevents pagination variants from growing while avoiding a subprocess every poll.
 const openCodeQueryCache = new Map<string, OpenCodeQueryCacheEntry>();
 let nextOpenCodeConfigIdentity = 1;
+const log = createSubsystemLogger("opencode/session-catalog");
+let cliVersion: { key: string; expiresAt: number; result: Promise<boolean> } | undefined;
+
+export async function isOpenCodeV2(): Promise<boolean> {
+  const key = SAFE_ENV_KEYS.map((name) => process.env[name] ?? "").join("\0");
+  if (!cliVersion || cliVersion.key !== key || cliVersion.expiresAt <= Date.now()) {
+    const result = runOpenCode(["--version"]).then((output) => {
+      const major = /^(?:opencode v)?(\d+)\./.exec(output.trim())?.[1];
+      if (major !== "1" && major !== "2") {
+        throw new Error("Unsupported OpenCode CLI version");
+      }
+      return major === "2";
+    });
+    cliVersion = { key, expiresAt: Date.now() + OPENCODE_QUERY_CACHE_TTL_MS, result };
+    result.catch(() => {
+      if (cliVersion?.result === result) {
+        cliVersion = undefined;
+      }
+    });
+  }
+  return cliVersion.result;
+}
 
 function openCodeQueryCacheKey(query: string, configIdentity: object): string {
   let identity = openCodeConfigIdentities.get(configIdentity);
@@ -95,6 +121,22 @@ const OPENCODE_PARAMETER_MESSAGES = {
 };
 
 async function runOpenCode(args: string[]): Promise<string> {
+  const configDirectory = args.includes("--standalone")
+    ? await mkdtemp(path.join(os.tmpdir(), "openclaw-opencode-config-"))
+    : undefined;
+  try {
+    return await executeOpenCode(args, configDirectory);
+  } catch (error) {
+    log.warn(`OpenCode catalog CLI failed: ${String(error)}`);
+    throw error;
+  } finally {
+    if (configDirectory) {
+      await rm(configDirectory, { recursive: true, force: true });
+    }
+  }
+}
+
+async function executeOpenCode(args: string[], configDirectory?: string): Promise<string> {
   const invocation = materializeWindowsSpawnProgram(
     resolveWindowsSpawnProgram({
       command: "opencode",
@@ -110,6 +152,12 @@ async function runOpenCode(args: string[]): Promise<string> {
     if (process.env[key] !== undefined) {
       env[key] = process.env[key];
     }
+  }
+  if (configDirectory) {
+    // v2 removed --pure. A private server and empty config root avoid executing
+    // user plugins; project configuration must also be disabled when exporting.
+    env.OPENCODE_CONFIG_DIR = configDirectory;
+    env.OPENCODE_CONFIG_PROJECT_DISABLE = "1";
   }
   const result = await runCommandBuffered([invocation.command, ...invocation.argv], {
     baseEnv: {},
@@ -134,7 +182,9 @@ async function runOpenCode(args: string[]): Promise<string> {
   }
   if (result.code !== 0) {
     const detail = result.stderr.toString("utf8").trim();
-    throw new Error(detail || `OpenCode exited with code ${String(result.code)}`);
+    throw new Error(detail || `OpenCode exited with code ${String(result.code)}`, {
+      cause: result.stdout.toString("utf8"),
+    });
   }
   return result.stdout.toString("utf8");
 }
@@ -144,8 +194,46 @@ export async function queryOpenCodeDatabase(query: string): Promise<unknown> {
   return output.trim() ? (JSON.parse(output) as unknown) : [];
 }
 
+export async function runOpenCodeApi(operation: string, params: string[]): Promise<string> {
+  return runOpenCode([
+    "api",
+    "--standalone",
+    operation,
+    ...params.flatMap((param) => ["--param", param]),
+  ]);
+}
+
+async function queryOpenCodeSessions(query: string, count: number): Promise<unknown> {
+  if (!(await isOpenCodeV2())) {
+    return queryOpenCodeDatabase(query);
+  }
+  const parsed: unknown = JSON.parse(
+    await runOpenCodeApi("session.list", [`limit=${count}`, "order=desc", "parentID=null"]),
+  );
+  if (!isRecord(parsed) || !Array.isArray(parsed.data)) {
+    throw new Error("OpenCode returned an invalid session list");
+  }
+  return parsed.data.flatMap((session) => {
+    if (!isRecord(session) || !isRecord(session.time) || !isRecord(session.location)) {
+      throw new Error("OpenCode returned an invalid session");
+    }
+    return session.time.archived === undefined
+      ? [
+          {
+            id: session.id,
+            title: session.title,
+            directory: session.location.directory,
+            created: session.time.created,
+            updated: session.time.updated,
+          },
+        ]
+      : [];
+  });
+}
+
 async function queryCachedOpenCodeSessions(
   query: string,
+  count: number,
   options: OpenCodeQueryCacheOptions,
 ): Promise<unknown> {
   const key = openCodeQueryCacheKey(query, options.configIdentity ?? process.env);
@@ -158,7 +246,7 @@ async function queryCachedOpenCodeSessions(
   if (cached) {
     openCodeQueryCache.delete(key);
   }
-  const result = queryOpenCodeDatabase(query);
+  const result = queryOpenCodeSessions(query, count);
   const entry: OpenCodeQueryCacheEntry = {
     expiresAt: Date.now() + OPENCODE_QUERY_CACHE_TTL_MS,
     result,
@@ -188,8 +276,70 @@ async function queryCachedOpenCodeSessions(
 }
 
 export async function exportOpenCodeSession(threadId: string): Promise<unknown> {
-  const output = await runOpenCode(["--pure", "export", threadId]);
-  return JSON.parse(output) as unknown;
+  if (!(await isOpenCodeV2())) {
+    return JSON.parse(await runOpenCode(["--pure", "export", threadId])) as unknown;
+  }
+  const exported: unknown = JSON.parse(
+    await runOpenCode(["session", "export", "--standalone", threadId]),
+  );
+  if (!isRecord(exported) || !Array.isArray(exported.messages)) {
+    throw new Error("OpenCode returned an invalid session export");
+  }
+  return {
+    ...exported,
+    messages: exported.messages.flatMap((message) => {
+      if (!isRecord(message)) {
+        return [];
+      }
+      const model = isRecord(message.model) ? message.model : {};
+      const parts =
+        message.type === "assistant" && Array.isArray(message.content)
+          ? message.content.map((part) => {
+              if (!isRecord(part) || part.type !== "tool" || !isRecord(part.state)) {
+                return part;
+              }
+              return {
+                ...part,
+                tool: part.name,
+                state: {
+                  ...part.state,
+                  output: Array.isArray(part.state.content)
+                    ? part.state.content
+                        .flatMap((content) =>
+                          isRecord(content) &&
+                          content.type === "text" &&
+                          typeof content.text === "string"
+                            ? [content.text]
+                            : [],
+                        )
+                        .join("\n")
+                    : undefined,
+                  error: isRecord(part.state.error) ? jsonText(part.state.error) : part.state.error,
+                },
+              };
+            })
+          : typeof message.text === "string"
+            ? [{ type: "text", text: message.text, synthetic: message.type !== "user" }]
+            : [];
+      if (message.type === "user" && Array.isArray(message.files)) {
+        parts.push(
+          ...message.files.flatMap((file) => (isRecord(file) ? [{ ...file, type: "file" }] : [])),
+        );
+      }
+      return [
+        {
+          info: {
+            id: message.id,
+            role: message.type === "user" ? "user" : "assistant",
+            time: message.time,
+            model,
+            ...model,
+          },
+          parts,
+        },
+      ];
+    }),
+  };
 }
 
 function parseOpenCodeSession(value: unknown): SessionCatalogSession | undefined {
@@ -239,7 +389,7 @@ export async function listLocalOpenCodeSessionPage(
     "WHERE parent_id IS NULL AND time_archived IS NULL",
     `ORDER BY time_updated DESC, id DESC LIMIT ${String(requestedCount)}`,
   ].join(" ");
-  const parsed = await queryCachedOpenCodeSessions(query, options);
+  const parsed = await queryCachedOpenCodeSessions(query, requestedCount, options);
   if (!Array.isArray(parsed) || parsed.length > MAX_CLI_LIST_SESSIONS) {
     throw new Error("OpenCode returned an invalid session list");
   }
