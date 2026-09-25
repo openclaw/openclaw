@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
 import type { ConnectedRfbStream, DesktopRfbAttachment } from "./attachment.js";
+import type { DesktopAudioSource } from "./managed-linux-audio.js";
 
 const DEFAULT_LINGER_MS = 60_000;
 const MAX_OBSERVERS = 8;
@@ -34,6 +35,9 @@ type DesktopSessionAcquireResult = {
   attachment: DesktopRfbAttachment;
   auth?: "vnc-password" | "ard-account";
   vncPassword?: string;
+  resolveAudio?: () => DesktopAudioSource | undefined;
+  /** Internal setup detail; project only a fixed availability code to viewers. */
+  readonly audioUnavailableReason?: string;
 };
 
 type DesktopSessionAcquireRequest = {

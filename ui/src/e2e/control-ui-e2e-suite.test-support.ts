@@ -15,11 +15,10 @@ import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
-  controlUiE2eWaitTimeoutMs,
   installControlUiRpcDiagnostics,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+} from "../test-helpers/control-ui-e2e-diagnostics.ts";
+import { controlUiE2eWaitTimeoutMs } from "../test-helpers/control-ui-e2e-readiness.ts";
+import type { ControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -493,7 +492,12 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
           if (!chromiumAvailable && options.unavailableMessage) {
             throw new Error(options.unavailableMessage(chromiumExecutablePath));
           }
-          const startServer = options.startServer ?? startControlUiE2eServer;
+          const startServer =
+            options.startServer ??
+            (async () => {
+              const { startControlUiE2eServer } = await import("../test-helpers/control-ui-e2e.ts");
+              return startControlUiE2eServer();
+            });
           setupPromise = Promise.resolve().then(async () => {
             if (options.startServerBeforeBrowser) {
               server = await startServer();

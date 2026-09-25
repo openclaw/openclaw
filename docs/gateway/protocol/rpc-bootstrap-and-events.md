@@ -106,7 +106,7 @@ count.
   take precedence when present. Merge an existing
   roster member's snapshot locally when the query's membership and pagination
   window remain valid. The Control UI reuses lifecycle and ordinary `patch`,
-  `send`, `steer`, `agent.run.started`, `agent.input.settled`, `run-capacity`, and
+  `placement`, `send`, `steer`, `agent.run.started`, `agent.input.settled`, `run-capacity`, and
   `chat.title` snapshots for held rows with unchanged identity, archive,
   pin, owner, and parent facts and nondecreasing recency. Keyed `sessions.changed`
   and `session.message` publications also carry `ancestorSessions`, an array of

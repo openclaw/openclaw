@@ -76,7 +76,8 @@ vi.mock("../infra/update-run-driver.js", async (original) => ({
   inspectUpdateRunDriver: (driver: { pid: number }) =>
     driver.pid === 23457 ? observation.previousDriver : observation.driver,
 }));
-vi.mock("../infra/openclaw-root.js", () => ({
+vi.mock("../infra/openclaw-root.js", async (original) => ({
+  ...(await original<typeof import("../infra/openclaw-root.js")>()),
   resolveOpenClawPackageRoot: async () => "/synthetic/openclaw",
 }));
 vi.mock("../infra/package-json.js", () => ({ readPackageVersion: async () => "2026.9.4" }));

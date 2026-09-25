@@ -45,8 +45,9 @@ import {
 } from "./update-run-report.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
 import { isFailedUpdateStep, updateRunWarningMessages } from "./update-run-step.js";
-import type { UpdateRunResult, UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 import { resolvePublicUpdateStepId } from "./update-step-identity.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const UPDATE_REPORT_BODY_MAX_BYTES = 16_000;
 const UPDATE_REPORT_FIELD_MAX_BYTES = 512;

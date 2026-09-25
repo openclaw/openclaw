@@ -35,6 +35,15 @@ export function createSessionHistoryWorkerReaders(
   runRequest: SessionHistoryWorkerRequestRunner,
 ): Omit<SessionHistoryWorkerDatabase, "generation" | "assertCurrent"> {
   return {
+    findTranscriptEvent: async (request) =>
+      await runRequest(
+        () => ({ kind: "transcript-match", request }),
+        JSON.stringify(request).length * 2,
+        (value) => {
+          assertResultKind(value, "transcript-match", "a transcript match");
+          return value.result;
+        },
+      ),
     readHistoricalEvictionCandidates: async (input) =>
       await runRequest(
         () => ({ kind: "historical-eviction-candidates", ...input }),

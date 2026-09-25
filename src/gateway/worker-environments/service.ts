@@ -3,7 +3,7 @@ import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import type { WorkerExecutionMode, WorkerProfile } from "../../plugins/types.js";
+import type { WorkerExecutionMode } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
 import { createWorkerEnvironmentBuildPreparation } from "./build-preparation.js";
@@ -12,65 +12,32 @@ import { createWorkerCredentialBroker } from "./credential-broker.js";
 import {
   createWorkerEnvironmentAccess,
   createWorkerEnvironmentTransportLifecycle,
-  type WorkerEnvironmentNodeTunnel,
 } from "./environment-access.js";
 import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
-import type { WorkerInferenceStore } from "./inference-store.js";
-import { createWorkerInferenceManager, type WorkerInferenceExecutor } from "./inference.js";
-import type { WorkerLiveEventReceiver } from "./live-events.js";
-import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
+import { createWorkerInferenceManager } from "./inference.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
-import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
-import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import { createPreparedWorkerPool } from "./prepared-pool.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
-import type {
-  WorkerEnvironmentAbandonment,
-  WorkerProviderLifecycleInputOptions,
-} from "./provider-lifecycle.types.js";
+import type { WorkerEnvironmentAbandonment } from "./provider-lifecycle.types.js";
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
-import {
-  createWorkerEnvironmentSessionAttachments,
-  type WorkerEnvironmentSessionAttachmentOptions,
-} from "./session-attachment-service.js";
+import type {
+  WorkerEnvironmentCreateRequest,
+  WorkerEnvironmentServiceErrorCode,
+  WorkerEnvironmentServiceOptions,
+  WorkerEnvironmentReconcileGuard,
+} from "./service.types.js";
+import { createWorkerEnvironmentSessionAttachments } from "./session-attachment-service.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerEnvironmentRecord,
   WorkerEnvironmentTransitionPatch as TransitionPatch,
 } from "./store.js";
-import type { WorkerTranscriptCommitApplication } from "./transcript-commit.js";
 import { joinWorkerTunnelStops } from "./tunnel-contract.js";
-import type { WorkerTunnelManager } from "./tunnel.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
 
-type WorkerEnvironmentCreateRequest = {
-  profileId: string;
-  idempotencyKey: string;
-  machineClass?: string;
-  executionMode?: WorkerExecutionMode;
-  projectPath?: string;
-  signal?: AbortSignal;
-  os?: string;
-  runSetupScript?: boolean;
-  inheritedProfile?: { providerId: string; profileSnapshot: WorkerProfile };
-  admittedIntent?: WorkerProviderPreparedIntent;
-};
-
-type WorkerEnvironmentServiceErrorCode =
-  | "profile_not_found"
-  | "provider_not_found"
-  | "environment_not_found"
-  | "invalid_profile"
-  | "invalid_project"
-  | "capacity"
-  | "invalid_state"
-  | "desktop_app_not_found"
-  | "unsupported_platform"
-  | "launcher_failure"
-  | "provider_failure"
-  | "bootstrap_failure";
+export type { WorkerEnvironmentReconcileCore } from "./service.types.js";
 
 class WorkerEnvironmentServiceError extends Error {
   constructor(
@@ -84,54 +51,21 @@ class WorkerEnvironmentServiceError extends Error {
 const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) =>
   new WorkerEnvironmentServiceError(code, message);
 
-type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions &
-  WorkerEnvironmentSessionAttachmentOptions & {
-    prepareComputer?: (
-      claim: import("./placement-store.js").WorkerSessionTurnClaim,
-    ) => Promise<import("./computer-transport.js").PreparedWorkerComputer | undefined>;
-    executeComputer?: import("./worker-turn-computer-rpc.js").WorkerComputerExecutor;
-    closeComputers?: () => Promise<void>;
-    tunnelManager?: WorkerTunnelManager;
-    nodeTunnelManager?: WorkerEnvironmentNodeTunnel;
-    nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
-    nodePortalCarrier?: WorkerNodePortalCarrier;
-    closeWorkerPortals?: (environmentId: string, ownerEpoch?: number) => Promise<void>;
-    stopNodeEnrollmentWaits?: () => void;
-    closeNodeBootstrapArtifacts?: () => Promise<void>;
-    stopNodeWorkerBundleTransfers?: () => void;
-    maintainProviders?: (signal: AbortSignal) => Promise<void>;
-    reconcileIntervalMs?: number;
-    bootstrapCallTimeoutMs?: number;
-    workerCredentialTtlMs?: number;
-    generateWorkerCredential?: (bytes: number) => string;
-    now?: () => number;
-    logger?: { warn: (message: string) => void };
-    applyTranscriptCommit?: WorkerTranscriptCommitApplication;
-    liveEvents?: Pick<
-      WorkerLiveEventReceiver,
-      "apply" | "clear" | "clearEnvironment" | "rotateCredential"
-    >;
-    executeInference: WorkerInferenceExecutor;
-    inferenceStore?: WorkerInferenceStore;
-    placementStore?: WorkerSessionPlacementGate;
-    executeSessionTool?: Parameters<typeof createWorkerTurnRpc>[0]["executeSessionTool"];
-  };
-
-export type WorkerEnvironmentReconcileCore = (
-  signal?: AbortSignal,
-  retainProviderSettlement?: (settled: Promise<void>) => void,
-) => Promise<void>;
-type WorkerEnvironmentReconcileGuard = (
-  environmentId: string,
-  reconcileCore: WorkerEnvironmentReconcileCore,
-) => Promise<void>;
-
 export function createWorkerEnvironmentService(options: WorkerEnvironmentServiceOptions) {
   const { store } = options;
   const warn = (message: string) => options.logger?.warn(message);
   const operations = new KeyedAsyncQueue();
   const providerOperations = new KeyedAsyncQueue();
   const activeOperations = new Set<Promise<unknown>>();
+  const inferenceCancellations = new Set<Promise<unknown>>();
+  const retainInferenceCancellation = (operation: Promise<unknown>) => {
+    inferenceCancellations.add(operation);
+    void operation.then(
+      () => inferenceCancellations.delete(operation),
+      () =>
+        warn("Worker inference cancellation persistence failed; shutdown will report the failure"),
+    );
+  };
   const now = options.now ?? Date.now;
   const tunnelLifecycle = createWorkerEnvironmentTransportLifecycle(options);
   const inference = createWorkerInferenceManager({
@@ -142,8 +76,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   let reconcileInFlight: Promise<void> | undefined;
   let interval: ReturnType<typeof setInterval> | undefined;
   let unsubscribeSessionIdentityMutation: (() => void) | undefined;
-  let unsubscribeTurnClaimClosed = options.placementStore?.registerTurnClaimClosedHandler((claim) =>
-    inference.cancelClaim(claim),
+  let unsubscribeTurnClaimClosed = options.placementStore?.registerTurnClaimClosedHandler(
+    (claim) => {
+      retainInferenceCancellation(inference.cancelClaim(claim));
+    },
   );
   let reconcileEnvironmentGuard: WorkerEnvironmentReconcileGuard | undefined;
   let reconcileEnvironmentGuardClosing = false;
@@ -243,8 +179,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       credentialBroker.clearEnvironment(record.environmentId);
     }
     if (to !== "attached") {
-      inference.cancelEnvironment(record.environmentId);
+      const cancellation = inference.cancelEnvironment(record.environmentId);
       options.liveEvents?.clearEnvironment(record.environmentId, record.ownerEpoch);
+      await cancellation;
     }
     return next;
   };
@@ -499,7 +436,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     unsubscribeSessionIdentityMutation = onSessionIdentityMutation((mutation) => {
       const currentSessionId = "current" in mutation ? mutation.current.sessionId : undefined;
       if (mutation.previous.sessionId && mutation.previous.sessionId !== currentSessionId) {
-        inference.cancelSession(mutation.previous.sessionId);
+        retainInferenceCancellation(inference.cancelSession(mutation.previous.sessionId));
       }
       sessionAttachments.retireSessionIdentityMutation(mutation);
     });
@@ -515,6 +452,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const stop = async () => {
+    const failures: unknown[] = [];
     stopping = true;
     providerLifecycle.clearDedicatedNodeLeases();
     sessionAttachments.cancelSessionAttachmentCreations();
@@ -533,7 +471,11 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     await options
       .closeComputers?.()
       .catch(() => warn("Session computer cleanup failed during Gateway shutdown"));
-    await inference.stop();
+    try {
+      await inference.stop();
+    } catch (error) {
+      failures.push(error);
+    }
     credentialBroker.clear();
     options.liveEvents?.clear();
     options.stopNodeWorkerBundleTransfers?.();
@@ -542,6 +484,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         environmentAccess.stopAllTunnels(),
         options.nodePortalCarrier?.stopAll(),
       ]);
+    } catch (error) {
+      failures.push(error);
     } finally {
       // Tunnel failures cannot release shutdown before admitted owner-bound operations drain.
       const reconciliation = reconcileInFlight;
@@ -551,10 +495,27 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       while (activeOperations.size > 0) {
         await Promise.allSettled(activeOperations);
       }
+      const cancellations = await Promise.allSettled(inferenceCancellations);
+      for (const outcome of cancellations) {
+        if (outcome.status === "rejected" && !failures.includes(outcome.reason)) {
+          failures.push(outcome.reason);
+        }
+      }
+      inferenceCancellations.clear();
       credentialBroker.clear();
       turnRpc.clear();
       options.liveEvents?.clear();
-      await options.closeNodeBootstrapArtifacts?.();
+      try {
+        await options.closeNodeBootstrapArtifacts?.();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Worker environment shutdown failed");
     }
   };
 
@@ -650,6 +611,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     isStopping: () => stopping,
     recordError: saveError,
     list: environmentAccess.list,
+    readPreparedPoolSummary: preparedPool.summary,
+    readReadyWorkerTarget: preparedPool.target,
     supportsProviderExecutionMode: providerSupportsExecutionMode,
     supportsExecutionMode: (profileId: string, mode: WorkerExecutionMode) => {
       const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];
@@ -736,11 +699,25 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     installReconcileEnvironmentGuard,
     reconcileEnvironment,
     reconcileOnce,
+    ready: async () => {
+      const results = await Promise.allSettled([store.ready(), inference.ready()]);
+      const failures = [
+        ...new Set(
+          results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+        ),
+      ];
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "Worker environment readiness failed");
+      }
+    },
     start,
     stop,
   };
   registerWorkerInferenceSessionControl(service, {
-    beginDrain: inference.beginSessionDrain,
+    reserveDrain: inference.reserveSessionDrain,
     captureCancel: inference.captureSessionCancellation,
     resolveTarget: inference.resolveSessionTargetForRunId,
   });

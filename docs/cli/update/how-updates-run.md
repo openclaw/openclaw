@@ -78,6 +78,14 @@ stop with a warning naming those counts; missing custody information never block
 the update. The next Gateway starts with the refreshed service policy. An operator drop-in
 that still shortens the native timeout is preserved and reported.
 
+An already replaced Gateway that rejects connections because its runtime files
+are unavailable is stopped through its service owner with a warning instead of
+waiting for an RPC it cannot serve. For the older error emitted by published
+June Gateways, this also requires a live legacy lock and local listener matching
+the owned service PID. Listener ownership, the lock, and native service identity
+are rechecked before stopping. Missing listener attribution or an unrelated
+connection error keeps the normal drain path.
+
 Maintenance drain uses the service's local credentials, including an existing
 paired operator identity when no shared token or password is configured. It does
 not create an identity or request new pairing. Older installed updaters that omit
@@ -171,6 +179,26 @@ maintenance until activation, recording a warning. Required configuration,
 database ownership, schema, and migration checks still run before readiness;
 plugin runtime loading remains part of validation. The serving Gateway prepares
 its session catalogs and maintenance normally after activation.
+
+After the canary passes, the updater records temporary-copy cleanup and previous-Gateway
+readiness verification as active steps. `openclaw update status`, including `--json`,
+shows the recorded operation, wait reason, start time, and budget. Readiness observations
+refresh at most every 30 seconds within each probe stage. Verification checks the managed
+service, listener identity, installed version/build, health RPC, and HTTP readiness.
+Its implicit allowance is ten times the canary startup duration, with a five-minute minimum
+and one-hour ceiling; an explicit `--timeout` takes precedence. The ceiling preserves
+headroom for slow hardware while bounding observation of the already-serving Gateway.
+Expiry records a warning and continues with previous-Gateway readiness unverified;
+automatic rollback cannot restart an unverified previous Gateway. Run
+`openclaw gateway status --deep --require-rpc` to inspect it.
+
+Each disposable-copy cleanup has a five-minute allowance. If removal takes longer,
+the update records a warning and continues; removal may still finish in the background.
+The warning names the temporary path and explains cleanup after the updater exits.
+These progress improvements require the repaired updater on the next update hop.
+An already-running 2026.9.5 updater retains its original silent verification window;
+independent `openclaw gateway status --deep --require-rpc` and `/readyz` probes can show
+whether the old Gateway is still serving, but do not establish the updater's wait reason.
 
 Update build and validation processes resolve source-linked plugin SDKs from
 the staged installation root, even when the serving source launcher passed its own checkout
@@ -425,6 +453,14 @@ plugin convergence, and any required full Doctor migrations. Downloads therefore
 count toward downtime. Unchanged plugins use read-only validation and readiness
 checks without another full Doctor pass. Service ownership is revalidated after
 convergence, and final runtime verification checks the resulting snapshot.
+
+On Windows, Scheduled Task autostart stays suspended until the candidate finalizer
+activates the updated Gateway. After migration, the retained updater checks its
+live executor lease without reopening the newer state database. Plugin version
+drift remains a warning while the candidate completes activation. This handoff
+repair applies when the updated driver runs the next upgrade; it cannot change
+an already-running 2026.9.5 updater. If that older driver stops with recovery
+pending, use the installed version's `openclaw update repair`.
 
 When Doctor cannot acquire maintenance before repair writes begin, finalization
 restores any service it stopped and exits successfully with a recorded warning.
@@ -807,7 +843,13 @@ the sentinel.
   <Step title="Activate and verify">
     Stops the managed service, checks out the exact staged commit SHA, publishes the prepared runtime, and runs required Doctor migrations. Core dependencies and the checkout build were prepared before downtime; plugin convergence follows while the service remains stopped.
 
+    Every activated Git build runs post-update checks in a fresh process, including when local commits already ahead of upstream rebase without changing the commit or version. Activation captures the built commit and runtime content digest. At convergence completion, the update records one comparison against that activated runtime, including when finalization runs in the migrated candidate worker. A changed identity is reported as a verification failure.
+
+    The previous checkout and runtime remain available until final verification completes. A late verification failure restores the original configuration, source, and runtime and restarts a previously verified running service when the state-safety checks permit rollback. Incompatible state changes or independent source edits refuse destructive restoration and retain the named backups for recovery.
+
     If restoring the previous Git runtime fails, the Gateway stays stopped and the failed rollback step records the filesystem error. Pending originals remain in sibling `<runtime>.openclaw-update-<id>.tmp/previous` directories. Preserve those backups and repair the installation before restarting; cleanup does not delete an unrestored original.
+
+    The installed updater owns fresh-process selection and backup retention. The published 2026.9.5 driver can still keep its old module graph after a same-commit rebuild and discard its previous runtime before verification. Installing newer candidate code cannot change that first hop. Use the [source-checkout manual update procedure](/install/updating/update-methods#source-checkout-servers-reference-script) to install the repaired driver, stopping the Gateway through its service manager before rebuilding. Subsequent updates use fresh verification and retained rollback.
 
   </Step>
   <Step title="Sync plugins">

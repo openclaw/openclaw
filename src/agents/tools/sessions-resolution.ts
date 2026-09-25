@@ -158,29 +158,21 @@ export async function lookupRequesterSessionOwnership(params: {
 
 function looksLikeSessionKey(value: string): boolean {
   const raw = normalizeOptionalString(value) ?? "";
-  if (!raw) {
-    return false;
-  }
   // These are canonical key shapes that should never be treated as sessionIds.
-  if (raw === "main" || raw === "global" || raw === "unknown" || raw === "current") {
-    return true;
-  }
-  if (isAcpSessionKey(raw)) {
-    return true;
-  }
-  if (raw.startsWith("agent:")) {
-    return true;
-  }
-  if (raw.startsWith("cron:") || raw.startsWith("hook:")) {
-    return true;
-  }
-  if (raw.startsWith("node-") || raw.startsWith("node:")) {
-    return true;
-  }
-  if (raw.includes(":group:") || raw.includes(":channel:")) {
-    return true;
-  }
-  return false;
+  return (
+    raw === "main" ||
+    raw === "global" ||
+    raw === "unknown" ||
+    raw === "current" ||
+    isAcpSessionKey(raw) ||
+    raw.startsWith("agent:") ||
+    raw.startsWith("cron:") ||
+    raw.startsWith("hook:") ||
+    raw.startsWith("node-") ||
+    raw.startsWith("node:") ||
+    raw.includes(":group:") ||
+    raw.includes(":channel:")
+  );
 }
 
 export function shouldResolveSessionIdInput(value: string): boolean {
@@ -221,20 +213,12 @@ async function requestResolvedSession(
   params: Record<string, unknown> & { allowMissing?: boolean },
   callGateway: GatewayCaller,
 ): Promise<{ agentId?: string; key: string } | undefined> {
-  const toResolvedSession = (result: { agentId?: unknown; key?: unknown } | undefined) => {
-    const key = normalizeOptionalString(result?.key);
-    if (!key) {
-      return undefined;
-    }
-    const agentId = normalizeOptionalString(result?.agentId);
-    return { key, ...(agentId ? { agentId } : {}) };
-  };
+  let result: { agentId?: unknown; key?: unknown } | undefined;
   try {
-    const result = await callGateway<{ agentId?: unknown; key?: unknown }>({
+    result = await callGateway<{ agentId?: unknown; key?: unknown }>({
       method: "sessions.resolve",
       params,
     });
-    return toResolvedSession(result);
   } catch (error) {
     const olderGatewayRejectedProbe =
       params.allowMissing === true &&
@@ -249,12 +233,17 @@ async function requestResolvedSession(
     // Retry without it for mixed-version correctness; remove at the next protocol break.
     const legacyParams: Record<string, unknown> = { ...params };
     delete legacyParams.allowMissing;
-    const result = await callGateway<{ agentId?: unknown; key?: unknown }>({
+    result = await callGateway<{ agentId?: unknown; key?: unknown }>({
       method: "sessions.resolve",
       params: legacyParams,
     });
-    return toResolvedSession(result);
   }
+  const key = normalizeOptionalString(result?.key);
+  if (!key) {
+    return undefined;
+  }
+  const agentId = normalizeOptionalString(result?.agentId);
+  return { key, ...(agentId ? { agentId } : {}) };
 }
 
 function buildSessionResolveQuery(params: {

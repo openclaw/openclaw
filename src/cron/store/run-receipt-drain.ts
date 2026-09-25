@@ -1,32 +1,33 @@
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
-import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import type { DB } from "../../state/openclaw-state-db.generated.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
+import { isCronRunReceiptOwnerStale } from "./run-receipt-store.js";
 
 /** A serving process cannot attest drainage while another receipt owner remains active. */
-export function hasActiveCronRunReceiptsForAgent(agentId: string): boolean {
-  const { db } = openOpenClawStateDatabase();
-  if (!tableExists(db, "cron_run_receipts")) {
+export async function hasActiveCronRunReceiptsForAgent(agentId: string): Promise<boolean> {
+  const reply = await executeExistingOpenClawStateRead(
+    {},
+    { type: "cron.activeReceiptOwners", agentId },
+    { current: true },
+  );
+  if (!reply) {
     return false;
   }
-  const owners = executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<Pick<DB, "cron_run_receipts">>(db)
-      .selectFrom("cron_run_receipts")
-      .select(["owner_pid", "owner_start_time"])
-      .distinct()
-      .where("status", "=", "running")
-      .where("agent_id", "=", agentId),
-  ).rows;
-  return owners.some((owner) => {
-    if (isPidDefinitelyDead(owner.owner_pid)) {
+  if (!reply.ok || reply.type !== "cron.activeReceiptOwners") {
+    throw new Error("Cron receipt owners are unavailable for drainage.");
+  }
+  return reply.owners.some((owner) => {
+    if (owner.ownerPid === process.pid) {
+      // A retired writer can leave a running row after its core settles. The receipt
+      // owner retains local liveness until that settlement or its safe finish retry.
+      return !isCronRunReceiptOwnerStale(owner);
+    }
+    if (isPidDefinitelyDead(owner.ownerPid)) {
       return false;
     }
-    const startedAt = getFileLockProcessStartTime(owner.owner_pid);
+    const startedAt = getFileLockProcessStartTime(owner.ownerPid);
     // Unlike scheduling recovery, cleanup cannot use age to dismiss an unverifiable owner.
     return (
-      owner.owner_start_time === null || startedAt === null || owner.owner_start_time === startedAt
+      owner.ownerStartTime === null || startedAt === null || owner.ownerStartTime === startedAt
     );
   });
 }

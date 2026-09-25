@@ -24,7 +24,7 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 - Session rosters apply nested Gateway row snapshots through the shared reconciler.
   `lib/sessions/session-list-query.ts` owns whether a snapshot preserves a held
-  window: lifecycle, patch/send/steer, run-start/settlement/capacity, and title
+  window: lifecycle, placement, patch/send/steer, run-start/settlement/capacity, and title
   updates can avoid list reads when membership, lineage, and pin/owner/archive
   facts stay unchanged and recency does not move backwards. Tree events require
   the Gateway's complete, access-scoped `ancestorSessions` snapshots; each row

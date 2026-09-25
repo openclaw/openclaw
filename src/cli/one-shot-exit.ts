@@ -2,7 +2,7 @@ import { drainProcessOutput } from "../process/output-drain.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import { waitForPendingCliDisposers } from "./runtime-cleanup.js";
-import { waitForCliSignalExit } from "./signal-exit-barrier.js";
+import { exitAfterSignalExitBarriers, waitForCliSignalExit } from "./signal-exit-barrier.js";
 
 type VitestWorkerMarkers = {
   tinypoolState?: unknown;
@@ -175,7 +175,7 @@ export function watchCliExitAfterOutput(exitCode: number, onStall: () => void): 
     try {
       onStall();
     } finally {
-      defaultRuntime.exit(exitCode);
+      exitAfterSignalExitBarriers(exitCode);
     }
   }, 10_000).unref();
 }

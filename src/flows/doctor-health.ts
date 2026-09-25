@@ -199,7 +199,7 @@ async function runDoctorHealthFlowWithResult(
         maintenance &&
         databasePreflight?.agentDatabaseMigrationDiscovery?.discovery.deletionJournal.status ===
           "unavailable";
-      const schemas =
+      let schemas =
         databasePreflight && !refreshRecoveryInventory
           ? databasePreflight
           : await prepareDoctorDatabasePreflight();
@@ -218,6 +218,31 @@ async function runDoctorHealthFlowWithResult(
         postCoreSchemaRepair: writeAuthority?.postCoreSchemaRepair,
       });
 
+      if (maintenance && (options.repair === true || options.yes === true)) {
+        const {
+          repairOpenClawStateDatabaseIndexesForDoctor,
+          repairOpenClawStateDatabaseReadabilityForDoctor,
+        } = await import("../state/openclaw-state-db.js");
+        // Restore physical indexes, then legacy catalog readability before config discovery.
+        let repairedState = false;
+        for (const repair of [
+          repairOpenClawStateDatabaseIndexesForDoctor,
+          repairOpenClawStateDatabaseReadabilityForDoctor,
+        ]) {
+          const result = repair({ env: process.env });
+          repairedState ||= result.changes.length > 0;
+          if (result.warnings.length > 0) {
+            throw new Error(result.warnings.join("\n"));
+          }
+          for (const change of result.changes) {
+            effectiveRuntime.log(change);
+          }
+        }
+        if (repairedState) {
+          schemas = await prepareDoctorDatabasePreflight();
+        }
+      }
+
       const { repairDoctorAgentDeletionJournal } =
         await import("../commands/doctor-agent-deletion-journal.js");
       const deletionJournal = await repairDoctorAgentDeletionJournal({
@@ -230,21 +255,6 @@ async function runDoctorHealthFlowWithResult(
       }
       for (const message of deletionJournal.warnings) {
         effectiveRuntime.log(message);
-      }
-
-      if (maintenance && (options.repair === true || options.yes === true)) {
-        const { repairOpenClawStateDatabaseReadabilityForDoctor } =
-          await import("../state/openclaw-state-db.js");
-        // Restore catalog reads before config discovery; versioned migrations remain in its graph.
-        const readability = repairOpenClawStateDatabaseReadabilityForDoctor({
-          env: process.env,
-        });
-        if (readability.warnings.length > 0) {
-          throw new Error(readability.warnings.join("\n"));
-        }
-        for (const change of readability.changes) {
-          effectiveRuntime.log(change);
-        }
       }
 
       // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.

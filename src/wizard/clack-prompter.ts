@@ -39,8 +39,6 @@ import { WizardCancelledError, WizardNavigationError } from "./prompts.js";
 // Same species as the pixel-mascot banner, compressed into a four-column
 // spinner for long-running wizard steps.
 const CLAW_SPINNER_FRAMES = ["(\\/)", "(||)", "(--)", "(||)"];
-// Clack-backed WizardPrompter implementation for interactive CLI setup. It
-// converts the generic wizard prompt contract into styled Clack prompts.
 function guardCancel<T>(value: T | symbol, output: NodeJS.WriteStream, signal?: AbortSignal): T {
   if (value === CANCEL_SYMBOL) {
     if (!signal?.aborted) {
@@ -168,7 +166,6 @@ async function runPromptWithNavigation<T>(
 function normalizeSearchTokens(search: string): string[] {
   return normalizeLowercaseStringOrEmpty(search)
     .split(/\s+/)
-    .map((token) => token.trim())
     .filter((token) => token.length > 0);
 }
 
@@ -214,23 +211,18 @@ export function createClackPrompter(
       return await runPromptWithNavigation(
         params.navigation,
         async (promptSignal) => {
-          if (params.searchable) {
-            const prompt = params.navigation ? autocompleteWithNavigationFooter : autocomplete;
-            return await prompt({
-              message,
-              options,
-              initialValue: params.initialValue,
-              filter: tokenizedOptionFilter,
-              signal: promptSignal,
-              ...(params.navigation ? { navigation: params.navigation } : {}),
-              output,
-            });
-          }
-          const prompt = params.navigation ? selectWithNavigationFooter : select;
+          const prompt = params.searchable
+            ? params.navigation
+              ? autocompleteWithNavigationFooter
+              : autocomplete
+            : params.navigation
+              ? selectWithNavigationFooter
+              : select;
           return await prompt({
             message,
             options,
             initialValue: params.initialValue,
+            ...(params.searchable ? { filter: tokenizedOptionFilter } : {}),
             signal: promptSignal,
             ...(params.navigation ? { navigation: params.navigation } : {}),
             output,
@@ -247,25 +239,18 @@ export function createClackPrompter(
       return await runPromptWithNavigation(
         params.navigation,
         async (promptSignal) => {
-          if (params.searchable) {
-            const prompt = params.navigation
+          const prompt = params.searchable
+            ? params.navigation
               ? autocompleteMultiselectWithNavigationFooter
-              : autocompleteMultiselect;
-            return await prompt({
-              message,
-              options,
-              initialValues: params.initialValues,
-              filter: tokenizedOptionFilter,
-              signal: promptSignal,
-              ...(params.navigation ? { navigation: params.navigation } : {}),
-              output,
-            });
-          }
-          const prompt = params.navigation ? multiselectWithNavigationFooter : multiselect;
+              : autocompleteMultiselect
+            : params.navigation
+              ? multiselectWithNavigationFooter
+              : multiselect;
           return await prompt({
             message,
             options,
             initialValues: params.initialValues,
+            ...(params.searchable ? { filter: tokenizedOptionFilter } : {}),
             signal: promptSignal,
             ...(params.navigation ? { navigation: params.navigation } : {}),
             output,
@@ -276,30 +261,23 @@ export function createClackPrompter(
       );
     },
     text: async (params) => {
-      const validate = params.validate;
       return await runPromptWithNavigation(
         params.navigation,
         async (promptSignal) => {
-          const message = stylePromptMessage(params.message);
-          const validateInput = validate
-            ? (value: string | undefined) => validate(value ?? "")
-            : undefined;
-          if (params.sensitive) {
-            const prompt = params.navigation ? passwordWithNavigationFooter : password;
-            return await prompt({
-              message,
-              validate: validateInput,
-              ...(params.navigation ? { navigation: params.navigation } : {}),
-              signal: promptSignal,
-              output,
-            });
-          }
-          const prompt = params.navigation ? textWithNavigationFooter : text;
+          const validate = params.validate;
+          const prompt = params.sensitive
+            ? params.navigation
+              ? passwordWithNavigationFooter
+              : password
+            : params.navigation
+              ? textWithNavigationFooter
+              : text;
           return await prompt({
-            message,
-            initialValue: params.initialValue,
-            placeholder: params.placeholder,
-            validate: validateInput,
+            message: stylePromptMessage(params.message),
+            ...(!params.sensitive
+              ? { initialValue: params.initialValue, placeholder: params.placeholder }
+              : {}),
+            validate: validate ? (value: string | undefined) => validate(value ?? "") : undefined,
             ...(params.navigation ? { navigation: params.navigation } : {}),
             signal: promptSignal,
             output,

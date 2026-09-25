@@ -31,10 +31,10 @@ export type AgentWorkspaceAccess = {
   installSkillDependencies?: WorkspaceSkillLifecycle["installSkillDependencies"];
   /** Read native source tiers and execution-host facts without applying Gateway policy. */
   loadSkills?: (request: WorkspaceSkillSourceRequest) => Promise<WorkspaceSkillSources>;
-  /** Keep a host subscription alive until aborted; notify without transferring file contents. */
+  /** Keep the subscription alive until aborted; available certifies verified coverage after loss. */
   watchSkills?: (
     request: Pick<WorkspaceSkillSourceRequest, "sourcePlan" | "executionWorkspaceDir">,
-    onChange: (event: "change" | "unavailable") => void,
+    onChange: (event: "change" | "unavailable" | "available") => void,
     signal: AbortSignal,
   ) => Promise<void>;
   skillResources?: SkillResourceSourceReader;
@@ -118,51 +118,37 @@ export function registerAgentWorkspaceAccess(
   const lifetime = new AbortController();
   const assertCurrent = () => assertBindingCurrent(key, binding);
   // Retained methods must stop working when their service stops or is replaced.
-  const bridge: AgentWorkspaceAccess["bridge"] = {
-    async readFile(params) {
-      assertCurrent();
-      const result = await access.bridge.readFile(params);
-      assertCurrent();
+  const guardCall =
+    <Args extends unknown[], Result>(
+      call: (...args: Args) => Promise<Result>,
+      assertActive = assertCurrent,
+    ) =>
+    async (...args: Args): Promise<Result> => {
+      assertActive();
+      const result = await call(...args);
+      assertActive();
       return result;
-    },
+    };
+  const bridge: AgentWorkspaceAccess["bridge"] = {
+    readFile: guardCall((params) => access.bridge.readFile(params)),
     async writeFile(params) {
       assertCurrent();
       await access.bridge.writeFile(params);
       assertCurrent();
     },
-    async stat(params) {
-      assertCurrent();
-      const result = await access.bridge.stat(params);
-      assertCurrent();
-      return result;
-    },
+    stat: guardCall((params) => access.bridge.stat(params)),
   };
   const createFileExclusive = access.bridge.createFileExclusive?.bind(access.bridge);
   if (createFileExclusive) {
-    bridge.createFileExclusive = async (params) => {
-      assertCurrent();
-      const result = await createFileExclusive(params);
-      assertCurrent();
-      return result;
-    };
+    bridge.createFileExclusive = guardCall(createFileExclusive);
   }
   const readFileWithSource = access.bridge.readFileWithSource?.bind(access.bridge);
   if (readFileWithSource) {
-    bridge.readFileWithSource = async (params) => {
-      assertCurrent();
-      const result = await readFileWithSource(params);
-      assertCurrent();
-      return result;
-    };
+    bridge.readFileWithSource = guardCall(readFileWithSource);
   }
   const readDirectory = access.bridge.readDirectory?.bind(access.bridge);
   if (readDirectory) {
-    bridge.readDirectory = async (params) => {
-      assertCurrent();
-      const result = await readDirectory(params);
-      assertCurrent();
-      return result;
-    };
+    bridge.readDirectory = guardCall(readDirectory);
   }
   const boundAccess: AgentWorkspaceAccess = { bridge: Object.freeze(bridge) };
   const outboundMedia = access.outboundMedia;
@@ -170,12 +156,7 @@ export function registerAgentWorkspaceAccess(
     const readFile = outboundMedia.readFile.bind(outboundMedia);
     boundAccess.outboundMedia = Object.freeze({
       localRoots: Object.freeze([...outboundMedia.localRoots]),
-      async readFile(filePath: string, maxBytes: number) {
-        assertCurrent();
-        const data = await readFile(filePath, maxBytes);
-        assertCurrent();
-        return data;
-      },
+      readFile: guardCall(readFile),
     });
   }
   const memoryFiles = access.memoryFiles;
@@ -184,14 +165,9 @@ export function registerAgentWorkspaceAccess(
       assertCurrent();
       memoryFiles.assertCurrent();
     };
-    const guardMemoryCall =
-      <Args extends unknown[], Result>(call: (...args: Args) => Promise<Result>) =>
-      async (...args: Args): Promise<Result> => {
-        assertMemoryCurrent();
-        const result = await call(...args);
-        assertMemoryCurrent();
-        return result;
-      };
+    const guardMemoryCall = <Args extends unknown[], Result>(
+      call: (...args: Args) => Promise<Result>,
+    ) => guardCall(call, assertMemoryCurrent);
     const maintenance = memoryFiles.maintenance;
     boundAccess.memoryFiles = Object.freeze<MemoryWorkspaceFiles>({
       assertCurrent: assertMemoryCurrent,
@@ -228,36 +204,11 @@ export function registerAgentWorkspaceAccess(
             }),
           }
         : {}),
-      async listFiles(...params) {
-        assertMemoryCurrent();
-        const result = await memoryFiles.listFiles(...params);
-        assertMemoryCurrent();
-        return result;
-      },
-      async inspectFile(...params) {
-        assertMemoryCurrent();
-        const result = await memoryFiles.inspectFile(...params);
-        assertMemoryCurrent();
-        return result;
-      },
-      async readFile(params) {
-        assertMemoryCurrent();
-        const result = await memoryFiles.readFile(params);
-        assertMemoryCurrent();
-        return result;
-      },
-      async readForIndexing(filePath) {
-        assertMemoryCurrent();
-        const result = await memoryFiles.readForIndexing(filePath);
-        assertMemoryCurrent();
-        return result;
-      },
-      async buildMultimodalChunk(entry) {
-        assertMemoryCurrent();
-        const result = await memoryFiles.buildMultimodalChunk(entry);
-        assertMemoryCurrent();
-        return result;
-      },
+      listFiles: guardMemoryCall((...params) => memoryFiles.listFiles(...params)),
+      inspectFile: guardMemoryCall((...params) => memoryFiles.inspectFile(...params)),
+      readFile: guardMemoryCall((params) => memoryFiles.readFile(params)),
+      readForIndexing: guardMemoryCall((filePath) => memoryFiles.readForIndexing(filePath)),
+      buildMultimodalChunk: guardMemoryCall((entry) => memoryFiles.buildMultimodalChunk(entry)),
       async watch(request, onChange, signal) {
         assertMemoryCurrent();
         const active = AbortSignal.any([signal, lifetime.signal]);
@@ -291,12 +242,7 @@ export function registerAgentWorkspaceAccess(
   }
   const installSkillDependencies = access.installSkillDependencies?.bind(access);
   if (installSkillDependencies) {
-    boundAccess.installSkillDependencies = async (params) => {
-      assertCurrent();
-      const result = await installSkillDependencies(params);
-      assertCurrent();
-      return result;
-    };
+    boundAccess.installSkillDependencies = guardCall(installSkillDependencies);
   }
   const loadSkills = access.loadSkills?.bind(access);
   if (loadSkills) {
@@ -342,18 +288,10 @@ export function registerAgentWorkspaceAccess(
         options.signal?.throwIfAborted();
         return result;
       },
-      async resolveExplicitSkill(selection) {
-        assertCurrent();
-        const result = await skillResources.resolveExplicitSkill(selection);
-        assertCurrent();
-        return result;
-      },
-      async readSkillFiles(skill, options) {
-        assertCurrent();
-        const result = await skillResources.readSkillFiles(skill, options);
-        assertCurrent();
-        return result;
-      },
+      resolveExplicitSkill: guardCall((selection) =>
+        skillResources.resolveExplicitSkill(selection),
+      ),
+      readSkillFiles: guardCall((skill, options) => skillResources.readSkillFiles(skill, options)),
     });
   }
   const applySkillRoot = access.applySkillRoot?.bind(access);
@@ -384,12 +322,9 @@ export function registerAgentWorkspaceAccess(
   const clawHubSkills = access.clawHubSkills;
   if (clawHubSkills) {
     boundAccess.clawHubSkills = Object.freeze({
-      async planClawHubSkillUninstall(params) {
-        assertCurrent();
-        const result = await clawHubSkills.planClawHubSkillUninstall(params);
-        assertCurrent();
-        return result;
-      },
+      planClawHubSkillUninstall: guardCall((params) =>
+        clawHubSkills.planClawHubSkillUninstall(params),
+      ),
       async applyClawHubSkillUninstall(plan, options) {
         assertCurrent();
         const result = await clawHubSkills.applyClawHubSkillUninstall(plan, {
@@ -406,53 +341,32 @@ export function registerAgentWorkspaceAccess(
         assertCurrent();
         return result;
       },
-      async resolveClawHubSkillVerificationTarget(params) {
-        assertCurrent();
-        const result = await clawHubSkills.resolveClawHubSkillVerificationTarget(params);
-        assertCurrent();
-        return result;
-      },
-      async readClawHubSkillsLockfile(params) {
-        assertCurrent();
-        const result = await clawHubSkills.readClawHubSkillsLockfile(params);
-        assertCurrent();
-        return result;
-      },
-      async resolveRequestedUpdateSlug(params) {
-        assertCurrent();
-        const result = await clawHubSkills.resolveRequestedUpdateSlug(params);
-        assertCurrent();
-        return result;
-      },
-      async resolveTrackedUpdateTarget(params) {
-        assertCurrent();
-        const result = await clawHubSkills.resolveTrackedUpdateTarget(params);
-        assertCurrent();
-        return result;
-      },
-      async guardTrackedSkillLocalState(params) {
-        assertCurrent();
-        const result = await clawHubSkills.guardTrackedSkillLocalState(params);
-        assertCurrent();
-        return result;
-      },
-      async preflightSkillOwnerState(params) {
-        assertCurrent();
-        const result = await clawHubSkills.preflightSkillOwnerState(params);
-        assertCurrent();
-        return result;
-      },
+      resolveClawHubSkillVerificationTarget: guardCall((params) =>
+        clawHubSkills.resolveClawHubSkillVerificationTarget(params),
+      ),
+      readClawHubSkillsLockfile: guardCall((params) =>
+        clawHubSkills.readClawHubSkillsLockfile(params),
+      ),
+      resolveRequestedUpdateSlug: guardCall((params) =>
+        clawHubSkills.resolveRequestedUpdateSlug(params),
+      ),
+      resolveTrackedUpdateTarget: guardCall((params) =>
+        clawHubSkills.resolveTrackedUpdateTarget(params),
+      ),
+      guardTrackedSkillLocalState: guardCall((params) =>
+        clawHubSkills.guardTrackedSkillLocalState(params),
+      ),
+      preflightSkillOwnerState: guardCall((params) =>
+        clawHubSkills.preflightSkillOwnerState(params),
+      ),
       async assertClawHubSkillInstallState(params) {
         assertCurrent();
         await clawHubSkills.assertClawHubSkillInstallState(params);
         assertCurrent();
       },
-      async readInstalledClawHubSkillFiles(params) {
-        assertCurrent();
-        const result = await clawHubSkills.readInstalledClawHubSkillFiles(params);
-        assertCurrent();
-        return result;
-      },
+      readInstalledClawHubSkillFiles: guardCall((params) =>
+        clawHubSkills.readInstalledClawHubSkillFiles(params),
+      ),
       async recordClawHubSkillInstall(params) {
         assertCurrent();
         await clawHubSkills.recordClawHubSkillInstall(params);

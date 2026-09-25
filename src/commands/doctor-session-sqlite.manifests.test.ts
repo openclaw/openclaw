@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import * as replaceFile from "@openclaw/fs-safe/atomic";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
-import * as replaceFile from "../infra/replace-file.js";
 import { assertSafeSessionSqliteMigrationMove } from "../infra/session-sqlite-migration-manifest.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
@@ -15,6 +15,10 @@ import {
   canonicalTestPath,
   useDoctorSessionSqliteTestFixture,
 } from "./doctor-session-sqlite.test-support.js";
+
+vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/atomic")>()),
+}));
 
 const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
 

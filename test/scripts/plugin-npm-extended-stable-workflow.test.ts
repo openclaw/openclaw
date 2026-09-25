@@ -18,6 +18,7 @@ import { validateActiveExtendedStableLine } from "../../scripts/openclaw-npm-ext
 import { createStablePluginNpmBootstrapApproval } from "../../scripts/plugin-npm-bootstrap-approval.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
+import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
 const workflowPath = ".github/workflows/plugin-npm-release.yml";
 const metaPackagePath = "extensions/meta/package.json";
@@ -1006,7 +1007,7 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
     expect(oidc?.if).toContain("inputs.trusted_publisher_preflight");
     expect(oidc?.if).toContain("has_selection == 'true'");
     expect(oidc?.environment).toBe("npm-release");
-    expect(oidc?.["runs-on"]).toBe("ubuntu-latest");
+    expect(evaluateWorkflowRunner(oidc?.["runs-on"])).toBe("ubuntu-latest");
     expect(oidc?.permissions).toEqual({ contents: "read", "id-token": "write" });
     expect(oidc?.strategy).toBeUndefined();
     expect(step(oidc, "Checkout trusted OIDC preflight tooling").with).toMatchObject({

@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { sameFileIdentity } from "../../infra/fs-safe-advanced.js";
 import { readRegularFile } from "../../infra/fs-safe.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
@@ -570,6 +570,7 @@ export async function updateGitInstall(params: {
                   runStep: (stepParams) =>
                     runUpdateStep({ ...stepParams, progress: params.progress }),
                   timeoutMs: effectiveTimeout,
+                  workTimeoutMs: params.timeoutMs ?? null,
                   env: mergeProcessEnv([installEnv, candidateEnv]),
                   installCwd: candidateRoot,
                   expectedGitCheckout: { root: candidateRoot, sha: candidateSha },
@@ -583,11 +584,13 @@ export async function updateGitInstall(params: {
                       managedServiceEnv: params.getManagedServiceEnv(),
                       root,
                       timeoutMs: effectiveTimeout,
+                      workTimeoutMs: params.timeoutMs ?? null,
                     }),
                 });
               },
             }
           : {
+              onTransaction: params.onTransaction,
               runGitDoctor: (root, results) =>
                 runPackageUpdateDoctor({
                   ...params,
@@ -595,6 +598,7 @@ export async function updateGitInstall(params: {
                   managedServiceEnv: params.getManagedServiceEnv(),
                   root,
                   timeoutMs: effectiveTimeout,
+                  workTimeoutMs: params.timeoutMs ?? null,
                 }),
             }),
       },

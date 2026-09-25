@@ -226,10 +226,7 @@ function hasCustomAgentDirOverride(env: NodeJS.ProcessEnv): boolean {
 }
 
 function resolveConcreteBindingAccountId(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const accountId = value.trim();
+  const accountId = typeof value === "string" ? value.trim() : undefined;
   return accountId && accountId !== "*" ? accountId : undefined;
 }
 
@@ -1655,6 +1652,8 @@ function buildLegacyStateMigrationSteps(
     finalSteps.push(
       finalStep("sessions", () =>
         migrateLegacySessions(detected, now, {
+          cfg: params.sessionConfig ?? params.config,
+          env,
           recoverCorruptTargetStore: params.recoverCorruptTargetStore,
           legacySessionSurfaces: params.legacySessionSurfaces,
         }),

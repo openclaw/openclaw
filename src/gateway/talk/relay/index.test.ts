@@ -5,11 +5,10 @@ import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 /**
  * Tests talk realtime relay event forwarding and connection cleanup.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { setActiveEmbeddedRun } from "../../../agents/embedded-agent-runner/runs.js";
-import { testing as embeddedRunTesting } from "../../../agents/embedded-agent-runner/runs.test-support.js";
 import {
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
@@ -18,18 +17,14 @@ import type { OpenClawConfig } from "../../../config/types.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { drainGlobalSingletonLifecycleState } from "../../../shared/global-singleton.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
+import { captureOpenClawStateDatabaseReadAdmission } from "../../../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import {
   authorizeClientVoiceConfirmation,
   bindAuthorizedClientVoiceConfirmation,
   checkClientVoiceToolConfirmationPolicy,
 } from "../../../talk/client-voice-confirmation.js";
-import {
-  noteClientVoiceConfirmationUtteranceForTest as noteClientVoiceConfirmationUtterance,
-  resetClientVoiceConfirmationStateForTest,
-} from "../../../talk/client-voice-confirmation.test-support.js";
-import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session.js";
+import { noteClientVoiceConfirmationUtteranceForTest as noteClientVoiceConfirmationUtterance } from "../../../talk/client-voice-confirmation.test-support.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import { resolveRealtimeVoiceProviderCapabilities } from "../../../talk/provider-resolver.js";
 import {
@@ -40,10 +35,6 @@ import {
   type RealtimeVoiceProviderCapabilities,
 } from "../../../talk/provider-types.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController, type ChatAbortControllerEntry } from "../../chat-abort.js";
 import { createChatRunState } from "../../server-chat-state.js";
 import { cleanupTalkConnection } from "../session-registry.js";
@@ -71,6 +62,7 @@ import {
 import { createIdleRelayProvider, makeRelayTransport } from "./index.test-support.js";
 import { resolveTalkRealtimeRelayPresentation } from "./issues.js";
 import { closeRelaySession } from "./operations.js";
+import { usePersistentRelayTestState } from "./session-state.test-support.js";
 import { drainingRelaySessions, relaySessions } from "./state.js";
 import { MAX_RELAY_TOOL_CALL_IDENTITIES } from "./tool-call-ledger.js";
 
@@ -172,7 +164,7 @@ describe("talk realtime relay provider error projection", () => {
 });
 
 describe("talk realtime gateway relay", () => {
-  let testState: OpenClawTestState | undefined;
+  const { cleanupIsolatedRelayState } = usePersistentRelayTestState(activeRelaySessions);
 
   it("rejects a late relay startup-failure claim while consuming the retained owner", () => {
     const adoptCompletionClaims = vi.fn();
@@ -233,16 +225,6 @@ describe("talk realtime gateway relay", () => {
     ).revokeRequesterFinal?.();
 
     expect(revokeRequesterFinal).toHaveBeenCalledOnce();
-  });
-
-  beforeEach(async () => {
-    testState = await createOpenClawTestState({
-      label: "talk-realtime-relay",
-      scenario: "minimal",
-    });
-    // The RPC owner creates this row before starting a relay. Explicit missing-key
-    // tests keep their own target and isolated state instead of inheriting this row.
-    await ensureClientVoiceAgentSessionEntry({ agentId: "main", sessionKey: "agent:main:main" });
   });
 
   it.each([
@@ -453,37 +435,6 @@ describe("talk realtime gateway relay", () => {
     const broadcastJson = JSON.stringify(events);
     for (const marker of Object.values(markers)) {
       expect(broadcastJson).not.toContain(marker);
-    }
-  });
-
-  afterEach(async () => {
-    try {
-      for (const [relaySessionId, connId] of activeRelaySessions) {
-        try {
-          await stopTalkRealtimeRelaySessionRaw({ relaySessionId, connId });
-        } catch (error) {
-          if (
-            !(error instanceof Error) ||
-            !error.message.includes("Unknown realtime relay session")
-          ) {
-            throw error;
-          }
-        }
-      }
-      await Promise.all(
-        [...drainingRelaySessions].map(
-          (session) =>
-            session.closing?.completion ?? session.voiceSessionClose ?? Promise.resolve(),
-        ),
-      );
-    } finally {
-      activeRelaySessions.clear();
-      vi.useRealTimers();
-      clientVoiceSessionTesting.reset();
-      resetClientVoiceConfirmationStateForTest();
-      embeddedRunTesting.resetActiveEmbeddedRuns();
-      await testState?.cleanup();
-      testState = undefined;
     }
   });
 
@@ -705,9 +656,8 @@ describe("talk realtime gateway relay", () => {
       cleanupTalkConnection("conn-other", logGateway);
       expect(bridgeCloses[2]).toHaveBeenCalledOnce();
     } finally {
+      await cleanupIsolatedRelayState(tempDir);
       clientVoiceSessionTesting.reset();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
       envSnapshot.restore();
     }
   });
@@ -893,6 +843,9 @@ describe("talk realtime gateway relay", () => {
   ])(
     "appends relay transcripts from %s to %s",
     async (sessionKey, canonicalKey, mainKey, scope) => {
+      const outerStateAdmission = captureOpenClawStateDatabaseReadAdmission(
+        resolveOpenClawStateSqlitePath(),
+      );
       const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
       const tempDir = await fs.realpath(
         await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-relay-voice-")),
@@ -968,11 +921,12 @@ describe("talk realtime gateway relay", () => {
           ),
         );
       } finally {
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
+        await cleanupIsolatedRelayState(tempDir);
         envSnapshot.restore();
         await fs.rm(tempDir, { recursive: true, force: true });
       }
+      // Nested relay storage cannot revoke the beforeEach fixture or its worker leases.
+      expect(() => outerStateAdmission.assertCurrent()).not.toThrow();
     },
   );
 
@@ -1091,8 +1045,7 @@ describe("talk realtime gateway relay", () => {
       );
     } finally {
       releaseQueue();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      await cleanupIsolatedRelayState(tempDir);
       envSnapshot.restore();
     }
   });
@@ -1148,9 +1101,8 @@ describe("talk realtime gateway relay", () => {
         ),
       );
     } finally {
+      await cleanupIsolatedRelayState(tempDir);
       clientVoiceSessionTesting.reset();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
       envSnapshot.restore();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -1202,8 +1154,7 @@ describe("talk realtime gateway relay", () => {
       );
       expect(clientVoiceSessionTesting.readRecord("ops", session.relaySessionId)).toBeUndefined();
     } finally {
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      await cleanupIsolatedRelayState(tempDir);
       envSnapshot.restore();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -1249,8 +1200,7 @@ describe("talk realtime gateway relay", () => {
       });
       expect(clientVoiceSessionTesting.readRecord("ops", session.relaySessionId)).toBeUndefined();
     } finally {
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      await cleanupIsolatedRelayState(tempDir);
       envSnapshot.restore();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -1312,8 +1262,7 @@ describe("talk realtime gateway relay", () => {
       );
       expect(warn).toHaveBeenCalledTimes(1);
     } finally {
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      await cleanupIsolatedRelayState(tempDir);
       envSnapshot.restore();
       await fs.rm(tempDir, { recursive: true, force: true });
     }

@@ -191,7 +191,7 @@ export async function captureGitHubPublicationRequester(
 ): Promise<{ requester: GitHubPublicationRequester; release: () => void }> {
   options.signal?.throwIfAborted();
   options.sessionMutationAuthorization?.assertCurrent();
-  const source = captureGatewayOperatorRunAuthority(options);
+  const source = await captureGatewayOperatorRunAuthority(options);
   let identity: PreparedProfileIdentity | undefined;
   let sessionFacts: PreparedPublicationSession | undefined;
   const release = () => {
