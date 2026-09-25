@@ -28,7 +28,7 @@ import {
   sanitizeToolArgs,
   setActiveEmbeddedRun,
   type AgentHarnessAttemptParamsV2,
-  type AgentHarnessAttemptResult,
+  type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
@@ -56,7 +56,7 @@ export async function runAgentsApiAttempt(
     sessionKey: string;
     storePath: string;
   },
-): Promise<AgentHarnessAttemptResult> {
+): Promise<EmbeddedRunAttemptResult> {
   const startedAtMs = Date.now();
   const cancellationState = {
     explicitCancellationObserved: false,
@@ -83,7 +83,7 @@ export async function runAgentsApiAttempt(
       controller.signal.throwIfAborted();
     }
   };
-  let lastToolError: AgentHarnessAttemptResult["lastToolError"];
+  let lastToolError: EmbeddedRunAttemptResult["lastToolError"];
   let toolTerminalObserved = false;
   const observeToolTerminal = params.observeToolTerminal;
   const runParams: AgentHarnessAttemptParamsV2 = observeToolTerminal
@@ -488,7 +488,7 @@ export async function runAgentsApiAttempt(
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
     lifecycle.emitLifecycleTerminal({ phase: terminal.kind === "failed" ? "error" : "end" });
   }
-  const result: AgentHarnessAttemptResult = {
+  const result: EmbeddedRunAttemptResult = {
     terminal,
     sessionIdUsed: params.sessionId,
     sessionFileUsed: params.sessionFile,
