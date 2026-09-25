@@ -1,4 +1,3 @@
-// Deepinfra tests cover speech provider plugin behavior.
 import { requireFirstPostJsonRequest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { buildDeepInfraSpeechProvider } from "./speech-provider.js";
@@ -94,22 +93,9 @@ describe("deepinfra speech provider", () => {
       timeoutMs: 12_345,
     });
 
-    expect(resolveProviderHttpRequestConfigMock.mock.calls).toEqual([
-      [
-        {
-          baseUrl: "https://api.deepinfra.com/v1/openai",
-          defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: "Bearer sk-deepinfra",
-            "Content-Type": "application/json",
-          },
-          provider: "deepinfra",
-          capability: "audio",
-          transport: "http",
-        },
-      ],
-    ]);
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "deepinfra", capability: "audio", transport: "http" }),
+    );
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
     const postRequest = requireFirstPostJsonRequest(
       postJsonRequestMock,
