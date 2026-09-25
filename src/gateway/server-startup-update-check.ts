@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type { createGatewayUpdateCheck } from "../infra/update-startup.js";
@@ -138,11 +139,19 @@ export function createDeferredGatewayUpdateCheck(params: {
           return;
         }
         const updateCheck = owner;
-        initialization = (async () => updateCheck.initialize())().catch((err: unknown) => {
-          if (!stopped) {
-            params.log.warn(`gateway update status failed to initialize: ${String(err)}`);
-          }
-        });
+        // Install discovery spawns git/npm probes; skip it at startup when the
+        // operator opted out. Explicit update-status requests still reach the
+        // memoized lifecycle.initialize lazily through their own RPC paths.
+        const startupCheckDisabled =
+          params.getConfig().update?.checkOnStart === false ||
+          isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE);
+        initialization = startupCheckDisabled
+          ? undefined
+          : (async () => updateCheck.initialize())().catch((err: unknown) => {
+              if (!stopped) {
+                params.log.warn(`gateway update status failed to initialize: ${String(err)}`);
+              }
+            });
       })();
       await ownerReady;
       await new Promise<void>((resolve) => {
