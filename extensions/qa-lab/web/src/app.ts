@@ -7,6 +7,7 @@ import { getJson, getJsonNoStore, postJson, QaLabHttpError } from "./http.js";
 import { conversationSelectionKey, findConversationBySelectionKey } from "./ui-conversation-key.js";
 import { captureEventKey } from "./ui-render-capture-events.js";
 import { redactSensitiveText } from "./ui-render-capture-redaction.js";
+import { captureRenderState, restoreRenderState } from "./ui-render-state.js";
 import {
   type Bootstrap,
   type EvidenceEnvelope,
@@ -1617,8 +1618,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
   /* ---------- Render ---------- */
 
   function render() {
-    /* Preserve focused element id so we can restore focus after re-render */
-    const focusedId = (document.activeElement as HTMLElement)?.id || null;
+    const renderState = captureRenderState(root);
     const composerText = state.composer.text;
 
     root.innerHTML = renderQaLabUi(state);
@@ -1632,13 +1632,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       textEl.style.height = `${Math.min(textEl.scrollHeight, 120)}px`;
     }
 
-    /* Restore focus */
-    if (focusedId) {
-      const el = root.querySelector<HTMLElement>(`#${CSS.escape(focusedId)}`);
-      if (el && "focus" in el) {
-        el.focus();
-      }
-    }
+    restoreRenderState(root, renderState);
 
     if (
       state.activeTab === "capture" &&
