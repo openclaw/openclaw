@@ -115,6 +115,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     const explicitToolAllowlistSources = collectAttemptExplicitToolAllowlistSources({
       capabilityProfile: runtimeCapabilityProfile,
       toolsAllow: attempt.toolsAllow,
+      toolsAllowIsDefault: attempt.toolsAllowIsDefault,
     });
     const toolSearchRunPlan = buildToolSearchRunPlan({
       visibleTools: effectiveTools,
@@ -142,6 +143,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
           toolsEnabled,
           disableTools: attempt.disableTools,
           toolsAllowExplicitlyEmpty: preparedToolBase.effectiveToolsAllow?.length === 0,
+          scheduledToolPolicyMode: attempt.scheduledToolPolicy?.mode,
           skillWorkshop: {
             sandboxed: input.setup.sandbox?.enabled,
             libraryAuthoring: attempt.skillLibraryAuthoring,
