@@ -5,10 +5,7 @@ import {
   createChangedNodeTestShards,
   hasControlUiPerformanceAffectingChange,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import {
-  createNodeTestShardBundles,
-  createSelectedNodeTestShardBundles,
-} from "../../scripts/lib/ci-node-test-plan.mts";
+import { createNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
 import { isReleaseOnlyRuntimeTestFile } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
@@ -172,15 +169,14 @@ it("keeps UI fallback with its complete canonical owners beside precise core cha
     ]),
   );
   expect(new Set(preciseFiles).size).toBe(preciseFiles.length);
+  expect(preciseFiles.some(isReleaseOnlyRuntimeTestFile)).toBe(false);
   expect(precise!.length).toBeLessThan(shards!.length);
-  // Precise selection retains template capacity; complete plans rebalance measured jobs.
-  const preciseOwners = expectDefined(
-    createSelectedNodeTestShardBundles(preciseFiles, {
-      runnerBackend: options.runnerBackend,
-      includeReleaseOnlyRuntimeTests: true,
-    }),
-    "canonical precise UI consumer jobs",
-  );
+  // Precise targets already passed deferral, so their canonical template retains runtime rows.
+  const preciseOwners = createNodeTestShardBundles({
+    compactMode: "pull-request",
+    runnerBackend: "hybrid",
+    includeReleaseOnlyRuntimeTests: true,
+  });
   for (const job of precise ?? []) {
     for (const group of job.groups ?? []) {
       const ownerJob = expectDefined(
