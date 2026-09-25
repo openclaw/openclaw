@@ -101,7 +101,12 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
           ? lastRun
           : activeRun?.runId === campaignRunId
             ? activeRun
-            : await getUpdateRunAsync(campaignRunId);
+            : await getUpdateRunAsync(campaignRunId).catch((error: unknown) => {
+                context?.logGateway?.warn(
+                  `update.status campaign run lookup failed: ${formatErrorMessage(error)}`,
+                );
+                return undefined;
+              });
       gatewayUpdateCampaign.reconcileRun(campaignRun);
       const schedule = getUpdateSchedule();
       mark("response");

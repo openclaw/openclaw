@@ -137,6 +137,43 @@ describe("update history RPCs", () => {
     expect(gatewayUpdateCampaign.getState()).toBeUndefined();
   });
 
+  it("preserves status and retries campaign reconciliation after an exact-run read fails", async () => {
+    gatewayUpdateCampaign.announce({
+      target: { kind: "package", version: "2026.9.6" },
+      apply: async () => "applied",
+      onChange: (campaign) =>
+        setUpdateScheduleCache({
+          next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+        }),
+    });
+    gatewayUpdateCampaign.adopt();
+    const campaign = expectDefined(gatewayUpdateCampaign.getState());
+    const run = createUpdateRun({ trigger: "campaign", origin: { campaignId: campaign.id } });
+    gatewayUpdateCampaign.bindRun(campaign.id, run.runId);
+    finishUpdateRun(run.runId, { status: "failed" });
+    vi.spyOn(Date, "now").mockReturnValue(run.createdAtMs + 1);
+    const newer = createUpdateRun({ trigger: "cli" });
+    finishUpdateRun(newer.runId, { status: "skipped", reason: "dry-run" });
+    vi.spyOn(ledger, "getUpdateRunAsync").mockRejectedValueOnce(new Error("ledger read failed"));
+
+    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        lastRun: expect.objectContaining({ runId: newer.runId }),
+        schedule: { channel: "stable", autoEnabled: true, campaign },
+      }),
+    );
+    expect(gatewayUpdateCampaign.getState()).toEqual(campaign);
+    expect(warn).toHaveBeenCalledWith(
+      "update.status campaign run lookup failed: ledger read failed",
+    );
+    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ schedule: { channel: "stable", autoEnabled: true } }),
+    );
+    expect(gatewayUpdateCampaign.getState()).toBeUndefined();
+  });
+
   it.each(["running", "unrelated"] as const)(
     "keeps an applying campaign when the latest run is %s",
     async (kind) => {
