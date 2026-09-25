@@ -1478,7 +1478,6 @@ printf 'status=%s\\n' "$status"
     );
     expect(template).toContain("EnvironmentFile={{OPENCLAW_CONFIG_DIR}}/.env");
     expect(template).toContain("PublishPort=127.0.0.1:18789:18789");
-    expect(template).toContain("Exec=node dist/index.js gateway --bind lan --port 18789");
     expect(template).not.toContain("/home/admin");
   });
 

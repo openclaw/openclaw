@@ -162,8 +162,12 @@ Setup checks that the selected image supports `gateway --published-port` before
 changing saved configuration or replacing the Gateway. If the image is too old,
 select a compatible image or build this checkout from source, then retry.
 The check does not upgrade your selected image automatically. Manual launch
-uses the checked image ID for that invocation. Quadlet setup records that image
-ID in the generated service, so rerun setup to select a different image.
+uses the checked image ID for that invocation. Quadlet retains the selected image
+name so pulling or rebuilding that image and restarting the service selects the
+updated image. Each new container checks its own Gateway help before starting.
+An older image with the existing `--port` option starts with its original command
+and a diagnostic that mapped-port origin defaults require a compatible image;
+failed or malformed help prevents startup. Saved origin policy remains unchanged.
 
 Useful env vars for the manual launcher (persist these in `~/.openclaw/.env`; the launcher reads that file before finalizing container/image defaults):
 

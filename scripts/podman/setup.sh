@@ -169,7 +169,7 @@ else
   fi
 fi
 
-GATEWAY_IMAGE_ID="$(openclaw_prepare_gateway_image podman "$OPENCLAW_IMAGE" never)"
+openclaw_prepare_gateway_image podman "$OPENCLAW_IMAGE" never >/dev/null
 
 ENV_FILE="$OPENCLAW_CONFIG_DIR/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -206,7 +206,7 @@ if [[ "$INSTALL_QUADLET" == true ]]; then
   OPENCLAW_HOME_ESCAPED="$(escape_sed_replacement_pipe_delim "$OPENCLAW_HOME")"
   OPENCLAW_CONFIG_ESCAPED="$(escape_sed_replacement_pipe_delim "$OPENCLAW_CONFIG_DIR")"
   OPENCLAW_WORKSPACE_ESCAPED="$(escape_sed_replacement_pipe_delim "$OPENCLAW_WORKSPACE_DIR")"
-  OPENCLAW_IMAGE_ESCAPED="$(escape_sed_replacement_pipe_delim "$GATEWAY_IMAGE_ID")"
+  OPENCLAW_IMAGE_ESCAPED="$(escape_sed_replacement_pipe_delim "$OPENCLAW_IMAGE")"
   OPENCLAW_CONTAINER_ESCAPED="$(escape_sed_replacement_pipe_delim "$OPENCLAW_CONTAINER_NAME")"
   sed \
     -e "s|{{OPENCLAW_HOME}}|$OPENCLAW_HOME_ESCAPED|g" \

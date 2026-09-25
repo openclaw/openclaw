@@ -4,6 +4,7 @@ import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { parseSystemdExecStart, splitSystemdLogicalLines } from "../../src/daemon/systemd-unit.js";
 import {
   cleanupDockerSetupSandboxRoot,
   collectMatchingLines,
@@ -1007,76 +1008,92 @@ describe("scripts/docker/setup.sh", () => {
     expect(syntaxCheck.stderr).not.toContain("declare: -A: invalid option");
   });
 
-  it.each([
-    {
-      name: "current",
-      help: "--port <port>\n--published-port <port>",
-      helpStatus: 0,
-      expectedStatus: 0,
-      mapped: true,
-    },
-    { name: "legacy", help: "--port <port>", helpStatus: 0, expectedStatus: 0, mapped: false },
-    {
-      name: "failed help",
-      help: "--port <port>\n--published-port <port>",
-      helpStatus: 1,
-      expectedStatus: 1,
-      mapped: false,
-    },
-    {
-      name: "malformed help",
-      help: "A note about --port <port>",
-      helpStatus: 0,
-      expectedStatus: 1,
-      mapped: false,
-    },
-  ])(
-    "preserves direct Compose image startup ($name)",
-    async ({ name, help, helpStatus, expectedStatus, mapped }) => {
-      const activeSandbox = requireSandbox(sandbox);
-      const parsed = parse(await readFile(join(repoRoot, "docker-compose.yml"), "utf8")) as {
-        services: { "openclaw-gateway": { command: string[] } };
-      };
-      const commandRoot = join(activeSandbox.rootDir, `compose-command-${name}`);
-      await mkdir(join(commandRoot, "dist"), { recursive: true });
-      await writeFile(
-        join(commandRoot, "dist", "index.js"),
-        `
+  describe.each(["Compose", "Quadlet"])("%s launch contract", (format) => {
+    it.each([
+      {
+        name: "current",
+        help: "--port <port>\n--published-port <port>",
+        helpStatus: 0,
+        expectedStatus: 0,
+        mapped: true,
+      },
+      { name: "legacy", help: "--port <port>", helpStatus: 0, expectedStatus: 0, mapped: false },
+      {
+        name: "failed help",
+        help: "--port <port>\n--published-port <port>",
+        helpStatus: 1,
+        expectedStatus: 1,
+        mapped: false,
+      },
+      {
+        name: "malformed help",
+        help: "A note about --port <port>",
+        helpStatus: 0,
+        expectedStatus: 1,
+        mapped: false,
+      },
+    ])(
+      "preserves selected image startup ($name)",
+      async ({ name, help, helpStatus, expectedStatus, mapped }) => {
+        const activeSandbox = requireSandbox(sandbox);
+        const parsed = parse(await readFile(join(repoRoot, "docker-compose.yml"), "utf8")) as {
+          services: { "openclaw-gateway": { command: string[] } };
+        };
+        const commandRoot = join(activeSandbox.rootDir, `compose-command-${name}`);
+        await mkdir(join(commandRoot, "dist"), { recursive: true });
+        await writeFile(
+          join(commandRoot, "dist", "index.js"),
+          `
       if (process.argv.includes("--help")) {
         console.log(${JSON.stringify(help)});
         process.exit(${helpStatus});
       } else console.log(JSON.stringify(process.argv.slice(2)));
     `,
-      );
-      const [command, ...args] = parsed.services["openclaw-gateway"].command.map((value) =>
-        value
-          .replaceAll("$$", "$")
-          .replace("${OPENCLAW_GATEWAY_BIND:-lan}", "lan")
-          .replace("${OPENCLAW_GATEWAY_PORT:-18789}", "19123"),
-      );
-      if (!command) {
-        throw new Error("Compose Gateway command must not be empty.");
-      }
-      const result = spawnSync(command, args, { cwd: commandRoot, encoding: "utf8" });
-      expect(result.status, result.stderr).toBe(expectedStatus);
-      if (expectedStatus === 0) {
-        expect(JSON.parse(result.stdout)).toEqual([
-          "gateway",
-          "--bind",
-          "lan",
-          "--port",
-          "18789",
-          ...(mapped ? ["--published-port", "19123"] : []),
-        ]);
-        if (!mapped) {
-          expect(result.stderr).toContain("mapped-port origin defaults require a compatible image");
+        );
+        const quadlet = await readFile(
+          join(repoRoot, "scripts/podman/openclaw.container.in"),
+          "utf8",
+        );
+        const exec = splitSystemdLogicalLines(quadlet).find((line) => line.startsWith("Exec="));
+        if (!exec) {
+          throw new Error("Quadlet Gateway Exec must exist.");
         }
-      } else {
-        expect(result.stdout).toBe("");
-        expect(result.stderr).toContain("Could not inspect Gateway help");
-      }
-    },
-  );
+        const selectedCommand =
+          format === "Compose"
+            ? parsed.services["openclaw-gateway"].command
+            : parseSystemdExecStart(exec.slice(5));
+        const [command, ...args] = selectedCommand.map((value) =>
+          value
+            .replaceAll("$$", "$")
+            .replace("${OPENCLAW_GATEWAY_BIND:-lan}", "lan")
+            .replace("${OPENCLAW_GATEWAY_PORT:-18789}", "19123"),
+        );
+        if (!command) {
+          throw new Error("Compose Gateway command must not be empty.");
+        }
+        const result = spawnSync(command, args, { cwd: commandRoot, encoding: "utf8" });
+        expect(result.status, result.stderr).toBe(expectedStatus);
+        if (expectedStatus === 0) {
+          expect(JSON.parse(result.stdout)).toEqual([
+            "gateway",
+            "--bind",
+            "lan",
+            "--port",
+            "18789",
+            ...(mapped ? ["--published-port", format === "Compose" ? "19123" : "18789"] : []),
+          ]);
+          if (!mapped) {
+            expect(result.stderr).toContain(
+              "mapped-port origin defaults require a compatible image",
+            );
+          }
+        } else {
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain("Could not inspect Gateway help");
+        }
+      },
+    );
+  });
 
   it("keeps docker-compose gateway Bonjour advertising in auto mode by default", async () => {
     const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");

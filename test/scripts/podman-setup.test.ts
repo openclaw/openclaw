@@ -122,16 +122,14 @@ esac`,
       },
     );
 
-    it("generates matching Quadlet port metadata without persisting an allowlist", () => {
+    it("retains the selected Quadlet image name for pull-and-restart upgrades", () => {
       const sandbox = fixture();
       sandbox.run("scripts/podman/setup.sh", ["--quadlet"]);
       const quadlet = readFileSync(
         join(sandbox.home, ".config/containers/systemd/openclaw.container"),
         "utf8",
       );
-      expect(quadlet).toContain(
-        "Image=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      );
+      expect(quadlet).toContain("Image=fixture:test");
       expect(quadlet).toContain("PublishPort=127.0.0.1:18789:18789");
       expect(quadlet).toContain("--published-port 18789");
       expect(JSON.parse(readFileSync(sandbox.file, "utf8")).gateway.controlUi).toEqual({});
