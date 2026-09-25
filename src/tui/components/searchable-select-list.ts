@@ -75,7 +75,7 @@ export class SearchableSelectList implements Component, Focusable {
   setItems(items: SearchableSelectItem[], emptyMessage = "No matches") {
     const selectedValue = this.filteredItems[this.selectedIndex]?.value;
     this.items = items;
-    this.emptyMessage = emptyMessage;
+    this.emptyMessage = sanitizeRenderableLine(emptyMessage);
     this.preparedItems = undefined;
     this.updateFilter();
     this.selectedIndex = Math.max(
