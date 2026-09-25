@@ -6,7 +6,9 @@ import {
 } from "../../../auto-reply/heartbeat-reply-payload.js";
 import { resolveHeartbeatToolResponseFromReplyResult } from "../../../auto-reply/heartbeat-tool-response.js";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import { buildReplyPayloads } from "../../../auto-reply/reply/agent-runner-payloads.js";
 import { shouldDeliverDespiteSourceReplySuppression } from "../../../auto-reply/reply/dispatch-from-config.payloads.js";
+import { normalizeReplyPayload } from "../../../auto-reply/reply/normalize-reply.js";
 import { resolveStrandedReplyRecovery } from "../../../auto-reply/reply/stranded-reply-recovery.js";
 import { createMockFollowupRun } from "../../../auto-reply/reply/test-helpers.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
@@ -305,6 +307,51 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       expect(result.prepared.finalAssistantRawText).toBe(SILENT_REPLY_TOKEN);
       expect(result.prepared.payloadsWithToolMedia).toEqual([]);
       expect(result.attempt).toBe(attempt);
+    },
+  );
+
+  it.each(["user", "heartbeat"] as const)(
+    "delivers an interrupted tool rate-limit explanation for a %s turn",
+    async (trigger) => {
+      const attempt = settledFailedAttempt();
+      attempt.terminal = {
+        kind: "failed",
+        source: "prompt",
+        error: new Error("codex app-server client closed before turn completed"),
+      };
+      attempt.lastToolError = {
+        toolName: "slack_read_thread",
+        error: "429 Too Many Requests",
+      };
+      const explanation =
+        "The lookup failed because Slack received too many requests. Slack advised waiting one second before retrying, but no retry was made, so the lookup remains incomplete.";
+      backendMocks.runSettledFinalization.mockResolvedValueOnce({
+        outcome: "answered",
+        result: {
+          assistant: buildEmbeddedRunnerAssistant({
+            content: [{ type: "text", text: explanation }],
+          }),
+          assistantTranscriptOwned: true,
+        },
+      });
+      const input = finalizationInput(attempt);
+      input.terminalBase.runParams.trigger = trigger;
+      const result = await prepareTerminalWithSettledTurnFinalization(input);
+      expect(result.finalizationOutcome).toBe("answered");
+      expect(getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia![0])).toMatchObject({
+        toolFailureExplanation: true,
+      });
+      const { replyPayloads } = await buildReplyPayloads({
+        payloads: result.prepared.payloadsWithToolMedia ?? [],
+        isHeartbeat: trigger === "heartbeat",
+        didLogHeartbeatStrip: false,
+        blockStreamingEnabled: false,
+        blockReplyPipeline: null,
+        replyToMode: "off",
+      });
+      expect(replyPayloads.map((payload) => normalizeReplyPayload(payload))).toEqual([
+        expect.objectContaining({ text: explanation, isError: true }),
+      ]);
     },
   );
 
