@@ -3,6 +3,7 @@ import { realpathSync, statSync, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import { normalizeWindowsNamespaceAlias } from "../infra/backup-archive-path-policy.js";
 import { isTransientBackupPath, isVolatileBackupPath } from "../infra/backup-volatile-filter.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -10,7 +11,6 @@ import { walkDirectory } from "../infra/fs-safe.js";
 import { isUpdateCapturePath } from "../infra/update-capture-paths.js";
 import type { ResolvedPluginBackupResource } from "../plugins/manifest-backup-resources.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { isPathWithin } from "./cleanup-utils.js";
 
 export type BackupAgentRoot = Readonly<{
   agentId: string;
@@ -84,7 +84,7 @@ async function listDefaultAgentTemporaryRoots(
     ({ agentId, sourcePath }) => sourcePath !== path.join(stateDir, "agents", agentId, "agent"),
   );
   const isCustomAgentPath = (candidate: string) =>
-    customAgentRoots.some(({ sourcePath }) => isPathWithin(candidate, sourcePath));
+    customAgentRoots.some(({ sourcePath }) => isPathInside(sourcePath, candidate));
   const temporaryRoots: string[] = [];
   let agentDirectories: Dirent[];
   try {
@@ -176,7 +176,7 @@ export async function createBackupResourcePlan(params: {
       const anchors = resource.scope === "state" ? [{ sourcePath: stateDir }] : agentRoots;
       for (const anchor of anchors) {
         const sourcePath = path.resolve(anchor.sourcePath, ...resource.relativePath.split("/"));
-        if (!isPathWithin(sourcePath, anchor.sourcePath)) {
+        if (!isPathInside(anchor.sourcePath, sourcePath)) {
           throw new Error(
             `Plugin ${resource.pluginId} backup resource escapes its ${resource.scope} root: ${resource.relativePath}`,
           );
@@ -246,7 +246,7 @@ function createBackupPathPolicy({
     if (isUpdateCapturePath(candidate, stateDir)) {
       return false;
     }
-    const exclusion = excludedPaths.find((excludedPath) => isPathWithin(candidate, excludedPath));
+    const exclusion = excludedPaths.find((excludedPath) => isPathInside(excludedPath, candidate));
     if (!exclusion) {
       return true;
     }
@@ -254,7 +254,7 @@ function createBackupPathPolicy({
     // only an explicit include inside the excluded subtree overrides it.
     return protectedPaths.some(
       (protectedPath) =>
-        isPathWithin(candidate, protectedPath) && isPathWithin(protectedPath, exclusion),
+        isPathInside(protectedPath, candidate) && isPathInside(exclusion, protectedPath),
     );
   };
   const isTraversable = (sourcePath: string): boolean => {
@@ -264,7 +264,7 @@ function createBackupPathPolicy({
     }
     return (
       isIncluded(candidate) ||
-      protectedPaths.some((protectedPath) => isPathWithin(protectedPath, candidate))
+      protectedPaths.some((protectedPath) => isPathInside(candidate, protectedPath))
     );
   };
   const isPackageContent = (sourcePath: string): boolean => {
@@ -274,12 +274,12 @@ function createBackupPathPolicy({
     if (
       protectedPaths.some(
         (protectedPath) =>
-          isPathWithin(candidate, protectedPath) || isPathWithin(protectedPath, candidate),
+          isPathInside(protectedPath, candidate) || isPathInside(candidate, protectedPath),
       )
     ) {
       return false;
     }
-    if (!isPathWithin(candidate, stateDir)) {
+    if (!isPathInside(stateDir, candidate)) {
       return false;
     }
     const segments = path.relative(stateDir, candidate).split(path.sep);
@@ -304,11 +304,11 @@ function createBackupPathPolicy({
     // State-specific rules do not apply inside explicit owners. Transient names
     // apply everywhere, while selected paths and their ancestors stay reachable.
     const ownedPath = protectedPaths.some((protectedPath) =>
-      isPathWithin(candidate, protectedPath),
+      isPathInside(protectedPath, candidate),
     );
     return (
       (candidate !== stateDir &&
-        !protectedPaths.some((protectedPath) => isPathWithin(protectedPath, candidate)) &&
+        !protectedPaths.some((protectedPath) => isPathInside(candidate, protectedPath)) &&
         isTransientBackupPath(candidate)) ||
       (!ownedPath && isVolatileBackupPath(candidate, volatilePlan))
     );
@@ -397,7 +397,7 @@ export function sealBackupResourceInventory(
         : undefined);
     return (
       owner ??
-      (resources.pluginResourceRoots.some((root) => isPathWithin(candidate, root))
+      (resources.pluginResourceRoots.some((root) => isPathInside(root, candidate))
         ? { role: "plugin" }
         : unresolvableLink
           ? { role: "unresolvable-link" }

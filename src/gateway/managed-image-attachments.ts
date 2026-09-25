@@ -1495,19 +1495,15 @@ export async function createManagedOutgoingMediaBlocks(params: {
         };
         let playback: "native" | "transcode" | undefined;
         if (mediaKind === "audio" || mediaKind === "video") {
-          const opened = await openLocalFileSafely({ filePath: savedOriginal.path });
-          try {
-            const probe = await probePlaybackMediaFileDescriptor(opened.handle.fd, mediaKind);
-            playback = await resolvePlaybackModeForSource({
-              sourcePath: opened.realPath,
-              sourceStat: opened.stat,
-              mimeType: savedOriginalContentType,
-              kind: mediaKind,
-              probe,
-            });
-          } finally {
-            await opened.handle.close().catch(() => {});
-          }
+          await using opened = await openLocalFileSafely({ filePath: savedOriginal.path });
+          const probe = await probePlaybackMediaFileDescriptor(opened.handle.fd, mediaKind);
+          playback = await resolvePlaybackModeForSource({
+            sourcePath: opened.realPath,
+            sourceStat: opened.stat,
+            mimeType: savedOriginalContentType,
+            kind: mediaKind,
+            probe,
+          });
         }
         const block = buildManagedMediaBlock(record, playback);
         const readScope = captureChannelReadScope();

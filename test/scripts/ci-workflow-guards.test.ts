@@ -1256,7 +1256,7 @@ AFTER_CD
       ["OPENCLAW_CI_RUN_MACOS", "run_macos"],
       ["OPENCLAW_CI_RUN_IOS_BUILD", "run_ios_build"],
     ] as const) {
-      for (const [eventName, releaseGate, selected, expected] of [
+      for (const [eventName, isReleaseGate, selected, expected] of [
         ["schedule", false, false, true],
         ["workflow_dispatch", false, false, true],
         ["workflow_dispatch", true, false, false],
@@ -1265,12 +1265,12 @@ AFTER_CD
         expect(
           evaluateWorkflowExpression(manifestEnv[environmentKey], {
             eventName,
-            releaseGate,
+            releaseGate: isReleaseGate,
             repository: "openclaw/openclaw",
             runAttempt: 1,
             steps: { changed_scope: { outputs: { [scopeKey]: String(selected) } } },
           }),
-          `${environmentKey}/${eventName}/${releaseGate}/${selected}`,
+          `${environmentKey}/${eventName}/${isReleaseGate}/${selected}`,
         ).toBe(String(expected));
       }
     }
@@ -1384,13 +1384,17 @@ AFTER_CD
         qualification_runner_backend: "hybrid",
       },
     };
+    // The PR cancellation monitor has no runner contract on main or qualification runs.
+    for (const context of [push, qualification]) {
+      expect(evaluateWorkflowExpression(workflow.jobs["pr-fail-fast"].if, context)).toBe(false);
+    }
     for (const [name, rawJob] of Object.entries(workflow.jobs)) {
       const job = rawJob as {
         "runs-on": string;
         "timeout-minutes"?: string | number;
         needs?: string[] | string;
       };
-      if (!String(job.needs).includes("preflight")) {
+      if (name === "pr-fail-fast" || !String(job.needs).includes("preflight")) {
         continue;
       }
       for (const key of ["runs-on", "timeout-minutes"] as const) {
@@ -1479,10 +1483,14 @@ AFTER_CD
 
     for (const [workflowPath, jobName] of workflows) {
       const workflow = readWorkflow(workflowPath);
-      expect(workflow.on.pull_request).toEqual({
-        types: ["opened", "reopened", "synchronize", "ready_for_review"],
-        paths: [".github/workflows/**"],
-      });
+      expect(workflow.on.pull_request.types).toEqual([
+        "opened",
+        "reopened",
+        "synchronize",
+        "ready_for_review",
+      ]);
+      expect(workflow.on.pull_request.paths).toContain(workflowPath);
+      expect(workflow.on.pull_request.paths).not.toContain(".github/workflows/**");
       expect(workflow.jobs[jobName].if).toBe(
         "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
       );
@@ -3750,7 +3758,6 @@ setImmediate(() => {
       runAttempt: 1,
       runnerBackend: "hybrid",
     } as const;
-
     for (const jobName of ["preflight", "security-fast", "ci-gate"]) {
       const expression = workflow.jobs[jobName]["runs-on"];
       for (const eventName of ["pull_request", "push"] as const) {
@@ -3984,6 +3991,7 @@ setImmediate(() => {
     const workflow = readCiWorkflow();
     const jobs = workflow.jobs as Record<string, { "runs-on": unknown }>;
     const expectedHostedRunners = {
+      "pr-fail-fast": "ubuntu-24.04",
       android: "ubuntu-24.04",
       "build-artifacts": "ubuntu-24.04",
       "check-additional-shard": "ubuntu-24.04",
@@ -4013,6 +4021,7 @@ setImmediate(() => {
     } as const;
     const expectedHybridFirstAttemptRunners = {
       ...expectedHostedRunners,
+      "pr-fail-fast": "blacksmith-4vcpu-ubuntu-2404",
       preflight: "blacksmith-16vcpu-ubuntu-2404",
       "security-fast": "blacksmith-4vcpu-ubuntu-2404",
       android: "blacksmith-8vcpu-ubuntu-2404",
@@ -4030,12 +4039,14 @@ setImmediate(() => {
     } as const;
     const expectedHybridForkRunners = {
       ...expectedHybridFirstAttemptRunners,
+      "pr-fail-fast": "ubuntu-24.04",
       "docker-seed-e2e": "ubuntu-24.04",
     } as const;
     const configurableJobs = Object.entries(jobs)
       .filter(
         ([, job]) =>
           String(job["runs-on"]).includes("OPENCLAW_CI_RUNNER_BACKEND") ||
+          String(job["runs-on"]).includes("needs.preflight.outputs.runner_profile") ||
           String(job["runs-on"]).includes("matrix.runner"),
       )
       .map(([jobName]) => jobName)
@@ -7769,7 +7780,7 @@ server.listen(0, "127.0.0.1", () => {
   it("uses the maintained checkout across workflow sanity jobs", () => {
     const workflow = readWorkflowSanityWorkflow();
 
-    for (const jobName of ["no-tabs", "actionlint", "generated-doc-baselines"]) {
+    for (const jobName of ["actionlint", "generated-doc-baselines"]) {
       const checkoutStep = workflow.jobs[jobName].steps.find(
         (step: WorkflowStep) => step.name === "Checkout",
       );
@@ -7859,7 +7870,9 @@ server.listen(0, "127.0.0.1", () => {
     expect(owner.with).toBeUndefined();
     expect(steps.indexOf(python)).toBeLessThan(steps.indexOf(owner));
     expect(steps.indexOf(owner)).toBeLessThan(steps.indexOf(policy));
-    expect(policy.if).toBe("github.event_name == 'pull_request'");
+    expect(policy.if).toBe(
+      "github.event_name == 'pull_request' && steps.scope.outputs.changed == 'true'",
+    );
     expect(policy.env).toEqual({
       BASE_REF: "${{ github.event.pull_request.base.ref }}",
       BASE_SHA: "${{ github.event.pull_request.base.sha }}",
