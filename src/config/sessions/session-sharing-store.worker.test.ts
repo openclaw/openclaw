@@ -342,11 +342,17 @@ it("commits worker membership and participant facts before publishing, and rejec
 
 it("rejects the complete category update when a later member changes after preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const scopes = Array.from({ length: 12 }, (_, index) => ({
+    const scopeAt = (index: number) => ({
       agentId: "main",
       sessionKey: `agent:main:category-revalidation:${String(index).padStart(2, "0")}`,
-    }));
-    const replacedScope = scopes[11];
+    });
+    const firstScope = scopeAt(0);
+    const replacedScope = scopeAt(11);
+    const scopes = [
+      firstScope,
+      ...Array.from({ length: 10 }, (_, index) => scopeAt(index + 1)),
+      replacedScope,
+    ];
     for (const [index, scope] of scopes.entries()) {
       replaceSessionEntrySync(scope, {
         sessionId: `original-${index}`,
@@ -357,7 +363,7 @@ it("rejects the complete category update when a later member changes after prepa
     let changed = false;
     await expect(
       updateSessionGroupCategoriesInWorker({
-        scope: scopes[0],
+        scope: firstScope,
         from: "Work",
         assertTargetCurrent() {
           if (!changed) {
@@ -373,7 +379,7 @@ it("rejects the complete category update when a later member changes after prepa
     ).rejects.toThrow(
       `SQLite session entry changed before replacement for ${replacedScope.sessionKey}`,
     );
-    expect(loadSessionEntry(scopes[0])).toMatchObject({
+    expect(loadSessionEntry(firstScope)).toMatchObject({
       sessionId: "original-0",
       updatedAt: 1,
       category: "Work",
@@ -384,7 +390,7 @@ it("rejects the complete category update when a later member changes after prepa
       category: "Replacement",
     });
     await expect(
-      updateSessionGroupCategoriesInWorker({ scope: scopes[0], from: "Work" }),
+      updateSessionGroupCategoriesInWorker({ scope: firstScope, from: "Work" }),
     ).resolves.toBe(11);
     for (const [index, scope] of scopes.slice(0, -1).entries()) {
       const entry = loadSessionEntry(scope);
