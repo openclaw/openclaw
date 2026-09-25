@@ -66,7 +66,7 @@ function resolveDecision(overrides: Parameters<typeof createInboundDecisionParam
 
 describe("resolveIMessageInboundDecision echo detection", () => {
   it("drops inbound messages when outbound message id matches echo cache", async () => {
-    const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
+    const echoHas = vi.fn(async (_scope: string, lookup: { text?: string; messageId?: string }) => {
       return lookup.messageId === "42";
     });
     const logVerbose = vi.fn();
@@ -92,7 +92,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
 
   it("matches attachment-only echoes by structured media fact", async () => {
     const echoHas = vi.fn(
-      (
+      async (
         _scope: string,
         lookup: { text?: string; media?: { kind?: string | null }; messageId?: string },
       ) => {
@@ -273,7 +273,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     // populated by chat.db. Without the multi-scope check, the chat_guid-keyed
     // echo would never be matched against the chat_id-only inbound scope and
     // the agent would react to its own message.
-    const echoHas = vi.fn((scope: string, lookup: { text?: string; messageId?: string }) => {
+    const echoHas = vi.fn(async (scope: string, lookup: { text?: string; messageId?: string }) => {
       return scope === "default:chat_guid:iMessage;+;chat0000" && lookup.messageId === "9001";
     });
 
@@ -299,7 +299,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
   });
 
   it("drops group echoes persisted under chat_identifier scope", async () => {
-    const echoHas = vi.fn((scope: string, lookup: { text?: string; messageId?: string }) => {
+    const echoHas = vi.fn(async (scope: string, lookup: { text?: string; messageId?: string }) => {
       return scope === "default:chat_identifier:chat0000" && lookup.messageId === "9001";
     });
 
@@ -324,7 +324,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
   });
 
   it("drops group echoes persisted under chat_id scope (baseline)", async () => {
-    const echoHas = vi.fn((scope: string, lookup: { text?: string; messageId?: string }) => {
+    const echoHas = vi.fn(async (scope: string, lookup: { text?: string; messageId?: string }) => {
       return scope === "default:chat_id:42" && lookup.messageId === "9001";
     });
 
@@ -350,7 +350,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
 
   it("does not drop a group inbound when echo cache holds an unrelated chat_guid", async () => {
     const echoHas = vi.fn(
-      (scope: string, lookup: { text?: string; messageId?: string }) =>
+      async (scope: string, lookup: { text?: string; messageId?: string }) =>
         scope === "default:chat_guid:iMessage;+;OTHER" && lookup.messageId === "9001",
     );
 
@@ -414,7 +414,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
   });
 
   it("returns a reaction decision for tapbacks on bot-authored messages by default", async () => {
-    const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
+    const echoHas = vi.fn(async (_scope: string, lookup: { text?: string; messageId?: string }) => {
       return lookup.messageId === "target-guid";
     });
 
@@ -476,7 +476,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       },
       messageText: "",
       bodyText: "",
-      echoCache: { has: () => false },
+      echoCache: { has: async () => false },
       isKnownFromMeMessageId: (messageId, { accountId, chatId, chatGuid, chatIdentifier }) => {
         expect({ messageId, accountId, chatId, chatGuid, chatIdentifier }).toEqual({
           messageId: "tool-sent-guid",
@@ -513,7 +513,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       },
       messageText: "Disliked “tapback target”",
       bodyText: "Disliked “tapback target”",
-      echoCache: { has: () => false },
+      echoCache: { has: async () => false },
       isKnownFromMeMessageId: (messageId, { accountId, chatId, chatGuid, chatIdentifier }) => {
         expect({ messageId, accountId, chatId, chatGuid, chatIdentifier }).toEqual({
           messageId: "lobster-reply-guid",
@@ -556,7 +556,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       },
       messageText: "Disliked “tapback target”",
       bodyText: "Disliked “tapback target”",
-      echoCache: { has: () => false },
+      echoCache: { has: async () => false },
       isKnownFromMeMessageId: (messageId) => {
         if (messageId === undefined) {
           throw new Error("expected reaction target message id");
@@ -600,7 +600,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       },
       messageText: "Loved “tapback target”",
       bodyText: "Loved “tapback target”",
-      echoCache: { has: () => false },
+      echoCache: { has: async () => false },
       isKnownFromMeMessageId: undefined,
     });
 
@@ -631,7 +631,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       messageText: "Liked “tapback target”",
       bodyText: "Liked “tapback target”",
       echoCache: {
-        has: (_scope, lookup) => {
+        has: async (_scope, lookup) => {
           if (lookup.messageId) {
             checkedMessageIds.push(lookup.messageId);
           }
@@ -658,7 +658,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       },
       messageText: "",
       bodyText: "",
-      echoCache: { has: () => false },
+      echoCache: { has: async () => false },
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "reaction target not sent by agent" });

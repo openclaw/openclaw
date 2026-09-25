@@ -54,6 +54,8 @@ import {
   type IMessageService,
 } from "../targets.js";
 import type { IMessageDmHistoryContext } from "./dm-history.js";
+import type { SentMessageCache } from "./echo-cache.js";
+import { buildIMessageEchoScope, hasReflectedReplyEcho } from "./echo-scope.js";
 import {
   type IMessageReactionContext,
   resolveIMessageReactionContext,
@@ -251,13 +253,7 @@ export function rememberIMessageSkippedFromMeForSelfChatDedupe(params: {
 }
 
 async function hasIMessageEchoMatch(params: {
-  echoCache: {
-    has: (
-      scope: string,
-      lookup: { text?: string; media?: MediaPlaceholderTextFact; messageId?: string },
-      options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
-    ) => boolean | Promise<boolean>;
-  };
+  echoCache: Pick<SentMessageCache, "has">;
   scope: string | readonly string[];
   text?: string;
   media?: MediaPlaceholderTextFact;
@@ -394,13 +390,7 @@ export async function resolveIMessageInboundDecision(params: {
   storeAllowFrom: string[];
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
-  echoCache?: {
-    has: (
-      scope: string,
-      lookup: { text?: string; media?: MediaPlaceholderTextFact; messageId?: string },
-      options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
-    ) => boolean | Promise<boolean>;
-  };
+  echoCache?: Pick<SentMessageCache, "has">;
   selfChatCache?: SelfChatCache;
   reactionNotifications?: IMessageReactionNotificationMode;
   isKnownFromMeMessageId?: (
@@ -480,6 +470,7 @@ export async function resolveIMessageInboundDecision(params: {
   let skipSelfChatHasCheck = false;
   const inboundMessageIds = resolveInboundEchoMessageIds(params.message);
   const inboundMessageId = inboundMessageIds[0];
+  const replyToGuid = normalizeReplyField(params.message.reply_to_guid);
   const hasInboundGuid = Boolean(normalizeReplyField(params.message.guid));
 
   if (params.message.is_from_me) {
@@ -689,28 +680,48 @@ export async function resolveIMessageInboundDecision(params: {
   // Echo detection: check if the received message matches a recently sent message.
   // Scope by conversation so same text in different chats is not conflated.
   if (params.echoCache && (messageText || inboundMessageId || mediaFacts.length > 0)) {
-    const echoScope = buildIMessageEchoScope({
+    const echoCache = params.echoCache;
+    const scopeParams = {
       accountId: params.accountId,
       isGroup,
       chatId,
       chatGuid,
       chatIdentifier,
       sender,
+    };
+    const echoScope = buildIMessageEchoScope(scopeParams);
+    // Direct replies are dispatched with the provider's exact chat-id target, and the
+    // generic scope only mirrors that shape for groups. The strict reflected-reply probe
+    // must cover it too, or a reflected direct reply never matches what the send side
+    // persisted and the duplicate turn this fix targets still slips through.
+    const replyEchoScope = buildIMessageEchoScope({
+      ...scopeParams,
+      includeDirectChatIdScope: true,
     });
+    const hasReplyToEcho =
+      params.message.is_from_me === false && isSelfChat && replyToGuid && bodyText
+        ? await hasReflectedReplyEcho({
+            echoCache,
+            scopes: replyEchoScope,
+            text: bodyText,
+            messageId: replyToGuid,
+          })
+        : false;
     if (
-      await hasIMessageEchoMatch({
+      hasReplyToEcho ||
+      (await hasIMessageEchoMatch({
         echoCache: params.echoCache,
         scope: echoScope,
         text: bodyText || undefined,
         media: mediaFacts[0],
         messageIds: inboundMessageIds,
         includePendingText: isSelfChat,
-      })
+      }))
     ) {
       params.logVerbose?.(
         describeIMessageEchoDropLog({ messageText: bodyText, messageId: inboundMessageId }),
       );
-      return { kind: "drop", reason: "echo" };
+      return { kind: "drop", reason: hasReplyToEcho ? "self-chat echo" : "echo" };
     }
   }
 
@@ -1081,39 +1092,6 @@ export async function buildIMessageInboundContext(params: {
   });
 
   return { ctxPayload, fromLabel, chatTarget, imessageTo, inboundHistory };
-}
-
-function buildIMessageEchoScope(params: {
-  accountId: string;
-  isGroup: boolean;
-  chatId?: number;
-  chatGuid?: string;
-  chatIdentifier?: string;
-  sender: string;
-}): string[] {
-  // Mirror every shape resolveOutboundEchoScope can persist (see send.ts).
-  // Inbound messages carry chat_id, chat_guid, and chat_identifier when
-  // available, but the outbound side only writes one of them — whichever
-  // shape the caller used. Returning all candidates lets hasIMessageEchoMatch
-  // cross-check, so a chat_guid-keyed send is suppressed even when chat.db
-  // annotates the inbound row with chat_id+chat_identifier (or any other
-  // permutation).
-  const scopes: string[] = [];
-  if (params.isGroup) {
-    const chatIdScope = formatIMessageChatTarget(params.chatId);
-    if (chatIdScope) {
-      scopes.push(`${params.accountId}:${chatIdScope}`);
-    }
-  } else {
-    scopes.push(`${params.accountId}:imessage:${params.sender}`);
-  }
-  if (params.chatGuid) {
-    scopes.push(`${params.accountId}:chat_guid:${params.chatGuid}`);
-  }
-  if (params.chatIdentifier) {
-    scopes.push(`${params.accountId}:chat_identifier:${params.chatIdentifier}`);
-  }
-  return scopes;
 }
 
 function describeIMessageEchoDropLog(params: { messageText: string; messageId?: string }): string {
