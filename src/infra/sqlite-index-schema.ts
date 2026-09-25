@@ -240,6 +240,8 @@ export function repairSqliteIndexCorruption(
       return repaired;
     },
     {
+      databaseLabel: pathname,
+      operationLabel: "sqlite.index-corruption-repair",
       withCommit: (commit) => {
         if (repaired.length > 0) {
           options.assertCurrent();
