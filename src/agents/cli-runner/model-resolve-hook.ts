@@ -16,9 +16,13 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import type { PluginHookBeforeModelResolveAttachment } from "../../plugins/hook-before-agent-start.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { HookRunner } from "../../plugins/hooks.js";
-import { resolveHookModelSelection } from "../embedded-agent-runner/run/setup.js";
+import {
+  buildBeforeModelResolveAttachments,
+  resolveHookModelSelection,
+} from "../embedded-agent-runner/run/setup.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -27,6 +31,8 @@ const log = createSubsystemLogger("agents/cli-runner");
 type CliModelResolveHookInput = {
   hookRunner: Pick<HookRunner, "hasHooks" | "runBeforeModelResolve"> | null;
   prompt: string;
+  /** Attachment metadata derived from the turn's image refs, same shape as embedded turns. */
+  attachments?: PluginHookBeforeModelResolveAttachment[];
   /** Execution backend this turn spawns through, e.g. `claude-cli`. */
   executionProvider: string;
   /** Logical provider of the caller-selected model, e.g. `anthropic`. */
@@ -71,6 +77,7 @@ async function resolveCliModelOverrideForTurn(
   }
   const hookSelection = await resolveHookModelSelection({
     prompt: params.prompt,
+    attachments: params.attachments,
     provider: params.logicalProvider,
     modelId: params.modelId,
     modelSelectionLocked: params.sessionEntry?.modelSelectionLocked === true,
@@ -169,6 +176,7 @@ export async function applyCliModelResolveHookForRun(params: RunCliAgentParams):
   const hookModelId = await runCliModelResolveHookForTurn({
     hookRunner: getGlobalHookRunner(),
     prompt: params.prompt,
+    attachments: buildBeforeModelResolveAttachments(params.images),
     executionProvider: params.provider,
     logicalProvider: params.modelProvider ?? params.provider,
     modelId: params.model ?? "",

@@ -121,6 +121,22 @@ describe("applyCliModelResolveHookForRun", () => {
     expect(call[1].accountId).toBe("acct-1");
   });
 
+  it("passes image-derived attachment metadata on image-bearing turns", async () => {
+    stubHookRunner({
+      hasBeforeModelResolve: true,
+      override: { providerOverride: "anthropic", modelOverride: "claude-sonnet-5" },
+    });
+    await runTurn({
+      images: [{ type: "image", data: "aGk=", mimeType: "image/png" }],
+    });
+    const call = hookRunnerStub.runBeforeModelResolve.mock.calls[0]!;
+    expect(call[0]).toEqual({
+      prompt: "hello",
+      attachments: [{ kind: "image", mimeType: "image/png" }],
+    });
+    expect(call[1].modelProviderId).toBe("anthropic");
+  });
+
   it("skips the hook entirely when the session locked model selection", async () => {
     stubHookRunner({
       hasBeforeModelResolve: true,
