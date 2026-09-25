@@ -13,7 +13,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Configure foreground on-device Voice Wake and Gateway-synced wake words in **Settings → Voice**.
 - Talk setup and startup failures stay visible in a dismissible Chat dialog. If the message reports a missing provider or invalid credentials, configure the Talk provider on the Gateway before trying again.
 - Use **Settings → OpenClaw** for guided Gateway setup and repair. New replies stay visible at the end of the conversation; scrolling back preserves your reading position until you return or tap **Jump to latest**.
-- Enable camera, location, and other phone capabilities through onboarding or Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
+- Setup offers optional notifications, microphone, camera, and location access; other permissions are under **Additional features**. Continue without granting access, or enable phone capabilities later in Settings. Blocked setup requests offer Android Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
 - View the phone's memory and disk meters on the Control UI Devices page. Connected Android nodes report host resource stats immediately and every 60 seconds; disk meters require an available storage sample and a Gateway that supports host stats.
 - Manage installed skills and Gateway-verified ClawHub releases, review Skill Workshop proposals, and inspect or edit automations with the required Gateway access.
 - Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.

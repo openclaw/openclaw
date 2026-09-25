@@ -60,6 +60,7 @@ import {
   requestCalls,
   requireRecord,
 } from "./chat-host.test-support.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
@@ -70,9 +71,6 @@ import {
   readChatQueueForScope,
   removeDeliveredQueuedChatSendForRun,
   removeQueuedMessage,
-  removeQueuedMessageWithoutReleasing,
-  subscribeChatOutboxProjection,
-  syncVisibleChatQueueProjection,
 } from "./chat-queue.ts";
 import {
   flushChatQueueForEvent,
@@ -85,12 +83,8 @@ import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import * as chatSendSupport from "./chat-send-support.ts";
 import { recordChatSendServerTiming } from "./chat-send-timing.ts";
-import {
-  getPendingChatPickerPatch,
-  switchChatFastMode,
-  switchChatThinkingLevel,
-} from "./chat-session.ts";
-import { patchChatSessionSettings } from "./chat-settings-patches.ts";
+import { switchChatFastMode, switchChatThinkingLevel } from "./chat-session.ts";
+import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
@@ -1715,7 +1709,7 @@ describe("handleSendChat", () => {
     });
 
     host.sessionKey = "agent:other";
-    syncVisibleChatQueueProjection(host);
+    chatOutboxOwner(host).syncHost(host);
     settingsPatch.resolve(true);
     await send;
 
@@ -2644,7 +2638,7 @@ describe("handleSendChat", () => {
     const send = handleSendChat(host);
     expect(await raceWithMacrotask(send)).toBe("pending");
     host.sessionKey = "agent:work:main";
-    syncVisibleChatQueueProjection(host);
+    chatOutboxOwner(host).syncHost(host);
 
     globalPatch.resolve(true);
     await send;
@@ -3081,7 +3075,7 @@ describe("handleSendChat", () => {
     expect(host.chatQueue[0]?.text).toBe("send from session a");
 
     host.sessionKey = "agent:other";
-    syncVisibleChatQueueProjection(host);
+    chatOutboxOwner(host).syncHost(host);
     host.chatMessage = "session b draft";
     switchUpdate.resolve(true);
     await send;
@@ -3114,7 +3108,7 @@ describe("handleSendChat", () => {
     const send = handleSendChat(host);
     await Promise.resolve();
     host.sessionKey = "agent:other";
-    syncVisibleChatQueueProjection(host);
+    chatOutboxOwner(host).syncHost(host);
     host.chatMessage = "session b draft";
 
     // Model the only settings event arriving before its follow-up refresh lets
@@ -3150,7 +3144,7 @@ describe("handleSendChat", () => {
     const send = handleSendChat(host);
     await Promise.resolve();
     host.sessionKey = "agent:other";
-    syncVisibleChatQueueProjection(host);
+    chatOutboxOwner(host).syncHost(host);
     host.chatMessage = "";
 
     switchUpdate.resolve(false);
@@ -3275,7 +3269,7 @@ describe("handleSendChat", () => {
 
     await retryQueuedChatMessage(host, original.id);
 
-    syncVisibleChatQueueProjection(host);
+    chatOutboxOwner(host).syncHost(host);
 
     expect(host.request).not.toHaveBeenCalled();
     expect(host.chatQueue).toStrictEqual([original]);
@@ -4859,8 +4853,8 @@ describe("handleSendChat", () => {
       // the outbox and the drain lane are shared, and either pane can own the lane.
       const editing = makeChatHost({ client, chatQueue: [item] });
       const peer = makeChatHost({ client, chatQueue: [] });
-      const stopEditing = subscribeChatOutboxProjection(editing);
-      const stopPeer = subscribeChatOutboxProjection(peer);
+      const stopEditing = chatOutboxOwner(editing).subscribe(editing);
+      const stopPeer = chatOutboxOwner(peer).subscribe(peer);
       try {
         const admission = captureChatOutboxAdmission(editing, editing.sessionKey);
         expect(admitQueuedMessageForSession(editing, admission, item)).toBe(true);
@@ -4900,7 +4894,7 @@ describe("handleSendChat", () => {
       chatQueue: [item],
     });
     const peer = makeChatHost({ client, chatQueue: [] });
-    const stopHost = subscribeChatOutboxProjection(host);
+    const stopHost = chatOutboxOwner(host).subscribe(host);
     let stopPeer = () => {};
     const admission = captureChatOutboxAdmission(host, host.sessionKey);
     expect(admitQueuedMessageForSession(host, admission, item)).toBe(true);
@@ -4908,7 +4902,7 @@ describe("handleSendChat", () => {
     try {
       const draining = resumeStoredChatOutboxes(host);
       await waitForFast(() => expect(executeSlashCommandMock).toHaveBeenCalledTimes(1));
-      stopPeer = subscribeChatOutboxProjection(peer);
+      stopPeer = chatOutboxOwner(peer).subscribe(peer);
 
       expect(host.chatQueue[0]?.sendState).toBe("executing-command");
       expect(peer.chatQueue[0]?.sendState).toBe("executing-command");
@@ -6100,7 +6094,7 @@ describe("handleSendChat", () => {
     const admission = captureChatOutboxAdmission(host, queuedSessionKey);
     expect(admitQueuedMessageForSession(host, admission, item)).toBe(true);
 
-    expect(removeQueuedMessageWithoutReleasing(host, item.id)).toMatchObject({ id: item.id });
+    expect(chatOutboxOwner(host).remove(host, item.id)).toMatchObject({ id: item.id });
 
     expect(readChatQueueForScope(host, queuedSessionKey)).toStrictEqual([]);
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
@@ -6113,8 +6107,8 @@ describe("handleSendChat", () => {
     const otherGateway = makeChatHost({
       settings: { gatewayUrl: "ws://gateway-b.test/control" },
     });
-    const stopSource = subscribeChatOutboxProjection(source);
-    const stopOther = subscribeChatOutboxProjection(otherGateway);
+    const stopSource = chatOutboxOwner(source).subscribe(source);
+    const stopOther = chatOutboxOwner(otherGateway).subscribe(otherGateway);
     const item = {
       id: "gateway-a-only",
       text: "stay on gateway a",
@@ -6141,7 +6135,7 @@ describe("handleSendChat", () => {
       createdAt: 1,
       sessionKey: source.sessionKey,
     };
-    const stopPeer = subscribeChatOutboxProjection(peer);
+    const stopPeer = chatOutboxOwner(peer).subscribe(peer);
     try {
       const admission = captureChatOutboxAdmission(source, source.sessionKey);
       expect(admitStoredChatComposerQueueItem(source, admission, item)).toBe(true);
@@ -6167,8 +6161,8 @@ describe("handleSendChat", () => {
     const source = makeChatHost({ chatQueue: [item], sessionKey });
     const cachedPane = makeChatHost({ sessionKey: "agent:main:other-session" });
     keepVolatileQueuedMessage(cachedPane, sessionKey, { ...item });
-    const stopSource = subscribeChatOutboxProjection(source);
-    const stopCachedPane = subscribeChatOutboxProjection(cachedPane);
+    const stopSource = chatOutboxOwner(source).subscribe(source);
+    const stopCachedPane = chatOutboxOwner(cachedPane).subscribe(cachedPane);
     try {
       const admission = captureChatOutboxAdmission(source, sessionKey);
       expect(admitQueuedMessageForSession(source, admission, item)).toBe(true);
@@ -6177,7 +6171,7 @@ describe("handleSendChat", () => {
 
       expect(readChatQueueForScope(cachedPane, sessionKey)).toStrictEqual([]);
       cachedPane.sessionKey = sessionKey;
-      syncVisibleChatQueueProjection(cachedPane);
+      chatOutboxOwner(cachedPane).syncHost(cachedPane);
       expect(cachedPane.chatQueue).toStrictEqual([]);
     } finally {
       stopCachedPane();
@@ -6201,8 +6195,8 @@ describe("handleSendChat", () => {
       chatQueue: [{ ...item }],
       sessionKey: item.sessionKey,
     });
-    const stopSource = subscribeChatOutboxProjection(source);
-    const stopPeer = subscribeChatOutboxProjection(peer);
+    const stopSource = chatOutboxOwner(source).subscribe(source);
+    const stopPeer = chatOutboxOwner(peer).subscribe(peer);
     try {
       const admission = captureChatOutboxAdmission(source, item.sessionKey);
       expect(admitQueuedMessageForSession(source, admission, item)).toBe(true);
@@ -6415,7 +6409,7 @@ describe("handleSendChat", () => {
     );
 
     const latePeer = makeChatHost({ client, chatQueue: [] });
-    const stopLatePeer = subscribeChatOutboxProjection(latePeer);
+    const stopLatePeer = chatOutboxOwner(latePeer).subscribe(latePeer);
     try {
       expect(latePeer.chatQueue).toEqual([
         expect.objectContaining({
@@ -6547,7 +6541,7 @@ describe("handleSendChat", () => {
     expect(queuedRunId).toEqual(expect.any(String));
 
     host.sessionKey = "agent:b";
-    syncVisibleChatQueueProjection(host);
+    chatOutboxOwner(host).syncHost(host);
     host.chatMessages = [];
     host.chatRunId = null;
     host.chatStream = null;
@@ -7112,7 +7106,7 @@ describe("handleSendChat", () => {
         sendState: "waiting-reconnect",
         sessionKey: source.sessionKey,
       };
-      const stopSource = subscribeChatOutboxProjection(source);
+      const stopSource = chatOutboxOwner(source).subscribe(source);
       let stopRecovered = () => {};
       try {
         const admission = captureChatOutboxAdmission(source, source.sessionKey, item.agentId);
@@ -7138,7 +7132,7 @@ describe("handleSendChat", () => {
           client: clientWithRequest(request),
           chatQueue: readback.queue,
         });
-        stopRecovered = subscribeChatOutboxProjection(recovered);
+        stopRecovered = chatOutboxOwner(recovered).subscribe(recovered);
         await retryQueuedChatMessage(recovered, item.id);
         const stored = expectDefined(
           loadChatComposerSnapshot(recovered, recovered.sessionKey)?.queue[0],
@@ -7182,7 +7176,7 @@ describe("handleSendChat", () => {
         chatMessage: "attachment A",
         chatAttachments: attachments,
       });
-      const unsubscribe = subscribeChatOutboxProjection(host);
+      const unsubscribe = chatOutboxOwner(host).subscribe(host);
       const readStarted = createDeferred();
       const releaseRead = createDeferred();
       let drain: Promise<void> | undefined;
@@ -7270,7 +7264,7 @@ describe("handleSendChat", () => {
         chatMessage: "do not replace newer attachment bytes",
         chatAttachments: attachments,
       });
-      const stopSource = subscribeChatOutboxProjection(source);
+      const stopSource = chatOutboxOwner(source).subscribe(source);
       let stopRecovered = () => {};
       const readStarted = createDeferred();
       const releaseRead = createDeferred();
@@ -7297,7 +7291,7 @@ describe("handleSendChat", () => {
         stopSource();
         reloadChatDocumentStorage(attachments);
         const host = makeChatHost({ client: clientWithRequest(request) });
-        stopRecovered = subscribeChatOutboxProjection(host);
+        stopRecovered = chatOutboxOwner(host).subscribe(host);
         const readPayload = outboxPayloadStore.readOutboxPayload;
         vi.spyOn(outboxPayloadStore, "readOutboxPayload").mockImplementationOnce(
           async (...args) => {
@@ -7402,7 +7396,7 @@ describe("handleSendChat", () => {
         chatMessage: "retain this uncertain attachment batch",
         chatAttachments: attachments,
       });
-      const stopSource = subscribeChatOutboxProjection(source);
+      const stopSource = chatOutboxOwner(source).subscribe(source);
       let stopRecovered = () => {};
       try {
         await handleSendChat(source);
@@ -7418,7 +7412,7 @@ describe("handleSendChat", () => {
         const read = vi
           .spyOn(outboxPayloadStore, "readOutboxPayload")
           .mockResolvedValue({ status: "failed", reason });
-        stopRecovered = subscribeChatOutboxProjection(host);
+        stopRecovered = chatOutboxOwner(host).subscribe(host);
         expect(host.chatQueue[0]?.attachments?.map(getChatAttachmentDataUrl)).toEqual([null, null]);
         await waitForFast(() =>
           expect(loadChatComposerSnapshot(host, host.sessionKey)?.queue[0]).toMatchObject({
@@ -8349,7 +8343,7 @@ describe("handleSendChat", () => {
         chatMessage: "keep my admitted message visible",
         chatAttachments: attachments,
       });
-      const stopSource = subscribeChatOutboxProjection(source);
+      const stopSource = chatOutboxOwner(source).subscribe(source);
       let stopRecovered = () => {};
       try {
         await handleSendChat(source);
@@ -8387,7 +8381,7 @@ describe("handleSendChat", () => {
             pendingPreview = preview.promise.then(() => readPayload(...args));
             return pendingPreview;
           });
-        stopRecovered = subscribeChatOutboxProjection(host);
+        stopRecovered = chatOutboxOwner(host).subscribe(host);
         await waitForFast(() => expect(read).toHaveBeenCalledTimes(1));
         if (retry) {
           // An explicit resend needs the attachment bytes. Passive consumption
@@ -9424,7 +9418,7 @@ describe("handleSendChat", () => {
       expect(host.request).toHaveBeenCalledWith("sessions.reset", { key: sourceSessionKey }),
     );
     host.sessionKey = visibleSessionKey;
-    syncVisibleChatQueueProjection(host);
+    chatOutboxOwner(host).syncHost(host);
     host.chatMessages = visibleHistory;
     if (rejected) {
       host.lastError = "Visible session error";

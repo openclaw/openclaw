@@ -14,8 +14,11 @@ vi.mock("openclaw/plugin-sdk/qa-channel-protocol", () => {
 });
 
 describe("QA Lab plugin entrypoint", () => {
-  it("loads without the private QA transport runtime", async () => {
-    const { default: plugin } = await import("./index.js");
+  it.each([
+    ["normal", () => import("./index.js")],
+    ["Gateway fixture", () => import("./gateway-entry.js")],
+  ] as const)("loads the %s entry without private QA transports", async (_name, load) => {
+    const { default: plugin } = await load();
 
     expect(plugin.id).toBe("qa-lab");
     expect(qaChannelLoads).not.toHaveBeenCalled();

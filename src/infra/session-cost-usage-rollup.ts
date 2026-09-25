@@ -464,6 +464,15 @@ export function createSessionCostSummaryAccumulator(
   return {
     add(source: SessionCostSummary): void {
       addCostUsageTotals(target, source);
+      if (source.computedAt !== undefined) {
+        target.computedAt = Math.min(target.computedAt ?? source.computedAt, source.computedAt);
+      }
+      if (source.staleSince !== undefined) {
+        target.staleSince = Math.min(target.staleSince ?? source.staleSince, source.staleSince);
+      }
+      if (source.refreshing) {
+        target.refreshing = true;
+      }
       target.firstActivity =
         target.firstActivity === undefined
           ? source.firstActivity

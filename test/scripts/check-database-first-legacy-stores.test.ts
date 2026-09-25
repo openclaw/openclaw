@@ -552,6 +552,15 @@ describe("check-database-first-legacy-stores", () => {
         import * as jsonFiles from "../infra/json-files.js";
         await jsonFiles.writeJson("sessions.json", {});
       `("helper-namespace-write.ts", filesystemWriteViolations(3)),
+      "flags direct fs-safe helper writes without flagging reads": sourceCase`
+        import { appendRegularFile as append } from "@openclaw/fs-safe/advanced";
+        import * as atomic from "@openclaw/fs-safe/atomic";
+        import { writeJsonSync as save, readJson } from "@openclaw/fs-safe/json";
+        await append({ filePath: "sessions.json", content: "{}\\n" });
+        atomic.replaceFileAtomicSync({ filePath: "plugin-state/state.sqlite", content: "" });
+        save("thread-bindings.json", {});
+        await readJson("sessions.json");
+      `("direct-fs-safe-helper-write.ts", filesystemWriteViolations(5, 6, 7)),
       "flags private file store writes to legacy paths": privateStoreCase`
         await privateFileStore(stateDir).writeJson("thread-bindings.json", {});
       `("private-file-store-write.ts", filesystemWriteViolations(3)),
@@ -1069,7 +1078,7 @@ describe("check-database-first-legacy-stores", () => {
       `("regular-file-helper.ts", filesystemWriteViolations(4)),
       "flags legacy paths written through JSON and atomic helpers": sourceCase`
         import { writeJson, writeTextAtomic } from "../infra/json-files.js";
-        import { replaceFileAtomicSync } from "../infra/replace-file.js";
+        import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
         import { saveJsonFile, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
         await writeJson("restart-sentinel.json", {});
         await writeTextAtomic("gateway-restart-intent.json", "{}\\n");

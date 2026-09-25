@@ -15,18 +15,19 @@ describe("catalog attempt status publication", () => {
         {},
         { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
         () => true,
+        () => {},
       );
       const catalog: ModelCatalogSnapshot = reporter.withRefreshStatus({
         entries: [],
         routeVariants: [],
       });
-      const publication = {
+      const publication = () => ({
         previous: { catalog },
         current: { catalog },
         staticCatalog: catalog,
-      };
+      });
       try {
-        reporter.started(["custom", "sibling"], kind);
+        reporter.setPending(["custom", "sibling"], kind);
         expect(events).not.toHaveBeenCalled();
         reporter.published(["unrelated"], kind, publication);
         expect(catalog.pendingProviders).toEqual(["custom", "sibling"]);

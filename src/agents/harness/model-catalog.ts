@@ -16,6 +16,7 @@ import {
 } from "../agent-scope.js";
 import { resolveConfiguredModelEntries } from "../configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../defaults.js";
+import { enrichHarnessRows, modelCatalogRouteVariantKey } from "../model-catalog-entry.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
 import type { ModelRef } from "../model-ref-shared.js";
 import {
@@ -43,96 +44,22 @@ function isCatalogRowList(
   return Array.isArray(result);
 }
 
-function normalizeRouteBaseUrl(value: string | undefined): string {
-  if (!value) {
-    return "";
+function replaceRuntimeScope<T>(
+  previous: Readonly<Record<string, readonly T[]>> | undefined,
+  runtime: string,
+  rows: readonly T[],
+  retain: (row: T) => boolean,
+) {
+  const before = previous && Object.hasOwn(previous, runtime) ? (previous[runtime] ?? []) : [];
+  const next = [...before.filter(retain), ...rows];
+  if (isDeepStrictEqual(before, next)) {
+    return previous;
   }
-  try {
-    const url = new URL(value);
-    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
-    return url.toString();
-  } catch {
-    return value.trim();
+  const updated = { ...previous, [runtime]: next };
+  if (!next.length) {
+    delete updated[runtime];
   }
-}
-
-function routeVariantKey(entry: ModelCatalogEntry, identityKey: string): string {
-  return [
-    identityKey,
-    entry.nativeRuntime ?? "",
-    entry.api ?? "",
-    normalizeRouteBaseUrl(entry.baseUrl),
-  ].join("\0");
-}
-
-function mergeHarnessCompat(
-  observed: ModelCatalogEntry["compat"],
-  provider: ModelCatalogEntry["compat"],
-): ModelCatalogEntry["compat"] {
-  if (!observed && !provider) {
-    return undefined;
-  }
-  const compat = { ...provider, ...observed };
-  if (observed?.supportedReasoningEfforts?.length === 0) {
-    return { ...compat, supportsReasoningEffort: false, supportedReasoningEfforts: [] };
-  }
-  const efforts = [
-    ...new Set([
-      ...(provider?.supportedReasoningEfforts ?? []),
-      ...(observed?.supportedReasoningEfforts ?? []),
-    ]),
-  ];
-  return efforts.length > 0
-    ? { ...compat, supportsReasoningEffort: true, supportedReasoningEfforts: efforts }
-    : compat;
-}
-
-function enrichHarnessRows(
-  rows: readonly ModelCatalogEntry[],
-  snapshot: ModelCatalogSnapshot,
-): ModelCatalogEntry[] {
-  const keyOf = createModelCatalogIdentityKeyResolver();
-  const routeDonors = new Map<string, ModelCatalogEntry>();
-  const identityDonors = new Map<string, ModelCatalogEntry>();
-  let donorsPrepared = false;
-  return rows.map((entry) => {
-    // Native discovery owns these capabilities; host donors cannot invent its transport.
-    if (entry.nativeRuntime) {
-      return entry;
-    }
-    if (!donorsPrepared) {
-      // First donor wins: live snapshot entries take precedence over static rows.
-      for (const donor of [...snapshot.entries, ...(snapshot.staticEntries ?? [])]) {
-        const identityKey = keyOf(donor);
-        const routeKey = routeVariantKey(donor, identityKey);
-        if (!routeDonors.has(routeKey)) {
-          routeDonors.set(routeKey, donor);
-        }
-        if (!identityDonors.has(identityKey)) {
-          identityDonors.set(identityKey, donor);
-        }
-      }
-      donorsPrepared = true;
-    }
-    const identityKey = keyOf(entry);
-    const donor =
-      routeDonors.get(routeVariantKey(entry, identityKey)) ??
-      (entry.api === undefined && entry.baseUrl === undefined
-        ? identityDonors.get(identityKey)
-        : undefined);
-    if (!donor) {
-      return entry;
-    }
-    const compat = mergeHarnessCompat(entry.compat, donor.compat);
-    const mergedParams =
-      donor.params || entry.params ? { ...donor.params, ...entry.params } : undefined;
-    return {
-      ...donor,
-      ...entry,
-      ...(mergedParams ? { params: mergedParams } : {}),
-      ...(compat ? { compat } : {}),
-    };
-  });
+  return updated;
 }
 
 export async function augmentModelCatalogWithAgentHarness(params: {
@@ -312,34 +239,35 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     const scopedRows = includesProvider
       ? listedRows.filter((entry) => includesProvider(entry.provider))
       : listedRows;
-    const previousOutcomes =
-      result.nativeProviderOutcomes && Object.hasOwn(result.nativeProviderOutcomes, runtime)
-        ? (result.nativeProviderOutcomes[runtime] ?? [])
-        : [];
-    const scopedOutcomes = includesProvider
-      ? [
-          ...previousOutcomes.filter((outcome) => !includesProvider(outcome.provider)),
-          ...outcomes.filter((outcome) => includesProvider(outcome.provider)),
-        ]
-      : outcomes;
-    if (!isDeepStrictEqual(previousOutcomes, scopedOutcomes)) {
-      const nativeProviderOutcomes = {
-        ...result.nativeProviderOutcomes,
-        [runtime]: scopedOutcomes,
-      };
-      if (!scopedOutcomes.length) {
-        delete nativeProviderOutcomes[runtime];
-      }
+    const outsideScope = ({ provider }: { provider: string }) =>
+      includesProvider !== undefined && !includesProvider(provider);
+    const nativeProviderOutcomes = replaceRuntimeScope(
+      result.nativeProviderOutcomes,
+      runtime,
+      outcomes.filter((outcome) => !outsideScope(outcome)),
+      outsideScope,
+    );
+    const failedProviders = new Set(
+      outcomes.filter((outcome) => outcome.status !== "ready").map(({ provider }) => provider),
+    );
+    const nativeHostRows = replaceRuntimeScope(
+      result.nativeHostRows,
+      runtime,
+      scopedRows.filter(
+        (row) => !row.nativeRuntime && !failedProviders.has(normalizeProvider(row.provider)),
+      ),
+      (row) => outsideScope(row) || failedProviders.has(normalizeProvider(row.provider)),
+    );
+    if (
+      nativeProviderOutcomes !== result.nativeProviderOutcomes ||
+      nativeHostRows !== result.nativeHostRows
+    ) {
       if (result === params.snapshot) {
         result = { ...params.snapshot };
       }
       result.nativeProviderOutcomes = nativeProviderOutcomes;
+      result.nativeHostRows = nativeHostRows;
     }
-    const failedProviders = new Set(
-      scopedOutcomes
-        .filter((outcome) => outcome.status !== "ready")
-        .map(({ provider }) => provider),
-    );
     completedRows.push(...scopedRows);
     discovered = true;
     const rows = enrichHarnessRows(scopedRows, prepared);
@@ -378,7 +306,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     );
     const variantKeyOf = createModelCatalogIdentityKeyResolver();
     result.routeVariants = dedupeByKey([...rows, ...retainedVariants], (entry) =>
-      routeVariantKey(entry, variantKeyOf(entry)),
+      modelCatalogRouteVariantKey(entry, variantKeyOf(entry)),
     );
   }
   if (!isCurrent()) {

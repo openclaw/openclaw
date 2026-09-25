@@ -3,6 +3,7 @@
  *
  * Projects plugin-owned provider configuration into the tool-local search shape.
  */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolvePluginWebSearchConfig } from "../../config/plugin-web-search-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isLegacyWebSearchProviderConfigKey } from "../../config/web-search-legacy-provider-keys.js";
@@ -25,11 +26,7 @@ export function getScopedCredentialValue(
   searchConfig: Record<string, unknown> | undefined,
   key: string,
 ): unknown {
-  const scoped = searchConfig?.[key];
-  if (!scoped || typeof scoped !== "object" || Array.isArray(scoped)) {
-    return undefined;
-  }
-  return (scoped as Record<string, unknown>).apiKey;
+  return asOptionalRecord(searchConfig?.[key])?.apiKey;
 }
 
 /** Writes a provider-scoped credential value, creating the scoped object when needed. */
@@ -38,12 +35,12 @@ export function setScopedCredentialValue(
   key: string,
   value: unknown,
 ): void {
-  const scoped = searchConfigTarget[key];
-  if (!scoped || typeof scoped !== "object" || Array.isArray(scoped)) {
+  const scoped = asOptionalRecord(searchConfigTarget[key]);
+  if (!scoped) {
     searchConfigTarget[key] = { apiKey: value };
     return;
   }
-  (scoped as Record<string, unknown>).apiKey = value;
+  scoped.apiKey = value;
 }
 
 /** Projects plugin web-search config into the provider-scoped tool-local shape. */
@@ -86,9 +83,9 @@ export function resolveProviderWebSearchPluginConfig(
 }
 
 function ensureObject(target: Record<string, unknown>, key: string): Record<string, unknown> {
-  const current = target[key];
-  if (current && typeof current === "object" && !Array.isArray(current)) {
-    return current as Record<string, unknown>;
+  const current = asOptionalRecord(target[key]);
+  if (current) {
+    return current;
   }
   const next: Record<string, unknown> = {};
   target[key] = next;

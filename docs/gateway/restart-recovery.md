@@ -504,6 +504,13 @@ the user to repeat the request. Preparing a new message cannot consume the
 interruption marker; the recovery owner retains it until work is adopted or
 settled.
 
+Recovery reads the interrupted turn's source before starting another run, even
+when a final reply is already pending. If the transcript cannot be read, the
+saved reply and any admitted completion claim remain available for a later
+attempt. Delegated requests and unverified internal inputs cannot resume
+automatically without surviving authority. Child-completion follow-ups still use their
+existing recovery and delivery ownership checks.
+
 When a recovered turn starts with an eligible channel delivery route, OpenClaw
 sends a resumption notice to that conversation, retaining its account and topic.
 The final reply uses the same delivery route. Transcript-only turns stay private,

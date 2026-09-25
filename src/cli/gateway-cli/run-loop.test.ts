@@ -1289,7 +1289,7 @@ describe("runGatewayLoop", () => {
     const logger =
       await vi.importActual<typeof import("../../logging/logger.js")>("../../logging/logger.js");
     const { fileLogTransport } = await import("../../logging/logger-file-transport.js");
-    const { appendRegularFile } = await import("../../infra/regular-file.js");
+    const { appendRegularFile } = await import("@openclaw/fs-safe/advanced");
     const logFile = join(closeLogTempDirs.make("openclaw-close-log-"), "gateway.jsonl");
     const appendAllowed = createDeferredCore();
     logger.setLoggerOverride({ level: "info", file: logFile });

@@ -6,7 +6,7 @@ import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import { admitQueuedMessageForSession, subscribeChatOutboxProjection } from "./chat-queue.ts";
+import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { moveQueuedChatMessage } from "./chat-send-actions.ts";
 import {
   admitStoredChatComposerQueueItem,
@@ -37,7 +37,7 @@ function queueHost(items: readonly Partial<ChatQueueItem>[], sessionKey = SESSIO
       agents: [{ id: "main" }],
     },
   });
-  const unsubscribe = subscribeChatOutboxProjection(host as never);
+  const unsubscribe = chatOutboxOwner(host as never).subscribe(host as never);
   items.forEach((item, index) => {
     const admitted = admitQueuedMessageForSession(
       host as never,

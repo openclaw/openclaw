@@ -2,7 +2,10 @@ import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createChannelIngressQueueForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createTestRegistry,
   resetPluginRuntimeStateForTest,
@@ -27,11 +30,14 @@ import { createTelegramBot } from "./bot.js";
 import { apiThrottler } from "./bot.runtime.js";
 import { telegramPlugin } from "./channel.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
+import { getTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import {
   clearTelegramRuntimeForTest,
   resetTelegramAccountThrottlersForTest,
 } from "./runtime.test-support.js";
 import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
+import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
+import { resolveTelegramIngressSpoolDir } from "./telegram-ingress-spool.js";
 import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 const saveRemoteMedia = vi.fn();
@@ -114,7 +120,7 @@ export function publishTelegramTestConfig(cfg: OpenClawConfig): void {
   setRuntimeConfigSnapshot(cfg);
 }
 
-export function createBot(
+export async function createBot(
   native = true,
   text = true,
   override?: OpenClawConfig,
@@ -145,7 +151,7 @@ export function createBot(
     id: resolveTelegramBotUserIdFromToken(token) ?? telegramBotInfoForTest.id,
     has_topics_enabled: dmTopicsEnabled,
   };
-  const bot = createTelegramBot({
+  const bot = await createTelegramBot({
     token,
     botInfo,
     config: cfg,
@@ -169,6 +175,40 @@ export function createBot(
   menuOwnerIds.add(botInfo.id);
   bots.push({ bot, abort });
   return bot;
+}
+
+export async function admitSpooledUpdate(
+  bot: Awaited<ReturnType<typeof createBot>>,
+  update: unknown,
+) {
+  const runtime = getTelegramRuntime();
+  setTelegramRuntime({
+    ...runtime,
+    state: {
+      ...runtime.state,
+      openChannelIngressQueue: (options) =>
+        createChannelIngressQueueForTests({ ...options, channelId: "telegram" }),
+    },
+  });
+  try {
+    const monitor = createTelegramTransportIngressMonitor({
+      spoolDir: resolveTelegramIngressSpoolDir({ accountId: "default" }),
+      bot,
+      accountId: "default",
+      botInfo: bot.botInfo,
+    });
+    try {
+      monitor.start();
+      const admission = await monitor.admit(update);
+      await monitor.waitForIdle();
+      await monitor.waitForDeferredClaims();
+      return admission;
+    } finally {
+      await monitor.stop();
+    }
+  } finally {
+    setTelegramRuntime(runtime);
+  }
 }
 
 let messageId = 10000;

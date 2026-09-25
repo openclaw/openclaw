@@ -660,7 +660,7 @@ function pluginNameFromPluginId(pluginId: string, marketplaceName: string): stri
   return withoutMarketplaceSuffix.split("/").at(-1)?.trim() || undefined;
 }
 
-function marketplaceRef(
+export function marketplaceRef(
   marketplace: v2.PluginMarketplaceEntry,
   name: CodexPluginMarketplaceName,
 ): CodexPluginMarketplaceRef {

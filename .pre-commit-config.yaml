@@ -35,7 +35,7 @@ repos:
 
   # GitHub Actions security audit
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: 451b56af716f9f0d0c2b816503a3fd0cf8b036fa # v1.29.0
+    rev: fa412071e4f5d44d44f9e365f4676f9df92456a2 # v1.30.1
     hooks:
       - id: zizmor
         args:
@@ -50,7 +50,7 @@ repos:
 
   # Python checks for skills scripts
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: aab412d509121cb5f7533134b7e67f9fab59c682 # v0.16.4
+    rev: 2eeb5678de71a00c0902cbda7105d328432f72cb # v0.16.8
     hooks:
       - id: ruff
         files: "^skills/.*\\.py$"

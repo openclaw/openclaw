@@ -1,6 +1,7 @@
 // Collects and verifies package dist inventory metadata.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import pLimit, { type LimitFunction } from "p-limit";
 import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-metadata-paths.mts";
@@ -15,7 +16,6 @@ import { escapeRegExp } from "../shared/regexp.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { sha256File } from "./directory-durability.js";
 import { isMissingPathError } from "./errno.js";
-import { readFileHandleBounded } from "./fs-safe-advanced.js";
 import { FsSafeError, root as openFsRoot } from "./fs-safe.js";
 import { readJsonIfExists } from "./json-files.js";
 export {

@@ -76,7 +76,7 @@ async function withHostedCreation(
     const sourceController = new AbortController();
     const captured = identified
       ? expectDefined(
-          captureGatewayOperatorRunAuthority({
+          await captureGatewayOperatorRunAuthority({
             client,
             context,
             sourceAuthority: {
