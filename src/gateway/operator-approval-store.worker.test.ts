@@ -210,13 +210,13 @@ it.each(["worker", "native-compatibility"] as const)(
     if (family === "worker") {
       const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit) =>
+        (admit, attachment) =>
           createAdmission((request, grant) => {
             if (request.stage === "commit" && refuse) {
               current = false;
             }
             return admit(request, grant);
-          }),
+          }, attachment),
       );
     }
     const input = {

@@ -66,6 +66,8 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/auth-profile-runtime-contract.test.ts",
   "extensions/codex/src/app-server/attempt-startup.test.ts",
   "extensions/codex/src/app-server/attempt-startup-retry.test.ts",
+  "extensions/codex/src/app-server/compact.model-policy.test.ts",
+  "extensions/codex/src/app-server/compact.native.test.ts",
   "extensions/codex/src/app-server/event-projector.output-fidelity.native.test.ts",
   "extensions/codex/src/app-server/inference-proxy.native.test.ts",
   "extensions/codex/src/app-server/settled-turn-finalizer.native.test.ts",

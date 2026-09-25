@@ -3,7 +3,8 @@ import type { TeamReportsConfig, resolveTeamReportsConfig } from "./config.js";
 import { describePeriod } from "./periods.js";
 import { renderMarkdown } from "./render/markdown.js";
 import { buildRoster } from "./roster.js";
-import { createDiscordSource, createGithubSource } from "./sources/index.js";
+import { createDiscordSource } from "./sources/discord/index.js";
+import { createGithubSource } from "./sources/github/index.js";
 import type { TeamReportsStore } from "./store.js";
 import { generateSummaries, type SummaryLlm } from "./summaries.js";
 import type {

@@ -173,7 +173,6 @@ extensions/qa-lab/src/live-transports/slack/slack-live.runtime.test.ts
 extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.test.ts
 extensions/qa-lab/src/mantis/slack-desktop-smoke.runtime.test.ts
 extensions/qa-lab/src/mantis/slack-desktop-smoke.runtime.ts
-extensions/qa-lab/src/mantis/visual-task.runtime.ts
 extensions/qa-lab/src/providers/mock-openai/server.test.ts
 extensions/qa-lab/src/providers/mock-openai/server.ts
 extensions/qa-lab/src/runtime-parity.ts
@@ -290,7 +289,6 @@ src/agents/command/attempt-execution.cli.test.ts
 src/agents/command/attempt-execution.test.ts
 src/agents/command/attempt-execution.ts
 src/agents/command/cli-compaction.test.ts
-src/agents/command/cli-compaction.ts
 src/agents/command/delivery.test.ts
 src/agents/command/delivery.ts
 src/agents/command/session-store.test.ts

@@ -76,11 +76,7 @@ export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
 }
 
 /** Return whether a request is a clean loopback request without forwarded identity headers. */
-export function isLocalDirectRequest(
-  req?: IncomingMessage,
-  _trustedProxies?: string[],
-  _allowRealIpFallback = false,
-): boolean {
+export function isLocalDirectRequest(req?: IncomingMessage): boolean {
   return Boolean(
     req && !hasForwardedRequestHeaders(req) && isLoopbackAddress(req.socket?.remoteAddress),
   );

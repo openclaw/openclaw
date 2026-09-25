@@ -1,10 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  escapeTableCell,
-  evaluateJsonlReplaySummary,
-  type QaConfidenceVerdict,
-} from "./confidence-report.js";
+import { evaluateJsonlReplaySummary, type QaConfidenceVerdict } from "./confidence-report.js";
 import {
   buildHarnessParityCell,
   buildHarnessParityResult,
@@ -12,6 +8,7 @@ import {
   type HarnessRuntimeParityCell,
   type RuntimeParitySystemPromptReport,
 } from "./harness-parity.js";
+import { escapeTableCell } from "./report.js";
 import {
   runRuntimeParityScenario,
   type RuntimeParityCell,
@@ -87,15 +84,17 @@ async function detectRuntimeDrift(params: {
   return result.drift === params.expectedDrift;
 }
 
-function syntheticPromptReport(
-  overrides: Partial<RuntimeParitySystemPromptReport> = {},
-): RuntimeParitySystemPromptReport {
+function syntheticPromptReport({
+  systemPromptHash = "system-prompt-a",
+  toolDescriptionHash = "summary-a",
+  toolSchemaHash = "schema-a",
+} = {}): RuntimeParitySystemPromptReport {
   return {
     systemPrompt: {
       chars: 100,
       projectContextChars: 10,
       nonProjectContextChars: 90,
-      hash: "system-prompt-a",
+      hash: systemPromptHash,
     },
     skills: {
       promptChars: 20,
@@ -108,14 +107,13 @@ function syntheticPromptReport(
         {
           name: "openclaw.synthetic",
           summaryChars: 12,
-          summaryHash: "summary-a",
+          summaryHash: toolDescriptionHash,
           schemaChars: 18,
-          schemaHash: "schema-a",
+          schemaHash: toolSchemaHash,
           propertiesCount: 2,
         },
       ],
     },
-    ...overrides,
   };
 }
 
@@ -198,54 +196,17 @@ async function buildQaConfidenceSelfTestSummary(
 ): Promise<QaConfidenceSelfTestSummary> {
   const promptDriftDetected = detectHarnessDrift({
     leftReport: syntheticPromptReport(),
-    rightReport: syntheticPromptReport({
-      systemPrompt: {
-        chars: 100,
-        projectContextChars: 10,
-        nonProjectContextChars: 90,
-        hash: "system-prompt-b",
-      },
-    }),
+    rightReport: syntheticPromptReport({ systemPromptHash: "system-prompt-b" }),
     expectedDrift: "system-prompt",
   });
   const toolDescriptionDetected = detectHarnessDrift({
     leftReport: syntheticPromptReport(),
-    rightReport: syntheticPromptReport({
-      tools: {
-        listChars: 30,
-        schemaChars: 40,
-        entries: [
-          {
-            name: "openclaw.synthetic",
-            summaryChars: 12,
-            summaryHash: "summary-b",
-            schemaChars: 18,
-            schemaHash: "schema-a",
-            propertiesCount: 2,
-          },
-        ],
-      },
-    }),
+    rightReport: syntheticPromptReport({ toolDescriptionHash: "summary-b" }),
     expectedDrift: "tool-description",
   });
   const toolSchemaDetected = detectHarnessDrift({
     leftReport: syntheticPromptReport(),
-    rightReport: syntheticPromptReport({
-      tools: {
-        listChars: 30,
-        schemaChars: 40,
-        entries: [
-          {
-            name: "openclaw.synthetic",
-            summaryChars: 12,
-            summaryHash: "summary-a",
-            schemaChars: 18,
-            schemaHash: "schema-b",
-            propertiesCount: 2,
-          },
-        ],
-      },
-    }),
+    rightReport: syntheticPromptReport({ toolSchemaHash: "schema-b" }),
     expectedDrift: "tool-schema",
   });
   const runtimeToolCallDropDetected = await detectRuntimeDrift({

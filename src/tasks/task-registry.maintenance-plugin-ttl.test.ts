@@ -143,7 +143,7 @@ describe("task maintenance plugin expiry", () => {
       const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       const admissionObserver = vi
         .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit) =>
+        .mockImplementation((admit, attachment) =>
           createAdmission((request, grant) => {
             if (
               sweepRequestPosted &&
@@ -155,7 +155,7 @@ describe("task maintenance plugin expiry", () => {
               }
             }
             admit(request, grant);
-          }),
+          }, attachment),
         );
       try {
         maintenance = runTaskRegistryMaintenance();

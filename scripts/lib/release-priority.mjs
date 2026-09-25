@@ -1,6 +1,6 @@
-// Release priority: while a Full Release Validation parent runs, hosted-runner
-// PR-side workflows defer through a job-level `if` on the repo variable below,
-// and `pnpm frv prioritize` cancels queued non-release runs, then restores them.
+// Historical release-priority recovery records identify workflows deferred by
+// the former repository-variable gate. Current release validation shares runner
+// capacity with PR CI and does not pause or cancel unrelated workflows.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 

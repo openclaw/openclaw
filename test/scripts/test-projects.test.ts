@@ -2710,7 +2710,9 @@ describe("scripts/test-projects changed-target routing", () => {
         {
           config: "test/vitest/vitest.infra.config.ts",
           forwardedArgs,
-          includePatterns: ["src/gateway/server-methods/memory-search.test.ts"],
+          includePatterns: databaseWorkerCoreTestFiles.filter((file) =>
+            file.startsWith("src/gateway/"),
+          ),
           watchMode: false,
         },
       ]);

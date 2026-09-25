@@ -428,7 +428,13 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       },
     );
   },
-  "sessions.resolve": async ({ params, respond, context, client }) => {
+  "sessions.resolve": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
       return;
     }
@@ -444,6 +450,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         isCurrent: () => getSessionRowProjection(context) === projection,
       },
       (resolved) => {
+        sessionMutationAuthorization?.assertCurrent();
         if (!resolved.ok) {
           respond(false, undefined, resolved.error);
           return;

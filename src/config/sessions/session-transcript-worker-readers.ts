@@ -291,6 +291,18 @@ export function createSessionHistoryWorkerReaders(
           return value.evidence;
         },
       ),
+    readProjectionStatus: async (input, signal) =>
+      await runRequest(
+        () => ({ kind: "projection-status", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          if (typeof value !== "boolean") {
+            throw new Error("Session history worker returned history instead of projection status");
+          }
+          return value;
+        },
+        signal,
+      ),
     readEntryPresence: async (scope) =>
       await runRequest(
         () => ({ kind: "session-row-presence", scope }),

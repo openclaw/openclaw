@@ -67,7 +67,7 @@ async function createFixture(state: OpenClawTestState, authority: "role" | "iden
   });
   const activatePolicy = async (update: Partial<NonNullable<OpenClawConfig["gateway"]>>) => {
     const gateway = { ...cfg.gateway, ...update };
-    await publishCanonicalUserChannelPolicy(gateway);
+    await publishCanonicalUserChannelPolicy(gateway, cfg.commands?.ownerAllowFrom);
     cfg.gateway = gateway;
   };
   await activatePolicy({});

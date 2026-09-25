@@ -127,6 +127,10 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             isRecord(pin) && typeof pin.skillId === "string" && typeof pin.revision === "string",
         )) ||
       input.command.type === "agentDatabaseRegistry.read" ||
+      (input.command.type === "agentDatabaseDeletion.snapshot" &&
+        (input.command.purpose === "runtime" || input.command.purpose === "maintenance")) ||
+      (input.command.type === "agentDeletionJournal.status" &&
+        typeof input.command.agentId === "string") ||
       input.command.type === "sessionGroups.snapshot" ||
       (input.command.type === "sessionGroups.members" && isRecord(input.command.cfg)) ||
       (input.command.type === "workerEnvironments.snapshot" &&
@@ -203,6 +207,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       input.command.type === "fleet.list" ||
       (input.command.type === "operatorApprovals.history" && isRecord(input.command.input)) ||
       input.command.type === "nodeHost.config" ||
+      input.command.type === "operator.channelPolicy" ||
       (input.command.type === "onboardingRecommendations.read" &&
         typeof input.command.configKey === "string") ||
       input.command.type === "sandboxRegistry.list" ||

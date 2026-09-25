@@ -36,6 +36,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
+import * as terminalState from "../../../sessions/subagent-terminal-state.js";
 import {
   AsyncWorkScope,
   getAsyncWorkSignal,
@@ -99,6 +100,7 @@ import {
   settleRequesterTurnAfterSessionSpawns,
 } from "./subagent-registry-requester-yield.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
+import { registerTerminalStateSignalAuthorityTests } from "./subagent-registry-terminal-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type LifecycleControllerParams = SubagentLifecycleOptions;
@@ -610,6 +612,7 @@ describe("subagent registry lifecycle hardening", () => {
       sessionId: "child-session-id",
       lifecycleRevision: "child-lifecycle-revision",
     });
+    vi.spyOn(terminalState, "recordSubagentTerminalState").mockResolvedValue();
   });
 
   it.each([
@@ -862,25 +865,6 @@ describe("subagent registry lifecycle hardening", () => {
   });
 
   registerDetachedCleanupAuthorityTest({ createRunEntry, createLifecycleController });
-
-  it("emits one progress end event at the canonical terminal transition", async () => {
-    const entry = createRunEntry({ expectsCompletionMessage: false });
-    const emitSubagentProgressEndedForRun = vi.fn(async () => {});
-    const controller = createLifecycleController({ entry, emitSubagentProgressEndedForRun });
-    const completion = {
-      runId: entry.runId,
-      endedAt: 4_000,
-      outcome: { status: "ok" as const },
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-      triggerCleanup: false,
-    };
-
-    await controller.completeSubagentRun(completion);
-    await controller.completeSubagentRun(completion);
-
-    expect(emitSubagentProgressEndedForRun).toHaveBeenCalledTimes(1);
-    expect(emitSubagentProgressEndedForRun).toHaveBeenCalledWith(entry);
-  });
 
   it("publishes a recovered terminal session status exactly once", async () => {
     const entry = createRunEntry();
@@ -1706,6 +1690,14 @@ describe("subagent registry lifecycle hardening", () => {
       controller.clearScheduledResumeTimers();
       vi.useRealTimers();
     }
+  });
+
+  registerTerminalStateSignalAuthorityTests({
+    createRunEntry,
+    createLifecycleController,
+    completeRun,
+    helperMocks,
+    lifecycleEventMocks,
   });
 
   registerTaskFinalizationAuthorityTests({
