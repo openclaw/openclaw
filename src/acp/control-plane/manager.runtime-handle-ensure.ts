@@ -22,6 +22,10 @@ import {
   isAcpOwnerRepairRequired,
   persistedAcpRuntimeHandle,
 } from "./manager.runtime-owner.js";
+import {
+  discardPersistedManagerRuntimeState,
+  isConfirmedMissingManagerResumeTargetError,
+} from "./manager.runtime-resume-state.js";
 import type {
   AcpSessionManagerDeps,
   SessionAcpMeta,
@@ -128,7 +132,25 @@ export async function ensureManagerRuntimeHandle(params: {
     : undefined;
   let identityForEnsure = previousIdentity;
   const persistedResumeSessionId =
-    mode === "persistent" ? resolveRuntimeResumeSessionId(previousIdentity) : undefined;
+    mode === "persistent" ||
+    (previousIdentity?.sessionResumeSupported === true &&
+      previousIdentity.sessionResumeReady === true)
+      ? resolveRuntimeResumeSessionId(previousIdentity, mode)
+      : undefined;
+  if (
+    mode === "oneshot" &&
+    !persistedResumeSessionId &&
+    identityHasStableSessionId(identityForEnsure)
+  ) {
+    const {
+      acpxRecordId: _staleAcpxRecordId,
+      acpxSessionId: _staleAcpxSessionId,
+      agentSessionId: _staleAgentSessionId,
+      sessionResumeReady: _staleSessionResumeReady,
+      ...freshIdentity
+    } = identityForEnsure!;
+    identityForEnsure = { ...freshIdentity, state: "pending" };
+  }
   const shouldPrepareFreshPersistentSession =
     mode === "persistent" &&
     previousIdentity != null &&
@@ -187,11 +209,23 @@ export async function ensureManagerRuntimeHandle(params: {
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "Could not initialize ACP session runtime.",
       });
-      if (!isCurrentActor()) {
+      if (!isCurrentActor() || isAcpOwnerRepairRequired(acpError)) {
         throw acpError;
       }
       params.assertActive?.();
-      if (isAcpOwnerRepairRequired(acpError) || acpError.code !== "ACP_SESSION_INIT_FAILED") {
+      if (mode === "oneshot") {
+        if (isConfirmedMissingManagerResumeTargetError(acpError)) {
+          await discardPersistedManagerRuntimeState({
+            cfg: params.cfg,
+            sessionKey: params.sessionKey,
+            agentId: params.agentId,
+            isCurrentActor,
+            writeSessionMeta: params.writeSessionMeta,
+          });
+        }
+        throw acpError;
+      }
+      if (acpError.code !== "ACP_SESSION_INIT_FAILED") {
         throw acpError;
       }
       logVerbose(
@@ -201,6 +235,7 @@ export async function ensureManagerRuntimeHandle(params: {
         const {
           acpxSessionId: _staleAcpxSessionId,
           agentSessionId: _staleAgentSessionId,
+          sessionResumeReady: _staleSessionResumeReady,
           ...retryIdentity
         } = identityForEnsure;
         // The persisted resume identifiers already failed, so do not merge them back into the
@@ -230,7 +265,22 @@ export async function ensureManagerRuntimeHandle(params: {
     ensuredIdentity?.acpxRecordId &&
     identityForEnsure.acpxRecordId !== ensuredIdentity.acpxRecordId
   ) {
-    identityForEnsure = undefined;
+    const resumedSameSession =
+      mode === "oneshot" &&
+      persistedResumeSessionId &&
+      ensured.backend === backend.id &&
+      ensuredIdentity.acpxSessionId === persistedResumeSessionId;
+    // ACPX can replace its physical record while resuming the same protocol session.
+    // Retain only resume confirmation; all identifiers must come from the new handle.
+    identityForEnsure = resumedSameSession
+      ? {
+          state: "pending",
+          source: "ensure",
+          sessionResumeSupported: identityForEnsure.sessionResumeSupported,
+          sessionResumeReady: identityForEnsure.sessionResumeReady,
+          lastUpdatedAt: now,
+        }
+      : undefined;
   }
   const nextIdentity =
     mergeSessionIdentity({

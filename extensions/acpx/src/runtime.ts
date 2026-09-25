@@ -5,8 +5,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import path, { resolve as resolvePath } from "node:path";
-import { isDeepStrictEqual } from "node:util";
+import path from "node:path";
 import {
   AcpxRuntime as BaseAcpxRuntime,
   decodeAcpxRuntimeHandleState,
@@ -59,6 +58,13 @@ import { AcpxRuntimeProbe } from "./runtime-probe.js";
 import { prepareAcpxProcessCleanup } from "./runtime-process-cleanup.js";
 import type { CompleteAcpRuntime, CompleteAcpRuntimeTurn } from "./runtime-proxy.js";
 import {
+  normalizeMissingResumeTargetError,
+  prepareResumeSafeSessionInput,
+  readReusablePersistentSessionCommand,
+  withResumeEnsureErrorNormalization,
+  withSessionResumeCapability,
+} from "./runtime-session-ensure.js";
+import {
   type AcpLoadedSessionRecord,
   type ResetAwareSessionStore,
   type AcpxLaunchLeaseContext,
@@ -68,8 +74,6 @@ import {
   type GenerationHandle,
   acpxOperationScope,
   readRecordAgentCommand,
-  readRecordCwd,
-  readRecordResetOnNextEnsure,
   readOpenClawLeaseIdFromRecord,
   extractGeneratedWrapperPath,
   createResetAwareSessionStore,
@@ -658,49 +662,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     );
   }
 
-  private async readReusablePersistentSessionCommand(params: {
-    sessionKey: string;
-    mode: Parameters<AcpRuntime["ensureSession"]>[0]["mode"];
-    cwd: string | undefined;
-    command: AcpxAgentCommand | undefined;
-    resumeSessionId: string | undefined;
-  }): Promise<AcpxAgentCommand | undefined> {
-    if (params.mode !== "persistent" || !params.command) {
-      return undefined;
-    }
-    const existing = await this.sessionStore.load(params.sessionKey);
-    if (!existing || readRecordResetOnNextEnsure(existing)) {
-      return undefined;
-    }
-    const recordCwd = readRecordCwd(existing);
-    if (!recordCwd || resolvePath(recordCwd) !== resolvePath(params.cwd?.trim() || this.cwd)) {
-      return undefined;
-    }
-    const recordCommand = readRecordAgentCommand(existing);
-    if (!recordCommand) {
-      return undefined;
-    }
-    const leaseIdentity = readAcpxProcessLeaseIdentity(recordCommand);
-    if (leaseIdentity && leaseIdentity.gatewayInstanceId !== this.gatewayInstanceId) {
-      return undefined;
-    }
-    const stableRecordCommand = leaseIdentity
-      ? withAcpxLeaseArgs({
-          command: params.command,
-          leaseId: leaseIdentity.leaseId,
-          gatewayInstanceId: leaseIdentity.gatewayInstanceId,
-        })
-      : params.command;
-    if (
-      !isDeepStrictEqual(splitCommandParts(recordCommand), splitCommandParts(stableRecordCommand))
-    ) {
-      return undefined;
-    }
-    return !params.resumeSessionId || existing.acpSessionId === params.resumeSessionId
-      ? recordCommand
-      : undefined;
-  }
-
   private async runWithLaunchLease<T>(params: {
     agent: string;
     sessionKey: string;
@@ -938,7 +899,10 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       agentId: logicalInput.agentId,
       bridgeSession: logicalInput.bridgeSession,
     };
-    const input = { ...logicalInput, sessionKey: resolveAcpxSessionResource(logicalInput) };
+    const input = prepareResumeSafeSessionInput({
+      input: { ...logicalInput, sessionKey: resolveAcpxSessionResource(logicalInput) },
+      markFresh: (sessionKey) => this.sessionStore.markFresh(sessionKey),
+    });
     const isCodexAcp =
       normalizeAgentName(input.agent) === CODEX_ACP_AGENT_ID && isCodexAcpCommand(command);
     const dropInheritedCodexMax =
@@ -980,34 +944,45 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       codexModelOverride && command
         ? appendCodexAcpConfigOverrides(command, codexModelOverride)
         : command;
-    const reusableCommand = await this.readReusablePersistentSessionCommand({
+    const reusableCommand = await readReusablePersistentSessionCommand({
+      sessionStore: this.sessionStore,
+      defaultCwd: this.cwd,
+      gatewayInstanceId: this.gatewayInstanceId,
       sessionKey: input.sessionKey,
-      mode: input.mode,
+      mode: ensureInput.mode,
       cwd: input.cwd,
       command: stableLaunchCommand,
       resumeSessionId: input.resumeSessionId,
     });
 
-    const handle = await this.runWithLaunchLease({
-      agent: ensureInput.agent,
-      sessionKey: ensureInput.sessionKey,
-      command: stableLaunchCommand,
-      reusableCommand,
+    const handle = await withResumeEnsureErrorNormalization({
+      input: ensureInput,
       run: () =>
-        this.withCodexWrapperDiagnostics({
+        this.runWithLaunchLease({
+          agent: ensureInput.agent,
+          sessionKey: ensureInput.sessionKey,
           command: stableLaunchCommand,
-          fallbackCode: "ACP_SESSION_INIT_FAILED",
+          reusableCommand,
           run: () =>
-            codexModelOverride
-              ? delegate.ensureSession(withAcpxSessionOptions(ensureInput))
-              : ensureSessionWithModelRef((request) => {
-                  this.generationRegistry.assertCurrentGeneration(generation);
-                  return delegate.ensureSession(request);
-                }, ensureInput),
+            this.withCodexWrapperDiagnostics({
+              command: stableLaunchCommand,
+              fallbackCode: "ACP_SESSION_INIT_FAILED",
+              run: () =>
+                codexModelOverride
+                  ? delegate.ensureSession(withAcpxSessionOptions(ensureInput))
+                  : ensureSessionWithModelRef((request) => {
+                      this.generationRegistry.assertCurrentGeneration(generation);
+                      return delegate.ensureSession(request);
+                    }, ensureInput),
+            }),
         }),
     });
+    // Capability lookup enriches an owned handle; a read failure must not strand its client.
+    const record = await this.sessionStore
+      .load(handle.acpxRecordId ?? input.sessionKey)
+      .catch(() => undefined);
     return {
-      ...handle,
+      ...withSessionResumeCapability(handle, record),
       ...logicalTarget,
       ...(appliedModel ? { appliedModel } : {}),
       ...(dropInheritedCodexMax ? { appliedThinking: { kind: "dropped" as const } } : {}),
@@ -1081,7 +1056,11 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         async *[Symbol.asyncIterator](): AsyncIterator<AcpRuntimeEvent> {
           const { command, turn } = await turnPromise;
           try {
-            yield* turn.events;
+            for await (const event of turn.events) {
+              yield event.type === "error"
+                ? normalizeMissingResumeTargetError(event, input.handle)
+                : event;
+            }
           } catch (error) {
             if (!isGenericInternalAcpError(error)) {
               throw error;
@@ -1093,6 +1072,12 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       result: turnPromise.then(({ command, turn }) =>
         withTurnDiagnostics(command, async (): Promise<AcpRuntimeTurnResult> => {
           const result = await turn.result;
+          if (result.status === "failed") {
+            const error = normalizeMissingResumeTargetError(result.error, input.handle);
+            if (error !== result.error) {
+              return { ...result, error };
+            }
+          }
           if (
             result.status !== "failed" ||
             !isCodexAcpCommand(command) ||

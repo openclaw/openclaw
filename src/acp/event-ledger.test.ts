@@ -201,6 +201,34 @@ describe("ACP event ledger", () => {
     });
   });
 
+  it("does not downgrade complete SQLite replay state when resuming a session", async () => {
+    await withTestAcpEventLedgerDatabase(async ({ databasePath }) => {
+      const ledger = createSqliteAcpEventLedger({
+        path: databasePath,
+      });
+      await ledger.startSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        cwd: "/work",
+        complete: true,
+      });
+
+      await ledger.startSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        cwd: "/work",
+        complete: false,
+      });
+
+      await expect(ledger.readReplayBySessionId({ sessionId: "session-1" })).resolves.toMatchObject(
+        {
+          complete: true,
+          sessionKey: "agent:main:work",
+        },
+      );
+    });
+  });
+
   it("marks SQLite-backed replay incomplete when event retention truncates history", async () => {
     await withTestAcpEventLedgerDatabase(async ({ databasePath }) => {
       const ledger = createSqliteAcpEventLedger({

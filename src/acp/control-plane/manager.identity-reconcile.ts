@@ -3,6 +3,7 @@ import {
   createIdentityFromHandleEvent,
   createIdentityFromStatus,
   identityEquals,
+  identityHasStableSessionId,
   mergeSessionIdentity,
   resolveRuntimeHandleIdentifiersFromIdentity,
   resolveSessionIdentityFromMeta,
@@ -12,16 +13,17 @@ import type {
   AcpRuntimeHandle,
   AcpRuntimeStatus,
 } from "@openclaw/acp-core/runtime/types";
+import type { SessionAcpIdentity } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { runAbortableTimeout } from "../../node-host/with-timeout.js";
 import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 import type { AcpSessionTarget, SessionAcpMeta, SessionEntry } from "./manager.types.js";
 import { hasLegacyAcpIdentityProjection } from "./manager.utils.js";
 
-/** Reconciles runtime-reported session identifiers into persisted ACP session metadata. */
-export async function reconcileManagerRuntimeSessionIdentifiers(params: {
+export type ManagerRuntimeSessionIdentifierReconcileParams = {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
@@ -30,6 +32,8 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   meta: SessionAcpMeta;
   runtimeStatus?: AcpRuntimeStatus;
   failOnStatusError: boolean;
+  failOnWriteError?: boolean;
+  statusTimeoutMs?: number;
   isCurrentActor?: () => boolean;
   setCachedHandle: (target: AcpSessionTarget, handle: AcpRuntimeHandle) => void;
   writeSessionMeta: (params: {
@@ -43,7 +47,12 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
     failOnError?: boolean;
     isCurrentActor?: () => boolean;
   }) => Promise<SessionEntry | null>;
-}): Promise<{
+};
+
+/** Reconciles runtime-reported session identifiers into persisted ACP session metadata. */
+export async function reconcileManagerRuntimeSessionIdentifiers(
+  params: ManagerRuntimeSessionIdentifierReconcileParams,
+): Promise<{
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
   runtimeStatus?: AcpRuntimeStatus;
@@ -57,9 +66,15 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
     try {
       runtimeStatus = await withAcpRuntimeErrorBoundary({
         run: async () =>
-          await params.runtime.getStatus!({
-            handle: params.handle,
-          }),
+          await runAbortableTimeout(
+            async (signal) =>
+              await params.runtime.getStatus!({
+                handle: params.handle,
+                signal,
+              }),
+            params.statusTimeoutMs,
+            "ACP runtime status refresh",
+          ),
         fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: "Could not read ACP runtime status.",
       });
@@ -168,6 +183,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   await params.writeSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    failOnError: params.failOnWriteError,
     agentId: params.agentId,
     isCurrentActor,
     mutate: (current, entry) => {
@@ -203,4 +219,19 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
     meta: nextMeta,
     runtimeStatus,
   };
+}
+
+/** Resolves the stable identity that a terminal one-shot can durably expose for resume. */
+export function resolveOneShotResumeIdentity(
+  meta: SessionAcpMeta,
+  terminalStatus: "completed" | "cancelled" | undefined,
+): SessionAcpIdentity | undefined {
+  const identity = resolveSessionIdentityFromMeta(meta);
+  return meta.mode === "oneshot" &&
+    terminalStatus === "completed" &&
+    identity?.state === "resolved" &&
+    identity?.sessionResumeSupported === true &&
+    identityHasStableSessionId(identity)
+    ? identity
+    : undefined;
 }

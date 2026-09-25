@@ -644,6 +644,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-state-db-schema-policy.test.ts",
   "src/state/openclaw-state-maintenance-resources.test.ts",
   "src/tasks/task-registry.test.ts",
+  "src/tasks/task-registry.maintenance-acp-cleanup.test.ts",
   "src/tasks/task-registry.test-support.test.ts",
   "src/tasks/task-registry.notifications.test.ts",
   "test/cli-message-authority.integration.test.ts",

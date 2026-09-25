@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { hasActiveTaskForChildSessionKey } from "./task-registry-query.js";
+import { isResumableOneShotAcpSession } from "./task-registry.acp-session-lifecycle.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
@@ -119,7 +120,7 @@ function shouldCloseTerminalAcpSession(
     return false;
   }
   if (acpEntry.acp.mode === "oneshot") {
-    return true;
+    return !isResumableOneShotAcpSession(acpEntry);
   }
   return !hasActiveSessionBinding(runtime, sessionKey);
 }
@@ -142,7 +143,7 @@ function shouldCloseOrphanedParentOwnedAcpSession(
     return false;
   }
   if (acpEntry.acp.mode === "oneshot") {
-    return true;
+    return !isResumableOneShotAcpSession(acpEntry);
   }
   return !hasActiveSessionBinding(runtime, sessionKey);
 }

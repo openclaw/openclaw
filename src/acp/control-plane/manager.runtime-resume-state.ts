@@ -26,19 +26,31 @@ export function isRecoverableManagerAcpxExitError(message: string): boolean {
 const SESSION_RESUME_REQUIRED_DETAIL_CODE = "SESSION_RESUME_REQUIRED";
 
 /**
- * Detects a "persistent session can no longer be resumed" failure by acpx's
- * structured detail code, on the error itself or anywhere in its cause chain.
+ * Detects a "session can no longer be resumed" failure by acpx's structured
+ * detail code, on the error itself or anywhere in its cause chain.
  * Keying on the structured code rather than the human reason text is what makes
  * recovery independent of the backend's wording — Claude reports "Resource not
  * found", Kiro reports "Internal error" (RequestError -32603), but both wrap a
  * SessionResumeRequiredError; matching the reason text missed Kiro and left the
  * thread permanently stuck (#87830).
  */
-function isRecoverableMissingManagerPersistentSessionError(error: AcpRuntimeError): boolean {
+function isMissingManagerResumeTargetError(error: AcpRuntimeError): boolean {
+  return (
+    hasResumeDetailCode(error, SESSION_RESUME_REQUIRED_DETAIL_CODE) ||
+    isConfirmedMissingManagerResumeTargetError(error)
+  );
+}
+
+/** One-shot invalidation requires adapter-correlated missing-target evidence, not a load failure. */
+export function isConfirmedMissingManagerResumeTargetError(error: AcpRuntimeError): boolean {
+  return hasResumeDetailCode(error, "SESSION_RESUME_TARGET_NOT_FOUND");
+}
+
+function hasResumeDetailCode(error: AcpRuntimeError, detailCode: string): boolean {
   let current: unknown = error;
   // Depth-capped to defend against self-referential cause cycles.
   for (let depth = 0; current && depth < 8; depth += 1) {
-    if ((current as { detailCode?: unknown }).detailCode === SESSION_RESUME_REQUIRED_DETAIL_CODE) {
+    if ((current as { detailCode?: unknown }).detailCode === detailCode) {
       return true;
     }
     current = (current as { cause?: unknown }).cause;
@@ -81,7 +93,7 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
     !params.runtime ||
     !params.meta ||
     params.meta.mode !== "persistent" ||
-    !isRecoverableMissingManagerPersistentSessionError(params.error)
+    !isMissingManagerResumeTargetError(params.error)
   ) {
     return false;
   }

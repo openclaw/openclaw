@@ -50,6 +50,8 @@ work. The delivery path depends on that shape.
     - Child turns run on the same background lane used by native sub-agent spawns, so a slow ACP harness does not block unrelated main-session work.
     - Completion reports back through the task-completion announce path. OpenClaw converts internal completion metadata into a plain ACP prompt before sending it to an external harness, so harnesses do not see OpenClaw-only runtime context markers.
     - The parent rewrites the child result in normal assistant voice when a user-facing reply is useful.
+    - After a completed turn, the parent can use `sessions_send` with the same child session key to answer a question or continue the work. This requires a stable harness session identity and confirmed session resume support. Runtime cleanup releases the worker while retaining that identity and the original working directory.
+    - Follow-ups to running one-shots or sessions without confirmed resume state are rejected. Use `session_status` or the task result for progress; a status-check prompt is another turn, not a read-only status query.
 
     Do **not** treat this path as a peer-to-peer chat between parent and
     child. The child already has a completion channel back to the parent.
@@ -79,6 +81,12 @@ work. The delivery path depends on that shape.
     while `delivery.status` is `pending` or `skipped`. For this owned-child case,
     `delivery.status="skipped"` because the completion path is already responsible
     for the result.
+
+    For a completed resumable one-shot, `sessions_send` returns `accepted`
+    without waiting for an inline reply, even with a positive `timeoutSeconds`.
+    The follow-up result arrives through task completion. Use the default send
+    mode or `mode="followup"`; `mode="resume"` is reserved for paused native
+    sub-agent tasks and does not resume ACP sessions.
 
   </Accordion>
   <Accordion title="Resume an existing session">

@@ -209,6 +209,9 @@ export function createAcpSessionStoreEntry(params: {
   sessionKey: string;
   parentSessionKey: string;
   mode: "persistent" | "oneshot";
+  resumeSessionId?: string;
+  sessionResumeSupported?: boolean;
+  sessionResumeReady?: boolean;
 }): AcpSessionStoreEntry {
   const acp = {
     backend: "acpx",
@@ -217,6 +220,22 @@ export function createAcpSessionStoreEntry(params: {
     mode: params.mode,
     state: "idle",
     lastActivityAt: Date.now(),
+    ...(params.resumeSessionId
+      ? {
+          identity: {
+            state: "resolved" as const,
+            agentSessionId: params.resumeSessionId,
+            ...(params.sessionResumeSupported !== undefined
+              ? { sessionResumeSupported: params.sessionResumeSupported }
+              : {}),
+            ...(params.sessionResumeReady !== undefined
+              ? { sessionResumeReady: params.sessionResumeReady }
+              : {}),
+            source: "event" as const,
+            lastUpdatedAt: Date.now(),
+          },
+        }
+      : {}),
   } as const;
   return {
     cfg: {},

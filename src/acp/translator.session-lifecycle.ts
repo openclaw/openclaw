@@ -225,12 +225,23 @@ export class AcpTranslatorSessionLifecycle {
     }
 
     const meta = parseSessionMeta(params["_meta"]);
-    const fallbackKey = existingSession?.sessionKey ?? params.sessionId;
-    const sessionKey = await this.resolveSessionKeyFromMeta({
+    const hasExplicitRouting = hasExplicitSessionRouting(meta, this.opts);
+    let sessionKey = await resolveAcpSessionKey({
       meta,
-      fallbackKey,
+      fallbackKey: existingSession?.sessionKey ?? params.sessionId,
+      gateway: this.gateway,
+      opts: this.opts,
     });
-
+    if (!existingSession && !hasExplicitRouting) {
+      const implicitBridgeKey = `acp-bridge:${params.sessionId}`;
+      const implicitBridgeSnapshot =
+        await this.sessionState.findExistingSnapshot(implicitBridgeKey);
+      if (implicitBridgeSnapshot) {
+        sessionKey = implicitBridgeKey;
+      }
+    }
+    // Resolve recovered routing before mutating state, then present the post-reset snapshot.
+    await resetSessionIfNeeded({ meta, sessionKey, gateway: this.gateway, opts: this.opts });
     const shouldRequireGatewaySession =
       !existingSession || sessionKey !== existingSession.sessionKey;
     const sessionSnapshot = shouldRequireGatewaySession
