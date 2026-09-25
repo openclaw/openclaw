@@ -246,24 +246,16 @@ export async function extractFileContext(params: {
       limits:
         remainingChars === undefined
           ? limits
-          : { ...limits, maxChars: Math.min(limits.maxChars, Math.max(1, remainingChars)) },
+          : { ...limits, maxChars: Math.min(limits.maxChars, Math.max(0, remainingChars)) },
       skipAttachmentIndexes,
       assertCurrent: params.assertCurrent,
     }).finally(() => cache.releaseBuffer(attachment.index));
     params.assertCurrent?.();
-    const { filename, mimeType } = classified;
-    const outcome =
-      remainingChars !== undefined && remainingChars <= 0 && classified.outcome.kind === "extracted"
-        ? { kind: "text-limit" as const, images: classified.outcome.images }
-        : classified.outcome;
+    const { filename, mimeType, outcome } = classified;
     if (remainingChars !== undefined && outcome.kind === "extracted") {
       remainingChars -= outcome.text.length;
     }
-    if (
-      outcome.kind === "extracted" ||
-      outcome.kind === "rendered-to-images" ||
-      outcome.kind === "text-limit"
-    ) {
+    if (outcome.kind === "extracted" || outcome.kind === "rendered-to-images") {
       images.push(
         ...outcome.images.map((image) => ({
           ...image,

@@ -394,7 +394,9 @@ describe("native document replay", () => {
       const projected = await agent.transformContext!([message]);
       expect(JSON.stringify(projected)).toContain("a".repeat(16));
       expect(JSON.stringify(projected)).not.toContain("b".repeat(16));
-      expect(JSON.stringify(projected)).toContain("context text limit reached");
+      expect(JSON.stringify(projected)).not.toContain("a".repeat(17));
+      expect(JSON.stringify(projected)).not.toContain("\\n---\\nb");
+      expect(JSON.stringify(projected)).toContain("[Partial document: text truncated.]");
       const controller = new AbortController();
       controller.abort(new Error("cancelled replay"));
       await expect(agent.transformContext!([message], controller.signal)).rejects.toThrow(

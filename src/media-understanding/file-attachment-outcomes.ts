@@ -52,7 +52,6 @@ export type FileAttachmentOutcome =
       metadata?: DocumentExtractionMetadata;
     }
   | { kind: "no-extractable-text"; metadata?: DocumentExtractionMetadata }
-  | { kind: "text-limit"; images: DocumentExtractedImage[] }
   // localPath is set only after a root-approved cache read. The reply runtime
   // separately decides whether its final tool surface can reveal that path.
   | { kind: "unsupported-format"; mime?: string; localPath?: string }
@@ -114,7 +113,6 @@ const SKIPPED_FILE_OUTCOME_KINDS = new Set<FileAttachmentOutcome["kind"]>([
   "policy-rejected",
   "read-failure",
   "url-sources-disabled",
-  "text-limit",
 ]);
 
 export function isSkippedFileOutcome(outcome: FileAttachmentOutcome): boolean {
@@ -141,8 +139,6 @@ export function renderFileAttachmentOutcome(
       return [renderDocumentTruncationNotice(outcome.metadata), "[No extractable text]"]
         .filter(Boolean)
         .join("\n");
-    case "text-limit":
-      return "[Document text omitted: context text limit reached]";
     case "unsupported-format": {
       const mime = markerSafeMime(outcome.mime);
       const formatClause = mime

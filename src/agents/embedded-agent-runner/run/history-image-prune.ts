@@ -356,7 +356,8 @@ export function installHistoryImagePruneContextTransform(
         ) {
           continue;
         }
-        const media = resolveMessageMediaFacts(message);
+        const media =
+          readRuntimePromptMediaFacts(message) ?? readPersistedMediaFacts(message) ?? [];
         if (!media.length) {
           continue;
         }
