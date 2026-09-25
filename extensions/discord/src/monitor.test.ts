@@ -18,7 +18,7 @@ import {
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordOwnerAccess,
-  resolveDiscordMentionPolicy,
+  resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
 } from "./monitor/allow-list.js";
@@ -472,35 +472,69 @@ describe("discord mention gating", () => {
       channelSlug: "general",
     });
     expect(
-      resolveDiscordMentionPolicy({
+      resolveDiscordShouldRequireMention({
         isGuildMessage: true,
         isThread: false,
         channelConfig,
         guildInfo,
       }),
-    ).toMatchObject({ requireMention: true });
+    ).toBe(true);
   });
 
   it("applies autoThread mention rules based on thread ownership", () => {
-    const cases = [
+    const cases = typedCases<{
+      name: string;
+      threadOwnerId?: string;
+      isAutoThreadOwnedByBot?: boolean;
+      requireMentionInBotThreads?: boolean;
+      expected: boolean;
+    }>([
       { name: "bot-owned thread", threadOwnerId: "bot123", expected: false },
       { name: "user-owned thread", threadOwnerId: "user456", expected: true },
       { name: "unknown thread owner", threadOwnerId: undefined, expected: true },
-    ] as const;
+      {
+        name: "precomputed bot-owned auto-thread without owner metadata",
+        isAutoThreadOwnedByBot: true,
+        expected: false,
+      },
+      {
+        name: "precomputed exclusion overrides inferred auto-thread ownership",
+        threadOwnerId: "bot123",
+        isAutoThreadOwnedByBot: false,
+        expected: true,
+      },
+      {
+        name: "explicit bot-thread policy requires mentions with precomputed ownership",
+        isAutoThreadOwnedByBot: true,
+        requireMentionInBotThreads: true,
+        expected: true,
+      },
+      {
+        name: "explicit bot-thread policy bypasses mentions outside auto-threads",
+        threadOwnerId: "bot123",
+        isAutoThreadOwnedByBot: false,
+        requireMentionInBotThreads: false,
+        expected: false,
+      },
+    ]);
 
     for (const testCase of cases) {
       const { guildInfo, channelConfig } = createAutoThreadMentionContext();
       expect(
-        resolveDiscordMentionPolicy({
+        resolveDiscordShouldRequireMention({
           isGuildMessage: true,
           isThread: true,
           botId: "bot123",
           threadOwnerId: testCase.threadOwnerId,
+          isAutoThreadOwnedByBot: testCase.isAutoThreadOwnedByBot,
           channelConfig,
-          guildInfo,
+          guildInfo: {
+            ...guildInfo,
+            requireMentionInBotThreads: testCase.requireMentionInBotThreads,
+          },
         }),
         testCase.name,
-      ).toMatchObject({ requireMention: testCase.expected });
+      ).toBe(testCase.expected);
     }
   });
 
@@ -524,13 +558,13 @@ describe("discord mention gating", () => {
     expect(channelConfig?.matchSource).toBe("parent");
     expect(channelConfig?.matchKey).toBe("parent-1");
     expect(
-      resolveDiscordMentionPolicy({
+      resolveDiscordShouldRequireMention({
         isGuildMessage: true,
         isThread: true,
         channelConfig,
         guildInfo,
       }),
-    ).toMatchObject({ requireMention: false });
+    ).toBe(false);
   });
 });
 

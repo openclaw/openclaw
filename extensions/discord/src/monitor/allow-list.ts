@@ -461,27 +461,43 @@ export function resolveDiscordChannelConfigWithFallback(params: {
   return resolveChannelMatchConfig(match, resolveDiscordChannelConfigEntry) ?? { allowed: false };
 }
 
-export function resolveDiscordMentionPolicy(params: {
+type DiscordMentionPolicyParams = {
   isGuildMessage: boolean;
   isThread: boolean;
   botId?: string | null;
   threadOwnerId?: string | null;
   channelConfig?: DiscordChannelConfigResolved | null;
   guildInfo?: DiscordGuildEntryResolved | null;
-  implicitMentionKinds?: readonly InboundImplicitMentionKind[];
-}) {
+  /** Shipped runtime callers may supply the precomputed auto-thread result. */
+  isAutoThreadOwnedByBot?: boolean;
+};
+
+/** Boolean runtime API retained for plugins built against OpenClaw 2026.9.6. */
+export function resolveDiscordShouldRequireMention(params: DiscordMentionPolicyParams): boolean {
+  return resolveDiscordMentionPolicy(params).requireMention;
+}
+
+export function resolveDiscordMentionPolicy(
+  params: DiscordMentionPolicyParams & {
+    implicitMentionKinds?: readonly InboundImplicitMentionKind[];
+  },
+) {
   const botId = params.botId?.trim();
   const threadOwnerId = params.threadOwnerId?.trim();
   const isBotOwnedThread = Boolean(
-    params.isGuildMessage && params.isThread && botId && threadOwnerId === botId,
+    params.isGuildMessage &&
+    (params.isAutoThreadOwnedByBot === true ||
+      (params.isThread && botId && threadOwnerId === botId)),
   );
+  const isAutoThreadOwnedByBot =
+    params.isAutoThreadOwnedByBot ?? (isBotOwnedThread && params.channelConfig?.autoThread);
   return resolveBotThreadMentionPolicy({
     isBotOwnedThread,
     requireMentionInBotThreads:
       params.channelConfig?.requireMentionInBotThreads ??
       params.guildInfo?.requireMentionInBotThreads,
     requireMention:
-      params.isGuildMessage && !(isBotOwnedThread && params.channelConfig?.autoThread)
+      params.isGuildMessage && !isAutoThreadOwnedByBot
         ? (params.channelConfig?.requireMention ?? params.guildInfo?.requireMention ?? true)
         : false,
     implicitMentionKinds: params.implicitMentionKinds,
