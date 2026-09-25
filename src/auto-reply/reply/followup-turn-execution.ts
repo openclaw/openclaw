@@ -15,6 +15,7 @@ import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloa
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
+import { retireFollowupRunCancellation } from "./queue/lifecycle.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { hasReplyOperationExecutionStarted } from "./reply-run-registry.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
@@ -353,6 +354,12 @@ export async function executeFollowupTurn(params: {
   let execution: AgentTurnExecutionResult;
   const runStartedAt = Date.now();
   if (turn.preflightFailurePayload) {
+    // Terminal preflight failure bypasses executeAgentTurn, so
+    // commitTerminalOutcome never retires the queued cancellation.
+    // Retire it here so a late chat.abort cannot mark the finalizing
+    // delivery as aborted. preflightError is not retired here because
+    // it is retryable — its queued entry must remain abortable.
+    retireFollowupRunCancellation(turn.queued);
     execution = {
       runId: turn.runId,
       outcome: { kind: "rejected", payload: turn.preflightFailurePayload },

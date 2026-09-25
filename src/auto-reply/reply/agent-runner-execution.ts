@@ -74,12 +74,14 @@ import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
+import { retireFollowupRunCancellation } from "./queue/lifecycle.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
 import {
+  hasReplyOperationExecutionStarted,
   markReplyOperationExecutionStarted,
   retainReplyOperationUntilComplete,
 } from "./reply-run-registry.js";
@@ -578,12 +580,17 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
       : {};
   let terminalOutcomeCommitted = false;
   // Settlement freezes cancellation once, including failure exits through finally.
+  // Retire the Gateway cancel entry for started (non-retryable) runs.
   const commitTerminalOutcome = () => {
     if (terminalOutcomeCommitted) {
       return;
     }
     terminalOutcomeCommitted = true;
-    executionParams.replyOperation?.freezeAbort();
+    const op = executionParams.replyOperation;
+    op?.freezeAbort();
+    if (op && hasReplyOperationExecutionStarted(op)) {
+      retireFollowupRunCancellation(executionParams.followupRun);
+    }
   };
   const lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
   try {

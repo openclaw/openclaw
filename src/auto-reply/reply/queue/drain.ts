@@ -48,6 +48,10 @@ import {
   resolveFollowupReplyAnchor,
 } from "./delivery-context.js";
 import {
+  buildCollectGroupTurnAdoptionLifecycle,
+  buildOverflowSummaryTurnAdoptionLifecycle,
+} from "./drain-lifecycle.js";
+import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
   retireFollowupRunCancellation,
@@ -571,17 +575,6 @@ function createAggregateCancellation(items: readonly FollowupRun[]): AggregateCa
   };
 }
 
-function resolveQueuedCronCreatorAuthorityUnavailable(
-  items: readonly FollowupRun[],
-): "queued-local-operator" | undefined {
-  return items.some(
-    (item) =>
-      item.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable === "queued-local-operator",
-  )
-    ? "queued-local-operator"
-    : undefined;
-}
-
 type FollowupQueueSummaryState = Pick<
   FollowupQueueState,
   | "cap"
@@ -910,24 +903,14 @@ async function runSyntheticOverflowSummary(params: {
     replyOperationRunStates: runtimeMetadata.replyOperationRunStates,
     ...(params.onAdmitted
       ? {
-          turnAdoptionLifecycle: {
-            // Synthetic aggregate owner — not a durable exclusive ingress identity.
-            admission: "cancel-only" as const,
-            ...(resolveQueuedCronCreatorAuthorityUnavailable(params.sources)
-              ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
-              : {}),
-            onAdopted: async () => {
-              await params.onAdmitted?.();
+          turnAdoptionLifecycle: buildOverflowSummaryTurnAdoptionLifecycle({
+            sources: params.sources,
+            onAdmitted: params.onAdmitted,
+            isAdmitted: () => admitted,
+            markAdmitted: () => {
               admitted = true;
             },
-            onSettled: () => {
-              if (admitted) {
-                for (const source of params.sources) {
-                  completeFollowupRunLifecycle(source);
-                }
-              }
-            },
-          },
+          }),
         }
       : {}),
     ...resolveOriginRoutingMetadata([params.source]),
@@ -1233,19 +1216,12 @@ export function scheduleFollowupDrain(
                 ...collectRuntimeMetadata(activeGroupItems, cancellation.signal),
                 ...(needsGroupAdmission
                   ? {
-                      turnAdoptionLifecycle: {
-                        // Synthetic aggregate owner — sources keep their own admission.
-                        admission: "cancel-only" as const,
-                        ...(resolveQueuedCronCreatorAuthorityUnavailable(activeGroupItems)
-                          ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
-                          : {}),
+                      turnAdoptionLifecycle: buildCollectGroupTurnAdoptionLifecycle({
+                        items: activeGroupItems,
                         onAdopted: admitGroupSources,
-                        onSettled: () => {
-                          if (admitted) {
-                            completeGroup();
-                          }
-                        },
-                      },
+                        onComplete: completeGroup,
+                        isAdmitted: () => admitted,
+                      }),
                     }
                   : {}),
                 ...collectQueuedPromptMedia(activeGroupItems),
