@@ -1,6 +1,7 @@
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 // Memory Core tests cover tools plugin behavior.
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-host-core";
+import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MEMORY_GET_TOOL_CONTRACT, MEMORY_SEARCH_TOOL_CONTRACT } from "./memory-tool-contract.js";
 import {
@@ -64,6 +65,29 @@ describe("memory tool schemas", () => {
       type: "string",
       enum: ["memory", "wiki", "all"],
     });
+  });
+
+  it.each([
+    { query: "X", min_score: 0.3, max_results: 3 },
+    { query: "X", minScore: 0.3, maxResults: 3 },
+    { query: "X", minScore: 0.3, maxResults: 3, min_score: 0.9, max_results: 1 },
+  ])("accepts search arguments with canonical precedence: %j", (args) => {
+    const tool = createMemorySearchToolOrThrow();
+    const prepared = tool.prepareArguments?.(args) ?? args;
+    expect(Value.Check(tool.parameters, prepared)).toBe(true);
+    expect(prepared).toEqual({ query: "X", minScore: 0.3, maxResults: 3 });
+  });
+
+  it.each([
+    { query: "X", min_score: 0.3, foo: true },
+    { query: "X", max_results: 1.5 },
+    { query: "X", min_score: "invalid" },
+    { query: "X", minScore: null, min_score: 0.3 },
+    { query: "X", maxResults: 0, max_results: 3 },
+  ])("keeps invalid search arguments rejected: %j", (args) => {
+    const tool = createMemorySearchToolOrThrow();
+    const prepared = tool.prepareArguments?.(args) ?? args;
+    expect(Value.Check(tool.parameters, prepared)).toBe(false);
   });
 });
 
