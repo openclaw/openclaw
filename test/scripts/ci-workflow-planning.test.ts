@@ -1457,6 +1457,10 @@ describe("release fast lane", () => {
     })),
     { name: "fork repositories", options: { repository: "contributor/openclaw" } },
     {
+      name: "fork heads on the canonical base",
+      options: { scopeEnv: { OPENCLAW_CI_HEAD_REPOSITORY: "contributor/openclaw" } },
+    },
+    {
       name: "docs-only PRs",
       options: { changedPaths: ["docs/ci.md"], scopeEnv: { OPENCLAW_CI_DOCS_ONLY: "true" } },
     },
@@ -1491,7 +1495,7 @@ describe("release fast lane", () => {
     expect(result.outputs.release_fast_lane).toBe("false");
     expect(result.outputs).toEqual(ordinary.outputs);
     const declinedReason =
-      reason ?? "applies only to canonical pull request CI with full Node routing";
+      reason ?? "applies only to same-repository pull request CI with full Node routing";
     expect(result.output).toContain(
       `::warning title=Release fast lane declined::${declinedReason}`,
     );

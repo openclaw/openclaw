@@ -680,11 +680,11 @@ skills lanes are skipped and listed under "Release fast lane" in the preflight
 step summary. A declined label (out-of-scope path, global Node input, fork,
 push, dispatch, docs-only) logs a warning and leaves ordinary selection
 untouched. The gate stays complete: every selected lane must pass, and hourly
-full main CI covers the merged result. ClawSweeper review is advisory for
-labelled PRs: record an open P1 in the PR before landing. `scripts/pr merge-run`
-still waits for a completed review, so use
-`gh pr merge <n> --squash --admin --delete-branch --match-head-commit <sha>` when
-that wait blocks the release window.
+full main CI covers the merged result. The label narrows only the CI gate: fork
+heads are declined, and the native `scripts/pr` landing path with its completed
+ClawSweeper review is unchanged. ClawSweeper findings are advisory for labelled
+PRs: a P1 that the release owner decides not to fix in the PR is recorded there
+with its follow-up before landing.
 
 ## Stable main closeout
 

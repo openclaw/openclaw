@@ -1633,8 +1633,8 @@ jobs:
           const releaseFastLaneLabel = parseBoolean(process.env.OPENCLAW_CI_RELEASE_FAST_LANE_LABEL);
           const releaseFastLaneScope = !releaseFastLaneLabel
             ? null
-            : !(eventName === "pull_request" && isCanonicalRepository && runNodeFull && !frozenTarget && !compatibilityTarget && !releaseGate && !docsOnly)
-              ? { eligible: false, reason: "applies only to canonical pull request CI with full Node routing" }
+            : !(eventName === "pull_request" && isCanonicalRepository && process.env.OPENCLAW_CI_HEAD_REPOSITORY === process.env.OPENCLAW_CI_REPOSITORY && runNodeFull && !frozenTarget && !compatibilityTarget && !releaseGate && !docsOnly)
+              ? { eligible: false, reason: "applies only to same-repository pull request CI with full Node routing" }
               : typeof changedNodeTestPlan.resolveReleaseFastLaneScope !== "function"
                 ? { eligible: false, reason: "CI target lacks the release fast lane selector" }
                 : changedNodeTestPlan.resolveReleaseFastLaneScope(changedPaths);
