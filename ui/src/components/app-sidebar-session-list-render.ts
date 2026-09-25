@@ -259,7 +259,14 @@ export function renderSessionSection(params: {
         section.renderHeader
           ? renderSidebarSessionSectionHeader({
               sectionId: section.id,
-              status: headerStatus,
+              status: headerStatus
+                ? {
+                    content: headerStatus,
+                    label,
+                    expanded: !collapsed,
+                    onToggle: () => host.toggleSection(section.id),
+                  }
+                : undefined,
               draggable: !derivedSection,
               disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
               onStartDrag: (sectionId) => host.sessionOrganizer.startSidebarSectionDrag(sectionId),

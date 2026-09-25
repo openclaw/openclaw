@@ -1590,7 +1590,8 @@ openclaw-settings-save-indicator:empty {
   cursor: grabbing;
 }
 
-.sidebar-session-group-toggle {
+.sidebar-session-group-toggle,
+.sidebar-session-group-status {
   display: flex;
   align-items: center;
   gap: var(--sidebar-row-gap);
@@ -1679,8 +1680,6 @@ openclaw-settings-save-indicator:empty {
 
 /* Keep counts on the trailing edge, after any running and attention indicators. */
 .sidebar-session-group-status {
-  display: flex;
-  align-items: center;
   gap: 8px;
   flex: 0 0 auto;
 }

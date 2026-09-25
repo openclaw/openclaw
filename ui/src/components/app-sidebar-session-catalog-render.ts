@@ -227,14 +227,20 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
           sectionId,
           status:
             hasError || (collapsed && rows.length > 0)
-              ? html`<span
-                  class="sidebar-session-group-count ${
-                    hasError ? "sidebar-session-group-count--error" : ""
-                  }"
-                  data-session-catalog-error=${hasError ? catalog.id : nothing}
-                  aria-hidden="true"
-                  >${hasError ? icons.alertTriangle : rows.length}</span
-                >`
+              ? {
+                  label: hasError ? `${catalog.label}: ${errorHelp}` : catalog.label,
+                  expanded: !collapsed,
+                  title: hasError ? errorHelp : undefined,
+                  onToggle: () => params.onToggleSection(sectionId),
+                  content: html`<span
+                    class="sidebar-session-group-count ${
+                      hasError ? "sidebar-session-group-count--error" : ""
+                    }"
+                    data-session-catalog-error=${hasError ? catalog.id : nothing}
+                    aria-hidden="true"
+                    >${hasError ? icons.alertTriangle : rows.length}</span
+                  >`,
+                }
               : undefined,
           disabledReason: params.sectionDragDisabledReason,
           onStartDrag: params.onStartSectionDrag,

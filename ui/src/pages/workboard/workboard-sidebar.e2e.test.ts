@@ -158,6 +158,14 @@ suite.define(() => {
       for (let index = 1; index < ordered.length; index++) {
         expect(ordered[index]!.left).toBeGreaterThanOrEqual(ordered[index - 1]!.right);
       }
+      const codingToggle = page.locator(
+        '[data-session-section="work"] .sidebar-session-group-toggle',
+      );
+      for (const indicator of ["running", "attention"]) {
+        await codingStatus.locator(`.sidebar-session-group-${indicator}`).click();
+        await expect.poll(() => codingToggle.getAttribute("aria-expanded")).toBe("true");
+        await codingToggle.click();
+      }
     } finally {
       await suite.closeBrowserContext(context);
     }
