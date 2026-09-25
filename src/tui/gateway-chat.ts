@@ -60,7 +60,10 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { sleep } from "../utils/sleep.js";
 import { VERSION } from "../version.js";
-import { loadGatewayModelCatalog, type GatewayModelCatalogEntry } from "./gateway-chat-models.js";
+import {
+  refreshTuiGatewayModelCatalog,
+  type GatewayModelCatalogEntry,
+} from "./gateway-chat-models.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -541,7 +544,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   listModels(opts?: { agentId?: string }): Promise<GatewayModelChoice[]> {
-    return loadGatewayModelCatalog({
+    return refreshTuiGatewayModelCatalog({
       catalogs: this.modelCatalogs,
       client: this.client,
       agentId: opts?.agentId,

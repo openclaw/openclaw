@@ -6,7 +6,7 @@ export type GatewayModelCatalogEntry = {
   pending?: Promise<TuiModelChoice[]>;
 };
 
-export function loadGatewayModelCatalog(params: {
+export function refreshTuiGatewayModelCatalog(params: {
   catalogs: Map<string | undefined, GatewayModelCatalogEntry>;
   client: Pick<GatewayClient, "request">;
   agentId?: string;

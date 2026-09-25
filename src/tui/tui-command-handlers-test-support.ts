@@ -195,7 +195,9 @@ export function createTuiCommandHandlersHarness(params?: {
     sessionInfo: params?.sessionInfo ?? {},
   };
 
-  const client: Partial<TuiBackend> = {
+  const modelEvents: Pick<TuiBackend, "onModelsChanged"> = {};
+  const client = {
+    ...modelEvents,
     sendChat,
     getGatewayStatus,
     listSessions,
