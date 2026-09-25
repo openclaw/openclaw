@@ -1,20 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { resolveDeferredPluginMigrationConfigPaths } from "../config/deferred-plugin-migration-config.js";
 import { readConfigFileSnapshot } from "../config/io.js";
+import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { readBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { readPersistedInstalledPluginIndexRowSync } from "../plugins/installed-plugin-index-record-state.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { readStartupMigrationSnapshot } from "./doctor-config-preflight-startup.js";
+import { readAdmittedConfigSnapshot } from "./config-preflight-snapshot.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
-import { planAutomaticConfigRepair } from "./doctor/shared/automatic-startup-config-repair.js";
+import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
-it("reads discovery policy and index from one generation, then releases it before migration guards", async () => {
+it("reads discovery policy and index from one generation, then releases it before readiness guards", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
     const stateDir = process.env.OPENCLAW_STATE_DIR ?? path.join(home, ".openclaw");
     const configPath = process.env.OPENCLAW_CONFIG_PATH ?? path.join(stateDir, "openclaw.json");
@@ -42,7 +43,7 @@ it("reads discovery policy and index from one generation, then releases it befor
       insert.run("plugins.installedIndex", '{"generation":"before"}');
       const before = family();
       let afterWrite: ReturnType<typeof family> | undefined;
-      const result = await readStartupMigrationSnapshot({
+      const result = await readAdmittedConfigSnapshot({
         env: process.env,
         readSnapshot: async () => {
           const snapshot = await readConfigFileSnapshot({
@@ -61,10 +62,9 @@ it("reads discovery policy and index from one generation, then releases it befor
           afterWrite = family();
           expect(readIndex()).toBe('{"generation":"before"}');
           expect(family()).toEqual(afterWrite);
-          return { snapshot, pluginMigrationFingerprint: null };
+          return { snapshot };
         },
-        planRepair: ({ snapshot }) => planAutomaticConfigRepair(snapshot),
-        beforeStateMigrations: async () => {
+        beforeStatePreparation: async () => {
           expect(readBundledDiscoveryMode(options)).toBe("allowlist");
           expect(readIndex()).toBe('{"generation":"after"}');
           return true;
@@ -92,17 +92,15 @@ it("refuses a session-store change between core admission and the full config re
     const changedConfig = JSON.stringify({ ...config, session: { store: legacyStore } });
 
     await expect(
-      readStartupMigrationSnapshot({
+      readAdmittedConfigSnapshot({
         env: process.env,
         readSnapshot: async () => {
           // Simulate an operator edit while the asynchronous admission read is in flight.
           fs.writeFileSync(configPath, changedConfig);
           return {
             snapshot: await readConfigFileSnapshot({ observe: false }),
-            pluginMigrationFingerprint: null,
           };
         },
-        planRepair: ({ snapshot }) => planAutomaticConfigRepair(snapshot),
       }),
     ).rejects.toMatchObject({ code: 78, message: expect.stringContaining("inputs changed") });
     expect(fs.readFileSync(configPath, "utf8")).toBe(changedConfig);
@@ -111,78 +109,88 @@ it("refuses a session-store change between core admission and the full config re
   });
 });
 
-it("admits active pending-plugin inputs without selecting an older valid backup", async () => {
-  await withDoctorConfigPreflightHome(async (home) => {
-    const stateDir = process.env.OPENCLAW_STATE_DIR ?? path.join(home, ".openclaw");
-    const configPath = process.env.OPENCLAW_CONFIG_PATH ?? path.join(stateDir, "openclaw.json");
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    const source = {
-      gateway: { mode: "local", port: 18991 },
-      plugins: { entries: { canvas: { enabled: true } } },
-      canvasHost: { enabled: true, root: path.join(home, "legacy-canvas") },
-    };
-    const activeRaw = `${JSON.stringify(source, null, 2)}\n`;
-    const backupRaw = JSON.stringify({
-      gateway: { mode: "local", port: 18789 },
-      plugins: { enabled: false },
-    });
-    fs.writeFileSync(configPath, activeRaw);
-    fs.writeFileSync(`${configPath}.bak`, backupRaw);
-    const initial = await readConfigFileSnapshot({ observe: false, pluginValidation: "core-only" });
-    expect(initial.valid).toBe(false);
+it.each([false, true])(
+  "preserves pending-plugin inputs (legacy identity: %s)",
+  async (legacyIdentity) => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const stateDir = process.env.OPENCLAW_STATE_DIR ?? path.join(home, ".openclaw");
+      const configPath = process.env.OPENCLAW_CONFIG_PATH ?? path.join(stateDir, "openclaw.json");
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      const source = {
+        gateway: { mode: "local", port: 18991 },
+        plugins: { entries: { canvas: { enabled: true } } },
+        canvasHost: { enabled: true, root: path.join(home, "legacy-canvas") },
+      };
+      const activeRaw = `${JSON.stringify(source, null, 2)}\n`;
+      const backupRaw = JSON.stringify({
+        gateway: { mode: "local", port: 18789 },
+        plugins: { enabled: false },
+      });
+      fs.writeFileSync(configPath, activeRaw);
+      fs.writeFileSync(`${configPath}.bak`, backupRaw);
+      const initial = await readConfigFileSnapshot({
+        observe: false,
+        pluginValidation: "core-only",
+      });
+      expect(initial.valid).toBe(false);
 
-    const preflight = await import("./doctor-database-preflight.js");
-    const prepareDatabases = preflight.prepareDoctorDatabasePreflight;
-    let databaseInspected = false;
-    const admission = vi
-      .spyOn(preflight, "prepareDoctorDatabasePreflight")
-      .mockImplementation(async (params) => {
-        const result = await prepareDatabases(params);
-        databaseInspected = true;
-        return result;
-      });
-    try {
-      const result = await readStartupMigrationSnapshot({
+      recordDeferredPluginMigrations({
         env: process.env,
-        readSnapshot: async () => ({
-          snapshot: await readConfigFileSnapshot({ observe: false }),
-          pluginMigrationFingerprint: null,
-        }),
-        planRepair: ({ snapshot }) => planAutomaticConfigRepair(snapshot),
-        preparePluginMigrations: async (snapshot) => {
-          expect(databaseInspected).toBe(true);
-          expect(snapshot.raw).toBe(activeRaw);
-          expect(snapshot.hash).toBe(initial.hash);
-          expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
-          return [
-            {
+        pending: [
+          {
+            pluginId: "canvas",
+            reason: "The configured plugin is not installed.",
+            command: "openclaw doctor --fix",
+            ...resolveDeferredPluginMigrationConfigPaths({
+              config: initial.sourceConfig,
               pluginId: "canvas",
-              reason: "The configured plugin is not installed.",
-              command: "openclaw doctor --fix",
-              ...resolveDeferredPluginMigrationConfigPaths({
-                config: snapshot.sourceConfig,
-                pluginId: "canvas",
-                compatibilityMigrationPaths: ["canvasHost"],
-              }),
-            },
-          ];
-        },
+              compatibilityMigrationPaths: ["canvasHost"],
+            }),
+          },
+        ],
+        resolvedPluginIds: [],
       });
-      expect(result.recovery).toBeUndefined();
-      expect(admission).toHaveBeenCalledWith({
-        cfg: expect.objectContaining({ ...source, agents: { entries: { main: {} } } }),
-      });
-      expect(result.snapshot.valid).toBe(true);
-      expect(result.snapshot.hash).toBe(initial.hash);
-      expect(result.snapshot.raw).toBe(activeRaw);
-      expect(result.snapshot.sourceConfig).toMatchObject(source);
-      expect(result.snapshot.config.gateway?.port).toBe(18991);
-      expect(result.snapshot.config).not.toHaveProperty("canvasHost");
+      expect((await readConfigFileSnapshot({ observe: false })).valid).toBe(true);
+      closeOpenClawStateDatabaseForTest();
+      const identityPath = path.join(stateDir, "identity", "device.json");
+      const identityRaw = '{"retiredIdentity":"leave for Doctor"}\n';
+      if (legacyIdentity) {
+        fs.mkdirSync(path.dirname(identityPath), { recursive: true });
+        fs.writeFileSync(identityPath, identityRaw);
+      }
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      const databaseFamily = () =>
+        ["", "-wal", "-shm"].map((suffix) => {
+          const pathname = databasePath + suffix;
+          return fs.existsSync(pathname) ? fs.readFileSync(pathname) : null;
+        });
+      const before = databaseFamily();
+      if (legacyIdentity) {
+        await expect(
+          runStartupConfigPreflight({ gateway: true, observe: false }),
+        ).rejects.toMatchObject({
+          code: 78,
+          message: expect.stringContaining("Legacy device identity exists"),
+        });
+        expect(fs.readFileSync(identityPath, "utf8")).toBe(identityRaw);
+      } else {
+        const result = await readAdmittedConfigSnapshot({
+          env: process.env,
+          readSnapshot: async () => ({
+            snapshot: await readConfigFileSnapshot({ observe: false }),
+          }),
+        });
+        expect(result.recovery).toBeUndefined();
+        expect(result.snapshot.valid).toBe(true);
+        expect(result.snapshot.hash).toBe(initial.hash);
+        expect(result.snapshot.raw).toBe(activeRaw);
+        expect(result.snapshot.sourceConfig).toMatchObject(source);
+        expect(result.snapshot.config.gateway?.port).toBe(18991);
+        expect(result.snapshot.config).not.toHaveProperty("canvasHost");
+      }
       expect(fs.readFileSync(configPath, "utf8")).toBe(activeRaw);
       expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backupRaw);
-      expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
-    } finally {
-      admission.mockRestore();
-    }
-  });
-});
+      expect(databaseFamily()).toEqual(before);
+    });
+  },
+);

@@ -91,6 +91,8 @@ export type PluginsPageViewModel = {
   detail: PluginsPageDetail | null;
   iconUrls: Record<string, string>;
   catalogIconUrls: Record<string, string>;
+  iconLoading?: (pluginId: string) => boolean;
+  catalogIconLoading?: (url: string) => boolean;
   pageNotice: PluginRowMessage | null;
   catalogDetail: PluginsPageCatalogDetail | null;
   installedDetailTab: InstalledPluginDetailTab;
@@ -139,6 +141,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     busy: model.busy,
     messages: model.messages,
     iconUrls: model.iconUrls,
+    iconLoading: model.iconLoading,
     canMutate: model.canMutate,
     mutationBlockedReason: model.mutationBlockedReason,
     configBusy: configState.configLoading,
@@ -180,6 +183,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
       inspectionError: detail?.error ?? null,
       catalogLoading: detail?.catalogLoading,
       catalogIconUrls: model.catalogIconUrls,
+      catalogIconLoading: model.catalogIconLoading,
       renderCredential: model.renderCredential,
       tools: detail?.tools,
       onOpenTool: actions.openTool,
@@ -268,6 +272,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                         onContinueInstall: (request) =>
                           void consentController.install(request, `install:${catalogDetail.id}`),
                         iconUrls: model.catalogIconUrls,
+                        iconLoading: model.catalogIconLoading,
                       })
                   : renderSettingsPage(
                       renderPluginCatalogResults({
@@ -291,6 +296,8 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                         query: discovery.query,
                         iconUrls: model.catalogIconUrls,
                         pluginIconUrls: model.iconUrls,
+                        iconLoading: model.catalogIconLoading,
+                        pluginIconLoading: model.iconLoading,
                         canInstall: model.canMutate,
                         installProgress: consentController.installProgress,
                         entryHref: (id) => pathForPluginCatalogEntry(id, context.basePath),
@@ -338,6 +345,10 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
             iconUrl: consentController.consent.pluginId
               ? model.iconUrls[consentController.consent.pluginId]
               : undefined,
+            iconLoading: Boolean(
+              consentController.consent.pluginId &&
+              model.iconLoading?.(consentController.consent.pluginId),
+            ),
             canMutate: model.canMutate,
             mutationBlockedReason: model.mutationBlockedReason,
             busy: Object.values(model.busy).some(Boolean),

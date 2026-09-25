@@ -8,6 +8,8 @@ import {
   prepareBundledPluginRuntime,
   stageBundledPluginRuntime,
 } from "../../scripts/stage-bundled-plugin-runtime.mts";
+import { readInstalledPluginOverview } from "../../src/plugins/installed-plugin-overview.js";
+import { createPluginCache, withPluginCache } from "../../src/plugins/plugin-cache.js";
 
 async function withTempDir(run: (dir: string) => Promise<void>) {
   const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-stage-runtime-"));
@@ -94,6 +96,7 @@ function writeRuntimeFixture(repoRoot: string) {
     "dist/extensions/demo/index.js": "export const generation = 'candidate';\n",
     "dist/extensions/demo/package.json": '{"name":"demo","type":"module"}\n',
     "dist/extensions/demo/assets/info.txt": "candidate asset\n",
+    "dist/extensions/demo/README.md": "# Candidate plugin\n",
   };
   for (const [relative, content] of Object.entries(files)) {
     const target = path.join(repoRoot, relative);
@@ -128,6 +131,14 @@ describe("prepareBundledPluginRuntime", () => {
       );
       const sdk = await import(pathToFileURL(path.join(aliasRoot, "plugin-sdk/demo.js")).href);
       expect(runtime.generation).toBe("candidate");
+      expect(
+        withPluginCache(createPluginCache(), () =>
+          readInstalledPluginOverview({
+            rootDir: path.join(runtimeRoot, "extensions/demo"),
+            origin: "bundled",
+          }),
+        )?.readme,
+      ).toBe("# Candidate plugin\n");
       expect(sdk.generation).toBe("candidate");
       expect(
         fs.readFileSync(path.join(runtimeRoot, "extensions/demo/assets/info.txt"), "utf8"),

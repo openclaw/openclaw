@@ -1,4 +1,3 @@
-// Loads provider usage snapshots from built-in and plugin providers.
 import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import {
@@ -87,21 +86,17 @@ export async function loadProviderUsageSummary(
   const timeoutMs = opts.timeoutMs ?? PROVIDER_USAGE_TIMEOUT_MS;
   const config = opts.config ?? getRuntimeConfig();
   const env = opts.env ?? process.env;
-  const descriptors: ProviderUsagePluginDescriptor[] = opts.providers
-    ? opts.providers.map((provider) => ({
+  const requestedProviders = opts.providers ?? opts.auth?.map(({ provider }) => provider);
+  const descriptors: ProviderUsagePluginDescriptor[] = requestedProviders
+    ? requestedProviders.map((provider) => ({
         provider,
         displayName: providerUsageLabel(provider) ?? provider,
       }))
-    : opts.auth
-      ? opts.auth.map((auth) => ({
-          provider: auth.provider,
-          displayName: providerUsageLabel(auth.provider) ?? auth.provider,
-        }))
-      : listProviderUsagePluginDescriptors({
-          config,
-          workspaceDir: opts.workspaceDir,
-          env,
-        });
+    : listProviderUsagePluginDescriptors({
+        config,
+        workspaceDir: opts.workspaceDir,
+        env,
+      });
   const displayNames = new Map(
     descriptors.map((descriptor) => [descriptor.provider, descriptor.displayName]),
   );
@@ -192,24 +187,15 @@ export async function loadProviderUsageSummary(
         (providerOrder.get(left.provider) ?? Number.MAX_SAFE_INTEGER) -
         (providerOrder.get(right.provider) ?? Number.MAX_SAFE_INTEGER),
     );
-  const providers = snapshots.filter((entry) => {
-    if (entry.windows.length > 0) {
-      return true;
-    }
-    if (entry.billing && entry.billing.length > 0) {
-      return true;
-    }
-    if (entry.costHistory?.daily.length) {
-      return true;
-    }
-    if (entry.summary?.trim()) {
-      return true;
-    }
-    if (!entry.error) {
-      return true;
-    }
-    return !ignoredErrors.has(entry.error);
-  });
+  const providers = snapshots.filter(
+    (entry) =>
+      entry.windows.length > 0 ||
+      (entry.billing?.length ?? 0) > 0 ||
+      entry.costHistory?.daily.length ||
+      entry.summary?.trim() ||
+      !entry.error ||
+      !ignoredErrors.has(entry.error),
+  );
 
   return { updatedAt: now, providers };
 }

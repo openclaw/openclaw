@@ -1,21 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveMigrationCheckpointIdentity } from "../commands/doctor-config-preflight-checkpoint.js";
 import {
   persistRefreshedPluginIndex,
-  type DoctorConfigPreflightPluginSnapshotRead,
-} from "../commands/doctor-config-preflight-plugin-index.js";
+  type ConfigPreflightSnapshotRead,
+} from "../commands/config-preflight-snapshot.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
-import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  acquireStartupMigrationLease,
-  readMigrationCheckpointStatus,
-  recordSuccessfulStateMigrations,
-  type MigrationCheckpointIdentity,
-} from "../infra/startup-migration-checkpoint.js";
+import { acquireStartupMigrationLeaseWithWait } from "../infra/startup-migration-checkpoint.js";
 import { autoMigrateLegacyPluginDoctorState } from "../infra/state-migrations.plugin-doctor.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -52,18 +45,6 @@ afterEach(() => {
 
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-plugin-registry-migration", tempDirs);
-}
-
-function checkpointIdentity(snapshot: PluginMetadataSnapshot): MigrationCheckpointIdentity {
-  if (!snapshot.configFingerprint) {
-    throw new Error("expected plugin migration fingerprint");
-  }
-  const configFingerprint = hashRuntimeConfigValue({});
-  return {
-    effectiveConfigFingerprint: configFingerprint,
-    pluginDoctorConfigFingerprint: configFingerprint,
-    pluginMigrationFingerprint: snapshot.configFingerprint,
-  };
 }
 
 function requirePlugin(snapshot: PluginMetadataSnapshot, pluginId: string) {
@@ -130,7 +111,7 @@ describe("persisted plugin registry Doctor contract freshness", () => {
       warnings: [],
       legacyIssues: [],
     });
-    const readSnapshot = async (): Promise<DoctorConfigPreflightPluginSnapshotRead> => {
+    const readSnapshot = async (): Promise<ConfigPreflightSnapshotRead> => {
       clearPluginMetadataLifecycleCaches();
       const pluginMetadataSnapshot = resolveConfigWidePluginMetadataSnapshot({
         config,
@@ -141,7 +122,6 @@ describe("persisted plugin registry Doctor contract freshness", () => {
       return {
         snapshot,
         pluginMetadataSnapshot,
-        pluginMigrationFingerprint: pluginMetadataSnapshot.configFingerprint ?? null,
       };
     };
     const derived = await readSnapshot();
@@ -152,7 +132,7 @@ describe("persisted plugin registry Doctor contract freshness", () => {
     ]);
     expect(derived.pluginMetadataSnapshot?.diagnostics).toHaveLength(2);
 
-    const lease = acquireStartupMigrationLease({ env });
+    const lease = await acquireStartupMigrationLeaseWithWait({ env, timeoutMs: 0 });
     try {
       const { snapshotRead: persisted } = await persistRefreshedPluginIndex({
         env,
@@ -160,11 +140,6 @@ describe("persisted plugin registry Doctor contract freshness", () => {
         measure: async (_name, run) => await run(),
         snapshotRead: derived,
         readPersistedSnapshot: readSnapshot,
-        expectedIdentity: resolveMigrationCheckpointIdentity({
-          snapshot: derived.snapshot,
-          baseConfig: config,
-          pluginMigrationFingerprint: derived.pluginMigrationFingerprint,
-        }),
       });
       expect(persisted.pluginMetadataSnapshot?.registrySource).toBe("persisted");
       expect(persisted.pluginMetadataSnapshot?.index.plugins).toEqual(
@@ -219,18 +194,9 @@ describe("persisted plugin registry Doctor contract freshness", () => {
       mtimeMs: expect.any(Number),
       ctimeMs: expect.any(Number),
     });
-    const checkpoint = {
-      env,
-      version: "2026.7.1",
-      buildIdentity: "2026-08-04T00:00:00.000Z",
-      identity: checkpointIdentity(persisted),
-    };
-    recordSuccessfulStateMigrations({ ...checkpoint, nowMs: 1_234 });
-
     const reused = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
     expect(reused.registrySource).toBe("persisted");
-    expect(checkpointIdentity(reused)).toEqual(checkpoint.identity);
-    expect(readMigrationCheckpointStatus(checkpoint)).toBe("state-current");
+    expect(reused.configFingerprint).toBe(persisted.configFingerprint);
 
     fs.writeFileSync(
       contractPath,
@@ -257,12 +223,10 @@ module.exports = {
     );
     // Package changes are visible to an explicit owner refresh, not to retained generations.
     expect(loadPluginMetadataSnapshot({ config: {}, env, stateDir })).toBe(persisted);
-    expect(readMigrationCheckpointStatus(checkpoint)).toBe("state-current");
     clearPluginMetadataLifecycleCaches();
     await withPluginCache(createPluginCache(), async () => {
       const refreshed = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
       const refreshedPlugin = requirePlugin(refreshed, pluginId);
-      const refreshedIdentity = checkpointIdentity(refreshed);
       expect(refreshed.registrySource).toBe("derived");
       expect(refreshed.registryDiagnostics.map((diagnostic) => diagnostic.code)).toContain(
         "persisted-registry-stale-source",
@@ -271,12 +235,7 @@ module.exports = {
       expect(refreshedPlugin.packageJson?.hash).toBe(persistedPlugin.packageJson?.hash);
       expect(refreshedPlugin.doctorContractHash).not.toBe(persistedPlugin.doctorContractHash);
       expect(refreshedPlugin.doctorContractFile).not.toEqual(persistedPlugin.doctorContractFile);
-      expect(refreshedIdentity.pluginMigrationFingerprint).not.toBe(
-        checkpoint.identity.pluginMigrationFingerprint,
-      );
-      expect(readMigrationCheckpointStatus({ ...checkpoint, identity: refreshedIdentity })).toBe(
-        "stale",
-      );
+      expect(refreshed.configFingerprint).not.toBe(persisted.configFingerprint);
 
       const migration = await autoMigrateLegacyPluginDoctorState({ config: {}, env });
 

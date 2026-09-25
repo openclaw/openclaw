@@ -370,6 +370,16 @@ export const fleetCacheLane = lane("fleet-cache", "pnpm test:docker:fleet-cache"
 
 export const mainLanes: DockerE2eLane[] = [
   lane(
+    "container-image-upgrade",
+    "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:container-image-upgrade",
+    {
+      e2eImageKind: false,
+      resources: ["docker", "service"],
+      timeoutMs: 30 * 60 * 1000,
+      weight: 4,
+    },
+  ),
+  lane(
     "docker-selected-plugins",
     "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:selected-plugins",
     {

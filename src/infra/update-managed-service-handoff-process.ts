@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   collectProcessAncestorPids,
@@ -18,10 +18,7 @@ function windowsArgvIdentity(argv: readonly string[]): string | null {
     return null;
   }
   const normalized = [path.win32.normalize(argv[0]).toLowerCase(), ...argv.slice(1)];
-  return (
-    WINDOWS_ARGV_IDENTITY_PREFIX +
-    createHash("sha256").update(JSON.stringify(normalized)).digest("hex")
-  );
+  return WINDOWS_ARGV_IDENTITY_PREFIX + sha256Hex(JSON.stringify(normalized));
 }
 
 /** Process facts shared by lease admission, live ownership, and cleanup. */

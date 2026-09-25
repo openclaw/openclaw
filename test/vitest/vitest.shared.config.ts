@@ -13,7 +13,7 @@ import {
   resolveLocalVitestScheduling,
 } from "../../scripts/lib/vitest-local-scheduling.mts";
 import type { LocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
-import { resolveVitestBunSourceArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveTestBunSourceArgs } from "../../src/test-utils/bun-process.ts";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
@@ -517,7 +517,7 @@ export const sharedVitestConfig = {
     // Native imports keep the invocation owner's isolated source-cache policy.
     execArgv: [
       ...(process.versions.bun
-        ? resolveVitestBunSourceArgs()
+        ? resolveTestBunSourceArgs(repoRoot)
         : ["--import", resolveTsxImport(repoRoot)]),
       `--import=${new URL("./vitest.jsdom-preload.mts", import.meta.url).href}`,
     ],
