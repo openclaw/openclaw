@@ -37,10 +37,11 @@ function createMinimaxProviderContract(portal: boolean): ProviderPlugin {
     docsPath: "/providers/minimax",
     envVars: portal ? ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"] : ["MINIMAX_API_KEY"],
     resolveThinkingProfile: ({ modelId }) => resolveMinimaxThinkingProfile(modelId),
-    auth: (["global", "cn"] as const).map((region) => ({
-      ...minimaxAuthMethodMetadata(region, portal ? "device_code" : "api_key"),
-      run: noopAuth,
-    })),
+    auth: (["global", "cn"] as const).map((region) =>
+      Object.assign(minimaxAuthMethodMetadata(region, portal ? "device_code" : "api_key"), {
+        run: noopAuth,
+      }),
+    ),
   };
 }
 

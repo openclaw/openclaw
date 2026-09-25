@@ -705,4 +705,3 @@ export function resolveFoundryTargetProfileId(config: FoundryConfigShape): strin
     (profileIds.length === 1 ? profileIds[0] : undefined)
   );
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
