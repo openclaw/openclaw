@@ -15,6 +15,7 @@ vi.mock("../../logging/diagnostic-cpu-profile.js", () => ({
 const result = {
   requestedDurationMs: 5_000,
   actualDurationMs: 5_015,
+  startBlockedMs: 2_100,
   samplingIntervalMicros: 10_000,
   sampleLossCount: null,
   redactedNodeCount: 1,

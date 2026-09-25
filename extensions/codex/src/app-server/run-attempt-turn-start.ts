@@ -108,10 +108,11 @@ export async function startCodexAttemptTurn(
           "codex app-server context-engine turn overflowed on resume; retrying with fresh thread",
           { threadId: resourceState.thread.threadId, error: formatErrorMessage(turnStartError) },
         );
-        const clearedBinding = await bindingStore.mutate(bindingIdentity, {
-          kind: "clear",
-          threadId: resourceState.thread.threadId,
-        });
+        const clearedBinding = await bindingStore.mutate(
+          bindingIdentity,
+          { kind: "clear", threadId: resourceState.thread.threadId },
+          connection.assertCurrent,
+        );
         if (!clearedBinding) {
           embeddedAgentLog.warn(
             "codex app-server preserved newer context-engine binding after resume overflow; skipping fresh retry",
