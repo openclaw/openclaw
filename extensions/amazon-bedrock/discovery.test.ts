@@ -542,6 +542,59 @@ describe("bedrock discovery", () => {
     expect(models.find((m) => m.id === "ap.anthropic.claude-sonnet-4-6")).toBeUndefined();
   });
 
+  it("rejects inference profile pagination that repeats a token", async () => {
+    const firstProfile = buildBedrockProfile("us.amazon.nova-micro-v1:0", "US Nova", [
+      "amazon.nova-micro-v1:0",
+    ]);
+    const secondProfile = buildBedrockProfile("eu.amazon.nova-micro-v1:0", "EU Nova", [
+      "amazon.nova-micro-v1:0",
+    ]);
+    sendMock
+      .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [firstProfile],
+        nextToken: "repeated-page",
+      })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [secondProfile],
+        nextToken: "repeated-page",
+      });
+
+    await expect(
+      discoverFreshBedrockModels({ region: "repeated-profile-page", clientFactory }),
+    ).rejects.toThrow("Bedrock ListInferenceProfiles repeated a pagination token");
+    expect(sendMock).toHaveBeenCalledTimes(3);
+    expect(destroyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("collects inference profile pages with advancing tokens", async () => {
+    const firstProfile = buildBedrockProfile("us.amazon.nova-micro-v1:0", "US Nova", [
+      "amazon.nova-micro-v1:0",
+    ]);
+    const secondProfile = buildBedrockProfile("eu.amazon.nova-micro-v1:0", "EU Nova", [
+      "amazon.nova-micro-v1:0",
+    ]);
+    sendMock
+      .mockResolvedValueOnce({ modelSummaries: [] })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [firstProfile],
+        nextToken: "second-page",
+      })
+      .mockResolvedValueOnce({ inferenceProfileSummaries: [secondProfile] });
+
+    const models = await discoverFreshBedrockModels({
+      region: "advancing-profile-pages",
+      clientFactory,
+    });
+
+    expect(models.map((model) => model.id)).toEqual([
+      secondProfile.inferenceProfileId,
+      firstProfile.inferenceProfileId,
+    ]);
+    expect(sendMock).toHaveBeenCalledTimes(3);
+    expect(destroyMock).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["foundation", "profiles", "profile-page"])(
     "rejects failed %s acquisition and retries the complete catalog",
     async (surface) => {

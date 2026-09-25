@@ -384,6 +384,9 @@ async function fetchInferenceProfileSummaries(
   createListInferenceProfilesCommand: BedrockControlPlaneSdk["createListInferenceProfilesCommand"],
 ): Promise<InferenceProfileSummary[]> {
   const profiles: InferenceProfileSummary[] = [];
+  // A repeated service token makes no pagination progress and would otherwise
+  // block strict catalog acquisition forever instead of reporting a failed refresh.
+  const seenTokens = new Set<string>();
   let nextToken: string | undefined;
   do {
     const command = createListInferenceProfilesCommand({ nextToken });
@@ -395,6 +398,12 @@ async function fetchInferenceProfileSummaries(
       profiles.push(summary);
     }
     nextToken = response.nextToken;
+    if (nextToken) {
+      if (seenTokens.has(nextToken)) {
+        throw new Error("Bedrock ListInferenceProfiles repeated a pagination token");
+      }
+      seenTokens.add(nextToken);
+    }
   } while (nextToken);
   return profiles;
 }
