@@ -81,7 +81,7 @@ export type EmbeddedAgentMeta = {
    */
   promptTokens?: number;
   usage?: EmbeddedAgentUsage;
-  /** Terminal cumulative usage reserved for turn-level diagnostics. */
+  /** Terminal cumulative usage for turn-level diagnostics and persisted CLI transcript accounting. */
   diagnosticUsage?: EmbeddedAgentUsage;
   /**
    * Usage from the last individual API call (not accumulated across tool-use
