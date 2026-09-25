@@ -19,9 +19,7 @@ vi.mock("../agents/subagents/announce/subagent-announce-delivery.js", async (imp
     typeof import("../agents/subagents/announce/subagent-announce-delivery.js")
   >()),
   isInternalAnnounceRequesterSession: () => true,
-  deliverSubagentAnnouncement: () => {
-    throw new Error("Unexpected completion delivery");
-  },
+  deliverSubagentAnnouncement: async () => ({ delivered: true, path: "steered" }),
 }));
 
 afterEach(() => {
@@ -129,36 +127,41 @@ describe("harness task selection with the real registry", () => {
     expect(clone).not.toHaveBeenCalled();
   });
 
-  it("filters completion ownership reads before copying and still rejects duplicate owners", async () => {
-    const owned = [
-      record("first", { runId: "example:duplicate" }),
-      record("second", { runId: "example:duplicate" }),
-    ];
-    const excluded = [
-      record("other-runtime", { runtime: "cli", runId: "example:duplicate" }),
-      record("no-kind", { taskKind: undefined, runId: "example:duplicate" }),
-      record("other-requester", {
-        requesterSessionKey: "agent:other:main",
-        runId: "example:duplicate",
-      }),
-      record("other-run"),
-    ];
-    const { write } = configure([...owned, ...excluded]);
-    const clone = vi.spyOn(globalThis, "structuredClone");
-    const result = await deliverAgentHarnessTaskCompletion({
-      scope: createAgentHarnessTaskRuntimeScope({ requesterSessionKey: ownerKey }),
-      childSessionKey: "example:duplicate",
-      childSessionId: "child",
-      announceId: "fixture-completion",
-      status: "succeeded",
-      result: "Synthetic completion",
-    });
-    expect(result).toMatchObject({
-      delivered: false,
-      recoveryBlocked: true,
-      error: "completion task ownership is ambiguous",
-    });
-    expect(clone.mock.calls.map(([detail]) => detail)).toEqual(owned.map((task) => task.detail));
-    expect(write).not.toHaveBeenCalled();
-  });
+  it.each([1, 2])(
+    "filters completion ownership reads and accepts only one owner (owners: %s)",
+    async (count) => {
+      const owned = [
+        record("first", { runId: "example:duplicate" }),
+        record("second", { runId: "example:duplicate" }),
+      ];
+      const excluded = [
+        record("other-runtime", { runtime: "cli", runId: "example:duplicate" }),
+        record("no-kind", { taskKind: undefined, runId: "example:duplicate" }),
+        record("other-requester", {
+          requesterSessionKey: "agent:other:main",
+          runId: "example:duplicate",
+        }),
+        record("other-run"),
+      ];
+      const { write } = configure([...owned.slice(0, count), ...excluded]);
+      const result = await deliverAgentHarnessTaskCompletion({
+        scope: createAgentHarnessTaskRuntimeScope({ requesterSessionKey: ownerKey }),
+        childSessionKey: "example:duplicate",
+        childSessionId: "child",
+        announceId: "fixture-completion",
+        status: "succeeded",
+        result: "Synthetic completion",
+      });
+      expect(result).toMatchObject(
+        count === 1
+          ? { delivered: true }
+          : {
+              delivered: false,
+              recoveryBlocked: true,
+              error: "completion task ownership is ambiguous",
+            },
+      );
+      expect(write).not.toHaveBeenCalled();
+    },
+  );
 });

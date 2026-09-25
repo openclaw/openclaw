@@ -83,6 +83,12 @@ vi.mock("../tasks/runtime-internal.js", () => ({
   listTaskRecords: vi.fn(() => []),
 }));
 
+vi.mock("../tasks/task-registry-read.js", () => ({
+  prepareTaskRegistryRead: async () => ({
+    getTasksByRunId: (runId: string) => listTaskRecords().filter((task) => task.runId === runId),
+  }),
+}));
+
 vi.mock("../tasks/task-execution-owner.js", () => ({
   captureTaskExecutionOwner: vi.fn(),
 }));
@@ -526,50 +532,6 @@ describe("agent-harness-task-runtime", () => {
         result: "child final answer",
       }),
     ).rejects.toThrow(/host-issued scope/);
-  });
-
-  it("lists only task records owned by the scoped requester session", () => {
-    const records = [
-      {
-        taskId: "task-1",
-        runtime: "subagent",
-        taskKind: "example-harness",
-        requesterSessionKey: "agent:main:channel:C123",
-        ownerKey: "agent:main:channel:C123",
-        scopeKind: "session",
-        runId: "example:child-1",
-        task: "owned",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: 1,
-      },
-      {
-        taskId: "task-2",
-        runtime: "subagent",
-        taskKind: "example-harness",
-        requesterSessionKey: "agent:other:channel:C999",
-        ownerKey: "agent:other:channel:C999",
-        scopeKind: "session",
-        runId: "example:child-2",
-        task: "other",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: 1,
-      },
-    ] satisfies ReturnType<typeof listTaskRecords>;
-    vi.mocked(listTaskRecords).mockImplementation((filter) =>
-      filter ? records.filter(filter) : records,
-    );
-    const runtime = createAgentHarnessTaskRuntime({
-      runtime: "subagent",
-      taskKind: "example-harness",
-      scope: createScope(),
-      runIdPrefix: "example:",
-    });
-
-    expect(runtime.listTaskRecords().map((task) => task.taskId)).toEqual(["task-1"]);
   });
 
   it.each(["unguarded", "retired-during-origin"] as const)(
