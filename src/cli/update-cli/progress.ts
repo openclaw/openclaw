@@ -266,14 +266,14 @@ export async function printResult(
   finalizeProgress?.pause();
   let run: UpdateRunRecord | undefined;
   let report: ReturnType<typeof renderUpdateRunReport> | undefined;
-  // Snapshot and render under the artifact lock, so a terminal writer cannot be
-  // overwritten by foreground output captured before its durable settlement.
-  const renderReport = () => {
-    run =
-      reportHints.record ??
-      (result.runId && reportHints.readHistory !== false
-        ? readDisplayRecord(result.runId, opts.run?.env)
-        : undefined);
+  const readRun =
+    result.runId && !reportHints.record && reportHints.readHistory !== false
+      ? () => readDisplayRecord(result.runId!, opts.run?.env)
+      : undefined;
+  // The artifact owner reads under its lock and reconciles after publication.
+  // Captured and detached reports never reopen retained history.
+  const renderReport = (current?: UpdateRunRecord) => {
+    run = reportHints.record ?? current;
     finalizeProgress?.finish(run);
     report = renderUpdateRunReport(updateRunReportInputFromResult(result, run), {
       ...reportHints,
@@ -284,13 +284,14 @@ export async function printResult(
   const reportPath = await writeUpdateRunReportArtifact({
     result,
     report: renderReport,
+    readRun,
     env: opts.run?.env,
     detached: reportHints.readHistory === false,
   }).catch((error: unknown) => {
     defaultRuntime.error(`Update report could not be saved: ${formatErrorMessage(error)}`);
     return undefined;
   });
-  report ??= renderReport();
+  report ??= renderReport(readRun?.());
   if (opts.json) {
     defaultRuntime.writeJson({
       ...result,

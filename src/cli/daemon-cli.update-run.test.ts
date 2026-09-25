@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -12,7 +13,9 @@ import {
   getUpdateRun,
 } from "../infra/update-run-ledger.js";
 import { defaultRuntime } from "../runtime.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { finishUpdateRun, recordUpdateRunDiagnostic } from "./daemon-cli.js";
 import { printResult } from "./update-cli/progress.js";
 
@@ -26,6 +29,7 @@ afterEach(() => {
 function fixture() {
   const stateDir = tempDirs.make("openclaw-daemon-ledger-");
   const env = {
+    HOME: stateDir,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
     OPENCLAW_WORKSPACE_DIR: path.join(stateDir, "workspace"),
@@ -50,7 +54,7 @@ function finishFromPublishedDriver(
   outcome: { status: "failed"; reason: string },
   options: { env: NodeJS.ProcessEnv },
   contention?: { lockPath: string; observed: () => void },
-): Promise<void> {
+): Promise<string> {
   const entry = resolveRuntimeWorkerUrl({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "daemon-cli",
@@ -89,10 +93,10 @@ function finishFromPublishedDriver(
   return new Promise((resolve, reject) => {
     child.once("error", reject);
     child.once("close", (code, signal) => {
-      if (code !== 0 || signal || stderr.includes("Update report could not be saved:")) {
+      if (code !== 0 || signal) {
         reject(new Error(`Published driver failed (${code}/${signal}): ${stderr}`));
       } else {
-        resolve();
+        resolve(stderr);
       }
     });
   });
@@ -153,7 +157,8 @@ it.each(["awaited", "published driver", "settled child"] as const)(
     if (driver !== "published driver") {
       await finishUpdateRun(run.runId, outcome, options);
     } else {
-      await finishFromPublishedDriver(run.runId, outcome, options);
+      const stderr = await finishFromPublishedDriver(run.runId, outcome, options);
+      expect(stderr).not.toContain("Update report could not be saved:");
     }
     expect(getUpdateRun(run.runId, options)).toMatchObject({
       status: "failed",
@@ -183,6 +188,7 @@ it("preserves a child-authored terminal report and its first recorded outcome", 
     nextAction: "Keep this specific candidate diagnostic and inspect the failed check.",
   });
   const report = await fs.readFile(reportPath, "utf8");
+  expect(report).toContain("Keep this specific candidate diagnostic and inspect the failed check.");
   await finishUpdateRun(run.runId, { status: "succeeded" }, options);
   expect(getUpdateRun(run.runId, options)?.status).toBe("failed");
   expect(await fs.readFile(reportPath, "utf8")).toBe(report);
@@ -204,48 +210,105 @@ it("keeps durable failure when the report directory cannot be written", async ()
   expect(await fs.readFile(path.join(stateDir, "update-reports"), "utf8")).toBe("unrelated file");
 });
 
-it("does not let an in-flight foreground report overwrite terminal settlement", async () => {
-  const { options, run, result, opts, reportPath } = fixture();
-  const paused = createDeferred();
-  const release = createDeferred();
-  const atomicWrite = jsonFiles.writeTextAtomic;
-  let intercepted = false;
-  vi.spyOn(jsonFiles, "writeTextAtomic").mockImplementation(async (target, body, policy) => {
-    if (target !== reportPath || intercepted) {
-      return atomicWrite(target, body, policy);
-    }
-    intercepted = true;
-    return atomicWrite(target, body, {
-      ...policy,
-      beforeRename: async () => {
-        paused.resolve();
-        await release.promise;
-      },
+it.each(["contention observed", "helper wait exhausted"] as const)(
+  "reconciles in-flight foreground publication after %s",
+  async (releaseAfter) => {
+    const { options, run, result, opts, reportPath } = fixture();
+    const paused = createDeferred();
+    const release = createDeferred();
+    const atomicWrite = jsonFiles.writeTextAtomic;
+    let intercepted = false;
+    vi.spyOn(jsonFiles, "writeTextAtomic").mockImplementation(async (target, body, policy) => {
+      if (target !== reportPath || intercepted) {
+        return atomicWrite(target, body, policy);
+      }
+      intercepted = true;
+      return atomicWrite(target, body, {
+        ...policy,
+        beforeRename: async () => {
+          paused.resolve();
+          await release.promise;
+        },
+      });
     });
-  });
-  const foreground = printResult(result, opts);
-  await Promise.race([
-    paused.promise,
-    foreground.then(() => {
-      throw new Error("Foreground report completed without reaching its atomic write gate");
-    }),
-  ]);
-  const contended = createDeferred();
-  const terminal = finishFromPublishedDriver(
-    run.runId,
-    { status: "failed", reason: "managed-service-handoff-failed" },
-    options,
-    { lockPath: `${reportPath}.lock`, observed: () => contended.resolve() },
-  );
-  try {
-    // The child confirms settlement while the foreground holds the report lock.
-    // Without serialization it exits first, then the stale rename wins.
-    await Promise.race([terminal, contended.promise]);
-  } finally {
-    release.resolve();
-    await Promise.all([foreground, terminal]);
-  }
-  const saved = await fs.readFile(reportPath, "utf8");
-  expect(saved).toContain("OpenClaw update failed: managed-service-handoff-failed");
-  expect(saved).not.toContain("in progress");
-});
+    const foreground = printResult(result, opts);
+    await Promise.race([
+      paused.promise,
+      foreground.then(() => {
+        throw new Error("Foreground report completed without reaching its atomic write gate");
+      }),
+    ]);
+    const contended = createDeferred();
+    const terminal = finishFromPublishedDriver(
+      run.runId,
+      { status: "failed", reason: "managed-service-handoff-failed" },
+      options,
+      { lockPath: `${reportPath}.lock`, observed: () => contended.resolve() },
+    );
+    try {
+      // Exercise both lock handoff and a writer delayed beyond the actual budget.
+      if (releaseAfter === "helper wait exhausted") {
+        expect(await terminal).toContain("Update report could not be saved:");
+      } else {
+        await Promise.race([terminal, contended.promise]);
+      }
+      expect(getUpdateRun(run.runId, options)).toMatchObject({
+        status: "failed",
+        reason: "managed-service-handoff-failed",
+      });
+    } finally {
+      release.resolve();
+      await Promise.allSettled([foreground, terminal]);
+    }
+    await foreground;
+    const stderr = await terminal;
+    if (releaseAfter === "contention observed") {
+      expect(stderr).not.toContain("Update report could not be saved:");
+    }
+    const saved = await fs.readFile(reportPath, "utf8");
+    expect(saved).toContain("OpenClaw update failed: managed-service-handoff-failed");
+    expect(saved).not.toContain("in progress");
+  },
+);
+
+it.each(["terminal", "custom", "captured"] as const)(
+  "preserves %s report details after schema admission closes",
+  async (kind) => {
+    const { options, run, result, opts, reportPath } = fixture();
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const captured = await finishUpdateRun(
+      run.runId,
+      { status: "failed", reason: "helper-first-failure" },
+      options,
+    );
+    expect(getUpdateRun(run.runId, options)?.status).toBe("failed");
+    if (kind === "custom") {
+      await fs.writeFile(reportPath, "Operator diagnostic: keep this exact recovery detail.\n");
+    }
+    const before = await fs.readFile(reportPath, "utf8");
+    closeOpenClawStateDatabaseForTest();
+    const database = new DatabaseSync(resolveOpenClawStateSqlitePath(options.env));
+    try {
+      database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+    } finally {
+      database.close();
+    }
+    expect(() => getUpdateRun(run.runId, options)).toThrow(/newer schema/);
+    await printResult(
+      result,
+      opts,
+      kind === "captured"
+        ? { record: captured, nextAction: "Captured terminal recovery instructions." }
+        : {},
+    );
+    const saved = await fs.readFile(reportPath, "utf8");
+    if (kind === "captured") {
+      expect(error).not.toHaveBeenCalled();
+      expect(saved).toContain("OpenClaw update failed: helper-first-failure");
+      expect(saved).toContain("Captured terminal recovery instructions.");
+    } else {
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("history unavailable"));
+      expect(saved).toBe(before);
+    }
+  },
+);

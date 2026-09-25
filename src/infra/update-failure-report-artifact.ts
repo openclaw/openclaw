@@ -129,7 +129,10 @@ export async function writeTriageUpdateFailure(
 /** Terminal exports never write into state retained by an unresolved recovery owner. */
 export async function writeUpdateRunReportArtifact(params: {
   result: UpdateRunResult;
-  report: Pick<UpdateRunReport, "markdown"> | (() => Pick<UpdateRunReport, "markdown">);
+  report:
+    | Pick<UpdateRunReport, "markdown">
+    | ((run?: UpdateRunRecord) => Pick<UpdateRunReport, "markdown">);
+  readRun?: () => UpdateRunRecord | undefined;
   env?: NodeJS.ProcessEnv;
   detached?: boolean;
 }): Promise<string> {
@@ -143,6 +146,21 @@ export async function writeUpdateRunReportArtifact(params: {
     : path.join(stateDir, "update-reports");
   const outputPath = path.join(directory, `${id}.md`);
   const write = async () => {
+    const run = params.readRun?.();
+    const report = typeof params.report === "function" ? params.report(run) : params.report;
+    if (params.readRun && !run) {
+      const previous = await fs.readFile(outputPath, "utf8").catch((error: unknown) => {
+        if (hasErrorCode(error, "ENOENT")) {
+          return "";
+        }
+        throw error;
+      });
+      // An old reader can lose schema admission after the helper settles.
+      // Its fallback result cannot replace already-published terminal details.
+      if (previous && !isUpdateRunReportInProgress(previous)) {
+        return outputPath;
+      }
+    }
     const failurePath =
       classifyUpdateOutcome(params.result) === "failed"
         ? await writeTriageUpdateFailure(
@@ -157,7 +175,7 @@ export async function writeUpdateRunReportArtifact(params: {
         : undefined;
     const findings = params.result.steps.flatMap((step) => step.doctorLintFindings ?? []);
     const body = [
-      (typeof params.report === "function" ? params.report() : params.report).markdown,
+      report.markdown,
       `${DOCTOR_LINT_REPORT_SECTION}${findings.length})\n`,
       ...findings.map((finding) => `- ${formatUpdateDoctorLintFinding(finding, env)}`),
       failurePath ? `\nBounded diagnostic JSON: ${path.relative(directory, failurePath)}` : "",
@@ -169,7 +187,18 @@ export async function writeUpdateRunReportArtifact(params: {
     );
     return outputPath;
   };
-  return params.detached ? write() : withUpdateReportWrite(outputPath, write);
+  if (params.detached) {
+    return write();
+  }
+  await withUpdateReportWrite(outputPath, write);
+  // Reconcile after release, including async rename and unlock. A helper that
+  // exhausted its lock wait has already settled the ledger; one settling after
+  // this read can acquire the released lock and finish the projection itself.
+  const settled = params.readRun?.();
+  if (settled) {
+    await refreshUpdateRunReportArtifact(settled, { env });
+  }
+  return outputPath;
 }
 
 export type SavedUpdateFailureReport = {
