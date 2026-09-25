@@ -1,7 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { tryResolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
@@ -9,6 +10,7 @@ import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import {
   resolvePrivateSessionEventBroadcastScope,
   resolveSessionEventAgentScope,
+  tryResolveSessionCompatibilityOwnerAgentId,
   type SessionEventAgentScope,
 } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
@@ -27,6 +29,22 @@ type SessionChangedPayload = {
   catalogChanged?: true;
 };
 
+export function resolveSessionMessageSubscriptionKey(params: {
+  canonicalKey: string;
+  agentId?: string;
+  defaultAgentId?: string;
+}): string {
+  const agentId = params.agentId
+    ? normalizeAgentId(params.agentId)
+    : params.canonicalKey === "global" && params.defaultAgentId
+      ? normalizeAgentId(params.defaultAgentId)
+      : undefined;
+  // Global session message subscriptions need per-agent channels to avoid cross-agent fanout.
+  return params.canonicalKey === "global" && agentId
+    ? `agent:${agentId}:global`
+    : params.canonicalKey;
+}
+
 type SessionChangeContext = Pick<
   GatewayRequestContext,
   | "broadcastToConnIds"
@@ -34,6 +52,7 @@ type SessionChangeContext = Pick<
   | "getRuntimeConfig"
   | "sessionRowProjectionOwner"
   | "getSessionEventSubscriberConnIds"
+  | "getSessionMessageSubscriberConnIds"
   | "workerSessionPlacementService"
   | "mentionInbox"
 >;
@@ -406,7 +425,46 @@ export function emitSessionsChanged(
     // Inbox subscriptions are independent of session-list subscriptions, including a closed sidebar.
     context.mentionInbox?.invalidate(payload.sessionKey);
   }
-  const connIds = context.getSessionEventSubscriberConnIds();
+  const evSubs = context.getSessionEventSubscriberConnIds();
+  const isTeardown =
+    payload.reason === "reset" || payload.reason === "delete" || payload.reason === "new";
+
+  if (isTeardown) {
+    let msgSubs: ReadonlySet<string> = new Set<string>();
+    if (payload.sessionKey) {
+      const cfg = context.getRuntimeConfig();
+      const defaultAgentId =
+        payload.sessionKey === "global"
+          ? (tryResolveSessionCompatibilityOwnerAgentId(cfg, payload.sessionKey) ??
+            tryResolveDefaultAgentId(cfg))
+          : undefined;
+      const subscriptionKey = resolveSessionMessageSubscriptionKey({
+        canonicalKey: payload.sessionKey,
+        agentId: payload.agentId,
+        defaultAgentId,
+      });
+      msgSubs = context.getSessionMessageSubscriberConnIds?.(subscriptionKey) ?? new Set();
+    }
+    const drainConnIds = new Set<string>([...evSubs, ...msgSubs]);
+
+    if (drainConnIds.size > 0 && payload.sessionKey) {
+      context.broadcastToConnIds(
+        "socket.drain",
+        {
+          sessionKey: payload.sessionKey,
+          reason: payload.reason,
+          ts: Date.now(),
+          ...(payload.sessionKey === "global" && payload.agentId
+            ? { agentId: payload.agentId }
+            : {}),
+        },
+        drainConnIds,
+      );
+    }
+  }
+
+  const connIds = evSubs;
+
   if (!hasSessionChangeReceivers(connIds)) {
     return;
   }
