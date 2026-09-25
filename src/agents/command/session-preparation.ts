@@ -256,8 +256,7 @@ export async function prepareEmbeddedSessionState(params: {
   }
 
   const runContext = resolveAgentRunContext(params.opts);
-  // Announce and inter-session turns have no inbound message; delivered output gets the
-  // channel contract from the same owner as replies.
+  // Announce and inter-session turns get the delivering channel's contract, like replies.
   const deliveryFormat =
     (params.opts.deliver === true || params.opts.sourceReplyDeliveryMode === "message_tool_only") &&
     buildDeliveryFormatPrompt({
@@ -265,6 +264,7 @@ export async function prepareEmbeddedSessionState(params: {
       channel: runContext.messageChannel,
       accountId: runContext.accountId,
       agentId: params.sessionAgentId,
+      allowBootstrap: true,
     });
   const extraSystemPrompt = [params.opts.extraSystemPrompt, deliveryFormat].filter(Boolean);
   return {

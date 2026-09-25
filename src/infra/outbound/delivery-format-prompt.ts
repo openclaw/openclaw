@@ -1,22 +1,27 @@
+import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
+import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 
-/** Renders the delivering channel's formatting contract for any turn; may bootstrap the plugin. */
+/** Renders the delivering channel's formatting contract; only delivered runs bootstrap. */
 export function buildDeliveryFormatPrompt(params: {
   cfg: OpenClawConfig;
   channel?: string | null;
   accountId?: string | null;
   agentId?: string;
+  allowBootstrap?: boolean;
 }): string | undefined {
   if (!params.channel) {
     return undefined;
   }
-  const plugin = resolveOutboundChannelPlugin({
-    channel: params.channel,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    allowBootstrap: true,
-  });
+  const plugin = params.allowBootstrap
+    ? resolveOutboundChannelPlugin({
+        channel: params.channel,
+        cfg: params.cfg,
+        agentId: params.agentId,
+        allowBootstrap: true,
+      })
+    : getLoadedChannelPlugin(normalizeAnyChannelId(params.channel) ?? params.channel);
   const responseFormat = plugin?.agentPrompt?.inboundFormattingHints?.({
     cfg: params.cfg,
     accountId: params.accountId?.trim() || undefined,
@@ -24,7 +29,6 @@ export function buildDeliveryFormatPrompt(params: {
   if (!plugin || !responseFormat) {
     return undefined;
   }
-  // Same bytes for every turn kind on this channel and contract: no per-turn fields.
   const payload = {
     schema: "openclaw.delivery_format.v1",
     channel: plugin.id,

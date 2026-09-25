@@ -328,7 +328,6 @@ export async function resolveCronDeliveryContext(params: {
     deliveryPlan,
     deliveryRequested: deliveryPlan.requested,
     resolvedDelivery,
-    // Announce runs have no inbound message; the delivering account's contract replaces it.
     deliverySystemPrompt:
       deliveryPlan.requested && resolvedDelivery.ok
         ? buildDeliveryFormatPrompt({
@@ -336,6 +335,7 @@ export async function resolveCronDeliveryContext(params: {
             channel: resolvedDelivery.channel,
             accountId: resolvedDelivery.accountId,
             agentId: params.agentId,
+            allowBootstrap: true,
           })
         : undefined,
     sourceDelivery: resolveCronSourceDeliveryPlan({ deliveryPlan, resolvedDelivery }),
