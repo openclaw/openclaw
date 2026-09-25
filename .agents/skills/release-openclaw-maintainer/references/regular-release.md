@@ -1,5 +1,19 @@
 # Regular beta and stable release
 
+## Orchestrated stable (default)
+
+`pnpm release:stable YYYY.M.PATCH` drives the whole fast path from
+`docs/reference/RELEASING.md` (cut → validate → publish → sync-beta →
+flip-github → macos → closeout) with state in
+`.artifacts/release-YYYY.M.PATCH/state.json`. Rerun to resume, `--from <phase>`
+to restart a phase, `--status` to inspect, `--dry-run` to print every command.
+Two prompts only: confirm the cut SHA (`--confirm-cut-sha <sha>` without a
+terminal) and approve publication (`--approve-publication`). A refusal prints
+`Next:` with the exact commands; run them, then resume. Use the manual sequence
+below when the orchestrator refuses a step it cannot repair itself (editorial
+changelog work, the compat inventory PR, an appcast PR, the closeout PR) or for
+betas.
+
 ## Freeze and validate code
 
 Read [preparation](preparation.md) before branch or version changes. Record the
@@ -178,8 +192,13 @@ approved by hand; watch `pending_deployments` on every child per
 cancelling PR CI. Blacksmith testbox runs use a separate pool.
 
 After the core child logs `+ openclaw@<version>`, the package takes 5-6 minutes
-to appear in `npm view openclaw versions --json --prefer-online`; poll it before
-the dist-tag sync, the GitHub flip, or verification. Run postpublish
+to appear in `npm view openclaw versions --json --prefer-online`. The parent's
+`Complete publish workflows` step polls the registry document for the version
+under the target dist-tag (bounded 10 minutes), then dispatches the
+`sync_beta_to_stable` ledger sync through a release-ledger app token and waits
+for it before verification; if its summary reports the token unavailable,
+dispatch the sync by hand before the verify runs. For manual work, poll the
+registry yourself before the sync, the GitHub flip, or verification. Run postpublish
 verification from a checkout of the Release SHA (a newer tooling checkout
 reports main-only bundled plugin files as missing), with the tooling identity
 exported, or it fails `SHA-pinned release-publish ref does not match`:
@@ -199,10 +218,9 @@ release evidence, and Docker.
 As soon as `openclaw@<version>` is visible on npm under the target dist-tag,
 flip the GitHub release public: un-draft it and mark it latest for stable.
 Never wait for Docker, ClawHub, the app publishers, or the parent's finalize
-step; the macOS publisher requires the public release. Dispatch the
-`sync_beta_to_stable` dist-tag sync right after core npm and before the parent's
-completion verify, which fails on a stale `beta` tag. If the parent has not
-flipped it, run
+step; the macOS publisher requires the public release. The parent's finalize
+step accepts an already public release with the expected tag target and latest
+state, so a manual flip does not fail it. If the parent has not flipped it, run
 `gh release edit v<version> --repo openclaw/openclaw --draft=false --latest`.
 
 Native applications use [platform publication](platform-publication.md) as

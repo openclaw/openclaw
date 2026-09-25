@@ -3,8 +3,12 @@ package ai.openclaw.app
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.protocol.OpenClawCameraCommand
+import ai.openclaw.app.voice.TalkModeManager
+import android.Manifest
 import android.content.Context
+import android.media.AudioRecord
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
@@ -26,21 +30,177 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowAudioRecord
 import org.robolectric.util.ReflectionHelpers
 import java.net.InetAddress
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewayBootstrapRefreshTest {
+  @Test
+  fun microphoneGrantDuringTalkStartupPreservesOperatorAndStartsOnce() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      app
+        .getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+        .edit()
+        .clear()
+        .commit()
+      shadowOf(app).denyPermissions(Manifest.permission.RECORD_AUDIO)
+      val prefs = SecurePrefs(app, app.getSharedPreferences("talk-refresh-${UUID.randomUUID()}", Context.MODE_PRIVATE))
+      prefs.setManualTls(false)
+      val configRequest = CompletableDeferred<Pair<WebSocket, String>>()
+      val refreshedNode = CompletableDeferred<Triple<WebSocket, String, JsonObject>>()
+      val closedSession = CompletableDeferred<JsonObject>()
+      val captureStarted = CompletableDeferred<AudioRecord>()
+      val finishCaptureRead = CountDownLatch(1)
+      val operatorConnects = AtomicInteger()
+      val creates = AtomicInteger()
+      val refreshing = AtomicBoolean()
+      val gateway =
+        ConsumedBootstrapGateway(sharedToken = "test-token", interceptRequest = { frame, socket ->
+          val id = frame.getValue("id").jsonPrimitive.content
+          when (frame["method"]?.jsonPrimitive?.content) {
+            "connect" -> {
+              val params = frame.getValue("params").jsonObject
+              when (params.getValue("role").jsonPrimitive.content) {
+                "operator" -> {
+                  operatorConnects.incrementAndGet() > 1
+                }
+
+                "node" -> {
+                  if (refreshing.get()) {
+                    refreshedNode.complete(Triple(socket, id, params))
+                    true
+                  } else {
+                    false
+                  }
+                }
+
+                else -> {
+                  false
+                }
+              }
+            }
+
+            "talk.config" -> {
+              configRequest.complete(socket to id)
+              true
+            }
+
+            "talk.session.create" -> {
+              creates.incrementAndGet()
+              socket.send("""{"type":"res","id":"$id","ok":true,"payload":{"relaySessionId":"permission-talk"}}""")
+              true
+            }
+
+            "talk.session.close" -> {
+              closedSession.complete(frame.getValue("params").jsonObject)
+              false
+            }
+
+            else -> {
+              false
+            }
+          }
+        })
+      ShadowAudioRecord.setSourceProvider { recorder ->
+        object : ShadowAudioRecord.AudioRecordSource {
+          override fun readInByteArray(
+            buffer: ByteArray,
+            offset: Int,
+            size: Int,
+            blocking: Boolean,
+          ): Int {
+            captureStarted.complete(recorder)
+            check(finishCaptureRead.await(5, TimeUnit.SECONDS)) { "Talk capture was not stopped" }
+            return 0
+          }
+        }
+      }
+      val runtime = createRuntime(app, prefs)
+      try {
+        val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.server.port)
+        runtime.connect(endpoint, NodeRuntime.GatewayConnectAuth("test-token", null, null))
+        withTimeout(5_000) { runtime.gatewayConnectionDisplay.first { it.statusText == "Connected" } }
+        withTimeout(5_000) { runtime.gatewayConnectionHandoff.first { !it.pending } }
+        val initialNode = withTimeout(5_000) { gateway.nodeConnects.receive() }
+        assertEquals(
+          "false",
+          initialNode
+            .getValue("permissions")
+            .jsonObject
+            .getValue("microphone")
+            .jsonPrimitive.content,
+        )
+        val operator = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
+        val originalLease = checkNotNull(operator.captureRequestLease(endpoint.stableId))
+
+        // ActivityResult starts Talk before MainActivity refreshes the changed permission surface.
+        shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+        runtime.setTalkModeEnabled(true)
+        val (configSocket, configId) = withTimeout(5_000) { configRequest.await() }
+        refreshing.set(true)
+        runtime.refreshNodePermissionSurface()
+        assertTrue("A node permission grant must preserve the in-flight operator request", originalLease.isCurrent())
+        val (nodeSocket, nodeId, nodeParams) = withTimeout(5_000) { refreshedNode.await() }
+        assertEquals(
+          "true",
+          nodeParams
+            .getValue("permissions")
+            .jsonObject
+            .getValue("microphone")
+            .jsonPrimitive.content,
+        )
+        assertFalse(runtime.nodeConnected.value)
+
+        configSocket.send("""{"type":"res","id":"$configId","ok":true,"payload":{"config":{"clientHints":{"realtime":{"gatewayRelaySupported":true}}}}}""")
+        withTimeout(5_000) { runtime.talkModeListening.first { it } }
+        val recorder = withTimeout(5_000) { captureStarted.await() }
+        assertNull(runtime.talkFailureNotice.value)
+        assertEquals(1, operatorConnects.get())
+        assertEquals(1, creates.get())
+        assertEquals(AudioRecord.RECORDSTATE_RECORDING, recorder.recordingState)
+
+        runtime.setTalkModeEnabled(false)
+        finishCaptureRead.countDown()
+        assertEquals("permission-talk", withTimeout(5_000) { closedSession.await() }.getValue("sessionId").jsonPrimitive.content)
+        val talkMode = ReflectionHelpers.getField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+        withTimeout(5_000) { talkMode.audioRetirement.await() }
+        assertEquals(AudioRecord.STATE_UNINITIALIZED, recorder.state)
+        nodeSocket.send(gateway.hello(nodeId, "node"))
+        withTimeout(5_000) { runtime.nodeConnected.first { it } }
+        assertFalse(runtime.talkModeEnabled.value)
+        assertFalse(runtime.talkModeListening.value)
+        assertEquals(1, creates.get())
+        assertTrue(originalLease.isCurrent())
+      } finally {
+        try {
+          runtime.setTalkModeEnabled(false)
+          finishCaptureRead.countDown()
+          closeNodeRuntimeTestFixture(runtime)
+        } finally {
+          ShadowAudioRecord.clearSource()
+          gateway.server.shutdown()
+          gateway.nodeConnects.close()
+        }
+      }
+    }
+
   @Test
   fun capabilityChangeDuringSetupPreservesHandoffAndRelaunchAccess() =
     runBlocking {
@@ -137,7 +297,10 @@ class GatewayBootstrapRefreshTest {
       startupJobs.joinAll()
     }
 
-  private class ConsumedBootstrapGateway {
+  private class ConsumedBootstrapGateway(
+    private val sharedToken: String? = null,
+    private val interceptRequest: (JsonObject, WebSocket) -> Boolean = { _, _ -> false },
+  ) {
     val nodeConnects = Channel<JsonObject>(Channel.UNLIMITED)
     val consumedBootstrap = CompletableDeferred<Pair<WebSocket, String>>()
     private val bootstrapConsumed = AtomicBoolean()
@@ -164,6 +327,7 @@ class GatewayBootstrapRefreshTest {
                   ) {
                     val frame = Json.parseToJsonElement(text).jsonObject
                     val id = frame["id"]?.jsonPrimitive?.content ?: return
+                    if (interceptRequest(frame, webSocket)) return
                     if (frame["method"]?.jsonPrimitive?.content != "connect") {
                       webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{}}""")
                       return
@@ -180,7 +344,8 @@ class GatewayBootstrapRefreshTest {
                       }
                       return
                     }
-                    if (auth?.get("token")?.jsonPrimitive?.content != "$role-token") {
+                    val token = auth?.get("token")?.jsonPrimitive?.content
+                    if (token != "$role-token" && (sharedToken == null || token != sharedToken)) {
                       webSocket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"UNAUTHORIZED","message":"device token mismatch","details":{"code":"AUTH_DEVICE_TOKEN_MISMATCH"}}}""")
                       return
                     }

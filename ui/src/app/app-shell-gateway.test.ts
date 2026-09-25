@@ -903,6 +903,8 @@ describe("ShellGatewayOwner config invalidation", () => {
         );
         await vi.advanceTimersByTimeAsync(0);
         if (rejected) {
+          expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
+          expect(runtimeConfig.state.lastError).toBeNull();
           request.mockResolvedValueOnce({
             config: { count: 1 },
             raw: '{\n  "count": 1\n}\n',

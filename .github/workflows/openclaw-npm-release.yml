@@ -1,4 +1,5 @@
 name: OpenClaw NPM Release
+run-name: "openclaw-npm-release.yml [${{ inputs.tag }}] ${{ inputs.preflight_only && 'preflight' || 'publish' }} parent=${{ inputs.release_publish_run_id || 'manual' }}/${{ inputs.release_publish_run_attempt || '1' }}"
 
 on:
   workflow_dispatch:
@@ -136,7 +137,7 @@ jobs:
 
   validate_publish_request:
     if: ${{ !inputs.preflight_only }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read

@@ -100,7 +100,11 @@ caller authority before commit, and the store fences changed authority until
 committed facts are installed. Diagnostic writes preserve keyed reads only when
 the worker proves that every environment and credential field except the error
 text and update timestamp is unchanged. Transfer capabilities keep their separate
-authority and lifetime checks. List and keyed inventory reads use the projection.
+authority and lifetime checks. Attachment reads remain available during unrelated
+metadata commits only when the worker proves that the complete attachment record
+is unchanged, including the activity timestamp used by idle-cleanup guards.
+Replacement, closure, and activity changes retain their publication fence.
+List and keyed inventory reads use the projection.
 
 Bound worker execution identities and delegated approval checks prepare selected placement
 facts asynchronously through the existing placement reader. Retained checks

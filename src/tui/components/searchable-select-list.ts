@@ -40,10 +40,12 @@ export class SearchableSelectList implements Component, Focusable {
   }>;
   private filteredItems: SearchableSelectItem[];
   private selectedIndex = 0;
+  private retainedSelection?: string;
   private maxVisible: number;
   private theme: SearchableSelectListTheme;
   private searchInput: Input;
   private highlightPatterns?: RegExp[];
+  private emptyMessage = "No matches";
 
   onSelect?: (item: SearchableSelectItem) => void;
   onCancel?: () => void;
@@ -69,6 +71,24 @@ export class SearchableSelectList implements Component, Focusable {
 
   set focused(value: boolean) {
     this.searchInput.focused = value;
+  }
+
+  setItems(items: SearchableSelectItem[], emptyMessage = "No matches", fallbackValue?: string) {
+    // Invalidation can clear the rows before a replacement catalog arrives.
+    const selectedValue = this.filteredItems[this.selectedIndex]?.value ?? this.retainedSelection;
+    this.items = items;
+    this.emptyMessage = sanitizeRenderableLine(emptyMessage);
+    this.preparedItems = undefined;
+    this.updateFilter();
+    const selectedIndex = this.filteredItems.findIndex((item) => item.value === selectedValue);
+    this.selectedIndex =
+      selectedIndex >= 0
+        ? selectedIndex
+        : Math.max(
+            0,
+            this.filteredItems.findIndex((item) => item.value === fallbackValue),
+          );
+    this.retainedSelection = this.filteredItems[this.selectedIndex]?.value ?? selectedValue;
   }
 
   private updateFilter() {
@@ -97,7 +117,7 @@ export class SearchableSelectList implements Component, Focusable {
     const scoredItems: ScoredItem[] = [];
     const fuzzyCandidates: FuzzyCandidate[] = [];
 
-    // Rows are fixed for the overlay lifetime; defer search projection until it is needed.
+    // Defer search projection until it is needed; setItems retires the old projection.
     this.preparedItems ??= this.items.map((item) => {
       const label = stripAnsi(this.getItemLabel(item));
       const description = stripAnsi(item.description ?? "");
@@ -201,7 +221,8 @@ export class SearchableSelectList implements Component, Focusable {
 
     // If no items match filter, show message
     if (this.filteredItems.length === 0) {
-      lines.push(truncateToWidth(this.theme.noMatch("  No matches"), safeWidth, ""));
+      const message = this.items.length === 0 ? this.emptyMessage : "No matches";
+      lines.push(truncateToWidth(this.theme.noMatch(`  ${message}`), safeWidth, ""));
       return lines;
     }
 
