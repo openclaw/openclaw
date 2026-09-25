@@ -57,6 +57,27 @@ The slowest Node test families are split or balanced so each job stays small wit
 - `check-additional-boundaries` runs the complete supplemental guard list (`scripts/run-additional-boundary-checks.mts`) with four concurrent child processes and per-check timings. Its 20 checks retain individual failures, deadlines and process cleanup. The shared four-rule focused scan runs once across all source roots; the narrower public lint commands remain available. Prompt snapshots run in their separate lane. Package-boundary compile/canary work stays together, and runtime topology architecture runs separately from the gateway watch coverage embedded in `build-artifacts`.
 - On the 32-vCPU self-hosted build runner, Gateway watch, channel tests, and the core support-boundary shard start together inside `build-artifacts` after `dist/` and `dist-runtime/` are already built. GitHub-hosted fallback runs keep Gateway watch serial so low-core contention cannot consume its readiness deadline. Full Node builds then verify Discord component attachment filenames through a serial public Gateway message action, checking the built revision and retaining the named-test JSON result; frozen targets that predate the case explicitly report unavailable proof. Both paths then run the two built TUI PTY artifact canaries alone.
 
+The `PR_EXEMPT_RUNTIME_TEST_FILES` inventory in
+`scripts/lib/ci-proof-test-inventory.mts` keeps measured slow integration tests
+out of unrelated canonical PRs and exact-head PR fallback dispatches. Hourly
+`main`, ordinary manual CI, and Full Release Validation's `normal_ci` child
+select these complete files through their canonical owners. The inventory also
+admits its tooling files on hourly `main` without enabling unrelated maintainer
+tooling. Direct test edits and subject changes opt files back into precise and
+compact PR plans through the existing changed-target owner and import graph,
+including subjects reached through fixtures. Missing/deleted tests and broad
+unresolved inputs alone do not enable the inventory. Reduced groups retain
+distinct timing identities and the original configs, prerequisites, process
+isolation, worker limits, cases, and assertions. This tier is separate from the
+older release-only inventories, whose decisions remain unchanged.
+Hourly GitHub-hosted plans reuse the measured serial tooling packer for the
+retained subset. Complete file estimates use the hosted cost scale; Blacksmith
+process observations stay with Blacksmith. Packing preserves each child group,
+its two-worker limit, and its timeout while keeping the complete Node matrix
+within the existing 70-row cap. Explicit source watches live in
+`scripts/lib/ci-policy-test-watch.mts`, including dynamically launched workers
+and scripts that the import graph cannot discover.
+
 Explicit policy watches retain their matching tests in PR CI even when the broader
 tooling or runtime suite is deferred. This includes wrapper dependency checks,
 Gateway client callsite scans, and upgrade-survivor package checks. Unrelated
