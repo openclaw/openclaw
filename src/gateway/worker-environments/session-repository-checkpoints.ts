@@ -105,12 +105,26 @@ async function refObjects(
 }
 
 export async function readSessionRepositoryArtifacts(
-  params: CheckpointSource & { previewPath?: string; assertCurrent: () => void },
+  params: CheckpointSource & {
+    previewPath?: string;
+    maxPreviewBytes?: number;
+    assertCurrent: () => void;
+  },
 ): Promise<StagedWorkerArtifactInventory> {
   const { workspace, root } = owner(params);
   const ref = checkpointRef(workspace, params.checkpointRef);
   const snapshot = await runGitWorkerOperation(
-    { type: "workspace.artifacts", input: { root, ref, previewPath: params.previewPath } },
+    {
+      type: "workspace.artifacts",
+      input: {
+        root,
+        ref,
+        previewPath: params.previewPath,
+        ...(params.maxPreviewBytes === undefined
+          ? {}
+          : { maxPreviewBytes: params.maxPreviewBytes }),
+      },
+    },
     { assertCurrent: params.assertCurrent },
   );
   assertBase(workspace, snapshot);

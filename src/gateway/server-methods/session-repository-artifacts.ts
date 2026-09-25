@@ -8,14 +8,22 @@ import type {
 import { readSessionRepositoryArtifacts } from "../worker-environments/session-repository-checkpoints.js";
 import type { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
 import { populateSessionFilePreview } from "./workspace-files.js";
-import { normalizeRelativePath, sortWorkspaceEntries } from "./workspace-fs.js";
+import {
+  normalizeRelativePath,
+  sortWorkspaceEntries,
+  WORKSPACE_PREVIEW_MAX_BYTES,
+} from "./workspace-fs.js";
 
 type StoredRepository = Extract<
   ReturnType<typeof resolveRepositoryWorkspaceAccess>,
   { kind: "stored" }
 >;
 
-async function readArtifacts(access: StoredRepository, previewPath?: string) {
+async function readArtifacts(
+  access: StoredRepository,
+  previewPath?: string,
+  maxPreviewBytes?: number,
+) {
   access.assertCurrent();
   if (!access.repository.checkpointRef) {
     return undefined;
@@ -25,6 +33,7 @@ async function readArtifacts(access: StoredRepository, previewPath?: string) {
     workspaceId: access.repository.workspaceId,
     checkpointRef: access.repository.checkpointRef,
     previewPath,
+    ...(maxPreviewBytes === undefined ? {} : { maxPreviewBytes }),
     assertCurrent: access.assertCurrent,
   });
   access.assertCurrent();
@@ -118,9 +127,10 @@ export async function listRepositoryArtifacts(
 export async function getRepositoryArtifact(
   access: StoredRepository,
   requestedPath: string,
+  maxPreviewBytes: number = WORKSPACE_PREVIEW_MAX_BYTES,
 ): Promise<{ file?: SessionFileEntry }> {
   const selected = artifactPath(requestedPath);
-  const snapshot = await readArtifacts(access, selected);
+  const snapshot = await readArtifacts(access, selected, maxPreviewBytes);
   const entry = snapshot?.changedEntries.find((candidate) => candidate.path === selected);
   if (!snapshot || entry?.type !== "file") {
     throw new Error(
@@ -128,7 +138,7 @@ export async function getRepositoryArtifact(
     );
   }
   const file = fileEntry(entry.path, entry.size);
-  if (snapshot.preview !== undefined) {
+  if (entry.size <= maxPreviewBytes && snapshot.preview !== undefined) {
     const content = Buffer.from(
       snapshot.preview.buffer,
       snapshot.preview.byteOffset,

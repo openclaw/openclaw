@@ -320,6 +320,36 @@ describe("repository workspace result ownership", () => {
   );
 
   it.each(["worker-turn", "remote-exec"] as const)(
+    "honors a raised maxPreviewBytes when collecting a staged %s artifact above the default cap",
+    async (executionMode) => {
+      const f = await fixture(executionMode);
+      const big = "x".repeat(300 * 1024);
+      await f.mutations.mutate({
+        ...sessionTarget,
+        assertCurrent: () => {},
+        mutate: async (assertCurrent) => {
+          assertCurrent();
+          await fs.writeFile(path.join(f.remote, "big-artifact.txt"), big);
+          return { changed: true, value: "saved" };
+        },
+      });
+      const capped = await readSessionRepositoryArtifacts({
+        workspaceId: f.repository.workspaceId,
+        previewPath: "big-artifact.txt",
+        assertCurrent: () => {},
+      });
+      expect(capped.preview).toBeUndefined();
+      const raised = await readSessionRepositoryArtifacts({
+        workspaceId: f.repository.workspaceId,
+        previewPath: "big-artifact.txt",
+        maxPreviewBytes: 512 * 1024,
+        assertCurrent: () => {},
+      });
+      expect(raised.preview).toEqual(new Uint8Array(Buffer.from(big)));
+    },
+  );
+
+  it.each(["worker-turn", "remote-exec"] as const)(
     "recovers unknown %s editor writes through pending result custody",
     async (executionMode) => {
       const f = await fixture(executionMode);

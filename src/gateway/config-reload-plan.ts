@@ -182,6 +182,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.auth.allowTailscale",
       "gateway.auth.identityScopes",
       "gateway.auth.trustedProxy",
+      "gateway.workspacePreviewMaxBytes",
       "diagnostics.enabled",
       "discovery.mdns.mode",
       "mcp.apps.sandboxOrigin",

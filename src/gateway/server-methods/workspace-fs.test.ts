@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as fsSafe from "../../infra/fs-safe.js";
-import { readWorkspaceFilePrefix, updateWorkspaceFile } from "./workspace-fs.js";
+import {
+  readWorkspaceFilePrefix,
+  resolveWorkspacePreviewMaxBytes,
+  updateWorkspaceFile,
+} from "./workspace-fs.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -49,6 +53,19 @@ it("preserves the workspace file when editor authority expires during write prep
   expect(await readFile(filePath, "utf8")).toBe(original);
 });
 
+describe("resolveWorkspacePreviewMaxBytes", () => {
+  it("falls back to the shared default without configured value", () => {
+    expect(resolveWorkspacePreviewMaxBytes(undefined)).toBe(256 * 1024);
+    expect(resolveWorkspacePreviewMaxBytes({ gateway: {} })).toBe(256 * 1024);
+  });
+
+  it("returns the configured cap", () => {
+    expect(
+      resolveWorkspacePreviewMaxBytes({ gateway: { workspacePreviewMaxBytes: 1024 * 1024 } }),
+    ).toBe(1024 * 1024);
+  });
+});
+
 type FileHandleRead = (
   target: Uint8Array,
   offset: number,
@@ -72,15 +89,11 @@ describe("readWorkspaceFilePrefix", () => {
 
     const fileHandlePrototype = await getFileHandleRead(filePath);
     const originalRead = fileHandlePrototype.read;
-    vi.spyOn(fileHandlePrototype, "read").mockImplementation(async function (
-      this: unknown,
-      target,
-      offset,
-      length,
-      position,
-    ) {
-      return await originalRead.call(this, target, offset, Math.min(length, 1), position);
-    });
+    vi.spyOn(fileHandlePrototype, "read").mockImplementation(
+      async function (this: unknown, target, offset, length, position) {
+        return await originalRead.call(this, target, offset, Math.min(length, 1), position);
+      },
+    );
 
     const result = await readWorkspaceFilePrefix(tempDir, "notes.txt", 100);
 
@@ -97,19 +110,15 @@ describe("readWorkspaceFilePrefix", () => {
     const fileHandlePrototype = await getFileHandleRead(filePath);
     const originalRead = fileHandlePrototype.read;
     let readCount = 0;
-    vi.spyOn(fileHandlePrototype, "read").mockImplementation(async function (
-      this: unknown,
-      target,
-      offset,
-      length,
-      position,
-    ) {
-      readCount += 1;
-      if (readCount === 2) {
-        return { bytesRead: 0, buffer: target };
-      }
-      return await originalRead.call(this, target, offset, Math.min(length, 3), position);
-    });
+    vi.spyOn(fileHandlePrototype, "read").mockImplementation(
+      async function (this: unknown, target, offset, length, position) {
+        readCount += 1;
+        if (readCount === 2) {
+          return { bytesRead: 0, buffer: target };
+        }
+        return await originalRead.call(this, target, offset, Math.min(length, 3), position);
+      },
+    );
 
     const result = await readWorkspaceFilePrefix(tempDir, "notes.txt", 100);
 
