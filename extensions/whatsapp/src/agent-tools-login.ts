@@ -111,7 +111,7 @@ export function createWhatsAppLoginTool(
               text: result.message,
             },
           ],
-          details: { qr: false },
+          details: { qr: false, ...(result.code ? { code: result.code } : {}) },
         };
       }
 

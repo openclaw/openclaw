@@ -35,6 +35,9 @@ type StartWebLoginWithQrResult = {
   connected?: boolean;
   code?: typeof WHATSAPP_AUTH_UNSTABLE_CODE;
 };
+type PreflightWebLoginWithQrStartResult = Omit<StartWebLoginWithQrResult, "qrDataUrl"> & {
+  qrDataUrl?: never;
+};
 
 type ActiveLogin = {
   accountId: string;
@@ -65,6 +68,14 @@ type LoginQrRaceResult =
   | { outcome: "connected" }
   | { outcome: "failed"; message: string };
 
+type WebLoginStartParams = {
+  verbose?: boolean;
+  timeoutMs?: number;
+  force?: boolean;
+  accountId?: string;
+  runtime?: RuntimeEnv;
+  beforeCredentialPersistence?: () => Promise<void>;
+};
 const ACTIVE_LOGIN_TTL_MS = 3 * 60_000;
 const MAX_QR_RENDER_CHASES = 10;
 const activeLogins = new Map<string, ActiveLogin>();
@@ -84,6 +95,24 @@ async function resetActiveLogin(accountId: string, reason?: string) {
 
 function isLoginFresh(login: ActiveLogin) {
   return Date.now() - login.startedAt < ACTIVE_LOGIN_TTL_MS;
+}
+
+function readActiveQrResult(accountId: string, force = false): StartWebLoginWithQrResult | null {
+  const existing = activeLogins.get(accountId);
+  if (
+    force ||
+    !existing ||
+    !isLoginFresh(existing) ||
+    existing.connected ||
+    existing.error !== undefined ||
+    !existing.qrDataUrl
+  ) {
+    return null;
+  }
+  return {
+    qrDataUrl: existing.qrDataUrl,
+    message: "QR already active. Scan it in WhatsApp → Linked Devices.",
+  };
 }
 
 function resetQrUpdateSignal(login: ActiveLogin) {
@@ -281,14 +310,7 @@ async function waitForQrOrRecoveredLogin(params: {
 }
 
 export async function startWebLoginWithQr(
-  opts: {
-    verbose?: boolean;
-    timeoutMs?: number;
-    force?: boolean;
-    accountId?: string;
-    runtime?: RuntimeEnv;
-    beforeCredentialPersistence?: () => Promise<void>;
-  } = {},
+  opts: WebLoginStartParams = {},
 ): Promise<StartWebLoginWithQrResult> {
   const runtime = opts.runtime ?? defaultRuntime;
   const cfg = getRuntimeConfig();
@@ -329,12 +351,9 @@ export async function startWebLoginWithQr(
     }
   }
 
-  const existing = activeLogins.get(account.accountId);
-  if (existing && isLoginFresh(existing) && existing.qrDataUrl) {
-    return {
-      qrDataUrl: existing.qrDataUrl,
-      message: "QR already active. Scan it in WhatsApp → Linked Devices.",
-    };
+  const activeQr = readActiveQrResult(account.accountId, Boolean(opts.force));
+  if (activeQr) {
+    return activeQr;
   }
 
   await resetActiveLogin(account.accountId);
@@ -494,6 +513,28 @@ export async function startWebLoginWithQr(
     qrDataUrl,
     message: "Scan this QR in WhatsApp → Linked Devices.",
   };
+}
+
+export async function preflightWebLoginWithQrStart(
+  opts: WebLoginStartParams = {},
+): Promise<PreflightWebLoginWithQrStartResult | null> {
+  const cfg = getRuntimeConfig();
+  const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
+  const authState = await readWebAuthExistsForDecision(account.authDir);
+  if (authState.outcome === "unstable") {
+    return {
+      code: WHATSAPP_AUTH_UNSTABLE_CODE,
+      message: "WhatsApp auth state is still stabilizing. Retry login in a moment.",
+    };
+  }
+  if (authState.exists && !opts.force && getActiveWebListener(account.accountId)) {
+    const selfId = readWebSelfId(account.authDir);
+    const who = selfId.e164 ?? selfId.jid ?? "unknown";
+    return {
+      message: `WhatsApp is already linked (${who}). Say “relink” if you want a fresh QR.`,
+    };
+  }
+  return null;
 }
 
 export async function waitForWebLogin(
