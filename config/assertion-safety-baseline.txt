@@ -2252,7 +2252,6 @@ src/commands/doctor/shared/legacy-web-tools-migrate.ts	1
 src/commands/doctor/shared/open-policy-allowfrom.ts	2
 src/commands/doctor/shared/plugin-runtime-symlinks.ts	1
 src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	1
-src/commands/doctor/shared/pristine-startup-state.ts	3
 src/commands/doctor/shared/stale-agent-model-ref-repair.ts	3
 src/commands/doctor/shared/stale-auth-order-store.ts	3
 src/commands/doctor/shared/stale-auth-order.ts	4
@@ -2698,7 +2697,7 @@ src/infra/diagnostic-semantic-run-progress.ts	1
 src/infra/diagnostic-trace-context.ts	2
 src/infra/diagnostic-trace-propagation.ts	3
 src/infra/directory-durability.ts	3
-src/infra/exec-approval-channel-runtime.ts	9
+src/infra/exec-approval-channel-runtime.ts	5
 src/infra/exec-approval-policy-snapshot.ts	2
 src/infra/exec-approval-reply.ts	2
 src/infra/exec-approvals-allowlist.ts	7
@@ -2709,7 +2708,7 @@ src/infra/exec-argv-analysis.ts	1
 src/infra/exec-host.ts	3
 src/infra/exec-safe-bin-policy-profiles.ts	1
 src/infra/fetch-headers.ts	4
-src/infra/fetch.ts	7
+src/infra/fetch.ts	5
 src/infra/file-lock-manager.ts	1
 src/infra/file-lock-sync.ts	1
 src/infra/fs-safe-remove.ts	4
@@ -2721,7 +2720,6 @@ src/infra/heartbeat-outcome-store.ts	1
 src/infra/heartbeat-runner-config.ts	1
 src/infra/heartbeat-visibility.ts	1
 src/infra/install-package-dir.ts	2
-src/infra/install-source-utils.ts	2
 src/infra/json-utf8-bytes.ts	4
 src/infra/kysely-sync-cache-state.ts	1
 src/infra/kysely-sync.ts	7
@@ -2763,7 +2761,7 @@ src/infra/package-dist-inventory.ts	2
 src/infra/pairing-files.ts	1
 src/infra/ports.ts	2
 src/infra/private-mode.ts	2
-src/infra/provider-usage.auth.ts	2
+src/infra/provider-usage.auth.ts	1
 src/infra/provider-usage.fetch.codex.ts	1
 src/infra/provider-usage.fetch.deepseek.ts	1
 src/infra/provider-usage.fetch.minimax.ts	1
@@ -2781,9 +2779,9 @@ src/infra/restart-stale-pids.ts	3
 src/infra/retry-policy.ts	3
 src/infra/session-cost-usage-cache.sqlite.ts	1
 src/infra/session-cost-usage-collection.ts	3
-src/infra/session-cost-usage-pricing.ts	6
+src/infra/session-cost-usage-pricing.ts	4
 src/infra/session-cost-usage-reporting.ts	5
-src/infra/session-sqlite-migration-readers.ts	5
+src/infra/session-sqlite-migration-readers.ts	2
 src/infra/shell-env.ts	1
 src/infra/sqlite-coordinator.ts	2
 src/infra/sqlite-file-generation.ts	9
@@ -2795,7 +2793,6 @@ src/infra/sqlite-schema-contract.ts	8
 src/infra/sqlite-snapshot.ts	2
 src/infra/sqlite-strict.ts	7
 src/infra/sqlite-wal.ts	4
-src/infra/startup-migration-checkpoint.ts	1
 src/infra/state-migrations.acp-replay.ts	1
 src/infra/state-migrations.audit-backup.ts	1
 src/infra/state-migrations.audit-records.ts	4
