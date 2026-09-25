@@ -174,6 +174,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/claws/bootstrap.test.ts",
   "src/claws/doctor.test.ts",
   "src/claws/export.test.ts",
+  "src/claws/lifecycle-adopt-remove.test.ts",
+  "src/cli/claws-cli-adopt-resume.test.ts",
   "src/claws/lifecycle-remove-approvals.test.ts",
   "src/claws/lifecycle-remove-ownership.test.ts",
   "src/claws/lifecycle-state-mcp.test.ts",

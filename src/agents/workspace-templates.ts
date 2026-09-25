@@ -1,11 +1,15 @@
 /**
- * Workspace template directory discovery.
- * Resolves packaged documentation templates for source and installed runtimes.
+ * Workspace template discovery and loading.
+ * Resolves packaged templates and caches their frontmatter-free contents.
  */
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { pathExists } from "../utils.js";
+
+const workspaceTemplateCache = new Map<string, Promise<string>>();
 
 const FALLBACK_DOCS_TEMPLATE_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -36,4 +40,45 @@ export async function resolveWorkspaceTemplateSearchDirs(opts?: {
     }
   }
   return dirs;
+}
+
+function stripFrontMatter(content: string): string {
+  return extractFrontmatterBlock(content)?.body.replace(/^\s+/, "") ?? content;
+}
+
+/** Loads a packaged template, sharing concurrent reads and evicting failed loads. */
+export async function loadWorkspaceTemplate(name: string): Promise<string> {
+  const cached = workspaceTemplateCache.get(name);
+  if (cached) {
+    return cached;
+  }
+
+  const pending = (async () => {
+    const templateDirs = await resolveWorkspaceTemplateSearchDirs();
+    const triedPaths: string[] = [];
+    for (const templateDir of templateDirs) {
+      const templatePath = path.join(templateDir, name);
+      triedPaths.push(templatePath);
+      try {
+        const content = await fs.readFile(templatePath, "utf-8");
+        return stripFrontMatter(content);
+      } catch (error) {
+        // SAFETY: Node filesystem errors expose code; other failures lack ENOENT and are rethrown.
+        if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+          throw error;
+        }
+      }
+    }
+    throw new Error(
+      `Missing workspace template: ${name} (${triedPaths.join(", ")}). Ensure workspace templates are packaged.`,
+    );
+  })();
+
+  workspaceTemplateCache.set(name, pending);
+  try {
+    return await pending;
+  } catch (error) {
+    workspaceTemplateCache.delete(name);
+    throw error;
+  }
 }

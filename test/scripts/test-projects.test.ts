@@ -2743,6 +2743,8 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it.each([
     "src/agents/command/session-store.test.ts",
+    "src/claws/lifecycle-adopt-remove.test.ts",
+    "src/cli/claws-cli-adopt-resume.test.ts",
     "src/state/openclaw-state-db.test.ts",
     "src/worker/worker.runtime.test.ts",
   ])("routes native shared-state consumer %s exactly once to its broker owner", (testFile) => {

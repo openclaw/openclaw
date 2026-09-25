@@ -1,5 +1,6 @@
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as fsSafe from "../infra/fs-safe.js";
@@ -29,6 +30,80 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { addFixture } = createClawRemoveTestFixtures(tempDirs, () => state);
 
 describe("Claw workspace deletion ownership", () => {
+  it.each(["SOUL.md", "BOOTSTRAP.md"])(
+    "does not stage %s after deletion takeover during native admission",
+    async (filename) => {
+      const current = await addFixture({
+        withFile: filename === "SOUL.md",
+        withBootstrap: filename === "BOOTSTRAP.md",
+      });
+      const workspacePath = await realpath(current.plan.agent.workspace);
+      const config = current.getConfig();
+      const plan = await buildClawRemovePlan("worker", { env: current.env, config });
+      const originalRoot = fsSafe.root;
+      let replaced = false;
+      const successfulStagingMoves: string[] = [];
+      const rootSpy = vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+        const workspace = await originalRoot(...args);
+        if (workspace.rootReal === workspacePath) {
+          const move = workspace.move.bind(workspace);
+          workspace.move = async (from, to, options) => {
+            await move(from, to, options);
+            // Observe the real move before any staged read or compensating restore.
+            if (from === filename) {
+              successfulStagingMoves.push(to);
+            }
+          };
+        }
+        return workspace;
+      });
+      __setFsSafeTestHooksForTest({
+        beforeRootFallbackMutation: (operation, target) => {
+          if (
+            operation !== "move" ||
+            !target.startsWith(join(workspacePath, `${filename}.openclaw-claw-remove-`))
+          ) {
+            return;
+          }
+          const entry = readAgentDeletionJournal("worker", { env: current.env });
+          if (!entry) {
+            throw new Error("Removal reached native admission without a deletion owner");
+          }
+          beginAgentDeletionJournal({ ...entry, operationId: "replacement" }, { env: current.env });
+          replaced = true;
+        },
+      });
+      try {
+        await expect(
+          applyClawRemovePlan(plan, {
+            env: current.env,
+            config,
+            consentPlanIntegrity: plan.planIntegrity,
+            monitorGateway: quiescentClawMonitorGateway,
+          }),
+        ).resolves.toMatchObject({
+          status: "partial",
+          agentRemoved: true,
+          error: { message: expect.stringContaining("no longer owns") },
+        });
+        expect(replaced).toBe(true);
+        expect(successfulStagingMoves, "revoked removal must not stage a workspace file").toEqual(
+          [],
+        );
+        await expect(readFile(join(workspacePath, filename), "utf8")).resolves.toBe("managed\n");
+        expect(
+          (await readdir(workspacePath)).filter((name) => name.includes(".openclaw-claw-remove-")),
+        ).toEqual([]);
+        expect(readAgentDeletionJournal("worker", { env: current.env })?.operationId).toBe(
+          "replacement",
+        );
+      } finally {
+        __setFsSafeTestHooksForTest();
+        rootSpy.mockRestore();
+      }
+    },
+  );
+
   it.each([
     ["SOUL.md", "discovery"],
     ["SOUL.md", "staged read"],

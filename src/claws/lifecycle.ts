@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { lstat, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { relative, resolve } from "node:path";
 import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { stableStringify } from "@openclaw/normalization-core";
+import { workspacePathsOverlap } from "../agents/agent-delete-safety.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
@@ -15,10 +16,16 @@ import {
   findClawExtensionPackageCollisions,
   planClawExtensions,
 } from "./application-plan.js";
+import {
+  planWorkspaceAdoption,
+  planWorkspaceAdoptionTargets,
+  workspaceAdoptionCapabilityChange,
+  type WorkspaceAdoptionOwnership,
+} from "./lifecycle-adopt-plan.js";
+import { planClawAgent } from "./lifecycle-agent-plan.js";
 import { digestClawMcpServer } from "./mcp.js";
 import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
-import { materializeClawToolProfile } from "./tool-profile-consent.js";
 import {
   CLAW_ADD_PLAN_SCHEMA_VERSION,
   CLAW_BOOTSTRAP_FILE_NAMES,
@@ -36,13 +43,13 @@ import {
   type ClawWorkspaceSourceSnapshot,
 } from "./types.js";
 
-const AGENT_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
-
 export type ClawAddPlanContext = {
   config?: OpenClawConfig;
   agentId?: string;
   workspace?: string;
   resumableWorkspace?: string;
+  resumableWorkspaceOwnership?: WorkspaceAdoptionOwnership;
+  adoptExistingWorkspace?: boolean;
   existingAgentIds?: Iterable<string>;
   existingWorkspacePaths?: Iterable<string>;
   existingMcpServerNames?: Iterable<string>;
@@ -208,81 +215,49 @@ export async function buildClawAddPlan(params: {
   const capabilityChanges: ClawAddCapabilityChange[] = [];
   const readinessRequirements: ClawLocalPrerequisite[] = [];
 
-  if (!AGENT_ID_PATTERN.test(finalId)) {
-    blockers.push(
-      blocker(
-        "invalid_agent_id",
-        "$.agent.id",
-        `Final agent id ${JSON.stringify(finalId)} is not a valid portable agent id.`,
-      ),
-    );
-  }
-  const existingAgentIds = new Set(context.existingAgentIds ?? []);
-  const agentBlocked = existingAgentIds.has(finalId);
-  const openClawAgentSettings = params.openClawProfile?.agent ?? {};
-  const persistedOpenClawAgentSettings = params.reconstructLegacyDynamicToolProfilePlan
-    ? openClawAgentSettings
-    : materializeClawToolProfile(openClawAgentSettings);
-  const agentConfig: ClawAddPlan["agent"]["config"] = {
-    ...params.manifest.agent,
-    ...persistedOpenClawAgentSettings,
-    id: finalId,
+  const agentPlan = planClawAgent({
+    finalId,
     workspace,
-  };
-  if (agentBlocked) {
-    blockers.push(
-      blocker(
-        "agent_id_collision",
-        "$.agent.id",
-        `Agent id ${JSON.stringify(finalId)} already exists; Claws never merge into existing agents.`,
-      ),
-    );
-  }
-  actions.push({
-    kind: "agent",
-    id: finalId,
-    action: "create",
-    target: `agents.entries[${JSON.stringify(finalId)}]`,
-    details: { ...agentConfig, expectedState: "absent" },
-    blocked: agentBlocked || !AGENT_ID_PATTERN.test(finalId),
+    manifestAgent: params.manifest.agent,
+    openClawProfile: params.openClawProfile,
+    reconstructLegacyDynamicToolProfilePlan: params.reconstructLegacyDynamicToolProfilePlan,
+    existingAgentIds: context.existingAgentIds,
   });
+  const openClawAgentSettings = params.openClawProfile?.agent ?? {};
+  const agentConfig = agentPlan.config;
+  blockers.push(...agentPlan.blockers);
+  actions.push(agentPlan.action);
   const agentCapability = clawAgentCapabilityChange(finalId, openClawAgentSettings);
   if (agentCapability) {
     capabilityChanges.push(agentCapability);
   }
 
-  const configuredWorkspacePaths = new Set(
-    [...(context.existingWorkspacePaths ?? [])].map((path) => canonicalWorkspacePath(path)),
+  // Ancestor/descendant overlap, not just an exact match: adopting a subdirectory of another
+  // agent's configured workspace (or a directory that contains one) is the same collision
+  // applyClawAddPlan's commit-time findOverlappingWorkspaceAgentIds check guards against.
+  const configuredWorkspacePaths = [...(context.existingWorkspacePaths ?? [])];
+  const configuredWorkspaceConflict = configuredWorkspacePaths.some((path) =>
+    workspacePathsOverlap(workspace, path),
   );
-  const configuredWorkspaceConflict = configuredWorkspacePaths.has(workspace);
-  const workspaceExistsOnDisk = await lstat(workspace)
-    .then(() => true)
-    .catch(() => false);
   const resumableWorkspace = context.resumableWorkspace
     ? canonicalWorkspacePath(context.resumableWorkspace)
     : undefined;
-  const workspaceBlocked =
-    configuredWorkspaceConflict || (workspaceExistsOnDisk && resumableWorkspace !== workspace);
-  if (workspaceBlocked) {
-    blockers.push(
-      blocker(
-        "workspace_collision",
-        "$.workspace",
-        `Workspace ${JSON.stringify(workspace)} already exists; a Claw requires a new workspace.`,
-      ),
+  const workspacePlan = await planWorkspaceAdoption({
+    agentId: finalId,
+    workspace,
+    requested: context.adoptExistingWorkspace === true,
+    configuredWorkspaceConflict,
+    resumableWorkspace,
+  });
+  const workspaceAdoption = workspacePlan.adopted;
+  const workspaceBlocked = workspacePlan.action.blocked;
+  blockers.push(...workspacePlan.blockers);
+  actions.push(workspacePlan.action);
+  if (workspaceAdoption) {
+    capabilityChanges.push(
+      clawAddCapabilityChange(workspaceAdoptionCapabilityChange(finalId, workspace)),
     );
   }
-  actions.push({
-    kind: "workspace",
-    id: finalId,
-    action: "create",
-    target: workspace,
-    details: { expectedState: "absent" },
-    blocked: workspaceBlocked,
-    ...(workspaceBlocked
-      ? { reason: `Workspace ${JSON.stringify(workspace)} already exists.` }
-      : {}),
-  });
 
   if (params.packageBootstrap && params.includePackageBootstrap !== false) {
     actions.push({
@@ -443,6 +418,18 @@ export async function buildClawAddPlan(params: {
         blockers.push(diagnostic);
       }
     }
+  }
+
+  if (workspaceAdoption) {
+    blockers.push(
+      ...(await planWorkspaceAdoptionTargets({
+        workspace,
+        pendingFiles: pendingWorkspaceFiles,
+        packageBootstrap: actions.find((action) => action.kind === "bootstrap"),
+        ownership:
+          resumableWorkspace === workspace ? context.resumableWorkspaceOwnership : undefined,
+      })),
+    );
   }
 
   for (const [index, pkg] of params.manifest.packages.entries()) {
@@ -634,7 +621,7 @@ export async function buildClawAddPlan(params: {
   const notices = clawAgentConfigurationNotices(
     openClawAgentSettings,
     context.config ?? {},
-    new Set([...existingAgentIds, finalId]),
+    new Set([...(context.existingAgentIds ?? []), finalId]),
   );
   const planIntegrity = `sha256:${createHash("sha256")
     .update(

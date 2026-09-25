@@ -1,12 +1,11 @@
 // Proves a fresh dev gateway can replace the synthetic implicit roster through real config IO.
-import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { injectPartialPublicationFailure } from "../../agents/workspace-bootstrap-publish.test-support.js";
 import { resetConfigRuntimeState } from "../../config/config.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { nodeFilePath } from "../../test-utils/node-file-path.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 
 describe("ensureDevGatewayConfig integration", () => {
@@ -53,7 +52,6 @@ describe("ensureDevGatewayConfig integration", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     const workspace = path.join(root, "workspace");
     const devWorkspace = `${workspace}-dev`;
-    const resolvedDevWorkspace = path.join(await fs.realpath(root), path.basename(devWorkspace));
 
     await withEnvAsync(
       {
@@ -63,42 +61,19 @@ describe("ensureDevGatewayConfig integration", () => {
       },
       async () => {
         resetConfigRuntimeState();
-        const realOpen = fs.open.bind(fs);
-        let injected = false;
-        const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          const handle = await realOpen(...args);
-          const rawPath = nodeFilePath(args[0]);
-          const exclusiveCreate =
-            typeof args[1] === "number" &&
-            (args[1] & constants.O_CREAT) !== 0 &&
-            (args[1] & constants.O_EXCL) !== 0;
-          if (
-            !injected &&
-            rawPath &&
-            path.dirname(path.resolve(rawPath)) === resolvedDevWorkspace &&
-            exclusiveCreate
-          ) {
-            vi.spyOn(handle, "write").mockImplementationOnce(async () => {
-              injected = true;
-              await handle.writeFile("# PARTIAL\n");
-              throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
-            });
-          }
-          return handle;
-        });
+        await fs.mkdir(devWorkspace, { recursive: true });
+        const injection = await injectPartialPublicationFailure(devWorkspace, "AGENTS.md");
 
         try {
-          await expect(
-            withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () => ensureDevGatewayConfig({})),
-          ).rejects.toMatchObject({ cause: { code: "ENOSPC" } });
-          expect(injected).toBe(true);
+          await expect(ensureDevGatewayConfig({})).rejects.toMatchObject({ code: "ENOSPC" });
+          injection.assertInjected();
           await expect(fs.access(configPath)).rejects.toMatchObject({ code: "ENOENT" });
           await expect(fs.access(path.join(devWorkspace, "AGENTS.md"))).rejects.toMatchObject({
             code: "ENOENT",
           });
           expect(await fs.readdir(devWorkspace)).toEqual([]);
         } finally {
-          openSpy.mockRestore();
+          injection.restore();
         }
 
         await ensureDevGatewayConfig({});

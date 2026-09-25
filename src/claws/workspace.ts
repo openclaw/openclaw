@@ -23,6 +23,7 @@ import {
 import { clawContainedRelativePath } from "./path-containment.js";
 import { parseClawMarkdown } from "./reader.js";
 import type { ClawAddPlan, ClawAddPlanAction, ClawDiagnostic } from "./types.js";
+import { CLAW_ADOPTED_WORKSPACE_MARKER_PATH } from "./workspace-origin.js";
 
 export const CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION =
   "openclaw.clawWorkspaceFileRecord.v1" as const;
@@ -291,6 +292,7 @@ export function readClawWorkspaceFiles(
         "=",
         parameter((value) => value),
       )
+      .where("target_path", "<>", CLAW_ADOPTED_WORKSPACE_MARKER_PATH)
       .orderBy("target_path"),
   );
   const rows =
@@ -307,12 +309,21 @@ export function readAllClawWorkspaceFiles(
   if (!tableExists(db, "claw_workspace_files")) {
     return [];
   }
-  const compiled = selectWorkspaceFiles(db).orderBy("agent_id").orderBy("target_path").compile();
+  const { compiled, bind } = compileSqliteQueryBindings<string, WorkspaceFileRow>((parameter) =>
+    selectWorkspaceFiles(db)
+      .where(
+        "target_path",
+        "<>",
+        parameter((value) => value),
+      )
+      .orderBy("agent_id")
+      .orderBy("target_path"),
+  );
   const rows =
     db /* sqlite-allow-raw: preserve native orphan inventory errors without a write transaction. */
       .prepare(compiled.sql)
       // SAFETY: The canonical table and shared explicit projection provide this generated row shape.
-      .all() as WorkspaceFileRow[];
+      .all(...bind(CLAW_ADOPTED_WORKSPACE_MARKER_PATH)) as WorkspaceFileRow[];
   // Orphan inventory reports the stored version; per-agent inventory uses the current constant.
   return rows.map((row) =>
     rowToWorkspaceFile(row, row.schema_version as PersistedClawWorkspaceFile["schemaVersion"]),
@@ -419,6 +430,37 @@ export async function createClawWorkspaceFiles(
       }
       if (await workspace.exists(targetRelative)) {
         if (!existingRecord || existingRecord.status === "failed") {
+          if (action.action === "adopt") {
+            const adoptedTarget = await workspace.read(targetRelative, {
+              hardlinks: "reject",
+              maxBytes: MAX_CLAW_WORKSPACE_FILE_BYTES,
+              symlinks: "reject",
+            });
+            if (contentDigest(adoptedTarget.buffer) !== expectedRecord.contentDigest) {
+              throw new ClawWorkspaceWriteError(
+                [
+                  diagnostic(
+                    action,
+                    "workspace_file_conflict",
+                    `Adoptable workspace destination ${JSON.stringify(targetRelative)} changed after planning; adoption never overwrites existing files.`,
+                  ),
+                ],
+                createdFiles,
+              );
+            }
+            const adoptedRecord = existingRecord ?? expectedRecord;
+            if (existingRecord) {
+              const previousStatus = existingRecord.status;
+              existingRecord.status = "complete";
+              existingRecord.updatedAtMs = nowMs;
+              updateWorkspaceFileStatus(existingRecord, [previousStatus], options);
+            } else {
+              adoptedRecord.status = "complete";
+              persistWorkspaceFile(adoptedRecord, options);
+            }
+            createdFiles.push(adoptedRecord);
+            continue;
+          }
           throw new ClawWorkspaceWriteError(
             [
               diagnostic(
@@ -453,6 +495,18 @@ export async function createClawWorkspaceFiles(
         updateWorkspaceFileStatus(existingRecord, [previousStatus], options);
         createdFiles.push(existingRecord);
         continue;
+      }
+      if (action.action === "adopt") {
+        throw new ClawWorkspaceWriteError(
+          [
+            diagnostic(
+              action,
+              "workspace_file_conflict",
+              `Adoptable workspace destination ${JSON.stringify(targetRelative)} disappeared after planning; adoption never writes missing files.`,
+            ),
+          ],
+          createdFiles,
+        );
       }
       const record = existingRecord ?? expectedRecord;
       if (existingRecord) {

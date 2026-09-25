@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -50,8 +49,6 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { executeSystemAgentOperation } from "../system-agent/operations-execute.js";
 import { createSystemAgentTestRuntime } from "../system-agent/system-agent.runtime.test-support.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { nodeFilePath } from "../test-utils/node-file-path.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -60,6 +57,7 @@ import { createAgent } from "./agent-create.js";
 import { isAgentDeletionBlocked } from "./agent-lifecycle-registry.js";
 import { resolveSharedAuthStorePath } from "./auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
+import { interceptBootstrapStageWrites } from "./workspace-bootstrap-publish.test-support.js";
 import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
 import {
   DEFAULT_IDENTITY_FILENAME,
@@ -498,14 +496,10 @@ it.each(["workspace", "workspace-write", "config"] as const)(
     const workspace = state.path("prepared-workspace");
     const stagedFile = state.path("staged-effect");
     const originalConfig = await fs.readFile(state.configPath, "utf8");
-    const pause = async (pausedPhase: typeof phase) => {
-      entered.resolve(pausedPhase);
+    const pause = async (at: typeof phase) => {
+      entered.resolve(at);
       await resume.promise;
     };
-    const nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
-    if (phase === "workspace-write") {
-      setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
-    }
     const realAccess = fs.access.bind(fs);
     const access = vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
       if (phase === "workspace" && file === path.join(workspace, "AGENTS.md")) {
@@ -513,31 +507,16 @@ it.each(["workspace", "workspace-write", "config"] as const)(
       }
       return await realAccess(file, mode);
     });
-    const realOpen = fs.open.bind(fs);
-    const restoreWrites: Array<() => void> = [];
-    let writePaused = false;
-    const open = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
-      const handle = await realOpen(file, flags, mode);
-      const filePath = nodeFilePath(file);
+    const restoreWrite = interceptBootstrapStageWrites(async (filePath, write) => {
+      const result = await write();
       if (
         phase === "workspace-write" &&
-        filePath &&
-        path.dirname(filePath) === workspace &&
-        typeof flags === "number" &&
-        (flags & fsConstants.O_EXCL) !== 0
+        path.dirname(path.dirname(filePath)) === workspace &&
+        path.basename(filePath) === "AGENTS.md"
       ) {
-        const realWrite = handle.write.bind(handle);
-        const write = vi.spyOn(handle, "write").mockImplementation(async (...args) => {
-          const result = await realWrite(...args);
-          if (!writePaused) {
-            writePaused = true;
-            await pause("workspace-write");
-          }
-          return result;
-        });
-        restoreWrites.push(() => write.mockRestore());
+        await pause("workspace-write");
       }
-      return handle;
+      return result;
     });
     const commit = vi.fn();
     const rollback = vi.fn(async () => await fs.rm(stagedFile));
@@ -586,12 +565,8 @@ it.each(["workspace", "workspace-write", "config"] as const)(
     } finally {
       resume.resolve();
       await outcome;
-      open.mockRestore();
-      for (const restore of restoreWrites) {
-        restore();
-      }
+      restoreWrite();
       access.mockRestore();
-      nativeModeEnv.restore();
       releaseAgentRunDelegatedAuthority(authority);
       closeOpenClawStateDatabaseForTest();
       await state.cleanup();
