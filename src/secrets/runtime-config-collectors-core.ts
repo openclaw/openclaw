@@ -38,6 +38,7 @@ type ProviderLike = {
   headers?: unknown;
   request?: unknown;
   enabled?: unknown;
+  localService?: unknown;
 };
 
 type SkillEntryLike = {
@@ -59,6 +60,7 @@ function collectModelProviderAssignments(params: {
 }): void {
   for (const [providerId, provider] of Object.entries(params.providers)) {
     const providerIsActive = provider.enabled !== false;
+    const usesManagedLocalService = provider.localService !== undefined;
     const providerPath = appendConfigPathSegment("models.providers", providerId);
     const owner = {
       ownerKind: "provider",
@@ -73,8 +75,10 @@ function collectModelProviderAssignments(params: {
       expected: "string",
       defaults: params.defaults,
       context: params.context,
-      active: providerIsActive,
-      inactiveReason: "provider is disabled.",
+      active: providerIsActive && !usesManagedLocalService,
+      inactiveReason: usesManagedLocalService
+        ? "managed local services use provider-owned authentication."
+        : "provider is disabled.",
       owner,
       apply: (value) => {
         provider.apiKey = value;
