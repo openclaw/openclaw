@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import {
+  createStagedInputOwnershipFixture,
+  useAutoCleanupTempDirTracker,
+} from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createStagedInputOwnershipFixture } from "../../src/media/staged-inputs.test-support.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AgentsApiClient, type AgentsApiArtifact } from "./agentsapi-client.js";
 import { collectOutputs, prepareInputs } from "./agentsapi-files.js";
 
