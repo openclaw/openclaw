@@ -8,7 +8,7 @@ read_when:
 
 ## Hourly main CI
 
-Full `main` CI runs directly from `ci.yml` at minute 23 of each hour.
+The complete `main` validation tier runs directly from `ci.yml` at minute 23 of each hour.
 GitHub's scheduled event selects the canonical main revision; manual dispatch
 inputs cannot claim scheduled-run policy. The schedule selects the complete
 `main` tier, including Android, without filtering to the last commit. Node,
@@ -31,6 +31,10 @@ worker limits, and retry fallbacks remain unchanged. Control UI and native
 translation source checks stay mandatory; generated locale drift is advisory
 because the post-merge translation workflows own its repair. Ordinary manual
 runs, including `validation_tier=main`, retain strict locale parity.
+
+A main-tier run does not emit the full-validation revision confirmation.
+Docs Agent's automatic write gate requires that full-tier receipt; its explicit
+manual dispatch remains available.
 
 Inspect the scheduled `CI` run and its `openclaw/ci-gate` job directly.
 Each scheduled run starts independently so an older iOS simulator phase cannot
@@ -65,11 +69,11 @@ Set the **repository Actions variable** `OPENCLAW_CI_ON_PUSH` to `true` under
 previous path-filtered full main-push admission in CI, the standalone checks,
 plugin artifact preview, and cache warming. GitHub string comparisons are
 case-insensitive; use the documented lowercase `true`. Unset, empty, `false`,
-and other values keep hourly-only full main CI. Delete the variable or set it
+and other values keep hourly-only main-tier CI. Delete the variable or set it
 to `false` to return to the default. Hourly runs remain enabled either way.
 No secret, commit, or protection-setting change is required.
 
-For an immediate complete CI run, choose **CI → Run workflow → main**, select the main validation tier and Android, or run:
+For an immediate main-tier CI run, choose **CI → Run workflow → main**, select the main validation tier and Android, or run:
 
 ```bash
 gh workflow run ci.yml --ref main -f validation_tier=main -f include_android=true
@@ -116,16 +120,19 @@ gh workflow run openclaw-stable-main-closeout.yml --ref main -f tag=vYYYY.M.PATC
 
 Unrelated source pushes no longer poll for release completion. Manual recovery
 retains its existing evidence checks.
-Docs Agent now verifies the exact successful full-CI attempt before admitting
-its write job: opted-in main pushes and scheduled full-CI runs qualify, while
-security-only pushes do not. Its hourly/current-main guard remains in place.
+Docs Agent verifies the exact successful full-tier CI attempt before admitting
+its automatic write job. Opted-in full main pushes qualify; hourly main-tier
+runs and security-only pushes do not. With `OPENCLAW_CI_ON_PUSH` unset,
+automatic Docs Agent writes are therefore disabled. Explicit non-bot Docs Agent
+dispatch remains available, and its current-main and hourly cadence guards remain
+in place for eligible workflow-run invocations.
 Security Review still handles PR and manual CI completion. Release/tag and PR-only workflows
 retain their existing triggers; this change adds no merge-queue support where
 none existed and changes no repository rulesets.
 
 GitHub cron is best-effort on the default branch, not a one-hour latency SLA:
 runs may be delayed or dropped under load, and public-repository schedules can
-be disabled after inactivity. Full main CI deliberately rechecks unchanged
+be disabled after inactivity. Main-tier CI deliberately rechecks unchanged
 SHAs rather than introducing a separate last-success ledger. A failure can be
 retried at the next hourly opportunity, and manual dispatch remains available.
 If iOS proof takes longer than an hour, later hourly runs can finish their other
@@ -461,11 +468,11 @@ site renderer or cross-page link validation.
 
 ### Docs Agent
 
-The `Docs Agent` workflow keeps existing docs aligned with recently landed changes. It has no pure schedule: an opted-in full main-push CI run or an scheduled full-CI run can trigger it, and explicit non-bot manual dispatch retains its direct admission. A read-only job verifies the canonical CI workflow, exact completed run attempt, current main SHA, successful aggregate, and successful revision-confirmation step before the write-capable job is admitted. That producer step is absent/skipped for security-only pushes, failed full CI, and manual validation of another target or reduced scope. The hourly child may run as `github-actions[bot]`; ordinary bot pushes remain excluded.
+The `Docs Agent` workflow keeps existing docs aligned with recently landed changes. It has no pure schedule. An opted-in full main-push CI run can admit automatic writes; hourly main-tier CI cannot. With `OPENCLAW_CI_ON_PUSH` unset, use explicit non-bot Docs Agent dispatch to run it. A read-only job verifies the canonical CI workflow, exact completed run attempt, current main SHA, successful aggregate, and successful revision-confirmation step before the write-capable job is admitted. That producer step is absent/skipped for main-tier runs, security-only pushes, failed full CI, and manual validation of another target or reduced scope. Ordinary bot pushes remain excluded.
 
-Only the admitted write job occupies the non-canceling docs concurrency slot, so a skipped push cannot displace pending hourly/manual work. Workflow-run invocations recheck main freshness and skip when another eligible Docs Agent invocation was created in the last hour. Canceled and skipped workflow conclusions are excluded from both hourly cadence and review-base selection; active runs with no conclusion still count. When admitted, the agent reviews the commit range from the previous eligible invocation's source SHA to current `main`.
+Only the admitted write job occupies the non-canceling docs concurrency slot, so a skipped push cannot displace pending eligible automatic or manual work. Workflow-run invocations recheck main freshness and inspect exact-attempt job evidence for up to 100 recent runs. A queued or active write job, or a recent attempt that actually ran the agent, counts toward the one-hour cadence. Canceled and skipped workflows, denied verification, and completed writer gates that skipped the agent do not count. When admitted, the agent reviews from the source SHA of the previous successful write job whose agent step succeeded to current `main`.
 
-History eligibility tracks workflow attempts, not completed docs reviews: a gate-rejected attempt that finishes successfully remains eligible history.
+Failed agent attempts can throttle another attempt within the hour, but do not advance the review base. If history evidence cannot be read, the gate fails before running the agent.
 
 ### Duplicate PRs After Merge
 
