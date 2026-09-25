@@ -1740,6 +1740,7 @@ describe("scripts/test-projects changed-target routing", () => {
         forwardedArgs: [],
         includePatterns: [
           "test/scripts/build-all.test.ts",
+          "test/scripts/pr-gate-base.test.ts",
           "test/scripts/check-dynamic-import-warts.test.ts",
           "test/scripts/lint-status.test.ts",
           "test/scripts/run-oxlint.test.ts",
@@ -5076,7 +5077,11 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(plan).toEqual({
       mode: "targets",
       skippedBroadFallbackPaths: ["src/gateway/server.impl.ts"],
-      targets: ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/check.test.ts"],
+      targets: [
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/check.test.ts",
+        "test/scripts/pr-gate-base.test.ts",
+      ],
     });
     expect(repoSourceReads).toEqual([]);
   });
