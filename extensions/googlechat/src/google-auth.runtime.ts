@@ -276,6 +276,15 @@ function validateGoogleChatServiceAccountCredentials(
   };
 }
 
+function sanitizeCredentialFileReadError(error: unknown): Error {
+  // Filesystem messages and causes can contain the private credential path.
+  return new Error(
+    extractErrorCode(error) === "too-large"
+      ? `Google Chat service account file exceeds ${MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES} bytes.`
+      : "Failed to load Google Chat service account file.",
+  );
+}
+
 async function readCredentialsFile(filePath: string): Promise<Record<string, unknown>> {
   const resolvedPath = resolveUserPath(filePath);
   if (!resolvedPath) {
@@ -285,8 +294,8 @@ async function readCredentialsFile(filePath: string): Promise<Record<string, unk
   let handle: Awaited<ReturnType<typeof fs.open>> | null;
   try {
     handle = await fs.open(resolvedPath, "r");
-  } catch {
-    throw new Error("Failed to load Google Chat service account file.");
+  } catch (error) {
+    throw sanitizeCredentialFileReadError(error);
   }
 
   try {
@@ -300,11 +309,7 @@ async function readCredentialsFile(filePath: string): Promise<Record<string, unk
         await readFileHandleBounded(handle, MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES)
       ).toString("utf8");
     } catch (error) {
-      throw new Error(
-        extractErrorCode(error) === "too-large"
-          ? `Google Chat service account file exceeds ${MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES} bytes.`
-          : "Failed to load Google Chat service account file.",
-      );
+      throw sanitizeCredentialFileReadError(error);
     }
 
     let parsed: unknown;

@@ -1,10 +1,15 @@
-import fs, { writeFile } from "node:fs/promises";
+import fs, { open, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildJsonPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { parseTeamReportsConfig, resolveTeamReportsConfig } from "./config.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
 
 const minimal = { github: { token: "fixture-token", orgs: ["acme"] } };
 const documented = {
@@ -51,6 +56,10 @@ const manifestSchema = buildJsonPluginConfigSchema(manifest.configSchema);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.mocked(open).mockReset();
+});
+afterAll(() => {
+  vi.doUnmock("node:fs/promises");
 });
 
 describe("Team Reports configuration", () => {
@@ -147,11 +156,15 @@ describe("Team Reports configuration", () => {
   it("rejects a people file that grows beyond 2 MiB after inspection", async () => {
     const peopleFile = join(tempDirs.make("team-reports-growing-people-"), "people.json");
     await writeFile(peopleFile, JSON.stringify({ people: [{ github: ["alice"] }] }));
-    await using inspectedFile = await fs.open(peopleFile, "r");
-    const inspected = await inspectedFile.stat();
-    vi.spyOn(Object.getPrototypeOf(inspectedFile), "stat").mockImplementationOnce(async () => {
-      await fs.appendFile(peopleFile, " ".repeat(2 * 1024 * 1024));
-      return inspected;
+    vi.mocked(open).mockImplementationOnce(async (...args) => {
+      const handle = await fs.open(...args);
+      const stat = handle.stat.bind(handle);
+      vi.spyOn(handle, "stat").mockImplementationOnce(async () => {
+        const inspected = await stat();
+        await fs.appendFile(peopleFile, " ".repeat(2 * 1024 * 1024));
+        return inspected;
+      });
+      return handle;
     });
 
     const config = parseTeamReportsConfig({ ...minimal, peopleFile });
