@@ -72,17 +72,17 @@ export async function fetchQaFixtureJson(
   const error = timeoutError(`HTTP request to ${url} timed out after ${timeoutMs}ms`);
   const { response, text } = await withTimeout(
     Promise.resolve().then(async () => {
-      const response = await (options.fetchImpl ?? fetch)(url, {
+      const fetchedResponse = await (options.fetchImpl ?? fetch)(url, {
         ...init,
         signal: controller.signal,
       });
-      const text = await readBoundedResponseText({
-        response,
+      const responseText = await readBoundedResponseText({
+        response: fetchedResponse,
         url,
         maxBytes: maxBodyBytes,
         signal: controller.signal,
       });
-      return { response, text };
+      return { response: fetchedResponse, text: responseText };
     }),
     timeoutMs,
     {
