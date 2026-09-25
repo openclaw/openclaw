@@ -78,6 +78,7 @@ export type SessionEntrySideMetadata = Pick<
 export function readSessionEntrySideMetadata(
   database: SessionEntryCacheDatabase,
   sessionKey: string,
+  participants?: Pick<SessionEntry, "participants" | "participantCount">,
 ): SessionEntrySideMetadata {
   const ownerRow = hasSqliteSessionOwnerColumns(database.db)
     ? executeSqliteQuerySync(
@@ -98,7 +99,7 @@ export function readSessionEntrySideMetadata(
   const owner = ownerRow ? readSqliteSessionOwner(ownerRow) : undefined;
   return {
     ...(owner ? { owner } : {}),
-    ...readSqliteSessionParticipantProjection(database.db, sessionKey),
+    ...(participants ?? readSqliteSessionParticipantProjection(database.db, sessionKey)),
   };
 }
 
