@@ -12,7 +12,7 @@ import {
 } from "./markdown-details.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 
-const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
+const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
 const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
 const LIST_ITEM_OPEN_RE = /^[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/u;
 const LINK_REFERENCE_CANDIDATE_RE = /^[ \t]*\[/u;
@@ -37,12 +37,17 @@ function stripMarkdownContainerPrefixes(line: string): StrippedMarkdownLine {
 }
 
 function getFenceMarker(line: string): FenceMarker | null {
-  const fence = FENCE_OPEN_RE.exec(stripMarkdownContainerPrefixes(line).content)?.[1];
-  return fence ? { length: fence.length, marker: fence.charAt(0) as FenceMarker["marker"] } : null;
+  const content = stripMarkdownContainerPrefixes(line).content;
+  const match = FENCE_OPEN_RE.exec(content);
+  const fence = match?.[1];
+  if (!match || !fence || (fence.startsWith("`") && content.slice(match[0].length).includes("`"))) {
+    return null;
+  }
+  return { length: fence.length, marker: fence.startsWith("`") ? "`" : "~" };
 }
 
 function isFenceClose(line: string, fence: FenceMarker): boolean {
-  const trimmed = stripMarkdownContainerPrefixes(line).content.trimEnd();
+  const trimmed = stripMarkdownContainerPrefixes(line).content.replace(/[ \t]+$/u, "");
   const match = FENCE_OPEN_RE.exec(trimmed);
   const marker = match?.[1];
   if (!match || !marker) {
@@ -51,7 +56,7 @@ function isFenceClose(line: string, fence: FenceMarker): boolean {
   return (
     marker.charAt(0) === fence.marker &&
     marker.length >= fence.length &&
-    trimmed.slice(match[0].length).trim() === ""
+    trimmed.length === match[0].length
   );
 }
 
@@ -264,7 +269,7 @@ function scanStableStreamingMarkdown(
             if (LINK_REFERENCE_CANDIDATE_RE.test(strippedLine.content)) {
               hasLinkReferenceDefinition = true;
             }
-            if (line.trim() === "") {
+            if (/^[ \t]*$/u.test(line)) {
               boundary = lineEnd;
             }
           }

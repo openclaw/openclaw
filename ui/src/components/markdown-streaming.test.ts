@@ -101,6 +101,89 @@ describe("toStreamingMarkdownParts", () => {
     expect(fragment.querySelector("blockquote p")?.textContent).toBe("after");
   });
 
+  it.each(["-", "+", "*", "1.", "1)"])(
+    "keeps standalone %s list markers with their paragraph continuations",
+    (marker) => {
+      const key = `standalone-list-${marker}`;
+      const indent = " ".repeat(marker.length + 1);
+      const source = `${marker}\n${indent}first\n\n`;
+      toStreamingMarkdownParts(source, {}, key);
+      const fragment = htmlFragment(
+        toStreamingMarkdownParts(`${source}${indent}second\n\n`, {}, key).join(""),
+      );
+      expect(fragment.querySelectorAll("li")).toHaveLength(1);
+      expect(
+        [...fragment.querySelectorAll("li p")].map((paragraph) => paragraph.textContent),
+      ).toEqual(["first", "second"]);
+    },
+  );
+
+  it("keeps a standalone hyphen as a setext heading underline after prose", () => {
+    const key = "setext-hyphen";
+    toStreamingMarkdownParts("Title\n", {}, key);
+    expect(toStreamingMarkdownParts("Title\n-\n\n", {}, key).join("")).toBe("<h2>Title</h2>\n");
+  });
+
+  it("keeps nonbreaking-space lines inside their streaming paragraph", () => {
+    const key = "nonbreaking-space-paragraph";
+    const source = "First\n\u00a0\n";
+    toStreamingMarkdownParts(source, {}, key);
+    const fragment = htmlFragment(
+      toStreamingMarkdownParts(`${source}Second\n\n`, {}, key).join(""),
+    );
+    expect(fragment.querySelectorAll("p")).toHaveLength(1);
+    expect(fragment.querySelector("p")?.textContent).toBe("First\n\u00a0\nSecond");
+  });
+
+  it("revisits reference links when a completed disclosure defines their target", () => {
+    const key = "disclosure-reference";
+    const source = "See [x]\n\n";
+    toStreamingMarkdownParts(source, {}, key);
+    const fragment = htmlFragment(
+      toStreamingMarkdownParts(
+        `${source}<details>\n<summary>More</summary>\n\n[x]: https://example.com\n\n</details>\n\n`,
+        {},
+        key,
+      ).join(""),
+    );
+    expect(fragment.querySelector("p a")?.getAttribute("href")).toBe("https://example.com");
+  });
+
+  it("removes completed raw-content blocks across earlier streaming boundaries", () => {
+    const key = "progress-raw-content";
+    const source = "before <script>hidden\n\n";
+    toStreamingMarkdownParts(source, { progressBars: true }, key);
+    expect(
+      toStreamingMarkdownParts(`${source}more</script>\n\n`, { progressBars: true }, key).join(""),
+    ).toBe("<p>before</p>\n");
+  });
+
+  it("keeps reference resolution consistent while an independent tail grows", () => {
+    const key = "reference-tail-environment";
+    const source =
+      "<details>\n<summary>More</summary>\n\n[x]: https://example.com\n\n</details>\n\nSee [x]";
+    for (const suffix of ["", " again"]) {
+      expect(toStreamingMarkdownParts(source + suffix, {}, key)[1]).toBe(
+        `<p>See [x]${suffix}</p>\n`,
+      );
+    }
+  });
+
+  it.each([
+    { name: "backtick fence info", source: "```foo`bar\ninside\n```\n", code: "after\n\n" },
+    {
+      name: "nonbreaking-space fence suffix",
+      source: "```\ncode\n```\u00a0\n",
+      code: "code\n```\u00a0\nafter\n\n",
+    },
+  ])("keeps $name from closing the actual open fence", ({ name, source, code }) => {
+    toStreamingMarkdownParts(source, {}, name);
+    const fragment = htmlFragment(
+      toStreamingMarkdownParts(`${source}after\n\n`, {}, name).join(""),
+    );
+    expect(fragment.querySelector("pre code")?.textContent).toBe(code);
+  });
+
   it("does not rescan completed disclosures in appended prefixes", () => {
     const prefixes: string[] = [];
     let prefix = "<details><summary>Done</summary></details>\n\n";

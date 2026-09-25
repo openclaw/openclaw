@@ -141,7 +141,7 @@ displayed value or properties change.
 Streaming Markdown retains normalized input, split progress, and rendered prefixes
 in one bounded cache. Completed independent blocks render once; replacements,
 locale or display-option changes, and document-wide Markdown dependencies invalidate
-that reuse. Lists, reference definitions, indented code, and colliding file labels
+that reuse. Lists, reference definitions, containers, raw HTML, and colliding file labels
 retain their whole-block or whole-prefix semantics and the existing parse limits.
 
 Composer edits publish transcript resize notifications only when the viewport
