@@ -1,4 +1,3 @@
-// Memory Core tests cover temporal decay plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,20 +9,15 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW_MS = Date.UTC(2026, 1, 10, 0, 0, 0);
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 
-function createVectorMemoryEntry(params: {
-  id: string;
-  path: string;
-  snippet: string;
-  vectorScore: number;
-}) {
+function createVectorMemoryEntry(memoryPath: string, vectorScore: number) {
   return {
-    id: params.id,
-    path: params.path,
+    id: memoryPath,
+    path: memoryPath,
     startLine: 1,
     endLine: 1,
     source: "memory" as const,
-    snippet: params.snippet,
-    vectorScore: params.vectorScore,
+    snippet: "memory",
+    vectorScore,
   };
 }
 
@@ -70,18 +64,13 @@ describe("temporal decay", () => {
   it("does not decay evergreen memory files", async () => {
     const dir = await createTempWorkspace("openclaw-temporal-decay-");
 
-    const rootMemoryPath = path.join(dir, "MEMORY.md");
-    const userMemoryPath = path.join(dir, "USER.md");
-    const topicPath = path.join(dir, "memory", "projects.md");
-    await fs.mkdir(path.dirname(topicPath), { recursive: true });
-    await fs.writeFile(rootMemoryPath, "evergreen");
-    await fs.writeFile(userMemoryPath, "user evergreen");
-    await fs.writeFile(topicPath, "topic evergreen");
-
     const veryOld = new Date(Date.UTC(2010, 0, 1));
-    await fs.utimes(rootMemoryPath, veryOld, veryOld);
-    await fs.utimes(userMemoryPath, veryOld, veryOld);
-    await fs.utimes(topicPath, veryOld, veryOld);
+    for (const relativePath of ["MEMORY.md", "USER.md", "memory/projects.md"]) {
+      const filePath = path.join(dir, relativePath);
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, "evergreen");
+      await fs.utimes(filePath, veryOld, veryOld);
+    }
 
     const decayed = await applyTemporalDecayToHybridResults({
       results: [
@@ -101,18 +90,8 @@ describe("temporal decay", () => {
 
   it("applies decay in hybrid merging before ranking", async () => {
     const merged = await mergeVectorResultsWithTemporalDecay([
-      createVectorMemoryEntry({
-        id: "old",
-        path: "memory/2025-01-01.md",
-        snippet: "old but high",
-        vectorScore: 0.95,
-      }),
-      createVectorMemoryEntry({
-        id: "new",
-        path: "memory/2026-02-10.md",
-        snippet: "new and relevant",
-        vectorScore: 0.8,
-      }),
+      createVectorMemoryEntry("memory/2025-01-01.md", 0.95),
+      createVectorMemoryEntry("memory/2026-02-10.md", 0.8),
     ]);
 
     expect(merged[0]?.path).toBe("memory/2026-02-10.md");
@@ -121,42 +100,12 @@ describe("temporal decay", () => {
 
   it("decays dated and slugged memory files at any depth by their embedded date", async () => {
     const merged = await mergeVectorResultsWithTemporalDecay([
-      createVectorMemoryEntry({
-        id: "nested-old",
-        path: "memory/dreaming/light/2025-01-01.md",
-        snippet: "stale dreaming report",
-        vectorScore: 0.95,
-      }),
-      createVectorMemoryEntry({
-        id: "root-old",
-        path: "memory/2025-01-01.md",
-        snippet: "stale daily note",
-        vectorScore: 0.95,
-      }),
-      createVectorMemoryEntry({
-        id: "root-timestamp",
-        path: "memory/2025-01-01-1430.md",
-        snippet: "stale session memory",
-        vectorScore: 0.95,
-      }),
-      createVectorMemoryEntry({
-        id: "root-collision",
-        path: "memory/2025-01-01-1430-2.md",
-        snippet: "stale colliding session memory",
-        vectorScore: 0.95,
-      }),
-      createVectorMemoryEntry({
-        id: "nested-slug",
-        path: "memory/dreaming/light/2025-01-01-vendor-pitch.md",
-        snippet: "stale named dreaming report",
-        vectorScore: 0.95,
-      }),
-      createVectorMemoryEntry({
-        id: "nested-undated",
-        path: "memory/dreaming/light/report.md",
-        snippet: "undated evergreen",
-        vectorScore: 0.7,
-      }),
+      createVectorMemoryEntry("memory/dreaming/light/2025-01-01.md", 0.95),
+      createVectorMemoryEntry("memory/2025-01-01.md", 0.95),
+      createVectorMemoryEntry("memory/2025-01-01-1430.md", 0.95),
+      createVectorMemoryEntry("memory/2025-01-01-1430-2.md", 0.95),
+      createVectorMemoryEntry("memory/dreaming/light/2025-01-01-vendor-pitch.md", 0.95),
+      createVectorMemoryEntry("memory/dreaming/light/report.md", 0.7),
     ]);
 
     const byPath = new Map(merged.map((entry) => [entry.path, entry]));
@@ -174,24 +123,9 @@ describe("temporal decay", () => {
 
   it("decays nested dated and slugged memory files with Windows-style separators", async () => {
     const merged = await mergeVectorResultsWithTemporalDecay([
-      createVectorMemoryEntry({
-        id: "win-nested-old",
-        path: "memory\\dreaming\\light\\2025-01-01.md",
-        snippet: "stale dreaming report",
-        vectorScore: 0.95,
-      }),
-      createVectorMemoryEntry({
-        id: "win-nested-slug",
-        path: "memory\\dreaming\\light\\2025-01-01-1430.md",
-        snippet: "stale session memory",
-        vectorScore: 0.95,
-      }),
-      createVectorMemoryEntry({
-        id: "win-nested-undated",
-        path: "memory\\dreaming\\light\\report.md",
-        snippet: "undated evergreen",
-        vectorScore: 0.7,
-      }),
+      createVectorMemoryEntry("memory\\dreaming\\light\\2025-01-01.md", 0.95),
+      createVectorMemoryEntry("memory\\dreaming\\light\\2025-01-01-1430.md", 0.95),
+      createVectorMemoryEntry("memory\\dreaming\\light\\report.md", 0.7),
     ]);
 
     const byPath = new Map(merged.map((entry) => [entry.path, entry]));
@@ -202,24 +136,9 @@ describe("temporal decay", () => {
 
   it("handles future dates, zero age, and very old memories", async () => {
     const merged = await mergeVectorResultsWithTemporalDecay([
-      createVectorMemoryEntry({
-        id: "future",
-        path: "memory/2099-01-01.md",
-        snippet: "future",
-        vectorScore: 0.9,
-      }),
-      createVectorMemoryEntry({
-        id: "today",
-        path: "memory/2026-02-10.md",
-        snippet: "today",
-        vectorScore: 0.8,
-      }),
-      createVectorMemoryEntry({
-        id: "very-old",
-        path: "memory/2000-01-01.md",
-        snippet: "ancient",
-        vectorScore: 1,
-      }),
+      createVectorMemoryEntry("memory/2099-01-01.md", 0.9),
+      createVectorMemoryEntry("memory/2026-02-10.md", 0.8),
+      createVectorMemoryEntry("memory/2000-01-01.md", 1),
     ]);
 
     const byPath = new Map(merged.map((entry) => [entry.path, entry]));

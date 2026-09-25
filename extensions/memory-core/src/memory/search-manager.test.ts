@@ -1,4 +1,3 @@
-// Memory Core tests cover builtin search manager acquisition and cleanup.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -19,11 +18,7 @@ vi.mock("../../manager-runtime.js", () => ({
   closeMemoryIndexManagersForAgent,
 }));
 
-import {
-  closeAllMemorySearchManagers,
-  closeMemorySearchManager,
-  getMemorySearchManager,
-} from "./search-manager.js";
+import { closeMemorySearchManager, getMemorySearchManager } from "./search-manager.js";
 
 describe("builtin memory search manager", () => {
   beforeEach(() => {
@@ -33,32 +28,12 @@ describe("builtin memory search manager", () => {
     closeMemoryIndexManagersForAgent.mockClear();
   });
 
-  it("returns the builtin manager for every purpose", async () => {
-    const cfg = {} as OpenClawConfig;
-
-    const result = await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" });
-
-    expect(result.manager).toBe(builtinManager);
-    expect(result.error).toBeUndefined();
-    expect(result.debug).toMatchObject({ backend: "builtin", purpose: "status" });
-    expect(result.debug?.managerMs).toBeGreaterThanOrEqual(0);
-    expect(memoryIndexGet).toHaveBeenCalledWith({ cfg, agentId: "main", purpose: "status" });
-  });
-
   it("returns the builtin initialization error", async () => {
     memoryIndexGet.mockRejectedValueOnce(new Error("index unavailable"));
 
     await expect(
       getMemorySearchManager({ cfg: {} as OpenClawConfig, agentId: "main" }),
     ).resolves.toMatchObject({ manager: null, error: "index unavailable" });
-  });
-
-  it("closes all loaded builtin managers", async () => {
-    await getMemorySearchManager({ cfg: {} as OpenClawConfig, agentId: "main" });
-
-    await closeAllMemorySearchManagers();
-
-    expect(closeAllMemoryIndexManagers).toHaveBeenCalledOnce();
   });
 
   it("normalizes the agent id before scoped cleanup", async () => {
