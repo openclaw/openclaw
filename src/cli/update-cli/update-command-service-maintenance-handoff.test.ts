@@ -7,6 +7,7 @@ import { expect, it, vi } from "vitest";
 import * as schtasksExec from "../../daemon/schtasks-exec.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
+import * as processAncestry from "../../infra/restart-stale-pids.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
@@ -26,6 +27,10 @@ function mockHandoffServicePlatform(platform: NodeJS.Platform) {
     existingUri(pathname, hostPlatform),
   );
   mockProcessPlatform(platform);
+  return vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+    pids: new Set([process.pid, process.ppid, 1]),
+    complete: true,
+  });
 }
 
 const servingAncestorMaintenanceCases = [
@@ -41,6 +46,16 @@ const servingAncestorMaintenanceCases = [
         })),
       ),
     ),
+  ),
+  ...(["linux", "darwin", "win32"] as const).map(
+    (platform) =>
+      ({
+        platform,
+        identity: "missing marker",
+        phase: "prepare",
+        ancestry: "unavailable ancestry",
+        authorized: false,
+      }) as const,
   ),
   { platform: "linux", identity: "missing metadata", phase: "prepare", authorized: false },
   { platform: "linux", identity: "missing lease", phase: "prepare", authorized: false },
@@ -67,8 +82,10 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
   (scenario) =>
     withServiceHome(async (home) => {
       const { platform, identity, phase, authorized, splitRoot } = scenario;
-      const inherited = "ancestry" in scenario && scenario.ancestry === "inherited environment";
-      const gatewayPid = inherited ? 2 : process.ppid;
+      const external = "ancestry" in scenario && scenario.ancestry === "inherited environment";
+      const unresolved = "ancestry" in scenario && scenario.ancestry === "unavailable ancestry";
+      const inherited = external || unresolved;
+      const gatewayPid = external ? 2 : process.ppid;
       vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue({
         code: 0,
         stdout: "<Task><Settings><Enabled>false</Enabled></Settings></Task>",
@@ -120,7 +137,10 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
         }
       }
       // Create the real lease on the host filesystem before simulating its service manager.
-      mockHandoffServicePlatform(platform);
+      const ancestryInspection = mockHandoffServicePlatform(platform);
+      if (unresolved) {
+        ancestryInspection.mockReturnValue({ pids: new Set([process.pid]), complete: false });
+      }
       await withEnvAsync(
         {
           OPENCLAW_UPDATE_RUN_HANDOFF: identity === "missing marker" ? undefined : "1",
@@ -155,15 +175,29 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
             handoffFromGateway: async () => false,
           });
           expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
-          if (authorized) {
+          if (authorized || external) {
             expect(inspected.blockMessage).toBeUndefined();
           } else {
-            expect(inspected.blockMessage).toBe(
-              `This command is running inside the gateway process tree (gateway PID ${gatewayPid}).\nStopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.\nRun this command from a shell outside the gateway service.`,
-            );
+            expect(inspected.blockFailureFacts).toEqual([
+              expect.objectContaining({
+                check: "managed-service-preflight",
+                code: unresolved ? "service-ancestry-unverified" : "inside-gateway-process-tree",
+              }),
+            ]);
+            if (unresolved) {
+              expect(inspected.blockMessage).toContain(
+                "Process ancestry could not be fully inspected",
+              );
+            } else {
+              expect(inspected.blockMessage).toBe(
+                `This command is running inside the gateway process tree (gateway PID ${gatewayPid}).\nStopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.\nRun this command from a shell outside the gateway service.`,
+              );
+            }
           }
-          expect(service.stop).toHaveBeenCalledTimes(authorized && phase === "prepare" ? 1 : 0);
-          if (authorized && phase === "prepare") {
+          expect(service.stop).toHaveBeenCalledTimes(
+            (authorized || external) && phase === "prepare" ? 1 : 0,
+          );
+          if ((authorized || external) && phase === "prepare") {
             expect(service.stop).toHaveBeenCalledWith(
               expect.objectContaining({
                 updateHandoff: { root: packageRoot, runId },

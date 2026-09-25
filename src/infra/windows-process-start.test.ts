@@ -294,7 +294,7 @@ describe("readWindowsProcessAncestorsSync", () => {
         SYSTEMROOT: "D:\\Native",
         NODE_OPTIONS: "--synthetic-injection",
       }),
-    ).toEqual([40, 39]);
+    ).toEqual({ pids: [40, 39], complete: true });
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);
     expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(
       "D:\\Native\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
@@ -325,7 +325,10 @@ describe("readWindowsProcessAncestorsSync", () => {
     },
   ])("stops at $name", ({ rows, expected }) => {
     spawnSyncMock.mockReturnValue({ status: 0, stdout: JSON.stringify(rows) });
-    expect(readWindowsProcessAncestorsSync(41, 32, 700)).toEqual(expected);
+    expect(readWindowsProcessAncestorsSync(41, 32, 700)).toEqual({
+      pids: expected,
+      complete: false,
+    });
   });
 
   it("bounds the walk and never repeats an ancestor from a cyclic snapshot", () => {
@@ -337,8 +340,11 @@ describe("readWindowsProcessAncestorsSync", () => {
         { ...grandparent, parentPid: 40, startedAt: child.startedAt },
       ]),
     });
-    expect(readWindowsProcessAncestorsSync(41, 1, 700)).toEqual([40]);
-    expect(readWindowsProcessAncestorsSync(41, 32, 700)).toEqual([40, 39]);
+    expect(readWindowsProcessAncestorsSync(41, 1, 700)).toEqual({ pids: [40], complete: false });
+    expect(readWindowsProcessAncestorsSync(41, 32, 700)).toEqual({
+      pids: [40, 39],
+      complete: false,
+    });
   });
 
   it.each([
@@ -346,7 +352,7 @@ describe("readWindowsProcessAncestorsSync", () => {
     { status: 0, stdout: "not JSON" },
   ])("does not invent ancestry after an unavailable query", (result) => {
     spawnSyncMock.mockReturnValue(result);
-    expect(readWindowsProcessAncestorsSync(41, 32, 700)).toEqual([]);
+    expect(readWindowsProcessAncestorsSync(41, 32, 700)).toEqual({ pids: [], complete: false });
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);
   });
 });

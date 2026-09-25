@@ -354,6 +354,10 @@ vi.mock("../infra/runtime-guard.js", async (importOriginal) => ({
 
 vi.mock("../infra/restart-stale-pids.js", () => ({
   getSelfAndAncestorPidsSync: () => mockGetSelfAndAncestorPidsSync(),
+  inspectSelfAndAncestorPidsSync: () => {
+    const pids = mockGetSelfAndAncestorPidsSync();
+    return { pids, complete: pids.has(1) };
+  },
   terminateStaleGatewayPids: (...args: unknown[]) => terminateStaleGatewayPids(...args),
 }));
 

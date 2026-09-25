@@ -35,8 +35,8 @@ function hasOpenClawServiceMarker(label: string, env: NodeJS.ProcessEnv): boolea
 }
 
 /**
- * Native launchd labels are the fast path. OpenClaw markers can outlive the job
- * in an external terminal, so reconcile them with the running job's ancestry.
+ * Service markers can outlive the job in an external terminal, so reconcile
+ * even native launchd labels with the running job's ancestry.
  * The detached update helper's recovery CLI inherits OPENCLAW_LAUNCHD_LABEL but
  * descends from no running Gateway, so it stays on the synchronous path.
  */
@@ -44,9 +44,6 @@ export async function isCurrentProcessInsideLaunchdService(
   label: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<boolean> {
-  if (hasNativeLaunchdServiceLabel(label, env)) {
-    return true;
-  }
   // Preserve the in-service guard when launchd cannot supply authoritative facts.
   const probe = await probeLaunchAgentState(`${resolveLaunchAgentGuiDomain()}/${label}`);
   if (probe.state === "running" && probe.runtime.pid !== undefined) {
@@ -55,10 +52,11 @@ export async function isCurrentProcessInsideLaunchdService(
     // an external shell; a failed ps hop must not disable the in-service guard.
     return (
       ancestors.has(probe.runtime.pid) ||
-      (hasOpenClawServiceMarker(label, env) && !ancestors.has(1))
+      (isCurrentProcessLaunchdServiceLabel(label, env) && !ancestors.has(1))
     );
   }
   return (
-    (probe.state === "unknown" || probe.state === "running") && hasOpenClawServiceMarker(label, env)
+    (probe.state === "unknown" || probe.state === "running") &&
+    isCurrentProcessLaunchdServiceLabel(label, env)
   );
 }

@@ -76,7 +76,7 @@ import { GatewayServiceUpdateOwnershipError } from "./update-command-service-pla
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
-  shouldBlockMutableUpdateFromGatewayServiceEnv,
+  mutableUpdateGatewayServiceBlock,
   UpdateCommandAbort,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
@@ -287,7 +287,7 @@ export async function executeMutableUpdate(
           preManagedServiceStop.stopped ||
           preManagedServiceStop.serviceUpdateVerdict?.kind === "owned" ||
           preManagedServiceStop.blockMessage ||
-          shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop }) ||
+          mutableUpdateGatewayServiceBlock({ preManagedServiceStop }) ||
           !preManagedServiceStop.inspected ||
           !preManagedServiceStop.running ||
           !params.shouldRestart
@@ -347,21 +347,13 @@ export async function executeMutableUpdate(
       });
     }
 
-    const inspectionFailure = {
-      failureFacts: collectServiceInspectionFailureFacts(
-        preManagedServiceStop?.serviceUpdateVerdict,
-      ),
-    };
-    if (shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop })) {
+    const serviceEnvBlock = mutableUpdateGatewayServiceBlock({ preManagedServiceStop });
+    if (serviceEnvBlock) {
       params.stop();
       throw new UpdatePreMutationError(
         "managed-service-preflight",
-        [
-          `${params.updateInstallKind === "git" ? "Git updates" : "Package updates"} cannot run from inside the gateway service process.`,
-          "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
-          `Run \`${formatCliCommand("openclaw update")}\` from a terminal outside the gateway service.`,
-        ].join("\n"),
-        inspectionFailure,
+        serviceEnvBlock.message,
+        serviceEnvBlock,
       );
     }
 
@@ -370,7 +362,11 @@ export async function executeMutableUpdate(
       throw new UpdatePreMutationError(
         "managed-service-preflight",
         formatUpdateAncestryBlockMessage(preManagedServiceStop.blockMessage),
-        inspectionFailure,
+        {
+          failureFacts:
+            preManagedServiceStop.blockFailureFacts ??
+            collectServiceInspectionFailureFacts(preManagedServiceStop.serviceUpdateVerdict),
+        },
       );
     }
   };

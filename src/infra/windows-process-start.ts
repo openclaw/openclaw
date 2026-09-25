@@ -194,7 +194,7 @@ export function readWindowsProcessAncestorsSync(
   maxDepth: number,
   timeoutMs: number,
   env: NodeJS.ProcessEnv = process.env,
-): number[] {
+): { pids: number[]; complete: boolean } {
   try {
     const result = spawnSync(
       windowsPowerShellPath(env),
@@ -218,11 +218,11 @@ export function readWindowsProcessAncestorsSync(
       },
     );
     if (result.error || result.status !== 0) {
-      return [];
+      return { pids: [], complete: false };
     }
     const parsed: unknown = JSON.parse(result.stdout);
     if (!Array.isArray(parsed)) {
-      return [];
+      return { pids: [], complete: false };
     }
     const rows: unknown[] = parsed;
     const processes = new Map<number, { parentPid: number; startedAt: bigint }>();
@@ -245,7 +245,7 @@ export function readWindowsProcessAncestorsSync(
         continue;
       }
       if (processes.has(row.pid)) {
-        return [];
+        return { pids: [], complete: false };
       }
       processes.set(row.pid, { parentPid: row.parentPid, startedAt: BigInt(row.startedAt) });
     }
@@ -266,8 +266,8 @@ export function readWindowsProcessAncestorsSync(
       ancestors.add(parentPid);
       current = parent;
     }
-    return [...ancestors];
+    return { pids: [...ancestors], complete: current?.parentPid === 0 };
   } catch {
-    return [];
+    return { pids: [], complete: false };
   }
 }
