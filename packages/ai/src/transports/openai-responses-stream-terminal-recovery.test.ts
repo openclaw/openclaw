@@ -140,8 +140,8 @@ const rejectedStreamedToolFixture = (params: {
             },
           ]
         : [],
-      responseId: params.status === "incomplete" ? "resp_rejected_streamed_tool" : null,
-      stopReason: "stop",
+      responseId: "resp_rejected_streamed_tool",
+      stopReason: params.started ? "toolUse" : "stop",
       error: params.error,
     },
   };

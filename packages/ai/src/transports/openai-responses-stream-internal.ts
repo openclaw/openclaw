@@ -84,7 +84,7 @@ export async function processResponsesStream<TApi extends Api>(
   });
   const stream = outputs.trackStream(sink);
   let terminalResponse: CompletedResponse | null | undefined;
-  let incompleteToolCall: CompletedToolCall | undefined;
+  let rejectedToolCall: { error: unknown } | undefined;
   let lastTextBlock: TextBlockReference | null = null;
   const blocks = output.content;
   const compactionTracker = createCompactionTracker(output, model, options);
@@ -322,14 +322,20 @@ export async function processResponsesStream<TApi extends Api>(
       if (
         event.type === "response.output_item.done" &&
         event.item.type === "function_call" &&
-        event.item.status === "incomplete"
+        event.item.status &&
+        event.item.status !== "completed" &&
+        !rejectedToolCall
       ) {
-        incompleteToolCall ??= event.item;
+        try {
+          resolveCompletedResponsesToolCall(event.item);
+        } catch (error) {
+          rejectedToolCall = { error };
+        }
       }
-      // An incomplete call closes output admission; only drain terminal facts.
+      // A rejected call closes output admission; only drain terminal facts.
       // Later async tool completions must not authorize side effects.
       if (
-        incompleteToolCall &&
+        rejectedToolCall &&
         event.type !== "response.completed" &&
         event.type !== "response.incomplete" &&
         event.type !== "response.failed" &&
@@ -669,29 +675,31 @@ export async function processResponsesStream<TApi extends Api>(
             streamedArguments !== completedArguments
               ? parseJsonObjectPreservingUnsafeIntegers(streamedArguments)
               : null;
-          const validated = resolveCompletedResponsesToolCall(item, {
-            name: streamingToolCall?.block.name,
-            arguments: parsedStreamedArguments ?? (completedArguments || streamedArguments),
-          });
+          let validated: Pick<ToolCall, "name" | "arguments">;
+          try {
+            validated = resolveCompletedResponsesToolCall(item, {
+              name: streamingToolCall?.block.name,
+              arguments: parsedStreamedArguments ?? (completedArguments || streamedArguments),
+            });
+          } catch (error) {
+            // Preserve the original validation code and bounded argument diagnostics.
+            // Draining must neither repair this call nor admit a later sibling.
+            rejectedToolCall = { error };
+            continue;
+          }
 
           finalizeToolCall(item, readResponsesOutputIndex(event), streamingToolCall, validated);
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
         // Preserve reported accounting before rejecting unfinished tool calls.
         terminal.finalizeResponse(event.response, event.type);
-        if (incompleteToolCall) {
-          if (output.errorMessage) {
-            throw new Error(output.errorMessage);
-          }
-          resolveCompletedResponsesToolCall(incompleteToolCall);
+        if (rejectedToolCall) {
+          throw output.errorMessage ? new Error(output.errorMessage) : rejectedToolCall.error;
         }
         if (event.type === "response.incomplete" && streamingToolCalls.hasActive()) {
-          if (output.errorMessage) {
-            throw new Error(output.errorMessage);
-          }
-          throw new IncompleteToolCallError(
-            "Responses stream completed with unresolved tool calls",
-          );
+          throw output.errorMessage
+            ? new Error(output.errorMessage)
+            : new IncompleteToolCallError("Responses stream completed with unresolved tool calls");
         }
         if (event.type === "response.completed" || output.stopReason === "length") {
           const items = event.response.output ?? [];
@@ -727,6 +735,9 @@ export async function processResponsesStream<TApi extends Api>(
     // the caller's authoritative reason before classifying terminal stream state.
     if (options?.signal?.aborted) {
       throw transportAbortError(options.signal);
+    }
+    if (rejectedToolCall) {
+      throw rejectedToolCall.error;
     }
     if (streamingToolCalls.hasActive()) {
       throw new Error("Responses stream ended with unresolved tool calls");
