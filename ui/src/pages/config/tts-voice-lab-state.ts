@@ -17,15 +17,56 @@ export function isStoredSpeechVoice(voice: StoredSpeechVoice): boolean {
   );
 }
 
+export type VoiceLabSubmitBlock =
+  | "disconnected"
+  | "needName"
+  | "needConsent"
+  | "needSource"
+  | "sourceTooLong";
+
+export function voiceLabSubmitBlock(input: {
+  name: string;
+  consentMs: number;
+  sourceMs: number;
+  connected: boolean;
+}): VoiceLabSubmitBlock | null {
+  if (!input.connected) {
+    return "disconnected";
+  }
+  if (!input.name.trim()) {
+    return "needName";
+  }
+  if (input.consentMs < CONSENT_MIN_MS) {
+    return "needConsent";
+  }
+  if (input.sourceMs < SOURCE_MIN_MS) {
+    return "needSource";
+  }
+  if (input.sourceMs > TTS_CLIP_MAX_DURATION_MS) {
+    return "sourceTooLong";
+  }
+  return null;
+}
+
 export function voiceLabCanSubmit(input: {
   name: string;
   consentMs: number;
   sourceMs: number;
 }): boolean {
   return (
-    Boolean(input.name.trim()) &&
-    input.consentMs >= CONSENT_MIN_MS &&
-    input.sourceMs >= SOURCE_MIN_MS &&
-    input.sourceMs <= TTS_CLIP_MAX_DURATION_MS
+    voiceLabSubmitBlock({
+      ...input,
+      connected: true,
+    }) === null
   );
+}
+
+export function isGoogleVoiceStoreBusy(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error ?? "");
+  return /\b503\b|UNAVAILABLE|currently unavailable/i.test(text);
+}
+
+export function isGoogleVoiceStoreInternal(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error ?? "");
+  return /\b500\b|INTERNAL error|Internal error encountered/i.test(text);
 }

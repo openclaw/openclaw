@@ -24,8 +24,10 @@ import {
   type TtsRecordedClip,
 } from "./tts-clip-recorder.ts";
 import {
+  isGoogleVoiceStoreBusy,
+  isGoogleVoiceStoreInternal,
   isStoredSpeechVoice,
-  voiceLabCanSubmit,
+  voiceLabSubmitBlock,
   type StoredSpeechVoice,
 } from "./tts-voice-lab-state.ts";
 
@@ -212,17 +214,14 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
 
   private async createVoice() {
     const client = this.client;
-    if (
-      !client ||
-      this.creating ||
-      !this.consent ||
-      !this.source ||
-      !voiceLabCanSubmit({
-        name: this.displayName,
-        consentMs: this.consent.durationMs,
-        sourceMs: this.source.durationMs,
-      })
-    ) {
+    const block = voiceLabSubmitBlock({
+      name: this.displayName,
+      consentMs: this.consent?.durationMs ?? 0,
+      sourceMs: this.source?.durationMs ?? 0,
+      connected: Boolean(client),
+    });
+    if (!client || this.creating || !this.consent || !this.source || block) {
+      this.createError = t(`ttsVoiceLab.${block ?? "createError"}`);
       return;
     }
     this.creating = true;
@@ -239,7 +238,11 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
       this.storedPreview = result;
       this.voicesTask.run();
     } catch (error) {
-      this.createError = formatUiError(error);
+      this.createError = isGoogleVoiceStoreBusy(error)
+        ? t("ttsVoiceLab.googleBusy")
+        : isGoogleVoiceStoreInternal(error)
+          ? t("ttsVoiceLab.googleInternal")
+          : formatUiError(error);
     } finally {
       this.creating = false;
     }
@@ -326,13 +329,13 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
     if (!this.dialogOpen) {
       return nothing;
     }
-    const canSubmit =
-      !this.creating &&
-      voiceLabCanSubmit({
-        name: this.displayName,
-        consentMs: this.consent?.durationMs ?? 0,
-        sourceMs: this.source?.durationMs ?? 0,
-      });
+    const submitBlock = voiceLabSubmitBlock({
+      name: this.displayName,
+      consentMs: this.consent?.durationMs ?? 0,
+      sourceMs: this.source?.durationMs ?? 0,
+      connected: Boolean(this.client),
+    });
+    const canSubmit = !this.creating && submitBlock === null;
     return html`
       <openclaw-modal-dialog
         label=${t("ttsVoiceLab.create")}
@@ -350,6 +353,9 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
             ${t("ttsVoiceLab.name")}
             <input
               type="text"
+              required
+              aria-required="true"
+              autocomplete="off"
               .value=${this.displayName}
               placeholder=${t("ttsVoiceLab.namePlaceholder")}
               ?disabled=${this.creating}
@@ -358,6 +364,7 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
               }}
             />
           </label>
+          <p class="settings-page__intro">${t("ttsVoiceLab.nameEmptyHint")}</p>
           ${renderSettingsSection(
             { title: t("ttsVoiceLab.consentTitle"), description: t("ttsVoiceLab.consentHint") },
             html`<blockquote>${t("ttsVoiceLab.consentStatement")}</blockquote>
@@ -387,6 +394,16 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
               : nothing
           }
           <footer class="exec-approval-actions">
+            ${
+              this.createError
+                ? renderSettingsStatus({ kind: "danger", label: this.createError })
+                : submitBlock
+                  ? renderSettingsStatus({
+                      kind: "muted",
+                      label: t(`ttsVoiceLab.${submitBlock}`),
+                    })
+                  : nothing
+            }
             <button type="button" class="btn" @click=${this.closeDialog}>
               ${t("ttsVoiceLab.close")}
             </button>

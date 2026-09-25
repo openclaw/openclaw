@@ -173,6 +173,38 @@ describe("Google project voices", () => {
     expect(release).toHaveBeenCalled();
   });
 
+  it("retries a 503 UNAVAILABLE replicate once, then stores the voice", async () => {
+    const preview = Buffer.from("replicated-preview");
+    const sourceAudio = Buffer.from("source-wav");
+    const consentAudio = Buffer.from("consent-wav");
+    const release = vi.fn(async () => {});
+    const busy = Object.assign(
+      new Error(
+        "ProviderHttpError: Google voices request failed (503): The service is currently unavailable. [code=UNAVAILABLE]",
+      ),
+      { status: 503, statusCode: 503, code: "UNAVAILABLE" },
+    );
+    postJsonRequestMock.mockRejectedValueOnce(busy).mockResolvedValueOnce({
+      response: jsonResponse({
+        id: "voice_replicated",
+        display_name: "Bobby",
+        sample_audio: { data: preview.toString("base64"), mime_type: "audio/wav" },
+      }),
+      release,
+    });
+    const provider = buildGoogleSpeechProvider();
+    const replicated = await provider.replicateVoice?.({
+      providerConfig: { apiKey: "***" },
+      displayName: "Bobby",
+      sourceAudio,
+      consentAudio,
+      timeoutMs: 5_000,
+    });
+    expect(replicated?.id).toBe("voice_replicated");
+    expect(postJsonRequestMock).toHaveBeenCalledTimes(2);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects empty replication recordings before calling Google", async () => {
     const provider = buildGoogleSpeechProvider();
     await expect(

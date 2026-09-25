@@ -1,5 +1,30 @@
 const WAV_HEADER_BYTES = 44;
 
+export function resampleFloat32Mono(
+  samples: Float32Array,
+  fromRate: number,
+  toRate: number,
+): Float32Array {
+  if (!Number.isFinite(fromRate) || !Number.isFinite(toRate) || fromRate <= 0 || toRate <= 0) {
+    throw new Error("PCM resample rates must be positive");
+  }
+  if (fromRate === toRate || samples.length === 0) {
+    return samples;
+  }
+  const ratio = fromRate / toRate;
+  const outLength = Math.max(1, Math.round(samples.length / ratio));
+  const out = new Float32Array(outLength);
+  const last = Math.max(0, samples.length - 1);
+  for (let i = 0; i < outLength; i += 1) {
+    const src = i * ratio;
+    const i0 = Math.min(last, Math.floor(src));
+    const i1 = Math.min(last, i0 + 1);
+    const frac = src - i0;
+    out[i] = (samples[i0] ?? 0) * (1 - frac) + (samples[i1] ?? 0) * frac;
+  }
+  return out;
+}
+
 export function floatToPcm16(samples: Float32Array): Uint8Array {
   const bytes = new Uint8Array(samples.length * 2);
   const view = new DataView(bytes.buffer);

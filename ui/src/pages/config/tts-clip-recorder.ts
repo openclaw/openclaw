@@ -1,4 +1,4 @@
-import { encodeWavPcm16Mono, floatToPcm16 } from "../../lib/pcm-wav.ts";
+import { encodeWavPcm16Mono, floatToPcm16, resampleFloat32Mono } from "../../lib/pcm-wav.ts";
 import { RealtimeTalkPcmInputPump } from "../chat/talk/audio.ts";
 import {
   RealtimeTalkInputController,
@@ -73,7 +73,7 @@ export class TtsClipRecorder {
     if (!context) {
       throw new Error("No voice clip is being recorded");
     }
-    const sampleRate = context.sampleRate || TTS_CLIP_TARGET_SAMPLE_RATE_HZ;
+    const nativeRate = context.sampleRate || TTS_CLIP_TARGET_SAMPLE_RATE_HZ;
     const chunks = this.chunks;
     this.teardownGraph();
     const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
@@ -83,11 +83,15 @@ export class TtsClipRecorder {
       samples.set(chunk, offset);
       offset += chunk.length;
     }
+    const pcm = resampleFloat32Mono(samples, nativeRate, TTS_CLIP_TARGET_SAMPLE_RATE_HZ);
     return {
-      wav: encodeWavPcm16Mono(floatToPcm16(samples), sampleRate),
+      wav: encodeWavPcm16Mono(floatToPcm16(pcm), TTS_CLIP_TARGET_SAMPLE_RATE_HZ),
       mimeType: "audio/wav",
-      durationMs: sampleRate > 0 ? (length / sampleRate) * 1000 : 0,
-      sampleRate,
+      durationMs:
+        TTS_CLIP_TARGET_SAMPLE_RATE_HZ > 0
+          ? (pcm.length / TTS_CLIP_TARGET_SAMPLE_RATE_HZ) * 1000
+          : 0,
+      sampleRate: TTS_CLIP_TARGET_SAMPLE_RATE_HZ,
     };
   }
 

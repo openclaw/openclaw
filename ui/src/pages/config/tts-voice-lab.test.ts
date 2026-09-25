@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isStoredSpeechVoice, voiceLabCanSubmit } from "./tts-voice-lab-state.ts";
+import {
+  isGoogleVoiceStoreBusy,
+  isGoogleVoiceStoreInternal,
+  isStoredSpeechVoice,
+  voiceLabCanSubmit,
+  voiceLabSubmitBlock,
+} from "./tts-voice-lab-state.ts";
 
 describe("TTS voice lab", () => {
   it("keeps only stored custom voices from the project catalog", () => {
@@ -15,5 +21,39 @@ describe("TTS voice lab", () => {
     expect(voiceLabCanSubmit({ name: "Bobby", consentMs: 500, sourceMs: 12_000 })).toBe(false);
     expect(voiceLabCanSubmit({ name: "Bobby", consentMs: 4_000, sourceMs: 8_000 })).toBe(false);
     expect(voiceLabCanSubmit({ name: "Bobby", consentMs: 4_000, sourceMs: 31_000 })).toBe(false);
+    expect(
+      voiceLabSubmitBlock({
+        name: "",
+        consentMs: 10_900,
+        sourceMs: 29_500,
+        connected: true,
+      }),
+    ).toBe("needName");
+    expect(
+      voiceLabSubmitBlock({
+        name: "Bobby",
+        consentMs: 10_900,
+        sourceMs: 29_500,
+        connected: false,
+      }),
+    ).toBe("disconnected");
+  });
+
+  it("treats Google 503 UNAVAILABLE as a busy voice store", () => {
+    expect(
+      isGoogleVoiceStoreBusy(
+        new Error(
+          "ProviderHttpError: Google voices request failed (503): The service is currently unavailable. [code=UNAVAILABLE]",
+        ),
+      ),
+    ).toBe(true);
+    expect(isGoogleVoiceStoreBusy(new Error("invalid consent audio"))).toBe(false);
+    expect(
+      isGoogleVoiceStoreInternal(
+        new Error(
+          "ProviderHttpError: Google voices request failed (500): Internal error encountered. [code=INTERNAL]",
+        ),
+      ),
+    ).toBe(true);
   });
 });

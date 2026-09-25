@@ -279,6 +279,15 @@ describe("realtime Talk microphone inputs", () => {
     });
   });
 
+  it("explains why an insecure origin cannot show a microphone prompt", async () => {
+    vi.stubGlobal("isSecureContext", false);
+    vi.stubGlobal("navigator", {});
+
+    await expect(openMicrophone(undefined)).rejects.toThrow(
+      "The browser will only prompt for the microphone on localhost, 127.0.0.1, or HTTPS",
+    );
+  });
+
   it("reports microphone permission denial with actionable guidance", async () => {
     const getUserMedia = vi.fn().mockRejectedValue(new DOMException("denied", "NotAllowedError"));
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });

@@ -9,7 +9,8 @@ const enTtsVoiceLab = {
     create: "Create from my voice",
     close: "Close",
     name: "Voice name",
-    namePlaceholder: "Bobby",
+    namePlaceholder: "Type a name",
+    nameEmptyHint: "Required. This field starts empty — nothing is pre-filled.",
     consentTitle: "Consent take",
     consentHint: "Read this sentence out loud, in your own voice:",
     consentStatement:
@@ -37,6 +38,14 @@ const enTtsVoiceLab = {
     talkHint: "Stored voices work for TTS playback. Talk and Live still use prebuilt names.",
     durationHint:
       "Consent needs a full reading of the sentence. The reference take must be 10–30 seconds.",
+    needName: "Type a voice name. The field starts empty and is not pre-filled.",
+    googleBusy:
+      "Google's voice store is busy. Wait a minute and tap Store again — your recordings are still here.",
+    googleInternal:
+      "Google could not process those recordings. Record both takes again in this dialog, then Store. The store wants 24 kHz mono WAV from the same speaker.",
+    needConsent: "Record the consent sentence before storing.",
+    needSource: "Record a 10–30 second reference take before storing.",
+    sourceTooLong: "The reference take must be 30 seconds or less.",
     advancedSettings: "Custom voices",
   },
 } satisfies TranslationMap;

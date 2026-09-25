@@ -19,6 +19,7 @@ const GOOGLE_VOICE_DESIGN_MODELS = ["gemini-3.8-flash-tts", "gemini-3.8-flash-li
 const DEFAULT_GOOGLE_VOICE_DESIGN_MODEL = GOOGLE_VOICE_DESIGN_MODELS[0];
 const MAX_VOICE_PAGES = 10;
 const MAX_PROMPT_CHARS = 2_000;
+const VOICE_HTTP_RETRY_LIMIT = 3;
 
 type GoogleHttpRequest = ReturnType<typeof sanitizeConfiguredModelProviderRequest>;
 
@@ -110,7 +111,34 @@ async function resolveGoogleVoiceHttp(params: {
   });
 }
 
-async function googleVoicesFetch(params: {
+function isRetryableGoogleVoiceHttpError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const record = error as {
+    status?: unknown;
+    statusCode?: unknown;
+    code?: unknown;
+    message?: unknown;
+  };
+  const status = Number(record.status ?? record.statusCode);
+  const code = String(record.code ?? "");
+  const message = String(record.message ?? error);
+  return (
+    status === 503 ||
+    code === "UNAVAILABLE" ||
+    /\b503\b|UNAVAILABLE|currently unavailable/i.test(message)
+  );
+}
+
+function voiceHttpRetryDelayMs(attempt: number): number {
+  if (process.env.VITEST) {
+    return 0;
+  }
+  return 500 * 2 ** attempt;
+}
+
+async function googleVoicesFetchOnce(params: {
   apiKey: string;
   baseUrl?: string;
   request?: GoogleHttpRequest;
@@ -163,6 +191,30 @@ async function googleVoicesFetch(params: {
   } finally {
     await release();
   }
+}
+
+async function googleVoicesFetch(params: {
+  apiKey: string;
+  baseUrl?: string;
+  request?: GoogleHttpRequest;
+  timeoutMs: number;
+  url: string;
+  method: "GET" | "POST";
+  body?: Record<string, unknown>;
+}): Promise<Record<string, unknown>> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < VOICE_HTTP_RETRY_LIMIT; attempt += 1) {
+    try {
+      return await googleVoicesFetchOnce(params);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableGoogleVoiceHttpError(error) || attempt === VOICE_HTTP_RETRY_LIMIT - 1) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, voiceHttpRetryDelayMs(attempt)));
+    }
+  }
+  throw lastError;
 }
 
 export async function listGoogleProjectVoices(params: {
