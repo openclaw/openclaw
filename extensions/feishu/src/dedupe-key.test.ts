@@ -7,17 +7,22 @@ function textEvent(overrides: {
   createTime?: string;
   senderOpenId?: string;
   chatId?: string;
+  chatType?: FeishuMessageEvent["message"]["chat_type"];
   text?: string;
+  rootId?: string;
+  threadId?: string;
 }): FeishuMessageEvent {
   return {
     sender: { sender_id: { open_id: overrides.senderOpenId ?? "ou-user" } },
     message: {
       message_id: overrides.messageId,
       chat_id: overrides.chatId ?? "oc-dm",
-      chat_type: "p2p",
+      chat_type: overrides.chatType ?? "p2p",
       message_type: "text",
       content: JSON.stringify({ text: overrides.text ?? "hello" }),
       create_time: overrides.createTime,
+      root_id: overrides.rootId,
+      thread_id: overrides.threadId,
     },
   };
 }
@@ -57,6 +62,102 @@ describe("resolveFeishuMessageDedupeKey", () => {
     expect(resolveFeishuMessageDedupeKey(otherSender)).not.toBe(baseKey);
     expect(resolveFeishuMessageDedupeKey(otherChat)).not.toBe(baseKey);
     expect(resolveFeishuMessageDedupeKey(otherText)).not.toBe(baseKey);
+  });
+
+  it("keeps route-distinct topic roots distinct despite identical sender/chat/create_time/content (#149313)", () => {
+    const a = resolveFeishuMessageDedupeKey(
+      textEvent({
+        messageId: "om_topic_a_child",
+        createTime: "1710000000000",
+        senderOpenId: "ou-same-sender",
+        chatId: "oc-topic-group",
+        chatType: "topic_group",
+        rootId: "om_topic_a_root",
+        threadId: "omt_topic_a",
+      }),
+    );
+    const b = resolveFeishuMessageDedupeKey(
+      textEvent({
+        messageId: "om_topic_b_child",
+        createTime: "1710000000000",
+        senderOpenId: "ou-same-sender",
+        chatId: "oc-topic-group",
+        chatType: "topic_group",
+        rootId: "om_topic_b_root",
+        threadId: "omt_topic_b",
+      }),
+    );
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
+    expect(a).not.toBe(b);
+  });
+
+  it("still collapses redeliveries when topic fields are present (#46778 with topics)", () => {
+    const first = resolveFeishuMessageDedupeKey(
+      textEvent({
+        messageId: "om_topic_first",
+        createTime: "1710000000000",
+        senderOpenId: "ou-same-sender",
+        chatId: "oc-topic-group",
+        chatType: "topic_group",
+        rootId: "om_topic_a_root",
+        threadId: "omt_topic_a",
+      }),
+    );
+    const retry = resolveFeishuMessageDedupeKey(
+      textEvent({
+        messageId: "om_topic_retry",
+        createTime: "1710000000000",
+        senderOpenId: "ou-same-sender",
+        chatId: "oc-topic-group",
+        chatType: "topic_group",
+        rootId: "om_topic_a_root",
+        threadId: "omt_topic_a",
+      }),
+    );
+    expect(first).toBeDefined();
+    expect(retry).toBe(first);
+  });
+
+  it("discriminates on thread_id when root_id is absent", () => {
+    const a = resolveFeishuMessageDedupeKey(
+      textEvent({
+        messageId: "om_thread_a",
+        createTime: "1710000000000",
+        senderOpenId: "ou-same-sender",
+        chatId: "oc-topic-group",
+        chatType: "topic_group",
+        threadId: "omt_topic_a",
+      }),
+    );
+    const b = resolveFeishuMessageDedupeKey(
+      textEvent({
+        messageId: "om_thread_b",
+        createTime: "1710000000000",
+        senderOpenId: "ou-same-sender",
+        chatId: "oc-topic-group",
+        chatType: "topic_group",
+        threadId: "omt_topic_b",
+      }),
+    );
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
+    expect(a).not.toBe(b);
+  });
+
+  it("keeps the legacy 5-element key shape for unthreaded text", () => {
+    const key = resolveFeishuMessageDedupeKey(
+      textEvent({ messageId: "om_legacy", createTime: "1710000000000" }),
+    );
+    expect(key).toBe(
+      JSON.stringify([
+        "text-retry",
+        "ou-user",
+        "oc-dm",
+        "1710000000000",
+        "cbbbdcd27692344de5dbab3abcaba413",
+      ]),
+    );
   });
 
   it("falls back to message_id for text without a stable retry anchor", () => {

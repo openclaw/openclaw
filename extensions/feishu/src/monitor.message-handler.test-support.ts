@@ -1,4 +1,5 @@
 // Feishu test support covers monitor.message handler plugin behavior.
+import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +17,12 @@ function createTextEvent(params: {
   messageId: string;
   senderOpenId: string;
   senderType: "bot" | "user";
+  chatId?: string;
+  chatType?: FeishuMessageEvent["message"]["chat_type"];
+  text?: string;
+  createTime?: string;
+  rootId?: string;
+  threadId?: string;
 }): FeishuMessageEvent {
   return {
     sender: {
@@ -24,10 +31,13 @@ function createTextEvent(params: {
     },
     message: {
       message_id: params.messageId,
-      chat_id: "oc_chat_1",
-      chat_type: "p2p",
+      chat_id: params.chatId ?? "oc_chat_1",
+      chat_type: params.chatType ?? "p2p",
       message_type: "text",
-      content: JSON.stringify({ text: "hello" }),
+      content: JSON.stringify({ text: params.text ?? "hello" }),
+      create_time: params.createTime,
+      root_id: params.rootId,
+      thread_id: params.threadId,
     },
   };
 }
@@ -126,5 +136,113 @@ describe("createFeishuMessageReceiveHandler self-message filtering", () => {
     expect(
       handleMessage.mock.calls.map(([params]) => params.event.sender.sender_id.open_id),
     ).toEqual(["ou_other_bot", "ou_user"]);
+  });
+
+  it("admits route-distinct topic texts and still drops true redeliveries (#149313)", async () => {
+    const { handler, handleMessage, enqueue } = createHandler();
+    const shared = {
+      senderOpenId: "ou-same-sender",
+      senderType: "user" as const,
+      chatId: "oc-topic-group",
+      chatType: "topic_group" as const,
+      text: "same text",
+      createTime: "1710000000000",
+    };
+
+    await handler(
+      createTextEvent({
+        ...shared,
+        messageId: "om_topic_a_child",
+        rootId: "om_topic_a_root",
+        threadId: "omt_topic_a",
+      }),
+    );
+    await handler(
+      createTextEvent({
+        ...shared,
+        messageId: "om_topic_b_child",
+        rootId: "om_topic_b_root",
+        threadId: "omt_topic_b",
+      }),
+    );
+    await handler(
+      createTextEvent({
+        ...shared,
+        messageId: "om_topic_a_retry",
+        rootId: "om_topic_a_root",
+        threadId: "omt_topic_a",
+      }),
+    );
+
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect(handleMessage).toHaveBeenCalledTimes(2);
+    expect(handleMessage.mock.calls.map(([params]) => params.event.message.message_id)).toEqual([
+      "om_topic_a_child",
+      "om_topic_b_child",
+    ]);
+  });
+
+  it("admits route-distinct topic texts through the real debounce path (#149313)", async () => {
+    const handleMessage = vi.fn(async (_params: HandleMessageParams) => {});
+    const channelRuntime = {
+      commands: {
+        isControlCommandMessage: () => false,
+      },
+      debounce: {
+        resolveInboundDebounceMs: () => 0,
+        createInboundDebouncer: (params: Parameters<typeof createInboundDebouncer>[0]) =>
+          createInboundDebouncer(params),
+      },
+    } as unknown as PluginRuntime["channel"];
+
+    const handler = createFeishuMessageReceiveHandler({
+      cfg: {} as ClawdbotConfig,
+      channelRuntime,
+      accountId: "default",
+      chatHistories: new Map(),
+      handleMessage,
+      resolveDebounceText: () => "same text",
+      hasProcessedMessage: vi.fn(async () => false),
+      getBotOpenId: () => "ou_bot",
+    });
+    const shared = {
+      senderOpenId: "ou-proof-sender",
+      senderType: "user" as const,
+      chatId: "oc-transport-proof",
+      chatType: "topic_group" as const,
+      text: "same text",
+      createTime: "1710000000000",
+    };
+
+    await handler(
+      createTextEvent({
+        ...shared,
+        messageId: "om_proof_a_child",
+        rootId: "om_proof_a_root",
+        threadId: "omt_proof_a",
+      }),
+    );
+    await handler(
+      createTextEvent({
+        ...shared,
+        messageId: "om_proof_b_child",
+        rootId: "om_proof_b_root",
+        threadId: "omt_proof_b",
+      }),
+    );
+    await handler(
+      createTextEvent({
+        ...shared,
+        messageId: "om_proof_a_retry",
+        rootId: "om_proof_a_root",
+        threadId: "omt_proof_a",
+      }),
+    );
+
+    expect(handleMessage).toHaveBeenCalledTimes(2);
+    expect(handleMessage.mock.calls.map(([params]) => params.event.message.message_id)).toEqual([
+      "om_proof_a_child",
+      "om_proof_b_child",
+    ]);
   });
 });
