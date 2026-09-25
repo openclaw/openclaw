@@ -1,13 +1,4 @@
-/**
- * Shared browser route helpers.
- *
- * Centralizes body/query parsing, profile resolution, error mapping, Playwright
- * availability checks, and tab-context guards for route modules.
- */
-import {
-  asNonArrayRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
 import { redactCdpErrorText } from "../cdp.helpers.js";
 import { toBrowserErrorResponse } from "../errors.js";
@@ -16,7 +7,7 @@ import {
   withBrowserNavigationPolicy,
 } from "../navigation-guard.js";
 import type { PwAiModule } from "../pw-ai-module.js";
-import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
+import { getPwAiModule } from "../pw-ai-module.js";
 import type { InteractionTargetOptions } from "../pw-tools-core.interactions.navigation.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
@@ -38,22 +29,10 @@ export const SELECTOR_UNSUPPORTED_MESSAGE = [
   "This is more reliable for modern SPAs.",
 ].join("\n");
 
-/** Return a safe object body for routes that accept JSON payloads. */
 export function readBody(req: BrowserRequest): Record<string, unknown> {
   return asNonArrayRecord(req.body);
 }
 
-/** Read an optional targetId from a request body. */
-export function resolveTargetIdFromBody(body: Record<string, unknown>): string | undefined {
-  return normalizeOptionalString(body.targetId);
-}
-
-/** Read an optional targetId from a query object. */
-export function resolveTargetIdFromQuery(query: Record<string, unknown>): string | undefined {
-  return normalizeOptionalString(query.targetId);
-}
-
-/** Map route-level browser errors to HTTP JSON responses. */
 export function handleRouteError(ctx: BrowserRouteContext, res: BrowserResponse, err: unknown) {
   if (isProfileRestartRequiredError(err)) {
     throw err;
@@ -69,7 +48,6 @@ export function handleRouteError(ctx: BrowserRouteContext, res: BrowserResponse,
   jsonError(res, 500, redactCdpErrorText(String(err)));
 }
 
-/** Resolve the requested browser profile and respond with JSON on failure. */
 export function resolveProfileContext(
   req: BrowserRequest,
   res: BrowserResponse,
@@ -83,7 +61,6 @@ export function resolveProfileContext(
   return profileCtx;
 }
 
-/** Build navigation guard policy for a profile and current resolved config. */
 export function browserNavigationPolicyForProfile(
   ctx: BrowserRouteContext,
   profileCtx: ProfileContext,
@@ -96,17 +73,12 @@ export function browserNavigationPolicyForProfile(
   });
 }
 
-/** Load the optional Playwright bridge module in soft-fail mode. */
-export async function getPwAiModule(): Promise<PwAiModule | null> {
-  return await getPwAiModuleBase({ mode: "soft" });
-}
-
 /** Require Playwright support for a route feature, returning a 501 when absent. */
 export async function requirePwAi(
   res: BrowserResponse,
   feature: string,
 ): Promise<PwAiModule | null> {
-  const mod = await getPwAiModule();
+  const mod = await getPwAiModule({ mode: "soft" });
   if (mod) {
     return mod;
   }
@@ -149,7 +121,6 @@ type RouteWithTabParams<T> = {
   run: (ctx: RouteTabContext) => Promise<T>;
 };
 
-/** Resolve profile and tab context, optionally enforcing current URL policy. */
 export async function withRouteTabContext<T>(
   params: RouteWithTabParams<T>,
 ): Promise<T | undefined> {
@@ -249,7 +220,6 @@ type RouteWithPwParams<T> = Omit<RouteWithTabParams<T>, "run"> & {
   run: (ctx: RouteTabPwContext) => Promise<T>;
 };
 
-/** Resolve profile, tab, and Playwright context for Playwright-only routes. */
 export async function withPlaywrightRouteContext<T>(
   params: RouteWithPwParams<T>,
 ): Promise<T | undefined> {

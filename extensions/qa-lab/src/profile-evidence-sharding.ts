@@ -7,6 +7,7 @@ import {
   isPathInside,
 } from "openclaw/plugin-sdk/file-access-runtime";
 import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
+import { toRepoPath } from "./cli-paths.js";
 import {
   mergeQaEvidenceSummaries,
   validateQaEvidenceSummaryJson,
@@ -283,10 +284,6 @@ function shardSignature(scenarioIds: readonly string[]) {
   return scenarioIds.toSorted().join("\u0000");
 }
 
-function toPublishedPath(filePath: string) {
-  return filePath.split(path.sep).join("/");
-}
-
 async function resolveChildArtifactPath(params: {
   artifactPath: string;
   evidencePath: string;
@@ -328,7 +325,7 @@ async function resolveChildArtifactPath(params: {
       );
     }
     if ((await fs.stat(realCandidate)).isFile()) {
-      return toPublishedPath(path.relative(params.payloadRoot, candidate));
+      return toRepoPath(path.relative(params.payloadRoot, candidate));
     }
     return undefined;
   };

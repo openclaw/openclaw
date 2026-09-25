@@ -9,7 +9,7 @@ import {
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { getDiscordEndpointRuntime, type DiscordEndpointRuntime } from "../endpoint-runtime.js";
 import { captureDiscordRequestAuthority } from "./request-authority.js";
-import { serializeRequestBody } from "./rest-body.js";
+import { serializeRequestBody, type RequestData } from "./rest-body.js";
 import {
   DiscordError,
   RateLimitError,
@@ -27,7 +27,6 @@ import { isDiscordRateLimitBody } from "./schemas.js";
 
 export { DiscordError, isUnknownDiscordVoiceStateError, RateLimitError } from "./rest-errors.js";
 
-type RuntimeProfile = "serverless" | "persistent";
 type RequestPriority = RestRequestPriority;
 type RequestSchedulerOptions = {
   lanes?: Partial<
@@ -48,7 +47,6 @@ export type RequestClientOptions = {
   timeout?: number;
   queueRequests?: boolean;
   maxQueueSize?: number;
-  runtimeProfile?: RuntimeProfile;
   scheduler?: RequestSchedulerOptions;
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 };
@@ -58,13 +56,6 @@ type NormalizedRequestClientOptions = RequestClientOptions & {
   apiVersion: number;
   maxQueueSize: number;
   timeout: number;
-};
-
-export type RequestData = {
-  body?: unknown;
-  multipartStyle?: "message" | "form";
-  rawBody?: boolean;
-  headers?: Record<string, string>;
 };
 
 type RequestDispatchData = {
@@ -80,7 +71,6 @@ const defaultOptions = {
   timeout: 15_000,
   queueRequests: true,
   maxQueueSize: 1000,
-  runtimeProfile: "persistent" as RuntimeProfile,
 };
 
 const DEFAULT_MAX_CONCURRENT_WORKERS = 4;

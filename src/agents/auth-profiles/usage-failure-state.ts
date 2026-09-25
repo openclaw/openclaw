@@ -31,43 +31,23 @@ function calculateAuthProfileCooldownMs(errorCount: number): number {
 const RATE_LIMIT_BACKOFF_BASE_MS = 30_000;
 const RATE_LIMIT_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000;
 
-type ResolvedAuthCooldownConfig = {
-  billingBackoffMs: number;
-  billingMaxMs: number;
-  authPermanentBackoffMs: number;
-  authPermanentMaxMs: number;
-  failureWindowMs: number;
-};
-
 type DisabledFailureReason = Extract<AuthProfileFailureReason, "billing" | "auth_permanent">;
 
-type DisabledFailureBackoffPolicy = {
-  baseMs: number;
-  maxMs: number;
-};
-
+const FAILURE_WINDOW_MS = 24 * 60 * 60 * 1000;
 // Keep the initial billing disable short so inline API keys can retry soon
 // after recharge, even though they cannot probe during an active window.
-const AUTH_COOLDOWN_CONFIG: ResolvedAuthCooldownConfig = {
-  billingBackoffMs: 10 * 60 * 1000,
-  billingMaxMs: 24 * 60 * 60 * 1000,
-  authPermanentBackoffMs: 10 * 60 * 1000,
-  authPermanentMaxMs: 60 * 60 * 1000,
-  failureWindowMs: 24 * 60 * 60 * 1000,
-};
-
 const DISABLED_FAILURE_BACKOFF_POLICIES = {
   billing: {
-    baseMs: AUTH_COOLDOWN_CONFIG.billingBackoffMs,
-    maxMs: AUTH_COOLDOWN_CONFIG.billingMaxMs,
+    baseMs: 10 * 60 * 1000,
+    maxMs: 24 * 60 * 60 * 1000,
   },
   auth_permanent: {
     // Recover quickly because some providers surface auth-looking payloads
     // transiently during incidents.
-    baseMs: AUTH_COOLDOWN_CONFIG.authPermanentBackoffMs,
-    maxMs: AUTH_COOLDOWN_CONFIG.authPermanentMaxMs,
+    baseMs: 10 * 60 * 1000,
+    maxMs: 60 * 60 * 1000,
   },
-} as const satisfies Record<DisabledFailureReason, DisabledFailureBackoffPolicy>;
+} satisfies Record<DisabledFailureReason, { baseMs: number; maxMs: number }>;
 
 function calculateCappedExponentialBackoffMs(params: {
   errorCount: number;
@@ -81,16 +61,6 @@ function calculateCappedExponentialBackoffMs(params: {
   const exponent = Math.min(normalized - 1, maxExponent);
   const raw = baseMs * 2 ** exponent;
   return Math.min(maxMs, raw);
-}
-
-function resolveDisabledFailureBackoffMs(params: {
-  reason: DisabledFailureReason;
-  errorCount: number;
-}): number {
-  return calculateCappedExponentialBackoffMs({
-    errorCount: params.errorCount,
-    ...DISABLED_FAILURE_BACKOFF_POLICIES[params.reason],
-  });
 }
 
 function keepActiveWindowOrRecompute(params: {
@@ -118,11 +88,10 @@ export function computeNextProfileUsageStats(params: {
   ) {
     return params.existing;
   }
-  const windowMs = AUTH_COOLDOWN_CONFIG.failureWindowMs;
   const windowExpired =
     typeof params.existing.lastFailureAt === "number" &&
     params.existing.lastFailureAt > 0 &&
-    params.now - params.existing.lastFailureAt > windowMs;
+    params.now - params.existing.lastFailureAt > FAILURE_WINDOW_MS;
 
   // If the previous cooldown has already expired, reset error counters so the
   // profile gets a fresh backoff window. clearExpiredCooldowns() does this
@@ -162,9 +131,9 @@ export function computeNextProfileUsageStats(params: {
 
   if (disabledFailureReason) {
     const disableCount = failureCounts[disabledFailureReason] ?? 1;
-    const backoffMs = resolveDisabledFailureBackoffMs({
-      reason: disabledFailureReason,
+    const backoffMs = calculateCappedExponentialBackoffMs({
       errorCount: disableCount,
+      ...DISABLED_FAILURE_BACKOFF_POLICIES[disabledFailureReason],
     });
     // Keep active disable windows immutable so retries within the window cannot
     // extend recovery time indefinitely.

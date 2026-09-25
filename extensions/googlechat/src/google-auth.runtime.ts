@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import type { ConnectionOptions } from "node:tls";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
@@ -274,6 +276,15 @@ function validateGoogleChatServiceAccountCredentials(
   };
 }
 
+function sanitizeCredentialFileReadError(error: unknown): Error {
+  // Filesystem messages and causes can contain the private credential path.
+  return new Error(
+    extractErrorCode(error) === "too-large"
+      ? `Google Chat service account file exceeds ${MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES} bytes.`
+      : "Failed to load Google Chat service account file.",
+  );
+}
+
 async function readCredentialsFile(filePath: string): Promise<Record<string, unknown>> {
   const resolvedPath = resolveUserPath(filePath);
   if (!resolvedPath) {
@@ -283,8 +294,8 @@ async function readCredentialsFile(filePath: string): Promise<Record<string, unk
   let handle: Awaited<ReturnType<typeof fs.open>> | null;
   try {
     handle = await fs.open(resolvedPath, "r");
-  } catch {
-    throw new Error("Failed to load Google Chat service account file.");
+  } catch (error) {
+    throw sanitizeCredentialFileReadError(error);
   }
 
   try {
@@ -292,22 +303,13 @@ async function readCredentialsFile(filePath: string): Promise<Record<string, unk
     if (!stat.isFile()) {
       throw new Error("Google Chat service account file must be a regular file.");
     }
-    if (stat.size > MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES) {
-      throw new Error(
-        `Google Chat service account file exceeds ${MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES} bytes.`,
-      );
-    }
-
     let raw: string;
     try {
-      raw = await handle.readFile({ encoding: "utf8" });
-    } catch {
-      throw new Error("Failed to load Google Chat service account file.");
-    }
-    if (Buffer.byteLength(raw, "utf8") > MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES) {
-      throw new Error(
-        `Google Chat service account file exceeds ${MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES} bytes.`,
-      );
+      raw = (
+        await readFileHandleBounded(handle, MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES)
+      ).toString("utf8");
+    } catch (error) {
+      throw sanitizeCredentialFileReadError(error);
     }
 
     let parsed: unknown;

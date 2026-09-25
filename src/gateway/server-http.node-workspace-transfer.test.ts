@@ -3,9 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayHttpServer } from "./server-http.js";
-import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
+import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http.js";
-import type { WorkerBootstrapArtifactTransferHttpCallback } from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
 
 const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
 const activeLimiters: AuthRateLimiter[] = [];
@@ -17,8 +16,8 @@ afterEach(() => {
 });
 
 async function withTransferServer<T>(params: {
-  bundleCallback?: NodeWorkerBundleTransferHttpCallback;
-  bootstrapCallback?: WorkerBootstrapArtifactTransferHttpCallback;
+  bundleCallback?: ArtifactTransferHttpCallback;
+  bootstrapCallback?: ArtifactTransferHttpCallback;
   callback?: NodeWorkspaceTransferHttpCallback;
   limiter?: AuthRateLimiter;
   hooks?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -61,7 +60,7 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
 describe("node worker bundle transfer HTTP routing", () => {
   it("reserves the exact bundle namespace and collapses rejected auth", async () => {
     const hooks = vi.fn(async () => false);
-    const callback = vi.fn<NodeWorkerBundleTransferHttpCallback>(async () => ({
+    const callback = vi.fn<ArtifactTransferHttpCallback>(async () => ({
       kind: "unauthorized",
     }));
     await withTransferServer({
@@ -88,7 +87,7 @@ describe("node worker bundle transfer HTTP routing", () => {
   });
 
   it("lets an authenticated exact bundle route own its response", async () => {
-    const callback: NodeWorkerBundleTransferHttpCallback = async ({ bearer, bundleHash, res }) => {
+    const callback: ArtifactTransferHttpCallback = async ({ bearer, artifactKey, res }) => {
       if (bearer !== "valid-bundle-token") {
         return { kind: "unauthorized" };
       }
@@ -96,7 +95,7 @@ describe("node worker bundle transfer HTTP routing", () => {
         kind: "authorized",
         handle: () => {
           res.writeHead(200, { "content-type": "text/plain" });
-          res.end(bundleHash);
+          res.end(artifactKey);
         },
       };
     };
@@ -120,16 +119,15 @@ describe("node worker bundle transfer HTTP routing", () => {
 describe("cloud bootstrap artifact HTTP routing", () => {
   it("serves only an authorized exact artifact before node enrollment and reserves malformed paths", async () => {
     const hooks = vi.fn(async () => false);
-    const callback = vi.fn<WorkerBootstrapArtifactTransferHttpCallback>(
-      async ({ bearer, artifactSha256, res }) =>
-        bearer === "bootstrap-capability"
-          ? {
-              kind: "authorized",
-              handle: () => {
-                res.end(artifactSha256);
-              },
-            }
-          : { kind: "unauthorized" },
+    const callback = vi.fn<ArtifactTransferHttpCallback>(async ({ bearer, artifactKey, res }) =>
+      bearer === "bootstrap-capability"
+        ? {
+            kind: "authorized",
+            handle: () => {
+              res.end(artifactKey);
+            },
+          }
+        : { kind: "unauthorized" },
     );
     await withTransferServer({
       bootstrapCallback: callback,

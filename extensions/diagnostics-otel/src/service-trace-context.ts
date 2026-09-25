@@ -3,12 +3,12 @@ import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
   DiagnosticTraceContext,
-} from "../api.js";
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   isValidDiagnosticSpanId,
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
-} from "../api.js";
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 
 export function normalizeTraceContext(value: unknown): DiagnosticTraceContext | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {

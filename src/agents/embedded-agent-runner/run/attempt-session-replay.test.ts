@@ -45,7 +45,9 @@ import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
   clearEmbeddedSessionPromptStates,
+  createToolResultPromptProjectionState,
   getEmbeddedSessionPromptState,
+  persistToolResultProjections,
 } from "../session-prompt-state.js";
 import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
@@ -64,12 +66,13 @@ function appendCompletedToolWork(
   manager: SessionManager,
   runId: string,
   beforeNested?: () => void,
+  suffix = "",
 ) {
   const original = guardSessionManager(manager, { runId });
   original.appendMessage(
     createAssistant(
       testModel,
-      [{ type: "toolCall", id: "completed-read", name: "read", arguments: {} }],
+      [{ type: "toolCall", id: "completed-read" + suffix, name: "read", arguments: {} }],
       "toolUse",
     ),
   );
@@ -77,11 +80,11 @@ function appendCompletedToolWork(
   original.appendMessage(
     createNestedToolActivity({
       runId,
-      scopeId: "nested-scope",
+      scopeId: "nested-scope" + suffix,
       afterEntryId: original.getAppendParentId(),
       startOrder: 0,
-      parentToolCallId: "completed-read",
-      toolCallId: "nested-read",
+      parentToolCallId: "completed-read" + suffix,
+      toolCallId: "nested-read" + suffix,
       toolName: "read",
       input: {},
       result: { content: [{ type: "text", text: "Nested read completed" }] },
@@ -92,13 +95,23 @@ function appendCompletedToolWork(
   );
   original.appendMessage({
     role: "toolResult",
-    toolCallId: "completed-read",
+    toolCallId: "completed-read" + suffix,
     toolName: "read",
     content: [{ type: "text", text: "Already read: use this completed result" }],
     isError: false,
     timestamp: 4,
   });
   original.appendCustomEntry("openclaw.cache-ttl", { timestamp: 4 });
+}
+
+function appendOversizedCacheSnapshot(manager: SessionManager) {
+  const state = createToolResultPromptProjectionState();
+  state.frozen.add("prior-result");
+  state.sourceHashByKey.set("prior-result", "synthetic-source");
+  state.replacements.set("prior-result", {
+    content: [{ type: "text", text: "x".repeat(64_000) }],
+  });
+  persistToolResultProjections(state, (type, data) => manager.appendCustomEntry(type, data));
 }
 
 async function withInterruptedTurn(
@@ -112,7 +125,12 @@ async function withInterruptedTurn(
     target: NonNullable<ReturnType<SessionManager["getSessionTarget"]>>;
     revoke: () => void;
   }) => Promise<void>,
-  options: { interruptedTurn?: boolean; toolProgress?: boolean; settledPrefix?: boolean } = {},
+  options: {
+    interruptedTurn?: boolean;
+    toolProgress?: boolean;
+    settledPrefix?: boolean;
+    oversizedMetadata?: boolean;
+  } = {},
 ) {
   await withOpenClawTestState({ label: "interrupted-keyed-replay" }, async (state) => {
     const runId = "interrupted-keyed-replay";
@@ -164,6 +182,10 @@ async function withInterruptedTurn(
         carrier.display,
         carrier.details,
       );
+    }
+    if (options.oversizedMetadata) {
+      appendCompletedToolWork(original, runId, undefined, "-before-window");
+      appendOversizedCacheSnapshot(original);
     }
     if (options.toolProgress) {
       appendCompletedToolWork(original, runId);
@@ -412,9 +434,11 @@ describe("interrupted canonical user replay", () => {
     { appendOnly: true, interruptedTurn: true, toolProgress: true },
     { appendOnly: false, interruptedTurn: true, toolProgress: false },
     { appendOnly: true, interruptedTurn: true, toolProgress: false },
+    { appendOnly: false, interruptedTurn: true, toolProgress: true, oversizedMetadata: true },
+    { appendOnly: true, interruptedTurn: true, toolProgress: true, oversizedMetadata: true },
   ])(
-    "replays one user after restart (carrier=$appendOnly, abort row=$interruptedTurn, tools=$toolProgress)",
-    async ({ appendOnly, interruptedTurn, toolProgress }) => {
+    "replays one user after restart (carrier=$appendOnly, abort row=$interruptedTurn, tools=$toolProgress, oversized metadata=$oversizedMetadata)",
+    async ({ appendOnly, interruptedTurn, toolProgress, oversizedMetadata }) => {
       let observedWalks = 0;
       const nativeReadFailures: unknown[] = [];
       const prepare = SessionManager.prototype[sessionManagerPrepareCurrentTurnReplay];
@@ -441,6 +465,7 @@ describe("interrupted canonical user replay", () => {
         async (fixture) => {
           const before = loadTranscriptEventsSync(fixture.target);
           await withReplaySession(fixture, appendOnly, async (session, submit) => {
+            expect(fixture.attempt.userTurnTranscriptRecorder!.hasPersisted()).toBe(true);
             streamMocks.streamSimple.mockImplementation((model) =>
               createAssistantResultStream(
                 createAssistant(model, [{ type: "text", text: "Continued from completed work" }]),
@@ -466,9 +491,24 @@ describe("interrupted canonical user replay", () => {
                 }),
               );
             }
+            if (oversizedMetadata) {
+              expect(
+                messages.flatMap((message: { role: string; toolCallId?: string }) =>
+                  message.role === "toolResult" ? [message.toolCallId] : [],
+                ),
+              ).toEqual(["completed-read-before-window", "completed-read"]);
+            }
             expect(session.getLastAssistantText()).toBe("Continued from completed work");
             const after = loadTranscriptEventsSync(fixture.target);
             expect(after.slice(0, before.length)).toEqual(before);
+            if (oversizedMetadata) {
+              expect(
+                after.filter(
+                  (entry) =>
+                    (entry as { message?: { role?: string } }).message?.role === "toolResult",
+                ),
+              ).toHaveLength(2);
+            }
             expect(
               after.filter(
                 (entry) => (entry as { message?: { role?: string } }).message?.role === "user",
@@ -476,7 +516,7 @@ describe("interrupted canonical user replay", () => {
             ).toHaveLength(1);
           });
         },
-        { interruptedTurn, toolProgress },
+        { interruptedTurn, toolProgress, oversizedMetadata },
       );
       expect(observedWalks).toBeGreaterThan(0);
       expect(nativeReadFailures).toEqual([]);
@@ -784,6 +824,7 @@ describe("interrupted canonical user replay", () => {
             }
           },
         );
+        appendOversizedCacheSnapshot(original);
         await withReplaySession(fixture, false, async (_session, submit) => {
           await submit();
           expect(streamMocks.streamSimple).not.toHaveBeenCalled();
@@ -848,6 +889,7 @@ describe("interrupted canonical user replay", () => {
         "reset",
         "branch",
         "writer",
+        "lifecycle",
         "session",
         "closed",
       ] as const
@@ -896,11 +938,13 @@ describe("interrupted canonical user replay", () => {
           if (change === "branch") {
             other.appendLeafControl({ targetId: null, appendParentId: null });
           }
-          if (change === "writer" || change === "session") {
+          if (change === "writer" || change === "session" || change === "lifecycle") {
             await upsertSessionEntryCore(fixture.target, {
               sessionId: change === "session" ? "replacement-session" : fixture.target.sessionId,
               updatedAt: 2,
-              activeWriterRunId: "replacement-writer",
+              activeWriterRunId:
+                change === "lifecycle" ? fixture.attempt.runId : "replacement-writer",
+              ...(change === "lifecycle" ? { lifecycleRevision: "replacement-generation" } : {}),
             });
           }
           if (change === "closed") {

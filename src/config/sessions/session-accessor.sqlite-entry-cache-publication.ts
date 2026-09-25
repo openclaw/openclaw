@@ -133,7 +133,7 @@ export function emitPreparedSessionSharingChange(
     agentId,
     storePath: database.path,
     sessionKey,
-    ...(facts ? { facts } : { factsInvalidated: true }),
+    ...(facts ? { facts, scope: "session-entry" as const } : { factsInvalidated: true }),
   };
   preparedSharingChanges.changes.set(change, receipt);
   sessionChanges.emit(change, database.db);
@@ -689,6 +689,7 @@ export function retainSessionEntryWorkerPublication(params: {
           storePath: params.storePath,
           sessionKey,
           factsInvalidated: true,
+          ...(receipt && !unknown ? { scope: "session-entry" as const } : {}),
         };
         if (receipt) {
           // A COMMIT receipt can survive unknown settlement without retaining creation custody.

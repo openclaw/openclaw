@@ -43,7 +43,7 @@ function source(
           if (!grant()) {
             throw new Error("Creation witness fixture lost admission");
           }
-        }),
+        }, binding.attachment),
       });
     },
   };

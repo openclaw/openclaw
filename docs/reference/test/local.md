@@ -19,6 +19,11 @@ worker concurrency, heap limits, or individual file boundaries. Raw Vitest and
 existing single-invocation selections, such as explicit targets, coverage, report
 output, bail, and watch mode, retain their existing behavior.
 
+Expanded full-suite runs split infrastructure and host-owned SQLite tests into
+batches of at most 64 files. Each batch keeps isolated fork workers within the
+existing full-suite worker budget. Focused selections and watch mode retain their
+usual routing.
+
 Tests that create real managed worktrees must satisfy the
 [capacity and disk-space requirements](/concepts/managed-worktrees#capacity-and-disk-space),
 including the additional allowance for executable setup scripts. Keep that space

@@ -566,12 +566,21 @@ fresh `--state-dir`, which the refusal prints.
    `npm beta floor: release-ledger token unavailable`), dispatch the sync by
    hand before the verify runs. `Finalize GitHub release` accepts an already
    public release with the expected tag target and latest state; a manual flip
-   does not fail the parent. Each npm child (`Plugin NPM Release`,
-   `openclaw-npm-release.yml`) needs its own `npm-release` approval;
+   does not fail the parent. The parent's `npm-release` approval is the one
+   release approval: the approved `publish` job writes and attests the
+   `openclaw-release-approval-v1-<run>-<attempt>` receipt (tag, target SHA,
+   tooling identity, approver) before dispatching children, and every
+   bot-dispatched child verifies it in its trusted-tooling validation job. The
+   ClawHub child then runs without its `clawhub-plugin-release` gate, waiting
+   instead for the parent's transaction-bound authorization receipt before its
+   publish jobs start. npm children keep the `npm-release` gate because their
+   npm trusted publishers are bound to that environment (`npm trust list
+openclaw`), and the workflow token cannot approve it (`canApprove=false`):
    watch `gh api repos/openclaw/openclaw/actions/runs/<child>/pending_deployments`
-   and approve npm children only. Never approve a ClawHub child by hand (its
-   publish jobs then fail `Artifact not found`); cancel it and re-dispatch the
-   parent. Before every child dispatch the parent rejects the gates of, cancels,
+   and approve the plugin npm and core npm children by hand. Direct human
+   dispatch of a child keeps its own gate and does not use the receipt. Never
+   approve a ClawHub child by hand; cancel it and re-dispatch the parent.
+   Before every child dispatch the parent rejects the gates of, cancels,
    and waits (bounded 5 minutes) for a failed earlier parent's `waiting`/`queued`
    children of the same release; a parent failure also cancels its own waiting
    npm children. Only legacy children without a parent identity in their run
@@ -1265,6 +1274,18 @@ Use this box to answer "does the release behave correctly in QA scenarios and li
 ### Package
 
 The Package box is the installable-product gate. It is backed by `Package Acceptance` and the resolver `scripts/resolve-openclaw-package-candidate.mts`. The resolver normalizes a candidate into the `package-under-test` tarball consumed by Docker E2E, validates the package inventory, records the package version and SHA-256, and keeps the workflow harness ref separate from the package source ref.
+
+The bundled Chrome MCP artifact checker selects a trusted, exact patch-byte
+contract from the candidate's declared dependency pin and requires the bundled
+manifest to match it. The supported contracts are `1.8.0` (shipped in
+`v2026.9.6` at `eb377ac59e6c9fd6c7705028034812becf00271b`) and `1.9.0`.
+Both retain their original runtime hashes, required assets, ESM manifest, and
+bundled CLI resolution checks. Ranges, unknown versions, mixed contracts, and
+artifact-supplied hash tables cannot authorize a payload. Retain the `1.8.0`
+contract while supported frozen release targets pin it; retire it explicitly
+when those targets retire or migrate to a qualified newer pin, not merely when
+main updates its dependency. This does not change the candidate dependency or
+waive any package acceptance gate.
 
 Supported candidate sources:
 

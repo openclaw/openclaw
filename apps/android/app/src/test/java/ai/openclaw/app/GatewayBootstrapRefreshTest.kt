@@ -71,6 +71,7 @@ class GatewayBootstrapRefreshTest {
       val operatorConnects = AtomicInteger()
       val creates = AtomicInteger()
       val refreshing = AtomicBoolean()
+      val talkConfig = """{"config":{"clientHints":{"realtime":{"gatewayRelaySupported":true}}}}"""
       val gateway =
         ConsumedBootstrapGateway(sharedToken = "test-token", interceptRequest = { frame, socket ->
           val id = frame.getValue("id").jsonPrimitive.content
@@ -98,7 +99,10 @@ class GatewayBootstrapRefreshTest {
             }
 
             "talk.config" -> {
-              configRequest.complete(socket to id)
+              // Startup and the explicit refresh can invalidate the first read concurrently.
+              if (!configRequest.complete(socket to id)) {
+                socket.send("""{"type":"res","id":"$id","ok":true,"payload":$talkConfig}""")
+              }
               true
             }
 
@@ -168,7 +172,7 @@ class GatewayBootstrapRefreshTest {
         )
         assertFalse(runtime.nodeConnected.value)
 
-        configSocket.send("""{"type":"res","id":"$configId","ok":true,"payload":{"config":{"clientHints":{"realtime":{"gatewayRelaySupported":true}}}}}""")
+        configSocket.send("""{"type":"res","id":"$configId","ok":true,"payload":$talkConfig}""")
         withTimeout(5_000) { runtime.talkModeListening.first { it } }
         val recorder = withTimeout(5_000) { captureStarted.await() }
         assertNull(runtime.talkFailureNotice.value)

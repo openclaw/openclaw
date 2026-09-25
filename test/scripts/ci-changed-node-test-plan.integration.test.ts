@@ -88,6 +88,7 @@ it("keeps UI fallback with its complete canonical owners beside precise core cha
   expect(shards).not.toBeNull();
   expect(hasControlUiPerformanceAffectingChange([paths[2]!])).toBe(true);
   const full = createNodeTestShardBundles({
+    changedPaths: paths,
     compactMode: "pull-request",
     runnerBackend: "hybrid",
     includeReleaseOnlyRuntimeTests: false,

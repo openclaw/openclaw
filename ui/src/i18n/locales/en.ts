@@ -3482,6 +3482,29 @@ export const en: TranslationMap & {
     outboxRecoveryFull:
       "Recovery is full. Restore saved entries to make room; remaining legacy data is still retained in this browser.",
     outboxRecoveryMessages: "Queued messages: {count}",
+    privateDraftReload: {
+      blocked: "An unsent Incognito draft is keeping this tab open. Review it before refreshing.",
+      review: "Review private draft",
+      title: "Unsent Incognito draft",
+      description:
+        "This draft stays only in this tab. Copy its text or download its attachments before discarding it to refresh. Keeping this tab open leaves the draft unchanged.",
+      text: "Draft text",
+      copy: "Copy text",
+      goal: "This draft includes an unsent goal change.",
+      reading:
+        "Some attachments are still being read. Keep this tab open, then review the draft again when they finish.",
+      changed:
+        "The draft changed while you were reviewing it. It has not been discarded; review the current draft before refreshing.",
+      copyFailed:
+        "The text could not be copied. Select it in the draft field and copy it manually.",
+      attachmentUnavailable:
+        "This attachment is no longer available to download. Keep the draft open and recover the original file before discarding it.",
+      download: "Download {name}",
+      discard: "Discard this draft and refresh",
+      keep: "Keep in this tab",
+      unavailable:
+        "The private draft could not be opened. It remains in this tab; try Review private draft again.",
+    },
     incognitoExpiredTitle: "Incognito session expired",
     incognitoExpiredBody:
       "Incognito sessions last for 24 hours or until the Gateway restarts. Your unsent input stays in this tab.",

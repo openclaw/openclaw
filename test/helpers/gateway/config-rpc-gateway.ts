@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import chokidar from "chokidar";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, vi, type TestContext } from "vitest";
 import { resolveDefaultAgentDir } from "../../../src/agents/agent-scope.js";
 import { prepareHostConfigSnapshot } from "../../../src/config/io.snapshot-preparation.js";
 import { GatewayClient, GatewayClientRequestError } from "../../../src/gateway/client.js";
@@ -10,7 +11,8 @@ import { pruneStaleControlPlaneBuckets } from "../../../src/gateway/control-plan
 import { configRawPayload } from "../../../src/gateway/server.config-patch.test-support.js";
 import { startGatewayServer } from "../../../src/gateway/server.js";
 import { resetGatewayRestartStateForInProcessRestart } from "../../../src/infra/restart.js";
-import { resetLogger, setLoggerOverride } from "../../../src/logging/logger.js";
+import { readConfiguredParsedLogTail } from "../../../src/logging/log-tail.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../../../src/logging/logger.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../src/plugins/plugin-metadata-lifecycle.js";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
 import { deleteTestEnvValue } from "../../../src/test-utils/env.js";
@@ -56,9 +58,26 @@ export async function rpcReq<T extends Record<string, unknown>>(
     if (!(error instanceof GatewayClientRequestError)) {
       throw error;
     }
+    let message = error.message;
+    if (isRecord(error.details) && Object.hasOwn(error.details, "persistedConfig")) {
+      try {
+        await flushLogger();
+        const tail = await readConfiguredParsedLogTail({
+          limit: 8,
+          maxBytes: 64 * 1024,
+          filter: ({ subsystem }) => subsystem === "gateway/reload",
+        });
+        if (tail.lines.length > 0) {
+          message += `\nRecent Gateway reload diagnostics:\n${tail.lines.map((line) => line.message).join("\n")}`;
+        }
+      } catch {
+        // Diagnostic I/O must not replace the config operation's original failure.
+        message += "\nRecent Gateway reload diagnostics could not be read.";
+      }
+    }
     return {
       ok: false,
-      error: { message: error.message, code: error.code, details: error.details },
+      error: { message, code: error.code, details: error.details },
     };
   }
 }
@@ -70,15 +89,17 @@ export function requireConfigObject(value: unknown, label: string): Record<strin
   return value as Record<string, unknown>;
 }
 
-async function startConfigRpcGateway({
-  configRelativePath,
-  watchConfigFiles = true,
-}: ConfigRpcGatewayOptions = {}) {
+async function startConfigRpcGateway(
+  { configRelativePath, watchConfigFiles = true }: ConfigRpcGatewayOptions = {},
+  recordPhase?: (phase: string) => void,
+) {
+  recordPhase?.("state.create");
   state = await createOpenClawTestState({
     label: "config-rpc",
     env: {
       OPENCLAW_GATEWAY_TOKEN: undefined,
       OPENCLAW_GATEWAY_PASSWORD: undefined,
+      OPENCLAW_LOG_LEVEL: undefined,
       OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
       OPENCLAW_SKIP_CANVAS_HOST: "1",
@@ -92,9 +113,14 @@ async function startConfigRpcGateway({
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve(import.meta.dirname, "../../../dist/extensions"),
     },
   });
-  setLoggerOverride({ level: "silent", consoleLevel: "silent" });
+  setLoggerOverride({
+    file: state.path("gateway.log"),
+    level: "info",
+    consoleLevel: "silent",
+  });
   const config = { agents: { entries: { main: {} } } };
   const configPath = configRelativePath ? state.statePath(configRelativePath) : state.configPath;
+  recordPhase?.("config.write");
   if (configRelativePath) {
     await writeJsonFile(configPath, config);
     process.env.OPENCLAW_CONFIG_PATH = configPath;
@@ -114,13 +140,16 @@ async function startConfigRpcGateway({
     });
   }
   hotReloadRecovery.mockClear();
+  recordPhase?.("port.allocate");
   const port = await getFreePort();
+  recordPhase?.("server.start");
   server = await startGatewayServer(port, {
     auth: { mode: "token", token: GATEWAY_TOKEN },
     prepareConfigSnapshot: prepareHostConfigSnapshot,
     controlUiEnabled: false,
     hotReloadRecovery,
   });
+  recordPhase?.("client.create");
   const connected = createDeferredCore();
   client = new GatewayClient({
     url: `ws://127.0.0.1:${port}`,
@@ -141,31 +170,65 @@ async function startConfigRpcGateway({
     onClose: (code, reason) => connected.reject(new Error(`closed ${code}: ${reason}`)),
   });
   client.start();
+  recordPhase?.("client.connect");
   await withTestTimeout(connected.promise, 10_000, "gateway connect timeout");
+  recordPhase?.("server.startupSettled");
   await server.startupSettled;
+  recordPhase?.("complete");
 }
 
-async function stopConfigRpcGateway() {
+async function stopConfigRpcGateway(recordPhase?: (phase: string) => void) {
   // This fixture has no run loop. Retire direct RPC restart timers before
   // teardown and after its owners drain so they cannot reach the next case.
   await runQaGatewayFixture(
-    async () => resetGatewayRestartStateForInProcessRestart(),
     async () => {
+      recordPhase?.("restart.before");
+      return resetGatewayRestartStateForInProcessRestart();
+    },
+    async () => {
+      recordPhase?.("client.stopAndWait");
       await client?.stopAndWait();
       client = undefined;
     },
     async () => {
+      recordPhase?.("server.close");
       await server?.close();
       server = undefined;
     },
-    () => Promise.all(unarmedConfigWatchers.splice(0).map((watcher) => watcher.close())),
-    () => resetGatewayRestartStateForInProcessRestart(),
-    () => state?.cleanup(),
-    () => resetLogger(),
-    () => clearPluginMetadataLifecycleCaches(),
-    () => vi.restoreAllMocks(),
-    () => expect(hotReloadRecovery).not.toHaveBeenCalled(),
+    () => {
+      recordPhase?.("watchers.close");
+      return Promise.all(unarmedConfigWatchers.splice(0).map((watcher) => watcher.close()));
+    },
+    () => {
+      recordPhase?.("restart.after");
+      return resetGatewayRestartStateForInProcessRestart();
+    },
+    () => {
+      recordPhase?.("logger.flush");
+      return flushLogger();
+    },
+    () => {
+      recordPhase?.("state.cleanup");
+      return state?.cleanup();
+    },
+    () => {
+      recordPhase?.("logger.reset");
+      return resetLogger();
+    },
+    () => {
+      recordPhase?.("metadata.clearCaches");
+      return clearPluginMetadataLifecycleCaches();
+    },
+    () => {
+      recordPhase?.("mocks.restore");
+      return vi.restoreAllMocks();
+    },
+    () => {
+      recordPhase?.("recovery.assert");
+      return expect(hotReloadRecovery).not.toHaveBeenCalled();
+    },
   );
+  recordPhase?.("complete");
 }
 
 export async function resetTempDir(name: string): Promise<string> {
@@ -254,11 +317,31 @@ export async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) 
 }
 
 export function installConfigWriteGatewayHooks(options: ConfigRpcGatewayOptions = {}) {
-  beforeEach(() => startConfigRpcGateway(options));
+  const phasesByTask = new WeakMap<TestContext["task"], { setup: string; teardown: string }>();
+  beforeEach((context) => {
+    const phases = { setup: "not-started", teardown: "not-started" };
+    phasesByTask.set(context.task, phases);
+    context.onTestFailed(() => {
+      console.error(
+        "[config-rpc-hook-phase]",
+        JSON.stringify({ test: context.task.name, ...phases }),
+      );
+    });
+    return startConfigRpcGateway(options, (phase) => {
+      phases.setup = phase;
+    });
+  });
   beforeEach(() => {
     pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
   });
-  afterEach(stopConfigRpcGateway);
+  afterEach((context) => {
+    const phases = phasesByTask.get(context.task);
+    return stopConfigRpcGateway((phase) => {
+      if (phases) {
+        phases.teardown = phase;
+      }
+    });
+  });
 }
 
 export function installSharedConfigWriteGatewayHooks({
@@ -301,7 +384,7 @@ export function installSharedConfigWriteGatewayHooks({
       () => expect(hotReloadRecovery).not.toHaveBeenCalled(),
     ),
   );
-  afterAll(stopConfigRpcGateway);
+  afterAll(() => stopConfigRpcGateway());
 }
 
 export function installReadOnlyConfigGatewayHooks() {
@@ -319,7 +402,7 @@ export function installReadOnlyConfigGatewayHooks() {
       () => expect(hotReloadRecovery).not.toHaveBeenCalled(),
     ),
   );
-  afterAll(stopConfigRpcGateway);
+  afterAll(() => stopConfigRpcGateway());
 }
 
 export function configRpcWorkspacePath(name: string) {

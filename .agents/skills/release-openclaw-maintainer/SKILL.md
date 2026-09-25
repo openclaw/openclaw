@@ -98,6 +98,21 @@ publish-bytes defect. Name each cherry-pick in the handoff record. Not allowed:
 opportunistic backports, feature reverts, or a new base taken to "pick up" a
 fix that cherry-picks cleanly enough with a small conflict resolution.
 
+Release process improvements made during a release land on both branches.
+Workflow, release-script, release-test, `RELEASING.md`, and release-skill changes
+merge to `main` first, then get cherry-picked (`-x`) onto `release/YYYY.M.PATCH`
+after the tag without moving the Code SHA, so recovery and the next patch run
+the same tooling. Where `main`-only CI infrastructure is missing on the branch,
+keep the branch's expression form and port only the logic. Product code on the
+release branch stays blocker-only per the rule above.
+
+A release is not done while anything opened for it is still open. Before the
+final report, list every PR created during the release (`gh pr list --author
+@me --state open` plus any PR bound to the session) and land or explicitly close
+each one with a reason; confirm its fix is on `main` and, when it is release
+tooling, on the release branch. Also remove the release's temporary worktrees,
+abandoned local cut branches, and stale `scripts/pr` worktrees.
+
 Published versions and final tags are immutable. Reuse successful exact-source
 artifacts; do not rebuild or republish as an implicit retry. The active release
 is the work queue: no opportunistic moving-main fixes or backports. Classify

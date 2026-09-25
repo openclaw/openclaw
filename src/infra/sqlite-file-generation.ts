@@ -19,15 +19,7 @@ export function readSqliteIntegrityFileIdentity(
 
 type SqliteFileFingerprint = FileMutationFingerprint & { sha256: string };
 
-type SerializedSqliteFileFingerprint = {
-  birthtimeNs: string;
-  ctimeNs: string;
-  dev: string;
-  ino: string;
-  mtimeNs: string;
-  sha256: string;
-  size: string;
-};
+type SerializedSqliteFileFingerprint = Record<keyof SqliteFileFingerprint, string>;
 
 export type SqliteFileGeneration = {
   database: SqliteFileFingerprint;

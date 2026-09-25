@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { shellEscape } from "../../agents/sandbox/remote-shell-command.js";
 import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -325,10 +326,6 @@ export function workerSshCommandOptions(params: {
     maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
     killProcessTree: true,
   };
-}
-
-function shellEscape(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 export function workerSshRemoteCommand(argv: readonly string[]): string {

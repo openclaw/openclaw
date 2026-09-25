@@ -2,7 +2,9 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
+import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { restoreDraft, retainDraft } from "./draft-navigation-handoff.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
@@ -382,7 +384,7 @@ describe("NewSessionDraftPersistence restore race", () => {
 
   it("keeps an incognito draft private when navigation hands it to a fresh page", async () => {
     const { context, flow: source } = createDraftFixture();
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(context.gateway);
     Object.assign(context, { chatAttachmentHandoff: handoff });
     source.draftPersistence.setOwner("ws://gateway.example", "principal-a");
     source.draftPersistence.selectRoute("private-route");
@@ -390,8 +392,10 @@ describe("NewSessionDraftPersistence restore race", () => {
     source.setMessage("private incognito draft");
     retainDraft(context, source, "private-route", "private-route");
     source.disconnect();
+    expect(canReloadControlUiDocument()).toBe(false);
     const target = createFlow();
     restoreDraft(context, target, "private-route", "");
+    expect(canReloadControlUiDocument()).toBe(true);
     await settle();
     if (store.pendingReads.length) {
       await resolvePendingRead({ status: "not-found", revision: Date.now() });
@@ -402,6 +406,7 @@ describe("NewSessionDraftPersistence restore race", () => {
     expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
     target.disconnect();
     handoff.dispose();
+    expect(canReloadControlUiDocument()).toBe(true);
   });
 
   it.each(["conflict", "late commit"])("reconciles a handed-off edit after %s", async (outcome) => {
@@ -463,9 +468,10 @@ describe("NewSessionDraftPersistence restore race", () => {
 
   it("lets durable restoration supersede a stale handoff during initial owner setup", async () => {
     const { context, flow } = createDraftFixture();
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(context.gateway);
     Object.assign(context, { chatAttachmentHandoff: handoff });
     handoff.prepare({
+      reviewPrivateDraft: reviewPrivateComposerDraft,
       owner: context.gateway.snapshot.client,
       paneId: "new-session-draft",
       scopeKey: "first-owner",

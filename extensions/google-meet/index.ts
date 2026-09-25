@@ -1,11 +1,12 @@
-// Google Meet plugin entrypoint registers its OpenClaw integration.
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord as asParamRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { GOOGLE_MEET_CLI_DESCRIPTOR } from "./src/cli-output-mode.js";
 import {
-  asParamRecord,
   assertGoogleMeetAgentToolActionSupported,
   callGoogleMeetGatewayFromTool,
   createGoogleMeetRuntimeAccessor,
@@ -17,6 +18,7 @@ import {
   loadGoogleMeetPluginHelpers,
   normalizeMode,
   normalizeTransport,
+  readGoogleMeetParticipationParams,
   resolveMeetingInput,
   sendGoogleMeetGatewayError,
   shouldJoinCreatedMeet,
@@ -162,6 +164,28 @@ export default definePluginEntry({
       );
     });
 
+    registerGatewayMethod("googlemeet.participationContext", async ({ params, respond }) => {
+      const sessionId = normalizeOptionalString(params?.sessionId);
+      if (!sessionId) {
+        sendGoogleMeetGatewayError(respond, new Error("sessionId required"), "INVALID_REQUEST");
+        return;
+      }
+      const runtime = await ensureRuntime();
+      respond(true, runtime.participationContext(sessionId));
+    });
+
+    registerGatewayMethod("googlemeet.participate", async ({ params, respond }) => {
+      let parsed: ReturnType<typeof readGoogleMeetParticipationParams>;
+      try {
+        parsed = readGoogleMeetParticipationParams(asParamRecord(params));
+      } catch (err) {
+        sendGoogleMeetGatewayError(respond, err, "INVALID_REQUEST");
+        return;
+      }
+      const runtime = await ensureRuntime();
+      respond(true, await runtime.participate(parsed.sessionId, parsed.request));
+    });
+
     registerGatewayMethod("googlemeet.recoverCurrentTab", async ({ params, respond }) => {
       const runtime = await ensureRuntime();
       respond(
@@ -260,7 +284,7 @@ export default definePluginEntry({
         name: "google_meet",
         label: "Google Meet",
         description:
-          "Join and track Google Meet sessions through Chrome or Twilio. Call setup_status before join/create/test_listen/test_speech; if it reports a Chrome node offline, local audio missing, or missing Twilio dial plan, surface that blocker instead of retrying or switching transports. Twilio cannot dial a Meet URL directly: provide dialInNumber plus optional pin/dtmfSequence, or configure twilio.defaultDialInNumber. Offline nodes are diagnostics only, not usable candidates. Local Chrome talk-back needs macOS with BlackHole 2ch or Linux with PipeWire-Pulse; otherwise use mode=transcribe, transport=twilio, or a supported chrome-node. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
+          "Join and track Google Meet sessions through Chrome or Twilio. Call setup_status before join/create/test_listen/test_speech; if it reports a Chrome node offline, local audio missing, or missing Twilio dial plan, surface that blocker instead of retrying or switching transports. Twilio cannot dial a Meet URL directly: provide dialInNumber plus optional pin/dtmfSequence, or configure twilio.defaultDialInNumber. Offline nodes are diagnostics only, not usable candidates. Local Chrome talk-back needs macOS with BlackHole 2ch or Linux with PipeWire-Pulse; otherwise use mode=transcribe, transport=twilio, or a supported chrome-node. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab. For meeting participation, call participation_context for current source identities and supported capabilities, then participate with a unique requestId and participationAction. An empty capability list means native participation is unavailable. Reuse a requestId only for an identical retry; use correctionOf only when a rejected result permits one correction.",
         parameters: GoogleMeetToolSchema,
         async execute(_toolCallId, params) {
           const raw = asParamRecord(params);
@@ -339,6 +363,13 @@ export default definePluginEntry({
                 const helpers = await loadGoogleMeetPluginHelpers();
                 return json(await helpers.exportGoogleMeetBundleFromParams(config, raw));
               }
+              case "participate": {
+                readGoogleMeetParticipationParams(raw);
+                return json(
+                  await callGoogleMeetGatewayFromTool({ config, action: raw.action, raw }),
+                );
+              }
+              case "participation_context":
               case "leave":
               case "speak": {
                 const sessionId = normalizeOptionalString(raw.sessionId);

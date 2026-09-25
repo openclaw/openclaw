@@ -50,9 +50,6 @@ export function createAgentsApiBindings(runtime: PluginRuntime) {
 
   return {
     withExclusiveMutationFence: lifecycle.withExclusiveMutationFence,
-    lookup(localSessionId: string): AgentsApiBinding | undefined {
-      return nativeBinding(readRecord(state.lookup(localSessionId)));
-    },
     async withSession<T>(
       localSessionId: string,
       assertCurrent: () => void,

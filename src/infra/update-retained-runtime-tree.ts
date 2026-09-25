@@ -202,6 +202,8 @@ export async function linkUpdateCandidatePluginTrees(
     // its private stage is published.
     await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
       overwrite: false,
+      // The entry loop already prepares each destination parent.
+      mkdir: false,
       maxBytes: entry.size,
       mode: entry.mode | 0o600,
       sourceHardlinks: "allow",

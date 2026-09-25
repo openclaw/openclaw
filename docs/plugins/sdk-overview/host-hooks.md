@@ -346,8 +346,13 @@ Examples of non-Plan consumers:
   seam for async output reducers such as tokenjuice.
 
 Plugins must declare `contracts.agentToolResultMiddleware` for each targeted
-runtime, for example `["openclaw", "codex"]`. Installed plugins without that
-contract, or without explicit enablement, cannot register this middleware; keep
+runtime. Supported ids are `agentsapi`, `codex`, and `openclaw`; for example,
+`["agentsapi", "codex", "openclaw"]`. Omitting registration `runtimes` uses
+all supported runtimes declared in the manifest. An explicit registration scope
+can select a subset of those declared runtimes.
+
+Installed plugins without that contract, or without explicit enablement, cannot
+register this middleware; keep
 normal OpenClaw plugin hooks for work that does not need pre-model tool-result
 timing. The old
 embedded-runner-only extension factory registration path has been removed.

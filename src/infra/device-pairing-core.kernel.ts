@@ -38,33 +38,23 @@ import type {
   PairedDevice,
 } from "./device-pairing.types.js";
 
-function resolveRequestedScopes(input: { scopes?: string[] }): string[] {
-  return normalizeDeviceAuthScopes(input.scopes);
-}
-
 function samePendingApprovalSnapshot(
   existing: DevicePairingPendingRequest,
   incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
 ): boolean {
-  if (existing.publicKey !== incoming.publicKey) {
-    return false;
-  }
-  if (existing.browserOrigin !== incoming.browserOrigin) {
-    return false;
-  }
-  if (normalizeDevicePairingRole(existing.role) !== normalizeDevicePairingRole(incoming.role)) {
-    return false;
-  }
-  if (
-    !sameDevicePairingStringSet(
+  return (
+    existing.publicKey === incoming.publicKey &&
+    existing.browserOrigin === incoming.browserOrigin &&
+    normalizeDevicePairingRole(existing.role) === normalizeDevicePairingRole(incoming.role) &&
+    sameDevicePairingStringSet(
       resolveRequestedDeviceRoles(existing),
       resolveRequestedDeviceRoles(incoming),
-    ) ||
-    !sameDevicePairingStringSet(resolveRequestedScopes(existing), resolveRequestedScopes(incoming))
-  ) {
-    return false;
-  }
-  return true;
+    ) &&
+    sameDevicePairingStringSet(
+      normalizeDeviceAuthScopes(existing.scopes),
+      normalizeDeviceAuthScopes(incoming.scopes),
+    )
+  );
 }
 
 function isStringSubset(subset: readonly string[], superset: readonly string[]): boolean {
@@ -97,8 +87,8 @@ function incomingApprovalCoveredByExisting(
   if (!isStringSubset(incomingRoles, resolveRequestedDeviceRoles(existing))) {
     return false;
   }
-  const existingScopes = resolveRequestedScopes(existing);
-  for (const scope of resolveRequestedScopes(incoming)) {
+  const existingScopes = normalizeDeviceAuthScopes(existing.scopes);
+  for (const scope of normalizeDeviceAuthScopes(incoming.scopes)) {
     const covered = incomingRoles.some((role) =>
       roleScopesAllow({
         role,
@@ -519,7 +509,7 @@ export function updatePairedDevicePresenceInWorker(
   expectedPairingGeneration: NodePairingGeneration,
   baseDir?: string,
 ): boolean {
-  const updated = updatePairedDevicePresenceInTransaction<boolean>(deviceId, baseDir, (device) => {
+  return updatePairedDevicePresenceInTransaction<boolean>(deviceId, baseDir, (device) => {
     const currentPairingGeneration = resolveNodePairingGeneration(device);
     if (
       !device ||
@@ -535,5 +525,4 @@ export function updatePairedDevicePresenceInWorker(
       lastSeenReason: patch.lastSeenReason,
     };
   });
-  return updated;
 }

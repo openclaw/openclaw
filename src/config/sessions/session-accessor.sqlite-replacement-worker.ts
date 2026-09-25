@@ -122,7 +122,7 @@ export async function withSessionEntryWorker<T>(
           if (!grant()) {
             throw new Error("Session replacement authority expired");
           }
-        });
+        }, binding.attachment);
         return { nativeLocations: binding.nativeLocations, admission };
       };
     },
@@ -279,6 +279,7 @@ export async function commitSessionEntryReplacementsInWorker(
     if (published) {
       publishCommittedSessionIdentity(
         lifecycle.identityAgentId,
+        databaseIdentity,
         published.previous,
         published.current,
       );

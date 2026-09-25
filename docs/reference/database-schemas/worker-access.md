@@ -115,8 +115,10 @@ the main thread and workers, naming the database and operation when supplied.
 Watched human-turn signals and upstream observations use the shared-state writer,
 including their watcher probe and pruning. Producers await settlement and recheck
 current session authority; upstream observations compare the captured source in
-the committing transaction. Goal events share that recording command. Synchronous
-creation, compaction, terminal-event, watch, reset, and deletion callbacks remain
+the committing transaction. Goal events and normalized child-run terminal outcomes
+share that recording command. Child completion joins recording and rechecks its
+current lifecycle or ACP actor authority at transaction and commit admission.
+Synchronous creation, compaction, watch, reset, and deletion callbacks remain
 separate migration work.
 
 Durable session entry replacement reads its detached snapshot in the history

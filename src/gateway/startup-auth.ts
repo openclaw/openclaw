@@ -24,36 +24,6 @@ import {
 const HOOKS_GATEWAY_AUTH_REUSE_WARNING =
   "Security warning: hooks.token matches active Gateway shared-secret auth. Startup continues for compatibility; rotate hooks.token or Gateway auth. Run openclaw security audit for a full report, and run openclaw doctor --fix when the reused hooks.token is persisted in config.";
 
-/** Merge sparse runtime auth overrides into persisted Gateway auth config. */
-export function mergeGatewayAuthConfig(
-  base?: GatewayAuthConfig,
-  override?: GatewayAuthConfig,
-): GatewayAuthConfig {
-  const merged: GatewayAuthConfig = { ...base };
-  if (!override) {
-    return merged;
-  }
-  if (override.mode !== undefined) {
-    merged.mode = override.mode;
-  }
-  if (override.token !== undefined) {
-    merged.token = override.token;
-  }
-  if (override.password !== undefined) {
-    merged.password = override.password;
-  }
-  if (override.allowTailscale !== undefined) {
-    merged.allowTailscale = override.allowTailscale;
-  }
-  if (override.rateLimit !== undefined) {
-    merged.rateLimit = override.rateLimit;
-  }
-  if (override.trustedProxy !== undefined) {
-    merged.trustedProxy = override.trustedProxy;
-  }
-  return merged;
-}
-
 /** Merge sparse runtime Tailscale overrides into persisted Gateway Tailscale config. */
 export function mergeGatewayTailscaleConfig(
   base?: GatewayTailscaleConfig,

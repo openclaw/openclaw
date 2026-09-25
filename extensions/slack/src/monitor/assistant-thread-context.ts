@@ -1,4 +1,3 @@
-// Slack plugin module owns Assistant thread context metadata and caching.
 import type { WebClient } from "@slack/web-api";
 import {
   asOptionalRecord,

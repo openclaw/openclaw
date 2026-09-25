@@ -515,15 +515,12 @@ export function createControlUiHandlers(
         return;
       }
       const admitted = new Promise<void>((resolve) => {
-        const replacement =
-          parsed.refreshSessionKeys.length > 0
-            ? subscriptions.replace(
-                connId,
-                parsed.sessionKeys,
-                new Set(parsed.refreshSessionKeys),
-                resolve,
-              )
-            : subscriptions.replace(connId, parsed.sessionKeys, undefined, resolve);
+        const replacement = subscriptions.replace(
+          connId,
+          parsed.sessionKeys,
+          parsed.refreshSessionKeys.length > 0 ? new Set(parsed.refreshSessionKeys) : undefined,
+          resolve,
+        );
         void replacement.catch(() => {});
       });
       await admitted;

@@ -668,6 +668,7 @@ export async function deliverChatQueueItem(
     if (options.restoreDraft && options.previousDraft?.trim()) {
       host.chatMessage = options.previousDraft;
       host.chatMentions = options.previousMentions ?? [];
+      host.chatReplyTarget = options.previousReplyTarget ?? null;
     }
     if (options.restoreAttachments && options.previousAttachments?.length) {
       host.chatAttachments = options.previousAttachments;

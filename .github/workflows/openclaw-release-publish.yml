@@ -1366,6 +1366,31 @@ jobs:
           source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
           record_postpublish_diagnostics initialize
 
+      - name: Write release approval receipt
+        id: approval_receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+        run: |
+          set -euo pipefail
+          node .release-harness/scripts/release-approval-receipt.mjs create \
+            --output "$RUNNER_TEMP/openclaw-release-approval/approval.json"
+
+      - name: Attest release approval receipt
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/openclaw-release-approval/approval.json
+
+      - name: Upload release approval receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.approval_receipt.outputs.artifact_name }}
+          path: ${{ runner.temp }}/openclaw-release-approval/approval.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Verify all prepared plugin bytes before publication
         if: inputs.prepared_plugins != ''
         env:

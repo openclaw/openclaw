@@ -568,6 +568,7 @@ jobs:
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
+      attestations: read
       contents: read
     steps:
       - name: Checkout
@@ -610,6 +611,32 @@ jobs:
           fi
           RUN_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}" --jq '{workflowName: .name, headBranch: .head_branch, headSha: .head_sha, event, status, conclusion, url: .html_url, runAttempt: .run_attempt, repository: .repository.full_name, path}')"
           printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
+
+      - name: Verify release approval receipt
+        id: receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
+          EXPECTED_WORKFLOW_FULL_REF: ${{ inputs.release_publish_full_ref || github.ref }}
+          EXPECTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RELEASE_TARGET_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then
+            echo "Direct dispatch keeps this workflow's environment gate; no parent receipt consumed."
+            exit 0
+          fi
+          node scripts/release-approval-receipt.mjs verify \
+            --output "$RUNNER_TEMP/openclaw-release-approval/approval.json"
+          gh attestation verify "$RUNNER_TEMP/openclaw-release-approval/approval.json" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/openclaw-release-publish.yml" \
+            --signer-digest "$EXPECTED_WORKFLOW_SHA" \
+            --source-digest "$EXPECTED_WORKFLOW_SHA" \
+            --source-ref "$EXPECTED_WORKFLOW_FULL_REF" \
+            --deny-self-hosted-runners
 
   preview_plugin_pack:
     needs: preview_plugins_npm

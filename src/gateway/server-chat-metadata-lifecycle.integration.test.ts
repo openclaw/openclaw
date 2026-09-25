@@ -36,6 +36,11 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import {
+  configureAuthFixture,
+  configureHarnessOwnedUnresolvedAuth,
+  model,
+} from "./server-chat-metadata-lifecycle.auth.test-support.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import {
   buildModelsListResult,
@@ -65,12 +70,6 @@ const config = {
     list: [{ id: "main", default: true }],
   },
 } as OpenClawConfig;
-const model = {
-  id: "gpt-5.4",
-  name: "GPT-5.4",
-  provider: "openai",
-  api: "openai-chatgpt-responses" as const,
-};
 const context = {
   broadcast: vi.fn(),
   getRuntimeConfig: () => config,
@@ -97,62 +96,6 @@ beforeEach(async () => {
   });
   sidecars = createGatewaySidecarStopOwner();
 });
-
-function configureAuthFixture(
-  kind: "secret-ref" | "external-oauth" | "unresolved-secret-ref",
-  catalogAuthRejected = false,
-) {
-  if (kind === "external-oauth") {
-    return;
-  }
-  const apiKeyModel = { ...model, api: "openai-responses" as const };
-  mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
-    entries: [apiKeyModel],
-    routeVariants: [apiKeyModel],
-    ...(catalogAuthRejected
-      ? {
-          providerOutcomes: [
-            {
-              provider: "openai",
-              profileId: "openai:default",
-              rejectionScope: "catalog",
-              status: "auth-rejected",
-            },
-          ],
-        }
-      : {}),
-  });
-  mocks.authStorage.getAll.mockReturnValue({
-    openai: { type: "api_key", key: "openclaw-secret-ref-configured" },
-  });
-  mocks.preparedAuthStore = {
-    version: 1,
-    profiles: {
-      "openai:default": {
-        type: "api_key",
-        provider: "openai",
-        keyRef: { source: "file", provider: "round4-file", id: "value" },
-        ...(kind === "secret-ref" ? { key: "resolved-at-runtime" } : {}),
-      },
-    },
-  };
-}
-
-function configureHarnessOwnedUnresolvedAuth() {
-  mocks.authStorage.getAll.mockReturnValue({
-    openai: { type: "api_key", key: "openclaw-secret-ref-configured" },
-  });
-  mocks.preparedAuthStore = {
-    version: 1,
-    profiles: {
-      "openai:default": {
-        type: "api_key",
-        provider: "openai",
-        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-      },
-    },
-  };
-}
 
 afterEach(async ({ task }) => {
   await sidecars.stop();
