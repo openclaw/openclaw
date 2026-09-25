@@ -9,7 +9,8 @@ import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 const { fetchWithSsrFGuardMock, resolveBootstrapFilesForRunMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock:
     vi.fn<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>(),
-  resolveBootstrapFilesForRunMock: vi.fn<typeof import("openclaw/plugin-sdk/agent-harness-runtime").resolveBootstrapFilesForRun>(),
+  resolveBootstrapFilesForRunMock:
+    vi.fn<typeof import("openclaw/plugin-sdk/agent-harness-runtime").resolveBootstrapFilesForRun>(),
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
@@ -19,7 +20,9 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 // Keep bootstrap resolution and the SDK request real; unrelated turn projection
 // and Gateway tool execution have their own boundary tests.
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
-  const bootstrap = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>("openclaw/plugin-sdk/agent-harness-runtime");
+  const bootstrap = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/agent-harness-runtime")
+  >("openclaw/plugin-sdk/agent-harness-runtime");
   resolveBootstrapFilesForRunMock.mockImplementation(bootstrap.resolveBootstrapFilesForRun);
   return {
     buildBootstrapContextForFiles: bootstrap.buildBootstrapContextForFiles,
@@ -73,14 +76,19 @@ describe("Agents API agent workspace instructions", () => {
     const instructionsPath = path.join(fixture.workspace, "AGENTS.md");
     const original = "Follow the Gateway fixture operating rules.\n";
     await fs.writeFile(instructionsPath, original);
-    await fs.writeFile(path.join(fixture.workspace, "SOUL.md"), "Persona fixture, not operating rules.");
+    await fs.writeFile(
+      path.join(fixture.workspace, "SOUL.md"),
+      "Persona fixture, not operating rules.",
+    );
     expect(await fs.readdir(fixture.executionWorkspace)).toEqual([]);
 
     const binding = await fixture.run();
     const firstInstructions = fixture.requests[0]?.agent.instructions;
     expect(firstInstructions).toContain(`### ${instructionsPath}\n\n${original}`);
     expect(firstInstructions).toContain("Extra fixture instructions");
-    expect(firstInstructions?.match(/Follow the Gateway fixture operating rules\./g)).toHaveLength(1);
+    expect(firstInstructions?.match(/Follow the Gateway fixture operating rules\./g)).toHaveLength(
+      1,
+    );
     expect(firstInstructions).not.toContain("Persona fixture");
 
     await fs.writeFile(instructionsPath, "Follow the updated Gateway fixture rules.\n");
@@ -92,43 +100,58 @@ describe("Agents API agent workspace instructions", () => {
     expect(fixture.requests[1]).toEqual({ agent: { reasoning: { effort: null } } });
 
     await fixture.run();
-    expect(fixture.requests[2]?.agent.instructions).toContain("Follow the updated Gateway fixture rules.");
+    expect(fixture.requests[2]?.agent.instructions).toContain(
+      "Follow the updated Gateway fixture rules.",
+    );
     expect(fixture.requests[2]?.agent.instructions).not.toContain(original.trim());
   });
 
-  it.each([undefined, " \n\t"])("keeps an empty snapshot when AGENTS.md is missing or blank (%s)", async (content) => {
-    const fixture = await createFixture();
-    const instructionsPath = path.join(fixture.workspace, "AGENTS.md");
-    if (content !== undefined) {
-      await fs.writeFile(instructionsPath, content);
-    }
-    const binding = await fixture.run();
-    const initialInstructions = fixture.requests[0]?.agent.instructions;
-    expect(initialInstructions).toContain("Extra fixture instructions");
-    expect(initialInstructions).not.toContain("OpenClaw Agent Workspace Instructions");
-    await fs.writeFile(instructionsPath, "Rules added after session creation.");
-    await fixture.run(binding);
-    expect(fixture.requests[1]).toEqual({ agent: { reasoning: { effort: null } } });
-    await fixture.run();
-    expect(fixture.requests[2]?.agent.instructions).toContain("Rules added after session creation.");
-  });
+  it.each([undefined, " \n\t"])(
+    "keeps an empty snapshot when AGENTS.md is missing or blank (%s)",
+    async (content) => {
+      const fixture = await createFixture();
+      const instructionsPath = path.join(fixture.workspace, "AGENTS.md");
+      if (content !== undefined) {
+        await fs.writeFile(instructionsPath, content);
+      }
+      const binding = await fixture.run();
+      const initialInstructions = fixture.requests[0]?.agent.instructions;
+      expect(initialInstructions).toContain("Extra fixture instructions");
+      expect(initialInstructions).not.toContain("OpenClaw Agent Workspace Instructions");
+      await fs.writeFile(instructionsPath, "Rules added after session creation.");
+      await fixture.run(binding);
+      expect(fixture.requests[1]).toEqual({ agent: { reasoning: { effort: null } } });
+      await fixture.run();
+      expect(fixture.requests[2]?.agent.instructions).toContain(
+        "Rules added after session creation.",
+      );
+    },
+  );
 
   it.each([
     { bootstrapMaxChars: 300, bootstrapTotalMaxChars: 600, budget: 300 },
     { bootstrapMaxChars: 600, bootstrapTotalMaxChars: 300, budget: 300 },
   ])("applies the configured bootstrap limits (%j)", async ({ budget, ...limits }) => {
     const fixture = await createFixture({ config: { agents: { defaults: limits } } });
-    await fs.writeFile(path.join(fixture.workspace, "AGENTS.md"), "Bounded fixture rules.\n".repeat(100));
+    await fs.writeFile(
+      path.join(fixture.workspace, "AGENTS.md"),
+      "Bounded fixture rules.\n".repeat(100),
+    );
     await fixture.run();
     const instructions = fixture.requests[0]?.agent.instructions;
     expect(instructions).toContain("Bounded fixture rules.");
     expect(instructions).toContain("truncated");
-    const snapshot = instructions?.split(`### ${path.join(fixture.workspace, "AGENTS.md")}\n\n`)[1]?.split("\n\nExtra fixture instructions")[0];
+    const snapshot = instructions
+      ?.split(`### ${path.join(fixture.workspace, "AGENTS.md")}\n\n`)[1]
+      ?.split("\n\nExtra fixture instructions")[0];
     expect(snapshot?.length).toBeLessThanOrEqual(budget);
   });
 
   it("keeps lightweight cron bootstrap context empty", async () => {
-    const fixture = await createFixture({ bootstrapContextMode: "lightweight", bootstrapContextRunKind: "cron" });
+    const fixture = await createFixture({
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "cron",
+    });
     await fs.writeFile(path.join(fixture.workspace, "AGENTS.md"), "Full bootstrap fixture rules.");
     await fixture.run();
     expect(fixture.requests[0]?.agent.instructions).not.toContain("Full bootstrap fixture rules.");
@@ -137,7 +160,10 @@ describe("Agents API agent workspace instructions", () => {
 
   it("retries a failed first capture before creating or binding a native session", async () => {
     const fixture = await createFixture();
-    await fs.writeFile(path.join(fixture.workspace, "AGENTS.md"), "Retryable Gateway fixture rules.");
+    await fs.writeFile(
+      path.join(fixture.workspace, "AGENTS.md"),
+      "Retryable Gateway fixture rules.",
+    );
     const failure = new Error("Workspace access changed while preparing bootstrap context");
     resolveBootstrapFilesForRunMock.mockRejectedValueOnce(failure);
     await expect(fixture.run()).rejects.toBe(failure);
@@ -147,7 +173,9 @@ describe("Agents API agent workspace instructions", () => {
   });
 });
 
-type InstructionRequest = { agent: { instructions?: string; reasoning?: { effort: string | null } } };
+type InstructionRequest = {
+  agent: { instructions?: string; reasoning?: { effort: string | null } };
+};
 
 async function createFixture(overrides: Partial<AgentHarnessAttemptParamsV2> = {}) {
   const root = tempDirs.make("openclaw-agentsapi-instructions-");
@@ -170,7 +198,12 @@ async function createFixture(overrides: Partial<AgentHarnessAttemptParamsV2> = {
     }
     return { response, finalUrl: request.url, release: async () => {} };
   });
-  const target = { agentId: "main", sessionId: "local-fixture", sessionKey: `agent:main:${root}`, storePath: path.join(root, "agent.sqlite") };
+  const target = {
+    agentId: "main",
+    sessionId: "local-fixture",
+    sessionKey: `agent:main:${root}`,
+    storePath: path.join(root, "agent.sqlite"),
+  };
   const params: AgentHarnessAttemptParamsV2 = {
     ...target,
     sessionTarget: target,
@@ -184,14 +217,33 @@ async function createFixture(overrides: Partial<AgentHarnessAttemptParamsV2> = {
     timeoutMs: 60_000,
     provider: "openai",
     modelId: "model-fixture",
-    model: { id: "model-fixture", name: "Fixture Model", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1024, maxTokens: 512 },
+    model: {
+      id: "model-fixture",
+      name: "Fixture Model",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1024,
+      maxTokens: 512,
+    },
     thinkLevel: "off",
     resolvedApiKey: "fixture-not-a-real-api-key",
     authProfileStore: { version: 1, profiles: {} },
     // Credentials and catalog are unused by the stubbed Gateway tool surface.
     authStorage: {} as AgentHarnessAttemptParamsV2["authStorage"],
     modelRegistry: {} as AgentHarnessAttemptParamsV2["modelRegistry"],
-    hostCapabilities: { kind: "agent-harness-host-capability", version: 1, assertActive: () => {}, bindToolSurface: (tools) => tools, runBeforeToolCall: async ({ params }) => ({ blocked: false, params }), requestApproval: async () => undefined, waitForApproval: async () => undefined },
+    hostCapabilities: {
+      kind: "agent-harness-host-capability",
+      version: 1,
+      assertActive: () => {},
+      bindToolSurface: (tools) => tools,
+      runBeforeToolCall: async ({ params }) => ({ blocked: false, params }),
+      requestApproval: async () => undefined,
+      waitForApproval: async () => undefined,
+    },
     ...overrides,
   };
   return {
@@ -200,10 +252,23 @@ async function createFixture(overrides: Partial<AgentHarnessAttemptParamsV2> = {
     requests,
     async run(binding?: AgentsApiBinding) {
       let saved = binding;
-      const result = await runAgentsApiAttempt(params, binding, async (next) => { saved = next; }, () => {}, () => {}, target);
-      if (result.terminal.kind === "failed") { throw result.terminal.error; }
+      const result = await runAgentsApiAttempt(
+        params,
+        binding,
+        async (next) => {
+          saved = next;
+        },
+        () => {},
+        () => {},
+        target,
+      );
+      if (result.terminal.kind === "failed") {
+        throw result.terminal.error;
+      }
       expect(result.terminal).toEqual({ kind: "ok" });
-      if (!saved) { throw new Error("Expected a saved native binding"); }
+      if (!saved) {
+        throw new Error("Expected a saved native binding");
+      }
       return saved;
     },
   };
