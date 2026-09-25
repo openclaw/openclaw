@@ -17,7 +17,7 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   listSessionEntriesCore,
-  loadSessionEntry as loadSessionEntryRaw,
+  loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -224,12 +224,6 @@ function seedQueuedFinal(id: string, text: string): void {
   seedDeliveryQueueEntry({ queueName: OUTBOUND_DELIVERY_QUEUE_NAME, stateDir: tmpDir, entry });
 }
 const resolveGatewayContext = () => undefined;
-
-function loadSessionEntry(
-  scope: Parameters<typeof loadSessionEntryRaw>[0],
-): SessionEntry | undefined {
-  return loadSessionEntryRaw(scope) as SessionEntry | undefined;
-}
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -1127,6 +1121,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("persists abort-registry runs after their event context was cleared", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const sessionsDir = await makeSessionsDir();
     await writeMainSession({
       sessionsDir,
@@ -1156,6 +1151,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("marks queued abort-registry runs before lifecycle start changes session status", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:main": {
@@ -1234,6 +1230,7 @@ describe("main-session-restart-recovery", () => {
       currentGeneration: true,
     },
   ])("$name", async ({ updatedAt, runId, observedAt, isActive, currentGeneration }) => {
+    tmpDir = transcriptFixture.prepareRoot();
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:main": createSessionEntry({
@@ -1267,6 +1264,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("preserves current-generation markers across repeated restart marking", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const sessionsDir = await makeSessionsDir();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     await writeMainSession({
@@ -1306,6 +1304,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("replaces an older marker when the same run id is active after another restart", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const sessionsDir = await makeSessionsDir();
     await writeMainSession({
       sessionsDir,
