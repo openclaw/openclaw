@@ -61,7 +61,9 @@ import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
 } from "../skills/library/selection-read.kernel.js";
+import { captureTaskRetentionSource } from "../tasks/task-registry-retention-source.js";
 import {
+  readTaskRecord,
   readTaskRegistryMutationSnapshotInDatabase,
   readTaskRegistrySnapshot,
 } from "../tasks/task-registry.store.kernel.js";
@@ -319,6 +321,15 @@ serveOwnedWorkerTasks(
                       command.input === undefined
                         ? readTaskRegistrySnapshot({ db, path: input.databasePath })
                         : readTaskRegistryMutationSnapshotInDatabase(db, command.input),
+                  };
+                }
+                if (command.type === "tasks.retentionSource") {
+                  const task = readTaskRecord(db, command.taskId);
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    source: task ? captureTaskRetentionSource(task) : undefined,
                   };
                 }
                 if (command.type === "subagents.forChildSession") {

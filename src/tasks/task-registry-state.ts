@@ -13,6 +13,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { restoreTaskExecutionSnapshot } from "./task-execution-owner.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
+import { clearTaskActivity } from "./task-registry-activity.js";
 import {
   clearTaskFlowSyncRetries,
   receiveTaskRegistryRestoreResult,
@@ -491,6 +492,7 @@ function installSnapshot(
         recordTaskRegistryProjectionWrite(recordWrites, taskId, true);
       }
       removeTaskIndexes(current);
+      clearTaskActivity(taskId);
       changed = tasks.delete(taskId) || changed;
       taskDeliveryStates.delete(taskId);
     }
@@ -686,7 +688,11 @@ export async function runTaskRegistryWorkerMutation<T>(
     dirtyScopes.add(scope);
     bumpTaskRegistryRevision(true, pending.readIdentity !== "preserved");
     try {
-      claimTaskRegistryPublication(pending, context.publicationRecords());
+      claimTaskRegistryPublication(
+        pending,
+        context.publicationRecords(),
+        context.publicationDeletions?.(),
+      );
       const { conflicted } = await reconcileTaskRegistryWorkerSnapshot({
         pending,
         assertCurrent: assertOwner,

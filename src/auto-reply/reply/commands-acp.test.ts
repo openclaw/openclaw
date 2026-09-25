@@ -165,7 +165,6 @@ function configureInMemoryTaskRegistryStoreForTests(): void {
     store: {
       ...createInMemoryTaskRegistryStore(),
       upsertTaskWithDeliveryState: () => {},
-      deleteTaskWithDeliveryState: () => {},
       upsertDeliveryState: () => {},
       close: () => {},
     },
