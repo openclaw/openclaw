@@ -207,7 +207,6 @@ extensions/codex/src/command-rpc.ts	1
 extensions/codex/src/conversation-control.ts	1
 extensions/codex/src/migration/apply.ts	2
 extensions/codex/src/migration/auth.ts	3
-extensions/codex/src/migration/helpers.ts	1
 extensions/codex/src/migration/plan.ts	5
 extensions/codex/src/migration/session-binding-sidecars.ts	4
 extensions/codex/src/migration/source-files.ts	1
@@ -1434,7 +1433,6 @@ packages/memory-host-sdk/src/host/memory-schema-migration.ts	1
 packages/memory-host-sdk/src/host/memory-schema-recall.ts	1
 packages/memory-host-sdk/src/host/memory-schema.ts	7
 packages/memory-host-sdk/src/host/multimodal.ts	1
-packages/memory-host-sdk/src/host/read-file.ts	1
 packages/memory-host-sdk/src/host/read-retry.ts	4
 packages/memory-host-sdk/src/host/session-files.ts	8
 packages/memory-host-sdk/src/host/session-reset-recall.ts	3
@@ -2279,7 +2277,7 @@ src/commands/doctor/shared/legacy-config-state-migration-input.ts	2
 src/commands/doctor/shared/legacy-talk-config-normalizer.ts	2
 src/commands/doctor/shared/legacy-web-tools-migrate.ts	1
 src/commands/doctor/shared/open-policy-allowfrom.ts	2
-src/commands/doctor/shared/plugin-runtime-symlinks.ts	4
+src/commands/doctor/shared/plugin-runtime-symlinks.ts	1
 src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	1
 src/commands/doctor/shared/pristine-startup-state.ts	3
 src/commands/doctor/shared/stale-agent-model-ref-repair.ts	3
@@ -2401,7 +2399,7 @@ src/config/sessions/session-entry-json.ts	1
 src/config/sessions/session-reset-boundary-event.ts	5
 src/config/sessions/session-snapshot-merge.ts	26
 src/config/sessions/session-sqlite-target.ts	2
-src/config/sessions/session-store-config.ts	2
+src/config/sessions/session-store-config.ts	1
 src/config/sessions/session-transcript-reconcile.worker.ts	1
 src/config/sessions/skill-prompt-blobs.ts	5
 src/config/sessions/store-entry-shape.ts	2
@@ -2991,7 +2989,7 @@ src/plugin-sdk/file-lock.ts	10
 src/plugin-sdk/inbound-reply-dispatch.ts	1
 src/plugin-sdk/lazy-value.ts	1
 src/plugin-sdk/memory-host-core.ts	26
-src/plugin-sdk/migration-runtime.ts	4
+src/plugin-sdk/migration-runtime.ts	2
 src/plugin-sdk/migration.ts	8
 src/plugin-sdk/plugin-test-api.ts	1
 src/plugin-sdk/provider-auth-copilot-cache.ts	1
@@ -3205,7 +3203,7 @@ src/security/audit-mcporter-registry.ts	1
 src/security/audit-model-refs.ts	5
 src/security/audit-plugins-trust.ts	5
 src/security/config-regex.ts	1
-src/security/fix.ts	8
+src/security/fix.ts	5
 src/security/installed-plugin-dirs.ts	1
 src/security/safe-regex.ts	1
 src/sessions/input-provenance.ts	3

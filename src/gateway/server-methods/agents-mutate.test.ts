@@ -1,14 +1,13 @@
 // Agent mutation tests cover create/update/delete handlers, safe workspace file
 // access, config preconditions, trash cleanup, and workspace-state handling.
 
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AgentDeletionAuthorityRollbackError } from "../../agents/agent-lifecycle-registry.js";
 import { WORKSPACE_BOOTSTRAP_FILENAMES } from "../../agents/workspace.js";
 import { FsSafeError, root } from "../../infra/fs-safe.js";
+import { registerAgentDeleteFilesystemTests } from "./agents-delete-filesystem.test-support.js";
 import { registerAgentIdentityUpdateTests } from "./agents-identity-update.test-support.js";
 import {
   expectRecordFields,
@@ -405,7 +404,6 @@ vi.mock("node:fs/promises", async () => {
 /* ------------------------------------------------------------------ */
 
 const { agentsHandlers } = await import("./agents.js");
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */
@@ -2609,37 +2607,13 @@ describe("agents.delete", () => {
     expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
   });
 
-  it.skipIf(process.platform === "win32")(
-    "does not trash a lexical decoy for a dangling workspace symlink",
-    async () => {
-      const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-      const base = await actualFs.realpath(tempDirs.make("openclaw-agent-delete-dangling-"));
-      const workspaceLink = path.join(base, "workspace-link");
-      const decoy = path.join(base, "missing");
-      await actualFs.mkdir(path.join(base, "physical", "child"), { recursive: true });
-      await actualFs.mkdir(decoy);
-      await actualFs.symlink("physical/child", path.join(base, "alias"));
-      await actualFs.symlink("alias/../missing", workspaceLink);
-      mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) =>
-        agentId === "test-agent" ? workspaceLink : `/workspace/${agentId ?? "unknown"}`,
-      );
-      mocks.fsRealpath.mockImplementation(async (pathname) =>
-        pathname.startsWith(base) ? await actualFs.realpath(pathname) : pathname,
-      );
-      mocks.fsLstat.mockImplementation(async (pathname) =>
-        String(pathname).startsWith(base) ? await actualFs.lstat(String(pathname)) : makeFileStat(),
-      );
-      mocks.fsReadlink.mockImplementation(async (pathname) => await actualFs.readlink(pathname));
-
-      const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
-      await promise;
-
-      expectRespondOk(respond, { ok: true });
-      expectNotTrashed(decoy);
-      expectTrashedWithinParent(workspaceLink);
-      expect(mocks.deleteWorkspaceState).toHaveBeenCalled();
-    },
-  );
+  registerAgentDeleteFilesystemTests({
+    mocks,
+    makeCall,
+    makeFileStat,
+    expectNotTrashed,
+    expectTrashedWithinParent,
+  });
 
   it("keeps workspace state when another agent still owns the workspace", async () => {
     mocks.pruneAgentConfig.mockReturnValue({
@@ -2655,38 +2629,6 @@ describe("agents.delete", () => {
     expectRespondOk(respond, { ok: true });
     expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
     expectNotTrashed("/workspace/test-agent");
-  });
-
-  it("reports trash failures without deleting the retained directory", async () => {
-    const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-    const workspaceDir = await actualFs.realpath(
-      await actualFs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-delete-trash-failure-")),
-    );
-    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg: unknown, agentId?: string) =>
-      agentId === "test-agent" ? workspaceDir : `/workspace/${agentId ?? "unknown"}`,
-    );
-    mocks.movePathToTrash.mockImplementation(async (pathname?: string) => {
-      if (pathname === workspaceDir) {
-        throw Object.assign(new Error("trash destination missing"), { code: "ENOENT" });
-      }
-      return "/trashed";
-    });
-
-    try {
-      const { respond, promise } = makeCall("agents.delete", {
-        agentId: "test-agent",
-      });
-      await promise;
-
-      expectRespondOk(respond, {
-        failed: [{ path: workspaceDir, reason: "trash destination missing" }],
-      });
-      await expect(actualFs.stat(workspaceDir)).resolves.toBeDefined();
-      expect(mocks.fsRm).not.toHaveBeenCalled();
-      expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
-    } finally {
-      await actualFs.rm(workspaceDir, { recursive: true, force: true });
-    }
   });
 
   it("reports an absent source without invoking the trash backend", async () => {
