@@ -436,14 +436,14 @@ function* openOpenClawAgentDatabaseSteps(
     const cleanup = registerAgentDeletionDatabaseCleanup(database, databaseOptions);
     if (cleanup) {
       const release = retainAgentDatabase(db);
-      cleanup.registerClose(() => {
-        release();
+      cleanup.registerClose(async () => {
         // The scope owns this connection, not a later cache entry at the same pathname.
         if (cache.databases.get(database.path) === database) {
-          closeOpenClawAgentDatabaseByPath(database.path, database.agentId);
+          await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
         } else if (database.db.isOpen) {
           throw new Error("Agent deletion cleanup lost its database close owner.");
         }
+        release();
       });
     }
     if (!isValidatedReopen) {

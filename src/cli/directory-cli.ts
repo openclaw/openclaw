@@ -40,11 +40,21 @@ function parseLimit(value: unknown): number | null {
   return parsed;
 }
 
-function buildRows(entries: Array<{ id: string; name?: string | undefined }>) {
-  return entries.map((entry) => ({
-    ID: entry.id,
-    Name: normalizeOptionalString(entry.name) ?? "",
-  }));
+function formatDirectoryTable(
+  entries: Array<{ id: string; name?: string | undefined }>,
+  width: number,
+) {
+  return renderTerminalSafeTable({
+    width,
+    columns: [
+      { key: "ID", header: "ID", minWidth: 16, flex: true },
+      { key: "Name", header: "Name", minWidth: 18, flex: true },
+    ],
+    rows: entries.map((entry) => ({
+      ID: entry.id,
+      Name: normalizeOptionalString(entry.name) ?? "",
+    })),
+  }).trimEnd();
 }
 
 function formatDirectoryScope(channelId: string, accountId: string): string {
@@ -65,16 +75,7 @@ function printDirectoryList(params: {
 
   const tableWidth = getTerminalTableWidth();
   defaultRuntime.log(`${theme.heading(params.title)} ${theme.muted(`(${params.entries.length})`)}`);
-  defaultRuntime.log(
-    renderTerminalSafeTable({
-      width: tableWidth,
-      columns: [
-        { key: "ID", header: "ID", minWidth: 16, flex: true },
-        { key: "Name", header: "Name", minWidth: 18, flex: true },
-      ],
-      rows: buildRows(params.entries),
-    }).trimEnd(),
-  );
+  defaultRuntime.log(formatDirectoryTable(params.entries, tableWidth));
 }
 
 /** Register directory lookup commands and shared channel/account resolution. */
@@ -285,16 +286,7 @@ export function registerDirectoryCli(program: Command) {
         }
         const tableWidth = getTerminalTableWidth();
         defaultRuntime.log(theme.heading("Self"));
-        defaultRuntime.log(
-          renderTerminalSafeTable({
-            width: tableWidth,
-            columns: [
-              { key: "ID", header: "ID", minWidth: 16, flex: true },
-              { key: "Name", header: "Name", minWidth: 18, flex: true },
-            ],
-            rows: buildRows([result]),
-          }).trimEnd(),
-        );
+        defaultRuntime.log(formatDirectoryTable([result], tableWidth));
       }),
   );
 

@@ -1955,7 +1955,7 @@ jobs:
           // projected runner contract; older targets keep their flat fields or
           // projected legacy groups because their shard runner predates the codec.
           const nodeTestGroupsCodecPath = "./scripts/lib/ci-node-test-groups-codec.mts";
-          const uiTestGroups = runUiTests &&
+          const uiTestGroups = runUiTests && !frozenTarget &&
             typeof nodeTestPlan.createUiTestShardGroups === "function"
               ? nodeTestPlan.createUiTestShardGroups({
                   includeReleaseOnlyTests: includeReleaseOnlyUiTests,

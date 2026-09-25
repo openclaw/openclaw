@@ -46,6 +46,10 @@ export async function createDiskSwap(sourceRoot, base) {
     clearTimeout,
   });
   const files = [
+    "infra/errno",
+    "infra/fs-safe-defaults",
+    "infra/fs-safe-remove",
+    "infra/mutation-authority",
     "infra/package-update-swap",
     "infra/package-update-filesystem",
     "infra/package-update-integrity",
@@ -66,10 +70,13 @@ export async function createDiskSwap(sourceRoot, base) {
       format: "esm",
       tsconfigRaw: { compilerOptions: { verbatimModuleSyntax: true } },
     }).code;
-    modules.set(
-      path.basename(name) + ".js",
-      new vm.SourceTextModule(code, { context, identifier: filename }),
-    );
+    const mod = new vm.SourceTextModule(code, { context, identifier: filename });
+    modules.set(path.basename(name) + ".js", mod);
+    for (const specifier of mod.dependencySpecifiers) {
+      if (!external.has(specifier)) {
+        external.set(specifier, new Set());
+      }
+    }
     for (const match of code.matchAll(
       /(?:import|export)\s*\{([^}]+)\}\s*from\s*["']([^"']+)["']/gs,
     )) {
@@ -94,8 +101,12 @@ export async function createDiskSwap(sourceRoot, base) {
     if (modules.has(path.basename(specifier))) {
       continue;
     }
-    const names = [...namesSet];
-    const builtin = specifier.startsWith("node:") ? await import(specifier) : undefined;
+    const realModule = specifier.startsWith("node:")
+      ? await import(specifier)
+      : specifier.startsWith("@openclaw/fs-safe/")
+        ? await import(pathToFileURL(require.resolve(specifier)).href)
+        : undefined;
+    const names = realModule ? Object.keys(realModule) : [...namesSet];
     stubs.set(
       specifier,
       new vm.SyntheticModule(
@@ -104,8 +115,8 @@ export async function createDiskSwap(sourceRoot, base) {
           for (const name of names) {
             this.setExport(
               name,
-              builtin
-                ? builtin[name]
+              realModule
+                ? realModule[name]
                 : Object.hasOwn(values, name)
                   ? values[name]
                   : function () {

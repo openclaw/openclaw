@@ -59,7 +59,10 @@ export function createTelegramDispatchHttpFixture() {
   const pendingDispatches = new Set<Promise<unknown>>();
   const bindingAdapters = new Map<string, SessionBindingAdapter>();
   const pendingRequests = new Set<Promise<unknown>>();
-  type Rejection = { error_code: number; description: string } | "no-message-id" | undefined;
+  type Rejection =
+    | { error_code: number; description: string; parameters?: { retry_after?: number } }
+    | "no-message-id"
+    | undefined;
   let respondToCall: ((call: RecordedBotApiCall) => Rejection | Promise<Rejection>) | undefined;
   let rejectNextQuote = false;
   let holdNextCall:

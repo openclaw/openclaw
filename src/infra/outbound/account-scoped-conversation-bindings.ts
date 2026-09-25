@@ -16,6 +16,7 @@ import {
   resolveCurrentConversationBindingRecordAsync,
   touchCurrentConversationBindingRecordAsync,
   listCurrentConversationBindingRecordsBySession,
+  listCurrentConversationBindingRecordsBySessionAsync,
   resolveCurrentConversationBindingRecord,
   inspectCurrentConversationBindingRecord,
   updateCurrentConversationBindingRecord,
@@ -24,6 +25,8 @@ import type { CurrentConversationBindingTouch } from "./current-conversation-bin
 import { SessionBindingError } from "./session-binding-errors.js";
 import {
   nativeSessionBindingSelection,
+  nativeSessionBindingListBySession,
+  type NativeSessionBindingListing,
   type NativeSessionBindingSelection,
 } from "./session-binding-native-selection.js";
 import { normalizeConversationRef } from "./session-binding-normalization.js";
@@ -324,7 +327,9 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     },
   };
 
-  const sessionBindingAdapter: SessionBindingAdapter & NativeSessionBindingSelection = {
+  const sessionBindingAdapter: SessionBindingAdapter &
+    NativeSessionBindingSelection &
+    NativeSessionBindingListing = {
     channel: params.channel,
     accountId,
     capabilities: {
@@ -356,6 +361,12 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     },
     listBySession: (targetSessionKey) =>
       listCurrentConversationBindingRecordsBySession(targetSessionKey, accountScope),
+    [nativeSessionBindingListBySession]: (targetSessionKey) =>
+      listCurrentConversationBindingRecordsBySessionAsync(
+        targetSessionKey,
+        accountScope,
+        assertCurrent,
+      ),
     resolveByConversation: (ref) => {
       if (ref.channel !== params.channel) {
         return null;

@@ -14,6 +14,7 @@ import {
   type Mock,
   type MockInstance,
 } from "vitest";
+import { maintainOpenClawCompileCache } from "../node-compile-cache.mjs";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
 import { mockNodeBuiltinModule } from "./plugin-sdk/test-helpers/node-builtin-mocks.js";
 import { createDeferredCore } from "./shared/deferred.js";
@@ -149,7 +150,7 @@ describe("entry compile cache", () => {
     expect(path.basename(directory)).toMatch(/^\d+-\d+$/);
   });
 
-  it("invalidates a replaced installation without deleting shared compile caches", async () => {
+  it("retires a replaced installation without deleting other applications' compile caches", async () => {
     const packageJsonPath = path.join(root, "package.json");
     const env = { NODE_COMPILE_CACHE: path.join(root, ".node-cache") };
     await fs.writeFile(packageJsonPath, '{"version":"2026.4.29"}\n', "utf8");
@@ -158,6 +159,8 @@ describe("entry compile cache", () => {
     await fs.mkdir(originalDirectory, { recursive: true });
     const originalCacheEntry = path.join(originalDirectory, "keep.txt");
     await fs.writeFile(originalCacheEntry, "previous cached installation\n", "utf8");
+    const sharedCacheEntry = path.join(env.NODE_COMPILE_CACHE, "another-application");
+    await fs.writeFile(sharedCacheEntry, "keep\n");
     await fs.writeFile(
       packageJsonPath,
       '{"version":"2026.4.29","installation":"replacement"}\n',
@@ -167,9 +170,9 @@ describe("entry compile cache", () => {
     const replacementDirectory = enabledDirectory(1);
     expect(replacementDirectory).toContain(path.join("openclaw", "2026.4.29"));
     expect(replacementDirectory).not.toBe(originalDirectory);
-    await expect(fs.readFile(originalCacheEntry, "utf8")).resolves.toBe(
-      "previous cached installation\n",
-    );
+    await maintainOpenClawCompileCache(replacementDirectory);
+    await expect(fs.stat(originalDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readFile(sharedCacheEntry, "utf8")).resolves.toBe("keep\n");
   });
 
   it("runs a one-shot no-cache respawn when source checkout inherits NODE_COMPILE_CACHE", async () => {

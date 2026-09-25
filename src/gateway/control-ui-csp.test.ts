@@ -20,7 +20,7 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).toContain("font-src 'self' https://fonts.gstatic.com");
   });
 
-  it("allows OpenAI realtime and tweakcn theme import requests without allowing all HTTPS", () => {
+  it("allows local asset reads and known remote connections without allowing all HTTPS", () => {
     const csp = buildControlUiCspHeader();
     const connectSrc = csp.split("; ").find((directive) => directive.startsWith("connect-src "));
     expect(connectSrc?.split(" ")).toEqual([
@@ -29,6 +29,7 @@ describe("buildControlUiCspHeader", () => {
       "ws:",
       "wss:",
       "data:",
+      "blob:",
       "https://api.openai.com",
       "https://tweakcn.com",
     ]);
