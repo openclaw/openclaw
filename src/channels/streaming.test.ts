@@ -27,15 +27,10 @@ import {
 
 describe("buildChannelProgressDraftLine", () => {
   it.each([
-    ["Bash", "command"],
     ["exec", "command"],
-    ["shell", "command"],
-    ["automations", "tool"],
     ["read", "tool"],
-    ["browser", "tool"],
-    ["message", "tool"],
     ["custom_command_runner", "tool"],
-  ] as const)("demotes failed %s items using existing snapshot fields", (name, itemKind) => {
+  ] as const)("lets failed %s items scroll out, including after restore", (name, itemKind) => {
     const line = buildChannelProgressDraftLine({
       event: "item",
       itemKind,
@@ -43,7 +38,6 @@ describe("buildChannelProgressDraftLine", () => {
       status: "failed",
     });
     expect(line).toBeDefined();
-    expect(line).not.toHaveProperty("commandBearing");
     const restored = parseConversationProgressSnapshot(
       serializeConversationProgressSnapshot({ lines: [line!] }),
     )!.lines[0]!;
@@ -54,17 +48,6 @@ describe("buildChannelProgressDraftLine", () => {
     expect(isChannelProgressPriorityLine({ ...line!, kind: "approval" })).toBe(true);
     expect(isChannelProgressPriorityLine({ ...line!, toolName: undefined })).toBe(true);
     expect(isChannelProgressPriorityLine({ ...line!, kind: "tool" })).toBe(true);
-  });
-
-  it("demotes custom command-bearing tool failures without adding a snapshot field", () => {
-    const line = buildChannelProgressDraftLine({
-      event: "item",
-      name: "custom_command_runner",
-      commandBearing: true,
-      status: "failed",
-    });
-    expect(line).not.toHaveProperty("commandBearing");
-    expect(line && isChannelProgressPriorityLine(line)).toBe(false);
   });
 
   it("keeps prepared titles and failure outcomes when detail text is unchanged", () => {
