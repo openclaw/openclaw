@@ -12,18 +12,29 @@ export function parseDateMs(value: string | undefined): number {
   return parseDateStringTimestampMs(value) ?? Date.now();
 }
 
-function startOfLocalDay(ms: number): number {
+function localDayKey(ms: number): string {
   const date = new Date(ms);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
 }
 
-function recencyGroup(ms: number): SkillWorkshopProposal["recencyGroup"] {
-  const today = startOfLocalDay(Date.now());
-  const day = startOfLocalDay(ms);
-  if (day === today) {
+// Anchor calendar subtraction at local noon. DST transitions can skip local
+// midnight (e.g. America/Santiago), so subtracting a day from the day start
+// normalizes to a shifted clock time instead of the previous calendar day.
+// Local noon is never a skipped hour, keeping the calendar date exact.
+function previousLocalDayKey(nowMs: number): string {
+  const now = new Date(nowMs);
+  const anchor = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12);
+  anchor.setDate(anchor.getDate() - 1);
+  return `${anchor.getFullYear()}-${anchor.getMonth()}-${anchor.getDate()}`;
+}
+
+export function recencyGroup(ms: number): SkillWorkshopProposal["recencyGroup"] {
+  const now = Date.now();
+  const day = localDayKey(ms);
+  if (day === localDayKey(now)) {
     return "today";
   }
-  if (day === today - 24 * 60 * 60 * 1000) {
+  if (day === previousLocalDayKey(now)) {
     return "yesterday";
   }
   return "earlier";
