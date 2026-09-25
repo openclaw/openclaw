@@ -24,6 +24,7 @@ import {
   DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT,
   DEFAULT_WIDGET_REVIEWER_SYSTEM_PROMPT,
 } from "./exec-auto-reviewer.prompt.js";
+import { isReasoningConstraintErrorMessage } from "./failover/context-overflow-tables.js";
 import {
   acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
@@ -34,6 +35,11 @@ const DEFAULT_EXEC_REVIEWER_TIMEOUT_MS = 30_000;
 const EXEC_REVIEWER_MAX_TOKENS = 1_024;
 const MAX_EXEC_REVIEWER_INPUT_CHARS = 16_000;
 const EXEC_REVIEWER_TIMEOUT = Symbol("exec-reviewer-timeout");
+/**
+ * Lowest enabled reasoning level, used once when a reasoning-only endpoint
+ * rejects the reviewer's default request (sent with reasoning disabled).
+ */
+const EXEC_REVIEWER_REASONING_FALLBACK: ReviewerThinking = "minimal";
 
 const execAutoReviewResponseSchema = z
   .object({
@@ -46,6 +52,8 @@ const execAutoReviewResponseSchema = z
 
 /** Config for the optional model-backed exec reviewer. */
 export type ExecReviewerConfig = NonNullable<NonNullable<ToolsConfig["exec"]>["reviewer"]>;
+
+type ReviewerThinking = NonNullable<ExecReviewerConfig["thinking"]>;
 
 type ExecReviewerDeps = {
   acquireSimpleCompletionModelForAgent?: typeof acquireSimpleCompletionModelForAgent;
@@ -489,47 +497,65 @@ export function createModelExecAutoReviewer(params: {
         );
       }
 
-      const result = await raceWithReviewerTimeout(
-        work.track(() =>
-          complete({
-            model: prepared.model,
-            auth: prepared.auth,
-            cfg,
-            context: {
-              systemPrompt:
-                "kind" in input
-                  ? DEFAULT_WIDGET_REVIEWER_SYSTEM_PROMPT
-                  : DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT,
-              messages: [
-                {
-                  role: "user",
-                  content: buildReviewerUserPrompt(input, serializedInput),
-                  timestamp: Date.now(),
-                },
-              ],
-            },
-            options: {
-              maxTokens: resolveExecReviewerMaxTokens(prepared.model.maxTokens),
-              temperature: 0,
-              ...(params.reviewer?.thinking ? { reasoning: params.reviewer.thinking } : {}),
-              ...(params.reviewer?.fastMode !== undefined
-                ? { serviceTier: params.reviewer.fastMode ? "priority" : "default" }
-                : {}),
-              signal,
-            },
-          }),
-        ),
-        {
-          timeoutMs,
-          signal: params.signal,
-          // Abort the provider request after the local timeout wins the race.
-          onTimeout: () => completionController?.abort(),
-        },
-      );
+      const runCompletion = async (reasoning: ReviewerThinking | undefined) =>
+        await raceWithReviewerTimeout(
+          work.track(() =>
+            complete({
+              model: prepared.model,
+              auth: prepared.auth,
+              cfg,
+              context: {
+                systemPrompt:
+                  "kind" in input
+                    ? DEFAULT_WIDGET_REVIEWER_SYSTEM_PROMPT
+                    : DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT,
+                messages: [
+                  {
+                    role: "user",
+                    content: buildReviewerUserPrompt(input, serializedInput),
+                    timestamp: Date.now(),
+                  },
+                ],
+              },
+              options: {
+                maxTokens: resolveExecReviewerMaxTokens(prepared.model.maxTokens),
+                temperature: 0,
+                ...(reasoning ? { reasoning } : {}),
+                ...(params.reviewer?.fastMode !== undefined
+                  ? { serviceTier: params.reviewer.fastMode ? "priority" : "default" }
+                  : {}),
+                signal,
+              },
+            }),
+          ),
+          {
+            timeoutMs,
+            signal: params.signal,
+            // Abort the provider request after the local timeout wins the race.
+            onTimeout: () => completionController?.abort(),
+          },
+        );
+
+      let result = await runCompletion(params.reviewer?.thinking);
       if (result === EXEC_REVIEWER_TIMEOUT) {
         return buildReviewerTimeoutDecision(timeoutMs);
       }
-      const completionFailure = extractCompletionFailure(result);
+      let completionFailure = extractCompletionFailure(result);
+      if (
+        completionFailure &&
+        !params.reviewer?.thinking &&
+        isReasoningConstraintErrorMessage(completionFailure)
+      ) {
+        // Without a configured reviewer thinking level the request carries no
+        // reasoning level, which OpenAI-compatible transports send as reasoning
+        // disabled. Reasoning-only endpoints reject that outright, so retry once
+        // at the lowest enabled level instead of failing every review closed.
+        result = await runCompletion(EXEC_REVIEWER_REASONING_FALLBACK);
+        if (result === EXEC_REVIEWER_TIMEOUT) {
+          return buildReviewerTimeoutDecision(timeoutMs);
+        }
+        completionFailure = extractCompletionFailure(result);
+      }
       if (completionFailure) {
         return buildExecAutoReviewFailureDecision(
           "exec reviewer completion failed",
