@@ -1901,7 +1901,8 @@ extension OpenClawSnapshotUITests {
         XCTAssertEqual(input.value as? String, text)
         send.tap()
 
-        XCTAssertTrue(app.staticTexts[text].waitForExistence(timeout: 5))
+        let submittedText = app.staticTexts.matching(NSPredicate(format: "label == %@", text)).firstMatch
+        XCTAssertTrue(submittedText.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts[replyMarker].waitForExistence(timeout: 60))
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
     }
