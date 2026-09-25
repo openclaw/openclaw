@@ -154,6 +154,9 @@ stopped. Forced termination without confirmed cleanup remains uncertain. Local
 TUI shell shutdown uses the same cleanup owner for its own commands.
 Permission-denied group probes still count as present; cleanup continues waiting
 within its original deadline for confirmed disappearance.
+On Linux, cleanup reaps already-exited descendants adopted by this process from
+the owned group after the tracked root exits. The root and unrelated child exit
+statuses remain with their existing owners.
 If the host was busy, cleanup processes queued native completion events before
 reporting a timeout.
 
