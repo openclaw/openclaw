@@ -11,7 +11,7 @@ import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
 
 async function isInvokeAuthorized(params: {
-  context: MSTeamsTurnContext;
+  context: Pick<MSTeamsTurnContext, "activity">;
   deps: MSTeamsMessageHandlerDeps;
   deniedLogs: {
     dm: string;
@@ -91,7 +91,7 @@ export async function isFeedbackInvokeAuthorized(
 }
 
 export async function isSigninInvokeAuthorized(
-  context: MSTeamsTurnContext,
+  context: Pick<MSTeamsTurnContext, "activity">,
   deps: MSTeamsMessageHandlerDeps,
 ): Promise<boolean> {
   return isInvokeAuthorized({

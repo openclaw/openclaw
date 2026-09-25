@@ -121,6 +121,14 @@ describe("startup admission before persistent writes", () => {
       reason: "Migrated workspace setup state to SQLite",
     },
     {
+      name: "legacy workspace with retained plugin install records",
+      workspace: true,
+      repairable: false,
+      retainedPluginRecords: true,
+      config: "local",
+      reason: "Migrated workspace setup state to SQLite",
+    },
+    {
       name: "session store selected by repaired agent ID",
       workspace: false,
       repairedSession: true,
@@ -187,6 +195,7 @@ describe("startup admission before persistent writes", () => {
       unavailablePlugin,
       repairedSession,
       restored,
+      retainedPluginRecords,
     }) => {
       const root = fs.realpathSync(tempDirs.createTempDir("openclaw-startup-admission-"));
       const preparedPreflightUrl = resolveRuntimeWorkerUrl(
@@ -265,7 +274,17 @@ describe("startup admission before persistent writes", () => {
                 ? { load: { paths: [path.join(root, "missing-plugin")] } }
                 : invalidPlugin
                   ? { entries: { broken: { enabled: "not-a-boolean" } } }
-                  : { enabled: false },
+                  : retainedPluginRecords
+                    ? {
+                        enabled: false,
+                        installs: {
+                          retained: {
+                            source: "path",
+                            installPath: path.join(root, "retained-plugin"),
+                          },
+                        },
+                      }
+                    : { enabled: false },
               agents: repairedSession
                 ? { list: [{ id: "" }] }
                 : { defaults: { workspace: workspaceDir } },

@@ -92,6 +92,7 @@ async function withSubagentKillScope<T>(
     : taskControl;
   const selected = new Set<string>();
   const releaseRetirements: Array<() => void> = [];
+  const completeRetirementPublications: Array<() => void> = [];
   const holds: Array<NonNullable<ReturnType<typeof holdQueuedSwarmRun>>> = [];
   const hold = (tree: KillTree) => {
     if (!tree.dispatchHold) {
@@ -166,6 +167,7 @@ async function withSubagentKillScope<T>(
         entry,
         (candidate) => latest() === candidate,
       );
+      completeRetirementPublications.push(retirement.completePublication);
       releaseRetirements.push(retirement.release);
       const bind = (current: SubagentRunRecord): KillBinding => {
         const { generation, createdAt } = retirement.observation;
@@ -266,6 +268,10 @@ async function withSubagentKillScope<T>(
   } catch (error) {
     outcome = { ok: false, error };
   }
+  // Failed-launch cleanup may own the same provisional session. Let it proceed only
+  // after cancellation publication finishes (including failure), before releasing a
+  // scheduler hold that can itself await that cleanup.
+  completeRetirementPublications.forEach((complete) => complete());
   const released = await Promise.allSettled(holds.map((reservation) => reservation.release()));
   const retired = await Promise.allSettled(releaseRetirements.map(async (release) => release()));
   if (!outcome.ok) {

@@ -7,7 +7,10 @@ import { validateToolArguments } from "../../../packages/llm-core/src/validation
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import { supportedSpawnModelChoice } from "../subagents/spawn/subagent-spawn.test-helpers.js";
+import {
+  expectRegisteredSubagentRun,
+  supportedSpawnModelChoice,
+} from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -285,12 +288,10 @@ describe("visible session placement and authority", () => {
           runId: "cloud-run",
           placement,
         });
-        expect(registerRun).toHaveBeenCalledWith(
-          expect.objectContaining({
-            runId: "cloud-run",
-            childSessionKey: key,
-          }),
-        );
+        expectRegisteredSubagentRun(registerRun, {
+          runId: "cloud-run",
+          childSessionKey: key,
+        });
       });
     },
   );

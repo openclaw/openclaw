@@ -12,6 +12,7 @@ import {
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { DecisionProviderHost } from "./provider-host.js";
 import { adoptRuntimeDecisionProviders } from "./registry-adoption.js";
 import {
@@ -114,9 +115,11 @@ describe("prepared decision provider ownership", () => {
 
   it("releases a prepared consumer without retiring the shared Gateway provider", async () => {
     let settled = false;
+    const entered = createDeferredCore();
     const { root, target, view, run } = fixture(async (_batch, { signal }) => {
       await new Promise<void>((resolve) => {
         signal.addEventListener("abort", () => resolve(), { once: true });
+        entered.resolve();
       });
       settled = true;
       signal.throwIfAborted();
@@ -125,6 +128,7 @@ describe("prepared decision provider ownership", () => {
     // Prepared generation custody activates its finite primary registry without making it root.
     markPluginRegistryActive(target);
     const pending = run();
+    await Promise.race([entered.promise, pending]);
     markPluginRegistryRetired(target);
     await expect(pending).rejects.toBeDefined();
     expect(settled).toBe(true);

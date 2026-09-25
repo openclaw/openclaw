@@ -243,6 +243,47 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     },
   );
 
+  it("delivers the final answer through repeated Telegram flood waits", async () => {
+    const floodedAt: number[] = [];
+    let flooded = Promise.withResolvers<void>();
+    http.respondToCall = (call) => {
+      if (
+        call.method !== "sendMessage" ||
+        call.fields.text !== "The command failed." ||
+        floodedAt.length >= 3
+      ) {
+        return undefined;
+      }
+      floodedAt.push(Date.now());
+      flooded.resolve();
+      return {
+        error_code: 429,
+        description: "Too Many Requests: retry after 5",
+        parameters: { retry_after: 5 },
+      };
+    };
+    const turn = dispatchProgressTurn(
+      async (options) => {
+        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "flood" });
+        await waitForBotApiCall((call) => call.method === "sendMessage");
+      },
+      { mode: "progress", toolProgress: true, allowErrors: true },
+    );
+    for (let flood = 0; flood < 3; flood += 1) {
+      await flooded.promise;
+      flooded = Promise.withResolvers<void>();
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    await turn;
+
+    expect(floodedAt).toHaveLength(3);
+    expect(floodedAt[2]! - floodedAt[0]!).toBeGreaterThanOrEqual(10_000);
+    expect([...visibleMessages.values()]).toEqual(["The command failed."]);
+    expect(calls.some((call) => String(call.fields.text).startsWith(DELIVERY_WARNING_PREFIX))).toBe(
+      false,
+    );
+  });
+
   it.each([false, true])(
     "preserves the post-progress final when Telegram rejects cleanup (error: %s)",
     async (isError) => {

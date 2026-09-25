@@ -15,22 +15,9 @@ import {
 import type { NodeListNode } from "../shared/node-list-types.js";
 import type { NodeSession } from "./node-registry.js";
 
-type KnownNodePendingSource = {
-  requestId: string;
-  nodeId: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  clientId?: string;
-  clientMode?: string;
-  remoteIp?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
+type KnownNodePendingSource = NodePairingPendingRequest & {
   caps: string[];
   commands: string[];
-  permissions?: Record<string, boolean>;
 };
 
 type KnownNodeCatalog = Map<string, NodeListNode>;
@@ -63,21 +50,9 @@ function hasAddressableId(value: unknown): boolean {
 
 function buildPendingNodeSource(entry: NodePairingPendingRequest): KnownNodePendingSource {
   return {
-    requestId: entry.requestId,
-    nodeId: entry.nodeId,
-    displayName: entry.displayName,
-    platform: entry.platform,
-    version: entry.version,
-    coreVersion: entry.coreVersion,
-    uiVersion: entry.uiVersion,
-    clientId: entry.clientId,
-    clientMode: entry.clientMode,
-    remoteIp: entry.remoteIp,
-    deviceFamily: entry.deviceFamily,
-    modelIdentifier: entry.modelIdentifier,
+    ...entry,
     caps: uniqueSortedStrings(entry.caps),
     commands: filterPublicNodeCommands(uniqueSortedStrings(entry.commands)),
-    permissions: entry.permissions,
   };
 }
 

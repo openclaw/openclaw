@@ -1,8 +1,5 @@
 // Duration parser shared by CLI flags, command directives, and config-backed timing values.
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import milliseconds from "ms";
 
 /** Options for choosing the unit used by bare numeric duration values. */
@@ -34,7 +31,7 @@ function roundSafeDurationMs(raw: string, value: number): number {
 
 /** Parse a non-negative duration into milliseconds, supporting single and composite units. */
 export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): number {
-  const trimmed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "");
+  const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (!trimmed) {
     throw invalidDuration(raw, "empty");
   }

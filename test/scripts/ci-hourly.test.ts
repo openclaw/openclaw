@@ -1,5 +1,5 @@
 import { runInNewContext } from "node:vm";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   evaluateWorkflowExpression,
   readCiWorkflow,
@@ -7,16 +7,14 @@ import {
 } from "./ci-workflow.test-support.js";
 
 const auxiliaryNames = [
-  "docs",
   "node-runtime-conformance",
   "plugin-init-scaffold-validation",
   "sandbox-common-smoke",
   "vitest-cache-warm",
   "plugin-npm-release",
 ];
-const hourly = readWorkflow(".github/workflows/ci-hourly.yml");
 const ci = readCiWorkflow();
-const base = { repository: "openclaw/openclaw", runAttempt: 1 } as const;
+const base = { repository: "openclaw/openclaw", runAttempt: 1, releasePriorityRun: "123" } as const;
 type Context = Parameters<typeof evaluateWorkflowExpression>[1];
 
 function evaluate(expression: string, context: Context) {
@@ -47,9 +45,11 @@ describe("hourly main CI admission", () => {
         }
       }
     }
-    for (const name of auxiliaryNames) {
+    for (const name of [...auxiliaryNames, "docs"]) {
       const workflow = readWorkflow(`.github/workflows/${name}.yml`);
-      const entry = Object.values(workflow.jobs)[0] as { if: string };
+      const entry = Object.entries(workflow.jobs).find(([id]) => id !== "scope")![1] as {
+        if: string;
+      };
       expect(evaluate(entry.if, context), name).toBe(admitted);
     }
   });
@@ -71,31 +71,112 @@ describe("hourly main CI admission", () => {
     },
   );
 
-  it("admits hourly work only in the canonical repo and preserves release priority", () => {
+  it("admits hourly work only in the canonical repo even during release validation", () => {
     const context = { ...base, eventName: "schedule" } as const;
-    expect(evaluate(hourly.jobs.dispatch.if, context)).toBe(true);
-    expect(evaluate(hourly.jobs.dispatch.if, { ...context, repository: "fork/openclaw" })).toBe(
-      false,
-    );
-    expect(evaluate(hourly.jobs.dispatch.if, { ...context, releasePriorityRun: "123" })).toBe(
-      false,
-    );
-    expect(
-      evaluate(hourly.jobs.dispatch.if, {
-        ...context,
-        eventName: "workflow_dispatch",
-        releasePriorityRun: "123",
-      }),
-    ).toBe(true);
+    expect(ci.on.schedule).toEqual([{ cron: "23 * * * *" }]);
+    for (const name of ["preflight", "security-fast", "ci-gate"]) {
+      expect(evaluate(ci.jobs[name].if, context), name).toBe(true);
+      expect(evaluate(ci.jobs[name].if, { ...context, repository: "fork/openclaw" }), name).toBe(
+        false,
+      );
+      expect(evaluate(ci.jobs[name].if, { ...context, ref: "refs/heads/topic" }), name).toBe(false);
+    }
     for (const name of auxiliaryNames) {
       const workflow = readWorkflow(`.github/workflows/${name}.yml`);
       expect(workflow.on.schedule).toHaveLength(1);
       const cron = workflow.on.schedule[0].cron.split(" ");
       expect(cron).toHaveLength(5);
-      expect(cron.slice(1)).toEqual(["*", "*", "*", "*"]);
+      expect(cron.slice(1)).toEqual(
+        name === "sandbox-common-smoke" ? ["5", "*", "*", "*"] : ["*", "*", "*", "*"],
+      );
       const entry = Object.values(workflow.jobs)[0] as { if: string };
       expect(evaluate(entry.if, context), name).toBe(true);
       expect(evaluate(entry.if, { ...context, repository: "fork/openclaw" }), name).toBe(false);
+    }
+  });
+
+  it.each(["github", "hybrid", "runson", "blacksmith", ""] as const)(
+    "preserves automatic runner and cache policy for scheduled %s runs",
+    (runnerBackend) => {
+      for (const runAttempt of [1, 2]) {
+        const shared = {
+          ...base,
+          runAttempt,
+          runnerBackend,
+          runnerEnvironment: "self-hosted" as const,
+          matrix: { runner: "blacksmith-8vcpu-ubuntu-2404", check_name: "fixture", task: "lint" },
+        };
+        const scheduled = { ...shared, eventName: "schedule" as const };
+        const push = { ...shared, eventName: "push" as const };
+        for (const [name, raw] of Object.entries(ci.jobs)) {
+          if (name === "pr-fail-fast") {
+            expect(evaluate(ci.jobs[name].if, scheduled), name).toBe(false);
+            expect(evaluate(ci.jobs[name].if, push), name).toBe(false);
+            continue;
+          }
+          const job = raw as { "runs-on"?: string; steps?: { with?: Record<string, unknown> }[] };
+          if (job["runs-on"]) {
+            expect(evaluate(job["runs-on"], scheduled), name).toEqual(
+              evaluate(job["runs-on"], push),
+            );
+          }
+          for (const step of job.steps ?? []) {
+            const cache = step.with?.["dependency-cache"];
+            if (typeof cache === "string" && cache.startsWith("${{")) {
+              expect(evaluate(cache, scheduled), name).toBe(evaluate(cache, push));
+              expect(
+                evaluate(cache, { ...scheduled, runnerEnvironment: "github-hosted" }),
+                name,
+              ).toBe("false");
+            }
+          }
+        }
+      }
+    },
+  );
+
+  it("keeps manual hourly-shaped inputs strict and outside schedule concurrency", () => {
+    const schedule = { ...base, eventName: "schedule" as const };
+    const manual = {
+      ...base,
+      eventName: "workflow_dispatch" as const,
+      dispatchId: "hourly-main-123-1",
+      validationTier: "main" as const,
+      runnerBackend: "hybrid" as const,
+    };
+    expect(evaluate(ci.jobs.preflight["runs-on"], manual)).toBe("ubuntu-24.04");
+    expect(evaluate(ci.concurrency.group, manual)).not.toBe(
+      evaluate(ci.concurrency.group, schedule),
+    );
+    for (const surface of ["control_ui", "native"]) {
+      const output = ci.jobs.preflight.outputs["strict_" + surface + "_i18n"];
+      const strict = String(evaluate(output, manual));
+      const advisory = String(
+        evaluate(output, { ...schedule, steps: { changed_scope: { outputs: {} } } }),
+      );
+      expect(strict).toBe("true");
+      expect(advisory).not.toBe("true");
+      const parity = ci.jobs[surface === "native" ? "native-i18n" : "control-ui-i18n"].steps.find(
+        (step: { name?: string }) =>
+          step.name ===
+          (surface === "native"
+            ? "Check native app generated locale parity"
+            : "Check Control UI locale parity"),
+      );
+      for (const [context, value, manualStrict] of [
+        [manual, strict, true],
+        [schedule, advisory, false],
+      ] as const) {
+        const finalContext = {
+          ...context,
+          preflightOutputs: { ["strict_" + surface + "_i18n"]: value },
+        };
+        if (surface === "native") {
+          expect(evaluate(parity.if, finalContext)).toBe(manualStrict);
+        } else {
+          expect(evaluate(parity["continue-on-error"], finalContext)).toBe(!manualStrict);
+        }
+      }
     }
   });
 
@@ -106,15 +187,12 @@ describe("hourly main CI admission", () => {
     expect(full).not.toBe(push);
     const child = {
       ...common,
-      eventName: "workflow_dispatch",
-      dispatchId: "hourly-main-123-1",
+      eventName: "schedule",
     } as const;
     const hourlyGroup = evaluate(ci.concurrency.group, child);
     expect(hourlyGroup).not.toBe(full);
     expect(hourlyGroup).not.toBe(push);
-    expect(
-      evaluate(ci.concurrency.group, { ...child, runId: 999, dispatchId: "hourly-main-999-1" }),
-    ).toBe(hourlyGroup);
+    expect(evaluate(ci.concurrency.group, { ...child, runId: 999 })).not.toBe(hourlyGroup);
     expect(evaluate(ci.concurrency["cancel-in-progress"], child)).toBe(false);
     expect(evaluate(ci.concurrency["cancel-in-progress"], { ...common, eventName: "push" })).toBe(
       false,
@@ -141,40 +219,48 @@ describe("hourly main CI admission", () => {
     }
   });
 
-  it("dispatches the complete main tier without freezing an obsolete scheduler SHA", async () => {
-    const dispatch = vi.fn().mockResolvedValue(undefined);
-    const summary = {
-      addHeading: vi.fn().mockReturnThis(),
-      addRaw: vi.fn().mockReturnThis(),
-      write: vi.fn(),
-    };
-    const sha = "a".repeat(40);
-    const script = hourly.jobs.dispatch.steps[0].with.script;
-    await runInNewContext(`(async () => { ${script} })()`, {
-      github: { rest: { actions: { createWorkflowDispatch: dispatch } } },
-      context: { repo: { owner: "openclaw", repo: "openclaw" }, sha, runId: 123 },
-      process: { env: { GITHUB_RUN_ATTEMPT: "1" } },
-      core: { summary },
-    });
-    expect(dispatch).toHaveBeenCalledExactlyOnceWith({
-      owner: "openclaw",
-      repo: "openclaw",
-      workflow_id: "ci.yml",
-      ref: "main",
-      inputs: {
-        include_android: "true",
-        validation_tier: "main",
-        release_gate: "false",
-        release_scope: "full",
-        dispatch_id: "hourly-main-123-1",
-      },
-    });
+  it("serializes only scheduled iOS proof while admitting overlapping hourly runs", () => {
+    const scheduled = {
+      ...base,
+      eventName: "schedule",
+      workflow: "CI",
+      runId: 123,
+      matrix: { phase: "tests" },
+    } as const;
+    const next = { ...scheduled, runId: 124 };
+    const ios = ci.jobs["ios-build"];
+    expect(evaluate(ci.concurrency.group, scheduled)).not.toBe(
+      evaluate(ci.concurrency.group, next),
+    );
+    expect(evaluate(ios.concurrency.group, scheduled)).toBe(evaluate(ios.concurrency.group, next));
+    expect(ios.concurrency["cancel-in-progress"]).toBe(false);
+    // GitHub's default single pending slot replaces pending work, never the active proof.
+    expect(ios.concurrency.queue ?? "single").toBe("single");
+    const hourly = evaluate(ios.concurrency.group, scheduled);
+    for (const eventName of ["workflow_dispatch", "pull_request", "push"] as const) {
+      for (const releaseGate of [false, true]) {
+        const groups = [123, 124].flatMap((runId) =>
+          ["tests", "release", "smoke"].map((phase) =>
+            evaluate(ios.concurrency.group, {
+              ...scheduled,
+              eventName,
+              releaseGate,
+              runId,
+              matrix: { phase },
+            }),
+          ),
+        );
+        expect(new Set(groups).size).toBe(groups.length);
+        expect(groups).not.toContain(hourly);
+      }
+    }
+  });
+
+  it("schedules complete main coverage at the workflow revision without a diff filter", () => {
     const childSha = "b".repeat(40);
     const context = {
       ...base,
-      eventName: "workflow_dispatch",
-      includeAndroid: true,
-      validationTier: "main",
+      eventName: "schedule",
       sha: childSha,
       workflowSha: childSha,
     } as const;
@@ -198,6 +284,8 @@ describe("hourly main CI admission", () => {
     expect(evaluate(manifest.env.OPENCLAW_CI_DOCS_ONLY, context)).toBe("false");
     expect(evaluate(manifest.env.OPENCLAW_CI_DOCS_CHANGED, context)).toBe("true");
     expect(evaluate(manifest.env.OPENCLAW_CI_VALIDATION_TIER, context)).toBe("main");
+    expect(evaluate(ci.jobs.android.strategy["max-parallel"], context)).toBe(2);
+    expect(evaluate(ci.jobs["macos-swift"].env.OPENCLAWKIT_TEST_EXECUTION, context)).toBe("serial");
     for (const id of ["docs_scope", "changed_scope"]) {
       expect(
         evaluate(
@@ -222,6 +310,7 @@ describe("hourly main CI admission", () => {
     expect(evaluate(guards.env.BASE_SHA, context)).toBe(baseSha);
     expect(evaluate(guards.env.PROTOCOL_SINCE_BASE_SHA, context)).toBe(baseSha);
     expect(evaluate(guards.if, { ...context, eventName: "workflow_dispatch" })).toBe(false);
+    expect(evaluate(guards.if, { ...context, eventName: "schedule" })).toBe(false);
     expect(evaluate(guards.if, { ...context, ciOnPush: "true" })).toBe(false);
   });
 

@@ -95,45 +95,28 @@ export function createRuntimeOutboundDelegates<Runtime>(
     };
   },
 ): Pick<ChannelOutboundAdapter, OutboundMethod> {
+  const forward = <Context, Result>(
+    read: () =>
+      | Omit<
+          RuntimeForwarderParams<Runtime, (ctx: Context) => MaybePromise<Result>>,
+          "getRuntime" | "notDispatched"
+        >
+      | undefined,
+    notDispatched = true,
+  ) =>
+    read()
+      ? createRuntimeForwarder(() => ({
+          getRuntime: params.getRuntime,
+          notDispatched,
+          resolve: read()!.resolve,
+          unavailableMessage: read()!.unavailableMessage,
+        }))
+      : undefined;
   return {
-    renderPresentation: params.renderPresentation
-      ? createRuntimeForwarder(() => ({
-          getRuntime: params.getRuntime,
-          resolve: params.renderPresentation!.resolve,
-          unavailableMessage: params.renderPresentation!.unavailableMessage,
-        }))
-      : undefined,
-    sendPayload: params.sendPayload
-      ? createRuntimeForwarder(() => ({
-          getRuntime: params.getRuntime,
-          notDispatched: true,
-          resolve: params.sendPayload!.resolve,
-          unavailableMessage: params.sendPayload!.unavailableMessage,
-        }))
-      : undefined,
-    sendText: params.sendText
-      ? createRuntimeForwarder(() => ({
-          getRuntime: params.getRuntime,
-          notDispatched: true,
-          resolve: params.sendText!.resolve,
-          unavailableMessage: params.sendText!.unavailableMessage,
-        }))
-      : undefined,
-    sendMedia: params.sendMedia
-      ? createRuntimeForwarder(() => ({
-          getRuntime: params.getRuntime,
-          notDispatched: true,
-          resolve: params.sendMedia!.resolve,
-          unavailableMessage: params.sendMedia!.unavailableMessage,
-        }))
-      : undefined,
-    sendPoll: params.sendPoll
-      ? createRuntimeForwarder(() => ({
-          getRuntime: params.getRuntime,
-          notDispatched: true,
-          resolve: params.sendPoll!.resolve,
-          unavailableMessage: params.sendPoll!.unavailableMessage,
-        }))
-      : undefined,
+    renderPresentation: forward(() => params.renderPresentation, false),
+    sendPayload: forward(() => params.sendPayload),
+    sendText: forward(() => params.sendText),
+    sendMedia: forward(() => params.sendMedia),
+    sendPoll: forward(() => params.sendPoll),
   };
 }

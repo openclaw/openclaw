@@ -317,6 +317,47 @@ prepare_validate_commit() {
   echo "prep commit subject validated: $subject"
 }
 
+read_prep_publication_result() {
+  local file="$1" line key value seen=" " count=0 valid=true
+  if [ ! -f "$file" ] || [ -L "$file" ]; then
+    echo "Invalid publication receipt $file: expected a regular file." >&2
+    return 1
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    key="${line%%=*}"
+    value="${line#*=}"
+    case "$key" in
+      PUSH_PREP_HEAD_SHA|PUSH_LOCAL_PREP_HEAD_SHA|PUSHED_FROM_SHA|PR_HEAD_SHA_AFTER_PUSH)
+        [[ "$value" =~ ^[0-9a-f]{40}$ ]] || { valid=false; break; } ;;
+      PUSH_REPLACED_HOSTED_ANCESTRY)
+        [ "$value" = true ] || [ "$value" = false ] || { valid=false; break; } ;;
+      *) valid=false; break ;;
+    esac
+    case "$seen" in *" $key "*) valid=false; break ;; esac
+    printf -v "$key" '%s' "$value"
+    seen="$seen$key "
+    count=$((count + 1))
+  done < "$file"
+  if [ "$valid" != true ] || [ "$count" -ne 5 ] ||
+    [ "$PUSH_PREP_HEAD_SHA" != "$PR_HEAD_SHA_AFTER_PUSH" ]; then
+    echo "Invalid publication receipt $file: expected the complete native result." >&2
+    return 1
+  fi
+}
+
+verify_prep_publication_order() {
+  local previous_head="$1" previous_local="$2" next_head="$3" next_local="$4"
+  [ -n "$previous_head" ] && [ "$previous_head" != "$next_head" ] || return 0
+  if { pr_git merge-base --is-ancestor "$previous_head" "$next_head" &&
+      pr_git merge-base --is-ancestor "$previous_head" "$next_local"; } ||
+    { pr_git merge-base --is-ancestor "$next_head" "$previous_head" &&
+      pr_git merge-base --is-ancestor "$next_head" "$previous_local"; }; then
+    return 0
+  fi
+  echo "Conflicting publication receipts; retain them and inspect the hosted ancestry." >&2
+  return 1
+}
+
 resolve_prep_publication_target() {
   local pr="$1" local_head="$2"
   local source_head="${PR_HEAD_SHA_BEFORE:-}" head_ref="${PR_HEAD:-}"
@@ -326,34 +367,66 @@ resolve_prep_publication_target() {
   fi
   PREP_PUBLICATION_LEASE_SHA="$source_head"
   PREP_PUBLICATION_HEAD_SHA="$local_head"
-  if [ ! -e .local/prep.env ]; then
-    return 0
-  fi
-
   # A previous publication can advance authority only for this PR, branch,
   # and prepared source. Do not let sourced receipt fields replace context.
   local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE=""
   local PREP_HEAD_SHA="" LOCAL_PREP_HEAD_SHA=""
-  # shellcheck disable=SC1091
-  source .local/prep.env || return 1
-  if [ "$PR_NUMBER" != "$pr" ] || [ "$PR_HEAD" != "$head_ref" ] ||
-    ! [[ "$PR_HEAD_SHA_BEFORE" =~ ^[0-9a-f]{40}$ ]] ||
-    ! [[ "$PREP_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
-    ! [[ "$LOCAL_PREP_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
-    ! pr_git merge-base --is-ancestor "$source_head" "$PR_HEAD_SHA_BEFORE" ||
-    ! pr_git merge-base --is-ancestor "$PR_HEAD_SHA_BEFORE" "$PREP_HEAD_SHA" ||
-    ! pr_git merge-base --is-ancestor "$source_head" "$LOCAL_PREP_HEAD_SHA" ||
-    [ "$(pr_git rev-parse "$LOCAL_PREP_HEAD_SHA^{tree}")" != "$(pr_git rev-parse "$PREP_HEAD_SHA^{tree}")" ]; then
-    echo "Publication receipt does not match this preparation. Retain artifacts and re-run review-init and prepare-init." >&2
-    return 1
+  if [ -e .local/prep.env ] || [ -L .local/prep.env ]; then
+    [ -f .local/prep.env ] && [ ! -L .local/prep.env ] || return 1
+    # shellcheck disable=SC1091
+    source .local/prep.env || return 1
+    if [ "$PR_NUMBER" != "$pr" ] || [ "$PR_HEAD" != "$head_ref" ] ||
+      ! [[ "$PR_HEAD_SHA_BEFORE" =~ ^[0-9a-f]{40}$ ]] ||
+      ! [[ "$PREP_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+      ! [[ "$LOCAL_PREP_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+      ! pr_git merge-base --is-ancestor "$source_head" "$PR_HEAD_SHA_BEFORE" ||
+      ! pr_git merge-base --is-ancestor "$PR_HEAD_SHA_BEFORE" "$PREP_HEAD_SHA" ||
+      ! pr_git merge-base --is-ancestor "$source_head" "$LOCAL_PREP_HEAD_SHA" ||
+      [ "$(pr_git rev-parse "$LOCAL_PREP_HEAD_SHA^{tree}")" != "$(pr_git rev-parse "$PREP_HEAD_SHA^{tree}")" ]; then
+      echo "Publication receipt does not match this preparation. Retain artifacts and re-run review-init and prepare-init." >&2
+      return 1
+    fi
   fi
-  PREP_PUBLICATION_LEASE_SHA="$PREP_HEAD_SHA"
-  if [ "$local_head" = "$LOCAL_PREP_HEAD_SHA" ]; then
+  local completed_head="$PREP_HEAD_SHA" completed_local="$LOCAL_PREP_HEAD_SHA"
+  local selected_head="$PREP_HEAD_SHA" selected_local="$LOCAL_PREP_HEAD_SHA"
+  local previous_result_head="" previous_result_local=""
+  local result PUSH_PREP_HEAD_SHA="" PUSH_LOCAL_PREP_HEAD_SHA="" PUSHED_FROM_SHA=""
+  local PUSH_REPLACED_HOSTED_ANCESTRY="" PR_HEAD_SHA_AFTER_PUSH=""
+  for result in .local/prepare-push-result.env .local/prepare-sync-result.env; do
+    [ -e "$result" ] || [ -L "$result" ] || continue
+    read_prep_publication_result "$result" || return 1
+    if ! pr_git merge-base --is-ancestor "$source_head" "$PUSHED_FROM_SHA" ||
+      ! pr_git merge-base --is-ancestor "$PUSHED_FROM_SHA" "$PUSH_PREP_HEAD_SHA" ||
+      ! pr_git merge-base --is-ancestor "$source_head" "$PUSH_LOCAL_PREP_HEAD_SHA" ||
+      [ "$PUSH_REPLACED_HOSTED_ANCESTRY" != false ] ||
+      [ "$(pr_git rev-parse "$PUSH_LOCAL_PREP_HEAD_SHA^{tree}")" != "$(pr_git rev-parse "$PUSH_PREP_HEAD_SHA^{tree}")" ]; then
+      echo "Publication receipt $result does not match this preparation." >&2
+      return 1
+    fi
+    # A completed merge can contain conflicting older receipts. Validate every
+    # recorded pair before selecting; equal GraphQL aliases need no self-ancestry.
+    verify_prep_publication_order "$completed_head" "$completed_local" "$PUSH_PREP_HEAD_SHA" "$PUSH_LOCAL_PREP_HEAD_SHA" || return 1
+    verify_prep_publication_order "$previous_result_head" "$previous_result_local" "$PUSH_PREP_HEAD_SHA" "$PUSH_LOCAL_PREP_HEAD_SHA" || return 1
+    previous_result_head="$PUSH_PREP_HEAD_SHA"
+    previous_result_local="$PUSH_LOCAL_PREP_HEAD_SHA"
+    if [ -z "$selected_head" ] ||
+      { [ "$selected_head" != "$PUSH_PREP_HEAD_SHA" ] &&
+        pr_git merge-base --is-ancestor "$selected_head" "$PUSH_PREP_HEAD_SHA"; }; then
+      selected_head="$PUSH_PREP_HEAD_SHA"
+      selected_local="$PUSH_LOCAL_PREP_HEAD_SHA"
+    elif [ "$selected_head" = "$PUSH_PREP_HEAD_SHA" ] &&
+      [ "$selected_head" != "$completed_head" ] && [ "$local_head" = "$PUSH_LOCAL_PREP_HEAD_SHA" ]; then
+      selected_local="$PUSH_LOCAL_PREP_HEAD_SHA"
+    fi
+  done
+  [ -n "$selected_head" ] || return 0
+  PREP_PUBLICATION_LEASE_SHA="$selected_head"
+  if [ "$local_head" = "$selected_local" ]; then
     # GraphQL can return a different verified OID for this exact local commit.
     # Only that recorded pair permits a no-op; new fixups must extend the OID.
-    PREP_PUBLICATION_HEAD_SHA="$PREP_HEAD_SHA"
+    PREP_PUBLICATION_HEAD_SHA="$selected_head"
   else
-    verify_prep_head_extends_hosted_head "$PREP_HEAD_SHA" || return 1
+    verify_prep_head_extends_hosted_head "$selected_head" "$local_head" || return 1
   fi
 }
 
@@ -423,7 +496,7 @@ prepare_push() {
   local pr_head_sha_after="$PR_HEAD_SHA_AFTER_PUSH"
 
   if [ "${GATES_MODE:-}" = "remote_crabbox_aws_pending" ]; then
-    finalize_remote_crabbox_aws_gate "$pr" "$prep_head_sha"
+    finalize_remote_crabbox_aws_gate "$pr" "$prep_head_sha" || return 1
     # shellcheck disable=SC1091
     source .local/gates.env
   elif [ "${GATES_MODE:-}" = github_pending ]; then

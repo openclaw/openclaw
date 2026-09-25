@@ -10,7 +10,6 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import {
-  openClawStateDatabaseCache,
   registerOpenClawStateDatabaseLifecycleListener,
   requireOpenClawStateDatabaseIdentity,
 } from "./openclaw-state-db-cache.js";
@@ -565,11 +564,6 @@ export async function prepareUserProfileIdentity(
     for (const publication of profileMutationPublications) {
       retainProfileMutationPublicationCatalog(publication, catalog, true);
     }
-    // Registration now sees prepared rows and never needs a cold host read.
-    const cached = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(pathname);
-    if (cached) {
-      profileCatalogHandles.set(cached.db, catalog.rows);
-    }
   }
   observeProfileCatalogs(refreshObserver);
   const retained = catalog;
@@ -604,7 +598,12 @@ export async function prepareUserProfileIdentity(
       throw new UserProfileNotFoundError(profileId);
     }
   };
+  function readCurrentProfile(this: void, requiredEmailBindingIds?: readonly string[]) {
+    assertCurrent(requiredEmailBindingIds);
+    return { profileId, assignedRole: rows.get(profileId)?.role || null };
+  }
   return {
+    readCurrentProfile,
     get emailBindingIds() {
       assertCurrent();
       if (initial.some((binding) => binding.bindingId === null)) {
@@ -613,7 +612,7 @@ export async function prepareUserProfileIdentity(
       return ids;
     },
     readCurrentFacts(this: void, requiredEmailBindingIds) {
-      assertCurrent(requiredEmailBindingIds);
+      const profile = readCurrentProfile(requiredEmailBindingIds);
       const aliases = new Set([profileId]);
       for (const row of rows.values()) {
         if (row.merged_into === profileId) {
@@ -622,9 +621,9 @@ export async function prepareUserProfileIdentity(
       }
       return {
         profile: {
-          profileId,
+          profileId: profile.profileId,
           emails: [...(bindings.emailsByProfile.get(profileId) ?? [])].toSorted(),
-          assignedRole: rows.get(profileId)?.role || null,
+          assignedRole: profile.assignedRole,
         },
         aliases,
       };

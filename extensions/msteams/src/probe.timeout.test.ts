@@ -8,15 +8,10 @@ const sdkState = vi.hoisted(() => ({
 
 vi.mock("@microsoft/teams.apps", () => ({
   App: class {
-    tokenManager = {
-      async getBotToken() {
-        if (sdkState.stall === "bot") {
-          return await new Promise<never>(() => {});
-        }
-        return { toString: () => "test-token" };
-      },
-      async getGraphToken() {
-        if (sdkState.stall === "graph") {
+    tokenProvider = {
+      async getAppToken(scope: string) {
+        const kind = scope === "https://graph.microsoft.com/.default" ? "graph" : "bot";
+        if (sdkState.stall === kind) {
           return await new Promise<never>(() => {});
         }
         return { toString: () => "test-token" };
